@@ -4724,3 +4724,51 @@ SEASTAR_TEST_CASE(twcs_single_key_reader_through_compound_set_test) {
         BOOST_REQUIRE(cf_stats.clustering_filter_count > 0);
     });
 }
+
+SEASTAR_TEST_CASE(test_major_does_not_miss_data_in_memtable) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto builder = schema_builder("tests", "test_major_does_not_miss_data_in_memtable")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("cl", int32_type, column_kind::clustering_key)
+                .with_column("value", int32_type);
+        auto s = builder.build();
+
+        auto tmp = tmpdir();
+        auto tokens = token_generation_for_shard(1, this_shard_id(), test_db_config.murmur3_partitioner_ignore_msb_bits(), smp::count);
+        auto pkey = partition_key::from_exploded(*s, {to_bytes(tokens[0].first)});
+
+        column_family_for_tests cf(env.manager(), s, tmp.path().string());
+        auto close_cf = deferred_stop(cf);
+        auto sst_gen = [&env, &cf, s, &tmp] () mutable {
+            return env.make_sstable(s, tmp.path().string(), column_family_test::calculate_generation_for_new_table(*cf),
+                sstables::get_highest_sstable_version(), big);
+        };
+
+        auto row_mut = [&] () {
+            static thread_local int32_t value = 1;
+            mutation m(s, pkey);
+            auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(value++)});
+            m.set_clustered_cell(c_key, bytes("value"), data_value(int32_t(value)), gc_clock::now().time_since_epoch().count());
+            return m;
+        }();
+        auto sst = make_sstable_containing(sst_gen, {std::move(row_mut)});
+        cf->add_sstable_and_update_cache(sst).get();
+        BOOST_REQUIRE(cf->get_sstables()->size() == 1);
+
+        auto deletion_mut = [&] () {
+            mutation m(s, pkey);
+            tombstone tomb(gc_clock::now().time_since_epoch().count(), gc_clock::now());
+            m.partition().apply(tomb);
+            return m;
+        }();
+        cf->apply(deletion_mut);
+
+        cf->compact_all_sstables().get();
+        BOOST_REQUIRE(cf->get_sstables()->size() == 1);
+        auto new_sst = *(cf->get_sstables()->begin());
+        BOOST_REQUIRE(new_sst->generation() != sst->generation());
+        assert_that(sstable_reader(new_sst, s, env.make_reader_permit()))
+                .produces(deletion_mut)
+                .produces_end_of_stream();
+    });
+}

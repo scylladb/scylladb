@@ -820,10 +820,9 @@ public:
 
     bool can_flush() const;
 
-    // FIXME: this is just an example, should be changed to something more
-    // general. compact_all_sstables() starts a compaction of all sstables.
-    // It doesn't flush the current memtable first. It's just a ad-hoc method,
-    // not a real compaction policy.
+    // Start a compaction of all sstables in a process known as major compaction
+    // Active memtable is flushed first to guarantee that data like tombstone,
+    // sitting in the memtable, will be compacted with shadowed data.
     future<> compact_all_sstables();
     // Compact all sstables provided in the vector.
     future<> compact_sstables(sstables::compaction_descriptor descriptor, sstables::compaction_data& cdata);
