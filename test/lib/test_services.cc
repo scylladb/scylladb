@@ -68,13 +68,16 @@ column_family_for_tests::column_family_for_tests(sstables::sstables_manager& sst
     )
 { }
 
-column_family_for_tests::column_family_for_tests(sstables::sstables_manager& sstables_manager, schema_ptr s)
+column_family_for_tests::column_family_for_tests(sstables::sstables_manager& sstables_manager, schema_ptr s, std::optional<sstring> datadir)
     : _data(make_lw_shared<data>())
 {
     _data->s = s;
     _data->cfg = column_family_test_config(sstables_manager, _data->semaphore);
-    _data->cfg.enable_disk_writes = false;
+    _data->cfg.enable_disk_writes = bool(datadir);
+    _data->cfg.datadir = datadir.value_or(sstring());
+    _data->cfg.cf_stats = &_data->cf_stats;
     _data->cfg.enable_commitlog = false;
+    _data->cm.enable();
     _data->cf = make_lw_shared<column_family>(_data->s, _data->cfg, column_family::no_commitlog(), _data->cm, _data->cl_stats, _data->tracker);
     _data->cf->mark_ready_for_writes();
 }

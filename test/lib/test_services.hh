@@ -45,6 +45,7 @@ struct column_family_for_tests {
         schema_ptr s;
         reader_concurrency_semaphore semaphore;
         cache_tracker tracker;
+        ::cf_stats cf_stats{0};
         column_family::config cfg;
         cell_locker_stats cl_stats;
         compaction_manager cm;
@@ -56,7 +57,7 @@ struct column_family_for_tests {
 
     explicit column_family_for_tests(sstables::sstables_manager& sstables_manager);
 
-    explicit column_family_for_tests(sstables::sstables_manager& sstables_manager, schema_ptr s);
+    explicit column_family_for_tests(sstables::sstables_manager& sstables_manager, schema_ptr s, std::optional<sstring> datadir = {});
 
     schema_ptr schema() { return _data->s; }
 
@@ -65,7 +66,9 @@ struct column_family_for_tests {
     column_family& operator*() { return *_data->cf; }
     column_family* operator->() { return _data->cf.get(); }
 
-    future<> stop() { return _data->semaphore.stop(); }
+    future<> stop() {
+        return when_all_succeed(_data->cm.stop(), _data->semaphore.stop()).discard_result();
+    }
 
     future<> stop_and_keep_alive() {
         return stop().finally([cf = *this] {});
