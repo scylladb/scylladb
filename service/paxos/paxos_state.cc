@@ -56,14 +56,14 @@ future<paxos_state::guard> paxos_state::get_cas_lock(const dht::token& key, cloc
     co_return m;
 }
 
-future<prepare_response> paxos_state::prepare(tracing::trace_state_ptr tr_state, schema_ptr schema,
+future<prepare_response> paxos_state::prepare(storage_proxy& sp, tracing::trace_state_ptr tr_state, schema_ptr schema,
         const query::read_command& cmd, const partition_key& key, utils::UUID ballot,
         bool only_digest, query::digest_algorithm da, clock_type::time_point timeout) {
-    return utils::get_local_injector().inject("paxos_prepare_timeout", timeout, [&cmd, &key, ballot, tr_state, schema, only_digest, da, timeout] {
+    return utils::get_local_injector().inject("paxos_prepare_timeout", timeout, [&sp, &cmd, &key, ballot, tr_state, schema, only_digest, da, timeout] {
         dht::token token = dht::get_token(*schema, key);
         utils::latency_counter lc;
         lc.start();
-        return with_locked_key(token, timeout, [&cmd, token, &key, ballot, tr_state, schema, only_digest, da, timeout] () mutable {
+        return with_locked_key(token, timeout, [&sp, &cmd, token, &key, ballot, tr_state, schema, only_digest, da, timeout] () mutable {
             // When preparing, we need to use the same time as "now" (that's the time we use to decide if something
             // is expired or not) across nodes, otherwise we may have a window where a Most Recent Decision shows up
             // on some replica and not others during a new proposal (in storage_proxy::begin_and_repair_paxos()), and no
@@ -72,7 +72,7 @@ future<prepare_response> paxos_state::prepare(tracing::trace_state_ptr tr_state,
             auto now_in_sec = utils::UUID_gen::unix_timestamp_in_sec(ballot);
 
             auto f = db::system_keyspace::load_paxos_state(key, schema, gc_clock::time_point(now_in_sec), timeout);
-            return f.then([&cmd, token = std::move(token), &key, ballot, tr_state, schema, only_digest, da, timeout] (paxos_state state) {
+            return f.then([&sp, &cmd, token = std::move(token), &key, ballot, tr_state, schema, only_digest, da, timeout] (paxos_state state) {
                 // If received ballot is newer that the one we already accepted it has to be accepted as well,
                 // but we will return the previously accepted proposal so that the new coordinator will use it instead of
                 // its own.
@@ -85,8 +85,8 @@ future<prepare_response> paxos_state::prepare(tracing::trace_state_ptr tr_state,
                     auto f1 = futurize_invoke(db::system_keyspace::save_paxos_promise, *schema, std::ref(key), ballot, timeout);
                     auto f2 = futurize_invoke([&] {
                         return do_with(dht::partition_range_vector({dht::partition_range::make_singular({token, key})}),
-                                [tr_state, schema, &cmd, only_digest, da, timeout] (const dht::partition_range_vector& prv) {
-                            return get_local_storage_proxy().get_db().local().query(schema, cmd,
+                                [&sp, tr_state, schema, &cmd, only_digest, da, timeout] (const dht::partition_range_vector& prv) {
+                            return sp.get_db().local().query(schema, cmd,
                                     {only_digest ? query::result_request::only_digest : query::result_request::result_and_digest, da},
                                     prv, tr_state, timeout);
                         });
@@ -128,18 +128,18 @@ future<prepare_response> paxos_state::prepare(tracing::trace_state_ptr tr_state,
                     return make_ready_future<prepare_response>(prepare_response(std::move(state._promised_ballot)));
                 }
             });
-        }).finally([schema, lc] () mutable {
-            auto& stats = get_local_storage_proxy().get_db().local().find_column_family(schema).get_stats();
+        }).finally([&sp, schema, lc] () mutable {
+            auto& stats = sp.get_db().local().find_column_family(schema).get_stats();
             stats.cas_prepare.mark(lc.stop().latency());
             stats.estimated_cas_prepare.add(lc.latency());
         });
     });
 }
 
-future<bool> paxos_state::accept(tracing::trace_state_ptr tr_state, schema_ptr schema, dht::token token, const proposal& proposal,
+future<bool> paxos_state::accept(storage_proxy& sp, tracing::trace_state_ptr tr_state, schema_ptr schema, dht::token token, const proposal& proposal,
         clock_type::time_point timeout) {
     return utils::get_local_injector().inject("paxos_accept_proposal_timeout", timeout,
-            [token = std::move(token), &proposal, schema, tr_state, timeout] {
+            [&sp, token = std::move(token), &proposal, schema, tr_state, timeout] {
         utils::latency_counter lc;
         lc.start();
         return with_locked_key(token, timeout, [&proposal, schema, tr_state, timeout] () mutable {
@@ -168,15 +168,15 @@ future<bool> paxos_state::accept(tracing::trace_state_ptr tr_state, schema_ptr s
                     return make_ready_future<bool>(false);
                 }
             });
-        }).finally([schema, lc] () mutable {
-            auto& stats = get_local_storage_proxy().get_db().local().find_column_family(schema).get_stats();
+        }).finally([&sp, schema, lc] () mutable {
+            auto& stats = sp.get_db().local().find_column_family(schema).get_stats();
             stats.cas_accept.mark(lc.stop().latency());
             stats.estimated_cas_accept.add(lc.latency());
         });
     });
 }
 
-future<> paxos_state::learn(schema_ptr schema, proposal decision, clock_type::time_point timeout,
+future<> paxos_state::learn(storage_proxy& sp, schema_ptr schema, proposal decision, clock_type::time_point timeout,
         tracing::trace_state_ptr tr_state) {
     if (utils::get_local_injector().enter("paxos_error_before_learn")) {
         return make_exception_future<>(utils::injected_error("injected_error_before_learn"));
@@ -185,10 +185,10 @@ future<> paxos_state::learn(schema_ptr schema, proposal decision, clock_type::ti
     utils::latency_counter lc;
     lc.start();
 
-    return do_with(std::move(decision), [tr_state = std::move(tr_state), schema, timeout] (proposal& decision) {
+    return do_with(std::move(decision), [&sp, tr_state = std::move(tr_state), schema, timeout] (proposal& decision) {
         auto f = utils::get_local_injector().inject("paxos_state_learn_timeout", timeout);
 
-        table& cf = get_local_storage_proxy().get_db().local().find_column_family(schema);
+        table& cf = sp.get_db().local().find_column_family(schema);
         db_clock::time_point t = cf.get_truncation_record();
         auto truncated_at = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch());
         // When saving a decision, also delete the last accepted proposal. This is just an
@@ -202,7 +202,7 @@ future<> paxos_state::learn(schema_ptr schema, proposal decision, clock_type::ti
         // The table may have been truncated since the proposal was initiated. In that case, we
         // don't want to perform the mutation and potentially resurrect truncated data.
         if (utils::UUID_gen::unix_timestamp(decision.ballot) >= truncated_at) {
-            f = f.then([schema, &decision, timeout, tr_state] {
+            f = f.then([&sp, schema, &decision, timeout, tr_state] {
                 logger.debug("Committing decision {}", decision);
                 tracing::trace(tr_state, "Committing decision {}", decision);
 
@@ -216,13 +216,13 @@ future<> paxos_state::learn(schema_ptr schema, proposal decision, clock_type::ti
                     logger.debug("Stored mutation references outdated schema version. "
                         "Trying to upgrade the accepted proposal mutation to the most recent schema version.");
                     return service::get_column_mapping(decision.update.column_family_id(), decision.update.schema_version())
-                        .then([schema, tr_state, timeout, &decision] (const column_mapping& cm) {
-                            return do_with(decision.update.unfreeze_upgrading(schema, cm), [tr_state, timeout] (const mutation& upgraded) {
-                                return get_local_storage_proxy().mutate_locally(upgraded, tr_state, db::commitlog::force_sync::yes, timeout);
+                        .then([&sp, schema, tr_state, timeout, &decision] (const column_mapping& cm) {
+                            return do_with(decision.update.unfreeze_upgrading(schema, cm), [&sp, tr_state, timeout] (const mutation& upgraded) {
+                                return sp.mutate_locally(upgraded, tr_state, db::commitlog::force_sync::yes, timeout);
                             });
                         });
                 }
-                return get_local_storage_proxy().mutate_locally(schema, decision.update, tr_state, db::commitlog::force_sync::yes, timeout);
+                return sp.mutate_locally(schema, decision.update, tr_state, db::commitlog::force_sync::yes, timeout);
             });
         } else {
             logger.debug("Not committing decision {} as ballot timestamp predates last truncation time", decision);
@@ -235,8 +235,8 @@ future<> paxos_state::learn(schema_ptr schema, proposal decision, clock_type::ti
                 return db::system_keyspace::save_paxos_decision(*schema, decision, timeout);
             });
         });
-    }).finally([schema, lc] () mutable {
-        auto& stats = get_local_storage_proxy().get_db().local().find_column_family(schema).get_stats();
+    }).finally([&sp, schema, lc] () mutable {
+        auto& stats = sp.get_db().local().find_column_family(schema).get_stats();
         stats.cas_learn.mark(lc.stop().latency());
         stats.estimated_cas_learn.add(lc.latency());
     });

@@ -48,6 +48,10 @@
 #include "utils/UUID_gen.hh"
 #include "service/paxos/prepare_response.hh"
 
+namespace service {
+class storage_proxy;
+}
+
 namespace service::paxos {
 
 using clock_type = db::timeout_clock;
@@ -140,14 +144,14 @@ public:
         , _accepted_proposal(std::move(accepted))
         , _most_recent_commit(std::move(commit)) {}
     // Replica RPC endpoint for Paxos "prepare" phase.
-    static future<prepare_response> prepare(tracing::trace_state_ptr tr_state, schema_ptr schema,
+    static future<prepare_response> prepare(storage_proxy& sp, tracing::trace_state_ptr tr_state, schema_ptr schema,
             const query::read_command& cmd, const partition_key& key, utils::UUID ballot,
             bool only_digest, query::digest_algorithm da, clock_type::time_point timeout);
     // Replica RPC endpoint for Paxos "accept" phase.
-    static future<bool> accept(tracing::trace_state_ptr tr_state, schema_ptr schema, dht::token token, const proposal& proposal,
+    static future<bool> accept(storage_proxy& sp, tracing::trace_state_ptr tr_state, schema_ptr schema, dht::token token, const proposal& proposal,
             clock_type::time_point timeout);
     // Replica RPC endpoint for Paxos "learn".
-    static future<> learn(schema_ptr schema, proposal decision, clock_type::time_point timeout, tracing::trace_state_ptr tr_state);
+    static future<> learn(storage_proxy& sp, schema_ptr schema, proposal decision, clock_type::time_point timeout, tracing::trace_state_ptr tr_state);
     // Replica RPC endpoint for pruning Paxos table
     static future<> prune(schema_ptr schema, const partition_key& key, utils::UUID ballot, clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state);
