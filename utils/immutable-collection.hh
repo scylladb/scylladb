@@ -42,15 +42,15 @@ namespace utils {
 
 template <typename Collection>
 class immutable_collection {
-    Collection& _col;
+    Collection* _col;
 
 public:
-    immutable_collection(Collection& col) noexcept : _col(col) {}
+    immutable_collection(Collection& col) noexcept : _col(&col) {}
 
 #define DO_WRAP_METHOD(method, is_const)                                                                           \
     template <typename... Args>                                                                                    \
     auto method(Args&&... args) is_const noexcept(noexcept(std::declval<is_const Collection>().method(args...))) { \
-        return _col.method(std::forward<Args>(args)...);                                                           \
+        return _col->method(std::forward<Args>(args)...);                                                           \
     }
 
 #define WRAP_CONST_METHOD(method)    \
