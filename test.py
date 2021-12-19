@@ -66,27 +66,40 @@ class TestSuite(ABC):
     """A test suite is a folder with tests of the same type.
     E.g. it can be unit tests, boost tests, or CQL tests."""
 
-    # All existing test suites, one suite per path.
+    # All existing test suites, one suite per path/mode.
     suites = dict()
     _next_id = 0
 
-    def __init__(self, path, cfg):
+    def __init__(self, path, cfg, options, mode):
         self.path = path
         self.name = os.path.basename(self.path)
         self.cfg = cfg
+        self.options = options
+        self.mode = mode
         self.tests = []
 
         self.run_first_tests = set(cfg.get("run_first", []))
         self.no_parallel_cases = set(cfg.get("no_parallel_cases", []))
-        disabled = self.cfg.get("disable", [])
-        non_debug = self.cfg.get("skip_in_debug_modes", [])
-        self.enabled_modes = dict()
-        self.disabled_tests = dict()
-        for mode in all_modes:
-            self.disabled_tests[mode] = \
-                set(self.cfg.get("skip_in_" + mode, []) + (non_debug if mode in debug_modes else []) + disabled)
-            for shortname in set(self.cfg.get("run_in_" + mode, [])):
-                self.enabled_modes[shortname] = self.enabled_modes.get(shortname, []) + [mode]
+        # Skip tests disabled in suite.yaml
+        self.disabled_tests = set(self.cfg.get("disable", []))
+        # Skip tests disabled in specific mode.
+        self.disabled_tests.update(self.cfg.get("skip_in_" + mode, []))
+        # If this mode is one of the debug modes, and there are
+        # tests disabled in a debug mode, add these tests to the skip list.
+        if mode in debug_modes:
+            self.disabled_tests.update(self.cfg.get("skip_in_debug_modes", []))
+        # If a test is listed in run_in_<mode>, it should only be enabled in
+        # this mode. Tests not listed in any run_in_<mode> directive should
+        # run in all modes. Inversing this, we should disable all tests
+        # which are listed explicitly in some run_in_<m> where m != mode
+        # This of course may create ambiguity with skip_* settings,
+        # since the priority of the two is undefined, but oh well.
+        run_in_m = set(self.cfg.get("run_in_" + mode, []))
+        for a in all_modes:
+            if a == mode:
+                continue
+            skip_in_m = set(self.cfg.get("run_in_" + a, []))
+            self.disabled_tests.update(skip_in_m - run_in_m)
 
     @property
     def next_id(self):
@@ -106,10 +119,11 @@ class TestSuite(ABC):
             return cfg
 
     @staticmethod
-    def opt_create(path):
+    def opt_create(path, options, mode):
         """Return a subclass of TestSuite with name cfg["type"].title + TestSuite.
         Ensures there is only one suite instance per path."""
-        suite = TestSuite.suites.get(path)
+        suite_key = os.path.join(path, mode)
+        suite = TestSuite.suites.get(suite_key)
         if not suite:
             cfg = TestSuite.load_cfg(path)
             kind = cfg.get("type")
@@ -118,8 +132,8 @@ class TestSuite(ABC):
             SpecificTestSuite = globals().get(kind.title() + "TestSuite")
             if not SpecificTestSuite:
                 raise RuntimeError("Failed to load tests in {}: suite type '{}' not found".format(path, kind))
-            suite = SpecificTestSuite(path, cfg)
-            TestSuite.suites[path] = suite
+            suite = SpecificTestSuite(path, cfg, options, mode)
+            TestSuite.suites[suite_key] = suite
         return suite
 
     @staticmethod
@@ -133,14 +147,15 @@ class TestSuite(ABC):
         pass
 
     @abstractmethod
-    def add_test(self, name, args, mode, options):
+    def add_test(self, shortname):
         pass
 
     def junit_tests(self):
         """Tests which participate in a consolidated junit report"""
         return self.tests
 
-    def add_test_list(self, mode, options):
+    def add_test_list(self):
+        options = self.options
         lst = [os.path.splitext(os.path.basename(t))[0] for t in glob.glob(os.path.join(self.path, self.pattern))]
         if lst:
             # Some tests are long and are better to be started earlier,
@@ -148,10 +163,7 @@ class TestSuite(ABC):
             lst.sort(key=lambda x: (x not in self.run_first_tests, x))
 
         for shortname in lst:
-            if shortname in self.disabled_tests[mode]:
-                continue
-            enabled_modes = self.enabled_modes.get(shortname, [])
-            if enabled_modes and mode not in enabled_modes:
+            if shortname in self.disabled_tests:
                 continue
 
             t = os.path.join(self.name, shortname)
@@ -162,33 +174,33 @@ class TestSuite(ABC):
             for p in patterns:
                 if p in t:
                     for i in range(options.repeat):
-                        self.add_test(shortname, mode, options)
+                        self.add_test(shortname)
 
 
 class UnitTestSuite(TestSuite):
     """TestSuite instantiation for non-boost unit tests"""
 
-    def __init__(self, path, cfg):
-        super().__init__(path, cfg)
+    def __init__(self, path, cfg, options, mode):
+        super().__init__(path, cfg, options, mode)
         # Map of custom test command line arguments, if configured
         self.custom_args = cfg.get("custom_args", {})
 
-    def create_test(self, shortname, args, suite, mode, options):
-        test = UnitTest(self.next_id, shortname, args, suite, mode, options)
+    def create_test(self, shortname, suite, args):
+        test = UnitTest(self.next_id, shortname, suite, args)
         self.tests.append(test)
 
-    def add_test(self, shortname, mode, options):
+    def add_test(self, shortname):
         """Create a UnitTest class with possibly custom command line
         arguments and add it to the list of tests"""
         # Skip tests which are not configured, and hence are not built
-        if os.path.join("test", self.name, shortname) not in options.tests:
+        if os.path.join("test", self.name, shortname) not in self.options.tests:
             return
 
         # Default seastar arguments, if not provided in custom test options,
         # are two cores and 2G of RAM
         args = self.custom_args.get(shortname, ["-c2 -m2G"])
         for a in args:
-            self.create_test(shortname, a, self, mode, options)
+            self.create_test(shortname, self, a)
 
     @property
     def pattern(self):
@@ -198,14 +210,15 @@ class UnitTestSuite(TestSuite):
 class BoostTestSuite(UnitTestSuite):
     """TestSuite for boost unit tests"""
 
-    def __init__(self, path, cfg):
-        super().__init__(path, cfg)
+    def __init__(self, path, cfg, options, mode):
+        super().__init__(path, cfg, options, mode)
         self._cases_cache = {'name': None, 'cases': []}
 
-    def create_test(self, shortname, args, suite, mode, options):
+    def create_test(self, shortname, suite, args):
+        options = suite.options
         if options.parallel_cases and (shortname not in self.no_parallel_cases):
             if self._cases_cache['name'] != shortname:
-                exe = os.path.join("build", mode, "test", suite.name, shortname)
+                exe = os.path.join("build", suite.mode, "test", suite.name, shortname)
                 cases = subprocess.run([exe, '--list_content'],
                                        stdout=subprocess.PIPE,
                                        stderr=subprocess.PIPE,
@@ -218,14 +231,14 @@ class BoostTestSuite(UnitTestSuite):
 
             case_list = self._cases_cache['cases']
             if len(case_list) == 1:
-                test = BoostTest(self.next_id, shortname, args, suite, None, mode, options)
+                test = BoostTest(self.next_id, shortname, suite, args, None)
                 self.tests.append(test)
             else:
                 for case in case_list:
-                    test = BoostTest(self.next_id, shortname, args, suite, case, mode, options)
+                    test = BoostTest(self.next_id, shortname, suite, args, case)
                     self.tests.append(test)
         else:
-            test = BoostTest(self.next_id, shortname, args, suite, None, mode, options)
+            test = BoostTest(self.next_id, shortname, suite, args, None)
             self.tests.append(test)
 
     def junit_tests(self):
@@ -236,9 +249,9 @@ class BoostTestSuite(UnitTestSuite):
 class CqlTestSuite(TestSuite):
     """TestSuite for CQL tests"""
 
-    def add_test(self, shortname, mode, options):
+    def add_test(self, shortname):
         """Create a CqlTest class and add it to the list"""
-        test = CqlTest(self.next_id, shortname, self, mode, options)
+        test = CqlTest(self.next_id, shortname, self)
         self.tests.append(test)
 
     @property
@@ -249,8 +262,8 @@ class CqlTestSuite(TestSuite):
 class RunTestSuite(TestSuite):
     """TestSuite for test directory with a 'run' script """
 
-    def add_test(self, shortname, mode, options):
-        test = RunTest(self.next_id, shortname, self, mode, options)
+    def add_test(self, shortname):
+        test = RunTest(self.next_id, shortname, self)
         self.tests.append(test)
 
     @property
@@ -260,17 +273,17 @@ class RunTestSuite(TestSuite):
 
 class Test:
     """Base class for CQL, Unit and Boost tests"""
-    def __init__(self, test_no, shortname, suite, mode, options):
+    def __init__(self, test_no, shortname, suite):
         self.id = test_no
         # Name with test suite name
         self.name = os.path.join(suite.name, shortname.split('.')[0])
         # Name within the suite
         self.shortname = shortname
-        self.mode = mode
+        self.mode = suite.mode
         self.suite = suite
         # Unique file name, which is also readable by human, as filename prefix
         self.uname = "{}.{}".format(self.shortname, self.id)
-        self.log_filename = os.path.join(options.tmpdir, self.mode, self.uname + ".log")
+        self.log_filename = os.path.join(suite.options.tmpdir, self.mode, self.uname + ".log")
         self.success = None
 
     @abstractmethod
@@ -297,8 +310,8 @@ class UnitTest(Test):
                                 "--blocked-reactor-notify-ms 2000000 --collectd 0 "
                                 "--max-networking-io-control-blocks=100 ")
 
-    def __init__(self, test_no, shortname, args, suite, mode, options):
-        super().__init__(test_no, shortname, suite, mode, options)
+    def __init__(self, test_no, shortname, suite, args):
+        super().__init__(test_no, shortname, suite)
         self.path = os.path.join("build", self.mode, "test", self.name)
         self.args = shlex.split(args) + UnitTest.standard_args
         if self.mode == "coverage":
@@ -319,13 +332,13 @@ class UnitTest(Test):
 class BoostTest(UnitTest):
     """A unit test which can produce its own XML output"""
 
-    def __init__(self, test_no, shortname, args, suite, casename, mode, options):
+    def __init__(self, test_no, shortname, suite, args, casename):
         boost_args = []
         if casename:
             shortname += '.' + casename
             boost_args += ['--run_test=' + casename]
-        super().__init__(test_no, shortname, args, suite, mode, options)
-        self.xmlout = os.path.join(options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
+        super().__init__(test_no, shortname, suite, args)
+        self.xmlout = os.path.join(suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
         boost_args += ['--report_level=no',
                        '--logger=HRF,test_suite:XML,test_suite,' + self.xmlout]
         boost_args += ['--catch_system_errors=no']  # causes undebuggable cores
@@ -369,13 +382,13 @@ class CqlTest(Test):
     """Run the sequence of CQL commands stored in the file and check
     output"""
 
-    def __init__(self, test_no, shortname, suite, mode, options):
-        super().__init__(test_no, shortname, suite, mode, options)
+    def __init__(self, test_no, shortname, suite):
+        super().__init__(test_no, shortname, suite)
         # Path to cql_repl driver, in the given build mode
         self.path = os.path.join("build", self.mode, "test/tools/cql_repl")
         self.cql = os.path.join(suite.path, self.shortname + ".cql")
         self.result = os.path.join(suite.path, self.shortname + ".result")
-        self.tmpfile = os.path.join(options.tmpdir, self.mode, self.uname + ".reject")
+        self.tmpfile = os.path.join(suite.options.tmpdir, self.mode, self.uname + ".reject")
         self.reject = os.path.join(suite.path, self.shortname + ".reject")
         self.args = shlex.split("-c1 -m2G --input={} --output={} --log={}".format(
             self.cql, self.tmpfile, self.log_filename))
@@ -435,10 +448,10 @@ class CqlTest(Test):
 class RunTest(Test):
     """Run tests in a directory started by a run script"""
 
-    def __init__(self, test_no, shortname, suite, mode, options):
-        super().__init__(test_no, shortname, suite, mode, options)
+    def __init__(self, test_no, shortname, suite):
+        super().__init__(test_no, shortname, suite)
         self.path = os.path.join(suite.path, shortname)
-        self.xmlout = os.path.join(options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
+        self.xmlout = os.path.join(suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
         self.args = ["--junit-xml={}".format(self.xmlout)]
         self.scylla_path = os.path.join("build", self.mode, "scylla")
 
@@ -711,8 +724,8 @@ def find_tests(options):
     for f in glob.glob(os.path.join("test", "*")):
         if os.path.isdir(f) and os.path.isfile(os.path.join(f, "suite.yaml")):
             for mode in options.modes:
-                suite = TestSuite.opt_create(f)
-                suite.add_test_list(mode, options)
+                suite = TestSuite.opt_create(f, options, mode)
+                suite.add_test_list()
 
     if not TestSuite.test_count():
         if len(options.name):
