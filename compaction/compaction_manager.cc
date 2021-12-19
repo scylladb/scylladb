@@ -1076,14 +1076,14 @@ const std::vector<sstables::compaction_info> compaction_manager::get_compactions
             }) | boost::adaptors::transformed(to_info));
 }
 
-future<> compaction_manager::stop_compaction(sstring type) {
+future<> compaction_manager::stop_compaction(sstring type, table* table) {
     sstables::compaction_type target_type;
     try {
         target_type = sstables::to_compaction_type(type);
     } catch (...) {
         throw std::runtime_error(format("Compaction of type {} cannot be stopped by compaction manager: {}", type.c_str(), std::current_exception()));
     }
-    return stop_ongoing_compactions("user request", nullptr, target_type);
+    return stop_ongoing_compactions("user request", table, target_type);
 }
 
 void compaction_manager::propagate_replacement(table* t,

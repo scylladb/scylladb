@@ -119,3 +119,4 @@ def cql(request):
 @pytest.fixture(scope="session")
 def this_dc(cql):
     yield cql.execute("SELECT data_center FROM system.local").one()[0]
+

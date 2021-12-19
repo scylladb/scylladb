@@ -19,12 +19,16 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/coroutine.hh>
+
 #include "compaction_manager.hh"
 #include "compaction/compaction_manager.hh"
 #include "api/api-doc/compaction_manager.json.hh"
 #include "db/system_keyspace.hh"
 #include "column_family.hh"
 #include "unimplemented.hh"
+#include "storage_service.hh"
+
 #include <utility>
 
 namespace api {
@@ -115,6 +119,23 @@ void set_compaction_manager(http_context& ctx, routes& r) {
         }).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
+    });
+
+    cm::stop_keyspace_compaction.set(r, [&ctx] (std::unique_ptr<request> req) -> future<json::json_return_type> {
+        auto ks_name = validate_keyspace(ctx, req->param);
+        auto table_names = parse_tables(ks_name, ctx, req->query_parameters, "tables");
+        if (table_names.empty()) {
+            table_names = map_keys(ctx.db.local().find_keyspace(ks_name).metadata().get()->cf_meta_data());
+        }
+        auto type = req->get_query_param("type");
+        co_await ctx.db.invoke_on_all([&ks_name, &table_names, type] (database& db) {
+            auto& cm = db.get_compaction_manager();
+            return parallel_for_each(table_names, [&db, &cm, &ks_name, type] (sstring& table_name) {
+                auto& t = db.find_column_family(ks_name, table_name);
+                return cm.stop_compaction(type, &t);
+            });
+        });
+        co_return json_void();
     });
 
     cm::get_pending_tasks.set(r, [&ctx] (std::unique_ptr<request> req) {
