@@ -205,9 +205,12 @@ class BoostTestSuite(UnitTestSuite):
     def create_test(self, shortname, args, suite, mode, options):
         if options.parallel_cases and (shortname not in self.no_parallel_cases):
             if self._cases_cache['name'] != shortname:
-                cases = subprocess.run([os.path.join("build", mode, "test", suite.name, shortname), '--list_content'],
+                exe = os.path.join("build", mode, "test", suite.name, shortname)
+                cases = subprocess.run([exe, '--list_content'],
                                        stdout=subprocess.PIPE,
                                        stderr=subprocess.PIPE,
+                                       env=dict(os.environ,
+                                                **{"ASAN_OPTIONS": "halt_on_error=0"}),
                                        check=True, universal_newlines=True).stderr
                 case_list = [case[:-1] for case in cases.splitlines() if case.endswith('*')]
                 self._cases_cache['name'] = shortname
