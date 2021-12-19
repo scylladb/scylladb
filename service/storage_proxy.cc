@@ -340,7 +340,7 @@ public:
     virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state) override {
         tracing::trace(tr_state, "Executing a learn locally");
-        return paxos::paxos_state::learn(_schema, *_proposal, timeout, tr_state);
+        return paxos::paxos_state::learn(get_local_storage_proxy(), _schema, *_proposal, timeout, tr_state);
     }
     virtual future<> apply_remotely(storage_proxy& sp, gms::inet_address ep, inet_address_vector_replica_set&& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
@@ -967,7 +967,7 @@ future<paxos::prepare_summary> paxos_response_handler::prepare_ballot(utils::UUI
                 auto da = digest_algorithm(get_local_storage_proxy());
                 if (fbu::is_me(peer)) {
                     tracing::trace(tr_state, "prepare_ballot: prepare {} locally", ballot);
-                    response = co_await paxos::paxos_state::prepare(tr_state, _schema, *_cmd, _key.key(), ballot, only_digest, da, _timeout);
+                    response = co_await paxos::paxos_state::prepare(get_local_storage_proxy(), tr_state, _schema, *_cmd, _key.key(), ballot, only_digest, da, _timeout);
                 } else {
                     tracing::trace(tr_state, "prepare_ballot: sending prepare {} to {}", ballot, peer);
                     response = co_await _proxy->_messaging.send_paxos_prepare(peer, _timeout, *_cmd, _key.key(), ballot, only_digest, da,
@@ -1128,7 +1128,7 @@ future<bool> paxos_response_handler::accept_proposal(lw_shared_ptr<paxos::propos
             try {
                 if (fbu::is_me(peer)) {
                     tracing::trace(tr_state, "accept_proposal: accept {} locally", *proposal);
-                    accepted = co_await paxos::paxos_state::accept(tr_state, _schema, proposal->update.decorated_key(*_schema).token(), *proposal, _timeout);
+                    accepted = co_await paxos::paxos_state::accept(get_local_storage_proxy(), tr_state, _schema, proposal->update.decorated_key(*_schema).token(), *proposal, _timeout);
                 } else {
                     tracing::trace(tr_state, "accept_proposal: send accept {} to {}", *proposal, peer);
                     accepted = co_await _proxy->_messaging.send_paxos_accept(peer, _timeout, *proposal, tracing::make_trace_info(tr_state));
@@ -5062,7 +5062,7 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
     ms.register_mutation(std::bind_front<>(receive_mutation_handler, mm, _write_smp_service_group));
     ms.register_hint_mutation(std::bind_front<>(receive_mutation_handler, mm, _hints_write_smp_service_group));
 
-    ms.register_paxos_learn([mm] (const rpc::client_info& cinfo, rpc::opt_time_point t, paxos::proposal decision,
+    ms.register_paxos_learn([this, mm] (const rpc::client_info& cinfo, rpc::opt_time_point t, paxos::proposal decision,
             std::vector<gms::inet_address> forward, gms::inet_address reply_to, unsigned shard,
             storage_proxy::response_id_type response_id, std::optional<tracing::trace_info> trace_info) {
         tracing::trace_state_ptr trace_state_ptr;
@@ -5071,9 +5071,9 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
         utils::UUID schema_version = decision.update.schema_version();
         return handle_write(src_addr, *mm, t, schema_version, std::move(decision), std::move(forward), reply_to, shard,
                 response_id, trace_info,
-               /* apply_fn */ [] (shared_ptr<storage_proxy>& p, tracing::trace_state_ptr tr_state, schema_ptr s,
+               /* apply_fn */ [this] (shared_ptr<storage_proxy>& p, tracing::trace_state_ptr tr_state, schema_ptr s,
                        const paxos::proposal& decision, clock_type::time_point timeout) {
-                     return paxos::paxos_state::learn(std::move(s), decision, timeout, tr_state);
+                     return paxos::paxos_state::learn(*this, std::move(s), decision, timeout, tr_state);
               },
               /* forward_fn */ [] (shared_ptr<storage_proxy>& p, netw::messaging_service::msg_addr addr, clock_type::time_point timeout, const paxos::proposal& m,
                       gms::inet_address reply_to, unsigned shard, response_id_type response_id,
@@ -5220,11 +5220,11 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
             unsigned shard = dht::shard_of(*schema, token);
             bool local = shard == this_shard_id();
             get_stats().replica_cross_shard_ops += !local;
-            return smp::submit_to(shard, _write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
+            return container().invoke_on(shard, _write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
                                      local, cmd = make_lw_shared<query::read_command>(std::move(cmd)), key = std::move(key),
-                                     ballot, only_digest, da, timeout, src_ip] () {
+                                     ballot, only_digest, da, timeout, src_ip] (storage_proxy& sp) {
                 tracing::trace_state_ptr tr_state = gt;
-                return paxos::paxos_state::prepare(tr_state, gs, *cmd, key, ballot, only_digest, da, *timeout).then([src_ip, tr_state] (paxos::prepare_response r) {
+                return paxos::paxos_state::prepare(sp, tr_state, gs, *cmd, key, ballot, only_digest, da, *timeout).then([src_ip, tr_state] (paxos::prepare_response r) {
                     tracing::trace(tr_state, "paxos_prepare: handling is done, sending a response to /{}", src_ip);
                     return make_foreign(std::make_unique<paxos::prepare_response>(std::move(r)));
                 });
@@ -5248,9 +5248,9 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
             unsigned shard = dht::shard_of(*schema, token);
             bool local = shard == this_shard_id();
             get_stats().replica_cross_shard_ops += !local;
-            return smp::submit_to(shard, _write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
-                                     local, proposal = std::move(proposal), timeout, token] () {
-                return paxos::paxos_state::accept(gt, gs, token, proposal, *timeout);
+            return container().invoke_on(shard, _write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
+                                     local, proposal = std::move(proposal), timeout, token] (storage_proxy& sp) {
+                return paxos::paxos_state::accept(sp, gt, gs, token, proposal, *timeout);
             });
         });
 
