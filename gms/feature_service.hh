@@ -101,6 +101,10 @@ private:
     gms::feature _cdc_generations_v2;
     gms::feature _uda;
     gms::feature _separate_page_size_and_safety_limit;
+    gms::feature _supports_raft_cluster_mgmt;
+    gms::feature _uses_raft_cluster_mgmt;
+
+    gms::feature::listener_registration _raft_support_listener;
 
 public:
 
