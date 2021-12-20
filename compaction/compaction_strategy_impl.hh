@@ -28,6 +28,7 @@
 
 namespace compaction {
 class table_state;
+class strategy_control;
 }
 
 namespace sstables {
@@ -57,7 +58,7 @@ protected:
     explicit compaction_strategy_impl(const std::map<sstring, sstring>& options);
 public:
     virtual ~compaction_strategy_impl() {}
-    virtual compaction_descriptor get_sstables_for_compaction(table_state& table_s, std::vector<sstables::shared_sstable> candidates) = 0;
+    virtual compaction_descriptor get_sstables_for_compaction(table_state& table_s, strategy_control& control, std::vector<sstables::shared_sstable> candidates) = 0;
     virtual compaction_descriptor get_major_compaction_job(table_state& table_s, std::vector<sstables::shared_sstable> candidates);
     virtual void notify_completion(const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added) { }
     virtual compaction_strategy_type type() const = 0;

@@ -157,7 +157,7 @@ size_tiered_compaction_strategy::most_interesting_bucket(std::vector<std::vector
 }
 
 compaction_descriptor
-size_tiered_compaction_strategy::get_sstables_for_compaction(table_state& table_s, std::vector<sstables::shared_sstable> candidates) {
+size_tiered_compaction_strategy::get_sstables_for_compaction(table_state& table_s, strategy_control& control, std::vector<sstables::shared_sstable> candidates) {
     // make local copies so they can't be changed out from under us mid-method
     int min_threshold = table_s.min_compaction_threshold();
     int max_threshold = table_s.schema()->max_compaction_threshold();

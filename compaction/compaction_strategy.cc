@@ -362,7 +362,7 @@ compaction_backlog_tracker& get_null_backlog_tracker() {
 //
 class null_compaction_strategy : public compaction_strategy_impl {
 public:
-    virtual compaction_descriptor get_sstables_for_compaction(table_state& table_s, std::vector<sstables::shared_sstable> candidates) override {
+    virtual compaction_descriptor get_sstables_for_compaction(table_state& table_s, strategy_control& control, std::vector<sstables::shared_sstable> candidates) override {
         return sstables::compaction_descriptor();
     }
 
@@ -581,7 +581,7 @@ date_tiered_compaction_strategy::date_tiered_compaction_strategy(const std::map<
     _use_clustering_key_filter = true;
 }
 
-compaction_descriptor date_tiered_compaction_strategy::get_sstables_for_compaction(table_state& table_s, std::vector<sstables::shared_sstable> candidates) {
+compaction_descriptor date_tiered_compaction_strategy::get_sstables_for_compaction(table_state& table_s, strategy_control& control, std::vector<sstables::shared_sstable> candidates) {
     auto gc_before = gc_clock::now() - table_s.schema()->gc_grace_seconds();
     auto sstables = _manifest.get_next_sstables(table_s, candidates, gc_before);
 
@@ -629,8 +629,8 @@ compaction_strategy_type compaction_strategy::type() const {
     return _compaction_strategy_impl->type();
 }
 
-compaction_descriptor compaction_strategy::get_sstables_for_compaction(table_state& table_s, std::vector<sstables::shared_sstable> candidates) {
-    return _compaction_strategy_impl->get_sstables_for_compaction(table_s, std::move(candidates));
+compaction_descriptor compaction_strategy::get_sstables_for_compaction(table_state& table_s, strategy_control& control, std::vector<sstables::shared_sstable> candidates) {
+    return _compaction_strategy_impl->get_sstables_for_compaction(table_s, control, std::move(candidates));
 }
 
 compaction_descriptor compaction_strategy::get_major_compaction_job(table_state& table_s, std::vector<sstables::shared_sstable> candidates) {
