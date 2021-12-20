@@ -363,10 +363,10 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer) {
     testlog.debug("Data split into {} buckets: {}", buckets.size(), boost::copy_range<std::vector<int64_t>>(buckets | boost::adaptors::map_keys));
 
     auto permit = semaphore.make_permit();
-    auto bucket_readers = boost::copy_range<std::vector<flat_mutation_reader>>(buckets | boost::adaptors::map_values |
-            boost::adaptors::transformed([&random_schema, &permit] (std::vector<mutation> muts) { return make_flat_mutation_reader_from_mutations(random_schema.schema(), permit, std::move(muts)); }));
-    auto reader = make_combined_reader(random_schema.schema(), permit, std::move(bucket_readers), streamed_mutation::forwarding::no,
-            mutation_reader::forwarding::no);
+    auto bucket_readers = boost::copy_range<std::vector<flat_mutation_reader_v2>>(buckets | boost::adaptors::map_values |
+            boost::adaptors::transformed([&random_schema, &permit] (std::vector<mutation> muts) { return upgrade_to_v2(make_flat_mutation_reader_from_mutations(random_schema.schema(), permit, std::move(muts))); }));
+    auto reader = downgrade_to_v1(make_combined_reader(random_schema.schema(), permit, std::move(bucket_readers), streamed_mutation::forwarding::no,
+            mutation_reader::forwarding::no));
     auto close_reader = deferred_close(reader);
 
     const auto now = gc_clock::now();
@@ -488,14 +488,14 @@ SEASTAR_THREAD_TEST_CASE(test_partition_based_splitting_mutation_writer) {
         });
     };
     auto check_and_reset = [&] {
-        std::vector<flat_mutation_reader> readers;
+        std::vector<flat_mutation_reader_v2> readers;
         auto close_readers = defer([&] {
             for (auto& rd : readers) {
                 rd.close().get();
             }
         });
         for (auto muts : output_mutations) {
-            readers.emplace_back(make_flat_mutation_reader_from_mutations(random_schema.schema(), semaphore.make_permit(), std::move(muts)));
+            readers.emplace_back(upgrade_to_v2(make_flat_mutation_reader_from_mutations(random_schema.schema(), semaphore.make_permit(), std::move(muts))));
         }
         auto rd = assert_that(make_combined_reader(random_schema.schema(), semaphore.make_permit(), std::move(readers)));
         for (const auto& mut : input_mutations) {

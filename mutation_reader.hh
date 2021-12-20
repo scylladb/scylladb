@@ -40,8 +40,8 @@ public:
 
     virtual ~reader_selector() = default;
     // Call only if has_new_readers() returned true.
-    virtual std::vector<flat_mutation_reader> create_new_readers(const std::optional<dht::ring_position_view>& pos) = 0;
-    virtual std::vector<flat_mutation_reader> fast_forward_to(const dht::partition_range& pr) = 0;
+    virtual std::vector<flat_mutation_reader_v2> create_new_readers(const std::optional<dht::ring_position_view>& pos) = 0;
+    virtual std::vector<flat_mutation_reader_v2> fast_forward_to(const dht::partition_range& pr) = 0;
 
     // Can be false-positive but never false-negative!
     bool has_new_readers(const std::optional<dht::ring_position_view>& pos) const noexcept {
@@ -53,20 +53,20 @@ public:
 // Creates a mutation reader which combines data return by supplied readers.
 // Returns mutation of the same schema only when all readers return mutations
 // of the same schema.
-flat_mutation_reader make_combined_reader(schema_ptr schema,
+flat_mutation_reader_v2 make_combined_reader(schema_ptr schema,
         reader_permit permit,
-        std::vector<flat_mutation_reader>,
+        std::vector<flat_mutation_reader_v2>,
         streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no,
         mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
-flat_mutation_reader make_combined_reader(schema_ptr schema,
+flat_mutation_reader_v2 make_combined_reader(schema_ptr schema,
         reader_permit permit,
         std::unique_ptr<reader_selector>,
         streamed_mutation::forwarding,
         mutation_reader::forwarding);
-flat_mutation_reader make_combined_reader(schema_ptr schema,
+flat_mutation_reader_v2 make_combined_reader(schema_ptr schema,
         reader_permit permit,
-        flat_mutation_reader&& a,
-        flat_mutation_reader&& b,
+        flat_mutation_reader_v2&& a,
+        flat_mutation_reader_v2&& b,
         streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no,
         mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
 
@@ -642,10 +642,10 @@ flat_mutation_reader make_compacting_reader(flat_mutation_reader source, gc_cloc
 // A mutation reader together with an upper bound on the set of positions of fragments
 // that the reader will return. The upper bound does not need to be exact.
 struct reader_and_upper_bound {
-    flat_mutation_reader reader;
+    flat_mutation_reader_v2 reader;
     position_in_partition upper_bound;
 
-    reader_and_upper_bound(flat_mutation_reader r, position_in_partition bound)
+    reader_and_upper_bound(flat_mutation_reader_v2 r, position_in_partition bound)
         : reader(std::move(r)), upper_bound(std::move(bound)) {}
 };
 
@@ -699,7 +699,7 @@ public:
     virtual future<> close() noexcept = 0;
 };
 
-flat_mutation_reader make_clustering_combined_reader(schema_ptr schema,
+flat_mutation_reader_v2 make_clustering_combined_reader(schema_ptr schema,
         reader_permit,
         streamed_mutation::forwarding,
         std::unique_ptr<position_reader_queue>);

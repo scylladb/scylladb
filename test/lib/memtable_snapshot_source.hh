@@ -67,19 +67,19 @@ private:
         auto new_mt = make_lw_shared<memtable>(_s);
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto permit = semaphore.make_permit();
-        std::vector<flat_mutation_reader> readers;
+        std::vector<flat_mutation_reader_v2> readers;
         for (auto&& mt : _memtables) {
-            readers.push_back(mt->make_flat_reader(new_mt->schema(),
+            readers.push_back(upgrade_to_v2(mt->make_flat_reader(new_mt->schema(),
                  permit,
                  query::full_partition_range,
                  new_mt->schema()->full_slice(),
                  default_priority_class(),
                  nullptr,
                  streamed_mutation::forwarding::no,
-                 mutation_reader::forwarding::yes));
+                 mutation_reader::forwarding::yes)));
         }
         _memtables.push_back(new_memtable());
-        auto&& rd = make_combined_reader(new_mt->schema(), permit, std::move(readers));
+        auto&& rd = downgrade_to_v1(make_combined_reader(new_mt->schema(), permit, std::move(readers)));
         auto close_rd = deferred_close(rd);
         consume_partitions(rd, [&] (mutation&& m) {
             new_mt->apply(std::move(m));
