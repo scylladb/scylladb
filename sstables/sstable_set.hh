@@ -146,17 +146,6 @@ public:
         mutation_reader::forwarding,
         read_monitor_generator& rmg = default_read_monitor_generator()) const;
 
-    flat_mutation_reader make_reader(
-            schema_ptr,
-            reader_permit,
-            const dht::partition_range&,
-            const query::partition_slice&,
-            const io_priority_class&,
-            tracing::trace_state_ptr,
-            streamed_mutation::forwarding,
-            mutation_reader::forwarding,
-            read_monitor_generator& rmg = default_read_monitor_generator()) const;
-
     flat_mutation_reader_v2 make_crawling_reader(
             schema_ptr,
             reader_permit,
