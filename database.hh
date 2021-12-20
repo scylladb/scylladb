@@ -604,7 +604,7 @@ private:
     // Caller needs to ensure that column_family remains live (FIXME: relax this).
     // The 'range' parameter must be live as long as the reader is used.
     // Mutations returned by the reader will all have given schema.
-    flat_mutation_reader make_sstable_reader(schema_ptr schema,
+    flat_mutation_reader_v2 make_sstable_reader(schema_ptr schema,
                                         reader_permit permit,
                                         lw_shared_ptr<sstables::sstable_set> sstables,
                                         const dht::partition_range& range,

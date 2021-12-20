@@ -62,7 +62,7 @@ static seastar::metrics::label keyspace_label("ks");
 
 using namespace std::chrono_literals;
 
-flat_mutation_reader
+flat_mutation_reader_v2
 table::make_sstable_reader(schema_ptr s,
                                    reader_permit permit,
                                    lw_shared_ptr<sstables::sstable_set> sstables,
@@ -79,14 +79,14 @@ table::make_sstable_reader(schema_ptr s,
     if (pr.is_singular() && pr.start()->value().has_key()) {
         const dht::ring_position& pos = pr.start()->value();
         if (dht::shard_of(*s, pos.token()) != this_shard_id()) {
-            return make_empty_flat_reader(s, std::move(permit)); // range doesn't belong to this shard
+            return make_empty_flat_reader_v2(s, std::move(permit)); // range doesn't belong to this shard
         }
 
         return sstables->create_single_key_sstable_reader(const_cast<column_family*>(this), std::move(s), std::move(permit),
                 _stats.estimated_sstable_per_read, pr, slice, pc, std::move(trace_state), fwd, fwd_mr);
     } else {
-        return downgrade_to_v1(sstables->make_local_shard_sstable_reader(std::move(s), std::move(permit), pr, slice, pc,
-                std::move(trace_state), fwd, fwd_mr));
+        return sstables->make_local_shard_sstable_reader(std::move(s), std::move(permit), pr, slice, pc,
+                std::move(trace_state), fwd, fwd_mr);
     }
 }
 
@@ -200,7 +200,7 @@ table::make_reader(schema_ptr s,
         // - fast forwarding is implemented in reversed sstable readers.
         readers.emplace_back(upgrade_to_v2(_cache.make_reader(s, permit, range, slice, pc, std::move(trace_state), fwd, fwd_mr)));
     } else {
-        readers.emplace_back(upgrade_to_v2(make_sstable_reader(s, permit, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr)));
+        readers.emplace_back(make_sstable_reader(s, permit, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
     }
 
     auto comb_reader = downgrade_to_v1(make_combined_reader(s, std::move(permit), std::move(readers), fwd, fwd_mr));
@@ -238,7 +238,7 @@ table::make_streaming_reader(schema_ptr s, reader_permit permit,
         for (auto&& mt : *_memtables) {
             readers.emplace_back(upgrade_to_v2(mt->make_flat_reader(s, permit, range, slice, pc, trace_state, fwd, fwd_mr)));
         }
-        readers.emplace_back(upgrade_to_v2(make_sstable_reader(s, permit, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr)));
+        readers.emplace_back(make_sstable_reader(s, permit, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
         return downgrade_to_v1(make_combined_reader(s, std::move(permit), std::move(readers), fwd, fwd_mr));
     });
 
@@ -256,7 +256,7 @@ flat_mutation_reader table::make_streaming_reader(schema_ptr schema, reader_perm
     for (auto&& mt : *_memtables) {
         readers.emplace_back(upgrade_to_v2(mt->make_flat_reader(schema, permit, range, slice, pc, trace_state, fwd, fwd_mr)));
     }
-    readers.emplace_back(upgrade_to_v2(make_sstable_reader(schema, permit, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr)));
+    readers.emplace_back(make_sstable_reader(schema, permit, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
     return downgrade_to_v1(make_combined_reader(std::move(schema), std::move(permit), std::move(readers), fwd, fwd_mr));
 }
 
@@ -2244,7 +2244,7 @@ table::make_reader_excluding_sstables(schema_ptr s,
         effective_sstables->insert(sst);
     });
 
-    readers.emplace_back(upgrade_to_v2(make_sstable_reader(s, permit, std::move(effective_sstables), range, slice, pc, std::move(trace_state), fwd, fwd_mr)));
+    readers.emplace_back(make_sstable_reader(s, permit, std::move(effective_sstables), range, slice, pc, std::move(trace_state), fwd, fwd_mr));
     return downgrade_to_v1(make_combined_reader(s, std::move(permit), std::move(readers), fwd, fwd_mr));
 }
 
