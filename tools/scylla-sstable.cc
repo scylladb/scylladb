@@ -1113,7 +1113,7 @@ const std::vector<operation> operations{
 namespace tools {
 
 int scylla_sstable_main(int argc, char** argv) {
-    app_template::config app_cfg;
+    app_template::seastar_options app_cfg;
     app_cfg.name = app_name;
 
     const auto description_template =
@@ -1164,6 +1164,8 @@ $ scylla-sstable --validate /path/to/md-123456-big-Data.db /path/to/md-123457-bi
                         [] (const auto& opt) { return fmt::format("    - {}: {}", opt.name, opt.description); }), "\n");
         return format("* {}: {}\n  Options:\n{}", op.name(), op.description(), opt_list);
     }), "\n"));
+
+    tools::utils::configure_tool_mode(app_cfg, sst_log.name());
 
     app_template app(std::move(app_cfg));
 

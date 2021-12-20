@@ -1147,7 +1147,7 @@ scylla_tests_dependencies = scylla_core + idls + scylla_tests_generic_dependenci
 
 scylla_raft_dependencies = scylla_raft_core + ['utils/uuid.cc']
 
-scylla_tools = ['tools/scylla-types.cc', 'tools/scylla-sstable.cc', 'tools/schema_loader.cc']
+scylla_tools = ['tools/scylla-types.cc', 'tools/scylla-sstable.cc', 'tools/schema_loader.cc', 'tools/utils.cc']
 
 deps = {
     'scylla': idls + ['main.cc'] + scylla_core + api + alternator + redis + scylla_tools,
