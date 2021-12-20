@@ -769,7 +769,7 @@ sstable_set_impl::select_sstable_runs(const std::vector<shared_sstable>& sstable
     throw_with_backtrace<std::bad_function_call>();
 }
 
-flat_mutation_reader
+flat_mutation_reader_v2
 sstable_set_impl::create_single_key_sstable_reader(
         column_family* cf,
         schema_ptr schema,
@@ -786,7 +786,7 @@ sstable_set_impl::create_single_key_sstable_reader(
     auto selected_sstables = filter_sstable_for_reader_by_pk(select(pr), *schema, pos);
     auto num_sstables = selected_sstables.size();
     if (!num_sstables) {
-        return make_empty_flat_reader(schema, permit);
+        return make_empty_flat_reader_v2(schema, permit);
     }
     auto readers = boost::copy_range<std::vector<flat_mutation_reader_v2>>(
         filter_sstable_for_reader_by_ck(std::move(selected_sstables), *cf, schema, slice)
@@ -809,10 +809,10 @@ sstable_set_impl::create_single_key_sstable_reader(
         readers.push_back(upgrade_to_v2(make_flat_mutation_reader_from_mutations(schema, permit, {mutation(schema, *pos.key())}, slice, fwd)));
     }
     sstable_histogram.add(num_readers);
-    return downgrade_to_v1(make_combined_reader(schema, std::move(permit), std::move(readers), fwd, fwd_mr));
+    return make_combined_reader(schema, std::move(permit), std::move(readers), fwd, fwd_mr);
 }
 
-flat_mutation_reader
+flat_mutation_reader_v2
 time_series_sstable_set::create_single_key_sstable_reader(
         column_family* cf,
         schema_ptr schema,
@@ -850,7 +850,7 @@ time_series_sstable_set::create_single_key_sstable_reader(
     auto it = std::find_if(_sstables->begin(), _sstables->end(), [&] (const sst_entry& e) { return pk_filter(*e.second); });
     if (it == _sstables->end()) {
         // No sstables contain data for the queried partition.
-        return make_empty_flat_reader(std::move(schema), std::move(permit));
+        return make_empty_flat_reader_v2(std::move(schema), std::move(permit));
     }
 
     auto& stats = *cf->cf_stats();
@@ -883,10 +883,10 @@ time_series_sstable_set::create_single_key_sstable_reader(
     auto reversed = slice.is_reversed();
     // Note that `sstable_position_reader_queue` always includes a reader which emits a `partition_start` fragment,
     // guaranteeing that the reader we return emits it as well; this helps us avoid the problem from #3552.
-    return downgrade_to_v1(make_clustering_combined_reader(
+    return make_clustering_combined_reader(
             schema, permit, fwd_sm,
             make_position_reader_queue(
-                std::move(create_reader), std::move(filter), *pos.key(), schema, permit, fwd_sm, reversed)));
+                std::move(create_reader), std::move(filter), *pos.key(), schema, permit, fwd_sm, reversed));
 }
 
 compound_sstable_set::compound_sstable_set(schema_ptr schema, std::vector<lw_shared_ptr<sstable_set>> sets)
@@ -1033,7 +1033,7 @@ sstable_set make_compound_sstable_set(schema_ptr schema, std::vector<lw_shared_p
     return sstable_set(std::make_unique<compound_sstable_set>(schema, std::move(sets)), schema);
 }
 
-flat_mutation_reader
+flat_mutation_reader_v2
 compound_sstable_set::create_single_key_sstable_reader(
         column_family* cf,
         schema_ptr schema,
@@ -1050,7 +1050,7 @@ compound_sstable_set::create_single_key_sstable_reader(
     auto non_empty_set_count = std::distance(sets.begin(), it);
 
     if (!non_empty_set_count) {
-        return make_empty_flat_reader(schema, permit);
+        return make_empty_flat_reader_v2(schema, permit);
     }
     // optimize for common case where only 1 set is populated, avoiding the expensive combined reader
     if (non_empty_set_count == 1) {
@@ -1061,13 +1061,13 @@ compound_sstable_set::create_single_key_sstable_reader(
     auto readers = boost::copy_range<std::vector<flat_mutation_reader_v2>>(
         boost::make_iterator_range(sets.begin(), it)
         | boost::adaptors::transformed([&] (const lw_shared_ptr<sstable_set>& non_empty_set) {
-            return upgrade_to_v2(non_empty_set->create_single_key_sstable_reader(cf, schema, permit, sstable_histogram, pr, slice, pc, trace_state, fwd, fwd_mr));
+            return non_empty_set->create_single_key_sstable_reader(cf, schema, permit, sstable_histogram, pr, slice, pc, trace_state, fwd, fwd_mr);
         })
     );
-    return downgrade_to_v1(make_combined_reader(std::move(schema), std::move(permit), std::move(readers), fwd, fwd_mr));
+    return make_combined_reader(std::move(schema), std::move(permit), std::move(readers), fwd, fwd_mr);
 }
 
-flat_mutation_reader
+flat_mutation_reader_v2
 sstable_set::create_single_key_sstable_reader(
         column_family* cf,
         schema_ptr schema,

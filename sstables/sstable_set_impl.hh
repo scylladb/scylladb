@@ -47,7 +47,7 @@ public:
     virtual void erase(shared_sstable sst) = 0;
     virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const = 0;
 
-    virtual flat_mutation_reader create_single_key_sstable_reader(
+    virtual flat_mutation_reader_v2 create_single_key_sstable_reader(
         column_family*,
         schema_ptr,
         reader_permit,
@@ -143,7 +143,7 @@ public:
         streamed_mutation::forwarding fwd_sm,
         bool reversed) const;
 
-    virtual flat_mutation_reader create_single_key_sstable_reader(
+    virtual flat_mutation_reader_v2 create_single_key_sstable_reader(
         column_family*,
         schema_ptr,
         reader_permit,
@@ -175,7 +175,7 @@ public:
     virtual void erase(shared_sstable sst) override;
     virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const override;
 
-    virtual flat_mutation_reader create_single_key_sstable_reader(
+    virtual flat_mutation_reader_v2 create_single_key_sstable_reader(
             column_family*,
             schema_ptr,
             reader_permit,

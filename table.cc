@@ -82,8 +82,8 @@ table::make_sstable_reader(schema_ptr s,
             return make_empty_flat_reader(s, std::move(permit)); // range doesn't belong to this shard
         }
 
-        return sstables->create_single_key_sstable_reader(const_cast<column_family*>(this), std::move(s), std::move(permit),
-                _stats.estimated_sstable_per_read, pr, slice, pc, std::move(trace_state), fwd, fwd_mr);
+        return downgrade_to_v1(sstables->create_single_key_sstable_reader(const_cast<column_family*>(this), std::move(s), std::move(permit),
+                _stats.estimated_sstable_per_read, pr, slice, pc, std::move(trace_state), fwd, fwd_mr));
     } else {
         return downgrade_to_v1(sstables->make_local_shard_sstable_reader(std::move(s), std::move(permit), pr, slice, pc,
                 std::move(trace_state), fwd, fwd_mr));
