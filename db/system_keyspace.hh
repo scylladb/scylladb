@@ -433,6 +433,9 @@ public:
     // Called once at fresh server startup to make sure every server
     // has a Raft ID
     static future<> set_raft_server_id(utils::UUID id);
+
+    // Save advertised gossip feature set to system.local
+    static future<> save_local_supported_features(const std::set<std::string_view>& feats);
 }; // class system_keyspace
 
 future<> system_keyspace_make(distributed<database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g);

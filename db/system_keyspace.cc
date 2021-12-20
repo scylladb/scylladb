@@ -1267,6 +1267,13 @@ future<> system_keyspace::setup_version(distributed<gms::feature_service>& feat,
     });
 }
 
+future<> system_keyspace::save_local_supported_features(const std::set<std::string_view>& feats) {
+    static const auto req = format("INSERT INTO system.{} (key, supported_features) VALUES (?, ?)", LOCAL);
+    return qctx->execute_cql(req,
+        sstring(db::system_keyspace::LOCAL),
+        ::join(",", feats)).discard_result();
+}
+
 // Changing the real load_dc_rack_info into a future would trigger a tidal wave of futurization that would spread
 // even into simple string operations like get_rack() / get_dc(). We will cache those at startup, and then change
 // our view of it every time we do updates on those values.
