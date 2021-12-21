@@ -843,7 +843,7 @@ future<> migration_manager::announce_keyspace_drop(const sstring& ks_name) {
 future<std::vector<mutation>> migration_manager::prepare_column_family_drop_announcement(const sstring& ks_name,
                     const sstring& cf_name, drop_views drop_views) {
     try {
-        auto& db = get_local_storage_proxy().get_db().local();
+        auto& db = _storage_proxy.get_db().local();
         auto& old_cfm = db.find_column_family(ks_name, cf_name);
         auto& schema = old_cfm.schema();
         if (schema->is_view()) {
