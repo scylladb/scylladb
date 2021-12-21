@@ -568,7 +568,13 @@ future<> distributed_loader::populate_keyspace(distributed<database>& db, sstrin
                                ks_name, cfname, sstdir, eptr);
                     dblog.error("Exception while populating keyspace '{}' with column family '{}' from file '{}': {}",
                                 ks_name, cfname, sstdir, eptr);
-                    throw std::runtime_error(msg.c_str());
+                    try {
+                        std::rethrow_exception(eptr);
+                    } catch (sstables::compaction_stopped_exception& e) {
+                        // swallow compaction stopped exception, to allow clean shutdown.
+                    } catch (...) {
+                        throw std::runtime_error(msg.c_str());
+                    }
                 });
             });
     }
