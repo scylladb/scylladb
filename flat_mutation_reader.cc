@@ -527,6 +527,16 @@ flat_mutation_reader_v2 make_empty_flat_reader_v2(schema_ptr s, reader_permit pe
     return make_flat_mutation_reader_v2<empty_flat_reader>(std::move(s), std::move(permit));
 }
 
+std::vector<mutation> slice_mutations(schema_ptr schema, std::vector<mutation> ms, const query::partition_slice& slice) {
+    std::vector<mutation> sliced_ms;
+    for (auto& m : ms) {
+        auto ck_ranges = query::clustering_key_filter_ranges::get_ranges(*schema, slice, m.key());
+        auto mp = mutation_partition(std::move(m.partition()), *schema, std::move(ck_ranges));
+        sliced_ms.emplace_back(schema, m.decorated_key(), std::move(mp));
+    }
+    return sliced_ms;
+}
+
 flat_mutation_reader
 make_flat_mutation_reader_from_mutations(schema_ptr schema,
                                     reader_permit permit,
@@ -541,12 +551,7 @@ make_flat_mutation_reader_from_mutations(schema_ptr schema,
     auto slice = reversed
             ? query::half_reverse_slice(*schema, query_slice)
             : query_slice;
-    std::vector<mutation> sliced_ms;
-    for (auto& m : ms) {
-        auto ck_ranges = query::clustering_key_filter_ranges::get_ranges(*schema, slice, m.key());
-        auto mp = mutation_partition(std::move(m.partition()), *schema, std::move(ck_ranges));
-        sliced_ms.emplace_back(schema, m.decorated_key(), std::move(mp));
-    }
+    auto sliced_ms = slice_mutations(schema, std::move(ms), slice);
     auto rd = make_flat_mutation_reader_from_mutations(schema, permit, sliced_ms, pr, reversed ? streamed_mutation::forwarding::no : fwd);
     if (reversed) {
         rd = make_reversing_reader(std::move(rd), permit.max_result_size());
