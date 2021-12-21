@@ -335,7 +335,7 @@ flat_mutation_reader read_context::create_reader(
             if (reader_opt->permit() != permit) {
                 on_internal_error(mmq_log, "read_context::create_reader(): passed-in permit is different than saved reader's permit");
             }
-            return std::move(*reader_opt);
+            return downgrade_to_v1(std::move(*reader_opt));
         }
     }
 
@@ -489,11 +489,12 @@ future<> read_context::save_reader(shard_id shard, const dht::decorated_key& las
             &last_pkey, &last_ckey, gts = tracing::global_trace_state_ptr(_trace_state)] (database& db) mutable {
         try {
             auto rparts = rm.rparts.release(); // avoid another round-trip when destroying rparts
-            flat_mutation_reader_opt reader = rparts->permit.semaphore().unregister_inactive_read(std::move(*rparts->handle));
+            auto reader_opt = rparts->permit.semaphore().unregister_inactive_read(std::move(*rparts->handle));
 
-            if (!reader) {
+            if (!reader_opt) {
                 return make_ready_future<>();
             }
+            flat_mutation_reader_opt reader = downgrade_to_v1(std::move(*reader_opt));
 
             size_t fragments = 0;
             const auto size_before = reader->buffer_size();
@@ -579,7 +580,7 @@ future<> read_context::lookup_readers(db::timeout_clock::time_point timeout) {
                         reinterpret_cast<uintptr_t>(&semaphore)));
             }
 
-            auto handle = semaphore.register_inactive_read(std::move(q).reader());
+            auto handle = semaphore.register_inactive_read(upgrade_to_v2(std::move(q).reader()));
             return reader_meta(
                     reader_state::successful_lookup,
                     reader_meta::remote_parts(q.permit(), std::move(q).reader_range(), std::move(q).reader_slice(), table.read_in_progress(),

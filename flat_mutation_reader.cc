@@ -1706,6 +1706,12 @@ flat_mutation_reader downgrade_to_v1(flat_mutation_reader_v2 r) {
                 : impl(r.schema(), r.permit())
                 , _reader(std::move(r))
         {}
+        virtual flat_mutation_reader_v2* get_original() override {
+            if (is_buffer_empty() && _rt_assembler.discardable()) {
+                return &_reader;
+            }
+            return nullptr;
+        }
         virtual future<> fill_buffer() override {
             if (_end_of_stream) {
                 return make_ready_future<>();
@@ -1756,7 +1762,14 @@ flat_mutation_reader downgrade_to_v1(flat_mutation_reader_v2 r) {
             return _reader.close();
         }
     };
-    return make_flat_mutation_reader<transforming_reader>(std::move(r));
+
+    if (auto original_opt = r.get_original()) {
+        auto original = std::move(*original_opt);
+        r._impl.reset();
+        return original;
+    } else {
+        return make_flat_mutation_reader<transforming_reader>(std::move(r));
+    }
 }
 
 flat_mutation_reader_v2 upgrade_to_v2(flat_mutation_reader r) {
@@ -1815,6 +1828,12 @@ flat_mutation_reader_v2 upgrade_to_v2(flat_mutation_reader r) {
                 , _reader(std::move(r))
                 , _rt_gen(*_schema)
         {}
+        virtual flat_mutation_reader* get_original() override {
+            if (is_buffer_empty() && _rt_gen.discardable() && !_current_rt) {
+                return &_reader;
+            }
+            return nullptr;
+        }
         virtual future<> fill_buffer() override {
             if (_end_of_stream) {
                 return make_ready_future<>();
@@ -1866,5 +1885,12 @@ flat_mutation_reader_v2 upgrade_to_v2(flat_mutation_reader r) {
             return _reader.close();
         }
     };
-    return make_flat_mutation_reader_v2<transforming_reader>(std::move(r));
+
+    if (auto original_opt = r.get_original()) {
+        auto original = std::move(*original_opt);
+        r._impl.reset();
+        return original;
+    } else {
+        return make_flat_mutation_reader_v2<transforming_reader>(std::move(r));
+    }
 }
