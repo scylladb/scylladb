@@ -171,6 +171,7 @@ schema_ptr schema_registry::get_or_load(table_schema_version v, std::function<sc
     if (e._state == schema_registry_entry::state::LOADING) {
         return load(e);
     }
+    assert(e._factory);
     return e.get_schema();
 }
 
@@ -256,6 +257,11 @@ void schema_registry_entry::detach_schema(const schema& s) noexcept {
         return;
     }
     slogger.trace("Deactivating {}", _version);
+    if (!_factory) {
+        //assert(_state == state::INITIAL);
+        erase();
+        return;
+    }
     // Some tests that use schemas don't start a reactor
     if (engine_is_ready()) [[likely]] {
         _erase_timer.arm(_registry.grace_period());
