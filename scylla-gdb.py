@@ -37,8 +37,13 @@ def get_template_arg_with_prefix(gdb_type, prefix):
 def get_base_class_offset(gdb_type, base_class_name):
     name_pattern = re.escape(base_class_name) + "(<.*>)?$"
     for field in gdb_type.fields():
-        if field.is_base_class and re.match(name_pattern, field.type.strip_typedefs().name):
-            return int(field.bitpos / 8)
+        if field.is_base_class:
+            field_offset = int(field.bitpos / 8)
+            if re.match(name_pattern, field.type.strip_typedefs().name):
+                return field_offset
+            offset = get_base_class_offset(field.type, base_class_name)
+            if not offset is None:
+                return field_offset + offset
 
 
 def get_field_offset(gdb_type, name):
