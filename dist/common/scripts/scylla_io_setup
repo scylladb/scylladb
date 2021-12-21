@@ -180,13 +180,14 @@ if __name__ == "__main__":
         print('Requires root permission.')
         sys.exit(1)
     parser = argparse.ArgumentParser(description='IO Setup script for Scylla.')
+    # Just keep for compatibility
     parser.add_argument('--ami', dest='ami', action='store_true',
                         help='configure AWS AMI')
     args = parser.parse_args()
 
     cpudata = scylla_cpuinfo()
     if not is_developer_mode():
-        if args.ami:
+        if is_machine_image() and is_ec2():
             idata = aws_instance()
 
             if not idata.is_supported_instance_class():
@@ -346,7 +347,7 @@ if __name__ == "__main__":
             else:
                 logging.info('This is a supported AWS instance type but there are no preconfigured IO scheduler parameters for it. Running manual iotune.')
                 run_iotune()
-        elif gcp_instance().is_gce_instance():
+        elif is_machine_image() and is_gce():
             idata = gcp_instance()
 
             if idata.is_recommended_instance():
@@ -398,7 +399,7 @@ if __name__ == "__main__":
                 logging.error(
                     'This is not a recommended Google Cloud instance setup for auto local disk tuning, running manual iotune.')
                 run_iotune()
-        elif azure_instance().is_azure_instance():
+        elif is_machine_image() and is_azure():
             idata = azure_instance()
             if idata.is_recommended_instance():
                 disk_properties = {}
