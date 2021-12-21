@@ -248,6 +248,10 @@ public:
         return _base_resources;
     }
 
+    void release_base_resources() noexcept {
+        _semaphore.signal(std::exchange(_base_resources, {}));
+    }
+
     sstring description() const {
         return format("{}.{}:{}",
                 _schema ? _schema->ks_name() : "*",
@@ -391,6 +395,10 @@ reader_resources reader_permit::consumed_resources() const {
 
 reader_resources reader_permit::base_resources() const {
     return _impl->base_resources();
+}
+
+void reader_permit::release_base_resources() noexcept {
+    return _impl->release_base_resources();
 }
 
 sstring reader_permit::description() const {
