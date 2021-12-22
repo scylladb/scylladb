@@ -266,10 +266,10 @@ public:
 
 private:
     future<>
-    execute_without_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) const;
+    execute_without_condition(query_processor& qp, service::query_state& qs, const query_options& options) const;
 
     future<::shared_ptr<cql_transport::messages::result_message>>
-    execute_with_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) const;
+    execute_with_condition(query_processor& qp, service::query_state& qs, const query_options& options) const;
 
 public:
     /**

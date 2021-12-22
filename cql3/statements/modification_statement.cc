@@ -275,7 +275,6 @@ modification_statement::execute(query_processor& qp, service::query_state& qs, c
 
 future<::shared_ptr<cql_transport::messages::result_message>>
 modification_statement::do_execute(query_processor& qp, service::query_state& qs, const query_options& options) const {
-    auto& proxy = qp.proxy();
     if (has_conditions() && options.get_protocol_version() == 1) {
         throw exceptions::invalid_request_exception("Conditional updates are not supported by the protocol version in use. You need to upgrade to a driver using the native protocol v2.");
     }
@@ -285,30 +284,30 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
     inc_cql_stats(qs.get_client_state().is_internal());
 
     if (has_conditions()) {
-        return execute_with_condition(proxy, qs, options);
+        return execute_with_condition(qp, qs, options);
     }
 
-    return execute_without_condition(proxy, qs, options).then([] {
+    return execute_without_condition(qp, qs, options).then([] {
         return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(
                 ::shared_ptr<cql_transport::messages::result_message>{});
     });
 }
 
 future<>
-modification_statement::execute_without_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) const {
+modification_statement::execute_without_condition(query_processor& qp, service::query_state& qs, const query_options& options) const {
     auto cl = options.get_consistency();
     auto timeout = db::timeout_clock::now() + get_timeout(qs.get_client_state(), options);
-    return get_mutations(proxy, options, timeout, false, options.get_timestamp(qs), qs).then([this, cl, timeout, &proxy, &qs] (auto mutations) {
+    return get_mutations(qp.proxy(), options, timeout, false, options.get_timestamp(qs), qs).then([this, cl, timeout, &qp, &qs] (auto mutations) {
         if (mutations.empty()) {
             return now();
         }
         
-        return proxy.mutate_with_triggers(std::move(mutations), cl, timeout, false, qs.get_trace_state(), qs.get_permit(), this->is_raw_counter_shard_write());
+        return qp.proxy().mutate_with_triggers(std::move(mutations), cl, timeout, false, qs.get_trace_state(), qs.get_permit(), this->is_raw_counter_shard_write());
     });
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-modification_statement::execute_with_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) const {
+modification_statement::execute_with_condition(query_processor& qp, service::query_state& qs, const query_options& options) const {
 
     auto cl_for_learn = options.get_consistency();
     auto cl_for_paxos = options.check_serial_consistency();
@@ -335,13 +334,13 @@ modification_statement::execute_with_condition(service::storage_proxy& proxy, se
 
     auto shard = service::storage_proxy::cas_shard(*s, request->key()[0].start()->value().as_decorated_key().token());
     if (shard != this_shard_id()) {
-        proxy.get_stats().replica_cross_shard_ops++;
+        qp.proxy().get_stats().replica_cross_shard_ops++;
         return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
                 ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(shard,
                     std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls())));
     }
 
-    return proxy.cas(s, request, request->read_command(proxy), request->key(),
+    return qp.proxy().cas(s, request, request->read_command(qp.proxy()), request->key(),
             {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()},
             cl_for_paxos, cl_for_learn, statement_timeout, cas_timeout).then([this, request] (bool is_applied) {
         return request->build_cas_result_set(_metadata, _columns_of_cas_result_set, is_applied);
