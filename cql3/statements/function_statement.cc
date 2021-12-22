@@ -26,6 +26,7 @@
 #include "data_dictionary/data_dictionary.hh"
 #include "gms/feature_service.hh"
 #include "service/storage_proxy.hh"
+#include "cql3/query_processor.hh"
 
 namespace cql3 {
 namespace statements {
@@ -94,11 +95,11 @@ void create_function_statement_base::validate(query_processor& qp, const service
     // validation happens during execution
 }
 
-shared_ptr<functions::function> create_function_statement_base::validate_while_executing(service::storage_proxy& proxy) const {
-    create_arg_types(proxy);
+shared_ptr<functions::function> create_function_statement_base::validate_while_executing(query_processor& qp) const {
+    create_arg_types(qp.proxy());
     auto old = functions::functions::find(_name, _arg_types);
     if (!old || _or_replace) {
-        return create(proxy, old.get());
+        return create(qp.proxy(), old.get());
     }
     if (!_if_not_exists) {
         throw exceptions::invalid_request_exception(format("The function '{}' already exists", old));
@@ -114,8 +115,8 @@ void drop_function_statement_base::validate(query_processor& qp, const service::
     // validation happens during execution
 }
 
-shared_ptr<functions::function> drop_function_statement_base::validate_while_executing(service::storage_proxy& proxy) const {
-    create_arg_types(proxy);
+shared_ptr<functions::function> drop_function_statement_base::validate_while_executing(query_processor& qp) const {
+    create_arg_types(qp.proxy());
     shared_ptr<functions::function> func;
     if (_args_present) {
         func = functions::functions::find(_name, _arg_types);

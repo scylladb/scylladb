@@ -81,7 +81,7 @@ create_function_statement::prepare_schema_mutations(query_processor& qp) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
     std::vector<mutation> m;
 
-    auto func = dynamic_pointer_cast<functions::user_function>(validate_while_executing(qp.proxy()));
+    auto func = dynamic_pointer_cast<functions::user_function>(validate_while_executing(qp));
 
     if (func) {
         m = co_await qp.get_migration_manager().prepare_new_function_announcement(func);

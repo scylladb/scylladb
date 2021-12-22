@@ -94,7 +94,7 @@ private:
                                               const sstring& name,
                                               index_metadata_kind kind,
                                               const index_options_map& options);
-    std::vector<::shared_ptr<index_target>> validate_while_executing(service::storage_proxy& proxy) const;
+    std::vector<::shared_ptr<index_target>> validate_while_executing(query_processor& qp) const;
     schema_ptr build_index_schema(query_processor& qp) const;
 };
 

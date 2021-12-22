@@ -77,9 +77,9 @@ void drop_type_statement::validate(query_processor& qp, const service::client_st
     // validation is done at execution time
 }
 
-void drop_type_statement::validate_while_executing(service::storage_proxy& proxy) const {
+void drop_type_statement::validate_while_executing(query_processor& qp) const {
     try {
-        auto&& ks = proxy.data_dictionary().find_keyspace(keyspace());
+        auto&& ks = qp.proxy().data_dictionary().find_keyspace(keyspace());
         auto&& all_types = ks.metadata()->user_types().get_all_types();
         auto old = all_types.find(_name.get_user_type_name());
         if (old == all_types.end()) {
@@ -153,7 +153,7 @@ const sstring& drop_type_statement::keyspace() const
 
 future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
 drop_type_statement::prepare_schema_mutations(query_processor& qp) const {
-    validate_while_executing(qp.proxy());
+    validate_while_executing(qp);
 
     data_dictionary::database db = qp.db();
 
