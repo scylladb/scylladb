@@ -43,8 +43,8 @@ protected:
     static shared_ptr<cql_transport::event::schema_change> create_schema_change(
             const functions::function& func, bool created);
     function_statement(functions::function_name name, std::vector<shared_ptr<cql3_type::raw>> raw_arg_types);
-    void create_arg_types(service::storage_proxy& proxy) const;
-    data_type prepare_type(service::storage_proxy& proxy, cql3_type::raw &t) const;
+    void create_arg_types(query_processor& qp) const;
+    data_type prepare_type(query_processor& qp, cql3_type::raw &t) const;
     virtual shared_ptr<functions::function> validate_while_executing(query_processor&) const = 0;
 };
 
@@ -52,7 +52,7 @@ protected:
 class create_function_statement_base : public function_statement {
 protected:
     virtual void validate(query_processor& qp, const service::client_state& state) const override;
-    virtual shared_ptr<functions::function> create(service::storage_proxy& proxy, functions::function* old) const = 0;
+    virtual shared_ptr<functions::function> create(query_processor& qp, functions::function* old) const = 0;
     virtual shared_ptr<functions::function> validate_while_executing(query_processor&) const override;
 
     bool _or_replace;

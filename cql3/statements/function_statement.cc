@@ -50,11 +50,11 @@ shared_ptr<cql_transport::event::schema_change> function_statement::create_schem
     return ::make_shared<event::schema_change>(change, type, func.name().keyspace, std::move(options));
 }
 
-data_type function_statement::prepare_type(service::storage_proxy& proxy, cql3_type::raw& t) const {
+data_type function_statement::prepare_type(query_processor& qp, cql3_type::raw& t) const {
     if (t.is_user_type() && t.is_frozen()) {
         throw exceptions::invalid_request_exception("User defined argument and return types should not be frozen");
     }
-    auto&& db = proxy.data_dictionary();
+    auto&& db = qp.proxy().data_dictionary();
     // At the CQL level the argument and return types should not have
     // the frozen keyword.
     // We and cassandra 3 support only frozen UDT arguments and
@@ -69,14 +69,14 @@ data_type function_statement::prepare_type(service::storage_proxy& proxy, cql3_t
     return prepared;
 }
 
-void function_statement::create_arg_types(service::storage_proxy& proxy) const {
-    if (!proxy.features().cluster_supports_user_defined_functions()) {
+void function_statement::create_arg_types(query_processor& qp) const {
+    if (!qp.proxy().features().cluster_supports_user_defined_functions()) {
         throw exceptions::invalid_request_exception("User defined functions are disabled. Set enable_user_defined_functions and experimental_features:udf to enable them");
     }
 
     if (_arg_types.empty()) {
         for (const auto& arg_type : _raw_arg_types) {
-            _arg_types.push_back(prepare_type(proxy, *arg_type));
+            _arg_types.push_back(prepare_type(qp, *arg_type));
         }
     }
 }
@@ -96,10 +96,10 @@ void create_function_statement_base::validate(query_processor& qp, const service
 }
 
 shared_ptr<functions::function> create_function_statement_base::validate_while_executing(query_processor& qp) const {
-    create_arg_types(qp.proxy());
+    create_arg_types(qp);
     auto old = functions::functions::find(_name, _arg_types);
     if (!old || _or_replace) {
-        return create(qp.proxy(), old.get());
+        return create(qp, old.get());
     }
     if (!_if_not_exists) {
         throw exceptions::invalid_request_exception(format("The function '{}' already exists", old));
@@ -116,7 +116,7 @@ void drop_function_statement_base::validate(query_processor& qp, const service::
 }
 
 shared_ptr<functions::function> drop_function_statement_base::validate_while_executing(query_processor& qp) const {
-    create_arg_types(qp.proxy());
+    create_arg_types(qp);
     shared_ptr<functions::function> func;
     if (_args_present) {
         func = functions::functions::find(_name, _arg_types);

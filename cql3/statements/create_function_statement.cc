@@ -35,20 +35,20 @@ namespace cql3 {
 
 namespace statements {
 
-shared_ptr<functions::function> create_function_statement::create(service::storage_proxy& proxy, functions::function* old) const {
+shared_ptr<functions::function> create_function_statement::create(query_processor& qp, functions::function* old) const {
     if (old && !dynamic_cast<functions::user_function*>(old)) {
         throw exceptions::invalid_request_exception(format("Cannot replace '{}' which is not a user defined function", *old));
     }
     if (_language != "lua" && _language != "xwasm") {
         throw exceptions::invalid_request_exception(format("Language '{}' is not supported", _language));
     }
-    data_type return_type = prepare_type(proxy, *_return_type);
+    data_type return_type = prepare_type(qp, *_return_type);
     std::vector<sstring> arg_names;
     for (const auto& arg_name : _arg_names) {
         arg_names.push_back(arg_name->to_string());
     }
 
-    auto&& db = proxy.data_dictionary();
+    auto&& db = qp.proxy().data_dictionary();
     if (_language == "lua") {
         auto cfg = lua::make_runtime_config(db.get_config());
         functions::user_function::context ctx = functions::user_function::lua_context {
