@@ -79,7 +79,7 @@ public:
 
     virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
 private:
-    schema_ptr lookup_indexed_table(service::storage_proxy& proxy) const;
+    schema_ptr lookup_indexed_table(query_processor& qp) const;
     schema_ptr make_drop_idex_schema(query_processor& qp) const;
 };
 

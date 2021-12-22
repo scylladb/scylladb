@@ -71,7 +71,7 @@ const sstring& drop_index_statement::column_family() const
 
 future<> drop_index_statement::check_access(query_processor& qp, const service::client_state& state) const
 {
-    auto cfm = lookup_indexed_table(qp.proxy());
+    auto cfm = lookup_indexed_table(qp);
     if (!cfm) {
         return make_ready_future<>();
     }
@@ -92,7 +92,7 @@ void drop_index_statement::validate(query_processor& qp, const service::client_s
 }
 
 schema_ptr drop_index_statement::make_drop_idex_schema(query_processor& qp) const {
-    auto cfm = lookup_indexed_table(qp.proxy());
+    auto cfm = lookup_indexed_table(qp);
     if (!cfm) {
         return nullptr;
     }
@@ -128,9 +128,9 @@ drop_index_statement::prepare(data_dictionary::database db, cql_stats& stats) {
     return std::make_unique<prepared_statement>(make_shared<drop_index_statement>(*this));
 }
 
-schema_ptr drop_index_statement::lookup_indexed_table(service::storage_proxy& proxy) const
+schema_ptr drop_index_statement::lookup_indexed_table(query_processor& qp) const
 {
-    auto& db = proxy.data_dictionary();
+    auto& db = qp.proxy().data_dictionary();
     if (!db.has_keyspace(keyspace())) {
         throw exceptions::keyspace_not_defined_exception(format("Keyspace {} does not exist", keyspace()));
     }
