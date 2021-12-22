@@ -340,7 +340,7 @@ modification_statement::execute_with_condition(query_processor& qp, service::que
                     std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls())));
     }
 
-    return qp.proxy().cas(s, request, request->read_command(qp.proxy()), request->key(),
+    return qp.proxy().cas(s, request, request->read_command(qp), request->key(),
             {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()},
             cl_for_paxos, cl_for_learn, statement_timeout, cas_timeout).then([this, request] (bool is_applied) {
         return request->build_cas_result_set(_metadata, _columns_of_cas_result_set, is_applied);
