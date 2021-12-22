@@ -126,7 +126,7 @@ gc_clock::duration modification_statement::get_time_to_live(const query_options&
 }
 
 future<> modification_statement::check_access(query_processor& qp, const service::client_state& state) const {
-    const data_dictionary::database db = qp.proxy().data_dictionary();
+    const data_dictionary::database db = qp.db();
     auto f = state.has_column_family_access(db.real_database(), keyspace(), column_family(), auth::permission::MODIFY);
     if (has_conditions()) {
         f = f.then([this, &state, db] {

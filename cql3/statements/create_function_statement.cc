@@ -48,7 +48,7 @@ shared_ptr<functions::function> create_function_statement::create(query_processo
         arg_names.push_back(arg_name->to_string());
     }
 
-    auto&& db = qp.proxy().data_dictionary();
+    auto&& db = qp.db();
     if (_language == "lua") {
         auto cfg = lua::make_runtime_config(db.get_config());
         functions::user_function::context ctx = functions::user_function::lua_context {

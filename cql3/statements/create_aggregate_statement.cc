@@ -44,7 +44,7 @@ shared_ptr<functions::function> create_aggregate_statement::create(query_process
     }
     data_type state_type = prepare_type(qp, *_stype);
 
-    auto&& db = qp.proxy().data_dictionary();
+    auto&& db = qp.db();
     std::vector<data_type> acc_types{state_type};
     acc_types.insert(acc_types.end(), _arg_types.begin(), _arg_types.end());
     auto state_func = dynamic_pointer_cast<functions::scalar_function>(functions::functions::find(functions::function_name{_name.keyspace, _sfunc}, acc_types));

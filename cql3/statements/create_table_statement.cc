@@ -463,7 +463,7 @@ std::optional<sstring> check_restricted_table_properties(
     // in prepare_schema_mutations(), in the middle of execute).
     auto strategy = cfprops.get_compaction_strategy_class();
     if (strategy && *strategy == sstables::compaction_strategy_type::date_tiered) {
-        switch(qp.proxy().data_dictionary().get_config().restrict_dtcs()) {
+        switch(qp.db().get_config().restrict_dtcs()) {
         case db::tri_mode_restriction_t::mode::TRUE:
             throw exceptions::configuration_exception(
                 "DateTieredCompactionStrategy is deprecated, and "

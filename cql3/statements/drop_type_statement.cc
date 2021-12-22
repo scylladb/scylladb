@@ -79,7 +79,7 @@ void drop_type_statement::validate(query_processor& qp, const service::client_st
 
 void drop_type_statement::validate_while_executing(query_processor& qp) const {
     try {
-        auto&& ks = qp.proxy().data_dictionary().find_keyspace(keyspace());
+        auto&& ks = qp.db().find_keyspace(keyspace());
         auto&& all_types = ks.metadata()->user_types().get_all_types();
         auto old = all_types.find(_name.get_user_type_name());
         if (old == all_types.end()) {

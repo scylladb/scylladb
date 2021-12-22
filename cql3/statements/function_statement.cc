@@ -54,7 +54,7 @@ data_type function_statement::prepare_type(query_processor& qp, cql3_type::raw& 
     if (t.is_user_type() && t.is_frozen()) {
         throw exceptions::invalid_request_exception("User defined argument and return types should not be frozen");
     }
-    auto&& db = qp.proxy().data_dictionary();
+    auto&& db = qp.db();
     // At the CQL level the argument and return types should not have
     // the frozen keyword.
     // We and cassandra 3 support only frozen UDT arguments and

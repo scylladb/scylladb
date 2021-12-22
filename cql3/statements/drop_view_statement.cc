@@ -61,7 +61,7 @@ drop_view_statement::drop_view_statement(cf_name view_name, bool if_exists)
 future<> drop_view_statement::check_access(query_processor& qp, const service::client_state& state) const
 {
     try {
-        const data_dictionary::database db = qp.proxy().data_dictionary();
+        const data_dictionary::database db = qp.db();
         auto&& s = db.find_schema(keyspace(), column_family());
         if (s->is_view()) {
             return state.has_column_family_access(db.real_database(), keyspace(), s->view_info()->base_name(), auth::permission::ALTER);

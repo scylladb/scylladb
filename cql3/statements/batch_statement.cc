@@ -230,8 +230,8 @@ void batch_statement::verify_batch_size(query_processor& qp, const std::vector<m
         return;     // We only warn for batch spanning multiple mutations
     }
 
-    size_t warn_threshold = qp.proxy().data_dictionary().get_config().batch_size_warn_threshold_in_kb() * 1024;
-    size_t fail_threshold = qp.proxy().data_dictionary().get_config().batch_size_fail_threshold_in_kb() * 1024;
+    size_t warn_threshold = qp.db().get_config().batch_size_warn_threshold_in_kb() * 1024;
+    size_t fail_threshold = qp.db().get_config().batch_size_fail_threshold_in_kb() * 1024;
 
     size_t size = 0;
     for (auto&m : mutations) {

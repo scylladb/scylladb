@@ -82,7 +82,7 @@ void drop_index_statement::validate(query_processor& qp, const service::client_s
 {
     // validated in lookup_indexed_table()
 
-    auto db = qp.proxy().data_dictionary();
+    auto db = qp.db();
     if (db.has_keyspace(keyspace())) {
         auto schema = db.find_indexed_table(keyspace(), _index_name);
         if (schema) {
@@ -130,7 +130,7 @@ drop_index_statement::prepare(data_dictionary::database db, cql_stats& stats) {
 
 schema_ptr drop_index_statement::lookup_indexed_table(query_processor& qp) const
 {
-    auto& db = qp.proxy().data_dictionary();
+    auto db = qp.db();
     if (!db.has_keyspace(keyspace())) {
         throw exceptions::keyspace_not_defined_exception(format("Keyspace {} does not exist", keyspace()));
     }

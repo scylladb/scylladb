@@ -93,7 +93,7 @@ create_index_statement::validate(query_processor& qp, const service::client_stat
 }
 
 std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_executing(query_processor& qp) const {
-    auto db = qp.proxy().data_dictionary();
+    auto db = qp.db();
     auto schema = validation::validate_column_family(db.real_database(), keyspace(), column_family());
 
     if (schema->is_counter()) {

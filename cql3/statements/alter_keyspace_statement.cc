@@ -93,9 +93,8 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
 future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
 cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_processor& qp) const {
     try {
-        service::storage_proxy& proxy = qp.proxy();
-        auto old_ksm = proxy.data_dictionary().find_keyspace(_name).metadata();
-        const auto& tm = *proxy.get_token_metadata_ptr();
+        auto old_ksm = qp.db().find_keyspace(_name).metadata();
+        const auto& tm = *qp.proxy().get_token_metadata_ptr();
 
         auto m = qp.get_migration_manager().prepare_keyspace_update_announcement(_attrs->as_ks_metadata_update(old_ksm, tm));
 

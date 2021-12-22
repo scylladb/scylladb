@@ -173,7 +173,7 @@ std::optional<sstring> check_restricted_replication_strategy(
     // may have in the future - multiple racks or DCs. So depending on how
     // protective we are configured, let's prevent it or allow with a warning:
     if (replication_strategy == "org.apache.cassandra.locator.SimpleStrategy") {
-        switch(qp.proxy().data_dictionary().get_config().restrict_replication_simplestrategy()) {
+        switch(qp.db().get_config().restrict_replication_simplestrategy()) {
         case db::tri_mode_restriction_t::mode::TRUE:
             throw exceptions::configuration_exception(
                 "SimpleStrategy replication class is not recommended, and "

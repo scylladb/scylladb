@@ -181,7 +181,7 @@ uint32_t select_statement::get_bound_terms() const {
 
 future<> select_statement::check_access(query_processor& qp, const service::client_state& state) const {
     try {
-        const data_dictionary::database db = qp.proxy().data_dictionary();
+        const data_dictionary::database db = qp.db();
         auto&& s = db.find_schema(keyspace(), column_family());
         auto& cf_name = s->is_view() ? s->view_info()->base_name() : column_family();
         return state.has_column_family_access(db.real_database(), keyspace(), cf_name, auth::permission::SELECT);
