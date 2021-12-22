@@ -152,7 +152,7 @@ public:
 private:
     friend class batch_statement_executor;
     future<shared_ptr<cql_transport::messages::result_message>> do_execute(
-            service::storage_proxy& storage,
+            query_processor& qp,
             service::query_state& query_state, const query_options& options,
             bool local, api::timestamp_type now) const;
 

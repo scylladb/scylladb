@@ -289,7 +289,7 @@ struct select_statement_executor {
 static thread_local inheriting_concrete_execution_stage<
         future<shared_ptr<cql_transport::messages::result_message>>,
         const select_statement*,
-        service::storage_proxy&,
+        query_processor&,
         service::query_state&,
         const query_options&> select_stage{"cql3_select", select_statement_executor::get()};
 
@@ -298,15 +298,15 @@ select_statement::execute(query_processor& qp,
                              service::query_state& state,
                              const query_options& options) const
 {
-    service::storage_proxy& proxy = qp.proxy();
-    return select_stage(this, seastar::ref(proxy), seastar::ref(state), seastar::cref(options));
+    return select_stage(this, seastar::ref(qp), seastar::ref(state), seastar::cref(options));
 }
 
 future<shared_ptr<cql_transport::messages::result_message>>
-select_statement::do_execute(service::storage_proxy& proxy,
+select_statement::do_execute(query_processor& qp,
                           service::query_state& state,
                           const query_options& options) const
 {
+    auto& proxy = qp.proxy();
     tracing::add_table_name(state.get_trace_state(), keyspace(), column_family());
 
     auto cl = options.get_consistency();
@@ -1003,10 +1003,11 @@ lw_shared_ptr<const service::pager::paging_state> indexed_table_select_statement
 }
 
 future<shared_ptr<cql_transport::messages::result_message>>
-indexed_table_select_statement::do_execute(service::storage_proxy& proxy,
+indexed_table_select_statement::do_execute(query_processor& qp,
                              service::query_state& state,
                              const query_options& options) const
 {
+    auto& proxy = qp.proxy();
     tracing::add_table_name(state.get_trace_state(), _view_schema->ks_name(), _view_schema->cf_name());
     tracing::add_table_name(state.get_trace_state(), keyspace(), column_family());
 

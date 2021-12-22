@@ -107,7 +107,7 @@ protected:
     bool _range_scan_no_bypass_cache = false;
     std::unique_ptr<cql3::attributes> _attrs;
 protected :
-    virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(service::storage_proxy& proxy,
+    virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(query_processor& qp,
         service::query_state& state, const query_options& options) const;
     friend class select_statement_executor;
 public:
@@ -228,7 +228,7 @@ public:
                                    std::unique_ptr<cql3::attributes> attrs);
 
 private:
-    virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(service::storage_proxy& proxy,
+    virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(query_processor& qp,
             service::query_state& state, const query_options& options) const override;
 
     lw_shared_ptr<const service::pager::paging_state> generate_view_paging_state_from_base_query_results(lw_shared_ptr<const service::pager::paging_state> paging_state,

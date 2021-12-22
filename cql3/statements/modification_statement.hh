@@ -251,7 +251,7 @@ public:
 
 private:
     future<::shared_ptr<cql_transport::messages::result_message>>
-    do_execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) const;
+    do_execute(query_processor& qp, service::query_state& qs, const query_options& options) const;
     friend class modification_statement_executor;
 public:
     // True if the statement has IF conditions. Pre-computed during prepare.

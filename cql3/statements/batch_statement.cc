@@ -262,7 +262,7 @@ struct batch_statement_executor {
 static thread_local inheriting_concrete_execution_stage<
         future<shared_ptr<cql_transport::messages::result_message>>,
         const batch_statement*,
-        service::storage_proxy&,
+        query_processor&,
         service::query_state&,
         const query_options&,
         bool,
@@ -270,17 +270,17 @@ static thread_local inheriting_concrete_execution_stage<
 
 future<shared_ptr<cql_transport::messages::result_message>> batch_statement::execute(
         query_processor& qp, service::query_state& state, const query_options& options) const {
-    service::storage_proxy& storage = qp.proxy();
     cql3::util::validate_timestamp(options, _attrs);
-    return batch_stage(this, seastar::ref(storage), seastar::ref(state),
+    return batch_stage(this, seastar::ref(qp), seastar::ref(state),
                        seastar::cref(options), false, options.get_timestamp(state));
 }
 
 future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_execute(
-        service::storage_proxy& storage,
+        query_processor& qp,
         service::query_state& query_state, const query_options& options,
         bool local, api::timestamp_type now) const
 {
+    auto& storage = qp.proxy();
     // FIXME: we don't support nulls here
 #if 0
     if (options.get_consistency() == null)

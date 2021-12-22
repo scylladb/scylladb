@@ -263,19 +263,19 @@ struct modification_statement_executor {
 static thread_local inheriting_concrete_execution_stage<
         future<::shared_ptr<cql_transport::messages::result_message>>,
         const modification_statement*,
-        service::storage_proxy&,
+        query_processor&,
         service::query_state&,
         const query_options&> modify_stage{"cql3_modification", modification_statement_executor::get()};
 
 future<::shared_ptr<cql_transport::messages::result_message>>
 modification_statement::execute(query_processor& qp, service::query_state& qs, const query_options& options) const {
     cql3::util::validate_timestamp(options, attrs);
-    service::storage_proxy& proxy = qp.proxy();
-    return modify_stage(this, seastar::ref(proxy), seastar::ref(qs), seastar::cref(options));
+    return modify_stage(this, seastar::ref(qp), seastar::ref(qs), seastar::cref(options));
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-modification_statement::do_execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) const {
+modification_statement::do_execute(query_processor& qp, service::query_state& qs, const query_options& options) const {
+    auto& proxy = qp.proxy();
     if (has_conditions() && options.get_protocol_version() == 1) {
         throw exceptions::invalid_request_exception("Conditional updates are not supported by the protocol version in use. You need to upgrade to a driver using the native protocol v2.");
     }
