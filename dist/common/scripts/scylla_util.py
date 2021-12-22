@@ -579,7 +579,7 @@ class aws_instance:
     """Describe several aspects of the current AWS instance"""
     GETTING_STARTED_URL = "http://www.scylladb.com/doc/getting-started-amazon/"
     META_DATA_BASE_URL = "http://169.254.169.254/latest/"
-    ENDPOINT_SNITCH = "Ec2Snitch"
+    ENDPOINT_SNITCH = "Ec2MultiRegionSnitch"
 
     def __disk_name(self, dev):
         name = re.compile(r"(?:/dev/)?(?P<devname>[a-zA-Z]+)\d*")
