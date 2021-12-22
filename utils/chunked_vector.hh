@@ -52,10 +52,12 @@ class chunked_vector {
     utils::small_vector<chunk_ptr, 1> _chunks;
     size_t _size = 0;
     size_t _capacity = 0;
-private:
+public:
+    // Maximum number of T elements fitting in a single chunk.
     static size_t max_chunk_capacity() {
         return std::max(max_contiguous_allocation / sizeof(T), size_t(1));
     }
+private:
     void reserve_for_push_back() {
         if (_size == _capacity) {
             do_reserve_for_push_back();

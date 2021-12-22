@@ -335,7 +335,7 @@ parse(const schema& s, sstable_version_types v, random_access_reader& in, Size& 
 template <typename Size, std::integral Members>
 future<>
 parse(const schema&, sstable_version_types, random_access_reader& in, Size& len, utils::chunked_vector<Members>& arr) {
-    Size now = 100000 / sizeof(Members);
+    Size now = arr.max_chunk_capacity();
     for (auto count = len; count; count -= now) {
         if (now > count) {
             now = count;
