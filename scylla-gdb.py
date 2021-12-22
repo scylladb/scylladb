@@ -37,8 +37,13 @@ def get_template_arg_with_prefix(gdb_type, prefix):
 def get_base_class_offset(gdb_type, base_class_name):
     name_pattern = re.escape(base_class_name) + "(<.*>)?$"
     for field in gdb_type.fields():
-        if field.is_base_class and re.match(name_pattern, field.type.strip_typedefs().name):
-            return int(field.bitpos / 8)
+        if field.is_base_class:
+            field_offset = int(field.bitpos / 8)
+            if re.match(name_pattern, field.type.strip_typedefs().name):
+                return field_offset
+            offset = get_base_class_offset(field.type, base_class_name)
+            if not offset is None:
+                return field_offset + offset
 
 
 def get_field_offset(gdb_type, name):
@@ -1494,6 +1499,8 @@ class lsa_region():
     def used(self):
         return self.total() - self.free()
 
+    def impl(self):
+        return self.region
 
 class dirty_mem_mgr():
     def __init__(self, ref):
@@ -2297,6 +2304,9 @@ class segment_descriptor:
         return int(gdb.parse_and_eval('%d & (\'logalloc\'::segment::size_mask)'
                                       % (self.ref['_free_space'])))
 
+    @property
+    def address(self):
+        return self.ref.address
 
 class scylla_segment_descs(gdb.Command):
     def __init__(self):
@@ -2334,6 +2344,64 @@ class scylla_segment_descs(gdb.Command):
                 desc = segment_descriptor(desc)
                 print_desc(addr, desc)
                 addr += segment_size
+
+
+def shard_of(ptr):
+    return (int(ptr) >> 36) & 0xff
+
+class scylla_lsa_check(gdb.Command):
+    """
+    Runs consistency checks on the LSA state on current shard.
+    """
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla lsa-check', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
+
+    def invoke(self, arg, from_tty):
+        segment_size = int(gdb.parse_and_eval('\'logalloc\'::segment::size'))
+
+        db = find_db()
+
+        # Collect segment* which are present in _segment_descs
+        in_buckets = set()
+        cache_region = lsa_region(db['_row_cache_tracker']['_region'])
+        shard = shard_of(cache_region.impl())
+        for bucket in std_array(cache_region.impl()['_segment_descs']['_buckets']):
+            for desc in intrusive_list(bucket):
+                if shard_of(int(desc.address)) != shard:
+                    gdb.write('ERROR: Out-of-shard segment: (logalloc::segment_descriptor*)0x%x, free_space=%d\n'
+                              % (int(desc.address), desc.free_space()))
+                in_buckets.add(int(desc.address))
+
+        # Scan shard's segment_descriptor:s for anomalies:
+        #  - detect segments owned by cache which are not in cache region's _segment_descs
+        #  - compute segment occupancy statistics for comparison with region's stored ones
+        base = int(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._store._segments_base'))
+        desc_free_space = 0
+        desc_total_space = 0
+        for desc in std_vector(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._segments')):
+            desc = segment_descriptor(desc)
+            if desc.is_lsa() and desc.region() == cache_region.impl():
+                if not int(desc.address) in in_buckets:
+                    if cache_region.impl()['_active'] != base and cache_region.impl()['_buf_active'] != base:
+                        # stray = not in _closed_segments
+                        gdb.write('ERROR: Stray segment: (logalloc::segment*)0x%x, (logalloc::segment_descriptor*)0x%x, free_space=%d\n'
+                              % (base, int(desc.address), desc.free_space()))
+                else:
+                    desc_free_space += desc.free_space()
+                    desc_total_space += segment_size
+            base += segment_size
+
+        region_free_space = int(cache_region.impl()['_closed_occupancy']['_free_space'])
+        if region_free_space != desc_free_space:
+            gdb.write("ERROR: free space in closed segments according to region: %d\n" % region_free_space)
+            gdb.write("ERROR: free space in closed segments according to segment descriptors: %d (diff: %d)\n"
+                      % (desc_free_space, desc_free_space - region_free_space))
+
+        region_total_space = int(cache_region.impl()['_closed_occupancy']['_total_space'])
+        if region_total_space != desc_total_space:
+            gdb.write("ERROR: total space in closed segments according to region: %d\n" % region_total_space)
+            gdb.write("ERROR: total space in closed segments according to segment descriptors: %d (diff: %d)\n"
+                      % (desc_total_space, desc_total_space - region_total_space))
 
 
 class scylla_lsa(gdb.Command):
@@ -4684,6 +4752,7 @@ scylla_mem_range()
 scylla_heapprof()
 scylla_lsa()
 scylla_lsa_segment()
+scylla_lsa_check()
 scylla_segment_descs()
 scylla_timers()
 scylla_apply()
