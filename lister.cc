@@ -1,3 +1,4 @@
+#include <seastar/core/coroutine.hh>
 #include <seastar/core/print.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/util/log.hh>
@@ -73,5 +74,59 @@ future<> lister::rmdir(fs::path dir) {
     }).then([dir] {
         // ...then kill the directory itself
         return remove_file(dir.native());
+    });
+}
+
+directory_lister::~directory_lister() {
+    if (_lister) {
+        on_internal_error(llogger, "directory_lister not closed when destroyed");
+    }
+}
+
+future<std::optional<directory_entry>> directory_lister::get() {
+    if (!_opt_done_fut) {
+        auto dir = co_await open_checked_directory(general_disk_error_handler, _dir.native());
+        auto walker = [this] (fs::path dir, directory_entry de) {
+            return _queue.push_eventually(std::make_optional<directory_entry>(std::move(de)));
+        };
+        assert(!_lister);
+        _lister = std::make_unique<lister>(std::move(dir), _type, std::move(walker), _filter, _dir, _do_show_hidden);
+        _opt_done_fut = _lister->done().then_wrapped([this] (future<> f) {
+            if (f.failed()) [[unlikely]] {
+                _queue.abort(f.get_exception());
+                return make_ready_future<>();
+            }
+            return _queue.push_eventually(std::nullopt);
+        }).finally([this] {
+            _lister.reset();
+        });
+    }
+    std::exception_ptr ex;
+    try {
+        auto ret = co_await _queue.pop_eventually();
+        if (ret) {
+            co_return ret;
+        }
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await close();
+    if (ex) {
+        co_return coroutine::exception(std::move(ex));
+    }
+    co_return std::nullopt;
+}
+
+void directory_lister::abort(std::exception_ptr ex) {
+    _queue.abort(std::move(ex));
+}
+
+future<> directory_lister::close() noexcept {
+    if (!_opt_done_fut) {
+        return make_ready_future<>();
+    }
+    _queue.abort(std::make_exception_ptr(broken_pipe_exception()));
+    return std::exchange(_opt_done_fut, std::make_optional<future<>>(make_ready_future<>()))->handle_exception([] (std::exception_ptr) {
+        // ignore all errors
     });
 }
