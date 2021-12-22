@@ -334,10 +334,9 @@ modification_statement::execute_with_condition(query_processor& qp, service::que
 
     auto shard = service::storage_proxy::cas_shard(*s, request->key()[0].start()->value().as_decorated_key().token());
     if (shard != this_shard_id()) {
-        qp.proxy().get_stats().replica_cross_shard_ops++;
         return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
-                ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(shard,
-                    std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls())));
+                qp.bounce_to_shard(shard, std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls()))
+            );
     }
 
     return qp.proxy().cas(s, request, request->read_command(qp), request->key(),

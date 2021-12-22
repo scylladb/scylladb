@@ -331,6 +331,8 @@ public:
 
     friend class migration_subscriber;
 
+    shared_ptr<cql_transport::messages::result_message> bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls);
+
 private:
     query_options make_internal_options(
             const statements::prepared_statement::checked_weak_ptr& p,

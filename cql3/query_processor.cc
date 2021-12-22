@@ -43,6 +43,7 @@
 
 #include <seastar/core/metrics.hh>
 
+#include "service/storage_proxy.hh"
 #include "cql3/CqlParser.hpp"
 #include "cql3/error_collector.hh"
 #include "cql3/statements/batch_statement.hh"
@@ -996,6 +997,11 @@ future<> query_processor::query_internal(
         const sstring& query_string,
         noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)>&& f) {
     return query_internal(query_string, db::consistency_level::ONE, {}, 1000, std::move(f));
+}
+
+shared_ptr<cql_transport::messages::result_message> query_processor::bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls) {
+    _proxy.get_stats().replica_cross_shard_ops++;
+    return ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(shard, std::move(cached_fn_calls));
 }
 
 }
