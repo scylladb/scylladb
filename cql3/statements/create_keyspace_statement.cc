@@ -161,7 +161,7 @@ future<> cql3::statements::create_keyspace_statement::grant_permissions_to_creat
 // errors (such as unknown replication strategy name or unknown options
 // to a known replication strategy) are done elsewhere.
 std::optional<sstring> check_restricted_replication_strategy(
-    service::storage_proxy& proxy,
+    query_processor& qp,
     const sstring& keyspace,
     const ks_prop_defs& attrs)
 {
@@ -174,7 +174,7 @@ std::optional<sstring> check_restricted_replication_strategy(
     // may have in the future - multiple racks or DCs. So depending on how
     // protective we are configured, let's prevent it or allow with a warning:
     if (replication_strategy == "org.apache.cassandra.locator.SimpleStrategy") {
-        switch(proxy.data_dictionary().get_config().restrict_replication_simplestrategy()) {
+        switch(qp.proxy().data_dictionary().get_config().restrict_replication_simplestrategy()) {
         case db::tri_mode_restriction_t::mode::TRUE:
             throw exceptions::configuration_exception(
                 "SimpleStrategy replication class is not recommended, and "
@@ -191,7 +191,7 @@ std::optional<sstring> check_restricted_replication_strategy(
         case db::tri_mode_restriction_t::mode::FALSE:
             // Scylla was configured to allow SimpleStrategy, but let's warn
             // if it's used on a cluster which *already* has multiple DCs:
-            if (proxy.get_token_metadata_ptr()->get_topology().get_datacenter_endpoints().size() > 1) {
+            if (qp.proxy().get_token_metadata_ptr()->get_topology().get_datacenter_endpoints().size() > 1) {
                 return "Using SimpleStrategy in a multi-datacenter environment is not recommended.";
             }
             break;
@@ -202,7 +202,7 @@ std::optional<sstring> check_restricted_replication_strategy(
 
 future<::shared_ptr<messages::result_message>>
 create_keyspace_statement::execute(query_processor& qp, service::query_state& state, const query_options& options) const {
-    std::optional<sstring> warning = check_restricted_replication_strategy(qp.proxy(), keyspace(), *_attrs);
+    std::optional<sstring> warning = check_restricted_replication_strategy(qp, keyspace(), *_attrs);
     return schema_altering_statement::execute(qp, state, options).then([this, warning = std::move(warning)] (::shared_ptr<messages::result_message> msg) {
         if (warning) {
             msg->add_warning(*warning);

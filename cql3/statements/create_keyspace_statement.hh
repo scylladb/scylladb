@@ -108,7 +108,7 @@ public:
 };
 
 std::optional<sstring> check_restricted_replication_strategy(
-    service::storage_proxy& proxy,
+    query_processor& qp,
     const sstring& keyspace,
     const ks_prop_defs& attrs);
 
