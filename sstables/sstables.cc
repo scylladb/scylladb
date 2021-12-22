@@ -596,20 +596,20 @@ future<> parse(const sstable& sst, sstable_version_types v, random_access_reader
                 break;
             case metadata_type::Serialization:
                 if (v < sstable_version_types::mc) {
-                    throw malformed_sstable_exception(
+                    throw_malformed_sstable_exception(sstlog, sst,
                         "Statistics is malformed: SSTable is in 2.x format but contains serialization header.");
                 } else {
                     co_await parse<serialization_header>(sst, v, in, s.contents[type]);
                 }
                 break;
             default:
-                throw malformed_sstable_exception(fmt::format("Invalid metadata type at Statistics file: {} ", int(type)));
+                throw_malformed_sstable_exception(sstlog, sst, fmt::format("Invalid metadata type at Statistics file: {} ", int(type)));
             }
         }
     } catch (const malformed_sstable_exception&) {
         throw;
     } catch (...) {
-        throw malformed_sstable_exception(fmt::format("Statistics file is malformed: {}", std::current_exception()));
+        throw_malformed_sstable_exception(sstlog, sst, fmt::format("Statistics file is malformed: {}", std::current_exception()));
     }
 }
 
@@ -627,7 +627,7 @@ future<> parse(const sstable& sst, sstable_version_types v, random_access_reader
     uint32_t length = *len;
 
     if (length == 0) {
-        throw malformed_sstable_exception("Estimated histogram with zero size found. Can't continue!");
+        throw_malformed_sstable_exception(sstlog, sst, "Estimated histogram with zero size found. Can't continue!");
     }
 
     // Arrays are potentially pre-initialized by the estimated_histogram constructor.
@@ -697,7 +697,7 @@ future<> parse(const sstable& sst, sstable_version_types v, random_access_reader
     co_await parse(sst, v, in, sh.max_bin_size, a);
     auto length = a.elements.size();
     if (length > sh.max_bin_size) {
-        throw malformed_sstable_exception("Streaming histogram with more entries than allowed. Can't continue!");
+        throw_malformed_sstable_exception(sstlog, sst, "Streaming histogram with more entries than allowed. Can't continue!");
     }
 
     // Find bad histogram which had incorrect elements merged due to use of
@@ -803,7 +803,7 @@ future<> sstable::read_toc() noexcept {
             // but if we so much as read a whole page from it, there is definitely something fishy
             // going on - and this simplifies the code.
             if (size >= 4096) {
-                throw malformed_sstable_exception("SSTable TOC too big: " + to_sstring(size) + " bytes", filename(component_type::TOC));
+                throw_malformed_sstable_exception(sstlog, *this, "SSTable TOC too big: " + to_sstring(size) + " bytes", filename(component_type::TOC));
             }
 
             std::string_view buf(bufptr.get(), size);
@@ -824,7 +824,7 @@ future<> sstable::read_toc() noexcept {
                 }
             }
             if (!_recognized_components.size()) {
-                throw malformed_sstable_exception("Empty TOC", filename(component_type::TOC));
+                throw_malformed_sstable_exception(sstlog, *this, "Empty TOC", filename(component_type::TOC));
             }
         });
     }).then_wrapped([this] (future<> f) {
@@ -832,7 +832,7 @@ future<> sstable::read_toc() noexcept {
             f.get();
         } catch (std::system_error& e) {
             if (e.code() == std::error_code(ENOENT, std::system_category())) {
-                throw malformed_sstable_exception(format("{}", std::current_exception()), filename(component_type::TOC));
+                throw_malformed_sstable_exception(sstlog, *this, format("{}", std::current_exception()), filename(component_type::TOC));
             }
             throw;
         }
@@ -1016,7 +1016,7 @@ future<> sstable::read_simple(T& component, const io_priority_class& pc) {
             f.get();
         } catch (std::system_error& e) {
             if (e.code() == std::error_code(ENOENT, std::system_category())) {
-                throw malformed_sstable_exception(format("{}", std::current_exception()), file_path);
+                throw_malformed_sstable_exception(sstlog, *this, format("{}", std::current_exception()), file_path);
             }
             throw;
         } catch (malformed_sstable_exception &e) {
@@ -1429,7 +1429,7 @@ void prepare_summary(const sstable& sst, summary& s, uint64_t expected_partition
             !!(expected_partition_count % min_index_interval);
     // FIXME: handle case where max_expected_entries is greater than max value stored by uint32_t.
     if (max_expected_entries > std::numeric_limits<uint32_t>::max()) {
-        throw malformed_sstable_exception("Current sampling level (" + to_sstring(downsampling::BASE_SAMPLING_LEVEL) + ") not enough to generate summary.");
+        throw_malformed_sstable_exception(sstlog, sst, "Current sampling level (" + to_sstring(downsampling::BASE_SAMPLING_LEVEL) + ") not enough to generate summary.", sst.filename(component_type::Summary));
     }
 
     s.header.memory_size = 0;
@@ -1945,7 +1945,7 @@ future<> sstable::check_create_links_replay(const sstring& dst_dir, int64_t dst_
                     if (!same) {
                         auto msg = format("Error while linking SSTable: {} to {}: File exists", src, dst);
                         sstlog.error("{}", msg);
-                        throw malformed_sstable_exception(msg, _dir);
+                        throw_malformed_sstable_exception(sstlog, *this, msg, _dir);
                     }
                     return make_ready_future<>();
                 });
@@ -2319,7 +2319,7 @@ void sstable::set_first_and_last_keys() {
     }
     auto decorate_key = [this] (const char *m, const bytes& value) {
         if (value.empty()) {
-            throw malformed_sstable_exception(format("{} key of summary of {} is empty", m, get_filename()));
+            throw_malformed_sstable_exception(sstlog, *this, format("{} key of summary of {} is empty", m, get_filename()), filename(component_type::Summary));
         }
         auto pk = key::from_bytes(value).to_partition_key(*_schema);
         return dht::decorate_key(*_schema, std::move(pk));
@@ -2327,7 +2327,7 @@ void sstable::set_first_and_last_keys() {
     auto first = decorate_key("first", _components->summary.first_key.value);
     auto last = decorate_key("last", _components->summary.last_key.value);
     if (first.tri_compare(*_schema, last) > 0) {
-        throw malformed_sstable_exception(format("{}: first and last keys of summary are misordered: first={} > last={}", get_filename(), first, last));
+        throw_malformed_sstable_exception(sstlog, *this, format("{}: first and last keys of summary are misordered: first={} > last={}", get_filename(), first, last), filename(component_type::Summary));
     }
     _first = std::move(first);
     _last = std::move(last);
@@ -3138,6 +3138,21 @@ std::optional<large_data_stats_entry> sstable::get_large_data_stat(large_data_ty
         }
     }
     return std::make_optional<large_data_stats_entry>();
+}
+
+malformed_sstable_exception::malformed_sstable_exception(const sstable& sst, sstring msg, const sstring& filename)
+    : malformed_sstable_exception(fmt::format("{} in sstable {} origin={}", msg, filename, sst.get_origin()))
+{
+}
+
+[[noreturn]] void throw_malformed_sstable_exception(logging::logger& log, const sstable& sst, sstring msg, const sstring& filename) {
+    auto ex = std::make_exception_ptr(malformed_sstable_exception(sst, msg, filename));
+    log.error("{} found at {}", ex, current_backtrace());
+    std::rethrow_exception(std::move(ex));
+}
+
+[[noreturn]] inline void throw_malformed_sstable_exception(logging::logger& log, const sstable& sst, sstring msg) {
+    throw_malformed_sstable_exception(log, sst, std::move(msg), sst.get_filename());
 }
 
 }
