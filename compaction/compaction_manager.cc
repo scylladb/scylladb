@@ -1085,6 +1085,15 @@ future<> compaction_manager::stop_compaction(sstring type, table* table) {
     } catch (...) {
         throw std::runtime_error(format("Compaction of type {} cannot be stopped by compaction manager: {}", type.c_str(), std::current_exception()));
     }
+    switch (target_type) {
+    case sstables::compaction_type::Validation:
+    case sstables::compaction_type::Index_build:
+        throw std::runtime_error(format("Compaction type {} is unsupported", type.c_str()));
+    case sstables::compaction_type::Reshard:
+        throw std::runtime_error(format("Stopping compaction of type {} is disallowed", type.c_str()));
+    default:
+        break;
+    }
     return stop_ongoing_compactions("user request", table, target_type);
 }
 
