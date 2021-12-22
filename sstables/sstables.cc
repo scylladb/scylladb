@@ -1419,7 +1419,7 @@ future<foreign_sstable_open_info> sstable::get_open_info() & {
     });
 }
 
-void prepare_summary(summary& s, uint64_t expected_partition_count, uint32_t min_index_interval) {
+void prepare_summary(const sstable& sst, summary& s, uint64_t expected_partition_count, uint32_t min_index_interval) {
     assert(expected_partition_count >= 1);
 
     s.header.min_index_interval = min_index_interval;
@@ -1724,7 +1724,7 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
         auto index_size = co_await index_file.size();
         // an upper bound. Surely to be less than this.
         auto estimated_partitions = std::max<uint64_t>(index_size / sizeof(uint64_t), 1);
-        prepare_summary(_components->summary, estimated_partitions, _schema->min_index_interval());
+        prepare_summary(*this, _components->summary, estimated_partitions, _schema->min_index_interval());
 
         file_input_stream_options options;
         options.buffer_size = sstable_buffer_size;

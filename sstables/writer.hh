@@ -603,7 +603,7 @@ void maybe_add_summary_entry(summary&, const dht::token&, bytes_view key, uint64
 // case none has been loaded (this happens, for example, in unit tests).
 const db::config& get_config();
 
-void prepare_summary(summary& s, uint64_t expected_partition_count, uint32_t min_index_interval);
+void prepare_summary(const sstable& sst, summary& s, uint64_t expected_partition_count, uint32_t min_index_interval);
 
 future<> seal_summary(summary& s,
     std::optional<key>&& first_key,

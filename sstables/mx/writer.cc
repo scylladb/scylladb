@@ -803,7 +803,7 @@ public:
         _sst._components->filter = utils::i_filter::get_filter(estimated_partitions, _schema.bloom_filter_fp_chance(), utils::filter_format::m_format);
         _pi_write_m.desired_block_size = cfg.promoted_index_block_size;
         _index_sampling_state.summary_byte_cost = _cfg.summary_byte_cost;
-        prepare_summary(_sst._components->summary, estimated_partitions, _schema.min_index_interval());
+        prepare_summary(_sst, _sst._components->summary, estimated_partitions, _schema.min_index_interval());
 
         // Initialize at the end of the constructor body, so we can delay making
         // the semaphore used until we know that no more exceptions can be thrown.
