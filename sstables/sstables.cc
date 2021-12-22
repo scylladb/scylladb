@@ -210,7 +210,7 @@ static void check_buf_size(temporary_buffer<char>& buf, size_t expected) {
 
 template <typename T>
 requires std::is_integral_v<T>
-future<> parse(const schema&, sstable_version_types v, random_access_reader& in, T& i) {
+future<> parse(const sstable&, sstable_version_types v, random_access_reader& in, T& i) {
     return in.read_exactly(sizeof(T)).then([&i] (auto buf) {
         check_buf_size(buf, sizeof(T));
         i = net::ntoh(read_unaligned<T>(buf.get()));
@@ -220,7 +220,7 @@ future<> parse(const schema&, sstable_version_types v, random_access_reader& in,
 
 template <typename T>
 requires std::is_enum_v<T>
-future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, T& i) {
+future<> parse(const sstable&, sstable_version_types v, random_access_reader& in, T& i) {
     return in.read_exactly(sizeof(T)).then([&i] (auto buf) {
         check_buf_size(buf, sizeof(T));
         i = static_cast<T>(net::ntoh(read_unaligned<std::underlying_type_t<T>>(buf.get())));
@@ -228,11 +228,11 @@ future<> parse(const schema& s, sstable_version_types v, random_access_reader& i
     });
 }
 
-future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, bool& i) {
-    return parse(s, v, in, reinterpret_cast<uint8_t&>(i));
+future<> parse(const sstable& sst, sstable_version_types v, random_access_reader& in, bool& i) {
+    return parse(sst, v, in, reinterpret_cast<uint8_t&>(i));
 }
 
-future<> parse(const schema&, sstable_version_types, random_access_reader& in, double& d) {
+future<> parse(const sstable&, sstable_version_types, random_access_reader& in, double& d) {
     return in.read_exactly(sizeof(double)).then([&d] (auto buf) {
         check_buf_size(buf, sizeof(double));
         unsigned long nr = read_unaligned<unsigned long>(buf.get());
@@ -242,7 +242,7 @@ future<> parse(const schema&, sstable_version_types, random_access_reader& in, d
 }
 
 template <typename T>
-future<> parse(const schema&, sstable_version_types, random_access_reader& in, T& len, bytes& s) {
+future<> parse(const sstable&, sstable_version_types, random_access_reader& in, T& len, bytes& s) {
     return in.read_exactly(len).then([&s, len] (auto buf) {
         check_buf_size(buf, len);
         // Likely a different type of char. Most bufs are unsigned, whereas the bytes type is signed.
@@ -252,27 +252,27 @@ future<> parse(const schema&, sstable_version_types, random_access_reader& in, T
 
 // All composite parsers must come after this
 template<typename First, typename... Rest>
-future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, First& first, Rest&&... rest) {
-    return parse(s, v, in, first).then([v, &s, &in, &rest...] {
-        return parse(s, v, in, std::forward<Rest>(rest)...);
+future<> parse(const sstable& sst, sstable_version_types v, random_access_reader& in, First& first, Rest&&... rest) {
+    return parse(sst, v, in, first).then([v, &sst, &in, &rest...] {
+        return parse(sst, v, in, std::forward<Rest>(rest)...);
     });
 }
 
 // Intended to be used for a type that describes itself through describe_type().
 template <self_describing T>
 future<>
-parse(const schema& s, sstable_version_types v, random_access_reader& in, T& t) {
-    return t.describe_type(v, [v, &s, &in] (auto&&... what) -> future<> {
-        return parse(s, v, in, what...);
+parse(const sstable& sst, sstable_version_types v, random_access_reader& in, T& t) {
+    return t.describe_type(v, [v, &sst, &in] (auto&&... what) -> future<> {
+        return parse(sst, v, in, what...);
     });
 }
 
 template <class T>
-future<> parse(const schema&, sstable_version_types v, random_access_reader& in, vint<T>& t) {
+future<> parse(const sstable&, sstable_version_types v, random_access_reader& in, vint<T>& t) {
     return read_vint(in, t.value);
 }
 
-future<> parse(const schema&, sstable_version_types, random_access_reader& in, utils::UUID& uuid) {
+future<> parse(const sstable&, sstable_version_types, random_access_reader& in, utils::UUID& uuid) {
     return in.read_exactly(uuid.serialized_size()).then([&uuid] (temporary_buffer<char> buf) {
         check_buf_size(buf, utils::UUID::serialized_size());
 
@@ -290,28 +290,28 @@ inline void write(sstable_version_types v, file_writer& out, const utils::UUID& 
 // are contiguous, it is not always the case. So we want to have the
 // flexibility of parsing them separately.
 template <typename Size>
-future<> parse(const schema& schema, sstable_version_types v, random_access_reader& in, disk_string<Size>& s) {
+future<> parse(const sstable& sst, sstable_version_types v, random_access_reader& in, disk_string<Size>& s) {
     auto len = std::make_unique<Size>();
-    auto f = parse(schema, v, in, *len);
-    return f.then([v, &schema, &in, &s, len = std::move(len)] {
-        return parse(schema, v, in, *len, s.value);
+    auto f = parse(sst, v, in, *len);
+    return f.then([v, &sst, &in, &s, len = std::move(len)] {
+        return parse(sst, v, in, *len, s.value);
     });
 }
 
-future<> parse(const schema& schema, sstable_version_types v, random_access_reader& in, disk_string_vint_size& s) {
+future<> parse(const sstable& sst, sstable_version_types v, random_access_reader& in, disk_string_vint_size& s) {
     auto len = std::make_unique<uint64_t>();
     auto f = read_vint(in, *len);
-    return f.then([v, &schema, &in, &s, len = std::move(len)] {
-        return parse(schema, v, in, *len, s.value);
+    return f.then([v, &sst, &in, &s, len = std::move(len)] {
+        return parse(sst, v, in, *len, s.value);
     });
 }
 
 template <typename Members>
-future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, disk_array_vint_size<Members>& arr) {
+future<> parse(const sstable& sst, sstable_version_types v, random_access_reader& in, disk_array_vint_size<Members>& arr) {
     auto len = std::make_unique<uint64_t>();
     auto f = read_vint(in, *len);
-    return f.then([v, &s, &in, &arr, len = std::move(len)] {
-        return parse(s, v, in, *len, arr.elements);
+    return f.then([v, &sst, &in, &arr, len = std::move(len)] {
+        return parse(sst, v, in, *len, arr.elements);
     });
 }
 
@@ -325,16 +325,16 @@ future<> parse(const schema& s, sstable_version_types v, random_access_reader& i
 // We'll offer a specialization for that case below.
 template <typename Size, typename Members>
 future<>
-parse(const schema& s, sstable_version_types v, random_access_reader& in, Size& len, utils::chunked_vector<Members>& arr) {
+parse(const sstable& sst, sstable_version_types v, random_access_reader& in, Size& len, utils::chunked_vector<Members>& arr) {
     for (auto count = len; count; count--) {
         arr.emplace_back();
-        co_await parse(s, v, in, arr.back());
+        co_await parse(sst, v, in, arr.back());
     }
 }
 
 template <typename Size, std::integral Members>
 future<>
-parse(const schema&, sstable_version_types, random_access_reader& in, Size& len, utils::chunked_vector<Members>& arr) {
+parse(const sstable&, sstable_version_types, random_access_reader& in, Size& len, utils::chunked_vector<Members>& arr) {
     Size now = arr.max_chunk_capacity();
     for (auto count = len; count; count -= now) {
         if (now > count) {
@@ -351,33 +351,33 @@ parse(const schema&, sstable_version_types, random_access_reader& in, Size& len,
 // We resize the array here, before we pass it to the integer / non-integer
 // specializations
 template <typename Size, typename Members>
-future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, disk_array<Size, Members>& arr) {
+future<> parse(const sstable& sst, sstable_version_types v, random_access_reader& in, disk_array<Size, Members>& arr) {
     Size len;
-    co_await parse(s, v, in, len);
+    co_await parse(sst, v, in, len);
     arr.elements.reserve(len);
-    co_await parse(s, v, in, len, arr.elements);
+    co_await parse(sst, v, in, len, arr.elements);
 }
 
 template <typename Size, typename Key, typename Value>
-future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, Size& len, std::unordered_map<Key, Value>& map) {
+future<> parse(const sstable& sst, sstable_version_types v, random_access_reader& in, Size& len, std::unordered_map<Key, Value>& map) {
     for (auto count = len; count; count--) {
         Key key;
         Value value;
-        co_await parse(s, v, in, key, value);
+        co_await parse(sst, v, in, key, value);
         map.emplace(key, value);
     }
 }
 
 template <typename First, typename Second>
-future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, std::pair<First, Second>& p) {
-    return parse(s, v, in, p.first, p.second);
+future<> parse(const sstable& sst, sstable_version_types v, random_access_reader& in, std::pair<First, Second>& p) {
+    return parse(sst, v, in, p.first, p.second);
 }
 
 template <typename Size, typename Key, typename Value>
-future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, disk_hash<Size, Key, Value>& h) {
+future<> parse(const sstable& sst, sstable_version_types v, random_access_reader& in, disk_hash<Size, Key, Value>& h) {
     Size w;
-    co_await parse(s, v, in, w);
-    co_await parse(s, v, in, w, h.map);
+    co_await parse(sst, v, in, w);
+    co_await parse(sst, v, in, w, h.map);
 }
 
 // Abstract parser/sizer/writer for a single tagged member of a tagged union
@@ -385,7 +385,7 @@ template <typename DiskSetOfTaggedUnion>
 struct single_tagged_union_member_serdes {
     using value_type = typename DiskSetOfTaggedUnion::value_type;
     virtual ~single_tagged_union_member_serdes() {}
-    virtual future<> do_parse(const schema& s, sstable_version_types version, random_access_reader& in, value_type& v) const = 0;
+    virtual future<> do_parse(const sstable& sst, sstable_version_types version, random_access_reader& in, value_type& v) const = 0;
     virtual uint32_t do_size(sstable_version_types version, const value_type& v) const = 0;
     virtual void do_write(sstable_version_types version, file_writer& out, const value_type& v) const = 0;
 };
@@ -395,9 +395,9 @@ template <typename DiskSetOfTaggedUnion, typename Member>
 struct single_tagged_union_member_serdes_for final : single_tagged_union_member_serdes<DiskSetOfTaggedUnion> {
     using base = single_tagged_union_member_serdes<DiskSetOfTaggedUnion>;
     using value_type = typename base::value_type;
-    virtual future<> do_parse(const schema& s, sstable_version_types version, random_access_reader& in, value_type& v) const override {
+    virtual future<> do_parse(const sstable& sst, sstable_version_types version, random_access_reader& in, value_type& v) const override {
         v = Member();
-        return parse(s, version, in, boost::get<Member>(v).value);
+        return parse(sst, version, in, boost::get<Member>(v).value);
     }
     virtual uint32_t do_size(sstable_version_types version, const value_type& v) const override {
         return serialized_size(version, boost::get<Member>(v).value);
@@ -416,12 +416,12 @@ struct disk_set_of_tagged_union<TagType, Members...>::serdes {
     serdes_map_type map = {
         {Members::tag(), make_shared<single_tagged_union_member_serdes_for<disk_set, Members>>()}...
     };
-    future<> lookup_and_parse(const schema& schema, sstable_version_types v, random_access_reader& in, TagType tag, uint32_t& size, disk_set& s, value_type& value) const {
+    future<> lookup_and_parse(const sstable& sst, sstable_version_types v, random_access_reader& in, TagType tag, uint32_t& size, disk_set& s, value_type& value) const {
         auto i = map.find(tag);
         if (i == map.end()) {
             return in.read_exactly(size).discard_result();
         } else {
-            return i->second->do_parse(schema, v, in, value).then([tag, &s, &value] () mutable {
+            return i->second->do_parse(sst, v, in, value).then([tag, &s, &value] () mutable {
                 s.data.emplace(tag, std::move(value));
             });
         }
@@ -439,20 +439,20 @@ typename disk_set_of_tagged_union<TagType, Members...>::serdes disk_set_of_tagge
 
 template <typename TagType, typename... Members>
 future<>
-parse(const schema& schema, sstable_version_types v, random_access_reader& in, disk_set_of_tagged_union<TagType, Members...>& s) {
+parse(const sstable& sst, sstable_version_types v, random_access_reader& in, disk_set_of_tagged_union<TagType, Members...>& s) {
     using disk_set = disk_set_of_tagged_union<TagType, Members...>;
     using key_type = typename disk_set::key_type;
     using value_type = typename disk_set::value_type;
 
     key_type nr_elements;
-    co_await parse(schema, v, in, nr_elements);
+    co_await parse(sst, v, in, nr_elements);
     for (auto _ : boost::irange<key_type>(0, nr_elements)) {
         key_type new_key;
         unsigned new_size;
-        co_await parse(schema, v, in, new_key);
-        co_await parse(schema, v, in, new_size);
+        co_await parse(sst, v, in, new_key);
+        co_await parse(sst, v, in, new_size);
         value_type new_value;
-        co_await disk_set::s_serdes.lookup_and_parse(schema, v, in, TagType(new_key), new_size, s, new_value);
+        co_await disk_set::s_serdes.lookup_and_parse(sst, v, in, TagType(new_key), new_size, s, new_value);
     }
 }
 
@@ -469,10 +469,10 @@ void write(sstable_version_types v, file_writer& out, const disk_set_of_tagged_u
     }
 }
 
-future<> parse(const schema& schema, sstable_version_types v, random_access_reader& in, summary& s) {
+future<> parse(const sstable& sst, sstable_version_types v, random_access_reader& in, summary& s) {
     using pos_type = typename decltype(summary::positions)::value_type;
 
-    co_await parse(schema, v, in, s.header.min_index_interval,
+    co_await parse(sst, v, in, s.header.min_index_interval,
                      s.header.size,
                      s.header.memory_size,
                      s.header.sampling_level,
@@ -498,12 +498,13 @@ future<> parse(const schema& schema, sstable_version_types v, random_access_read
     s.positions.push_back(s.header.memory_size);
 
     co_await in.seek(sizeof(summary::header) + s.header.memory_size);
-    co_await parse(schema, v, in, s.first_key, s.last_key);
+    co_await parse(sst, v, in, s.first_key, s.last_key);
     co_await in.seek(s.positions[0] + sizeof(summary::header));
 
     s.entries.reserve(s.header.size);
 
     int idx = 0;
+    auto& schema = *sst.get_schema();
     while (s.entries.size() != s.header.size) {
         auto pos = s.positions[idx++];
         auto next = s.positions[idx];
@@ -559,14 +560,14 @@ future<summary_entry&> sstable::read_summary_entry(size_t i) {
     return make_ready_future<summary_entry&>(_components->summary.entries[i]);
 }
 
-future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, deletion_time& d) {
-    return parse(s, v, in, d.local_deletion_time, d.marked_for_delete_at);
+future<> parse(const sstable& sst, sstable_version_types v, random_access_reader& in, deletion_time& d) {
+    return parse(sst, v, in, d.local_deletion_time, d.marked_for_delete_at);
 }
 
 template <typename Child>
-future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, std::unique_ptr<metadata>& p) {
+future<> parse(const sstable& sst, sstable_version_types v, random_access_reader& in, std::unique_ptr<metadata>& p) {
     p.reset(new Child);
-    return parse(s, v, in, *static_cast<Child *>(p.get()));
+    return parse(sst, v, in, *static_cast<Child *>(p.get()));
 }
 
 template <typename Child>
@@ -574,9 +575,9 @@ inline void write(sstable_version_types v, file_writer& out, const std::unique_p
     write(v, out, *static_cast<Child *>(p.get()));
 }
 
-future<> parse(const schema& schema, sstable_version_types v, random_access_reader& in, statistics& s) {
+future<> parse(const sstable& sst, sstable_version_types v, random_access_reader& in, statistics& s) {
     try {
-        co_await parse(schema, v, in, s.offsets);
+        co_await parse(sst, v, in, s.offsets);
         // Old versions of Scylla do not respect the order.
         // See https://github.com/scylladb/scylla/issues/3937
         boost::sort(s.offsets.elements, [] (auto&& e1, auto&& e2) { return e1.first < e2.first; });
@@ -585,20 +586,20 @@ future<> parse(const schema& schema, sstable_version_types v, random_access_read
             co_await in.seek(val.second);
             switch (type) {
             case metadata_type::Validation:
-                co_await parse<validation_metadata>(schema, v, in, s.contents[type]);
+                co_await parse<validation_metadata>(sst, v, in, s.contents[type]);
                 break;
             case metadata_type::Compaction:
-                co_await parse<compaction_metadata>(schema, v, in, s.contents[type]);
+                co_await parse<compaction_metadata>(sst, v, in, s.contents[type]);
                 break;
             case metadata_type::Stats:
-                co_await parse<stats_metadata>(schema, v, in, s.contents[type]);
+                co_await parse<stats_metadata>(sst, v, in, s.contents[type]);
                 break;
             case metadata_type::Serialization:
                 if (v < sstable_version_types::mc) {
                     throw malformed_sstable_exception(
                         "Statistics is malformed: SSTable is in 2.x format but contains serialization header.");
                 } else {
-                    co_await parse<serialization_header>(schema, v, in, s.contents[type]);
+                    co_await parse<serialization_header>(sst, v, in, s.contents[type]);
                 }
                 break;
             default:
@@ -619,10 +620,10 @@ inline void write(sstable_version_types v, file_writer& out, const statistics& s
     }
 }
 
-future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, utils::estimated_histogram& eh) {
+future<> parse(const sstable& sst, sstable_version_types v, random_access_reader& in, utils::estimated_histogram& eh) {
     auto len = std::make_unique<uint32_t>();
 
-    co_await parse(s, v, in, *len);
+    co_await parse(sst, v, in, *len);
     uint32_t length = *len;
 
     if (length == 0) {
@@ -690,10 +691,10 @@ struct streaming_histogram_element {
     auto describe_type(sstable_version_types v, Describer f) { return f(key, value); }
 };
 
-future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, utils::streaming_histogram& sh) {
+future<> parse(const sstable& sst, sstable_version_types v, random_access_reader& in, utils::streaming_histogram& sh) {
     auto a = disk_array<uint32_t, streaming_histogram_element>();
 
-    co_await parse(s, v, in, sh.max_bin_size, a);
+    co_await parse(sst, v, in, sh.max_bin_size, a);
     auto length = a.elements.size();
     if (length > sh.max_bin_size) {
         throw malformed_sstable_exception("Streaming histogram with more entries than allowed. Can't continue!");
@@ -727,9 +728,9 @@ void write(sstable_version_types v, file_writer& out, const utils::streaming_his
     write(v, out, max_bin_size, a);
 }
 
-future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, commitlog_interval& ci) {
-    co_await parse(s, v, in, ci.start);
-    co_await parse(s, v, in, ci.end);
+future<> parse(const sstable& sst, sstable_version_types v, random_access_reader& in, commitlog_interval& ci) {
+    co_await parse(sst, v, in, ci.start);
+    co_await parse(sst, v, in, ci.end);
 }
 
 void write(sstable_version_types v, file_writer& out, const commitlog_interval& ci) {
@@ -737,17 +738,17 @@ void write(sstable_version_types v, file_writer& out, const commitlog_interval& 
     write(v, out, ci.end);
 }
 
-future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, compression& c) {
+future<> parse(const sstable& sst, sstable_version_types v, random_access_reader& in, compression& c) {
     uint64_t data_len = 0;
     uint32_t chunk_len = 0;
 
-    co_await parse(s, v, in, c.name, c.options, chunk_len, data_len);
+    co_await parse(sst, v, in, c.name, c.options, chunk_len, data_len);
     c.set_uncompressed_chunk_length(chunk_len);
     c.set_uncompressed_file_length(data_len);
 
     uint32_t len = 0;
     compression::segmented_offsets::writer offsets = c.offsets.get_writer();
-    co_await parse(s, v, in, len);
+    co_await parse(sst, v, in, len);
     auto eoarr = [&c, &len] { return c.offsets.size() == len; };
 
     while (!eoarr()) {
@@ -1005,7 +1006,7 @@ future<> sstable::read_simple(T& component, const io_priority_class& pc) {
         auto fut = fi.size();
         return fut.then([this, &component, fi = std::move(fi)] (uint64_t size) {
             auto r = make_lw_shared<file_random_access_reader>(std::move(fi), size, sstable_buffer_size);
-            auto fut = parse(*_schema, _version, *r, component);
+            auto fut = parse(*this, _version, *r, component);
             return fut.finally([r] {
                 return r->close();
             }).then([r] {});
