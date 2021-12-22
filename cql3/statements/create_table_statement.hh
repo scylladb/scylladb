@@ -160,7 +160,7 @@ public:
 };
 
 std::optional<sstring> check_restricted_table_properties(
-    service::storage_proxy& proxy,
+    query_processor& qp,
     const sstring& keyspace, const sstring& table,
     const cf_prop_defs& cfprops);
 

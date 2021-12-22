@@ -453,7 +453,7 @@ void create_table_statement::raw_statement::add_column_alias(::shared_ptr<column
 // legal but restricted by the configuration. Checks for other of errors
 // in the table's options are done elsewhere.
 std::optional<sstring> check_restricted_table_properties(
-    service::storage_proxy& proxy,
+    query_processor& qp,
     const sstring& keyspace, const sstring& table,
     const cf_prop_defs& cfprops)
 {
@@ -463,7 +463,7 @@ std::optional<sstring> check_restricted_table_properties(
     // in prepare_schema_mutations(), in the middle of execute).
     auto strategy = cfprops.get_compaction_strategy_class();
     if (strategy && *strategy == sstables::compaction_strategy_type::date_tiered) {
-        switch(proxy.data_dictionary().get_config().restrict_dtcs()) {
+        switch(qp.proxy().data_dictionary().get_config().restrict_dtcs()) {
         case db::tri_mode_restriction_t::mode::TRUE:
             throw exceptions::configuration_exception(
                 "DateTieredCompactionStrategy is deprecated, and "
@@ -485,7 +485,7 @@ std::optional<sstring> check_restricted_table_properties(
 
 future<::shared_ptr<messages::result_message>>
 create_table_statement::execute(query_processor& qp, service::query_state& state, const query_options& options) const {
-    std::optional<sstring> warning = check_restricted_table_properties(qp.proxy(), keyspace(), column_family(), *_properties);
+    std::optional<sstring> warning = check_restricted_table_properties(qp, keyspace(), column_family(), *_properties);
     return schema_altering_statement::execute(qp, state, options).then([this, warning = std::move(warning)] (::shared_ptr<messages::result_message> msg) {
         if (warning) {
             msg->add_warning(*warning);
