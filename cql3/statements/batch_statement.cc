@@ -225,13 +225,13 @@ future<std::vector<mutation>> batch_statement::get_mutations(service::storage_pr
     });
 }
 
-void batch_statement::verify_batch_size(service::storage_proxy& proxy, const std::vector<mutation>& mutations) {
+void batch_statement::verify_batch_size(query_processor& qp, const std::vector<mutation>& mutations) {
     if (mutations.size() <= 1) {
         return;     // We only warn for batch spanning multiple mutations
     }
 
-    size_t warn_threshold = proxy.data_dictionary().get_config().batch_size_warn_threshold_in_kb() * 1024;
-    size_t fail_threshold = proxy.data_dictionary().get_config().batch_size_fail_threshold_in_kb() * 1024;
+    size_t warn_threshold = qp.proxy().data_dictionary().get_config().batch_size_warn_threshold_in_kb() * 1024;
+    size_t fail_threshold = qp.proxy().data_dictionary().get_config().batch_size_fail_threshold_in_kb() * 1024;
 
     size_t size = 0;
     for (auto&m : mutations) {
@@ -291,16 +291,16 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_
     if (_has_conditions) {
         ++_stats.cas_batches;
         _stats.statements_in_cas_batches += _statements.size();
-        return execute_with_conditions(storage, options, query_state);
+        return execute_with_conditions(qp, options, query_state);
     }
 
     ++_stats.batches;
     _stats.statements_in_batches += _statements.size();
 
     auto timeout = db::timeout_clock::now() + get_timeout(query_state.get_client_state(), options);
-    return get_mutations(storage, options, timeout, local, now, query_state).then([this, &storage, &options, timeout, tr_state = query_state.get_trace_state(),
+    return get_mutations(storage, options, timeout, local, now, query_state).then([this, &qp, &options, timeout, tr_state = query_state.get_trace_state(),
                                                                                                                                permit = query_state.get_permit()] (std::vector<mutation> ms) mutable {
-        return execute_without_conditions(storage, std::move(ms), options.get_consistency(), timeout, std::move(tr_state), std::move(permit));
+        return execute_without_conditions(qp, std::move(ms), options.get_consistency(), timeout, std::move(tr_state), std::move(permit));
     }).then([] {
         return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
                 make_shared<cql_transport::messages::result_message::void_message>());
@@ -308,7 +308,7 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_
 }
 
 future<> batch_statement::execute_without_conditions(
-        service::storage_proxy& storage,
+        query_processor& qp,
         std::vector<mutation> mutations,
         db::consistency_level cl,
         db::timeout_clock::time_point timeout,
@@ -326,7 +326,7 @@ future<> batch_statement::execute_without_conditions(
         }
     }));
 #endif
-    verify_batch_size(storage, mutations);
+    verify_batch_size(qp, mutations);
 
     bool mutate_atomic = true;
     if (_type != type::LOGGED) {
@@ -340,11 +340,11 @@ future<> batch_statement::execute_without_conditions(
             mutate_atomic = false;
         }
     }
-    return storage.mutate_with_triggers(std::move(mutations), cl, timeout, mutate_atomic, std::move(tr_state), std::move(permit));
+    return qp.proxy().mutate_with_triggers(std::move(mutations), cl, timeout, mutate_atomic, std::move(tr_state), std::move(permit));
 }
 
 future<shared_ptr<cql_transport::messages::result_message>> batch_statement::execute_with_conditions(
-        service::storage_proxy& proxy,
+        query_processor& qp,
         const query_options& options,
         service::query_state& qs) const {
 
@@ -391,12 +391,12 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
 
     auto shard = service::storage_proxy::cas_shard(*_statements[0].statement->s, request->key()[0].start()->value().as_decorated_key().token());
     if (shard != this_shard_id()) {
-        proxy.get_stats().replica_cross_shard_ops++;
+        qp.proxy().get_stats().replica_cross_shard_ops++;
         return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
                 ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(shard, std::move(cached_fn_calls)));
     }
 
-    return proxy.cas(schema, request, request->read_command(proxy), request->key(),
+    return qp.proxy().cas(schema, request, request->read_command(qp.proxy()), request->key(),
             {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()},
             cl_for_paxos, cl_for_learn, batch_timeout, cas_timeout).then([this, request] (bool is_applied) {
         return request->build_cas_result_set(_metadata, _columns_of_cas_result_set, is_applied);

@@ -145,7 +145,7 @@ public:
      * Checks batch size to ensure threshold is met. If not, a warning is logged.
      * @param cfs ColumnFamilies that will store the batch's mutations.
      */
-    static void verify_batch_size(service::storage_proxy& proxy, const std::vector<mutation>& mutations);
+    static void verify_batch_size(query_processor& qp, const std::vector<mutation>& mutations);
 
     virtual future<shared_ptr<cql_transport::messages::result_message>> execute(
             query_processor& qp, service::query_state& state, const query_options& options) const override;
@@ -157,7 +157,7 @@ private:
             bool local, api::timestamp_type now) const;
 
     future<> execute_without_conditions(
-            service::storage_proxy& storage,
+            query_processor& qp,
             std::vector<mutation> mutations,
             db::consistency_level cl,
             db::timeout_clock::time_point timeout,
@@ -165,7 +165,7 @@ private:
             service_permit permit) const;
 
     future<shared_ptr<cql_transport::messages::result_message>> execute_with_conditions(
-            service::storage_proxy& storage,
+            query_processor& qp,
             const query_options& options,
             service::query_state& state) const;
 
