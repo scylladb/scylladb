@@ -228,7 +228,7 @@ public:
 
     // Build a read_command instance to fetch the previous mutation from storage. The mutation is
     // fetched if we need to check LWT conditions or apply updates to non-frozen list elements.
-    lw_shared_ptr<query::read_command> read_command(service::storage_proxy& proxy, query::clustering_row_ranges ranges, db::consistency_level cl) const;
+    lw_shared_ptr<query::read_command> read_command(query_processor& qp, query::clustering_row_ranges ranges, db::consistency_level cl) const;
     // Create a mutation object for the update operation represented by this modification statement.
     // A single mutation object for lightweight transactions, which can only span one partition, or a vector
     // of mutations, one per partition key, for statements which affect multiple partition keys,
@@ -282,7 +282,7 @@ public:
      * @return vector of the mutations
      * @throws invalid_request_exception on invalid requests
      */
-    future<std::vector<mutation>> get_mutations(service::storage_proxy& proxy, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs) const;
+    future<std::vector<mutation>> get_mutations(query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs) const;
 
     virtual json_cache_opt maybe_prepare_json_cache(const query_options& options) const;
 protected:

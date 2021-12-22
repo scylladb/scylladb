@@ -137,7 +137,7 @@ future<> modification_statement::check_access(query_processor& qp, const service
 }
 
 future<std::vector<mutation>>
-modification_statement::get_mutations(service::storage_proxy& proxy, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs) const {
+modification_statement::get_mutations(query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs) const {
     if (_restrictions->range_or_slice_eq_null(options)) { // See #7852 and #9290.
         throw exceptions::invalid_request_exception("Invalid null value in condition for a key column");
     }
@@ -154,9 +154,9 @@ modification_statement::get_mutations(service::storage_proxy& proxy, const query
     }
 
     if (requires_read()) {
-        lw_shared_ptr<query::read_command> cmd = read_command(proxy, ranges, cl);
+        lw_shared_ptr<query::read_command> cmd = read_command(qp, ranges, cl);
         // FIXME: ignoring "local"
-        f = proxy.query(s, cmd, dht::partition_range_vector(keys), cl,
+        f = qp.proxy().query(s, cmd, dht::partition_range_vector(keys), cl,
                 {timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()}).then(
 
                 [this, cmd] (auto cqr) {
@@ -232,14 +232,14 @@ std::vector<mutation> modification_statement::apply_updates(
 }
 
 lw_shared_ptr<query::read_command>
-modification_statement::read_command(service::storage_proxy& proxy, query::clustering_row_ranges ranges, db::consistency_level cl) const {
+modification_statement::read_command(query_processor& qp, query::clustering_row_ranges ranges, db::consistency_level cl) const {
     try {
         validate_for_read(cl);
     } catch (exceptions::invalid_request_exception& e) {
         throw exceptions::invalid_request_exception(format("Write operation require a read but consistency {} is not supported on reads", cl));
     }
     query::partition_slice ps(std::move(ranges), *s, columns_to_read(), update_parameters::options);
-    const auto max_result_size = proxy.get_max_result_size(ps);
+    const auto max_result_size = qp.proxy().get_max_result_size(ps);
     return make_lw_shared<query::read_command>(s->id(), s->version(), std::move(ps), query::max_result_size(max_result_size));
 }
 
@@ -297,7 +297,7 @@ future<>
 modification_statement::execute_without_condition(query_processor& qp, service::query_state& qs, const query_options& options) const {
     auto cl = options.get_consistency();
     auto timeout = db::timeout_clock::now() + get_timeout(qs.get_client_state(), options);
-    return get_mutations(qp.proxy(), options, timeout, false, options.get_timestamp(qs), qs).then([this, cl, timeout, &qp, &qs] (auto mutations) {
+    return get_mutations(qp, options, timeout, false, options.get_timestamp(qs), qs).then([this, cl, timeout, &qp, &qs] (auto mutations) {
         if (mutations.empty()) {
             return now();
         }

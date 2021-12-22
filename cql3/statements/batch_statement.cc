@@ -189,20 +189,20 @@ const std::vector<batch_statement::single_statement>& batch_statement::get_state
     return _statements;
 }
 
-future<std::vector<mutation>> batch_statement::get_mutations(service::storage_proxy& storage, const query_options& options,
+future<std::vector<mutation>> batch_statement::get_mutations(query_processor& qp, const query_options& options,
         db::timeout_clock::time_point timeout, bool local, api::timestamp_type now, service::query_state& query_state) const {
     // Do not process in parallel because operations like list append/prepend depend on execution order.
     using mutation_set_type = std::unordered_set<mutation, mutation_hash_by_key, mutation_equals_by_key>;
-    return do_with(mutation_set_type(), [this, &storage, &options, timeout, now, local, &query_state] (auto& result) mutable {
+    return do_with(mutation_set_type(), [this, &qp, &options, timeout, now, local, &query_state] (auto& result) mutable {
         result.reserve(_statements.size());
         return do_for_each(boost::make_counting_iterator<size_t>(0),
                            boost::make_counting_iterator<size_t>(_statements.size()),
-                           [this, &storage, &options, now, local, &result, timeout, &query_state] (size_t i) {
+                           [this, &qp, &options, now, local, &result, timeout, &query_state] (size_t i) {
             auto&& statement = _statements[i].statement;
             statement->inc_cql_stats(query_state.get_client_state().is_internal());
             auto&& statement_options = options.for_statement(i);
             auto timestamp = _attrs->get_timestamp(now, statement_options);
-            return statement->get_mutations(storage, statement_options, timeout, local, timestamp, query_state).then([&result] (auto&& more) {
+            return statement->get_mutations(qp, statement_options, timeout, local, timestamp, query_state).then([&result] (auto&& more) {
                 for (auto&& m : more) {
                     // We want unordered_set::try_emplace(), but we don't have it
                     auto pos = result.find(m);
@@ -280,7 +280,6 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_
         service::query_state& query_state, const query_options& options,
         bool local, api::timestamp_type now) const
 {
-    auto& storage = qp.proxy();
     // FIXME: we don't support nulls here
 #if 0
     if (options.get_consistency() == null)
@@ -298,7 +297,7 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_
     _stats.statements_in_batches += _statements.size();
 
     auto timeout = db::timeout_clock::now() + get_timeout(query_state.get_client_state(), options);
-    return get_mutations(storage, options, timeout, local, now, query_state).then([this, &qp, &options, timeout, tr_state = query_state.get_trace_state(),
+    return get_mutations(qp, options, timeout, local, now, query_state).then([this, &qp, &options, timeout, tr_state = query_state.get_trace_state(),
                                                                                                                                permit = query_state.get_permit()] (std::vector<mutation> ms) mutable {
         return execute_without_conditions(qp, std::move(ms), options.get_consistency(), timeout, std::move(tr_state), std::move(permit));
     }).then([] {

@@ -137,7 +137,7 @@ public:
 
     const std::vector<single_statement>& get_statements();
 private:
-    future<std::vector<mutation>> get_mutations(service::storage_proxy& storage, const query_options& options, db::timeout_clock::time_point timeout,
+    future<std::vector<mutation>> get_mutations(query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout,
             bool local, api::timestamp_type now, service::query_state& query_state) const;
 
 public:
