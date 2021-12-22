@@ -31,6 +31,11 @@
 class index_reader_assertions {
     std::unique_ptr<sstables::index_reader> _r;
 public:
+    // Must be called from a seastar thread
+    ~index_reader_assertions() {
+        close().get();
+    }
+
     index_reader_assertions(std::unique_ptr<sstables::index_reader> r)
         : _r(std::move(r))
     { }
@@ -72,6 +77,15 @@ public:
             _r->advance_to_next_partition().get();
         }
         return *this;
+    }
+
+    future<> close() noexcept {
+        if (_r) {
+            auto r = std::move(_r);
+            auto f = r->close();
+            return f.then([r = std::move(r)] {});
+        }
+        return make_ready_future<>();
     }
 };
 
