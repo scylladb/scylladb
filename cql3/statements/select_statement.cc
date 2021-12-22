@@ -179,9 +179,9 @@ uint32_t select_statement::get_bound_terms() const {
     return _bound_terms;
 }
 
-future<> select_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const {
+future<> select_statement::check_access(query_processor& qp, const service::client_state& state) const {
     try {
-        const data_dictionary::database db = proxy.data_dictionary();
+        const data_dictionary::database db = qp.proxy().data_dictionary();
         auto&& s = db.find_schema(keyspace(), column_family());
         auto& cf_name = s->is_view() ? s->view_info()->base_name() : column_family();
         return state.has_column_family_access(db.real_database(), keyspace(), cf_name, auth::permission::SELECT);
@@ -191,7 +191,7 @@ future<> select_statement::check_access(service::storage_proxy& proxy, const ser
     }
 }
 
-void select_statement::validate(service::storage_proxy&, const service::client_state& state) const {
+void select_statement::validate(query_processor&, const service::client_state& state) const {
     // Nothing to do, all validation has been done by raw_statemet::prepare()
 }
 

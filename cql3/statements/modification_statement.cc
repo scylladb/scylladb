@@ -125,8 +125,8 @@ gc_clock::duration modification_statement::get_time_to_live(const query_options&
     return gc_clock::duration(attrs->get_time_to_live(options));
 }
 
-future<> modification_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const {
-    const data_dictionary::database db = proxy.data_dictionary();
+future<> modification_statement::check_access(query_processor& qp, const service::client_state& state) const {
+    const data_dictionary::database db = qp.proxy().data_dictionary();
     auto f = state.has_column_family_access(db.real_database(), keyspace(), column_family(), auth::permission::MODIFY);
     if (has_conditions()) {
         f = f.then([this, &state, db] {
@@ -551,7 +551,7 @@ modification_statement::prepare_conditions(data_dictionary::database db, const s
 }  // namespace raw
 
 void
-modification_statement::validate(service::storage_proxy&, const service::client_state& state) const {
+modification_statement::validate(query_processor&, const service::client_state& state) const {
     if (has_conditions() && attrs->is_timestamp_set()) {
         throw exceptions::invalid_request_exception("Cannot provide custom timestamp for conditional updates");
     }

@@ -90,7 +90,7 @@ public:
      *
      * @param state the current client state
      */
-    virtual seastar::future<> check_access(service::storage_proxy& proxy, const service::client_state& state) const = 0;
+    virtual seastar::future<> check_access(query_processor& qp, const service::client_state& state) const = 0;
 
     /**
      * Perform additional validation required by the statment.
@@ -98,7 +98,7 @@ public:
      *
      * @param state the current client state
      */
-    virtual void validate(service::storage_proxy& proxy, const service::client_state& state) const = 0;
+    virtual void validate(query_processor& qp, const service::client_state& state) const = 0;
 
     /**
      * Execute the statement and return the resulting result or null if there is no result.

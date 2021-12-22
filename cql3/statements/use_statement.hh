@@ -63,9 +63,9 @@ public:
 
     virtual bool depends_on_column_family(const seastar::sstring& cf_name) const override;
 
-    virtual seastar::future<> check_access(service::storage_proxy& proxy, const service::client_state& state) const override;
+    virtual seastar::future<> check_access(query_processor& qp, const service::client_state& state) const override;
 
-    virtual void validate(service::storage_proxy&, const service::client_state& state) const override;
+    virtual void validate(query_processor&, const service::client_state& state) const override;
 
     virtual seastar::future<seastar::shared_ptr<cql_transport::messages::result_message>>
     execute(query_processor& qp, service::query_state& state, const query_options& options) const override;

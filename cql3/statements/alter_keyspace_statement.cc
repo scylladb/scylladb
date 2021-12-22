@@ -62,11 +62,11 @@ const sstring& cql3::statements::alter_keyspace_statement::keyspace() const {
     return _name;
 }
 
-future<> cql3::statements::alter_keyspace_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const {
-    return state.has_keyspace_access(proxy.local_db(), _name, auth::permission::ALTER);
+future<> cql3::statements::alter_keyspace_statement::check_access(query_processor& qp, const service::client_state& state) const {
+    return state.has_keyspace_access(qp.proxy().local_db(), _name, auth::permission::ALTER);
 }
 
-void cql3::statements::alter_keyspace_statement::validate(service::storage_proxy& proxy, const service::client_state& state) const {
+void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, const service::client_state& state) const {
         auto tmp = _name;
         std::transform(tmp.begin(), tmp.end(), tmp.begin(), ::tolower);
         if (is_system_keyspace(tmp)) {

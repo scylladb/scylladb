@@ -35,7 +35,7 @@ namespace statements {
 
 class function_statement : public schema_altering_statement {
 protected:
-    virtual future<> check_access(service::storage_proxy& proxy, const service::client_state& state) const override;
+    virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
     virtual void prepare_keyspace(const service::client_state& state) override;
     functions::function_name _name;
     std::vector<shared_ptr<cql3_type::raw>> _raw_arg_types;
@@ -51,7 +51,7 @@ protected:
 // common logic for creating UDF and UDA
 class create_function_statement_base : public function_statement {
 protected:
-    virtual void validate(service::storage_proxy& proxy, const service::client_state& state) const override;
+    virtual void validate(query_processor& qp, const service::client_state& state) const override;
     virtual shared_ptr<functions::function> create(service::storage_proxy& proxy, functions::function* old) const = 0;
     virtual shared_ptr<functions::function> validate_while_executing(service::storage_proxy&) const override;
 
@@ -65,7 +65,7 @@ protected:
 // common logic for dropping UDF and UDA
 class drop_function_statement_base : public function_statement {
 protected:
-    virtual void validate(service::storage_proxy&, const service::client_state& state) const override;
+    virtual void validate(query_processor&, const service::client_state& state) const override;
     virtual shared_ptr<functions::function> validate_while_executing(service::storage_proxy&) const override;
 
     bool _args_present;

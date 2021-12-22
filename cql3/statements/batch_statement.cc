@@ -113,11 +113,11 @@ uint32_t batch_statement::get_bound_terms() const
     return _bound_terms;
 }
 
-future<> batch_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const
+future<> batch_statement::check_access(query_processor& qp, const service::client_state& state) const
 {
-    return parallel_for_each(_statements.begin(), _statements.end(), [&proxy, &state](auto&& s) {
+    return parallel_for_each(_statements.begin(), _statements.end(), [&qp, &state](auto&& s) {
         if (s.needs_authorization) {
-            return s.statement->check_access(proxy, state);
+            return s.statement->check_access(qp, state);
         } else {
             return make_ready_future<>();
         }
@@ -177,10 +177,10 @@ void batch_statement::validate()
     }
 }
 
-void batch_statement::validate(service::storage_proxy& proxy, const service::client_state& state) const
+void batch_statement::validate(query_processor& qp, const service::client_state& state) const
 {
     for (auto&& s : _statements) {
-        s.statement->validate(proxy, state);
+        s.statement->validate(qp, state);
     }
 }
 

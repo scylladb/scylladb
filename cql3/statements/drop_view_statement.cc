@@ -58,10 +58,10 @@ drop_view_statement::drop_view_statement(cf_name view_name, bool if_exists)
 {
 }
 
-future<> drop_view_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const
+future<> drop_view_statement::check_access(query_processor& qp, const service::client_state& state) const
 {
     try {
-        const data_dictionary::database db = proxy.data_dictionary();
+        const data_dictionary::database db = qp.proxy().data_dictionary();
         auto&& s = db.find_schema(keyspace(), column_family());
         if (s->is_view()) {
             return state.has_column_family_access(db.real_database(), keyspace(), s->view_info()->base_name(), auth::permission::ALTER);
@@ -72,7 +72,7 @@ future<> drop_view_statement::check_access(service::storage_proxy& proxy, const 
     return make_ready_future<>();
 }
 
-void drop_view_statement::validate(service::storage_proxy&, const service::client_state& state) const
+void drop_view_statement::validate(query_processor&, const service::client_state& state) const
 {
     // validated in migration_manager::announce_view_drop()
 }

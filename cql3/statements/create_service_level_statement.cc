@@ -42,10 +42,10 @@ cql3::statements::create_service_level_statement::prepare(
     return std::make_unique<prepared_statement>(::make_shared<create_service_level_statement>(*this));
 }
 
-void create_service_level_statement::validate(service::storage_proxy &, const service::client_state &) const {
+void create_service_level_statement::validate(query_processor &, const service::client_state &) const {
 }
 
-future<> create_service_level_statement::check_access(service::storage_proxy& sp, const service::client_state &state) const {
+future<> create_service_level_statement::check_access(query_processor& qp, const service::client_state &state) const {
     return state.ensure_has_permission(auth::command_desc{.permission = auth::permission::CREATE, .resource = auth::root_service_level_resource()});
 }
 

@@ -68,10 +68,10 @@ cql3::statements::permission_altering_statement::permission_altering_statement(
                 , _role_name(rn.to_string()) {
 }
 
-void cql3::statements::permission_altering_statement::validate(service::storage_proxy&, const service::client_state&) const {
+void cql3::statements::permission_altering_statement::validate(query_processor&, const service::client_state&) const {
 }
 
-future<> cql3::statements::permission_altering_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const {
+future<> cql3::statements::permission_altering_statement::check_access(query_processor& qp, const service::client_state& state) const {
     state.ensure_not_anonymous();
     maybe_correct_resource(_resource, state);
 

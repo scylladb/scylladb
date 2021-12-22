@@ -74,12 +74,12 @@ const sstring& create_keyspace_statement::keyspace() const
     return _name;
 }
 
-future<> create_keyspace_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const
+future<> create_keyspace_statement::check_access(query_processor& qp, const service::client_state& state) const
 {
     return state.has_all_keyspaces_access(auth::permission::CREATE);
 }
 
-void create_keyspace_statement::validate(service::storage_proxy&, const service::client_state& state) const
+void create_keyspace_statement::validate(query_processor&, const service::client_state& state) const
 {
     std::string name;
     name.resize(_name.length());

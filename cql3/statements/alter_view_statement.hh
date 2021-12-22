@@ -62,9 +62,9 @@ private:
 public:
     alter_view_statement(cf_name view_name, std::optional<cf_prop_defs> properties);
 
-    virtual future<> check_access(service::storage_proxy& proxy, const service::client_state& state) const override;
+    virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
 
-    virtual void validate(service::storage_proxy&, const service::client_state& state) const override;
+    virtual void validate(query_processor&, const service::client_state& state) const override;
 
 
     future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> prepare_schema_mutations(query_processor& qp) const override;

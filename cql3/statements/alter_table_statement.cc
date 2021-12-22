@@ -75,13 +75,13 @@ alter_table_statement::alter_table_statement(cf_name name,
 {
 }
 
-future<> alter_table_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const {
+future<> alter_table_statement::check_access(query_processor& qp, const service::client_state& state) const {
     using cdt = auth::command_desc::type;
-    return state.has_column_family_access(proxy.local_db(), keyspace(), column_family(), auth::permission::ALTER,
+    return state.has_column_family_access(qp.proxy().local_db(), keyspace(), column_family(), auth::permission::ALTER,
                                           _type == type::opts ? cdt::ALTER_WITH_OPTS : cdt::OTHER);
 }
 
-void alter_table_statement::validate(service::storage_proxy& proxy, const service::client_state& state) const
+void alter_table_statement::validate(query_processor& qp, const service::client_state& state) const
 {
     // validated in prepare_schema_mutations()
 }

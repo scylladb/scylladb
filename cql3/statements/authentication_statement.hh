@@ -59,9 +59,9 @@ public:
 
     bool depends_on_column_family(const sstring& cf_name) const override;
 
-    future<> check_access(service::storage_proxy& proxy, const service::client_state& state) const override;
+    future<> check_access(query_processor& qp, const service::client_state& state) const override;
 
-    void validate(service::storage_proxy&, const service::client_state& state) const override;
+    void validate(query_processor&, const service::client_state& state) const override;
 };
 
 }

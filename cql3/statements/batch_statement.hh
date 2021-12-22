@@ -122,7 +122,7 @@ public:
 
     virtual uint32_t get_bound_terms() const override;
 
-    virtual future<> check_access(service::storage_proxy& proxy, const service::client_state& state) const override;
+    virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
 
     // Validates a prepared batch statement without validating its nested statements.
     void validate();
@@ -133,7 +133,7 @@ public:
 
     // The batch itself will be validated in either Parsed#prepare() - for regular CQL3 batches,
     //   or in QueryProcessor.processBatch() - for native protocol batches.
-    virtual void validate(service::storage_proxy& proxy, const service::client_state& state) const override;
+    virtual void validate(query_processor& qp, const service::client_state& state) const override;
 
     const std::vector<single_statement>& get_statements();
 private:

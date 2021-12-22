@@ -78,12 +78,12 @@ create_index_statement::create_index_statement(cf_name name,
 }
 
 future<>
-create_index_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const {
-    return state.has_column_family_access(proxy.local_db(), keyspace(), column_family(), auth::permission::ALTER);
+create_index_statement::check_access(query_processor& qp, const service::client_state& state) const {
+    return state.has_column_family_access(qp.proxy().local_db(), keyspace(), column_family(), auth::permission::ALTER);
 }
 
 void
-create_index_statement::validate(service::storage_proxy& proxy, const service::client_state& state) const
+create_index_statement::validate(query_processor& qp, const service::client_state& state) const
 {
     if (_raw_targets.empty() && !_properties->is_custom) {
         throw exceptions::invalid_request_exception("Only CUSTOM indexes can be created without specifying a target column");
