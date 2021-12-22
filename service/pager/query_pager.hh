@@ -48,6 +48,7 @@
 
 namespace service {
 
+class storage_proxy;
 class storage_proxy_coordinator_query_result;
 
 namespace pager {
@@ -89,6 +90,7 @@ protected:
     std::optional<clustering_key> _last_ckey;
     std::optional<utils::UUID> _query_uuid;
 
+    shared_ptr<service::storage_proxy> _proxy;
     schema_ptr _schema;
     shared_ptr<const cql3::selection::selection> _selection;
     service::query_state& _state;
@@ -100,7 +102,7 @@ protected:
     uint64_t _rows_fetched_for_last_partition = 0;
     stats _stats;
 public:
-    query_pager(schema_ptr s, shared_ptr<const cql3::selection::selection> selection,
+    query_pager(service::storage_proxy& p, schema_ptr s, shared_ptr<const cql3::selection::selection> selection,
                 service::query_state& state,
                 const cql3::query_options& options,
                 lw_shared_ptr<query::read_command> cmd,
