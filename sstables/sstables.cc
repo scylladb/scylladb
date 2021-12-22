@@ -326,64 +326,46 @@ future<> parse(const schema& s, sstable_version_types v, random_access_reader& i
 template <typename Size, typename Members>
 future<>
 parse(const schema& s, sstable_version_types v, random_access_reader& in, Size& len, utils::chunked_vector<Members>& arr) {
-
-    auto count = make_lw_shared<size_t>(0);
-    auto eoarr = [count, len] { return *count == len; };
-
-    return do_until(eoarr, [v, &s, count, &in, &arr] {
+    for (auto count = len; count; count--) {
         arr.emplace_back();
-        (*count)++;
-        return parse(s, v, in, arr.back());
-    });
+        co_await parse(s, v, in, arr.back());
+    }
 }
 
 template <typename Size, std::integral Members>
 future<>
 parse(const schema&, sstable_version_types, random_access_reader& in, Size& len, utils::chunked_vector<Members>& arr) {
-    auto done = make_lw_shared<size_t>(0);
-    return repeat([&in, &len, &arr, done]  {
-        auto now = std::min(len - *done, 100000 / sizeof(Members));
-        return in.read_exactly(now * sizeof(Members)).then([&arr, len, now, done] (auto buf) {
-            check_buf_size(buf, now * sizeof(Members));
-
-            for (size_t i = 0; i < now; ++i) {
-                arr.push_back(net::ntoh(read_unaligned<Members>(buf.get() + i * sizeof(Members))));
-            }
-            *done += now;
-            return make_ready_future<stop_iteration>(*done == len ? stop_iteration::yes : stop_iteration::no);
-        });
-    });
+    Size now = 100000 / sizeof(Members);
+    for (auto count = len; count; count -= now) {
+        if (now > count) {
+            now = count;
+        }
+        auto buf = co_await in.read_exactly(now * sizeof(Members));
+        check_buf_size(buf, now * sizeof(Members));
+        for (size_t i = 0; i < now; ++i) {
+            arr.push_back(net::ntoh(read_unaligned<Members>(buf.get() + i * sizeof(Members))));
+        }
+    }
 }
 
 // We resize the array here, before we pass it to the integer / non-integer
 // specializations
 template <typename Size, typename Members>
 future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, disk_array<Size, Members>& arr) {
-    auto len = make_lw_shared<Size>();
-    auto f = parse(s, v, in, *len);
-    return f.then([v, &s, &in, &arr, len] {
-        arr.elements.reserve(*len);
-        return parse(s, v, in, *len, arr.elements);
-    }).finally([len] {});
+    Size len;
+    co_await parse(s, v, in, len);
+    arr.elements.reserve(len);
+    co_await parse(s, v, in, len, arr.elements);
 }
 
 template <typename Size, typename Key, typename Value>
 future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, Size& len, std::unordered_map<Key, Value>& map) {
-    return do_with(Size(), [v, &s, &in, len, &map] (Size& count) {
-        auto eos = [len, &count] { return len == count++; };
-        return do_until(eos, [v, &s, len, &in, &map] {
-            struct kv {
-                Key key;
-                Value value;
-            };
-
-            return do_with(kv(), [v, &s, &in, &map] (auto& el) {
-                return parse(s, v, in, el.key, el.value).then([&el, &map] {
-                    map.emplace(el.key, el.value);
-                });
-            });
-        });
-    });
+    for (auto count = len; count; count--) {
+        Key key;
+        Value value;
+        co_await parse(s, v, in, key, value);
+        map.emplace(key, value);
+    }
 }
 
 template <typename First, typename Second>
@@ -393,11 +375,9 @@ future<> parse(const schema& s, sstable_version_types v, random_access_reader& i
 
 template <typename Size, typename Key, typename Value>
 future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, disk_hash<Size, Key, Value>& h) {
-    auto w = std::make_unique<Size>();
-    auto f = parse(s, v, in, *w);
-    return f.then([v, &s, &in, &h, w = std::move(w)] {
-        return parse(s, v, in, *w, h.map);
-    });
+    Size w;
+    co_await parse(s, v, in, w);
+    co_await parse(s, v, in, w, h.map);
 }
 
 // Abstract parser/sizer/writer for a single tagged member of a tagged union
@@ -463,18 +443,17 @@ parse(const schema& schema, sstable_version_types v, random_access_reader& in, d
     using disk_set = disk_set_of_tagged_union<TagType, Members...>;
     using key_type = typename disk_set::key_type;
     using value_type = typename disk_set::value_type;
-    return do_with(0u, 0u, 0u, value_type{}, [&] (key_type& nr_elements, key_type& new_key, unsigned& new_size, value_type& new_value) {
-        return parse(schema, v, in, nr_elements).then([&, v] {
-            auto rng = boost::irange<key_type>(0, nr_elements); // do_for_each doesn't like an rvalue range
-            return do_for_each(rng.begin(), rng.end(), [&, v] (key_type ignore) {
-                return parse(schema, v, in, new_key).then([&, v] {
-                    return parse(schema, v, in, new_size).then([&, v] {
-                        return disk_set::s_serdes.lookup_and_parse(schema, v, in, TagType(new_key), new_size, s, new_value);
-                    });
-                });
-            });
-        });
-    });
+
+    key_type nr_elements;
+    co_await parse(schema, v, in, nr_elements);
+    for (auto _ : boost::irange<key_type>(0, nr_elements)) {
+        key_type new_key;
+        unsigned new_size;
+        co_await parse(schema, v, in, new_key);
+        co_await parse(schema, v, in, new_size);
+        value_type new_value;
+        co_await disk_set::s_serdes.lookup_and_parse(schema, v, in, TagType(new_key), new_size, s, new_value);
+    }
 }
 
 template <typename TagType, typename... Members>
