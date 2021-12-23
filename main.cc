@@ -977,7 +977,7 @@ int main(int ac, char** av) {
             view_update_generator.start(std::ref(db)).get();
 
             supervisor::notify("setting up system keyspace");
-            db::system_keyspace::setup(db, qp, feature_service, messaging).get();
+            db::system_keyspace::setup(db, qp, messaging).get();
 
             // Re-enable previously enabled features on node startup.
             // This should be done before commitlog starts replaying

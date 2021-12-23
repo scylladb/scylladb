@@ -338,6 +338,9 @@ schema_ptr system_keyspace::built_indexes() {
                 {"rpc_address", inet_addr_type},
                 {"broadcast_address", inet_addr_type},
                 {"listen_address", inet_addr_type},
+                // This column represents advertised local features (i.e. the features
+                // advertised by the node via gossip after passing the feature check
+                // against remote features in the cluster)
                 {"supported_features", utf8_type},
                 {"scylla_cpu_sharding_algorithm", utf8_type},
                 {"scylla_nr_shards", int32_type},
@@ -1245,9 +1248,9 @@ schema_ptr system_keyspace::legacy::aggregates() {
     return schema;
 }
 
-future<> system_keyspace::setup_version(distributed<gms::feature_service>& feat, sharded<netw::messaging_service>& ms, const db::config& cfg) {
-    return utils::resolve(cfg.rpc_address).then([&feat, &ms, &cfg](gms::inet_address a) {
-        sstring req = fmt::format("INSERT INTO system.{} (key, release_version, cql_version, thrift_version, native_protocol_version, data_center, rack, partitioner, rpc_address, broadcast_address, listen_address, supported_features) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+future<> system_keyspace::setup_version(sharded<netw::messaging_service>& ms, const db::config& cfg) {
+    return utils::resolve(cfg.rpc_address).then([&ms, &cfg](gms::inet_address a) {
+        sstring req = fmt::format("INSERT INTO system.{} (key, release_version, cql_version, thrift_version, native_protocol_version, data_center, rack, partitioner, rpc_address, broadcast_address, listen_address) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                         , db::system_keyspace::LOCAL);
         auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
 
@@ -1261,8 +1264,7 @@ future<> system_keyspace::setup_version(distributed<gms::feature_service>& feat,
                              sstring(cfg.partitioner()),
                              a.addr(),
                              utils::fb_utilities::get_broadcast_address().addr(),
-                             ms.local().listen_address().addr(),
-                             ::join(",", feat.local().supported_feature_set())
+                             ms.local().listen_address().addr()
         ).discard_result();
     });
 }
@@ -1354,10 +1356,9 @@ void system_keyspace::minimal_setup(distributed<cql3::query_processor>& qp) {
 
 future<> system_keyspace::setup(distributed<database>& db,
                distributed<cql3::query_processor>& qp,
-               distributed<gms::feature_service>& feat,
                sharded<netw::messaging_service>& ms) {
     const db::config& cfg = db.local().get_config();
-    co_await setup_version(feat, ms, cfg);
+    co_await setup_version(ms, cfg);
     co_await update_schema_version(db.local().get_version());
     co_await init_local_cache();
     co_await build_dc_rack_info();
