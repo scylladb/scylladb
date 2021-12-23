@@ -51,7 +51,9 @@ static future<> broken_sst(sstring dir, unsigned long generation, schema_ptr s, 
         BOOST_FAIL("expecting exception");
     } catch (malformed_sstable_exception& e) {
         auto ex_what = sstring(e.what());
-        BOOST_REQUIRE(ex_what.find(msg) != sstring::npos);
+        if (ex_what.find(msg) == sstring::npos) {
+            BOOST_FAIL(format("Expected message '{}' not found in error message: '{}'", msg, ex_what));
+        }
         if (sst_name) {
             BOOST_REQUIRE(ex_what.find(*sst_name) != sstring::npos);
         }
