@@ -34,15 +34,35 @@
 #include <seastar/util/optimized_optional.hh>
 
 
+struct mutation_consume_cookie {
+    using crs_iterator_type = mutation_partition::rows_type::iterator;
+    using rts_iterator_type = range_tombstone_list::iterator;
+
+    struct clustering_iterators {
+        crs_iterator_type crs_begin;
+        crs_iterator_type crs_end;
+        rts_iterator_type rts_begin;
+        rts_iterator_type rts_end;
+    };
+
+    bool partition_start_consumed = false;
+    bool static_row_consumed = false;
+    // only used when reverse == consume_in_reverse::yes
+    std::unique_ptr<range_tombstone_list> reversed_range_tombstones;
+    std::optional<clustering_iterators> iterators;
+};
+
 template<typename Result>
 struct mutation_consume_result {
     stop_iteration stop;
     Result result;
+    mutation_consume_cookie cookie;
 };
 
 template<>
 struct mutation_consume_result<void> {
     stop_iteration stop;
+    mutation_consume_cookie cookie;
 };
 
 enum class consume_in_reverse {
@@ -141,8 +161,18 @@ public:
     //   tombstones in legacy reverse order[2].
     //
     // For definition of [1] and [2] see docs/design-notes/reverse-reads.md.
+    //
+    // The consume operation is pausable and resumable:
+    // * To pause return stop_iteration::yes from one of the consume() methods;
+    // * The consume will now stop and return;
+    // * To resume call consume again and pass the cookie member of the returned
+    //   mutation_consume_result as the cookie parameter;
+    //
+    // Note that `consume_end_of_partition()` and `consume_end_of_stream()`
+    // will be called each time the consume is stopping, regardless of whether
+    // you are pausing or the consumption is ending for good.
     template<FlattenedConsumer Consumer>
-    auto consume(Consumer& consumer, consume_in_reverse reverse) && -> mutation_consume_result<decltype(consumer.consume_end_of_stream())>;
+    auto consume(Consumer& consumer, consume_in_reverse reverse, mutation_consume_cookie cookie = {}) && -> mutation_consume_result<decltype(consumer.consume_end_of_stream())>;
 
     // See mutation_partition::live_row_count()
     uint64_t live_row_count(gc_clock::time_point query_time = gc_clock::time_point::min()) const;
@@ -165,49 +195,51 @@ private:
 namespace {
 
 template<consume_in_reverse reverse, FlattenedConsumer Consumer>
-stop_iteration consume_clustering_fragments(schema_ptr s, mutation_partition& partition, Consumer& consumer) {
+stop_iteration consume_clustering_fragments(schema_ptr s, mutation_partition& partition, Consumer& consumer, mutation_consume_cookie& cookie) {
     constexpr bool crs_in_reverse = reverse == consume_in_reverse::legacy_half_reverse || reverse == consume_in_reverse::yes;
     constexpr bool rts_in_reverse = reverse == consume_in_reverse::legacy_half_reverse;
 
     using crs_type = mutation_partition::rows_type;
-    using crs_iterator_type = std::conditional_t<crs_in_reverse, crs_type::reverse_iterator, crs_type::iterator>;
+    using crs_iterator_type = std::conditional_t<crs_in_reverse, std::reverse_iterator<crs_type::iterator>, crs_type::iterator>;
     using rts_type = range_tombstone_list;
-    using rts_iterator_type = std::conditional_t<rts_in_reverse, rts_type::reverse_iterator, rts_type::iterator>;
+    using rts_iterator_type = std::conditional_t<rts_in_reverse, std::reverse_iterator<rts_type::iterator>, rts_type::iterator>;
 
     if constexpr (reverse == consume_in_reverse::yes) {
         s = s->make_reversed();
     }
 
-    // only used when reverse == consume_in_reverse::yes
-    range_tombstone_list reversed_range_tombstones(*s);
-
     auto* rt_list = &partition.mutable_row_tombstones();
-    if constexpr (reverse == consume_in_reverse::yes) {
+    if (reverse == consume_in_reverse::yes && !cookie.reversed_range_tombstones) {
+        cookie.reversed_range_tombstones = std::make_unique<rts_type>(*s);
         while (!rt_list->empty()) {
             auto rt = rt_list->pop_front_and_lock();
             rt.reverse();
-            reversed_range_tombstones.apply(*s, std::move(rt));
+            cookie.reversed_range_tombstones->apply(*s, std::move(rt));
         }
-        rt_list = &reversed_range_tombstones;
+        rt_list = &*cookie.reversed_range_tombstones;
+    }
+
+    if (!cookie.iterators) {
+        cookie.iterators.emplace(mutation_consume_cookie::clustering_iterators{partition.clustered_rows().begin(), partition.clustered_rows().end(), rt_list->begin(), rt_list->end()});
     }
 
     crs_iterator_type crs_it, crs_end;
     rts_iterator_type rts_it, rts_end;
 
     if constexpr (crs_in_reverse) {
-        crs_it = partition.clustered_rows().rbegin();
-        crs_end = partition.clustered_rows().rend();
+        crs_it = std::reverse_iterator(cookie.iterators->crs_end);
+        crs_end = std::reverse_iterator(cookie.iterators->crs_begin);
     } else {
-        crs_it = partition.clustered_rows().begin();
-        crs_end = partition.clustered_rows().end();
+        crs_it = cookie.iterators->crs_begin;
+        crs_end = cookie.iterators->crs_end;
     }
 
     if constexpr (rts_in_reverse) {
-        rts_it = rt_list->rbegin();
-        rts_end = rt_list->rend();
+        rts_it = std::reverse_iterator(cookie.iterators->rts_end);
+        rts_end = std::reverse_iterator(cookie.iterators->rts_begin);
     } else {
-        rts_it = rt_list->begin();
-        rts_end = rt_list->end();
+        rts_it = cookie.iterators->rts_begin;
+        rts_end = cookie.iterators->rts_end;
     }
 
     stop_iteration stop = stop_iteration::no;
@@ -239,41 +271,64 @@ stop_iteration consume_clustering_fragments(schema_ptr s, mutation_partition& pa
         }
     }
 
+    if constexpr (crs_in_reverse) {
+        cookie.iterators->crs_begin = crs_end.base();
+        cookie.iterators->crs_end = crs_it.base();
+    } else {
+        cookie.iterators->crs_begin = crs_it;
+        cookie.iterators->crs_end = crs_end;
+    }
+
+    if constexpr (rts_in_reverse) {
+        cookie.iterators->rts_begin = rts_end.base();
+        cookie.iterators->rts_end = rts_it.base();
+    } else {
+        cookie.iterators->rts_begin = rts_it;
+        cookie.iterators->rts_end = rts_end;
+    }
+
     return stop;
 }
 
 } // anonymous namespace
 
 template<FlattenedConsumer Consumer>
-auto mutation::consume(Consumer& consumer, consume_in_reverse reverse) && -> mutation_consume_result<decltype(consumer.consume_end_of_stream())> {
-    consumer.consume_new_partition(_ptr->_dk);
+auto mutation::consume(Consumer& consumer, consume_in_reverse reverse, mutation_consume_cookie cookie) &&
+        -> mutation_consume_result<decltype(consumer.consume_end_of_stream())> {
+    if (!cookie.partition_start_consumed) {
+        consumer.consume_new_partition(_ptr->_dk);
+    }
 
     auto& partition = _ptr->_p;
 
-    if (partition.partition_tombstone()) {
+    if (!cookie.partition_start_consumed && partition.partition_tombstone()) {
         consumer.consume(partition.partition_tombstone());
     }
 
+    cookie.partition_start_consumed = true;
+
     stop_iteration stop = stop_iteration::no;
-    if (!partition.static_row().empty()) {
+    if (!cookie.static_row_consumed && !partition.static_row().empty()) {
         stop = consumer.consume(static_row(std::move(partition.static_row().get_existing())));
     }
 
+    cookie.static_row_consumed = true;
+
     if (reverse == consume_in_reverse::yes) {
-        stop = consume_clustering_fragments<consume_in_reverse::yes>(_ptr->_schema, partition, consumer);
+        stop = consume_clustering_fragments<consume_in_reverse::yes>(_ptr->_schema, partition, consumer, cookie);
     } else if (reverse == consume_in_reverse::legacy_half_reverse) {
-        stop = consume_clustering_fragments<consume_in_reverse::legacy_half_reverse>(_ptr->_schema, partition, consumer);
+        stop = consume_clustering_fragments<consume_in_reverse::legacy_half_reverse>(_ptr->_schema, partition, consumer, cookie);
     } else {
-        stop = consume_clustering_fragments<consume_in_reverse::no>(_ptr->_schema, partition, consumer);
+        stop = consume_clustering_fragments<consume_in_reverse::no>(_ptr->_schema, partition, consumer, cookie);
     }
 
     const auto stop_consuming = consumer.consume_end_of_partition();
     using consume_res_type = decltype(consumer.consume_end_of_stream());
     if constexpr (std::is_same_v<consume_res_type, void>) {
         consumer.consume_end_of_stream();
-        return mutation_consume_result<void>{stop_consuming};
+        return mutation_consume_result<void>{stop_consuming, std::move(cookie)};
     } else {
-        return mutation_consume_result<consume_res_type>{stop_consuming, consumer.consume_end_of_stream()};
+        return mutation_consume_result<consume_res_type>{stop_consuming, consumer.consume_end_of_stream(), std::move(cookie)};
     }
 }
 
