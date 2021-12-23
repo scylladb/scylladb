@@ -115,8 +115,7 @@ void create_keyspace_statement::validate(query_processor&, const service::client
 
 future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> create_keyspace_statement::prepare_schema_mutations(query_processor& qp) const {
     using namespace cql_transport;
-    auto p = qp.proxy().shared_from_this();
-    const auto& tm = *p->get_token_metadata_ptr();
+    const auto& tm = *qp.proxy().get_token_metadata_ptr();
     ::shared_ptr<event::schema_change> ret;
     std::vector<mutation> m;
 
