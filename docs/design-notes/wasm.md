@@ -77,7 +77,31 @@ Scylla accepts UDF's source code in WebAssembly text format - also known as `wat
 
 UDF's source code can be, naturally, simply coded by hand in wat. It is not often very convenient to program directly in assembly, so here are a few tips.
 
-### Compiling from Rust to wasm
+### Compiling to wasm
+
+#### AssemblyScript
+
+AssemblyScript is a TypeScript-like language that compiles to WebAsembly.
+
+Install via npm:
+```
+npm install -g assemblyscript
+```
+
+Example source code:
+```assemblyscript
+export function fib(n: i32): i32 {
+  if (n < 2) {
+    return n
+  }
+  return fib(n - 1) + fib(n - 2)
+}
+```
+
+Compile directly to WebAssembly Text Format with:
+```
+asc fib.ts --textFile fib.wat --optimize
+```
 
 #### C
 
