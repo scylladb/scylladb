@@ -59,12 +59,12 @@ drop_keyspace_statement::drop_keyspace_statement(const sstring& keyspace, bool i
 {
 }
 
-future<> drop_keyspace_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const
+future<> drop_keyspace_statement::check_access(query_processor& qp, const service::client_state& state) const
 {
-    return state.has_keyspace_access(proxy.local_db(), keyspace(), auth::permission::DROP);
+    return state.has_keyspace_access(qp.proxy().local_db(), keyspace(), auth::permission::DROP);
 }
 
-void drop_keyspace_statement::validate(service::storage_proxy&, const service::client_state& state) const
+void drop_keyspace_statement::validate(query_processor&, const service::client_state& state) const
 {
     warn(unimplemented::cause::VALIDATION);
 #if 0

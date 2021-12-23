@@ -122,7 +122,7 @@ public:
 
     virtual uint32_t get_bound_terms() const override;
 
-    virtual future<> check_access(service::storage_proxy& proxy, const service::client_state& state) const override;
+    virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
 
     // Validates a prepared batch statement without validating its nested statements.
     void validate();
@@ -133,11 +133,11 @@ public:
 
     // The batch itself will be validated in either Parsed#prepare() - for regular CQL3 batches,
     //   or in QueryProcessor.processBatch() - for native protocol batches.
-    virtual void validate(service::storage_proxy& proxy, const service::client_state& state) const override;
+    virtual void validate(query_processor& qp, const service::client_state& state) const override;
 
     const std::vector<single_statement>& get_statements();
 private:
-    future<std::vector<mutation>> get_mutations(service::storage_proxy& storage, const query_options& options, db::timeout_clock::time_point timeout,
+    future<std::vector<mutation>> get_mutations(query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout,
             bool local, api::timestamp_type now, service::query_state& query_state) const;
 
 public:
@@ -145,19 +145,19 @@ public:
      * Checks batch size to ensure threshold is met. If not, a warning is logged.
      * @param cfs ColumnFamilies that will store the batch's mutations.
      */
-    static void verify_batch_size(service::storage_proxy& proxy, const std::vector<mutation>& mutations);
+    static void verify_batch_size(query_processor& qp, const std::vector<mutation>& mutations);
 
     virtual future<shared_ptr<cql_transport::messages::result_message>> execute(
             query_processor& qp, service::query_state& state, const query_options& options) const override;
 private:
     friend class batch_statement_executor;
     future<shared_ptr<cql_transport::messages::result_message>> do_execute(
-            service::storage_proxy& storage,
+            query_processor& qp,
             service::query_state& query_state, const query_options& options,
             bool local, api::timestamp_type now) const;
 
     future<> execute_without_conditions(
-            service::storage_proxy& storage,
+            query_processor& qp,
             std::vector<mutation> mutations,
             db::consistency_level cl,
             db::timeout_clock::time_point timeout,
@@ -165,7 +165,7 @@ private:
             service_permit permit) const;
 
     future<shared_ptr<cql_transport::messages::result_message>> execute_with_conditions(
-            service::storage_proxy& storage,
+            query_processor& qp,
             const query_options& options,
             service::query_state& state) const;
 

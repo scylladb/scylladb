@@ -41,12 +41,6 @@
 #include "service/paxos/cas_request.hh"
 #include "cql3/statements/modification_statement.hh"
 
-namespace service {
-
-class storage_proxy;
-
-} // namespace service
-
 namespace cql3::statements {
 
 using namespace std::chrono;
@@ -96,7 +90,7 @@ public:
         return _rows;
     }
 
-    lw_shared_ptr<query::read_command> read_command(service::storage_proxy& proxy) const;
+    lw_shared_ptr<query::read_command> read_command(query_processor& qp) const;
 
     void add_row_update(const modification_statement& stmt_arg, std::vector<query::clustering_range> ranges_arg,
         modification_statement::json_cache_opt json_cache_arg, const query_options& options_arg);

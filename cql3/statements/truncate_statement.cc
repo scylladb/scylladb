@@ -77,12 +77,12 @@ bool truncate_statement::depends_on_column_family(const sstring& cf_name) const
     return false;
 }
 
-future<> truncate_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const
+future<> truncate_statement::check_access(query_processor& qp, const service::client_state& state) const
 {
-    return state.has_column_family_access(proxy.local_db(), keyspace(), column_family(), auth::permission::MODIFY);
+    return state.has_column_family_access(qp.proxy().local_db(), keyspace(), column_family(), auth::permission::MODIFY);
 }
 
-void truncate_statement::validate(service::storage_proxy&, const service::client_state& state) const
+void truncate_statement::validate(query_processor&, const service::client_state& state) const
 {
     warn(unimplemented::cause::VALIDATION);
 #if 0

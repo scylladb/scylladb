@@ -65,13 +65,13 @@ std::unique_ptr<cql3::statements::prepared_statement> cql3::statements::list_per
 }
 
 void cql3::statements::list_permissions_statement::validate(
-        service::storage_proxy& proxy,
+        query_processor& qp,
         const service::client_state& state) const {
     // a check to ensure the existence of the user isn't being leaked by user existence check.
     state.ensure_not_anonymous();
 }
 
-future<> cql3::statements::list_permissions_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const {
+future<> cql3::statements::list_permissions_statement::check_access(query_processor& qp, const service::client_state& state) const {
     if (_resource) {
         maybe_correct_resource(*_resource, state);
         return state.ensure_exists(*_resource);

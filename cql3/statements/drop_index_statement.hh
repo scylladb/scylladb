@@ -71,15 +71,15 @@ public:
 
     virtual const sstring& column_family() const override;
 
-    virtual future<> check_access(service::storage_proxy& proxy, const service::client_state& state) const override;
+    virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
 
-    virtual void validate(service::storage_proxy&, const service::client_state& state) const override;
+    virtual void validate(query_processor&, const service::client_state& state) const override;
 
     future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> prepare_schema_mutations(query_processor& qp) const override;
 
     virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
 private:
-    schema_ptr lookup_indexed_table(service::storage_proxy& proxy) const;
+    schema_ptr lookup_indexed_table(query_processor& qp) const;
     schema_ptr make_drop_idex_schema(query_processor& qp) const;
 };
 

@@ -99,9 +99,9 @@ public:
                            column_set_type static_columns,
                            const std::optional<utils::UUID>& id);
 
-    virtual future<> check_access(service::storage_proxy& proxy, const service::client_state& state) const override;
+    virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
 
-    virtual void validate(service::storage_proxy&, const service::client_state& state) const override;
+    virtual void validate(query_processor&, const service::client_state& state) const override;
 
     future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> prepare_schema_mutations(query_processor& qp) const override;
 
@@ -160,7 +160,7 @@ public:
 };
 
 std::optional<sstring> check_restricted_table_properties(
-    service::storage_proxy& proxy,
+    query_processor& qp,
     const sstring& keyspace, const sstring& table,
     const cf_prop_defs& cfprops);
 

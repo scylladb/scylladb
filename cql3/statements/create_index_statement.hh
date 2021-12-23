@@ -76,8 +76,8 @@ public:
             std::vector<::shared_ptr<index_target::raw>> raw_targets,
             ::shared_ptr<index_prop_defs> properties, bool if_not_exists);
 
-    future<> check_access(service::storage_proxy& proxy, const service::client_state& state) const override;
-    void validate(service::storage_proxy&, const service::client_state& state) const override;
+    future<> check_access(query_processor& qp, const service::client_state& state) const override;
+    void validate(query_processor&, const service::client_state& state) const override;
     future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> prepare_schema_mutations(query_processor& qp) const override;
 
 
@@ -94,7 +94,7 @@ private:
                                               const sstring& name,
                                               index_metadata_kind kind,
                                               const index_options_map& options);
-    std::vector<::shared_ptr<index_target>> validate_while_executing(service::storage_proxy& proxy) const;
+    std::vector<::shared_ptr<index_target>> validate_while_executing(query_processor& qp) const;
     schema_ptr build_index_schema(query_processor& qp) const;
 };
 

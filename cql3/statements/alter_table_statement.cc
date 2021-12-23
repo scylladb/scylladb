@@ -75,13 +75,13 @@ alter_table_statement::alter_table_statement(cf_name name,
 {
 }
 
-future<> alter_table_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const {
+future<> alter_table_statement::check_access(query_processor& qp, const service::client_state& state) const {
     using cdt = auth::command_desc::type;
-    return state.has_column_family_access(proxy.local_db(), keyspace(), column_family(), auth::permission::ALTER,
+    return state.has_column_family_access(qp.proxy().local_db(), keyspace(), column_family(), auth::permission::ALTER,
                                           _type == type::opts ? cdt::ALTER_WITH_OPTS : cdt::OTHER);
 }
 
-void alter_table_statement::validate(service::storage_proxy& proxy, const service::client_state& state) const
+void alter_table_statement::validate(query_processor& qp, const service::client_state& state) const
 {
     // validated in prepare_schema_mutations()
 }
@@ -436,7 +436,7 @@ cql3::statements::alter_table_statement::prepare(data_dictionary::database db, c
 
 future<::shared_ptr<messages::result_message>>
 alter_table_statement::execute(query_processor& qp, service::query_state& state, const query_options& options) const {
-    std::optional<sstring> warning = check_restricted_table_properties(qp.proxy(), keyspace(), column_family(), *_properties);
+    std::optional<sstring> warning = check_restricted_table_properties(qp, keyspace(), column_family(), *_properties);
     return schema_altering_statement::execute(qp, state, options).then([this, warning = std::move(warning)] (::shared_ptr<messages::result_message> msg) {
         if (warning) {
             msg->add_warning(*warning);

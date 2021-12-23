@@ -35,7 +35,7 @@ namespace statements {
 
 class function_statement : public schema_altering_statement {
 protected:
-    virtual future<> check_access(service::storage_proxy& proxy, const service::client_state& state) const override;
+    virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
     virtual void prepare_keyspace(const service::client_state& state) override;
     functions::function_name _name;
     std::vector<shared_ptr<cql3_type::raw>> _raw_arg_types;
@@ -43,17 +43,17 @@ protected:
     static shared_ptr<cql_transport::event::schema_change> create_schema_change(
             const functions::function& func, bool created);
     function_statement(functions::function_name name, std::vector<shared_ptr<cql3_type::raw>> raw_arg_types);
-    void create_arg_types(service::storage_proxy& proxy) const;
-    data_type prepare_type(service::storage_proxy& proxy, cql3_type::raw &t) const;
-    virtual shared_ptr<functions::function> validate_while_executing(service::storage_proxy&) const = 0;
+    void create_arg_types(query_processor& qp) const;
+    data_type prepare_type(query_processor& qp, cql3_type::raw &t) const;
+    virtual shared_ptr<functions::function> validate_while_executing(query_processor&) const = 0;
 };
 
 // common logic for creating UDF and UDA
 class create_function_statement_base : public function_statement {
 protected:
-    virtual void validate(service::storage_proxy& proxy, const service::client_state& state) const override;
-    virtual shared_ptr<functions::function> create(service::storage_proxy& proxy, functions::function* old) const = 0;
-    virtual shared_ptr<functions::function> validate_while_executing(service::storage_proxy&) const override;
+    virtual void validate(query_processor& qp, const service::client_state& state) const override;
+    virtual shared_ptr<functions::function> create(query_processor& qp, functions::function* old) const = 0;
+    virtual shared_ptr<functions::function> validate_while_executing(query_processor&) const override;
 
     bool _or_replace;
     bool _if_not_exists;
@@ -65,8 +65,8 @@ protected:
 // common logic for dropping UDF and UDA
 class drop_function_statement_base : public function_statement {
 protected:
-    virtual void validate(service::storage_proxy&, const service::client_state& state) const override;
-    virtual shared_ptr<functions::function> validate_while_executing(service::storage_proxy&) const override;
+    virtual void validate(query_processor&, const service::client_state& state) const override;
+    virtual shared_ptr<functions::function> validate_while_executing(query_processor&) const override;
 
     bool _args_present;
     bool _if_exists;

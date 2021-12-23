@@ -78,12 +78,12 @@ create_index_statement::create_index_statement(cf_name name,
 }
 
 future<>
-create_index_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const {
-    return state.has_column_family_access(proxy.local_db(), keyspace(), column_family(), auth::permission::ALTER);
+create_index_statement::check_access(query_processor& qp, const service::client_state& state) const {
+    return state.has_column_family_access(qp.proxy().local_db(), keyspace(), column_family(), auth::permission::ALTER);
 }
 
 void
-create_index_statement::validate(service::storage_proxy& proxy, const service::client_state& state) const
+create_index_statement::validate(query_processor& qp, const service::client_state& state) const
 {
     if (_raw_targets.empty() && !_properties->is_custom) {
         throw exceptions::invalid_request_exception("Only CUSTOM indexes can be created without specifying a target column");
@@ -92,8 +92,8 @@ create_index_statement::validate(service::storage_proxy& proxy, const service::c
     _properties->validate();
 }
 
-std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_executing(service::storage_proxy& proxy) const {
-    auto db = proxy.data_dictionary();
+std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_executing(query_processor& qp) const {
+    auto db = qp.db();
     auto schema = validation::validate_column_family(db.real_database(), keyspace(), column_family());
 
     if (schema->is_counter()) {
@@ -279,7 +279,7 @@ void create_index_statement::validate_targets_for_multi_column_index(std::vector
 }
 
 schema_ptr create_index_statement::build_index_schema(query_processor& qp) const {
-    auto targets = validate_while_executing(qp.proxy());
+    auto targets = validate_while_executing(qp);
 
     data_dictionary::database db = qp.db();
     auto schema = db.find_schema(keyspace(), column_family());

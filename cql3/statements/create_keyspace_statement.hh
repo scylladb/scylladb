@@ -83,7 +83,7 @@ public:
 
     virtual const sstring& keyspace() const override;
 
-    virtual future<> check_access(service::storage_proxy& proxy, const service::client_state& state) const override;
+    virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
 
     /**
      * The <code>CqlParser</code> only goes as far as extracting the keyword arguments
@@ -92,7 +92,7 @@ public:
      *
      * @throws InvalidRequestException if arguments are missing or unacceptable
      */
-    virtual void validate(service::storage_proxy&, const service::client_state& state) const override;
+    virtual void validate(query_processor&, const service::client_state& state) const override;
 
 
     future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> prepare_schema_mutations(query_processor& qp) const override;
@@ -108,7 +108,7 @@ public:
 };
 
 std::optional<sstring> check_restricted_replication_strategy(
-    service::storage_proxy& proxy,
+    query_processor& qp,
     const sstring& keyspace,
     const ks_prop_defs& attrs);
 

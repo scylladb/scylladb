@@ -35,16 +35,16 @@ namespace cql3 {
 
 namespace statements {
 
-shared_ptr<functions::function> create_aggregate_statement::create(service::storage_proxy& proxy, functions::function* old) const {
-    if (!proxy.features().cluster_supports_user_defined_aggregates()) {
+shared_ptr<functions::function> create_aggregate_statement::create(query_processor& qp, functions::function* old) const {
+    if (!qp.proxy().features().cluster_supports_user_defined_aggregates()) {
         throw exceptions::invalid_request_exception("Cluster does not support user-defined aggregates, upgrade the whole cluster in order to use UDA");
     }
     if (old && !dynamic_cast<functions::user_aggregate*>(old)) {
         throw exceptions::invalid_request_exception(format("Cannot replace '{}' which is not a user defined aggregate", *old));
     }
-    data_type state_type = prepare_type(proxy, *_stype);
+    data_type state_type = prepare_type(qp, *_stype);
 
-    auto&& db = proxy.data_dictionary();
+    auto&& db = qp.db();
     std::vector<data_type> acc_types{state_type};
     acc_types.insert(acc_types.end(), _arg_types.begin(), _arg_types.end());
     auto state_func = dynamic_pointer_cast<functions::scalar_function>(functions::functions::find(functions::function_name{_name.keyspace, _sfunc}, acc_types));
@@ -74,7 +74,7 @@ create_aggregate_statement::prepare_schema_mutations(query_processor& qp) const 
     ::shared_ptr<cql_transport::event::schema_change> ret;
     std::vector<mutation> m;
 
-    auto aggregate = dynamic_pointer_cast<functions::user_aggregate>(validate_while_executing(qp.proxy()));
+    auto aggregate = dynamic_pointer_cast<functions::user_aggregate>(validate_while_executing(qp));
     if (aggregate) {
         m = co_await qp.get_migration_manager().prepare_new_aggregate_announcement(aggregate);
         ret = create_schema_change(*aggregate, true);

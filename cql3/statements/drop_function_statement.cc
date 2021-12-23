@@ -41,7 +41,7 @@ drop_function_statement::prepare_schema_mutations(query_processor& qp) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
     std::vector<mutation> m;
 
-    auto func = validate_while_executing(qp.proxy());
+    auto func = validate_while_executing(qp);
 
     if (func) {
         auto user_func = dynamic_pointer_cast<functions::user_function>(func);

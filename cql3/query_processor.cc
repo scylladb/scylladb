@@ -43,6 +43,7 @@
 
 #include <seastar/core/metrics.hh>
 
+#include "service/storage_proxy.hh"
 #include "cql3/CqlParser.hpp"
 #include "cql3/error_collector.hh"
 #include "cql3/statements/batch_statement.hh"
@@ -503,7 +504,7 @@ query_processor::execute_direct(const sstring_view& query_string, service::query
             metrics.regularStatementsExecuted.inc();
 #endif
     tracing::trace(query_state.get_trace_state(), "Processing a statement");
-    return cql_statement->check_access(_proxy, query_state.get_client_state()).then(
+    return cql_statement->check_access(*this, query_state.get_client_state()).then(
             [this, cql_statement, &query_state, &options, warnings = move(warnings)] () mutable {
         return process_authorized_statement(std::move(cql_statement), query_state, options).then(
                 [warnings = move(warnings)] (::shared_ptr<result_message> m) {
@@ -526,7 +527,7 @@ query_processor::execute_prepared(
     ::shared_ptr<cql_statement> statement = prepared->statement;
     future<> fut = make_ready_future<>();
     if (needs_authorization) {
-        fut = statement->check_access(_proxy, query_state.get_client_state()).then([this, &query_state, prepared = std::move(prepared), cache_key = std::move(cache_key)] () mutable {
+        fut = statement->check_access(*this, query_state.get_client_state()).then([this, &query_state, prepared = std::move(prepared), cache_key = std::move(cache_key)] () mutable {
             return _authorized_prepared_cache.insert(*query_state.get_client_state().user(), std::move(cache_key), std::move(prepared)).handle_exception([this] (auto eptr) {
                 log.error("failed to cache the entry: {}", eptr);
             });
@@ -545,7 +546,7 @@ query_processor::process_authorized_statement(const ::shared_ptr<cql_statement> 
 
     ++_stats.queries_by_cl[size_t(options.get_consistency())];
 
-    statement->validate(_proxy, client_state);
+    statement->validate(*this, client_state);
 
     auto fut = statement->execute(*this, query_state, options);
 
@@ -691,7 +692,7 @@ statements::prepared_statement::checked_weak_ptr query_processor::prepare_intern
     if (p == nullptr) {
         auto np = parse_statement(query_string)->prepare(_db, _cql_stats);
         np->statement->raw_cql_statement = query_string;
-        np->statement->validate(_proxy, *_internal_state);
+        np->statement->validate(*this, *_internal_state);
         p = std::move(np); // inserts it into map
     }
     return p->checked_weak_from_this();
@@ -849,7 +850,7 @@ query_processor::execute_internal(
     } else {
         auto p = parse_statement(query_string)->prepare(_db, _cql_stats);
         p->statement->raw_cql_statement = query_string;
-        p->statement->validate(_proxy, *_internal_state);
+        p->statement->validate(*this, *_internal_state);
         auto checked_weak_ptr = p->checked_weak_from_this();
         return execute_with_params(std::move(checked_weak_ptr), cl, query_state, values).finally([p = std::move(p)] {});
     }
@@ -875,14 +876,14 @@ query_processor::execute_batch(
         service::query_state& query_state,
         query_options& options,
         std::unordered_map<prepared_cache_key_type, authorized_prepared_statements_cache::value_type> pending_authorization_entries) {
-    return batch->check_access(_proxy, query_state.get_client_state()).then([this, &query_state, &options, batch, pending_authorization_entries = std::move(pending_authorization_entries)] () mutable {
+    return batch->check_access(*this, query_state.get_client_state()).then([this, &query_state, &options, batch, pending_authorization_entries = std::move(pending_authorization_entries)] () mutable {
         return parallel_for_each(pending_authorization_entries, [this, &query_state] (auto& e) {
             return _authorized_prepared_cache.insert(*query_state.get_client_state().user(), e.first, std::move(e.second)).handle_exception([this] (auto eptr) {
                 log.error("failed to cache the entry: {}", eptr);
             });
         }).then([this, &query_state, &options, batch] {
             batch->validate();
-            batch->validate(_proxy, query_state.get_client_state());
+            batch->validate(*this, query_state.get_client_state());
             _stats.queries_by_cl[size_t(options.get_consistency())] += batch->get_statements().size();
             if (log.is_enabled(logging::log_level::trace)) {
                 std::ostringstream oss;
@@ -996,6 +997,11 @@ future<> query_processor::query_internal(
         const sstring& query_string,
         noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)>&& f) {
     return query_internal(query_string, db::consistency_level::ONE, {}, 1000, std::move(f));
+}
+
+shared_ptr<cql_transport::messages::result_message> query_processor::bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls) {
+    _proxy.get_stats().replica_cross_shard_ops++;
+    return ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(shard, std::move(cached_fn_calls));
 }
 
 }

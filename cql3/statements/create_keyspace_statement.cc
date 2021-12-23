@@ -74,12 +74,12 @@ const sstring& create_keyspace_statement::keyspace() const
     return _name;
 }
 
-future<> create_keyspace_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const
+future<> create_keyspace_statement::check_access(query_processor& qp, const service::client_state& state) const
 {
     return state.has_all_keyspaces_access(auth::permission::CREATE);
 }
 
-void create_keyspace_statement::validate(service::storage_proxy&, const service::client_state& state) const
+void create_keyspace_statement::validate(query_processor&, const service::client_state& state) const
 {
     std::string name;
     name.resize(_name.length());
@@ -115,8 +115,7 @@ void create_keyspace_statement::validate(service::storage_proxy&, const service:
 
 future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> create_keyspace_statement::prepare_schema_mutations(query_processor& qp) const {
     using namespace cql_transport;
-    auto p = qp.proxy().shared_from_this();
-    const auto& tm = *p->get_token_metadata_ptr();
+    const auto& tm = *qp.proxy().get_token_metadata_ptr();
     ::shared_ptr<event::schema_change> ret;
     std::vector<mutation> m;
 
@@ -161,7 +160,7 @@ future<> cql3::statements::create_keyspace_statement::grant_permissions_to_creat
 // errors (such as unknown replication strategy name or unknown options
 // to a known replication strategy) are done elsewhere.
 std::optional<sstring> check_restricted_replication_strategy(
-    service::storage_proxy& proxy,
+    query_processor& qp,
     const sstring& keyspace,
     const ks_prop_defs& attrs)
 {
@@ -174,7 +173,7 @@ std::optional<sstring> check_restricted_replication_strategy(
     // may have in the future - multiple racks or DCs. So depending on how
     // protective we are configured, let's prevent it or allow with a warning:
     if (replication_strategy == "org.apache.cassandra.locator.SimpleStrategy") {
-        switch(proxy.data_dictionary().get_config().restrict_replication_simplestrategy()) {
+        switch(qp.db().get_config().restrict_replication_simplestrategy()) {
         case db::tri_mode_restriction_t::mode::TRUE:
             throw exceptions::configuration_exception(
                 "SimpleStrategy replication class is not recommended, and "
@@ -191,7 +190,7 @@ std::optional<sstring> check_restricted_replication_strategy(
         case db::tri_mode_restriction_t::mode::FALSE:
             // Scylla was configured to allow SimpleStrategy, but let's warn
             // if it's used on a cluster which *already* has multiple DCs:
-            if (proxy.get_token_metadata_ptr()->get_topology().get_datacenter_endpoints().size() > 1) {
+            if (qp.proxy().get_token_metadata_ptr()->get_topology().get_datacenter_endpoints().size() > 1) {
                 return "Using SimpleStrategy in a multi-datacenter environment is not recommended.";
             }
             break;
@@ -202,7 +201,7 @@ std::optional<sstring> check_restricted_replication_strategy(
 
 future<::shared_ptr<messages::result_message>>
 create_keyspace_statement::execute(query_processor& qp, service::query_state& state, const query_options& options) const {
-    std::optional<sstring> warning = check_restricted_replication_strategy(qp.proxy(), keyspace(), *_attrs);
+    std::optional<sstring> warning = check_restricted_replication_strategy(qp, keyspace(), *_attrs);
     return schema_altering_statement::execute(qp, state, options).then([this, warning = std::move(warning)] (::shared_ptr<messages::result_message> msg) {
         if (warning) {
             msg->add_warning(*warning);

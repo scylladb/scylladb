@@ -72,9 +72,9 @@ public:
 
     future<> grant_permissions_to_creator(const service::client_state&) const;
 
-    void validate(service::storage_proxy&, const service::client_state&) const override;
+    void validate(query_processor&, const service::client_state&) const override;
 
-    virtual future<> check_access(service::storage_proxy& proxy, const service::client_state&) const override;
+    virtual future<> check_access(query_processor& qp, const service::client_state&) const override;
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
     execute(query_processor&, service::query_state&, const query_options&) const override;

@@ -41,11 +41,11 @@ bool service_level_statement::depends_on_column_family(
 }
 
 void service_level_statement::validate(
-        service::storage_proxy &,
+        query_processor&,
         const service::client_state &state) const {
 }
 
-future<> service_level_statement::check_access(service::storage_proxy& sp, const service::client_state &state) const {
+future<> service_level_statement::check_access(query_processor& qp, const service::client_state &state) const {
     return make_ready_future<>();
 }
 

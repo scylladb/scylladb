@@ -160,10 +160,10 @@ public:
 
     gc_clock::duration get_time_to_live(const query_options& options) const;
 
-    virtual future<> check_access(service::storage_proxy& proxy, const service::client_state& state) const override;
+    virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
 
     // Validate before execute, using client state and current schema
-    void validate(service::storage_proxy&, const service::client_state& state) const override;
+    void validate(query_processor&, const service::client_state& state) const override;
 
     virtual bool depends_on_keyspace(const sstring& ks_name) const override;
 
@@ -228,7 +228,7 @@ public:
 
     // Build a read_command instance to fetch the previous mutation from storage. The mutation is
     // fetched if we need to check LWT conditions or apply updates to non-frozen list elements.
-    lw_shared_ptr<query::read_command> read_command(service::storage_proxy& proxy, query::clustering_row_ranges ranges, db::consistency_level cl) const;
+    lw_shared_ptr<query::read_command> read_command(query_processor& qp, query::clustering_row_ranges ranges, db::consistency_level cl) const;
     // Create a mutation object for the update operation represented by this modification statement.
     // A single mutation object for lightweight transactions, which can only span one partition, or a vector
     // of mutations, one per partition key, for statements which affect multiple partition keys,
@@ -251,7 +251,7 @@ public:
 
 private:
     future<::shared_ptr<cql_transport::messages::result_message>>
-    do_execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) const;
+    do_execute(query_processor& qp, service::query_state& qs, const query_options& options) const;
     friend class modification_statement_executor;
 public:
     // True if the statement has IF conditions. Pre-computed during prepare.
@@ -266,10 +266,10 @@ public:
 
 private:
     future<>
-    execute_without_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) const;
+    execute_without_condition(query_processor& qp, service::query_state& qs, const query_options& options) const;
 
     future<::shared_ptr<cql_transport::messages::result_message>>
-    execute_with_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) const;
+    execute_with_condition(query_processor& qp, service::query_state& qs, const query_options& options) const;
 
 public:
     /**
@@ -282,7 +282,7 @@ public:
      * @return vector of the mutations
      * @throws invalid_request_exception on invalid requests
      */
-    future<std::vector<mutation>> get_mutations(service::storage_proxy& proxy, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs) const;
+    future<std::vector<mutation>> get_mutations(query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs) const;
 
     virtual json_cache_opt maybe_prepare_json_cache(const query_options& options) const;
 protected:

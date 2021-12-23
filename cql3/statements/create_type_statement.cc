@@ -72,9 +72,9 @@ void create_type_statement::add_definition(::shared_ptr<column_identifier> name,
     _column_types.emplace_back(type);
 }
 
-future<> create_type_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const
+future<> create_type_statement::check_access(query_processor& qp, const service::client_state& state) const
 {
-    return state.has_keyspace_access(proxy.local_db(), keyspace(), auth::permission::CREATE);
+    return state.has_keyspace_access(qp.proxy().local_db(), keyspace(), auth::permission::CREATE);
 }
 
 inline bool create_type_statement::type_exists_in(data_dictionary::keyspace ks) const
@@ -83,7 +83,7 @@ inline bool create_type_statement::type_exists_in(data_dictionary::keyspace ks) 
     return keyspace_types.contains(_name.get_user_type_name());
 }
 
-void create_type_statement::validate(service::storage_proxy& proxy, const service::client_state& state) const
+void create_type_statement::validate(query_processor& qp, const service::client_state& state) const
 {
     if (_column_types.size() > max_udt_fields) {
         throw exceptions::invalid_request_exception(format("A user type cannot have more than {} fields", max_udt_fields));

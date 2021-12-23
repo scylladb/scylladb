@@ -125,8 +125,8 @@ gc_clock::duration modification_statement::get_time_to_live(const query_options&
     return gc_clock::duration(attrs->get_time_to_live(options));
 }
 
-future<> modification_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const {
-    const data_dictionary::database db = proxy.data_dictionary();
+future<> modification_statement::check_access(query_processor& qp, const service::client_state& state) const {
+    const data_dictionary::database db = qp.db();
     auto f = state.has_column_family_access(db.real_database(), keyspace(), column_family(), auth::permission::MODIFY);
     if (has_conditions()) {
         f = f.then([this, &state, db] {
@@ -137,7 +137,7 @@ future<> modification_statement::check_access(service::storage_proxy& proxy, con
 }
 
 future<std::vector<mutation>>
-modification_statement::get_mutations(service::storage_proxy& proxy, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs) const {
+modification_statement::get_mutations(query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs) const {
     if (_restrictions->range_or_slice_eq_null(options)) { // See #7852 and #9290.
         throw exceptions::invalid_request_exception("Invalid null value in condition for a key column");
     }
@@ -154,9 +154,9 @@ modification_statement::get_mutations(service::storage_proxy& proxy, const query
     }
 
     if (requires_read()) {
-        lw_shared_ptr<query::read_command> cmd = read_command(proxy, ranges, cl);
+        lw_shared_ptr<query::read_command> cmd = read_command(qp, ranges, cl);
         // FIXME: ignoring "local"
-        f = proxy.query(s, cmd, dht::partition_range_vector(keys), cl,
+        f = qp.proxy().query(s, cmd, dht::partition_range_vector(keys), cl,
                 {timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()}).then(
 
                 [this, cmd] (auto cqr) {
@@ -232,14 +232,14 @@ std::vector<mutation> modification_statement::apply_updates(
 }
 
 lw_shared_ptr<query::read_command>
-modification_statement::read_command(service::storage_proxy& proxy, query::clustering_row_ranges ranges, db::consistency_level cl) const {
+modification_statement::read_command(query_processor& qp, query::clustering_row_ranges ranges, db::consistency_level cl) const {
     try {
         validate_for_read(cl);
     } catch (exceptions::invalid_request_exception& e) {
         throw exceptions::invalid_request_exception(format("Write operation require a read but consistency {} is not supported on reads", cl));
     }
     query::partition_slice ps(std::move(ranges), *s, columns_to_read(), update_parameters::options);
-    const auto max_result_size = proxy.get_max_result_size(ps);
+    const auto max_result_size = qp.proxy().get_max_result_size(ps);
     return make_lw_shared<query::read_command>(s->id(), s->version(), std::move(ps), query::max_result_size(max_result_size));
 }
 
@@ -263,19 +263,18 @@ struct modification_statement_executor {
 static thread_local inheriting_concrete_execution_stage<
         future<::shared_ptr<cql_transport::messages::result_message>>,
         const modification_statement*,
-        service::storage_proxy&,
+        query_processor&,
         service::query_state&,
         const query_options&> modify_stage{"cql3_modification", modification_statement_executor::get()};
 
 future<::shared_ptr<cql_transport::messages::result_message>>
 modification_statement::execute(query_processor& qp, service::query_state& qs, const query_options& options) const {
     cql3::util::validate_timestamp(options, attrs);
-    service::storage_proxy& proxy = qp.proxy();
-    return modify_stage(this, seastar::ref(proxy), seastar::ref(qs), seastar::cref(options));
+    return modify_stage(this, seastar::ref(qp), seastar::ref(qs), seastar::cref(options));
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-modification_statement::do_execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) const {
+modification_statement::do_execute(query_processor& qp, service::query_state& qs, const query_options& options) const {
     if (has_conditions() && options.get_protocol_version() == 1) {
         throw exceptions::invalid_request_exception("Conditional updates are not supported by the protocol version in use. You need to upgrade to a driver using the native protocol v2.");
     }
@@ -285,30 +284,30 @@ modification_statement::do_execute(service::storage_proxy& proxy, service::query
     inc_cql_stats(qs.get_client_state().is_internal());
 
     if (has_conditions()) {
-        return execute_with_condition(proxy, qs, options);
+        return execute_with_condition(qp, qs, options);
     }
 
-    return execute_without_condition(proxy, qs, options).then([] {
+    return execute_without_condition(qp, qs, options).then([] {
         return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(
                 ::shared_ptr<cql_transport::messages::result_message>{});
     });
 }
 
 future<>
-modification_statement::execute_without_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) const {
+modification_statement::execute_without_condition(query_processor& qp, service::query_state& qs, const query_options& options) const {
     auto cl = options.get_consistency();
     auto timeout = db::timeout_clock::now() + get_timeout(qs.get_client_state(), options);
-    return get_mutations(proxy, options, timeout, false, options.get_timestamp(qs), qs).then([this, cl, timeout, &proxy, &qs] (auto mutations) {
+    return get_mutations(qp, options, timeout, false, options.get_timestamp(qs), qs).then([this, cl, timeout, &qp, &qs] (auto mutations) {
         if (mutations.empty()) {
             return now();
         }
         
-        return proxy.mutate_with_triggers(std::move(mutations), cl, timeout, false, qs.get_trace_state(), qs.get_permit(), this->is_raw_counter_shard_write());
+        return qp.proxy().mutate_with_triggers(std::move(mutations), cl, timeout, false, qs.get_trace_state(), qs.get_permit(), this->is_raw_counter_shard_write());
     });
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-modification_statement::execute_with_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) const {
+modification_statement::execute_with_condition(query_processor& qp, service::query_state& qs, const query_options& options) const {
 
     auto cl_for_learn = options.get_consistency();
     auto cl_for_paxos = options.check_serial_consistency();
@@ -335,13 +334,12 @@ modification_statement::execute_with_condition(service::storage_proxy& proxy, se
 
     auto shard = service::storage_proxy::cas_shard(*s, request->key()[0].start()->value().as_decorated_key().token());
     if (shard != this_shard_id()) {
-        proxy.get_stats().replica_cross_shard_ops++;
         return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
-                ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(shard,
-                    std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls())));
+                qp.bounce_to_shard(shard, std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls()))
+            );
     }
 
-    return proxy.cas(s, request, request->read_command(proxy), request->key(),
+    return qp.proxy().cas(s, request, request->read_command(qp), request->key(),
             {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()},
             cl_for_paxos, cl_for_learn, statement_timeout, cas_timeout).then([this, request] (bool is_applied) {
         return request->build_cas_result_set(_metadata, _columns_of_cas_result_set, is_applied);
@@ -551,7 +549,7 @@ modification_statement::prepare_conditions(data_dictionary::database db, const s
 }  // namespace raw
 
 void
-modification_statement::validate(service::storage_proxy&, const service::client_state& state) const {
+modification_statement::validate(query_processor&, const service::client_state& state) const {
     if (has_conditions() && attrs->is_timestamp_set()) {
         throw exceptions::invalid_request_exception("Cannot provide custom timestamp for conditional updates");
     }
