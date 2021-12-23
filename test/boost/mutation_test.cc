@@ -65,6 +65,7 @@
 #include "types/set.hh"
 #include "types/user.hh"
 #include "concrete_types.hh"
+#include "mutation_rebuilder.hh"
 
 using namespace std::chrono_literals;
 
@@ -3121,6 +3122,54 @@ SEASTAR_THREAD_TEST_CASE(test_appending_hash_row_4567) {
     // Legacy check which shows incorrect handling of NULL values.
     // These checks are meaningful because legacy hashing is still used for old nodes.
     BOOST_CHECK_EQUAL(compute_legacy_hash(r1, { 0, 1, 2 }), compute_legacy_hash(r2, { 0, 1, 2 }));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_mutation_consume) {
+    std::mt19937 engine(tests::random::get_int<uint32_t>());
+
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    auto permit = semaphore.make_permit();
+
+    auto rnd_schema_spec = tests::make_random_schema_specification(
+            get_name(),
+            std::uniform_int_distribution<size_t>(1, 2),
+            std::uniform_int_distribution<size_t>(1, 8));
+    auto rnd_schema = tests::random_schema(engine(), *rnd_schema_spec);
+
+    auto forward_schema = rnd_schema.schema();
+    auto reverse_schema = forward_schema->make_reversed();
+
+    const auto muts = tests::generate_random_mutations(
+            rnd_schema,
+            tests::default_timestamp_generator(),
+            tests::no_expiry_expiry_generator(),
+            std::uniform_int_distribution<size_t>(1, 10)).get();
+
+
+    testlog.info("Forward");
+    {
+        for (const auto& mut : muts) {
+            mutation_rebuilder rebuilder(forward_schema);
+            auto rebuilt_mut = *mutation(mut).consume(rebuilder, consume_in_reverse::no).result;
+            assert_that(std::move(rebuilt_mut)).is_equal_to(mut);
+        }
+    }
+    testlog.info("Legacy half reverse");
+    {
+        for (const auto& mut : muts) {
+            mutation_rebuilder rebuilder(forward_schema);
+            auto rebuilt_mut = *mutation(mut).consume(rebuilder, consume_in_reverse::legacy_half_reverse).result;
+            assert_that(std::move(rebuilt_mut)).is_equal_to(mut);
+        }
+    }
+    testlog.info("Reverse");
+    {
+        for (const auto& mut : muts) {
+            mutation_rebuilder rebuilder(reverse_schema);
+            auto rebuilt_mut = *mutation(mut).consume(rebuilder, consume_in_reverse::yes).result;
+            assert_that(reverse(std::move(rebuilt_mut))).is_equal_to(mut);
+        }
+    }
 }
 
 SEASTAR_THREAD_TEST_CASE(test_mutation_consume_position_monotonicity) {
