@@ -333,6 +333,11 @@ future<> compaction_manager::run_custom_job(table* t, sstables::compaction_type 
     task->compaction_done = with_semaphore(_maintenance_ops_sem, 1, [this, task, &job = *job_ptr] () mutable {
         // take read lock for table, so major compaction and resharding can't proceed in parallel.
         return with_lock(task->compaction_state.lock.for_read(), [this, task, &job] () mutable {
+            // Allow caller to know that task (e.g. reshape) was asked to stop while waiting for a chance to run.
+            if (task->stopping) {
+                throw sstables::compaction_stopped_exception(task->compacting_table->schema()->ks_name(), task->compacting_table->schema()->cf_name(),
+                    task->compaction_data.stop_requested);
+            }
             _stats.active_tasks++;
             if (!can_proceed(task)) {
                 return make_ready_future<>();
