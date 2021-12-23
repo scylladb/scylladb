@@ -832,7 +832,7 @@ future<> sstable::read_toc() noexcept {
             f.get();
         } catch (std::system_error& e) {
             if (e.code() == std::error_code(ENOENT, std::system_category())) {
-                throw malformed_sstable_exception(filename(component_type::TOC) + ": file not found");
+                throw malformed_sstable_exception(format("{}", std::current_exception()), filename(component_type::TOC));
             }
             throw;
         }
@@ -1016,7 +1016,7 @@ future<> sstable::read_simple(T& component, const io_priority_class& pc) {
             f.get();
         } catch (std::system_error& e) {
             if (e.code() == std::error_code(ENOENT, std::system_category())) {
-                throw malformed_sstable_exception(file_path + ": file not found");
+                throw malformed_sstable_exception(format("{}", std::current_exception()), file_path);
             }
             throw;
         } catch (malformed_sstable_exception &e) {

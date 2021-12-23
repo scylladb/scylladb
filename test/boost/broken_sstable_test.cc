@@ -232,25 +232,25 @@ SEASTAR_TEST_CASE(empty_toc) {
 
 SEASTAR_TEST_CASE(alien_toc) {
     return broken_sst("test/resource/sstables/badtoc", 2,
-               "test/resource/sstables/badtoc/la-2-big-Statistics.db: file not found");
+               "open failed: No such file or directory [test/resource/sstables/badtoc/la-2-big-Statistics.db]");
 }
 
 SEASTAR_TEST_CASE(truncated_toc) {
     return broken_sst("test/resource/sstables/badtoc", 3,
-               "test/resource/sstables/badtoc/la-3-big-Statistics.db: file not found");
+               "open failed: No such file or directory [test/resource/sstables/badtoc/la-3-big-Statistics.db]");
 }
 
 SEASTAR_TEST_CASE(wrong_format_toc) {
     return broken_sst("test/resource/sstables/badtoc", 4,
-               "test/resource/sstables/badtoc/la-4-big-TOC.txt: file not found");
+               "open failed: No such file or directory [test/resource/sstables/badtoc/la-4-big-TOC.txt]");
 }
 
 SEASTAR_TEST_CASE(compression_truncated) {
     return broken_sst("test/resource/sstables/badcompression", 1,
-               "test/resource/sstables/badcompression/la-1-big-Statistics.db: file not found");
+               "open failed: No such file or directory [test/resource/sstables/badcompression/la-1-big-Statistics.db]");
 }
 
 SEASTAR_TEST_CASE(compression_bytes_flipped) {
     return broken_sst("test/resource/sstables/badcompression", 2,
-               "test/resource/sstables/badcompression/la-2-big-Statistics.db: file not found");
+               "open failed: No such file or directory [test/resource/sstables/badcompression/la-2-big-Statistics.db]");
 }
