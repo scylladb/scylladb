@@ -805,11 +805,12 @@ future<> compaction_manager::rewrite_sstables(table* t, sstables::compaction_typ
     _stats.pending_tasks += sstables.size();
 
     task->compaction_done = do_until([this, &sstables, task] { return sstables.empty() || !can_proceed(task); },
-             [this, task, options, &sstables, &compacting, can_purge] () mutable {
+             [this, &task, options, &sstables, &compacting, can_purge] () mutable -> future<> {
         auto sst = sstables.back();
         sstables.pop_back();
 
-        return repeat([this, task, options, sst = std::move(sst), &compacting, can_purge] () mutable {
+        stop_iteration completed = stop_iteration::no;
+        do {
             table& t = *task->compacting_table;
             auto sstable_level = sst->get_sstable_level();
             auto run_identifier = sst->run_identifier();
@@ -822,20 +823,18 @@ future<> compaction_manager::rewrite_sstables(table* t, sstables::compaction_typ
                 compacting->release_compacting(exhausted_sstables);
             };
 
-            return with_semaphore(_maintenance_ops_sem, 1, [this, task, &t, descriptor = std::move(descriptor)] () mutable {
-              // Take write lock for table to serialize cleanup/upgrade sstables/scrub with major compaction/reshape/reshard.
-              return with_lock(_compaction_state[&t].lock.for_write(), [this, task, &t, descriptor = std::move(descriptor)] () mutable {
-                _stats.pending_tasks--;
-                _stats.active_tasks++;
-                task->setup_new_compaction();
-                task->output_run_identifier = descriptor.run_identifier;
-                compaction_backlog_tracker user_initiated(std::make_unique<user_initiated_backlog_tracker>(_compaction_controller.backlog_of_shares(200), _available_memory));
-                return do_with(std::move(user_initiated), [this, &t, descriptor = std::move(descriptor), task] (compaction_backlog_tracker& bt) mutable {
-                    return with_scheduling_group(_maintenance_sg.cpu, [this, &t, descriptor = std::move(descriptor), task]() mutable {
-                        return t.compact_sstables(std::move(descriptor), task->compaction_data);
-                    });
-                });
-              });
+            auto maintenance_permit = co_await seastar::get_units(_maintenance_ops_sem, 1);
+            // Take write lock for table to serialize cleanup/upgrade sstables/scrub with major compaction/reshape/reshard.
+            auto write_lock_holder = co_await _compaction_state[&t].lock.hold_write_lock();
+
+            _stats.pending_tasks--;
+            _stats.active_tasks++;
+            task->setup_new_compaction();
+            task->output_run_identifier = descriptor.run_identifier;
+
+            compaction_backlog_tracker user_initiated(std::make_unique<user_initiated_backlog_tracker>(_compaction_controller.backlog_of_shares(200), _available_memory));
+            completed = co_await with_scheduling_group(_maintenance_sg.cpu, [this, &t, &descriptor, task] () mutable {
+                return t.compact_sstables(std::move(descriptor), task->compaction_data);
             }).then_wrapped([this, task] (future<> f) mutable {
                 task->finish_compaction();
                 _stats.active_tasks--;
@@ -853,7 +852,7 @@ future<> compaction_manager::rewrite_sstables(table* t, sstables::compaction_typ
                 reevaluate_postponed_compactions();
                 return make_ready_future<stop_iteration>(stop_iteration::yes);
             });
-        });
+        } while (!completed);
     }).finally([this, task, type = options.type(), &sstables] {
         _stats.pending_tasks -= sstables.size();
         _tasks.remove(task);
