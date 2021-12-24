@@ -51,6 +51,15 @@ if __name__ == '__main__':
                 pkg_install('systemd-coredump')
                 if is_suse_variant():
                     systemd_unit('systemd-coredump.socket').restart()
+        # Some older distribution does not have this unit
+        if systemd_unit.available('systemd-coredump@.service'):
+            dropin = '''
+[Service]
+TimeoutStartSec=infinity
+'''[1:-1]
+            os.makedirs('/etc/systemd/system/systemd-coredump@.service.d', exist_ok=True)
+            with open('/etc/systemd/system/systemd-coredump@.service.d/timeout.conf', 'w') as f:
+                f.write(dropin)
         conf_data = '''
 [Coredump]
 Storage=external
