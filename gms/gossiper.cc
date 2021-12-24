@@ -698,8 +698,7 @@ future<> gossiper::remove_endpoint(inet_address endpoint) {
     logger.debug("removing endpoint {}", endpoint);
 }
 
-// Runs inside seastar::async context
-void gossiper::do_status_check() {
+future<> gossiper::do_status_check() {
     logger.trace("Performing status check ...");
 
     auto now = this->now();
@@ -720,8 +719,8 @@ void gossiper::do_status_check() {
             && !_just_removed_endpoints.contains(endpoint)
             && ((now - ep_state.get_update_timestamp()) > fat_client_timeout)) {
             logger.info("FatClient {} has been silent for {}ms, removing from gossip", endpoint, fat_client_timeout.count());
-            remove_endpoint(endpoint).get(); // will put it in _just_removed_endpoints to respect quarantine delay
-            evict_from_membership(endpoint).get(); // can get rid of the state immediately
+            co_await remove_endpoint(endpoint); // will put it in _just_removed_endpoints to respect quarantine delay
+            co_await evict_from_membership(endpoint); // can get rid of the state immediately
         }
 
         // check for dead state removal
@@ -729,7 +728,7 @@ void gossiper::do_status_check() {
         if (!is_alive && (now > expire_time)
              && (!get_token_metadata_ptr()->is_member(endpoint))) {
             logger.debug("time is expiring for endpoint : {} ({})", endpoint, expire_time.time_since_epoch().count());
-            evict_from_membership(endpoint).get();
+            co_await evict_from_membership(endpoint);
         }
     }
 
@@ -935,7 +934,7 @@ void gossiper::run() {
                     logger.trace("Faill to do_gossip_to_unreachable_member: {}", ep);
                 });
 
-                do_status_check();
+                do_status_check().get();
             }
 
             //
