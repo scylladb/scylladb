@@ -235,13 +235,13 @@ public:
     future<schema_ptr> get_schema_for_write(table_schema_version, netw::msg_addr from, netw::messaging_service& ms);
 
 private:
-    virtual void on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) override;
-    virtual void on_change(gms::inet_address endpoint, gms::application_state state, const gms::versioned_value& value) override;
-    virtual void on_alive(gms::inet_address endpoint, gms::endpoint_state state) override;
-    virtual void on_dead(gms::inet_address endpoint, gms::endpoint_state state) override {}
-    virtual void on_remove(gms::inet_address endpoint) override {}
-    virtual void on_restart(gms::inet_address endpoint, gms::endpoint_state state) override {}
-    virtual void before_change(gms::inet_address endpoint, gms::endpoint_state current_state, gms::application_state new_statekey, const gms::versioned_value& newvalue) override {}
+    virtual future<> on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) override;
+    virtual future<> on_change(gms::inet_address endpoint, gms::application_state state, const gms::versioned_value& value) override;
+    virtual future<> on_alive(gms::inet_address endpoint, gms::endpoint_state state) override;
+    virtual future<> on_dead(gms::inet_address endpoint, gms::endpoint_state state) override { return make_ready_future(); }
+    virtual future<> on_remove(gms::inet_address endpoint) override { return make_ready_future(); }
+    virtual future<> on_restart(gms::inet_address endpoint, gms::endpoint_state state) override { return make_ready_future(); }
+    virtual future<> before_change(gms::inet_address endpoint, gms::endpoint_state current_state, gms::application_state new_statekey, const gms::versioned_value& newvalue) override { return make_ready_future(); }
 };
 
 future<column_mapping> get_column_mapping(utils::UUID table_id, table_schema_version v);

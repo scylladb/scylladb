@@ -277,7 +277,7 @@ future<> view_update_backlog_broker::stop() {
     });
 }
 
-void view_update_backlog_broker::on_change(gms::inet_address endpoint, gms::application_state state, const gms::versioned_value& value) {
+future<> view_update_backlog_broker::on_change(gms::inet_address endpoint, gms::application_state state, const gms::versioned_value& value) {
     if (state == gms::application_state::VIEW_BACKLOG) {
         size_t current;
         size_t max;
@@ -287,16 +287,16 @@ void view_update_backlog_broker::on_change(gms::inet_address endpoint, gms::appl
         for (auto* ptr : {&current, &max}) {
             *ptr = std::strtoull(start_bound, &end_bound, 10);
             if (*ptr == ULLONG_MAX) {
-                return;
+                return make_ready_future();;
             }
             start_bound = end_bound + 1;
         }
         if (max == 0) {
-            return;
+            return make_ready_future();
         }
         ticks = std::strtoll(start_bound, &end_bound, 10);
         if (ticks == 0 || ticks == LLONG_MAX || end_bound != value.value.data() + value.value.size()) {
-            return;
+            return make_ready_future();
         }
         auto backlog = view_update_backlog_timestamped{db::view::update_backlog{current, max}, ticks};
         auto[it, inserted] = _sp.local()._view_update_backlogs.try_emplace(endpoint, std::move(backlog));
@@ -304,10 +304,12 @@ void view_update_backlog_broker::on_change(gms::inet_address endpoint, gms::appl
             it->second = std::move(backlog);
         }
     }
+    return make_ready_future();
 }
 
-void view_update_backlog_broker::on_remove(gms::inet_address endpoint) {
+future<> view_update_backlog_broker::on_remove(gms::inet_address endpoint) {
     _sp.local()._view_update_backlogs.erase(endpoint);
+    return make_ready_future();
 }
 
 }

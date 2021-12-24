@@ -52,12 +52,12 @@ private:
     void reconnect(gms::inet_address public_address, gms::inet_address local_address);
 public:
     reconnectable_snitch_helper(sstring local_dc);
-    void before_change(gms::inet_address endpoint, gms::endpoint_state cs, gms::application_state new_state_key, const gms::versioned_value& new_value) override;
-    void on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) override;
-    void on_change(gms::inet_address endpoint, gms::application_state state, const gms::versioned_value& value) override;
-    void on_alive(gms::inet_address endpoint, gms::endpoint_state ep_state) override;
-    void on_dead(gms::inet_address endpoint, gms::endpoint_state ep_state) override;
-    void on_remove(gms::inet_address endpoint) override;
-    void on_restart(gms::inet_address endpoint, gms::endpoint_state state) override;
+    future<> before_change(gms::inet_address endpoint, gms::endpoint_state cs, gms::application_state new_state_key, const gms::versioned_value& new_value) override;
+    future<> on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) override;
+    future<> on_change(gms::inet_address endpoint, gms::application_state state, const gms::versioned_value& value) override;
+    future<> on_alive(gms::inet_address endpoint, gms::endpoint_state ep_state) override;
+    future<> on_dead(gms::inet_address endpoint, gms::endpoint_state ep_state) override;
+    future<> on_remove(gms::inet_address endpoint) override;
+    future<> on_restart(gms::inet_address endpoint, gms::endpoint_state state) override;
 };
 } // namespace locator

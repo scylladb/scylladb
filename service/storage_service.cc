@@ -1113,14 +1113,14 @@ void storage_service::handle_state_removing(inet_address endpoint, std::vector<s
     }
 }
 
-void storage_service::on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) {
+future<> storage_service::on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) {
     slogger.debug("endpoint={} on_join", endpoint);
     for (const auto& e : ep_state.get_application_state_map()) {
-        on_change(endpoint, e.first, e.second);
+        co_await on_change(endpoint, e.first, e.second);
     }
 }
 
-void storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_state state) {
+future<> storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_state state) {
     slogger.debug("endpoint={} on_alive", endpoint);
     if (get_token_metadata().is_member(endpoint)) {
         notify_up(endpoint);
@@ -1128,25 +1128,26 @@ void storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_state s
     if (_replacing_nodes_pending_ranges_updater.contains(endpoint)) {
         _replacing_nodes_pending_ranges_updater.erase(endpoint);
         slogger.info("Trigger pending ranges updater for replacing node {}", endpoint);
-        auto tmlock = get_token_metadata_lock().get0();
-        auto tmptr = get_mutable_token_metadata_ptr().get0();
+        auto tmlock = co_await get_token_metadata_lock();
+        auto tmptr = co_await get_mutable_token_metadata_ptr();
         handle_state_replacing_update_pending_ranges(tmptr, endpoint);
-        replicate_to_all_cores(std::move(tmptr)).get();
+        co_await replicate_to_all_cores(std::move(tmptr));
     }
 }
 
-void storage_service::before_change(gms::inet_address endpoint, gms::endpoint_state current_state, gms::application_state new_state_key, const gms::versioned_value& new_value) {
+future<> storage_service::before_change(gms::inet_address endpoint, gms::endpoint_state current_state, gms::application_state new_state_key, const gms::versioned_value& new_value) {
     slogger.debug("endpoint={} before_change: new app_state={}, new versioned_value={}", endpoint, new_state_key, new_value);
+    return make_ready_future();
 }
 
-void storage_service::on_change(inet_address endpoint, application_state state, const versioned_value& value) {
+future<> storage_service::on_change(inet_address endpoint, application_state state, const versioned_value& value) {
     slogger.debug("endpoint={} on_change:     app_state={}, versioned_value={}", endpoint, state, value);
     if (state == application_state::STATUS) {
         std::vector<sstring> pieces;
         boost::split(pieces, value.value, boost::is_any_of(sstring(versioned_value::DELIMITER_STR)));
         if (pieces.empty()) {
             slogger.warn("Fail to split status in on_change: endpoint={}, app_state={}, value={}", endpoint, state, value);
-            return;
+            co_return;
         }
         sstring move_name = pieces[0];
         if (move_name == sstring(versioned_value::STATUS_BOOTSTRAPPING)) {
@@ -1166,13 +1167,13 @@ void storage_service::on_change(inet_address endpoint, application_state state, 
         } else if (move_name == sstring(versioned_value::HIBERNATE)) {
             handle_state_replacing(endpoint);
         } else {
-            return; // did nothing.
+            co_return; // did nothing.
         }
     } else {
         auto* ep_state = _gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
         if (!ep_state || _gossiper.is_dead_state(*ep_state)) {
             slogger.debug("Ignoring state change for dead or unknown endpoint: {}", endpoint);
-            return;
+            co_return;
         }
         if (get_token_metadata().is_member(endpoint)) {
             do_update_system_peers_table(endpoint, state, value);
@@ -1185,26 +1186,28 @@ void storage_service::on_change(inet_address endpoint, application_state state, 
 }
 
 
-void storage_service::on_remove(gms::inet_address endpoint) {
+future<> storage_service::on_remove(gms::inet_address endpoint) {
     slogger.debug("endpoint={} on_remove", endpoint);
-    auto tmlock = get_token_metadata_lock().get0();
-    auto tmptr = get_mutable_token_metadata_ptr().get0();
+    auto tmlock = co_await get_token_metadata_lock();
+    auto tmptr = co_await get_mutable_token_metadata_ptr();
     tmptr->remove_endpoint(endpoint);
-    update_pending_ranges(tmptr, format("on_remove {}", endpoint)).get();
-    replicate_to_all_cores(std::move(tmptr)).get();
+    co_await update_pending_ranges(tmptr, format("on_remove {}", endpoint));
+    co_await replicate_to_all_cores(std::move(tmptr));
 }
 
-void storage_service::on_dead(gms::inet_address endpoint, gms::endpoint_state state) {
+future<> storage_service::on_dead(gms::inet_address endpoint, gms::endpoint_state state) {
     slogger.debug("endpoint={} on_dead", endpoint);
     notify_down(endpoint);
+    return make_ready_future();
 }
 
-void storage_service::on_restart(gms::inet_address endpoint, gms::endpoint_state state) {
+future<> storage_service::on_restart(gms::inet_address endpoint, gms::endpoint_state state) {
     slogger.debug("endpoint={} on_restart", endpoint);
     // If we have restarted before the node was even marked down, we need to reset the connection pool
     if (state.is_alive()) {
-        on_dead(endpoint, state);
+        return on_dead(endpoint, state);
     }
+    return make_ready_future();
 }
 
 // Runs inside seastar::async context

@@ -3059,38 +3059,45 @@ class row_level_repair_gossip_helper : public gms::i_endpoint_state_change_subsc
             rlogger.warn("Failed to remove row level repair for node {}: {}", node, ep);
         }).get();
     }
-    virtual void on_join(
+    virtual future<> on_join(
             gms::inet_address endpoint,
             gms::endpoint_state ep_state) override {
+        return make_ready_future();
     }
-    virtual void before_change(
+    virtual future<> before_change(
             gms::inet_address endpoint,
             gms::endpoint_state current_state,
             gms::application_state new_state_key,
             const gms::versioned_value& new_value) override {
+        return make_ready_future();
     }
-    virtual void on_change(
+    virtual future<> on_change(
             gms::inet_address endpoint,
             gms::application_state state,
             const gms::versioned_value& value) override {
+        return make_ready_future();
     }
-    virtual void on_alive(
+    virtual future<> on_alive(
             gms::inet_address endpoint,
             gms::endpoint_state state) override {
+        return make_ready_future();
     }
-    virtual void on_dead(
+    virtual future<> on_dead(
             gms::inet_address endpoint,
             gms::endpoint_state state) override {
         remove_row_level_repair(endpoint);
+        return make_ready_future();
     }
-    virtual void on_remove(
+    virtual future<> on_remove(
             gms::inet_address endpoint) override {
         remove_row_level_repair(endpoint);
+        return make_ready_future();
     }
-    virtual void on_restart(
+    virtual future<> on_restart(
             gms::inet_address endpoint,
             gms::endpoint_state ep_state) override {
         remove_row_level_repair(endpoint);
+        return make_ready_future();
     }
 };
 

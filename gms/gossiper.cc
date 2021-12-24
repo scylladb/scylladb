@@ -106,19 +106,20 @@ class feature_enabler : public i_endpoint_state_change_subscriber {
     gossiper& _g;
 public:
     feature_enabler(gossiper& g) : _g(g) {}
-    void on_join(inet_address ep, endpoint_state state) override {
-        _g.maybe_enable_features().get();
+    future<> on_join(inet_address ep, endpoint_state state) override {
+        return _g.maybe_enable_features();
     }
-    void on_change(inet_address ep, application_state state, const versioned_value&) override {
+    future<> on_change(inet_address ep, application_state state, const versioned_value&) override {
         if (state == application_state::SUPPORTED_FEATURES) {
-            _g.maybe_enable_features().get();
+            return _g.maybe_enable_features();
         }
+        return make_ready_future();
     }
-    void before_change(inet_address, endpoint_state, application_state, const versioned_value&) override { }
-    void on_alive(inet_address, endpoint_state) override {}
-    void on_dead(inet_address, endpoint_state) override {}
-    void on_remove(inet_address) override {}
-    void on_restart(inet_address, endpoint_state) override {}
+    future<> before_change(inet_address, endpoint_state, application_state, const versioned_value&) override { return make_ready_future(); }
+    future<> on_alive(inet_address, endpoint_state) override { return make_ready_future(); }
+    future<> on_dead(inet_address, endpoint_state) override { return make_ready_future(); }
+    future<> on_remove(inet_address) override { return make_ready_future(); }
+    future<> on_restart(inet_address, endpoint_state) override { return make_ready_future(); }
 };
 
 gossiper::gossiper(abort_source& as, feature_service& features, const locator::shared_token_metadata& stm, netw::messaging_service& ms, db::config& cfg, gossip_config gcfg)
@@ -676,9 +677,9 @@ future<> gossiper::remove_endpoint(inet_address endpoint) {
     // We can not run on_remove callbacks here becasue on_remove in
     // storage_service might take the gossiper::timer_callback_lock
     (void)seastar::async([this, endpoint] {
-        _subscribers.thread_for_each([endpoint] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
-            subscriber->on_remove(endpoint);
-        });
+        _subscribers.for_each([endpoint] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
+            return subscriber->on_remove(endpoint);
+        }).get();
     }).handle_exception([] (auto ep) {
         logger.warn("Fail to call on_remove callback: {}", ep);
     });
@@ -1578,10 +1579,10 @@ void gossiper::real_mark_alive(inet_address addr, endpoint_state& local_state) {
         logger.info("InetAddress {} is now UP, status = {}", addr, status);
     }
 
-    _subscribers.thread_for_each([addr, state] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
-        subscriber->on_alive(addr, state);
+    _subscribers.for_each([addr, state] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) -> future<> {
+        co_await subscriber->on_alive(addr, state);
         logger.trace("Notified {}", fmt::ptr(subscriber.get()));
-    });
+    }).get();
 }
 
 // Runs inside seastar::async context
@@ -1593,10 +1594,10 @@ void gossiper::mark_dead(inet_address addr, endpoint_state& local_state) {
     update_live_endpoints_version().get();
     _unreachable_endpoints[addr] = now();
     logger.info("InetAddress {} is now DOWN, status = {}", addr, get_gossip_status(state));
-    _subscribers.thread_for_each([addr, state] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
-        subscriber->on_dead(addr, state);
+    _subscribers.for_each([addr, state] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) -> future<> {
+        co_await subscriber->on_dead(addr, state);
         logger.trace("Notified {}", fmt::ptr(subscriber.get()));
-    });
+    }).get();
 }
 
 // Runs inside seastar::async context
@@ -1625,9 +1626,9 @@ void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& 
 
     if (eps_old) {
         // the node restarted: it is up to the subscriber to take whatever action is necessary
-        _subscribers.thread_for_each([ep, eps_old] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
-            subscriber->on_restart(ep, *eps_old);
-        });
+        _subscribers.for_each([ep, eps_old] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
+            return subscriber->on_restart(ep, *eps_old);
+        }).get();
     }
 
     auto& ep_state = endpoint_state_map.at(ep);
@@ -1640,9 +1641,9 @@ void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& 
 
     auto* eps_new = get_endpoint_state_for_endpoint_ptr(ep);
     if (eps_new) {
-        _subscribers.thread_for_each([ep, eps_new] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
-            subscriber->on_join(ep, *eps_new);
-        });
+        _subscribers.for_each([ep, eps_new] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
+            return subscriber->on_join(ep, *eps_new);
+        }).get();
     }
     // check this at the end so nodes will learn about the endpoint
     if (is_shutdown(ep)) {
@@ -1742,16 +1743,16 @@ void gossiper::apply_new_states(inet_address addr, endpoint_state& local_state, 
 
 // Runs inside seastar::async context
 void gossiper::do_before_change_notifications(inet_address addr, const endpoint_state& ep_state, const application_state& ap_state, const versioned_value& new_value) {
-    _subscribers.thread_for_each([addr, ep_state, ap_state, new_value] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
-        subscriber->before_change(addr, ep_state, ap_state, new_value);
-    });
+    _subscribers.for_each([addr, ep_state, ap_state, new_value] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
+        return subscriber->before_change(addr, ep_state, ap_state, new_value);
+    }).get();
 }
 
 // Runs inside seastar::async context
 void gossiper::do_on_change_notifications(inet_address addr, const application_state& state, const versioned_value& value) {
-    _subscribers.thread_for_each([addr, state, value] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
-        subscriber->on_change(addr, state, value);
-    });
+    _subscribers.for_each([addr, state, value] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
+        return subscriber->on_change(addr, state, value);
+    }).get();
 }
 
 void gossiper::request_all(gossip_digest& g_digest,

@@ -261,37 +261,43 @@ void reconnectable_snitch_helper::reconnect(gms::inet_address public_address, gm
 reconnectable_snitch_helper::reconnectable_snitch_helper(sstring local_dc)
         : _local_dc(local_dc) {}
 
-void reconnectable_snitch_helper::before_change(gms::inet_address endpoint, gms::endpoint_state cs, gms::application_state new_state_key, const gms::versioned_value& new_value) {
+future<> reconnectable_snitch_helper::before_change(gms::inet_address endpoint, gms::endpoint_state cs, gms::application_state new_state_key, const gms::versioned_value& new_value) {
     // do nothing.
+    return make_ready_future();
 }
 
-void reconnectable_snitch_helper::on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) {
+future<> reconnectable_snitch_helper::on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) {
     auto* internal_ip_state = ep_state.get_application_state_ptr(gms::application_state::INTERNAL_IP);
     if (internal_ip_state) {
         reconnect(endpoint, *internal_ip_state);
     }
+    return make_ready_future();
 }
 
-void reconnectable_snitch_helper::on_change(gms::inet_address endpoint, gms::application_state state, const gms::versioned_value& value) {
+future<> reconnectable_snitch_helper::on_change(gms::inet_address endpoint, gms::application_state state, const gms::versioned_value& value) {
     if (state == gms::application_state::INTERNAL_IP) {
         reconnect(endpoint, value);
     }
+    return make_ready_future();
 }
 
-void reconnectable_snitch_helper::on_alive(gms::inet_address endpoint, gms::endpoint_state ep_state) {
-    on_join(std::move(endpoint), std::move(ep_state));
+future<> reconnectable_snitch_helper::on_alive(gms::inet_address endpoint, gms::endpoint_state ep_state) {
+    return on_join(std::move(endpoint), std::move(ep_state));
 }
 
-void reconnectable_snitch_helper::on_dead(gms::inet_address endpoint, gms::endpoint_state ep_state) {
+future<> reconnectable_snitch_helper::on_dead(gms::inet_address endpoint, gms::endpoint_state ep_state) {
     // do nothing.
+    return make_ready_future();
 }
 
-void reconnectable_snitch_helper::on_remove(gms::inet_address endpoint) {
+future<> reconnectable_snitch_helper::on_remove(gms::inet_address endpoint) {
     // do nothing.
+    return make_ready_future();
 }
 
-void reconnectable_snitch_helper::on_restart(gms::inet_address endpoint, gms::endpoint_state state) {
+future<> reconnectable_snitch_helper::on_restart(gms::inet_address endpoint, gms::endpoint_state state) {
     // do nothing.
+    return make_ready_future();
 }
 
 } // namespace locator

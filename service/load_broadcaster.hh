@@ -66,29 +66,32 @@ public:
         assert(_stopped);
     }
 
-    virtual void on_change(gms::inet_address endpoint, gms::application_state state, const gms::versioned_value& value) override {
+    virtual future<> on_change(gms::inet_address endpoint, gms::application_state state, const gms::versioned_value& value) override {
         if (state == gms::application_state::LOAD) {
             _load_info[endpoint] = std::stod(value.value);
         }
+        return make_ready_future();
     }
 
-    virtual void on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) override {
+    virtual future<> on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) override {
         auto* local_value = ep_state.get_application_state_ptr(gms::application_state::LOAD);
         if (local_value) {
-            on_change(endpoint, gms::application_state::LOAD, *local_value);
+            return on_change(endpoint, gms::application_state::LOAD, *local_value);
         }
+        return make_ready_future();
     }
     
-    virtual void before_change(gms::inet_address endpoint, gms::endpoint_state current_state, gms::application_state new_state_key, const gms::versioned_value& newValue) override {}
+    virtual future<> before_change(gms::inet_address endpoint, gms::endpoint_state current_state, gms::application_state new_state_key, const gms::versioned_value& newValue) override { return make_ready_future(); }
 
-    void on_alive(gms::inet_address endpoint, gms::endpoint_state) override {}
+    future<> on_alive(gms::inet_address endpoint, gms::endpoint_state) override { return make_ready_future(); }
 
-    void on_dead(gms::inet_address endpoint, gms::endpoint_state) override {}
+    future<> on_dead(gms::inet_address endpoint, gms::endpoint_state) override { return make_ready_future(); }
 
-    void on_restart(gms::inet_address endpoint, gms::endpoint_state) override {}
+    future<> on_restart(gms::inet_address endpoint, gms::endpoint_state) override { return make_ready_future(); }
 
-    virtual void on_remove(gms::inet_address endpoint) override {
+    virtual future<> on_remove(gms::inet_address endpoint) override {
         _load_info.erase(endpoint);
+        return make_ready_future();
     }
 
     const std::unordered_map<gms::inet_address, double> get_load_info() const {

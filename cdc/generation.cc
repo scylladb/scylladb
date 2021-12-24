@@ -733,28 +733,28 @@ future<> generation_service::after_join(std::optional<cdc::generation_id>&& star
     _cdc_streams_rewrite_complete = maybe_rewrite_streams_descriptions();
 }
 
-void generation_service::on_join(gms::inet_address ep, gms::endpoint_state ep_state) {
+future<> generation_service::on_join(gms::inet_address ep, gms::endpoint_state ep_state) {
     assert_shard_zero(__PRETTY_FUNCTION__);
 
     auto val = ep_state.get_application_state_ptr(gms::application_state::CDC_GENERATION_ID);
     if (!val) {
-        return;
+        return make_ready_future();
     }
 
-    on_change(ep, gms::application_state::CDC_GENERATION_ID, *val);
+    return on_change(ep, gms::application_state::CDC_GENERATION_ID, *val);
 }
 
-void generation_service::on_change(gms::inet_address ep, gms::application_state app_state, const gms::versioned_value& v) {
+future<> generation_service::on_change(gms::inet_address ep, gms::application_state app_state, const gms::versioned_value& v) {
     assert_shard_zero(__PRETTY_FUNCTION__);
 
     if (app_state != gms::application_state::CDC_GENERATION_ID) {
-        return;
+        return make_ready_future();
     }
 
     auto gen_id = gms::versioned_value::cdc_generation_id_from_string(v.value);
     cdc_log.debug("Endpoint: {}, CDC generation ID change: {}", ep, gen_id);
 
-    handle_cdc_generation(gen_id).get();
+    return handle_cdc_generation(gen_id);
 }
 
 future<> generation_service::check_and_repair_cdc_streams() {
