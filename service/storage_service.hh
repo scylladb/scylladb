@@ -626,7 +626,8 @@ private:
      */
     void handle_state_replacing(inet_address endpoint);
 
-    void handle_state_replacing_update_pending_ranges(mutable_token_metadata_ptr tmptr, inet_address replacing_node);
+    future<>
+    handle_state_replacing_update_pending_ranges(mutable_token_metadata_ptr tmptr, inet_address replacing_node);
 
 private:
     void excise(std::unordered_set<token> tokens, inet_address endpoint);

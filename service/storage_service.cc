@@ -785,17 +785,17 @@ storage_service::get_range_to_address_map(const sstring& keyspace,
     return construct_range_to_endpoint_map(ks, get_all_ranges(sorted_tokens));
 }
 
-void storage_service::handle_state_replacing_update_pending_ranges(mutable_token_metadata_ptr tmptr, inet_address replacing_node) {
+future<> storage_service::handle_state_replacing_update_pending_ranges(mutable_token_metadata_ptr tmptr, inet_address replacing_node) {
     try {
         slogger.info("handle_state_replacing: Waiting for replacing node {} to be alive on all shards", replacing_node);
-        _gossiper.wait_alive({replacing_node}, std::chrono::milliseconds(5 * 1000)).get();
+        co_await _gossiper.wait_alive({replacing_node}, std::chrono::milliseconds(5 * 1000));
         slogger.info("handle_state_replacing: Replacing node {} is now alive on all shards", replacing_node);
     } catch (...) {
         slogger.warn("handle_state_replacing: Failed to wait for replacing node {} to be alive on all shards: {}",
                 replacing_node, std::current_exception());
     }
     slogger.info("handle_state_replacing: Update pending ranges for replacing node {}", replacing_node);
-    update_pending_ranges(tmptr, format("handle_state_replacing {}", replacing_node)).get();
+    co_await update_pending_ranges(tmptr, format("handle_state_replacing {}", replacing_node));
 }
 
 void storage_service::handle_state_replacing(inet_address replacing_node) {
@@ -820,7 +820,7 @@ void storage_service::handle_state_replacing(inet_address replacing_node) {
     tmptr->add_replacing_endpoint(existing_node, replacing_node);
     if (_gossiper.is_alive(replacing_node)) {
         slogger.info("handle_state_replacing: Replacing node {} is already alive, update pending ranges", replacing_node);
-        handle_state_replacing_update_pending_ranges(tmptr, replacing_node);
+        handle_state_replacing_update_pending_ranges(tmptr, replacing_node).get();
     } else {
         slogger.info("handle_state_replacing: Replacing node {} is not alive yet, delay update pending ranges", replacing_node);
         _replacing_nodes_pending_ranges_updater.insert(replacing_node);
@@ -1130,7 +1130,7 @@ future<> storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_sta
         slogger.info("Trigger pending ranges updater for replacing node {}", endpoint);
         auto tmlock = co_await get_token_metadata_lock();
         auto tmptr = co_await get_mutable_token_metadata_ptr();
-        handle_state_replacing_update_pending_ranges(tmptr, endpoint);
+        co_await handle_state_replacing_update_pending_ranges(tmptr, endpoint);
         co_await replicate_to_all_cores(std::move(tmptr));
     }
 }
