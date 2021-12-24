@@ -1841,38 +1841,38 @@ void gossiper::examine_gossiper(utils::chunked_vector<gossip_digest>& g_digest_l
 }
 
 future<> gossiper::start_gossiping(int generation_nbr, std::map<application_state, versioned_value> preload_local_states, gms::advertise_myself advertise) {
-    return container().invoke_on_all([advertise] (gossiper& g) {
+    co_await container().invoke_on_all([advertise] (gossiper& g) {
         if (!advertise) {
             g._advertise_myself = false;
         }
-    }).then([this, generation_nbr, preload_local_states] () mutable {
-        build_seeds_list();
-        if (_cfg.force_gossip_generation() > 0) {
-            generation_nbr = _cfg.force_gossip_generation();
-            logger.warn("Use the generation number provided by user: generation = {}", generation_nbr);
-        }
-        endpoint_state& local_state = endpoint_state_map[get_broadcast_address()];
-        local_state.set_heart_beat_state_and_update_timestamp(heart_beat_state(generation_nbr));
-        local_state.mark_alive();
-        for (auto& entry : preload_local_states) {
-            local_state.add_application_state(entry.first, entry.second);
-        }
+    });
 
-        auto generation = local_state.get_heart_beat_state().get_generation();
+    build_seeds_list();
+    if (_cfg.force_gossip_generation() > 0) {
+        generation_nbr = _cfg.force_gossip_generation();
+        logger.warn("Use the generation number provided by user: generation = {}", generation_nbr);
+    }
+    endpoint_state& local_state = endpoint_state_map[get_broadcast_address()];
+    local_state.set_heart_beat_state_and_update_timestamp(heart_beat_state(generation_nbr));
+    local_state.mark_alive();
+    for (auto& entry : preload_local_states) {
+        local_state.add_application_state(entry.first, entry.second);
+    }
 
-        return replicate(get_broadcast_address(), local_state).then([] {
-            //notify snitches that Gossiper is about to start
-            return locator::i_endpoint_snitch::get_local_snitch_ptr()->gossiper_starting();
-        }).then([this, generation] {
-            logger.trace("gossip started with generation {}", generation);
-            _enabled = true;
-            _nr_run = 0;
-            _scheduled_gossip_task.arm(INTERVAL);
-            return container().invoke_on_all([] (gms::gossiper& g) {
-                g._enabled = true;
-                g._failure_detector_loop_done = g.failure_detector_loop();
-            });
-        });
+    auto generation = local_state.get_heart_beat_state().get_generation();
+
+    co_await replicate(get_broadcast_address(), local_state);
+
+    //notify snitches that Gossiper is about to start
+    co_await locator::i_endpoint_snitch::get_local_snitch_ptr()->gossiper_starting();
+
+    logger.trace("gossip started with generation {}", generation);
+    _enabled = true;
+    _nr_run = 0;
+    _scheduled_gossip_task.arm(INTERVAL);
+    co_await container().invoke_on_all([] (gms::gossiper& g) {
+        g._enabled = true;
+        g._failure_detector_loop_done = g.failure_detector_loop();
     });
 }
 
