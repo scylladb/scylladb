@@ -230,11 +230,11 @@ logging::logger& reconnectable_snitch_helper::logger() {
 }
 
 
-void reconnectable_snitch_helper::reconnect(gms::inet_address public_address, const gms::versioned_value& local_address_value) {
-    reconnect(public_address, gms::inet_address(local_address_value.value));
+future<> reconnectable_snitch_helper::reconnect(gms::inet_address public_address, const gms::versioned_value& local_address_value) {
+    return reconnect(public_address, gms::inet_address(local_address_value.value));
 }
 
-void reconnectable_snitch_helper::reconnect(gms::inet_address public_address, gms::inet_address local_address) {
+future<> reconnectable_snitch_helper::reconnect(gms::inet_address public_address, gms::inet_address local_address) {
     netw::messaging_service& ms = gms::get_local_gossiper().get_local_messaging();
     auto& sn_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
 
@@ -243,16 +243,16 @@ void reconnectable_snitch_helper::reconnect(gms::inet_address public_address, gm
         //
         // First, store the local address in the system_table...
         //
-        db::system_keyspace::update_preferred_ip(public_address, local_address).get();
+        co_await db::system_keyspace::update_preferred_ip(public_address, local_address);
 
         //
         // ...then update messaging_service cache and reset the currently
         // open connections to this endpoint on all shards...
         //
-        ms.container().invoke_on_all([public_address, local_address] (auto& local_ms) {
+        co_await ms.container().invoke_on_all([public_address, local_address] (auto& local_ms) {
             local_ms.cache_preferred_ip(public_address, local_address);
             local_ms.remove_rpc_client(netw::msg_addr(public_address));
-        }).get();
+        });
 
         logger().debug("Initiated reconnect to an Internal IP {} for the {}", local_address, public_address);
     }
@@ -269,14 +269,14 @@ future<> reconnectable_snitch_helper::before_change(gms::inet_address endpoint, 
 future<> reconnectable_snitch_helper::on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) {
     auto* internal_ip_state = ep_state.get_application_state_ptr(gms::application_state::INTERNAL_IP);
     if (internal_ip_state) {
-        reconnect(endpoint, *internal_ip_state);
+        return reconnect(endpoint, *internal_ip_state);
     }
     return make_ready_future();
 }
 
 future<> reconnectable_snitch_helper::on_change(gms::inet_address endpoint, gms::application_state state, const gms::versioned_value& value) {
     if (state == gms::application_state::INTERNAL_IP) {
-        reconnect(endpoint, value);
+        return reconnect(endpoint, value);
     }
     return make_ready_future();
 }

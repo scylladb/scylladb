@@ -48,8 +48,8 @@ private:
     static logging::logger& logger();
     sstring _local_dc;
 private:
-    void reconnect(gms::inet_address public_address, const gms::versioned_value& local_address_value);
-    void reconnect(gms::inet_address public_address, gms::inet_address local_address);
+    future<> reconnect(gms::inet_address public_address, const gms::versioned_value& local_address_value);
+    future<> reconnect(gms::inet_address public_address, gms::inet_address local_address);
 public:
     reconnectable_snitch_helper(sstring local_dc);
     future<> before_change(gms::inet_address endpoint, gms::endpoint_state cs, gms::application_state new_state_key, const gms::versioned_value& new_value) override;
