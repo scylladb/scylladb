@@ -662,7 +662,7 @@ future<> gossiper::force_remove_endpoint(inet_address endpoint) {
     }
     return container().invoke_on(0, [endpoint] (auto& gossiper) mutable {
         return seastar::async([&gossiper, g = gossiper.shared_from_this(), endpoint] () mutable {
-            gossiper.remove_endpoint(endpoint);
+            gossiper.remove_endpoint(endpoint).get();
             gossiper.evict_from_membership(endpoint).get();
             logger.info("Finished to force remove node {}", endpoint);
         }).handle_exception([endpoint] (auto ep) {
@@ -671,8 +671,7 @@ future<> gossiper::force_remove_endpoint(inet_address endpoint) {
     });
 }
 
-// Runs inside seastar::async context
-void gossiper::remove_endpoint(inet_address endpoint) {
+future<> gossiper::remove_endpoint(inet_address endpoint) {
     // do subscribers first so anything in the subscriber that depends on gossiper state won't get confused
     // We can not run on_remove callbacks here becasue on_remove in
     // storage_service might take the gossiper::timer_callback_lock
@@ -691,7 +690,7 @@ void gossiper::remove_endpoint(inet_address endpoint) {
     }
 
     _live_endpoints.resize(std::distance(_live_endpoints.begin(), std::remove(_live_endpoints.begin(), _live_endpoints.end(), endpoint)));
-    update_live_endpoints_version().get();
+    co_await update_live_endpoints_version();
     _unreachable_endpoints.erase(endpoint);
     _syn_handlers.erase(endpoint);
     _ack_handlers.erase(endpoint);
@@ -721,7 +720,7 @@ void gossiper::do_status_check() {
             && !_just_removed_endpoints.contains(endpoint)
             && ((now - ep_state.get_update_timestamp()) > fat_client_timeout)) {
             logger.info("FatClient {} has been silent for {}ms, removing from gossip", endpoint, fat_client_timeout.count());
-            remove_endpoint(endpoint); // will put it in _just_removed_endpoints to respect quarantine delay
+            remove_endpoint(endpoint).get(); // will put it in _just_removed_endpoints to respect quarantine delay
             evict_from_membership(endpoint).get(); // can get rid of the state immediately
         }
 

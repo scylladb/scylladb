@@ -1541,7 +1541,7 @@ future<> storage_service::check_for_endpoint_collision(std::unordered_set<gms::i
 
 // Runs inside seastar::async context
 void storage_service::remove_endpoint(inet_address endpoint) {
-    _gossiper.remove_endpoint(endpoint);
+    _gossiper.remove_endpoint(endpoint).get();
     db::system_keyspace::remove_endpoint(endpoint).then_wrapped([endpoint] (auto&& f) {
         try {
             f.get();
