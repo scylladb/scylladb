@@ -660,14 +660,14 @@ future<> gossiper::force_remove_endpoint(inet_address endpoint) {
     if (endpoint == get_broadcast_address()) {
         return make_exception_future<>(std::runtime_error(format("Can not force remove node {} itself", endpoint)));
     }
-    return container().invoke_on(0, [endpoint] (auto& gossiper) mutable {
-        return seastar::async([&gossiper, g = gossiper.shared_from_this(), endpoint] () mutable {
-            gossiper.remove_endpoint(endpoint).get();
-            gossiper.evict_from_membership(endpoint).get();
+    return container().invoke_on(0, [endpoint] (auto& gossiper) mutable -> future<> {
+        try {
+            co_await gossiper.remove_endpoint(endpoint);
+            co_await gossiper.evict_from_membership(endpoint);
             logger.info("Finished to force remove node {}", endpoint);
-        }).handle_exception([endpoint] (auto ep) {
-            logger.warn("Failed to force remove node {}: {}", endpoint, ep);
-        });
+        } catch (...) {
+            logger.warn("Failed to force remove node {}: {}", endpoint, std::current_exception());
+        }
     });
 }
 
