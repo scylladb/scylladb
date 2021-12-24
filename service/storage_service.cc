@@ -967,7 +967,7 @@ void storage_service::handle_state_normal(inet_address endpoint) {
 
     // Send joined notification only when this node was not a member prior to this
     if (!is_member) {
-        notify_joined(endpoint);
+        notify_joined(endpoint).get();
     }
 
     if (slogger.is_enabled(logging::log_level::debug)) {
@@ -1123,7 +1123,7 @@ future<> storage_service::on_join(gms::inet_address endpoint, gms::endpoint_stat
 future<> storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_state state) {
     slogger.debug("endpoint={} on_alive", endpoint);
     if (get_token_metadata().is_member(endpoint)) {
-        notify_up(endpoint);
+        co_await notify_up(endpoint);
     }
     if (_replacing_nodes_pending_ranges_updater.contains(endpoint)) {
         _replacing_nodes_pending_ranges_updater.erase(endpoint);
@@ -1179,7 +1179,7 @@ future<> storage_service::on_change(inet_address endpoint, application_state sta
             do_update_system_peers_table(endpoint, state, value);
             if (state == application_state::RPC_READY) {
                 slogger.debug("Got application_state::RPC_READY for node {}, is_cql_ready={}", endpoint, ep_state->is_cql_ready());
-                notify_cql_change(endpoint, ep_state->is_cql_ready());
+                co_await notify_cql_change(endpoint, ep_state->is_cql_ready());
             }
         }
     }
@@ -1197,8 +1197,7 @@ future<> storage_service::on_remove(gms::inet_address endpoint) {
 
 future<> storage_service::on_dead(gms::inet_address endpoint, gms::endpoint_state state) {
     slogger.debug("endpoint={} on_dead", endpoint);
-    notify_down(endpoint);
-    return make_ready_future();
+    return notify_down(endpoint);
 }
 
 future<> storage_service::on_restart(gms::inet_address endpoint, gms::endpoint_state state) {
@@ -2933,7 +2932,7 @@ void storage_service::excise(std::unordered_set<token> tokens, inet_address endp
     replicate_to_all_cores(std::move(tmptr)).get();
     tmlock.reset();
 
-    notify_left(endpoint);
+    notify_left(endpoint).get();
 }
 
 void storage_service::excise(std::unordered_set<token> tokens, inet_address endpoint, int64_t expire_time) {
@@ -3488,11 +3487,11 @@ future<> endpoint_lifecycle_notifier::notify_down(gms::inet_address endpoint) {
     });
 }
 
-void storage_service::notify_down(inet_address endpoint) {
-    container().invoke_on_all([endpoint] (auto&& ss) {
+future<> storage_service::notify_down(inet_address endpoint) {
+    co_await container().invoke_on_all([endpoint] (auto&& ss) {
         ss._messaging.local().remove_rpc_client(netw::msg_addr{endpoint, 0});
         return ss._lifecycle_notifier.notify_down(endpoint);
-    }).get();
+    });
     slogger.debug("Notify node {} has been down", endpoint);
 }
 
@@ -3508,10 +3507,10 @@ future<> endpoint_lifecycle_notifier::notify_left(gms::inet_address endpoint) {
     });
 }
 
-void storage_service::notify_left(inet_address endpoint) {
-    container().invoke_on_all([endpoint] (auto&& ss) {
+future<> storage_service::notify_left(inet_address endpoint) {
+    co_await container().invoke_on_all([endpoint] (auto&& ss) {
         return ss._lifecycle_notifier.notify_left(endpoint);
-    }).get();
+    });
     slogger.debug("Notify node {} has left the cluster", endpoint);
 }
 
@@ -3527,14 +3526,13 @@ future<> endpoint_lifecycle_notifier::notify_up(gms::inet_address endpoint) {
     });
 }
 
-void storage_service::notify_up(inet_address endpoint)
-{
+future<> storage_service::notify_up(inet_address endpoint) {
     if (!_gossiper.is_cql_ready(endpoint) || !_gossiper.is_alive(endpoint)) {
-        return;
+        co_return;
     }
-    container().invoke_on_all([endpoint] (auto&& ss) {
+    co_await container().invoke_on_all([endpoint] (auto&& ss) {
         return ss._lifecycle_notifier.notify_up(endpoint);
-    }).get();
+    });
     slogger.debug("Notify node {} has been up", endpoint);
 }
 
@@ -3550,24 +3548,22 @@ future<> endpoint_lifecycle_notifier::notify_joined(gms::inet_address endpoint) 
     });
 }
 
-void storage_service::notify_joined(inet_address endpoint)
-{
+future<> storage_service::notify_joined(inet_address endpoint) {
     if (!_gossiper.is_normal(endpoint)) {
-        return;
+        co_return;
     }
 
-    container().invoke_on_all([endpoint] (auto&& ss) {
+    co_await container().invoke_on_all([endpoint] (auto&& ss) {
         return ss._lifecycle_notifier.notify_joined(endpoint);
-    }).get();
+    });
     slogger.debug("Notify node {} has joined the cluster", endpoint);
 }
 
-void storage_service::notify_cql_change(inet_address endpoint, bool ready)
-{
+future<> storage_service::notify_cql_change(inet_address endpoint, bool ready) {
     if (ready) {
-        notify_up(endpoint);
+        co_await notify_up(endpoint);
     } else {
-        notify_down(endpoint);
+        co_await notify_down(endpoint);
     }
 }
 

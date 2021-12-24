@@ -843,11 +843,11 @@ private:
     void do_isolate_on_error(disk_error type);
     future<> isolate();
 
-    void notify_down(inet_address endpoint);
-    void notify_left(inet_address endpoint);
-    void notify_up(inet_address endpoint);
-    void notify_joined(inet_address endpoint);
-    void notify_cql_change(inet_address endpoint, bool ready);
+    future<> notify_down(inet_address endpoint);
+    future<> notify_left(inet_address endpoint);
+    future<> notify_up(inet_address endpoint);
+    future<> notify_joined(inet_address endpoint);
+    future<> notify_cql_change(inet_address endpoint, bool ready);
 public:
     future<bool> is_cleanup_allowed(sstring keyspace);
     bool is_repair_based_node_ops_enabled(streaming::stream_reason reason);
