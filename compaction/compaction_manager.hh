@@ -195,7 +195,7 @@ private:
     // Compaction manager stop itself if it finds an storage I/O error which results in
     // stop of transportation services. It cannot make progress anyway.
     // Returns true if error is judged not fatal, and compaction can be retried.
-    inline bool maybe_stop_on_error(future<> f, stop_iteration will_stop = stop_iteration::no);
+    inline bool maybe_stop_on_error(std::exception_ptr err, bool can_retry);
 
     void postponed_compactions_reevaluation();
     void reevaluate_postponed_compactions();

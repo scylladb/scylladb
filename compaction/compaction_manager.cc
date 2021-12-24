@@ -635,11 +635,11 @@ inline future<> compaction_manager::put_task_to_sleep(lw_shared_ptr<task>& task)
     return task->compaction_retry.retry();
 }
 
-inline bool compaction_manager::maybe_stop_on_error(future<> f, stop_iteration will_stop) {
+inline bool compaction_manager::maybe_stop_on_error(std::exception_ptr err, bool can_retry) {
     bool retry = false;
 
     try {
-        f.get();
+        std::rethrow_exception(err);
     } catch (sstables::compaction_stopped_exception& e) {
         cmlog.info("compaction info: {}: stopping", e.what());
     } catch (sstables::compaction_aborted_exception& e) {
@@ -651,7 +651,7 @@ inline bool compaction_manager::maybe_stop_on_error(future<> f, stop_iteration w
         do_stop();
     } catch (...) {
         _stats.errors++;
-        retry = (will_stop == stop_iteration::no);
+        retry = can_retry;
         cmlog.error("compaction failed: {}: {}", std::current_exception(), retry ? "retrying" : "stopping");
     }
     return retry;
@@ -706,15 +706,15 @@ void compaction_manager::submit(table* t) {
                 _stats.active_tasks--;
                 task->finish_compaction();
 
-                if (!can_proceed(task)) {
-                    maybe_stop_on_error(std::move(f), stop_iteration::yes);
+                if (f.failed()) {
+                    auto ex = f.get_exception();
+                    if (maybe_stop_on_error(std::move(ex), can_proceed(task))) {
+                        _stats.pending_tasks++;
+                        return put_task_to_sleep(task).then([] {
+                            return make_ready_future<stop_iteration>(stop_iteration::no);
+                        });
+                    }
                     return make_ready_future<stop_iteration>(stop_iteration::yes);
-                }
-                if (maybe_stop_on_error(std::move(f))) {
-                    _stats.pending_tasks++;
-                    return put_task_to_sleep(task).then([] {
-                        return make_ready_future<stop_iteration>(stop_iteration::no);
-                    });
                 }
                 _stats.pending_tasks++;
                 _stats.completed_tasks++;
@@ -838,15 +838,15 @@ future<> compaction_manager::rewrite_sstables(table* t, sstables::compaction_typ
             }).then_wrapped([this, task] (future<> f) mutable {
                 task->finish_compaction();
                 _stats.active_tasks--;
-                if (!can_proceed(task)) {
-                    maybe_stop_on_error(std::move(f), stop_iteration::yes);
+                if (f.failed()) {
+                    auto ex = f.get_exception();
+                    if (maybe_stop_on_error(std::move(ex), can_proceed(task))) {
+                        _stats.pending_tasks++;
+                        return put_task_to_sleep(task).then([] {
+                            return make_ready_future<stop_iteration>(stop_iteration::no);
+                        });
+                    }
                     return make_ready_future<stop_iteration>(stop_iteration::yes);
-                }
-                if (maybe_stop_on_error(std::move(f))) {
-                    _stats.pending_tasks++;
-                    return put_task_to_sleep(task).then([] {
-                        return make_ready_future<stop_iteration>(stop_iteration::no);
-                    });
                 }
                 _stats.completed_tasks++;
                 reevaluate_postponed_compactions();
