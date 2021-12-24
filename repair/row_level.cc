@@ -3049,15 +3049,16 @@ future<> shutdown_all_row_level_repair() {
 }
 
 class row_level_repair_gossip_helper : public gms::i_endpoint_state_change_subscriber {
-    void remove_row_level_repair(gms::inet_address node) {
+    future<> remove_row_level_repair(gms::inet_address node) {
         rlogger.debug("Started to remove row level repair on all shards for node {}", node);
-        smp::invoke_on_all([node] {
-            return repair_meta::remove_repair_meta(node);
-        }).then([node] {
+        try {
+            co_await smp::invoke_on_all([node] {
+                return repair_meta::remove_repair_meta(node);
+            });
             rlogger.debug("Finished to remove row level repair on all shards for node {}", node);
-        }).handle_exception([node] (std::exception_ptr ep) {
-            rlogger.warn("Failed to remove row level repair for node {}: {}", node, ep);
-        }).get();
+        } catch(...) {
+            rlogger.warn("Failed to remove row level repair for node {}: {}", node, std::current_exception());
+        }
     }
     virtual future<> on_join(
             gms::inet_address endpoint,
@@ -3085,19 +3086,16 @@ class row_level_repair_gossip_helper : public gms::i_endpoint_state_change_subsc
     virtual future<> on_dead(
             gms::inet_address endpoint,
             gms::endpoint_state state) override {
-        remove_row_level_repair(endpoint);
-        return make_ready_future();
+        return remove_row_level_repair(endpoint);
     }
     virtual future<> on_remove(
             gms::inet_address endpoint) override {
-        remove_row_level_repair(endpoint);
-        return make_ready_future();
+        return remove_row_level_repair(endpoint);
     }
     virtual future<> on_restart(
             gms::inet_address endpoint,
             gms::endpoint_state ep_state) override {
-        remove_row_level_repair(endpoint);
-        return make_ready_future();
+        return remove_row_level_repair(endpoint);
     }
 };
 
