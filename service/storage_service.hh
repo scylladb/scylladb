@@ -578,7 +578,7 @@ private:
      *
      * @param endpoint bootstrapping node
      */
-    void handle_state_bootstrap(inet_address endpoint);
+    future<> handle_state_bootstrap(inet_address endpoint);
 
     /**
      * Handle node move to normal state. That is, node is entering token ring and participating

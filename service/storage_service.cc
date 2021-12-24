@@ -828,7 +828,7 @@ void storage_service::handle_state_replacing(inet_address replacing_node) {
     replicate_to_all_cores(std::move(tmptr)).get();
 }
 
-void storage_service::handle_state_bootstrap(inet_address endpoint) {
+future<> storage_service::handle_state_bootstrap(inet_address endpoint) {
     slogger.debug("endpoint={} handle_state_bootstrap", endpoint);
     // explicitly check for TOKENS, because a bootstrapping node might be bootstrapping in legacy mode; that is, not using vnodes and no token specified
     auto tokens = get_tokens_for(endpoint);
@@ -838,8 +838,8 @@ void storage_service::handle_state_bootstrap(inet_address endpoint) {
     // if this node is present in token metadata, either we have missed intermediate states
     // or the node had crashed. Print warning if needed, clear obsolete stuff and
     // continue.
-    auto tmlock = get_token_metadata_lock().get0();
-    auto tmptr = get_mutable_token_metadata_ptr().get0();
+    auto tmlock = co_await get_token_metadata_lock();
+    auto tmptr = co_await get_mutable_token_metadata_ptr();
     if (tmptr->is_member(endpoint)) {
         // If isLeaving is false, we have missed both LEAVING and LEFT. However, if
         // isLeaving is true, we have only missed LEFT. Waiting time between completing
@@ -856,8 +856,8 @@ void storage_service::handle_state_bootstrap(inet_address endpoint) {
     if (_gossiper.uses_host_id(endpoint)) {
         tmptr->update_host_id(_gossiper.get_host_id(endpoint), endpoint);
     }
-    update_pending_ranges(tmptr, format("handle_state_bootstrap {}", endpoint)).get();
-    replicate_to_all_cores(std::move(tmptr)).get();
+    co_await update_pending_ranges(tmptr, format("handle_state_bootstrap {}", endpoint));
+    co_await replicate_to_all_cores(std::move(tmptr));
 }
 
 void storage_service::handle_state_normal(inet_address endpoint) {
@@ -1151,7 +1151,7 @@ future<> storage_service::on_change(inet_address endpoint, application_state sta
         }
         sstring move_name = pieces[0];
         if (move_name == sstring(versioned_value::STATUS_BOOTSTRAPPING)) {
-            handle_state_bootstrap(endpoint);
+            co_await handle_state_bootstrap(endpoint);
         } else if (move_name == sstring(versioned_value::STATUS_NORMAL) ||
                    move_name == sstring(versioned_value::SHUTDOWN)) {
             handle_state_normal(endpoint);
