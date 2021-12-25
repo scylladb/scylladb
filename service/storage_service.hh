@@ -600,7 +600,7 @@ private:
      * @param endpoint If reason for leaving is decommission, endpoint is the leaving node.
      * @param pieces STATE_LEFT,token
      */
-    void handle_state_left(inet_address endpoint, std::vector<sstring> pieces);
+    future<> handle_state_left(inet_address endpoint, std::vector<sstring> pieces);
 
     /**
      * Handle node moving inside the ring.

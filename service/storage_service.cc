@@ -1012,11 +1012,11 @@ future<> storage_service::handle_state_leaving(inet_address endpoint) {
     co_await replicate_to_all_cores(std::move(tmptr));
 }
 
-void storage_service::handle_state_left(inet_address endpoint, std::vector<sstring> pieces) {
+future<> storage_service::handle_state_left(inet_address endpoint, std::vector<sstring> pieces) {
     slogger.debug("endpoint={} handle_state_left", endpoint);
     if (pieces.size() < 2) {
         slogger.warn("Fail to handle_state_left endpoint={} pieces={}", endpoint, pieces);
-        return;
+        co_return;
     }
     auto tokens = get_tokens_for(endpoint);
     slogger.debug("Node {} state left, tokens {}", endpoint, tokens);
@@ -1031,7 +1031,7 @@ void storage_service::handle_state_left(inet_address endpoint, std::vector<sstri
         slogger.warn("handle_state_left: Get tokens from token_metadata, node={}, tokens={}", endpoint, tokens_from_tm);
         tokens = std::unordered_set<dht::token>(tokens_from_tm.begin(), tokens_from_tm.end());
     }
-    excise(tokens, endpoint, extract_expire_time(pieces)).get();
+    co_await excise(tokens, endpoint, extract_expire_time(pieces));
 }
 
 void storage_service::handle_state_moving(inet_address endpoint, std::vector<sstring> pieces) {
@@ -1158,7 +1158,7 @@ future<> storage_service::on_change(inet_address endpoint, application_state sta
         } else if (move_name == sstring(versioned_value::STATUS_LEAVING)) {
             co_await handle_state_leaving(endpoint);
         } else if (move_name == sstring(versioned_value::STATUS_LEFT)) {
-            handle_state_left(endpoint, pieces);
+            co_await handle_state_left(endpoint, pieces);
         } else if (move_name == sstring(versioned_value::STATUS_MOVING)) {
             handle_state_moving(endpoint, pieces);
         } else if (move_name == sstring(versioned_value::HIBERNATE)) {
