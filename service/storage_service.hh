@@ -634,7 +634,7 @@ private:
     void excise(std::unordered_set<token> tokens, inet_address endpoint, long expire_time);
 
     /** unlike excise we just need this endpoint gone without going through any notifications **/
-    void remove_endpoint(inet_address endpoint);
+    future<> remove_endpoint(inet_address endpoint);
 
     void add_expire_time_if_found(inet_address endpoint, int64_t expire_time);
 

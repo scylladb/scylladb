@@ -950,7 +950,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint) {
     tmlock.reset();
 
     for (auto ep : endpoints_to_remove) {
-        remove_endpoint(ep);
+        co_await remove_endpoint(ep);
     }
     slogger.debug("handle_state_normal: endpoint={} owned_tokens = {}", endpoint, owned_tokens);
     if (!owned_tokens.empty() && !endpoints_to_remove.count(endpoint)) {
@@ -1106,7 +1106,7 @@ void storage_service::handle_state_removing(inet_address endpoint, std::vector<s
         if (sstring(gms::versioned_value::REMOVED_TOKEN) == pieces[0]) {
             add_expire_time_if_found(endpoint, extract_expire_time(pieces));
         }
-        remove_endpoint(endpoint);
+        remove_endpoint(endpoint).get();
     }
 }
 
@@ -1532,17 +1532,13 @@ future<> storage_service::check_for_endpoint_collision(std::unordered_set<gms::i
     });
 }
 
-// Runs inside seastar::async context
-void storage_service::remove_endpoint(inet_address endpoint) {
-    _gossiper.remove_endpoint(endpoint).get();
-    db::system_keyspace::remove_endpoint(endpoint).then_wrapped([endpoint] (auto&& f) {
-        try {
-            f.get();
-        } catch (...) {
-            slogger.error("fail to remove endpoint={}: {}", endpoint, std::current_exception());
-        }
-        return make_ready_future<>();
-    }).get();
+future<> storage_service::remove_endpoint(inet_address endpoint) {
+    co_await _gossiper.remove_endpoint(endpoint);
+    try {
+        co_await db::system_keyspace::remove_endpoint(endpoint);
+    } catch (...) {
+        slogger.error("fail to remove endpoint={}: {}", endpoint, std::current_exception());
+    }
 }
 
 future<storage_service::replacement_info>
@@ -2913,7 +2909,7 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
 void storage_service::excise(std::unordered_set<token> tokens, inet_address endpoint) {
     slogger.info("Removing tokens {} for {}", tokens, endpoint);
     // FIXME: HintedHandOffManager.instance.deleteHintsForEndpoint(endpoint);
-    remove_endpoint(endpoint);
+    remove_endpoint(endpoint).get();
     auto tmlock = std::make_optional(get_token_metadata_lock().get0());
     auto tmptr = get_mutable_token_metadata_ptr().get0();
     tmptr->remove_endpoint(endpoint);
