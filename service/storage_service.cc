@@ -976,7 +976,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint) {
     }
 }
 
-void storage_service::handle_state_leaving(inet_address endpoint) {
+future<> storage_service::handle_state_leaving(inet_address endpoint) {
     slogger.debug("endpoint={} handle_state_leaving", endpoint);
 
     auto tokens = get_tokens_for(endpoint);
@@ -986,13 +986,13 @@ void storage_service::handle_state_leaving(inet_address endpoint) {
     // If the node is previously unknown or tokens do not match, update tokenmetadata to
     // have this node as 'normal' (it must have been using this token before the
     // leave). This way we'll get pending ranges right.
-    auto tmlock = get_token_metadata_lock().get0();
-    auto tmptr = get_mutable_token_metadata_ptr().get0();
+    auto tmlock = co_await get_token_metadata_lock();
+    auto tmptr = co_await get_mutable_token_metadata_ptr();
     if (!tmptr->is_member(endpoint)) {
         // FIXME: this code should probably resolve token collisions too, like handle_state_normal
         slogger.info("Node {} state jump to leaving", endpoint);
 
-        tmptr->update_normal_tokens(tokens, endpoint).get();
+        co_await tmptr->update_normal_tokens(tokens, endpoint);
     } else {
         auto tokens_ = tmptr->get_tokens(endpoint);
         std::set<token> tmp(tokens.begin(), tokens.end());
@@ -1000,7 +1000,7 @@ void storage_service::handle_state_leaving(inet_address endpoint) {
             slogger.warn("Node {} 'leaving' token mismatch. Long network partition?", endpoint);
             slogger.debug("tokens_={}, tokens={}", tokens_, tmp);
 
-            tmptr->update_normal_tokens(tokens, endpoint).get();
+            co_await tmptr->update_normal_tokens(tokens, endpoint);
         }
     }
 
@@ -1008,8 +1008,8 @@ void storage_service::handle_state_leaving(inet_address endpoint) {
     // normally
     tmptr->add_leaving_endpoint(endpoint);
 
-    update_pending_ranges(tmptr, format("handle_state_leaving", endpoint)).get();
-    replicate_to_all_cores(std::move(tmptr)).get();
+    co_await update_pending_ranges(tmptr, format("handle_state_leaving", endpoint));
+    co_await replicate_to_all_cores(std::move(tmptr));
 }
 
 void storage_service::handle_state_left(inet_address endpoint, std::vector<sstring> pieces) {
@@ -1156,7 +1156,7 @@ future<> storage_service::on_change(inet_address endpoint, application_state sta
                    move_name == sstring(versioned_value::REMOVED_TOKEN)) {
             co_await handle_state_removing(endpoint, pieces);
         } else if (move_name == sstring(versioned_value::STATUS_LEAVING)) {
-            handle_state_leaving(endpoint);
+            co_await handle_state_leaving(endpoint);
         } else if (move_name == sstring(versioned_value::STATUS_LEFT)) {
             handle_state_left(endpoint, pieces);
         } else if (move_name == sstring(versioned_value::STATUS_MOVING)) {

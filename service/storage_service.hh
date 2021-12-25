@@ -592,7 +592,7 @@ private:
      *
      * @param endpoint node
      */
-    void handle_state_leaving(inet_address endpoint);
+    future<> handle_state_leaving(inet_address endpoint);
 
     /**
      * Handle node leaving the ring. This will happen when a node is decommissioned
