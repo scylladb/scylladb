@@ -1031,7 +1031,7 @@ void storage_service::handle_state_left(inet_address endpoint, std::vector<sstri
         slogger.warn("handle_state_left: Get tokens from token_metadata, node={}, tokens={}", endpoint, tokens_from_tm);
         tokens = std::unordered_set<dht::token>(tokens_from_tm.begin(), tokens_from_tm.end());
     }
-    excise(tokens, endpoint, extract_expire_time(pieces));
+    excise(tokens, endpoint, extract_expire_time(pieces)).get();
 }
 
 void storage_service::handle_state_moving(inet_address endpoint, std::vector<sstring> pieces) {
@@ -1059,7 +1059,7 @@ void storage_service::handle_state_removing(inet_address endpoint, std::vector<s
         auto remove_tokens = get_token_metadata().get_tokens(endpoint);
         if (sstring(gms::versioned_value::REMOVED_TOKEN) == state) {
             std::unordered_set<token> tmp(remove_tokens.begin(), remove_tokens.end());
-            excise(std::move(tmp), endpoint, extract_expire_time(pieces));
+            excise(std::move(tmp), endpoint, extract_expire_time(pieces)).get();
         } else if (sstring(gms::versioned_value::REMOVING_TOKEN) == state) {
             mutate_token_metadata([this, remove_tokens = std::move(remove_tokens), endpoint] (mutable_token_metadata_ptr tmptr) mutable {
                 slogger.debug("Tokens {} removed manually (endpoint was {})", remove_tokens, endpoint);
@@ -2318,7 +2318,7 @@ future<> storage_service::removenode(sstring host_id_string, std::list<gms::inet
                 // Step 5: Announce the node has left
                 ss._gossiper.advertise_token_removed(endpoint, host_id).get();
                 std::unordered_set<token> tmp(tokens.begin(), tokens.end());
-                ss.excise(std::move(tmp), endpoint);
+                ss.excise(std::move(tmp), endpoint).get();
 
                 // Step 6: Finish
                 req.cmd = node_ops_cmd::removenode_done;
@@ -2905,26 +2905,25 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
   });
 }
 
-// Runs inside seastar::async context
-void storage_service::excise(std::unordered_set<token> tokens, inet_address endpoint) {
+future<> storage_service::excise(std::unordered_set<token> tokens, inet_address endpoint) {
     slogger.info("Removing tokens {} for {}", tokens, endpoint);
     // FIXME: HintedHandOffManager.instance.deleteHintsForEndpoint(endpoint);
-    remove_endpoint(endpoint).get();
-    auto tmlock = std::make_optional(get_token_metadata_lock().get0());
-    auto tmptr = get_mutable_token_metadata_ptr().get0();
+    co_await remove_endpoint(endpoint);
+    auto tmlock = std::make_optional(co_await get_token_metadata_lock());
+    auto tmptr = co_await get_mutable_token_metadata_ptr();
     tmptr->remove_endpoint(endpoint);
     tmptr->remove_bootstrap_tokens(tokens);
 
-    update_pending_ranges(tmptr, format("excise {}", endpoint)).get();
-    replicate_to_all_cores(std::move(tmptr)).get();
+    co_await update_pending_ranges(tmptr, format("excise {}", endpoint));
+    co_await replicate_to_all_cores(std::move(tmptr));
     tmlock.reset();
 
-    notify_left(endpoint).get();
+    co_await notify_left(endpoint);
 }
 
-void storage_service::excise(std::unordered_set<token> tokens, inet_address endpoint, int64_t expire_time) {
+future<> storage_service::excise(std::unordered_set<token> tokens, inet_address endpoint, int64_t expire_time) {
     add_expire_time_if_found(endpoint, expire_time);
-    excise(tokens, endpoint);
+    return excise(tokens, endpoint);
 }
 
 future<> storage_service::send_replication_notification(inet_address remote) {
@@ -3349,7 +3348,7 @@ future<> storage_service::force_remove_completion() {
                         }
                         ss._gossiper.advertise_token_removed(endpoint, host_id).get();
                         std::unordered_set<token> tokens_set(tokens.begin(), tokens.end());
-                        ss.excise(tokens_set, endpoint);
+                        ss.excise(tokens_set, endpoint).get();
                         ss._group0->leave_group0(endpoint).get();
                     }
                     ss._replicating_nodes.clear();
