@@ -616,7 +616,7 @@ private:
      * @param endpoint node
      * @param pieces either REMOVED_TOKEN (node is gone) or REMOVING_TOKEN (replicas need to be restored)
      */
-    void handle_state_removing(inet_address endpoint, std::vector<sstring> pieces);
+    future<> handle_state_removing(inet_address endpoint, std::vector<sstring> pieces);
 
     /**
      * Handle notification that a node is replacing another node.

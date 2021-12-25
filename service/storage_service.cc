@@ -1038,35 +1038,35 @@ void storage_service::handle_state_moving(inet_address endpoint, std::vector<sst
     throw std::runtime_error(format("Move operation is not supported anymore, endpoint={}", endpoint));
 }
 
-void storage_service::handle_state_removing(inet_address endpoint, std::vector<sstring> pieces) {
+future<> storage_service::handle_state_removing(inet_address endpoint, std::vector<sstring> pieces) {
     slogger.debug("endpoint={} handle_state_removing", endpoint);
     if (pieces.empty()) {
         slogger.warn("Fail to handle_state_removing endpoint={} pieces={}", endpoint, pieces);
-        return;
+        co_return;
     }
     if (endpoint == get_broadcast_address()) {
         slogger.info("Received removenode gossip about myself. Is this node rejoining after an explicit removenode?");
         try {
-            drain().get();
+            co_await drain();
         } catch (...) {
             slogger.error("Fail to drain: {}", std::current_exception());
             throw;
         }
-        return;
+        co_return;
     }
     if (get_token_metadata().is_member(endpoint)) {
         auto state = pieces[0];
         auto remove_tokens = get_token_metadata().get_tokens(endpoint);
         if (sstring(gms::versioned_value::REMOVED_TOKEN) == state) {
             std::unordered_set<token> tmp(remove_tokens.begin(), remove_tokens.end());
-            excise(std::move(tmp), endpoint, extract_expire_time(pieces)).get();
+            co_await excise(std::move(tmp), endpoint, extract_expire_time(pieces));
         } else if (sstring(gms::versioned_value::REMOVING_TOKEN) == state) {
-            mutate_token_metadata([this, remove_tokens = std::move(remove_tokens), endpoint] (mutable_token_metadata_ptr tmptr) mutable {
+            co_await mutate_token_metadata([this, remove_tokens = std::move(remove_tokens), endpoint] (mutable_token_metadata_ptr tmptr) mutable {
                 slogger.debug("Tokens {} removed manually (endpoint was {})", remove_tokens, endpoint);
                 // Note that the endpoint is being removed
                 tmptr->add_leaving_endpoint(endpoint);
                 return update_pending_ranges(std::move(tmptr), format("handle_state_removing {}", endpoint));
-            }).get();
+            });
             // find the endpoint coordinating this removal that we need to notify when we're done
             auto* value = _gossiper.get_application_state_ptr(endpoint, application_state::REMOVAL_COORDINATOR);
             if (!value) {
@@ -1106,7 +1106,7 @@ void storage_service::handle_state_removing(inet_address endpoint, std::vector<s
         if (sstring(gms::versioned_value::REMOVED_TOKEN) == pieces[0]) {
             add_expire_time_if_found(endpoint, extract_expire_time(pieces));
         }
-        remove_endpoint(endpoint).get();
+        co_await remove_endpoint(endpoint);
     }
 }
 
@@ -1154,7 +1154,7 @@ future<> storage_service::on_change(inet_address endpoint, application_state sta
             co_await handle_state_normal(endpoint);
         } else if (move_name == sstring(versioned_value::REMOVING_TOKEN) ||
                    move_name == sstring(versioned_value::REMOVED_TOKEN)) {
-            handle_state_removing(endpoint, pieces);
+            co_await handle_state_removing(endpoint, pieces);
         } else if (move_name == sstring(versioned_value::STATUS_LEAVING)) {
             handle_state_leaving(endpoint);
         } else if (move_name == sstring(versioned_value::STATUS_LEFT)) {
