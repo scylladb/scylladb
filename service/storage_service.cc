@@ -1209,28 +1209,24 @@ future<> storage_service::on_restart(gms::inet_address endpoint, gms::endpoint_s
     return make_ready_future();
 }
 
-// Runs inside seastar::async context
 template <typename T>
-static void update_table(gms::inet_address endpoint, sstring col, T value) {
-    db::system_keyspace::update_peer_info(endpoint, col, value).then_wrapped([col, endpoint] (auto&& f) {
-        try {
-            f.get();
-        } catch (...) {
-            slogger.error("fail to update {} for {}: {}", col, endpoint, std::current_exception());
-        }
-        return make_ready_future<>();
-    }).get();
+static future<> update_table(gms::inet_address endpoint, sstring col, T value) {
+    try {
+        co_await db::system_keyspace::update_peer_info(endpoint, col, value);
+    } catch (...) {
+        slogger.error("fail to update {} for {}: {}", col, endpoint, std::current_exception());
+    }
 }
 
 // Runs inside seastar::async context
 void storage_service::do_update_system_peers_table(gms::inet_address endpoint, const application_state& state, const versioned_value& value) {
     slogger.debug("Update system.peers table: endpoint={}, app_state={}, versioned_value={}", endpoint, state, value);
     if (state == application_state::RELEASE_VERSION) {
-        update_table(endpoint, "release_version", value.value);
+        update_table(endpoint, "release_version", value.value).get();
     } else if (state == application_state::DC) {
-        update_table(endpoint, "data_center", value.value);
+        update_table(endpoint, "data_center", value.value).get();
     } else if (state == application_state::RACK) {
-        update_table(endpoint, "rack", value.value);
+        update_table(endpoint, "rack", value.value).get();
     } else if (state == application_state::RPC_ADDRESS) {
         auto col = sstring("rpc_address");
         inet_address ep;
@@ -1240,13 +1236,13 @@ void storage_service::do_update_system_peers_table(gms::inet_address endpoint, c
             slogger.error("fail to update {} for {}: invalid rcpaddr {}", col, endpoint, value.value);
             return;
         }
-        update_table(endpoint, col, ep.addr());
+        update_table(endpoint, col, ep.addr()).get();
     } else if (state == application_state::SCHEMA) {
-        update_table(endpoint, "schema_version", utils::UUID(value.value));
+        update_table(endpoint, "schema_version", utils::UUID(value.value)).get();
     } else if (state == application_state::HOST_ID) {
-        update_table(endpoint, "host_id", utils::UUID(value.value));
+        update_table(endpoint, "host_id", utils::UUID(value.value)).get();
     } else if (state == application_state::SUPPORTED_FEATURES) {
-        update_table(endpoint, "supported_features", value.value);
+        update_table(endpoint, "supported_features", value.value).get();
     }
 }
 
