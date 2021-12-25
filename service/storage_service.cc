@@ -954,7 +954,7 @@ void storage_service::handle_state_normal(inet_address endpoint) {
     }
     slogger.debug("handle_state_normal: endpoint={} owned_tokens = {}", endpoint, owned_tokens);
     if (!owned_tokens.empty() && !endpoints_to_remove.count(endpoint)) {
-        update_peer_info(endpoint);
+        update_peer_info(endpoint).get();
         db::system_keyspace::update_tokens(endpoint, owned_tokens).then_wrapped([endpoint] (auto&& f) {
             try {
                 f.get();
@@ -1245,17 +1245,16 @@ future<> storage_service::do_update_system_peers_table(gms::inet_address endpoin
     }
 }
 
-// Runs inside seastar::async context
-void storage_service::update_peer_info(gms::inet_address endpoint) {
+future<> storage_service::update_peer_info(gms::inet_address endpoint) {
     using namespace gms;
     auto* ep_state = _gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
     if (!ep_state) {
-        return;
+        co_return;
     }
     for (auto& entry : ep_state->get_application_state_map()) {
         auto& app_state = entry.first;
         auto& value = entry.second;
-        do_update_system_peers_table(endpoint, app_state, value).get();
+        co_await do_update_system_peers_table(endpoint, app_state, value);
     }
 }
 
