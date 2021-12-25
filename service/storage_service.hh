@@ -586,7 +586,7 @@ private:
      *
      * @param endpoint node
      */
-    void handle_state_normal(inet_address endpoint);
+    future<> handle_state_normal(inet_address endpoint);
 
     /**
      * Handle node preparing to leave the ring
