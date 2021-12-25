@@ -2783,7 +2783,7 @@ void storage_service::unbootstrap() {
         }
         slogger.debug("stream acks all received.");
     }
-    leave_ring();
+    leave_ring().get();
 }
 
 // Runs inside seastar::async context
@@ -2968,21 +2968,20 @@ future<> storage_service::confirm_replication(inet_address node) {
     });
 }
 
-// Runs inside seastar::async context
-void storage_service::leave_ring() {
-    db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::NEEDS_BOOTSTRAP).get();
-    mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) {
+future<> storage_service::leave_ring() {
+    co_await db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::NEEDS_BOOTSTRAP);
+    co_await mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) {
         auto endpoint = get_broadcast_address();
         tmptr->remove_endpoint(endpoint);
         return update_pending_ranges(std::move(tmptr), format("leave_ring {}", endpoint));
-    }).get();
+    });
 
     auto expire_time = _gossiper.compute_expire_time().time_since_epoch().count();
-    _gossiper.add_local_application_state(gms::application_state::STATUS,
-            versioned_value::left(db::system_keyspace::get_local_tokens().get0(), expire_time)).get();
+    co_await _gossiper.add_local_application_state(gms::application_state::STATUS,
+            versioned_value::left(co_await db::system_keyspace::get_local_tokens(), expire_time));
     auto delay = std::max(get_ring_delay(), gms::gossiper::INTERVAL);
     slogger.info("Announcing that I have left the ring for {}ms", delay.count());
-    sleep_abortable(delay, _abort_source).get();
+    co_await sleep_abortable(delay, _abort_source);
 }
 
 future<>

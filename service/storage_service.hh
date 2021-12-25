@@ -740,7 +740,7 @@ private:
      * Broadcast leaving status and update local _token_metadata accordingly
      */
     future<> start_leaving();
-    void leave_ring();
+    future<> leave_ring();
     void unbootstrap();
 
 public:
