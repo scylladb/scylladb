@@ -624,7 +624,7 @@ private:
      *
      * @param endpoint node
      */
-    void handle_state_replacing(inet_address endpoint);
+    future<> handle_state_replacing(inet_address endpoint);
 
     future<>
     handle_state_replacing_update_pending_ranges(mutable_token_metadata_ptr tmptr, inet_address replacing_node);

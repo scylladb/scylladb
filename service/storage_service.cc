@@ -798,11 +798,11 @@ future<> storage_service::handle_state_replacing_update_pending_ranges(mutable_t
     co_await update_pending_ranges(tmptr, format("handle_state_replacing {}", replacing_node));
 }
 
-void storage_service::handle_state_replacing(inet_address replacing_node) {
+future<> storage_service::handle_state_replacing(inet_address replacing_node) {
     slogger.debug("endpoint={} handle_state_replacing", replacing_node);
     auto host_id = _gossiper.get_host_id(replacing_node);
-    auto tmlock = get_token_metadata_lock().get0();
-    auto tmptr = get_mutable_token_metadata_ptr().get0();
+    auto tmlock = co_await get_token_metadata_lock();
+    auto tmptr = co_await get_mutable_token_metadata_ptr();
     auto existing_node_opt = tmptr->get_endpoint_for_host_id(host_id);
     auto replace_addr = _db.local().get_replace_address();
     if (replacing_node == get_broadcast_address() && replace_addr && *replace_addr == get_broadcast_address()) {
@@ -810,7 +810,7 @@ void storage_service::handle_state_replacing(inet_address replacing_node) {
     }
     if (!existing_node_opt) {
         slogger.warn("Can not find the existing node for the replacing node {}", replacing_node);
-        return;
+        co_return;
     }
     auto existing_node = *existing_node_opt;
     auto existing_tokens = get_tokens_for(existing_node);
@@ -820,12 +820,12 @@ void storage_service::handle_state_replacing(inet_address replacing_node) {
     tmptr->add_replacing_endpoint(existing_node, replacing_node);
     if (_gossiper.is_alive(replacing_node)) {
         slogger.info("handle_state_replacing: Replacing node {} is already alive, update pending ranges", replacing_node);
-        handle_state_replacing_update_pending_ranges(tmptr, replacing_node).get();
+        co_await handle_state_replacing_update_pending_ranges(tmptr, replacing_node);
     } else {
         slogger.info("handle_state_replacing: Replacing node {} is not alive yet, delay update pending ranges", replacing_node);
         _replacing_nodes_pending_ranges_updater.insert(replacing_node);
     }
-    replicate_to_all_cores(std::move(tmptr)).get();
+    co_await replicate_to_all_cores(std::move(tmptr));
 }
 
 future<> storage_service::handle_state_bootstrap(inet_address endpoint) {
@@ -1162,7 +1162,7 @@ future<> storage_service::on_change(inet_address endpoint, application_state sta
         } else if (move_name == sstring(versioned_value::STATUS_MOVING)) {
             handle_state_moving(endpoint, pieces);
         } else if (move_name == sstring(versioned_value::HIBERNATE)) {
-            handle_state_replacing(endpoint);
+            co_await handle_state_replacing(endpoint);
         } else {
             co_return; // did nothing.
         }
