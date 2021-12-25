@@ -1280,7 +1280,7 @@ future<> storage_service::stop_transport() {
         (void) seastar::async([this] {
             slogger.info("Stop transport: starts");
 
-            shutdown_protocol_servers();
+            shutdown_protocol_servers().get();
             slogger.info("Stop transport: shutdown rpc and cql server done");
 
             _gossiper.container().invoke_on_all(&gms::gossiper::shutdown).get();
@@ -3032,11 +3032,11 @@ void storage_service::add_expire_time_if_found(inet_address endpoint, int64_t ex
     }
 }
 
-void storage_service::shutdown_protocol_servers() {
+future<> storage_service::shutdown_protocol_servers() {
     for (auto& server : _protocol_servers) {
         slogger.info("Shutting down {} server", server->name());
         try {
-            server->stop_server().get();
+            co_await server->stop_server();
         } catch (...) {
             slogger.error("Unexpected error shutting down {} server: {}",
                     server->name(), std::current_exception());

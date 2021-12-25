@@ -357,8 +357,7 @@ public:
     }
 private:
     future<> do_stop_ms();
-    // Runs in thread context
-    void shutdown_protocol_servers();
+    future<> shutdown_protocol_servers();
 
     // Tokens and the CDC streams timestamp of the replaced node.
     using replacement_info = std::unordered_set<token>;
