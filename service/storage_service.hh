@@ -563,7 +563,7 @@ public:
     virtual void on_drop_view(const sstring& ks_name, const sstring& view_name) override {}
 private:
     void update_peer_info(inet_address endpoint);
-    void do_update_system_peers_table(gms::inet_address endpoint, const application_state& state, const versioned_value& value);
+    future<> do_update_system_peers_table(gms::inet_address endpoint, const application_state& state, const versioned_value& value);
 
     std::unordered_set<token> get_tokens_for(inet_address endpoint);
 private:
