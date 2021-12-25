@@ -2612,21 +2612,19 @@ future<> storage_service::drain() {
 }
 
 future<> storage_service::do_drain() {
-    return seastar::async([this] {
-        stop_transport().get();
+    co_await stop_transport();
 
-        tracing::tracing::tracing_instance().invoke_on_all(&tracing::tracing::shutdown).get();
+    co_await tracing::tracing::tracing_instance().invoke_on_all(&tracing::tracing::shutdown);
 
-        get_batchlog_manager().invoke_on_all([] (auto& bm) {
-            return bm.drain();
-        }).get();
-
-        set_mode(mode::DRAINING, "shutting down migration manager", false);
-        _migration_manager.invoke_on_all(&service::migration_manager::drain).get();
-
-        set_mode(mode::DRAINING, "flushing column families", false);
-        _db.invoke_on_all(&replica::database::drain).get();
+    co_await get_batchlog_manager().invoke_on_all([] (auto& bm) {
+        return bm.drain();
     });
+
+    set_mode(mode::DRAINING, "shutting down migration manager", false);
+    co_await _migration_manager.invoke_on_all(&service::migration_manager::drain);
+
+    set_mode(mode::DRAINING, "flushing column families", false);
+    co_await _db.invoke_on_all(&replica::database::drain);
 }
 
 future<> storage_service::rebuild(sstring source_dc) {
