@@ -43,6 +43,8 @@ seastar::future<raft::server_address> raft_group0::load_or_create_my_addr() {
         co_await db::system_keyspace::set_raft_server_id(my_addr.id.id);
     }
     my_addr.info = inet_addr_to_raft_addr(_gossiper.get_broadcast_address());
+    // Default join as non-voter (except first node creating group0)
+    my_addr.can_vote = false;
     co_return my_addr;
 }
 
@@ -190,7 +192,9 @@ future<> raft_group0::join_group0() {
             // This is the first time the discovery is run.
             raft::configuration initial_configuration;
             if (g0_info.addr.id == my_addr.id) {
-                // We should start a new group.
+                // We should start a new group with this node as voter.
+                rslog.trace("server {} creating configuration as voter", my_addr.id);
+                my_addr.can_vote = true;
                 initial_configuration.current.emplace(my_addr);
             }
             auto grp = create_server_for_group(group0_id, my_addr);
@@ -201,6 +205,8 @@ future<> raft_group0::join_group0() {
         if (server->get_configuration().contains(my_addr.id)) {
             // True if we started a new group or completed a configuration change
             // initiated earlier.
+            rslog.trace("server {} already in group as {}", my_addr.id,
+                    server->get_configuration().can_vote(my_addr.id)? "voter" : "non-voter");
             break;
         }
         std::vector<raft::server_address> add_set;
@@ -223,6 +229,22 @@ future<> raft_group0::join_group0() {
 
     _group0 = group0_id;
     rslog.info("{} joined group 0 with id {}", my_addr.id, group0_id);
+}
+
+future<> raft_group0::become_voter() {
+    if (!_raft_gr.is_enabled()) {
+        co_return;
+    }
+    auto my_addr = co_await load_or_create_my_addr();
+    assert(std::holds_alternative<raft::group_id>(_group0));
+    auto& gid = std::get<raft::group_id>(_group0);
+    if (!_raft_gr.get_server(gid).get_configuration().can_vote(my_addr.id)) {
+        std::vector<raft::server_address> add_set;
+        my_addr.can_vote = true;
+        add_set.push_back(my_addr);
+        auto pause_shutdown = _shutdown_gate.hold();
+        co_return co_await _raft_gr.group0().modify_config(add_set, {});
+    }
 }
 
 future<> raft_group0::leave_group0(std::optional<gms::inet_address> node) {
