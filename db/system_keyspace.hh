@@ -117,7 +117,7 @@ class system_keyspace {
     static schema_ptr large_cells();
     static schema_ptr scylla_local();
     static schema_ptr clients();
-    static future<> setup_version(distributed<gms::feature_service>& feat, sharded<netw::messaging_service>& ms, const db::config& cfg);
+    static future<> setup_version(sharded<netw::messaging_service>& ms, const db::config& cfg);
     static future<> check_health(const sstring& cluster_name);
     static future<> force_blocking_flush(sstring cfname);
     static future<> build_dc_rack_info();
@@ -240,7 +240,6 @@ public:
     static future<> deinit_local_cache();
     static future<> setup(distributed<database>& db,
                 distributed<cql3::query_processor>& qp,
-                distributed<gms::feature_service>& feat,
                 sharded<netw::messaging_service>& ms);
     static future<> update_schema_version(utils::UUID version);
 
@@ -433,6 +432,9 @@ public:
     // Called once at fresh server startup to make sure every server
     // has a Raft ID
     static future<> set_raft_server_id(utils::UUID id);
+
+    // Save advertised gossip feature set to system.local
+    static future<> save_local_supported_features(const std::set<std::string_view>& feats);
 }; // class system_keyspace
 
 future<> system_keyspace_make(distributed<database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g);

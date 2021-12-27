@@ -269,6 +269,12 @@ void storage_service::prepare_to_join(
             _gossiper.add_saved_endpoint(ep).get();
         }
     }
+    auto features = _feature_service.supported_feature_set();
+    slogger.info("Save advertised features list in the 'system.{}' table", db::system_keyspace::LOCAL);
+    // Save the advertised feature set to system.local table after
+    // all remote feature checks are complete and after gossip shadow rounds are done.
+    // At this point, the final feature set is already determined before the node joins the ring.
+    db::system_keyspace::save_local_supported_features(features).get0();
 
     // If this is a restarting node, we should update tokens before gossip starts
     auto my_tokens = db::system_keyspace::get_saved_tokens().get0();
@@ -297,7 +303,6 @@ void storage_service::prepare_to_join(
     // (we won't be part of the storage ring though until we add a counterId to our state, below.)
     // Seed the host ID-to-endpoint map with our own ID.
     auto local_host_id = db::system_keyspace::load_local_host_id().get0();
-    auto features = _feature_service.supported_feature_set();
     if (!replacing_a_node_with_diff_ip) {
         // Replacing node with a different ip should own the host_id only after
         // the replacing node becomes NORMAL status. It is updated in
