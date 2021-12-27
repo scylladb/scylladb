@@ -198,7 +198,7 @@ future<> raft_group0::join_group0() {
             co_await grp.persistence.bootstrap(std::move(initial_configuration));
             co_await _raft_gr.start_server_for_group(std::move(grp));
         }
-        if (server->get_configuration().can_vote(my_addr.id)) {
+        if (server->get_configuration().contains(my_addr.id)) {
             // True if we started a new group or completed a configuration change
             // initiated earlier.
             break;
