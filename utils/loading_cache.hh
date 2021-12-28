@@ -212,7 +212,7 @@ public:
     class entry_is_too_big : public std::exception {};
 
 private:
-    loading_cache(size_t max_size, std::chrono::milliseconds expiry, std::chrono::milliseconds refresh, logging::logger& logger)
+    loading_cache(size_t max_size, lowres_clock::duration expiry, lowres_clock::duration refresh, logging::logger& logger)
         : _max_size(max_size)
         , _expiry(expiry)
         , _refresh(refresh)
@@ -222,14 +222,14 @@ private:
         static_assert(noexcept(LoadingCacheStats::inc_unprivileged_on_cache_size_eviction()), "LoadingCacheStats::inc_unprivileged_on_cache_size_eviction must be non-throwing");
 
         // Sanity check: if expiration period is given then non-zero refresh period and maximal size are required
-        if (caching_enabled() && (_refresh == std::chrono::milliseconds(0) || _max_size == 0)) {
+        if (caching_enabled() && (_refresh == lowres_clock::duration(0) || _max_size == 0)) {
             throw exceptions::configuration_exception("loading_cache: caching is enabled but refresh period and/or max_size are zero");
         }
     }
 
 public:
     template<typename Func>
-    loading_cache(size_t max_size, std::chrono::milliseconds expiry, std::chrono::milliseconds refresh, logging::logger& logger, Func&& load)
+    loading_cache(size_t max_size, lowres_clock::duration expiry, lowres_clock::duration refresh, logging::logger& logger, Func&& load)
         : loading_cache(max_size, expiry, refresh, logger)
     {
         static_assert(ReloadEnabled == loading_cache_reload_enabled::yes, "This constructor should only be invoked when ReloadEnabled == loading_cache_reload_enabled::yes");
@@ -246,7 +246,7 @@ public:
         _timer.arm(_timer_period);
     }
 
-    loading_cache(size_t max_size, std::chrono::milliseconds expiry, logging::logger& logger)
+    loading_cache(size_t max_size, lowres_clock::duration expiry, logging::logger& logger)
         : loading_cache(max_size, expiry, loading_cache_clock_type::time_point::max().time_since_epoch(), logger)
     {
         static_assert(ReloadEnabled == loading_cache_reload_enabled::no, "This constructor should only be invoked when ReloadEnabled == loading_cache_reload_enabled::no");
@@ -410,7 +410,7 @@ private:
     }
 
     bool caching_enabled() const {
-        return _expiry != std::chrono::milliseconds(0);
+        return _expiry != lowres_clock::duration(0);
     }
 
     static void destroy_ts_value(ts_value_lru_entry* val) {
@@ -573,8 +573,8 @@ private:
     lru_list_type _unprivileged_lru_list; // list containing "unprivileged" section entries
     size_t _current_size = 0;
     size_t _max_size = 0;
-    std::chrono::milliseconds _expiry;
-    std::chrono::milliseconds _refresh;
+    loading_cache_clock_type::duration _expiry;
+    loading_cache_clock_type::duration _refresh;
     loading_cache_clock_type::duration _timer_period;
     logging::logger& _logger;
     std::function<future<Tp>(const Key&)> _load;
