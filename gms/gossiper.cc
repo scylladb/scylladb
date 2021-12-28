@@ -763,7 +763,7 @@ future<> gossiper::update_live_endpoints_version() {
 
 future<> gossiper::failure_detector_loop_for_node(gms::inet_address node, int64_t gossip_generation, uint64_t live_endpoints_version) {
     auto last = gossiper::clk::now();
-    auto diff = std::chrono::milliseconds(0);
+    auto diff = gossiper::clk::duration(0);
     auto echo_interval = std::chrono::milliseconds(2000);
     auto max_duration = echo_interval + std::chrono::milliseconds(_cfg.failure_detector_timeout_in_ms());
     while (is_enabled()) {
