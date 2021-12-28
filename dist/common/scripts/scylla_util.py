@@ -1055,8 +1055,8 @@ class systemd_unit:
 
     @classmethod
     def available(cls, unit):
-        res = run('systemctl cat {}'.format(unit), shell=True, check=True, stdout=DEVNULL, stderr=DEVNULL)
-        return True if res.returncode == 0 else False
+        res = run('systemctl cat {}'.format(unit), shell=True, check=False, stdout=DEVNULL, stderr=DEVNULL)
+        return res.returncode == 0
 
 
 class sysconfig_parser:
