@@ -214,12 +214,13 @@ future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() 
         });
     }).then([this] {
         _slen = _gstate.size();
+        using namespace std::chrono_literals;
         return _gossiper.add_local_application_state(gms::application_state::CACHE_HITRATES, gms::versioned_value::cache_hitrates(_gstate)).then([this] {
             // if max difference during this round is big schedule next recalculate earlier
             if (_diff < 0.01) {
-                return std::chrono::milliseconds(2000);
+                return lowres_clock::duration(2000ms);
             } else {
-                return std::chrono::milliseconds(500);
+                return lowres_clock::duration(500ms);
             }
         });
     }).finally([this] {
