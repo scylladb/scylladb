@@ -629,7 +629,7 @@ def test_gsi_projection_keys_only(dynamodb):
     assert_index_scan(table, 'hello', expected_items)
     table.delete()
 
-# Test for "ProjectionType:: INCLUDE". The secondary table includes the
+# Test for "ProjectionType: INCLUDE". The secondary table includes the
 # its own and the base's keys (as in KEYS_ONLY) plus the extra keys given
 # in NonKeyAttributes.
 @pytest.mark.xfail(reason="GSI projection not supported - issue #5036")
@@ -660,6 +660,185 @@ def test_gsi_projection_include(dynamodb):
     assert_index_scan(table, 'hello', expected_items)
     print(len(expected_items))
     table.delete()
+
+# Despite the name "NonKeyAttributes", key attributes *may* be listed.
+# But they have no effect - because key attributes are always projected
+# anyway.
+@pytest.mark.xfail(reason="GSI projection not supported - issue #5036")
+def test_gsi_projection_include_keyattributes(dynamodb):
+    with new_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+        AttributeDefinitions=[
+            { 'AttributeName': 'p', 'AttributeType': 'S' },
+            { 'AttributeName': 'x', 'AttributeType': 'S' } ],
+        GlobalSecondaryIndexes=[
+            {   'IndexName': 'hello',
+                'KeySchema': [
+                    { 'AttributeName': 'x', 'KeyType': 'HASH' },
+                ],
+                'Projection': { 'ProjectionType': 'INCLUDE',
+                                'NonKeyAttributes': ['a', 'x'] }
+            }
+        ]) as table:
+        p = random_string();
+        x = random_string();
+        a = random_string();
+        b = random_string();
+        table.put_item(Item={'p': p, 'x': x, 'a': a, 'b': b})
+        # We expect both key attributes ('p' and 'x') to be projected, as
+        # well as 'a' listed on NonKeyAttributes. The fact that 'x' was
+        # also listed on NonKeyAttributes and 'p' wasn't doesn't make a
+        # difference. The non-key 'b' wasn't listed, so it will not be
+        # retrieved from the GSI.
+        expected_items = [{'p': p, 'x': x, 'a': a}]
+        assert_index_scan(table, 'hello', expected_items)
+
+# In this test, we add two GSIs, one projecting the other GSI's key.
+# This is an interesting case in Alternator's implementation, because
+# GSI keys currently become actual Scylla columns - while regular attributes
+# do not (they are elements of a single map column), so we need to remember
+# to project both real columns and map elements into the view.
+@pytest.mark.xfail(reason="GSI projection not supported - issue #5036")
+def test_gsi_projection_include_otherkey(dynamodb):
+    with new_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+        AttributeDefinitions=[
+            { 'AttributeName': 'p', 'AttributeType': 'S' },
+            { 'AttributeName': 'x', 'AttributeType': 'S' },
+            { 'AttributeName': 'a', 'AttributeType': 'S' },
+            { 'AttributeName': 'z', 'AttributeType': 'S' } ],
+        GlobalSecondaryIndexes=[
+            {   'IndexName': 'indexx',
+                'KeySchema': [
+                    { 'AttributeName': 'x', 'KeyType': 'HASH' },
+                ],
+                'Projection': { 'ProjectionType': 'INCLUDE',
+                                'NonKeyAttributes': ['a', 'b'] }
+            },
+            {   'IndexName': 'indexa',
+                'KeySchema': [
+                    { 'AttributeName': 'a', 'KeyType': 'HASH' },
+                ],
+                'Projection': { 'ProjectionType': 'KEYS_ONLY' }
+            },
+            {   'IndexName': 'indexz',
+                'KeySchema': [
+                    { 'AttributeName': 'z', 'KeyType': 'HASH' },
+                ],
+                'Projection': { 'ProjectionType': 'KEYS_ONLY' }
+            }
+        ]) as table:
+        p = random_string();
+        x = random_string();
+        a = random_string();
+        b = random_string();
+        c = random_string();
+        z = random_string();
+        table.put_item(Item={'p': p, 'x': x, 'a': a, 'b': b, 'c': c, 'z': z})
+        # When scanning indexx, we expect both its key attributes ('x')
+        # and the base table's ('p') to be projected, as well as 'a' and 'b'
+        # listed on NonKeyAttributes. 'c' isn't projected, and neither is 'z'
+        # despite being some other GSI's key. Note that the projected 'a'
+        # also happens to be some other GSI's key, while 'b' isn't, allowing
+        # us to exercise both code paths (Alternator stores regular attributes
+        # differently from attributes which are keys of some GSI).
+        expected_items = [{'p': p, 'x': x, 'a': a, 'b': b}]
+        assert_index_scan(table, 'indexx', expected_items)
+
+# With ProjectionType=INCLUDE, NonKeyAttributes must not be missing:
+@pytest.mark.xfail(reason="GSI projection not supported - issue #5036")
+def test_gsi_projection_error_missing_nonkeyattributes(dynamodb):
+    with pytest.raises(ClientError, match='ValidationException.*NonKeyAttributes'):
+        create_test_table(dynamodb,
+            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+            AttributeDefinitions=[
+                { 'AttributeName': 'p', 'AttributeType': 'S' },
+                { 'AttributeName': 'x', 'AttributeType': 'S' },
+            ],
+            GlobalSecondaryIndexes=[
+                {   'IndexName': 'hello',
+                    'KeySchema': [
+                        { 'AttributeName': 'x', 'KeyType': 'HASH' },
+                    ],
+                    'Projection': { 'ProjectionType': 'INCLUDE' }
+                }
+            ])
+
+# With ProjectionType!=INCLUDE, NonKeyAttributes must not be present:
+@pytest.mark.xfail(reason="GSI projection not supported - issue #5036")
+def test_gsi_projection_error_superflous_nonkeyattributes(dynamodb):
+    with pytest.raises(ClientError, match='ValidationException.*NonKeyAttributes'):
+        create_test_table(dynamodb,
+            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+            AttributeDefinitions=[
+                { 'AttributeName': 'p', 'AttributeType': 'S' },
+                { 'AttributeName': 'x', 'AttributeType': 'S' },
+            ],
+            GlobalSecondaryIndexes=[
+                {   'IndexName': 'hello',
+                    'KeySchema': [
+                        { 'AttributeName': 'x', 'KeyType': 'HASH' },
+                    ],
+                    'Projection': { 'ProjectionType': 'ALL',
+                                    'NonKeyAttributes': ['a'] }
+                }
+            ])
+
+# Duplicate attribute names in NonKeyAttributes of INCLUDE are not allowed:
+@pytest.mark.xfail(reason="GSI projection not supported - issue #5036")
+def test_gsi_projection_error_duplicate(dynamodb):
+    with pytest.raises(ClientError, match='ValidationException.*Duplicate'):
+        create_test_table(dynamodb,
+            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+            AttributeDefinitions=[
+                { 'AttributeName': 'p', 'AttributeType': 'S' },
+                { 'AttributeName': 'x', 'AttributeType': 'S' },
+            ],
+            GlobalSecondaryIndexes=[
+                {   'IndexName': 'hello',
+                    'KeySchema': [
+                        { 'AttributeName': 'x', 'KeyType': 'HASH' },
+                    ],
+                    'Projection': { 'ProjectionType': 'INCLUDE',
+                                    'NonKeyAttributes': ['a', 'a'] }
+                }
+            ])
+
+# NonKeyAttributes must be a list of strings. Non-strings in this list
+# result, for some reason, in SerializationException instead of the more
+# usual ValidationException.
+@pytest.mark.xfail(reason="GSI projection not supported - issue #5036")
+def test_gsi_projection_error_nonstring_nonkeyattributes(dynamodb):
+    with pytest.raises(ClientError, match='SerializationException'):
+        create_test_table(dynamodb,
+            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+            AttributeDefinitions=[
+                { 'AttributeName': 'p', 'AttributeType': 'S' },
+                { 'AttributeName': 'x', 'AttributeType': 'S' },
+            ],
+            GlobalSecondaryIndexes=[
+                {   'IndexName': 'hello',
+                    'KeySchema': [
+                        { 'AttributeName': 'x', 'KeyType': 'HASH' },
+                    ],
+                    'Projection': { 'ProjectionType': 'INCLUDE',
+                                    'NonKeyAttributes': ['a', 123] }
+                }
+            ])
+
+# An unsupported ProjectionType value should result in an error:
+@pytest.mark.xfail(reason="GSI projection not supported - issue #5036")
+def test_gsi_bad_projection_type(dynamodb):
+    with pytest.raises(ClientError, match='ValidationException.*nonsense'):
+        create_test_table(dynamodb,
+            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }],
+            AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }],
+            GlobalSecondaryIndexes=[
+                {   'IndexName': 'hello',
+                    'KeySchema': [{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
+                    'Projection': { 'ProjectionType': 'nonsense' }
+                }
+            ])
 
 # DynamoDB's says the "Projection" argument of GlobalSecondaryIndexes is
 # mandatory, and indeed Boto3 enforces that it must be passed. The
