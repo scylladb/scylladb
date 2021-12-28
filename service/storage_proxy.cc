@@ -589,7 +589,7 @@ public:
             return ret;
         } else {
             // budget is small (< ret) so can be converted to microseconds
-            return budget;
+            return std::chrono::duration_cast<std::chrono::microseconds>(budget);
         }
     }
     // Calculates how much to delay completing the request. The delay adds to the request's inherent latency.
