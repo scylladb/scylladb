@@ -1568,6 +1568,452 @@ std::pair<flat_mutation_reader, evictable_reader_handle> make_manually_paused_ev
     return std::pair(flat_mutation_reader(std::move(reader)), handle);
 }
 
+// Encapsulates all data and logic that is local to the remote shard the
+// reader lives on.
+class evictable_reader_v2 : public flat_mutation_reader_v2::impl {
+public:
+    using auto_pause = bool_class<class auto_pause_tag>;
+
+private:
+    auto_pause _auto_pause;
+    mutation_source _ms;
+    const dht::partition_range* _pr;
+    const query::partition_slice& _ps;
+    const io_priority_class& _pc;
+    tracing::global_trace_state_ptr _trace_state;
+    const mutation_reader::forwarding _fwd_mr;
+    reader_concurrency_semaphore::inactive_read_handle _irh;
+    bool _drop_partition_start = false;
+    bool _drop_static_row = false;
+    // Validate the partition key of the first emitted partition, set after the
+    // reader was recreated.
+    bool _validate_partition_key = false;
+    position_in_partition::tri_compare _tri_cmp;
+
+    std::optional<dht::decorated_key> _last_pkey;
+    position_in_partition _next_position_in_partition = position_in_partition::for_partition_start();
+    // These are used when the reader has to be recreated (after having been
+    // evicted while paused) and the range and/or slice it is recreated with
+    // differs from the original ones.
+    std::optional<dht::partition_range> _range_override;
+    std::optional<query::partition_slice> _slice_override;
+
+    flat_mutation_reader_v2_opt _reader;
+
+private:
+    void do_pause(flat_mutation_reader_v2 reader);
+    void maybe_pause(flat_mutation_reader_v2 reader);
+    flat_mutation_reader_v2_opt try_resume();
+    void update_next_position(flat_mutation_reader_v2& reader);
+    void adjust_partition_slice();
+    flat_mutation_reader_v2 recreate_reader();
+    future<flat_mutation_reader_v2> resume_or_create_reader();
+    void maybe_validate_partition_start(const flat_mutation_reader_v2::tracked_buffer& buffer);
+    void validate_position_in_partition(position_in_partition_view pos) const;
+    bool should_drop_fragment(const mutation_fragment_v2& mf);
+    future<> do_fill_buffer(flat_mutation_reader_v2& reader);
+    future<> fill_buffer(flat_mutation_reader_v2& reader);
+
+public:
+    evictable_reader_v2(
+            auto_pause ap,
+            mutation_source ms,
+            schema_ptr schema,
+            reader_permit permit,
+            const dht::partition_range& pr,
+            const query::partition_slice& ps,
+            const io_priority_class& pc,
+            tracing::trace_state_ptr trace_state,
+            mutation_reader::forwarding fwd_mr);
+    virtual future<> fill_buffer() override;
+    virtual future<> next_partition() override;
+    virtual future<> fast_forward_to(const dht::partition_range& pr) override;
+    virtual future<> fast_forward_to(position_range) override {
+        throw_with_backtrace<std::bad_function_call>();
+    }
+    virtual future<> close() noexcept override {
+        if (_reader) {
+            return _reader->close();
+        }
+        if (auto reader_opt = try_resume()) {
+            return reader_opt->close();
+        }
+        return make_ready_future<>();
+    }
+    reader_concurrency_semaphore::inactive_read_handle inactive_read_handle() && {
+        return std::move(_irh);
+    }
+    void pause() {
+        if (_reader) {
+            do_pause(std::move(*_reader));
+        }
+    }
+    reader_permit permit() {
+        return _permit;
+    }
+};
+
+void evictable_reader_v2::do_pause(flat_mutation_reader_v2 reader) {
+    assert(!_irh);
+    _irh = _permit.semaphore().register_inactive_read(std::move(reader));
+}
+
+void evictable_reader_v2::maybe_pause(flat_mutation_reader_v2 reader) {
+    if (_auto_pause) {
+        do_pause(std::move(reader));
+    } else {
+        _reader = std::move(reader);
+    }
+}
+
+flat_mutation_reader_v2_opt evictable_reader_v2::try_resume() {
+    if (auto reader_opt = _permit.semaphore().unregister_inactive_read(std::move(_irh))) {
+        return std::move(*reader_opt);
+    }
+    return {};
+}
+
+void evictable_reader_v2::update_next_position(flat_mutation_reader_v2& reader) {
+    if (is_buffer_empty()) {
+        return;
+    }
+
+    auto rbegin = std::reverse_iterator(buffer().end());
+    auto rend = std::reverse_iterator(buffer().begin());
+    if (auto pk_it = std::find_if(rbegin, rend, std::mem_fn(&mutation_fragment_v2::is_partition_start)); pk_it != rend) {
+        _last_pkey = pk_it->as_partition_start().key();
+    }
+
+    const auto last_pos = buffer().back().position();
+    switch (last_pos.region()) {
+        case partition_region::partition_start:
+            _next_position_in_partition = position_in_partition::for_static_row();
+            break;
+        case partition_region::static_row:
+            _next_position_in_partition = position_in_partition::before_all_clustered_rows();
+            break;
+        case partition_region::clustered:
+            if (!reader.is_buffer_empty() && reader.peek_buffer().is_end_of_partition()) {
+                push_mutation_fragment(reader.pop_mutation_fragment());
+                _next_position_in_partition = position_in_partition::for_partition_start();
+            } else {
+                _next_position_in_partition = position_in_partition::after_key(last_pos);
+            }
+            break;
+        case partition_region::partition_end:
+           _next_position_in_partition = position_in_partition::for_partition_start();
+           break;
+    }
+}
+
+void evictable_reader_v2::adjust_partition_slice() {
+    const auto reversed = _ps.options.contains(query::partition_slice::option::reversed);
+    _slice_override = reversed ? query::legacy_reverse_slice_to_native_reverse_slice(*_schema, _ps) : _ps;
+
+    auto ranges = _slice_override->default_row_ranges();
+    query::trim_clustering_row_ranges_to(*_schema, ranges, _next_position_in_partition);
+
+    _slice_override->clear_ranges();
+    _slice_override->set_range(*_schema, _last_pkey->key(), std::move(ranges));
+
+    if (reversed) {
+        _slice_override = query::native_reverse_slice_to_legacy_reverse_slice(*_schema, std::move(*_slice_override));
+    }
+}
+
+flat_mutation_reader_v2 evictable_reader_v2::recreate_reader() {
+    const dht::partition_range* range = _pr;
+    const query::partition_slice* slice = &_ps;
+
+    _range_override.reset();
+    _slice_override.reset();
+
+    _drop_partition_start = false;
+    _drop_static_row = false;
+
+    if (_last_pkey) {
+        bool partition_range_is_inclusive = true;
+
+        switch (_next_position_in_partition.region()) {
+        case partition_region::partition_start:
+            partition_range_is_inclusive = false;
+            break;
+        case partition_region::static_row:
+            _drop_partition_start = true;
+            break;
+        case partition_region::clustered:
+            _drop_partition_start = true;
+            _drop_static_row = true;
+            adjust_partition_slice();
+            slice = &*_slice_override;
+            break;
+        case partition_region::partition_end:
+            partition_range_is_inclusive = false;
+            break;
+        }
+
+        // The original range contained a single partition and we've read it
+        // all. We'd have to create a reader with an empty range that would
+        // immediately be at EOS. This is not possible so just create an empty
+        // reader instead.
+        // This should be extremely rare (who'd create a multishard reader to
+        // read a single partition) but still, let's make sure we handle it
+        // correctly.
+        if (_pr->is_singular() && !partition_range_is_inclusive) {
+            return make_empty_flat_reader_v2(_schema, _permit);
+        }
+
+        _range_override = dht::partition_range({dht::partition_range::bound(*_last_pkey, partition_range_is_inclusive)}, _pr->end());
+        range = &*_range_override;
+
+        _validate_partition_key = true;
+    }
+
+    return _ms.make_reader_v2(
+            _schema,
+            _permit,
+            *range,
+            *slice,
+            _pc,
+            _trace_state,
+            streamed_mutation::forwarding::no,
+            _fwd_mr);
+}
+
+future<flat_mutation_reader_v2> evictable_reader_v2::resume_or_create_reader() {
+    if (_reader) {
+        co_return std::move(*_reader);
+    }
+    if (auto reader_opt = try_resume()) {
+        co_return std::move(*reader_opt);
+    }
+    co_await _permit.maybe_wait_readmission();
+    co_return recreate_reader();
+}
+
+void evictable_reader_v2::maybe_validate_partition_start(const flat_mutation_reader_v2::tracked_buffer& buffer) {
+    if (!_validate_partition_key || buffer.empty()) {
+        return;
+    }
+
+    // If this is set we can assume the first fragment is a partition-start.
+    const auto& ps = buffer.front().as_partition_start();
+    const auto tri_cmp = dht::ring_position_comparator(*_schema);
+    // If we recreated the reader after fast-forwarding it we won't have
+    // _last_pkey set. In this case it is enough to check if the partition
+    // is in range.
+    if (_last_pkey) {
+        const auto cmp_res = tri_cmp(*_last_pkey, ps.key());
+        if (_drop_partition_start) { // we expect to continue from the same partition
+            // We cannot assume the partition we stopped the read at is still alive
+            // when we recreate the reader. It might have been compacted away in the
+            // meanwhile, so allow for a larger partition too.
+            require(
+                    cmp_res <= 0,
+                    "{}(): validation failed, expected partition with key larger or equal to _last_pkey {} due to _drop_partition_start being set, but got {}",
+                    __FUNCTION__,
+                    *_last_pkey,
+                    ps.key());
+            // Reset drop flags and next pos if we are not continuing from the same partition
+            if (cmp_res < 0) {
+                // Close previous partition, we are not going to continue it.
+                push_mutation_fragment(*_schema, _permit, partition_end{});
+                _drop_partition_start = false;
+                _drop_static_row = false;
+                _next_position_in_partition = position_in_partition::for_partition_start();
+            }
+        } else { // should be a larger partition
+            require(
+                    cmp_res < 0,
+                    "{}(): validation failed, expected partition with key larger than _last_pkey {} due to _drop_partition_start being unset, but got {}",
+                    __FUNCTION__,
+                    *_last_pkey,
+                    ps.key());
+        }
+    }
+    const auto& prange = _range_override ? *_range_override : *_pr;
+    require(
+            // TODO: somehow avoid this copy
+            prange.contains(ps.key(), tri_cmp),
+            "{}(): validation failed, expected partition with key that falls into current range {}, but got {}",
+            __FUNCTION__,
+            prange,
+            ps.key());
+
+    _validate_partition_key = false;
+}
+
+void evictable_reader_v2::validate_position_in_partition(position_in_partition_view pos) const {
+    require(
+            _tri_cmp(_next_position_in_partition, pos) <= 0,
+            "{}(): validation failed, expected position in partition that is larger-than-equal than _next_position_in_partition {}, but got {}",
+            __FUNCTION__,
+            _next_position_in_partition,
+            pos);
+
+    if (_slice_override && pos.region() == partition_region::clustered) {
+        const auto reversed = _ps.options.contains(query::partition_slice::option::reversed);
+        std::optional<query::partition_slice> native_slice;
+        if (reversed) {
+            native_slice = query::legacy_reverse_slice_to_native_reverse_slice(*_schema, *_slice_override);
+        }
+        auto& slice = reversed ? *native_slice : *_slice_override;
+
+        const auto ranges = slice.row_ranges(*_schema, _last_pkey->key());
+        const bool any_contains = std::any_of(ranges.begin(), ranges.end(), [this, &pos] (const query::clustering_range& cr) {
+            // TODO: somehow avoid this copy
+            auto range = position_range(cr);
+            return range.contains(*_schema, pos);
+        });
+        require(
+                any_contains,
+                "{}(): validation failed, expected clustering fragment that is included in the slice {}, but got {}",
+                __FUNCTION__,
+                slice,
+                pos);
+    }
+}
+
+bool evictable_reader_v2::should_drop_fragment(const mutation_fragment_v2& mf) {
+    if (_drop_partition_start && mf.is_partition_start()) {
+        _drop_partition_start = false;
+        return true;
+    }
+    // Unlike partition-start above, a partition is not guaranteed to have a
+    // static row fragment. So reset the flag regardless of whether we could
+    // drop one or not.
+    // We are guaranteed to get here only right after dropping a partition-start,
+    // so if we are not seeing a static row here, the partition doesn't have one.
+    if (_drop_static_row) {
+         _drop_static_row = false;
+        return mf.is_static_row();
+    }
+    return false;
+}
+
+future<> evictable_reader_v2::do_fill_buffer(flat_mutation_reader_v2& reader) {
+    if (!_drop_partition_start && !_drop_static_row) {
+        auto fill_buf_fut = reader.fill_buffer();
+        if (_validate_partition_key) {
+            fill_buf_fut = fill_buf_fut.then([this, &reader] {
+                maybe_validate_partition_start(reader.buffer());
+            });
+        }
+        return fill_buf_fut;
+    }
+    return repeat([this, &reader] {
+        return reader.fill_buffer().then([this, &reader] {
+            maybe_validate_partition_start(reader.buffer());
+            while (!reader.is_buffer_empty() && should_drop_fragment(reader.peek_buffer())) {
+                reader.pop_mutation_fragment();
+            }
+            return stop_iteration(reader.is_buffer_full() || reader.is_end_of_stream());
+        });
+    });
+}
+
+future<> evictable_reader_v2::fill_buffer(flat_mutation_reader_v2& reader) {
+    co_await do_fill_buffer(reader);
+    reader.move_buffer_content_to(*this);
+    update_next_position(reader);
+}
+
+evictable_reader_v2::evictable_reader_v2(
+        auto_pause ap,
+        mutation_source ms,
+        schema_ptr schema,
+        reader_permit permit,
+        const dht::partition_range& pr,
+        const query::partition_slice& ps,
+        const io_priority_class& pc,
+        tracing::trace_state_ptr trace_state,
+        mutation_reader::forwarding fwd_mr)
+    : impl(std::move(schema), std::move(permit))
+    , _auto_pause(ap)
+    , _ms(std::move(ms))
+    , _pr(&pr)
+    , _ps(ps)
+    , _pc(pc)
+    , _trace_state(std::move(trace_state))
+    , _fwd_mr(fwd_mr)
+    , _tri_cmp(*_schema) {
+}
+
+future<> evictable_reader_v2::fill_buffer() {
+    if (is_end_of_stream()) {
+        co_return;
+    }
+    _reader = co_await resume_or_create_reader();
+    co_await fill_buffer(*_reader);
+    _end_of_stream = _reader->is_end_of_stream() && _reader->is_buffer_empty();
+    maybe_pause(std::move(*_reader));
+}
+
+future<> evictable_reader_v2::next_partition() {
+    _next_position_in_partition = position_in_partition::for_partition_start();
+    clear_buffer_to_next_partition();
+    if (!is_buffer_empty()) {
+        co_return;
+    }
+    auto reader = co_await resume_or_create_reader();
+    co_await reader.next_partition();
+    maybe_pause(std::move(reader));
+}
+
+future<> evictable_reader_v2::fast_forward_to(const dht::partition_range& pr) {
+    _pr = &pr;
+    _last_pkey.reset();
+    _next_position_in_partition = position_in_partition::for_partition_start();
+    clear_buffer();
+    _end_of_stream = false;
+
+    if (_reader) {
+        co_await _reader->fast_forward_to(pr);
+        _range_override.reset();
+        co_return;
+    }
+    if (auto reader_opt = try_resume()) {
+        co_await reader_opt->fast_forward_to(pr);
+        _range_override.reset();
+        maybe_pause(std::move(*reader_opt));
+    }
+}
+
+evictable_reader_handle_v2::evictable_reader_handle_v2(evictable_reader_v2& r) : _r(&r)
+{ }
+
+void evictable_reader_handle_v2::evictable_reader_handle_v2::pause() {
+    _r->pause();
+}
+
+flat_mutation_reader_v2 make_auto_paused_evictable_reader_v2(
+        mutation_source ms,
+        schema_ptr schema,
+        reader_permit permit,
+        const dht::partition_range& pr,
+        const query::partition_slice& ps,
+        const io_priority_class& pc,
+        tracing::trace_state_ptr trace_state,
+        mutation_reader::forwarding fwd_mr) {
+    return make_flat_mutation_reader_v2<evictable_reader_v2>(evictable_reader_v2::auto_pause::yes, std::move(ms), std::move(schema), std::move(permit), pr, ps,
+            pc, std::move(trace_state), fwd_mr);
+}
+
+std::pair<flat_mutation_reader_v2, evictable_reader_handle_v2> make_manually_paused_evictable_reader_v2(
+        mutation_source ms,
+        schema_ptr schema,
+        reader_permit permit,
+        const dht::partition_range& pr,
+        const query::partition_slice& ps,
+        const io_priority_class& pc,
+        tracing::trace_state_ptr trace_state,
+        mutation_reader::forwarding fwd_mr) {
+    auto reader = std::make_unique<evictable_reader_v2>(evictable_reader_v2::auto_pause::no, std::move(ms), std::move(schema), std::move(permit), pr, ps,
+            pc, std::move(trace_state), fwd_mr);
+    auto handle = evictable_reader_handle_v2(*reader.get());
+    return std::pair(flat_mutation_reader_v2(std::move(reader)), handle);
+}
+
 namespace {
 
 // A special-purpose shard reader.
