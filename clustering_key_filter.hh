@@ -71,6 +71,13 @@ public:
         }
         return clustering_key_filter_ranges(ranges);
     }
+
+    // Returns all clustering ranges determined by `slice` inside partition determined by `key`.
+    // The ranges will be returned in the same order as stored in the slice.
+    static clustering_key_filter_ranges get_native_ranges(const schema& schema, const query::partition_slice& slice, const partition_key& key) {
+        const query::clustering_row_ranges& ranges = slice.row_ranges(schema, key);
+        return clustering_key_filter_ranges(ranges);
+    }
 };
 
 }

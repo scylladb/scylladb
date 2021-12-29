@@ -2053,6 +2053,7 @@ private:
     std::uniform_int_distribution<size_t> _ck_index_dist{0, n_blobs - 1};
     std::uniform_int_distribution<int> _bool_dist{0, 1};
     std::uniform_int_distribution<int> _not_dummy_dist{0, 19};
+    std::uniform_int_distribution<api::timestamp_type> _timestamp_dist{::api::min_timestamp, ::api::min_timestamp + 2};
 
     template <typename Generator>
     static gc_clock::time_point expiry_dist(Generator& gen) {
@@ -2081,6 +2082,20 @@ private:
     schema_ptr make_schema() {
         return _generate_counters ? do_make_schema(counter_type)
                                   : do_make_schema(bytes_type);
+    }
+
+    api::timestamp_type gen_timestamp(timestamp_level l) {
+        auto ts = _timestamp_dist(_gen);
+        if (_uncompactable) {
+            // Offset the timestamp such that no higher level tombstones
+            // covers any lower level tombstone, and no tombstone covers data.
+            return ts + static_cast<std::underlying_type_t<timestamp_level>>(l) * 10;
+        }
+        return ts;
+    }
+
+    tombstone random_tombstone(timestamp_level l) {
+        return tombstone(gen_timestamp(l), expiry_dist(_gen));
     }
 public:
     explicit impl(generate_counters counters, local_shard_only lso = local_shard_only::yes,
@@ -2161,20 +2176,20 @@ public:
         return ranges;
     }
 
+    range_tombstone make_random_range_tombstone() {
+        auto start = make_random_prefix();
+        auto end = make_random_prefix();
+        clustering_key_prefix::less_compare less(*_schema);
+        if (less(end, start)) {
+            std::swap(start, end);
+        }
+        return range_tombstone(std::move(start), std::move(end), random_tombstone(timestamp_level::range_tombstone));
+    }
+
     mutation operator()() {
         std::uniform_int_distribution<column_id> column_count_dist(1, column_count);
         std::uniform_int_distribution<column_id> column_id_dist(0, column_count - 1);
         std::uniform_int_distribution<size_t> value_blob_index_dist(0, 2);
-
-        auto gen_timestamp = [this, timestamp_dist = std::uniform_int_distribution<api::timestamp_type>(api::min_timestamp, api::min_timestamp + 2)] (timestamp_level l) mutable {
-            auto ts = timestamp_dist(_gen);
-            if (_uncompactable) {
-                // Offset the timestamp such that no higher level tombstones
-                // covers any lower level tombstone, and no tombstone covers data.
-                return ts + static_cast<std::underlying_type_t<timestamp_level>>(l) * 10;
-            }
-            return ts;
-        };
 
         auto pkey = partition_key::from_single_value(*_schema, _blobs[0]);
         mutation m(_schema, pkey);
@@ -2257,10 +2272,6 @@ public:
             }
         };
 
-        auto random_tombstone = [&] (timestamp_level l) {
-            return tombstone(gen_timestamp(l), expiry_dist(_gen));
-        };
-
         auto random_row_marker = [&] {
             static thread_local std::uniform_int_distribution<int> dist(0, 3);
             switch (dist(_gen)) {
@@ -2319,14 +2330,7 @@ public:
 
         size_t range_tombstone_count = row_count_dist(_gen);
         for (size_t i = 0; i < range_tombstone_count; ++i) {
-            auto start = make_random_prefix();
-            auto end = make_random_prefix();
-            clustering_key_prefix::less_compare less(*_schema);
-            if (less(end, start)) {
-                std::swap(start, end);
-            }
-            m.partition().apply_row_tombstone(*_schema,
-                    range_tombstone(std::move(start), std::move(end), random_tombstone(timestamp_level::range_tombstone)));
+            m.partition().apply_row_tombstone(*_schema, make_random_range_tombstone());
         }
 
         if (_bool_dist(_gen)) {
@@ -2376,6 +2380,10 @@ std::vector<dht::decorated_key> random_mutation_generator::make_partition_keys(s
 
 schema_ptr random_mutation_generator::schema() const {
     return _impl->_schema;
+}
+
+range_tombstone random_mutation_generator::make_random_range_tombstone() {
+    return _impl->make_random_range_tombstone();
 }
 
 clustering_key random_mutation_generator::make_random_key() {

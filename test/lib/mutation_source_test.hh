@@ -69,6 +69,7 @@ public:
     std::vector<mutation> operator()(size_t n);
     schema_ptr schema() const;
     clustering_key make_random_key();
+    range_tombstone make_random_range_tombstone();
     std::vector<dht::decorated_key> make_partition_keys(size_t n);
     std::vector<query::clustering_range> make_random_ranges(unsigned n_ranges);
 };

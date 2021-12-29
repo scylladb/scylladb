@@ -690,7 +690,7 @@ public:
             _hook = cur.n->_base.keys[_idx];
             assert(_hook->attached());
         }
-        iterator_base() noexcept : _tree(static_cast<tree_ptr>(nullptr)) {}
+        iterator_base() noexcept : _tree(static_cast<tree_ptr>(nullptr)), _idx(npos) {}
 
         bool is_end() const noexcept { return _idx == npos; }
 

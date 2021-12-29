@@ -2021,6 +2021,159 @@ SEASTAR_TEST_CASE(test_cache_populates_partition_tombstone) {
     });
 }
 
+// Returns a range tombstone which represents the same writes as this one but governed by a schema
+// with reversed clustering key order.
+static range_tombstone reversed(range_tombstone rt) {
+    rt.reverse();
+    return rt;
+}
+
+static query::partition_slice make_legacy_reversed(schema_ptr table_schema, query::partition_slice table_slice) {
+    return query::native_reverse_slice_to_legacy_reverse_slice(*table_schema->make_reversed(),
+                                                               query::reverse_slice(*table_schema, std::move(table_slice)));
+}
+
+static query::clustering_row_ranges reversed(const query::clustering_row_ranges& ranges) {
+    query::clustering_row_ranges res;
+    for (auto& range : ranges) {
+        res.emplace_back(query::reverse(range));
+    }
+    return res;
+}
+
+SEASTAR_TEST_CASE(test_scan_with_partial_partitions_reversed) {
+    return seastar::async([] {
+        simple_schema s;
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+        auto cache_mt = make_lw_shared<memtable>(s.schema());
+
+        auto pkeys = s.make_pkeys(3);
+        auto rev_schema = s.schema()->make_reversed();
+
+        mutation m1(s.schema(), pkeys[0]);
+        s.add_row(m1, s.make_ckey(0), "v0");
+        s.add_row(m1, s.make_ckey(1), "v1");
+        s.add_row(m1, s.make_ckey(2), "v2");
+        s.add_row(m1, s.make_ckey(3), "v3");
+        s.add_row(m1, s.make_ckey(4), "v4");
+        cache_mt->apply(m1);
+
+        mutation m2(s.schema(), pkeys[1]);
+        s.add_row(m2, s.make_ckey(3), "v5");
+        s.add_row(m2, s.make_ckey(4), "v6");
+        s.add_row(m2, s.make_ckey(5), "v7");
+        cache_mt->apply(m2);
+
+        mutation m3(s.schema(), pkeys[2]);
+        auto rt1 = s.make_range_tombstone(s.make_ckey_range(0, 3));
+        auto rev_rt1_to_after_2 = reversed(rt1);
+        auto rev_rt1_from_after_2 = reversed(rt1);
+        {
+            rev_rt1_to_after_2.trim(*rev_schema,
+                                 position_in_partition::before_all_clustered_rows(),
+                                 position_in_partition::after_key(s.make_ckey(2)));
+            rev_rt1_from_after_2.trim(*rev_schema,
+                                 position_in_partition::after_key(s.make_ckey(2)),
+                                 position_in_partition::after_all_clustered_rows());
+        }
+        auto rt2 = s.make_range_tombstone(s.make_ckey_range(3, 4));
+        m3.partition().apply_delete(*s.schema(), rt1);
+        m3.partition().apply_delete(*s.schema(), rt2);
+        s.add_row(m3, s.make_ckey(2), "v10");
+        cache_mt->apply(m3);
+
+        cache_tracker tracker;
+        row_cache cache(s.schema(), snapshot_source_from_snapshot(cache_mt->as_data_source()), tracker);
+
+        // partially populate middle of m1, clustering range: [-inf, 1]
+        {
+            auto slice = partition_slice_builder(*s.schema())
+                    .with_range(query::clustering_range::make_ending_with(s.make_ckey(1)))
+                    .build();
+            auto prange = dht::partition_range::make_ending_with(dht::ring_position(m1.decorated_key()));
+            assert_that(cache.make_reader(s.schema(), semaphore.make_permit(), prange, slice))
+                    .produces(m1, slice.row_ranges(*s.schema(), m1.key()))
+                    .produces_end_of_stream();
+        }
+
+        // partially populate m3, clustering range: [-inf, 1]
+        {
+            auto slice = partition_slice_builder(*s.schema())
+                    .with_range(query::clustering_range::make_ending_with(s.make_ckey(1)))
+                    .build();
+            auto prange = dht::partition_range::make_singular(m3.decorated_key());
+            assert_that(cache.make_reader(s.schema(), semaphore.make_permit(), prange, slice))
+                    .produces(m3, slice.row_ranges(*s.schema(), m3.key()))
+                    .produces_end_of_stream();
+        }
+
+        {
+            auto slice = partition_slice_builder(*s.schema())
+                    .with_range(s.make_ckey_range(1, 4))
+                    .build();
+
+            auto rev_slice = make_legacy_reversed(s.schema(), std::move(slice));
+
+            assert_that(cache.make_reader(rev_schema, semaphore.make_permit(), query::full_partition_range, rev_slice))
+                    .produces_partition_start(m1.decorated_key())
+                    .produces_row_with_key(s.make_ckey(4))
+                    .produces_row_with_key(s.make_ckey(3))
+                    .produces_row_with_key(s.make_ckey(2))
+                    .produces_row_with_key(s.make_ckey(1))
+                    .produces_partition_end()
+                    .produces_partition_start(m2.decorated_key())
+                    .produces_row_with_key(s.make_ckey(4))
+                    .produces_row_with_key(s.make_ckey(3))
+                    .produces_partition_end()
+                    .produces_partition_start(m3.decorated_key())
+                    .produces_range_tombstone(reversed(rt2))
+                    .produces_range_tombstone(rev_rt1_to_after_2)
+                    .produces_row_with_key(s.make_ckey(2))
+                    .produces_range_tombstone(rev_rt1_from_after_2, reversed(rev_slice.row_ranges(*rev_schema, m3.key())))
+                    .produces_partition_end()
+                    .produces_end_of_stream();
+        }
+
+        // Test query slice which has no rows
+        {
+            auto slice = partition_slice_builder(*s.schema())
+                    .with_range(s.make_ckey_range(0, 1))
+                    .build();
+
+            auto rev_slice = make_legacy_reversed(s.schema(), std::move(slice));
+            auto pr = dht::partition_range::make_singular(m2.decorated_key());
+
+            assert_that(cache.make_reader(rev_schema, semaphore.make_permit(), pr, rev_slice))
+                    .produces_eos_or_empty_mutation();
+
+        }
+
+        // full scan to validate cache state
+        assert_that(cache.make_reader(s.schema(), semaphore.make_permit()))
+                .produces(m1)
+                .produces(m2)
+                .produces(m3)
+                .produces_end_of_stream();
+
+        // Test full range population on empty cache
+        {
+            cache.evict();
+
+            auto slice = s.schema()->full_slice();
+            auto rev_slice = make_legacy_reversed(s.schema(), std::move(slice));
+            auto pr = dht::partition_range::make_singular(m2.decorated_key());
+
+            assert_that(cache.make_reader(rev_schema, semaphore.make_permit(), pr, rev_slice))
+                    .produces_partition_start(m2.decorated_key())
+                    .produces_row_with_key(s.make_ckey(5))
+                    .produces_row_with_key(s.make_ckey(4))
+                    .produces_row_with_key(s.make_ckey(3))
+                    .produces_partition_end()
+                    .produces_end_of_stream();
+        }
+    });
+}
+
 // Tests the case of cache reader having to reconcile a range tombstone
 // from the underlying mutation source which overlaps with previously emitted
 // tombstones.
@@ -3199,6 +3352,7 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
         random_mutation_generator gen(random_mutation_generator::generate_counters::no);
         memtable_snapshot_source underlying(gen.schema());
         schema_ptr s = gen.schema();
+        schema_ptr rev_s = s->make_reversed();
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
         auto m0 = gen();
@@ -3214,7 +3368,8 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
 
         auto pr = dht::partition_range::make_singular(m0.decorated_key());
         auto make_reader = [&] (const query::partition_slice& slice) {
-            auto rd = cache.make_reader(s, semaphore.make_permit(), pr, slice);
+            auto reversed = slice.options.contains<query::partition_slice::option::reversed>();
+            auto rd = cache.make_reader(reversed ? rev_s : s, semaphore.make_permit(), pr, slice);
             rd.set_max_buffer_size(3);
             rd.fill_buffer().get();
             return rd;
@@ -3238,9 +3393,18 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
                     generations[id] = oldest_generation;
                     gc_versions();
 
+                    bool reversed = tests::random::get_bool();
+
+                    auto fwd_ranges = gen.make_random_ranges(1);
                     auto slice = partition_slice_builder(*s)
-                        .with_ranges(gen.make_random_ranges(1))
+                        .with_ranges(fwd_ranges)
                         .build();
+
+                    auto native_slice = slice;
+                    if (reversed) {
+                        slice = make_legacy_reversed(s, std::move(slice));
+                        native_slice = query::legacy_reverse_slice_to_native_reverse_slice(*s, slice);
+                    }
 
                     auto rd = make_reader(slice);
                     auto close_rd = deferred_close(rd);
@@ -3248,13 +3412,16 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
                     BOOST_REQUIRE(actual_opt);
                     auto actual = *actual_opt;
 
-                    auto&& ranges = slice.row_ranges(*s, actual.key());
-                    actual.partition().mutable_row_tombstones().trim(*s, ranges);
+                    auto&& ranges = native_slice.row_ranges(*rd.schema(), actual.key());
+                    actual.partition().mutable_row_tombstones().trim(*rd.schema(), ranges);
 
                     auto n_to_consider = last_generation - oldest_generation + 1;
                     auto possible_versions = boost::make_iterator_range(versions.end() - n_to_consider, versions.end());
                     if (!boost::algorithm::any_of(possible_versions, [&] (const mutation& m) {
-                        auto m2 = m.sliced(ranges);
+                        auto m2 = m.sliced(fwd_ranges);
+                        if (reversed) {
+                            m2 = reverse(std::move(m2));
+                        }
                         if (n_to_consider == 1) {
                             assert_that(actual).is_equal_to(m2);
                         }
