@@ -83,6 +83,13 @@ namespace query {
  * Once SEPARATE_PAGE_SIZE_AND_SAFETY_LIMIT cluster feature becomes supported by
  * the whole cluster, new nodes will start to set `page_size` to the right value
  * according to the interpretation described in the point (2).
+ *
+ * For each request, only the coordinator looks at
+ * SEPARATE_PAGE_SIZE_AND_SAFETY_LIMIT and based on it decides for this request
+ * whether it will be handled with interpretation (1) or (2). Then all the
+ * replicas can check the decision based only on the message they receive.
+ * If page_size is set to 0 or not set at all then the request will be handled
+ * using the interpretation (1). Otherwise, interpretation (2) will be used.
  */
 struct max_result_size {
     uint64_t soft_limit;
