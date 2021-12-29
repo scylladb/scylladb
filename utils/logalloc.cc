@@ -1395,6 +1395,8 @@ private:
     }
 
     lsa_buffer alloc_buf(size_t buf_size) {
+        // Note: Can be re-entered from allocation sites below due to memory reclamation which
+        // invokes segment compaction.
         static_assert(segment::size % buf_align == 0);
         if (buf_size > segment::size) {
             throw_with_backtrace<std::runtime_error>(format("Buffer size {} too large", buf_size));
@@ -1504,6 +1506,10 @@ private:
         std::vector<entangled> ptrs;
         ptrs.reserve(segment::size / buf_align);
         segment* new_active = new_segment();
+        if (_buf_active) [[unlikely]] {
+            // Memory allocation above could allocate active buffer during segment compaction.
+            close_buf_active();
+        }
         assert((uintptr_t)new_active->at(0) % buf_align == 0);
         segment_descriptor& desc = shard_segment_pool.descriptor(new_active);
         desc._buf_pointers = std::move(ptrs);
