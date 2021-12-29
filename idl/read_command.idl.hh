@@ -50,6 +50,7 @@ class partition_slice {
 struct max_result_size {
     uint64_t soft_limit;
     uint64_t hard_limit;
+    uint64_t page_size [[version 4.7]] = 0;
 }
 
 class read_command {

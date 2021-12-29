@@ -100,6 +100,7 @@ private:
     gms::feature _range_scan_data_variant;
     gms::feature _cdc_generations_v2;
     gms::feature _uda;
+    gms::feature _separate_page_size_and_safety_limit;
 
 public:
 
@@ -176,6 +177,22 @@ public:
 
     bool cluster_supports_user_defined_aggregates() const {
         return bool(_uda);
+    }
+
+    // Historically max_result_size contained only two fields: soft_limit and
+    // hard_limit. It was somehow obscure because for normal paged queries both
+    // fields were equal and meant page size. For unpaged queries and reversed
+    // queries soft_limit was used to warn when the size of the result exceeded
+    // the soft_limit and hard_limit was used to throw when the result was
+    // bigger than this hard_limit. To clean things up, we introduced the third
+    // field into max_result_size. It's name is page_size. Now page_size always
+    // means the size of the page while soft and hard limits are just what their
+    // names suggest. They are no longer interepreted as page size. This is not
+    // a backwards compatible change so this new cluster feature is used to make
+    // sure the whole cluster supports the new page_size field and we can safely
+    // send it to replicas.
+    bool cluster_supports_separate_page_size_and_safety_limit() const {
+        return bool(_separate_page_size_and_safety_limit);
     }
 
     static std::set<sstring> to_feature_set(sstring features_string);

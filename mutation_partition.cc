@@ -1962,19 +1962,20 @@ void query_result_builder::consume_end_of_stream() {
 }
 
 stop_iteration query::result_memory_accounter::check_local_limit() const {
-    if (_total_used_memory > _maximum_result_size.hard_limit) {
-        if (_short_read_allowed) {
-            return stop_iteration::yes;
+    if (_short_read_allowed) {
+        return stop_iteration(_total_used_memory > _maximum_result_size.get_page_size());
+    } else {
+        if (_total_used_memory > _maximum_result_size.hard_limit) {
+            throw std::runtime_error(fmt::format(
+                    "Memory usage of unpaged query exceeds hard limit of {} (configured via max_memory_for_unlimited_query_hard_limit)",
+                    _maximum_result_size.hard_limit));
         }
-        throw std::runtime_error(fmt::format(
-                "Memory usage of unpaged query exceeds hard limit of {} (configured via max_memory_for_unlimited_query_hard_limit)",
-                _maximum_result_size.hard_limit));
-    }
-    if (_below_soft_limit && !_short_read_allowed && _total_used_memory > _maximum_result_size.soft_limit) {
-        mplog.warn(
-                "Memory usage of unpaged query exceeds soft limit of {} (configured via max_memory_for_unlimited_query_soft_limit)",
-                _maximum_result_size.soft_limit);
-        _below_soft_limit = false;
+        if (_below_soft_limit && _total_used_memory > _maximum_result_size.soft_limit) {
+            mplog.warn(
+                    "Memory usage of unpaged query exceeds soft limit of {} (configured via max_memory_for_unlimited_query_soft_limit)",
+                    _maximum_result_size.soft_limit);
+            _below_soft_limit = false;
+        }
     }
     return stop_iteration::no;
 }
