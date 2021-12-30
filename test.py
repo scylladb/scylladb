@@ -284,6 +284,15 @@ class CqlTestSuite(TestSuite):
 class RunTestSuite(TestSuite):
     """TestSuite for test directory with a 'run' script """
 
+    def __init__(self, path, cfg, options, mode):
+        super().__init__(path, cfg, options, mode)
+        self.scylla_exe = os.path.join("build", self.mode, "scylla")
+        if self.mode == "coverage":
+            self.scylla_env = coverage.env(self.scylla_exe, distinct_id=self.name)
+        else:
+            self.scylla_env = dict()
+        self.scylla_env['SCYLLA'] = self.scylla_exe
+
     async def add_test(self, shortname):
         test = RunTest(self.next_id, shortname, self)
         self.tests.append(test)
@@ -475,13 +484,6 @@ class RunTest(Test):
         self.path = os.path.join(suite.path, shortname)
         self.xmlout = os.path.join(suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
         self.args = ["--junit-xml={}".format(self.xmlout)]
-        self.scylla_path = os.path.join("build", self.mode, "scylla")
-
-        if self.mode == "coverage":
-            self.env = coverage.env(self.scylla_path, distinct_id=self.suite.name)
-        else:
-            self.env = dict()
-        self.env['SCYLLA'] = self.scylla_path
 
     def print_summary(self):
         print("Output of {} {}:".format(self.path, " ".join(self.args)))
@@ -489,7 +491,7 @@ class RunTest(Test):
 
     async def run(self, options):
         # This test can and should be killed gently, with SIGTERM, not with SIGKILL
-        self.success = await run_test(self, options, gentle_kill=True, env=self.env)
+        self.success = await run_test(self, options, gentle_kill=True, env=self.suite.scylla_env)
         logging.info("Test #%d %s", self.id, "succeeded" if self.success else "failed ")
         return self
 
