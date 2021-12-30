@@ -147,14 +147,14 @@ class TestSuite(ABC):
         pass
 
     @abstractmethod
-    def add_test(self, shortname):
+    async def add_test(self, shortname):
         pass
 
     def junit_tests(self):
         """Tests which participate in a consolidated junit report"""
         return self.tests
 
-    def add_test_list(self):
+    async def add_test_list(self):
         options = self.options
         lst = [os.path.splitext(os.path.basename(t))[0] for t in glob.glob(os.path.join(self.path, self.pattern))]
         if lst:
@@ -162,6 +162,7 @@ class TestSuite(ABC):
             # so pop them up while sorting the list
             lst.sort(key=lambda x: (x not in self.run_first_tests, x))
 
+        pending = set()
         for shortname in lst:
             if shortname in self.disabled_tests:
                 continue
@@ -171,10 +172,24 @@ class TestSuite(ABC):
             if options.skip_pattern and options.skip_pattern in t:
                 continue
 
+            async def add_test(shortname):
+                # Add variants of the same test sequentially
+                # so that case cache has a chance to populate
+                for i in range(options.repeat):
+                    await self.add_test(shortname)
+
             for p in patterns:
                 if p in t:
-                    for i in range(options.repeat):
-                        self.add_test(shortname)
+                    pending.add(asyncio.create_task(add_test(shortname)))
+        if len(pending) == 0:
+            return
+        try:
+            await asyncio.gather(*pending)
+        except asyncio.CancelledError:
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+            raise
 
 
 class UnitTestSuite(TestSuite):
@@ -185,11 +200,11 @@ class UnitTestSuite(TestSuite):
         # Map of custom test command line arguments, if configured
         self.custom_args = cfg.get("custom_args", {})
 
-    def create_test(self, shortname, suite, args):
+    async def create_test(self, shortname, suite, args):
         test = UnitTest(self.next_id, shortname, suite, args)
         self.tests.append(test)
 
-    def add_test(self, shortname):
+    async def add_test(self, shortname):
         """Create a UnitTest class with possibly custom command line
         arguments and add it to the list of tests"""
         # Skip tests which are not configured, and hence are not built
@@ -200,7 +215,7 @@ class UnitTestSuite(TestSuite):
         # are two cores and 2G of RAM
         args = self.custom_args.get(shortname, ["-c2 -m2G"])
         for a in args:
-            self.create_test(shortname, self, a)
+            await self.create_test(shortname, self, a)
 
     @property
     def pattern(self):
@@ -217,19 +232,23 @@ class BoostTestSuite(UnitTestSuite):
     def __init__(self, path, cfg, options, mode):
         super().__init__(path, cfg, options, mode)
 
-    def create_test(self, shortname, suite, args):
-        options = suite.options
+    async def create_test(self, shortname, suite, args):
+        options = self.options
         if options.parallel_cases and (shortname not in self.no_parallel_cases):
             fqname = os.path.join(self.mode, self.name, shortname)
             if fqname not in self._case_cache:
                 exe = os.path.join("build", suite.mode, "test", suite.name, shortname)
-                cases = subprocess.run([exe, '--list_content'],
-                                       stdout=subprocess.PIPE,
-                                       stderr=subprocess.PIPE,
-                                       env=dict(os.environ,
-                                                **{"ASAN_OPTIONS": "halt_on_error=0"}),
-                                       check=True, universal_newlines=True).stderr
-                case_list = [case[:-1] for case in cases.splitlines() if case.endswith('*')]
+                process = await asyncio.create_subprocess_exec(
+                    exe, *['--list_content'],
+                    stderr=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    env=dict(os.environ,
+                             **{"ASAN_OPTIONS": "halt_on_error=0"}),
+                    preexec_fn=os.setsid,
+                )
+                _, stderr = await asyncio.wait_for(process.communicate(), options.timeout)
+
+                case_list = [case[:-1] for case in stderr.decode().splitlines() if case.endswith('*')]
                 self._case_cache[fqname] = case_list
 
             case_list = self._case_cache[fqname]
@@ -252,7 +271,7 @@ class BoostTestSuite(UnitTestSuite):
 class CqlTestSuite(TestSuite):
     """TestSuite for CQL tests"""
 
-    def add_test(self, shortname):
+    async def add_test(self, shortname):
         """Create a CqlTest class and add it to the list"""
         test = CqlTest(self.next_id, shortname, self)
         self.tests.append(test)
@@ -265,7 +284,7 @@ class CqlTestSuite(TestSuite):
 class RunTestSuite(TestSuite):
     """TestSuite for test directory with a 'run' script """
 
-    def add_test(self, shortname):
+    async def add_test(self, shortname):
         test = RunTest(self.next_id, shortname, self)
         self.tests.append(test)
 
@@ -722,13 +741,13 @@ def parse_cmd_line():
     return args
 
 
-def find_tests(options):
+async def find_tests(options):
 
     for f in glob.glob(os.path.join("test", "*")):
         if os.path.isdir(f) and os.path.isfile(os.path.join(f, "suite.yaml")):
             for mode in options.modes:
                 suite = TestSuite.opt_create(f, options, mode)
-                suite.add_test_list()
+                await suite.add_test_list()
 
     if not TestSuite.test_count():
         if len(options.name):
@@ -891,7 +910,7 @@ async def main():
 
     open_log(options.tmpdir)
 
-    find_tests(options)
+    await find_tests(options)
     if options.list_tests:
         print('\n'.join([t.name for t in TestSuite.tests()]))
         return 0
