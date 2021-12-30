@@ -2019,17 +2019,17 @@ with open(buildfile_tmp, 'w') as f:
             f.write('build $builddir/{mode}/{hh}.o: checkhh.{mode} {hh} | $builddir/{mode}/gen/empty.cc || {gen_headers_dep}\n'.format(
                     mode=mode, hh=hh, gen_headers_dep=gen_headers_dep))
 
-        f.write('build $builddir/{mode}/seastar/libseastar.a: ninja | always\n'
+        f.write('build $builddir/{mode}/seastar/libseastar.a: ninja $builddir/{mode}/seastar/build.ninja | always\n'
                 .format(**locals()))
         f.write('  pool = submodule_pool\n')
         f.write('  subdir = $builddir/{mode}/seastar\n'.format(**locals()))
         f.write('  target = seastar\n'.format(**locals()))
-        f.write('build $builddir/{mode}/seastar/libseastar_testing.a: ninja | always\n'
+        f.write('build $builddir/{mode}/seastar/libseastar_testing.a: ninja $builddir/{mode}/seastar/build.ninja | always\n'
                 .format(**locals()))
         f.write('  pool = submodule_pool\n')
         f.write('  subdir = $builddir/{mode}/seastar\n'.format(**locals()))
         f.write('  target = seastar_testing\n'.format(**locals()))
-        f.write('build $builddir/{mode}/seastar/apps/iotune/iotune: ninja\n'
+        f.write('build $builddir/{mode}/seastar/apps/iotune/iotune: ninja $builddir/{mode}/seastar/build.ninja\n'
                 .format(**locals()))
         f.write('  pool = submodule_pool\n')
         f.write('  subdir = $builddir/{mode}/seastar\n'.format(**locals()))
@@ -2063,7 +2063,7 @@ with open(buildfile_tmp, 'w') as f:
         f.write('  pool = submodule_pool\n')
 
         for lib in abseil_libs:
-            f.write('build $builddir/{mode}/abseil/{lib}: ninja\n'.format(**locals()))
+            f.write('build $builddir/{mode}/abseil/{lib}: ninja $builddir/{mode}/abseil/build.ninja\n'.format(**locals()))
             f.write('  pool = submodule_pool\n')
             f.write('  subdir = $builddir/{mode}/abseil\n'.format(**locals()))
             f.write('  target = {lib}\n'.format(**locals()))
@@ -2163,7 +2163,7 @@ with open(buildfile_tmp, 'w') as f:
         rule configure
           command = {python} configure.py $configure_args
           generator = 1
-        build build.ninja: configure | configure.py SCYLLA-VERSION-GEN {args.seastar_path}/CMakeLists.txt
+        build build.ninja {build_ninja_list}: configure | configure.py SCYLLA-VERSION-GEN {args.seastar_path}/CMakeLists.txt
         rule cscope
             command = find -name '*.[chS]' -o -name "*.cc" -o -name "*.hh" | cscope -bq -i-
             description = CSCOPE
@@ -2177,7 +2177,7 @@ with open(buildfile_tmp, 'w') as f:
             description = List configured modes
         build mode_list: mode_list
         default {modes_list}
-        ''').format(modes_list=' '.join(default_modes), **globals()))
+        ''').format(modes_list=' '.join(default_modes), build_ninja_list=' '.join([f'build/{mode}/{dir}/build.ninja' for mode in build_modes for dir in ['seastar', 'abseil']]), **globals()))
     unit_test_list = set(test for test in build_artifacts if test in set(tests))
     f.write(textwrap.dedent('''\
         rule unit_test_list
