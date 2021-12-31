@@ -3144,10 +3144,18 @@ class scylla_io_queues(gdb.Command):
             gdb.write("\n")
 
             for fg, fq in zip(f_groups, f_queues):
-                gdb.write("\tMax capacity:        {}\n".format(self.ticket(fg['_maximum_capacity'])))
-                gdb.write("\tCapacity tail:       {}\n".format(self.ticket(std_atomic(fg['_capacity_tail']).get())))
-                gdb.write("\tCapacity head:       {}\n".format(self.ticket(std_atomic(fg['_capacity_head']).get())))
-                gdb.write("\n")
+                try:
+                    gdb.write("\tShares capacity:     {}\n".format(self.ticket(fg['_shares_capacity'])))
+                    gdb.write("\tCost capacity:       {}\n".format(self.ticket(fg['_cost_capacity'])))
+                    gdb.write("\tCapacity tail:       {}\n".format(std_atomic(fg['_capacity_tail']).get()))
+                    gdb.write("\tCapacity head:       {}\n".format(std_atomic(fg['_capacity_head']).get()))
+                    gdb.write("\tCapacity ceil:       {}\n".format(std_atomic(fg['_capacity_ceil']).get()))
+                    gdb.write("\n")
+                except gdb.error:
+                    gdb.write("\tMax capacity:        {}\n".format(self.ticket(fg['_maximum_capacity'])))
+                    gdb.write("\tCapacity tail:       {}\n".format(self.ticket(std_atomic(fg['_capacity_tail']).get())))
+                    gdb.write("\tCapacity head:       {}\n".format(self.ticket(std_atomic(fg['_capacity_head']).get())))
+                    gdb.write("\n")
 
                 gdb.write("\tResources executing: {}\n".format(self.ticket(fq['_resources_executing'])))
                 gdb.write("\tResources queued:    {}\n".format(self.ticket(fq['_resources_queued'])))
