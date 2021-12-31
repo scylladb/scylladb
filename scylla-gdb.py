@@ -3359,6 +3359,8 @@ class scylla_fiber(gdb.Command):
         try:
             initial_task_ptr = int(gdb.parse_and_eval(args.task))
             this_task, fiber = self._walk(initial_task_ptr, args.max_depth, args.scanned_region_size, args.force_fallback_mode, args.verbose)
+            if this_task is None:
+                return
 
             tptr, vptr, name = this_task
             gdb.write("Starting task: (task*) 0x{:016x} 0x{:016x} {}\n".format(tptr.ptr, int(vptr), name))
