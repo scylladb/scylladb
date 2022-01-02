@@ -7,6 +7,9 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
+
 #include "mutation_partition_serializer.hh"
 #include "mutation_partition.hh"
 
@@ -14,6 +17,7 @@
 #include "idl/mutation.dist.hh"
 #include "idl/mutation.dist.impl.hh"
 #include "frozen_mutation.hh"
+#include "utils/preempt.hh"
 
 using namespace db;
 
@@ -170,13 +174,19 @@ static auto write_row(Writer&& writer, const schema& s, const clustering_key_pre
 }
 
 template<typename Writer>
-void mutation_partition_serializer::write_serialized(Writer&& writer, const schema& s, const mutation_partition& mp)
+void mutation_partition_serializer::write_serialized(Writer&& writer, const schema& s, const mutation_partition& mp, is_preemptible preemptible)
 {
     auto srow_writer = std::move(writer).write_tomb(mp.partition_tombstone()).start_static_row();
     auto row_tombstones = write_row_cells(std::move(srow_writer), mp.static_row().get(), s, column_kind::static_column).end_static_row().start_range_tombstones();
+    if (preemptible) {
+        seastar::thread::maybe_yield();
+    }
     write_tombstones(s, row_tombstones, mp.row_tombstones());
     auto clustering_rows = std::move(row_tombstones).end_range_tombstones().start_rows();
     for (auto&& cr : mp.non_dummy_rows()) {
+        if (preemptible) {
+            seastar::thread::maybe_yield();
+        }
         write_row(clustering_rows.add(), s, cr.key(), cr.row().cells(), cr.row().marker(), cr.row().deleted_at()).end_deletable_row();
     }
     std::move(clustering_rows).end_rows().end_mutation_partition();
@@ -187,13 +197,13 @@ mutation_partition_serializer::mutation_partition_serializer(const schema& schem
 { }
 
 void
-mutation_partition_serializer::write(bytes_ostream& out) const {
-    write(ser::writer_of_mutation_partition<bytes_ostream>(out));
+mutation_partition_serializer::write(bytes_ostream& out, is_preemptible preemptible) const {
+    write(ser::writer_of_mutation_partition<bytes_ostream>(out), preemptible);
 }
 
-void mutation_partition_serializer::write(ser::writer_of_mutation_partition<bytes_ostream>&& wr) const
+void mutation_partition_serializer::write(ser::writer_of_mutation_partition<bytes_ostream>&& wr, is_preemptible preemptible) const
 {
-    write_serialized(std::move(wr), _schema, _p);
+    write_serialized(std::move(wr), _schema, _p, preemptible);
 }
 
 void serialize_mutation_fragments(const schema& s, tombstone partition_tombstone,

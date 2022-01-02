@@ -11,6 +11,7 @@
 #include "replica/database_fwd.hh"
 #include "bytes_ostream.hh"
 #include "mutation_fragment.hh"
+#include "utils/preempt.hh"
 
 namespace ser {
 template<typename Output>
@@ -25,14 +26,19 @@ private:
     const schema& _schema;
     const mutation_partition& _p;
 private:
+    // is_preemptible can be set when called in a seastar thread
     template<typename Writer>
-    static void write_serialized(Writer&& out, const schema&, const mutation_partition&);
+    static void write_serialized(Writer&& out, const schema&, const mutation_partition&, is_preemptible preemptible);
+
+    template<typename Writer>
+    static future<> write_serialized_gently(Writer&& out, const schema&, const mutation_partition&);
 public:
     using count_type = uint32_t;
     mutation_partition_serializer(const schema&, const mutation_partition&);
 public:
-    void write(bytes_ostream&) const;
-    void write(ser::writer_of_mutation_partition<bytes_ostream>&&) const;
+    // is_preemptible can be set when called in a seastar thread
+    void write(bytes_ostream&, is_preemptible preemptible = is_preemptible::no) const;
+    void write(ser::writer_of_mutation_partition<bytes_ostream>&&, is_preemptible preemptible = is_preemptible::no) const;
 };
 
 void serialize_mutation_fragments(const schema& s, tombstone partition_tombstone,

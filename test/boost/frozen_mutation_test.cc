@@ -24,6 +24,7 @@
 #include <seastar/core/coroutine.hh>
 #include "readers/from_mutations_v2.hh"
 #include "readers/mutation_fragment_v1_stream.hh"
+#include "utils/preempt.hh"
 
 static schema_builder new_table() {
     return { "some_keyspace", "some_table" };
@@ -43,12 +44,13 @@ std::ostream& operator<<(std::ostream& os, const mutation_fragment::printer& p) 
     return os;
 }
 
-template <typename UnfreezeFunc>
-requires std::same_as<std::invoke_result_t<UnfreezeFunc, const frozen_mutation&, schema_ptr>, mutation>
-static future<> _test_freeze_unfreeze(UnfreezeFunc&& unfreeze_func) {
-    return seastar::async([unfreeze_func = std::move(unfreeze_func)] {
-        for_each_mutation([&unfreeze_func](const mutation &m) {
-            auto frozen = freeze(m);
+template <typename FreezeFunc, typename UnfreezeFunc>
+requires (std::same_as<std::invoke_result_t<FreezeFunc, const mutation&>, frozen_mutation> &&
+          std::same_as<std::invoke_result_t<UnfreezeFunc, const frozen_mutation&, schema_ptr>, mutation>)
+static future<> _test_freeze_unfreeze(FreezeFunc&& freeze_func, UnfreezeFunc&& unfreeze_func) {
+    return seastar::async([freeze_func = std::move(freeze_func), unfreeze_func = std::move(unfreeze_func)] {
+        for_each_mutation([&] (const mutation &m) {
+            auto frozen = freeze_func(m);
             BOOST_REQUIRE_EQUAL(frozen.schema_version(), m.schema()->version());
             assert_that(unfreeze_func(frozen, m.schema())).is_equal_to(m);
             BOOST_REQUIRE(frozen.decorated_key(*m.schema()).equal(*m.schema(), m.decorated_key()));
@@ -57,13 +59,17 @@ static future<> _test_freeze_unfreeze(UnfreezeFunc&& unfreeze_func) {
 }
 
 SEASTAR_TEST_CASE(test_writing_and_reading) {
-    return _test_freeze_unfreeze([] (const frozen_mutation& fm, schema_ptr s) {
+    return _test_freeze_unfreeze([] (const mutation& m) {
+        return freeze(m);
+    }, [] (const frozen_mutation& fm, schema_ptr s) {
         return fm.unfreeze(std::move(s));
     });
 }
 
 SEASTAR_TEST_CASE(test_writing_and_reading_gently) {
-    return _test_freeze_unfreeze([] (const frozen_mutation& fm, schema_ptr s) {
+    return _test_freeze_unfreeze([&] (const mutation& m) {
+        return freeze(m, is_preemptible::yes);
+    }, [] (const frozen_mutation& fm, schema_ptr s) {
         return fm.unfreeze_gently(std::move(s)).handle_exception([] (std::exception_ptr ex) {
             testlog.error("test_writing_and_reading_gently: {}", ex);
             return make_exception_future<mutation>(std::move(ex));
@@ -94,6 +100,9 @@ SEASTAR_TEST_CASE(test_writing_and_reading_vectors_gently) {
         auto mutations = gen(rand_size);
         _test_freeze_unfreeze_vector(mutations, [] (const std::vector<mutation>& muts) {
             return freeze_gently(muts).get();
+        });
+        _test_freeze_unfreeze_vector(mutations, [] (const std::vector<mutation>& muts) {
+            return freeze(muts, is_preemptible::yes);
         });
     });
 }

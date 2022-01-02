@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include <seastar/core/thread.hh>
+
 #include "dht/i_partitioner.hh"
 #include "replica/database_fwd.hh"
 #include "mutation_fragment.hh"
@@ -230,8 +232,9 @@ public:
     printer pretty_printer(schema_ptr) const;
 };
 
-frozen_mutation freeze(const mutation& m);
-std::vector<frozen_mutation> freeze(const std::vector<mutation>&);
+// is_preemptible can be set when called in a seastar thread
+frozen_mutation freeze(const mutation& m, is_preemptible = is_preemptible(seastar::thread::running_in_thread()));
+std::vector<frozen_mutation> freeze(const std::vector<mutation>&, is_preemptible = is_preemptible(seastar::thread::running_in_thread()));
 // Caller is responsible for keeping the argument stable in memory
 // freeze_gently may yield only between mutations, threfore it's suitable for
 // a long vector of short mutations.

@@ -22,6 +22,7 @@
 #include "readers/flat_mutation_reader_v2.hh"
 #include "converting_mutation_partition_applier.hh"
 #include "mutation_partition_view.hh"
+#include "utils/preempt.hh"
 
 //
 // Representation layout:
@@ -129,13 +130,24 @@ mutation frozen_mutation::unfreeze_upgrading(schema_ptr schema, const column_map
     return m;
 }
 
-frozen_mutation freeze(const mutation& m) {
-    return frozen_mutation{ m };
+frozen_mutation freeze(const mutation& m, is_preemptible preemptible) {
+    mutation_partition_serializer part_ser(*m.schema(), m.partition());
+
+    bytes_ostream bytes;
+    ser::writer_of_mutation<bytes_ostream> wom(bytes);
+
+    std::move(wom).write_table_id(m.schema()->id())
+                  .write_schema_version(m.schema()->version())
+                  .write_key(m.key())
+                  .partition([&] (auto wr) mutable {
+                    part_ser.write(std::move(wr), preemptible);
+                  }).end_mutation();
+    return frozen_mutation(std::move(bytes), m.key());
 }
 
-std::vector<frozen_mutation> freeze(const std::vector<mutation>& muts) {
-    return boost::copy_range<std::vector<frozen_mutation>>(muts | boost::adaptors::transformed([] (const mutation& m) {
-        return freeze(m);
+std::vector<frozen_mutation> freeze(const std::vector<mutation>& muts, is_preemptible preemptible) {
+    return boost::copy_range<std::vector<frozen_mutation>>(muts | boost::adaptors::transformed([preemptible] (const mutation& m) {
+        return freeze(m, preemptible);
     }));
 }
 
