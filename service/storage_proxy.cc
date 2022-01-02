@@ -1887,9 +1887,10 @@ future<>
 storage_proxy::mutate_locally(const mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout, smp_service_group smp_grp) {
     auto shard = _db.local().shard_of(m);
     get_stats().replica_cross_shard_ops += shard != this_shard_id();
-    return _db.invoke_on(shard, {smp_grp, timeout},
+    auto fm = co_await freeze_gently(m);
+    co_await _db.invoke_on(shard, {smp_grp, timeout},
             [s = global_schema_ptr(m.schema()),
-             m = freeze(m),
+             m = std::move(fm),
              gtr = tracing::global_trace_state_ptr(std::move(tr_state)),
              timeout,
              sync] (database& db) mutable -> future<> {
