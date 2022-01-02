@@ -21,7 +21,7 @@ ip = run.pid_to_ip(pid)
 
 run.wait_for_services(pid, [
     lambda: run.check_rest_api(ip),
-    lambda: run.check_cql(ip)
+    lambda: check_cql(ip)
 ])
 
 success = run.run_pytest(sys.path[0], ['--host', ip] + sys.argv[1:])
