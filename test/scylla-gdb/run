@@ -1,44 +1,75 @@
-#! /bin/bash -eu
+#!/usr/bin/env python3
 
-if [ "$(uname -m)" != x86_64 ]; then
-    # the gdb tests are known broken on aarch64 (and untested on anything else)
-    # see https://sourceware.org/bugzilla/show_bug.cgi?id=27886
-    # pretend everything is working until a fix is found
-    exit 0
-fi
+import sys
+import os
+import subprocess
 
-here=$(dirname $(readlink -e "$0"))
-src=$(realpath -e "$here"/../..)
+# Use the run.py library from ../cql-pytest:
+sys.path.insert(1, sys.path[0] + '/../cql-pytest')
+import run
 
-scylla=$(readlink -e "${SCYLLA-$src/build/release/scylla}")
-gdb=$(readlink -e "${GDB-$(command -v gdb)}")
+print('Scylla is: ' + run.scylla + '.')
 
-_WORKDIR="$(readlink -e ${TMPDIR-/tmp})"/scylla-gdb-$$
-mkdir "$_WORKDIR"
+# Gdb will only work if the executable was built with debug symbols
+# (e.g., Scylla's release or debug build modes mode, but not dev mode).
+# Check this quickly up-front, instead of waiting for gdb to fail in a
+# mysterious way when it can't look up types.
+if not 'debug_info' in subprocess.run(['file', run.scylla],
+        capture_output=True, text=True).stdout:
+    print(f'Scylla executable was compiled without debugging information (-g)')
+    print(f'so cannot be used to test gdb. Please set SCYLLA environment variable.')
+    exit(1)
 
-code=0
-cleanup() {
-    rm -rf --preserve-root "$_WORKDIR"
-    exit $code
-}
-trap 'cleanup' EXIT
+# Run Scylla, waiting until it can respond to CQL
+pid = run.run_with_temporary_dir(run.run_scylla_cmd)
+ip = run.pid_to_ip(pid)
+run.wait_for_services(pid, [lambda: run.check_cql(ip)])
 
-# for easier pkill
-scylla_link="$_WORKDIR"/test-gdb-scylla
-ln -s "$scylla" "$scylla_link"
-gdb_link="$_WORKDIR"/test-gdb
-ln -s "$gdb" "$gdb_link"
+# We do something strange here: We start pytest *inside* gdb's Python
+# interpreter. This will allow us to test various gdb commands added
+# by scylla-gdb.py inside gdb using the pytest framework.
+# TODO: consider a more straightforward implementation, where we don't
+# run pytest inside gdb - and instead run gdb as a separate process and
+# pytest just sends commands to it.
+# TODO: think if we can avoid code duplication with run.run_ptest().
+def run_pytest_in_gdb(pytest_dir, additional_parameters):
+    sys.stdout.flush()
+    sys.stderr.flush()
+    pid = os.fork()
+    if pid == 0:
+        # child:
+        run.run_with_temporary_dir_pids = set() # no children to clean up on child
+        run.run_pytest_pids = set()
+        os.chdir(pytest_dir)
+        pytest_args = ['-o', 'junit_family=xunit2'] + additional_parameters
+        pytest_cmd = f'print("Starting pytest {" ".join(pytest_args)}"); import pytest; sys.argv[0]="pytest"; sys.exit(pytest.main({str(pytest_args)}))'
+        print(f'Starting gdb {run.scylla}')
+        sys.stdout.flush()
+        os.execvp('gdb', ['gdb',
+            '-batch', '-n', '-se', run.scylla,
+            '-ex', 'python ' + pytest_cmd,
+            ])
+        exit(1)
+    # parent:
+    run.run_pytest_pids.add(pid)
+    if os.waitpid(pid, 0)[1]:
+        return False
+    else:
+        return True
 
-# see explanation of SCYLLA_IP in ../alternator/run
-scylla_ip=127.1.$(($$ >> 8 & 255)).$(($$ & 255))
 
-export _WORKDIR
-"$gdb_link" -n -batch -return-child-result -se "$scylla_link" -ex "source $src/scylla-gdb.py" -x "$here"/test.py \
-	    --args "$scylla_link" --developer-mode=true -W "$_WORKDIR" \
-	    -c2 -m256M \
-            --api-address $scylla_ip \
-            --rpc-address $scylla_ip \
-            --listen-address $scylla_ip \
-            --prometheus-address $scylla_ip \
-            --seed-provider-parameters seeds=$scylla_ip \
-	|| code=$?
+# Interesting note: We must use "--scylla-tmp-dir=DIR" here instead of
+# "--scylla-tmp-dir DIR": While the latter does work, pytest has a bug that
+# its command-line parser finds the given directory name in the original
+# command line, saves it as "initialpaths", and uses it to print what it
+# thinks are nice (but are really incorrect) relative paths for "nodes" (test
+# source files).
+success = run_pytest_in_gdb(sys.path[0], ['--scylla-pid='+str(pid), '--scylla-tmp-dir='+run.pid_to_dir(pid)] + sys.argv[1:])
+
+run.summary = 'Scylla GDB tests pass' if success else 'Scylla GDB tests failure'
+
+exit(0 if success else 1)
+
+# Note that the run.cleanup_all() function runs now, just like on any exit
+# for any reason in this script. It will delete the temporary files and
+# announce the failure or success of the test (printing run.summary).
