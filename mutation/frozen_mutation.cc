@@ -7,6 +7,8 @@
  */
 
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
+
 #include "frozen_mutation.hh"
 #include "schema/schema_registry.hh"
 #include "mutation_partition.hh"
@@ -135,6 +137,16 @@ std::vector<frozen_mutation> freeze(const std::vector<mutation>& muts) {
     return boost::copy_range<std::vector<frozen_mutation>>(muts | boost::adaptors::transformed([] (const mutation& m) {
         return freeze(m);
     }));
+}
+
+future<std::vector<frozen_mutation>> freeze_gently(const std::vector<mutation>& muts) {
+    std::vector<frozen_mutation> result;
+    result.reserve(muts.size());
+    for (const auto& m : muts) {
+        result.emplace_back(freeze(m));
+        co_await coroutine::maybe_yield();
+    }
+    co_return std::move(result);
 }
 
 std::vector<mutation> unfreeze(const std::vector<frozen_mutation>& muts) {

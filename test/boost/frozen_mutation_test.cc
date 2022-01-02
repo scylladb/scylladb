@@ -18,6 +18,7 @@
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
+#include "test/lib/random_utils.hh"
 
 #include <seastar/core/thread.hh>
 #include <seastar/core/coroutine.hh>
@@ -67,6 +68,33 @@ SEASTAR_TEST_CASE(test_writing_and_reading_gently) {
             testlog.error("test_writing_and_reading_gently: {}", ex);
             return make_exception_future<mutation>(std::move(ex));
         }).get();
+    });
+}
+
+// Called in a seastar thread
+template <typename FreezeFunc>
+requires std::same_as<std::invoke_result_t<FreezeFunc, const std::vector<mutation>&>, std::vector<frozen_mutation>>
+static void _test_freeze_unfreeze_vector(const std::vector<mutation>& mutations, FreezeFunc&& freeze_func) {
+    auto frozen_mutations = freeze_func(mutations);
+    BOOST_REQUIRE_EQUAL(mutations.size(), frozen_mutations.size());
+    for (size_t i = 0; i < mutations.size(); i++) {
+        const auto& m = mutations[i];
+        const auto& frozen = frozen_mutations[i];
+        BOOST_REQUIRE_EQUAL(frozen.schema_version(), m.schema()->version());
+        BOOST_REQUIRE(frozen.decorated_key(*m.schema()).equal(*m.schema(), m.decorated_key()));
+        auto unfrozen = frozen.unfreeze_gently(m.schema()).get();
+        assert_that(unfrozen).is_equal_to(m);
+    }
+}
+
+SEASTAR_TEST_CASE(test_writing_and_reading_vectors_gently) {
+    return seastar::async([] {
+        auto gen = random_mutation_generator(random_mutation_generator::generate_counters::no);
+        size_t rand_size = 1 + tests::random::get_int(99);
+        auto mutations = gen(rand_size);
+        _test_freeze_unfreeze_vector(mutations, [] (const std::vector<mutation>& muts) {
+            return freeze_gently(muts).get();
+        });
     });
 }
 
