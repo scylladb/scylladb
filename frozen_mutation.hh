@@ -84,6 +84,8 @@ public:
 
 frozen_mutation freeze(const mutation& m);
 
+future<frozen_mutation> freeze_gently(const mutation& m);
+
 struct frozen_mutation_and_schema {
     frozen_mutation fm;
     schema_ptr s;

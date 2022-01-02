@@ -19,6 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/coroutine.hh>
 #include <seastar/util/closeable.hh>
 #include "frozen_mutation.hh"
 #include "mutation_partition.hh"
@@ -137,6 +138,30 @@ mutation frozen_mutation::unfreeze_upgrading(schema_ptr schema, const column_map
 
 frozen_mutation freeze(const mutation& m) {
     return frozen_mutation{ m };
+}
+
+future<frozen_mutation> freeze_gently(const mutation& m) {
+    mutation_partition_serializer part_ser(*m.schema(), m.partition());
+
+    promise<> pr;
+    future<> f = pr.get_future();
+    bytes_ostream bytes;
+    ser::writer_of_mutation<bytes_ostream> wom(bytes);
+    std::move(wom).write_table_id(m.schema()->id())
+                  .write_schema_version(m.schema()->version())
+                  .write_key(m.key())
+                  .partition([&, pr = std::move(pr)] (auto wr) mutable {
+                    // waited via pr's future.
+                    (void)part_ser.write_gently(std::move(wr)).then_wrapped([pr = std::move(pr)] (future<> f) mutable {
+                        if (f.failed()) [[unlikely]] {
+                            pr.set_exception(f.get_exception());
+                        } else {
+                            pr.set_value();
+                        }
+                    });
+                  }).end_mutation();
+    co_await std::move(f);
+    co_return frozen_mutation(std::move(bytes), m.key());
 }
 
 mutation_partition_view frozen_mutation::partition() const {
