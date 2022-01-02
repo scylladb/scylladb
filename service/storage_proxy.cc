@@ -4685,7 +4685,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
                 tracing::trace(handler->tr_state, "CAS precondition is met; proposing client-requested updates for {}", ballot);
             }
 
-            auto proposal = make_lw_shared<paxos::proposal>(ballot, freeze(*mutation));
+            auto proposal = make_lw_shared<paxos::proposal>(ballot, co_await freeze_gently(*mutation));
 
             bool is_accepted = co_await handler->accept_proposal(proposal);
             if (is_accepted) {
