@@ -1551,11 +1551,15 @@ future<> shard_reader::close() noexcept {
         co_return;
     }
 
-    try {
-        if (_read_ahead) {
+    if (_read_ahead) {
+        try {
             co_await *std::exchange(_read_ahead, std::nullopt);
+        } catch (...) {
+            mrlog.warn("shard_reader::close(): read_ahead on shard {} failed: {}", _shard, std::current_exception());
         }
+    }
 
+    try {
         co_await smp::submit_to(_shard, [this] {
             auto irh = std::move(*_reader).inactive_read_handle();
             return with_closeable(flat_mutation_reader(_reader.release()), [this] (flat_mutation_reader& reader) mutable {
