@@ -475,13 +475,22 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
     std::string table_name = get_table_name(request);
     std::string keyspace_name = executor::KEYSPACE_NAME_PREFIX + table_name;
     tracing::add_table_name(trace_state, keyspace_name, table_name);
+    auto& p = _proxy.container();
 
-    if (!_proxy.get_db().local().has_schema(keyspace_name, table_name)) {
-        co_return api_error::resource_not_found(format("Requested resource not found: Table: {} not found", table_name));
-    }
+    co_await _mm.container().invoke_on(0, [&] (service::migration_manager& mm) -> future<> {
+        co_await mm.schema_read_barrier();
 
-    co_await _mm.announce_column_family_drop(keyspace_name, table_name, service::migration_manager::drop_views::yes);
-    co_await _mm.announce_keyspace_drop(keyspace_name);
+        if (!p.local().get_db().local().has_schema(keyspace_name, table_name)) {
+            throw api_error::resource_not_found(format("Requested resource not found: Table: {} not found", table_name));
+        }
+
+        auto m = co_await mm.prepare_column_family_drop_announcement(keyspace_name, table_name, service::migration_manager::drop_views::yes);
+        auto m2 = mm.prepare_keyspace_drop_announcement(keyspace_name);
+
+        std::move(m2.begin(), m2.end(), std::back_inserter(m));
+
+        co_await mm.announce(std::move(m));
+    });
 
     // FIXME: need more attributes?
     rjson::value table_description = rjson::empty_object();
