@@ -45,7 +45,9 @@
 
 #include "seastarx.hh"
 
+namespace replica {
 class database;
+}
 
 namespace cql3 {
 class query_processor;
@@ -58,7 +60,7 @@ class storage_proxy;
 namespace db {
 namespace legacy_schema_migrator {
 
-future<> migrate(sharded<service::storage_proxy>&, sharded<database>& db, cql3::query_processor&);
+future<> migrate(sharded<service::storage_proxy>&, sharded<replica::database>& db, cql3::query_processor&);
 
 }
 }

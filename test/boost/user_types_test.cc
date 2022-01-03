@@ -39,7 +39,7 @@
         exception_predicate::message_equals(msg))
 
 static void flush(cql_test_env& e) {
-    e.db().invoke_on_all([](database& dbi) {
+    e.db().invoke_on_all([](replica::database& dbi) {
         return dbi.flush_all_memtables();
     }).get();
 }

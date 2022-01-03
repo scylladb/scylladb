@@ -149,7 +149,7 @@ bool view_update_generator::should_throttle() const {
     return !_started.available();
 }
 
-future<> view_update_generator::register_staging_sstable(sstables::shared_sstable sst, lw_shared_ptr<table> table) {
+future<> view_update_generator::register_staging_sstable(sstables::shared_sstable sst, lw_shared_ptr<replica::table> table) {
     if (_as.abort_requested()) {
         return make_ready_future<>();
     }
@@ -184,7 +184,7 @@ void view_update_generator::setup_metrics() {
 
 void view_update_generator::discover_staging_sstables() {
     for (auto& x : _db.get_column_families()) {
-        table& t = *(x.second);
+        replica::table& t = *(x.second);
         for (auto sstables = t.get_sstables(); sstables::shared_sstable sst : *sstables) {
             if (sst->requires_view_building()) {
                 _sstables_with_tables[t.shared_from_this()].push_back(std::move(sst));

@@ -41,7 +41,7 @@ void feature_enabled_listener::on_enabled() {
     }
 }
 
-sstables_format_selector::sstables_format_selector(gms::gossiper& g, sharded<gms::feature_service>& f, sharded<database>& db)
+sstables_format_selector::sstables_format_selector(gms::gossiper& g, sharded<gms::feature_service>& f, sharded<replica::database>& db)
     : _gossiper(g)
     , _features(f)
     , _db(db)
@@ -96,7 +96,7 @@ future<> sstables_format_selector::read_sstables_format() {
 future<> sstables_format_selector::select_format(sstables::sstable_version_types format) {
     logger.info("Selected {} sstables format", to_string(format));
     _selected_format = format;
-    return _db.invoke_on_all([this] (database& db) {
+    return _db.invoke_on_all([this] (replica::database& db) {
         db.set_format(_selected_format);
     });
 }

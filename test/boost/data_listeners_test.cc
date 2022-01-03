@@ -72,7 +72,7 @@ results test_data_listeners(cql_test_env& e, sstring cf_name) {
 
     std::vector<std::unique_ptr<table_listener>> listeners;
 
-    e.db().invoke_on_all([&listeners, &cf_name] (database& db) {
+    e.db().invoke_on_all([&listeners, &cf_name] (replica::database& db) {
         auto listener = std::make_unique<table_listener>(cf_name);
         db.data_listeners().install(&*listener);
         testlog.info("installed listener {}", fmt::ptr(&*listener));
@@ -86,7 +86,7 @@ results test_data_listeners(cql_test_env& e, sstring cf_name) {
     e.execute_cql("SELECT k, c FROM t1;").get();
 
     auto res = e.db().map_reduce0(
-        [&listeners] (database& db) {
+        [&listeners] (replica::database& db) {
             for (auto& listener: listeners) {
                 auto li = &*listener;
                 if (!db.data_listeners().exists(li)) {

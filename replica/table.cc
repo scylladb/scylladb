@@ -55,6 +55,8 @@
 #include <boost/range/algorithm/remove_if.hpp>
 #include <boost/range/algorithm.hpp>
 
+namespace replica {
+
 static logging::logger tlogger("table");
 static seastar::metrics::label column_family_label("cf");
 static seastar::metrics::label keyspace_label("ks");
@@ -1546,7 +1548,7 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
         db::replay_position rp;
         struct removed_sstable {
             sstables::shared_sstable sst;
-            ::enable_backlog_tracker enable_backlog_tracker;
+            replica::enable_backlog_tracker enable_backlog_tracker;
         };
         std::vector<removed_sstable> remove;
 
@@ -1561,7 +1563,7 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
 
             auto prune = [this, &gc_trunc] (lw_shared_ptr<sstables::sstable_set>& pruned,
                                             lw_shared_ptr<sstables::sstable_set>& pruning,
-                                            ::enable_backlog_tracker enable_backlog_tracker) mutable {
+                                            replica::enable_backlog_tracker enable_backlog_tracker) mutable {
                 pruning->for_each_sstable([&] (const sstables::shared_sstable& p) mutable {
                     if (p->max_data_age() <= gc_trunc) {
                         rp = std::max(p->get_stats_metadata().position, rp);
@@ -1957,6 +1959,8 @@ future<> table::apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_hand
 
 template void table::do_apply(db::rp_handle&&, const frozen_mutation&, const schema_ptr&);
 
+}
+
 future<>
 write_memtable_to_sstable(flat_mutation_reader reader,
                           memtable& mt, sstables::shared_sstable sst,
@@ -1982,7 +1986,7 @@ write_memtable_to_sstable(reader_permit permit, memtable& mt, sstables::shared_s
 future<>
 write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst, sstables::sstable_writer_config cfg) {
     return do_with(
-            permit_monitor(make_lw_shared(sstable_write_permit::unconditional())),
+            replica::permit_monitor(make_lw_shared(sstable_write_permit::unconditional())),
             std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{}, "write_memtable_to_sstable"),
             cfg,
             [&mt, sst] (auto& monitor, auto& semaphore, auto& cfg) {
@@ -1993,6 +1997,7 @@ write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst, sstables::
     });
 }
 
+namespace replica {
 
 struct query_state {
     explicit query_state(schema_ptr s,
@@ -2430,3 +2435,5 @@ public:
 compaction::table_state& table::as_table_state() const noexcept {
     return *_table_state;
 }
+
+} // namespace replica

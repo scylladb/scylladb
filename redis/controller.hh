@@ -52,7 +52,9 @@ namespace gms {
 class gossiper;
 }
 
+namespace replica {
 class database;
+}
 
 namespace redis {
 

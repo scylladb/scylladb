@@ -376,8 +376,8 @@ private:
 
 public:
     repair_reader(
-            seastar::sharded<database>& db,
-            column_family& cf,
+            seastar::sharded<replica::database>& db,
+            replica::column_family& cf,
             schema_ptr s,
             reader_permit permit,
             dht::token_range range,
@@ -539,11 +539,11 @@ public:
         return sstables::offstrategy(operations_supported.contains(reason));
     }
 
-    void create_writer(sharded<database>& db, sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<db::view::view_update_generator>& view_update_gen) {
+    void create_writer(sharded<replica::database>& db, sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<db::view::view_update_generator>& view_update_gen) {
         if (_writer_done) {
             return;
         }
-        table& t = db.local().find_column_family(_schema->id());
+        replica::table& t = db.local().find_column_family(_schema->id());
         auto [queue_reader, queue_handle] = make_queue_reader(_schema, _permit);
         _mq = std::move(queue_handle);
         auto writer = shared_from_this();
@@ -644,11 +644,11 @@ public:
     using msg_addr = netw::messaging_service::msg_addr;
     using tracker_link_type = boost::intrusive::list_member_hook<bi::link_mode<boost::intrusive::auto_unlink>>;
 private:
-    seastar::sharded<database>& _db;
+    seastar::sharded<replica::database>& _db;
     seastar::sharded<netw::messaging_service>& _messaging;
     seastar::sharded<db::system_distributed_keyspace>& _sys_dist_ks;
     seastar::sharded<db::view::view_update_generator>& _view_update_generator;
-    column_family& _cf;
+    replica::column_family& _cf;
     schema_ptr _schema;
     reader_permit _permit;
     dht::token_range _range;
@@ -735,11 +735,11 @@ public:
 
 public:
     repair_meta(
-            seastar::sharded<database>& db,
+            seastar::sharded<replica::database>& db,
             seastar::sharded<netw::messaging_service>& ms,
             seastar::sharded<db::system_distributed_keyspace>& sys_dist_ks,
             seastar::sharded<db::view::view_update_generator>& view_update_generator,
-            column_family& cf,
+            replica::column_family& cf,
             schema_ptr s,
             reader_permit permit,
             dht::token_range range,
@@ -1665,7 +1665,7 @@ public:
                 _master_node_shard_config.shard, _master_node_shard_config.shard_count, _master_node_shard_config.ignore_msb,
                 remote_partitioner_name, std::move(schema_version), reason).then([ks_name, cf_name] (rpc::optional<repair_row_level_start_response> resp) {
             if (resp && resp->status == repair_row_level_start_status::no_such_column_family) {
-                return make_exception_future<>(no_such_column_family(ks_name, cf_name));
+                return make_exception_future<>(replica::no_such_column_family(ks_name, cf_name));
             } else {
                 return make_ready_future<>();
             }
@@ -1681,7 +1681,7 @@ public:
             utils::fb_utilities::get_broadcast_address(), from, repair_meta_id, ks_name, cf_name, schema_version, range, seed, max_row_buf_size);
         return insert_repair_meta(repair, from, src_cpu_id, repair_meta_id, std::move(range), algo, max_row_buf_size, seed, std::move(master_node_shard_config), std::move(schema_version), reason).then([] {
             return repair_row_level_start_response{repair_row_level_start_status::ok};
-        }).handle_exception_type([] (no_such_column_family&) {
+        }).handle_exception_type([] (replica::no_such_column_family&) {
             return repair_row_level_start_response{repair_row_level_start_status::no_such_column_family};
         });
     }
@@ -2290,7 +2290,7 @@ future<repair_update_system_table_response> repair_service::repair_update_system
     if (!is_valid_range) {
         throw std::runtime_error(format("repair[{}]: range {} is not in the format of (start, end]", req.repair_uuid, req.range));
     }
-    co_await db.invoke_on_all([&req] (database& local_db) {
+    co_await db.invoke_on_all([&req] (replica::database& local_db) {
         auto& table = local_db.find_column_family(req.table_uuid);
         return ::update_repair_time(table.schema(), req.range, req.repair_time);
     });
@@ -2559,7 +2559,7 @@ class row_level_repair {
     utils::UUID _table_id;
     dht::token_range _range;
     inet_address_vector_replica_set _all_live_peer_nodes;
-    column_family& _cf;
+    replica::column_family& _cf;
 
     // Repair master and followers will propose a sync boundary. Each of them
     // read N bytes of rows from disk, the row with largest
@@ -2996,7 +2996,7 @@ public:
                     }
                     send_missing_rows_to_follower_nodes(master);
                 }
-            } catch (no_such_column_family& e) {
+            } catch (replica::no_such_column_family& e) {
                 table_dropped = true;
                 rlogger.warn("repair id {} on shard {}, keyspace={}, cf={}, range={}, got error in row level repair: {}",
                         _ri.id, this_shard_id(), _ri.keyspace, _cf_name, _range, e);
@@ -3018,7 +3018,7 @@ public:
             _ri.update_statistics(master.stats());
             if (_failed) {
                 if (table_dropped) {
-                    throw no_such_column_family(_ri.keyspace,  _cf_name);
+                    throw replica::no_such_column_family(_ri.keyspace,  _cf_name);
                 } else {
                     throw std::runtime_error(format("Failed to repair for keyspace={}, cf={}, range={}", _ri.keyspace, _cf_name, _range));
                 }
@@ -3096,7 +3096,7 @@ class row_level_repair_gossip_helper : public gms::i_endpoint_state_change_subsc
 
 repair_service::repair_service(distributed<gms::gossiper>& gossiper,
         netw::messaging_service& ms,
-        sharded<database>& db,
+        sharded<replica::database>& db,
         sharded<service::storage_proxy>& sp,
         sharded<db::batchlog_manager>& bm,
         sharded<db::system_distributed_keyspace>& sys_dist_ks,
@@ -3197,11 +3197,11 @@ future<> repair_service::load_history() {
             auto range = dht::token_range(dht::token_range::bound(start, false), dht::token_range::bound(end, true));
             rlogger.debug("Loading repair history for keyspace={}, table={}, table_uuid={}, repair_time={}, range={}",
                     keyspace_name, table_name, table_uuid, repair_time, range);
-            co_await get_db().invoke_on_all([table_uuid, range, repair_time, keyspace_name, table_name] (database& local_db) -> future<> {
+            co_await get_db().invoke_on_all([table_uuid, range, repair_time, keyspace_name, table_name] (replica::database& local_db) -> future<> {
                 try {
                     auto& table = local_db.find_column_family(table_uuid);
                     ::update_repair_time(table.schema(), range, repair_time);
-                } catch (no_such_column_family&) {
+                } catch (replica::no_such_column_family&) {
                     rlogger.trace("Table {}.{} with {} does not exist", keyspace_name, table_name, table_uuid);
                 } catch (...) {
                     rlogger.warn("Failed to load repair history for keyspace={}, table={}, range={}, repair_time={}",

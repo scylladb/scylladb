@@ -169,7 +169,7 @@ token_generation_for_shard(unsigned tokens_to_generate, unsigned shard,
     return key_and_token_pair;
 }
 
-future<compaction_result> compact_sstables(sstables::compaction_descriptor descriptor, column_family& cf, std::function<shared_sstable()> creator, compaction_sstable_replacer_fn replacer) {
+future<compaction_result> compact_sstables(sstables::compaction_descriptor descriptor, replica::column_family& cf, std::function<shared_sstable()> creator, compaction_sstable_replacer_fn replacer) {
     descriptor.creator = [creator = std::move(creator)] (shard_id dummy) mutable {
         return creator();
     };
@@ -201,7 +201,7 @@ future<shared_sstable> test_env::reusable_sst(schema_ptr schema, sstring dir, un
     throw sst_not_found(dir, generation);
 }
 
-sstables::compaction_data& compaction_manager_test::register_compaction(utils::UUID output_run_id, column_family* cf) {
+sstables::compaction_data& compaction_manager_test::register_compaction(utils::UUID output_run_id, replica::column_family* cf) {
     auto task = make_lw_shared<compaction_manager::task>(cf, sstables::compaction_type::Compaction, _cm._compaction_state[cf]);
     testlog.debug("compaction_manager_test: register_compaction: task {} cf={}", fmt::ptr(task.get()), fmt::ptr(cf));
     task->compaction_running = true;

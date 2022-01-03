@@ -24,7 +24,9 @@
 #include "flat_mutation_reader_v2.hh"
 #include "db/system_keyspace.hh"
 
+namespace replica {
 class database;
+}
 
 namespace db {
 
@@ -36,7 +38,7 @@ struct token_range {
 };
 
 class size_estimates_mutation_reader final : public flat_mutation_reader_v2::impl {
-    database& _db;
+    replica::database& _db;
     const dht::partition_range* _prange;
     const query::partition_slice& _slice;
     using ks_range = std::vector<sstring>;
@@ -45,7 +47,7 @@ class size_estimates_mutation_reader final : public flat_mutation_reader_v2::imp
     streamed_mutation::forwarding _fwd;
     flat_mutation_reader_v2_opt _partition_reader;
 public:
-    size_estimates_mutation_reader(database& db, schema_ptr, reader_permit, const dht::partition_range&, const query::partition_slice&, streamed_mutation::forwarding);
+    size_estimates_mutation_reader(replica::database& db, schema_ptr, reader_permit, const dht::partition_range&, const query::partition_slice&, streamed_mutation::forwarding);
 
     virtual future<> fill_buffer() override;
     virtual future<> next_partition() override;
@@ -61,7 +63,7 @@ private:
 };
 
 struct virtual_reader {
-    database& db;
+    replica::database& db;
 
     flat_mutation_reader_v2 operator()(schema_ptr schema,
             reader_permit permit,
@@ -74,10 +76,10 @@ struct virtual_reader {
         return make_flat_mutation_reader_v2<size_estimates_mutation_reader>(db, std::move(schema), std::move(permit), range, slice, fwd);
     }
 
-    virtual_reader(database& db_) noexcept : db(db_) {}
+    virtual_reader(replica::database& db_) noexcept : db(db_) {}
 };
 
-future<std::vector<token_range>> test_get_local_ranges(database& db);
+future<std::vector<token_range>> test_get_local_ranges(replica::database& db);
 
 } // namespace size_estimates
 

@@ -133,7 +133,7 @@ public:
     static constexpr std::string_view ks_name = "ks";
     static std::atomic<bool> active;
 private:
-    sharded<database>& _db;
+    sharded<replica::database>& _db;
     sharded<cql3::query_processor>& _qp;
     sharded<auth::service>& _auth_service;
     sharded<db::view::view_builder>& _view_builder;
@@ -182,7 +182,7 @@ private:
     }
 public:
     single_node_cql_env(
-            sharded<database>& db,
+            sharded<replica::database>& db,
             sharded<cql3::query_processor>& qp,
             sharded<auth::service>& auth_service,
             sharded<db::view::view_builder>& view_builder,
@@ -330,12 +330,12 @@ public:
                                       ks_name = std::move(ks_name),
                                       column_name = std::move(column_name),
                                       exp = std::move(exp),
-                                      table_name = std::move(table_name)] (database& db) mutable {
+                                      table_name = std::move(table_name)] (replica::database& db) mutable {
           auto& cf = db.find_column_family(ks_name, table_name);
           auto schema = cf.schema();
           auto permit = db.get_reader_concurrency_semaphore().make_tracking_only_permit(schema.get(), "require_column_has_value()", db::no_timeout);
           return cf.find_partition_slow(schema, permit, pkey)
-                  .then([schema, ckey, column_name, exp] (column_family::const_mutation_partition_ptr p) {
+                  .then([schema, ckey, column_name, exp] (replica::column_family::const_mutation_partition_ptr p) {
             assert(p != nullptr);
             auto row = p->find_row(*schema, ckey);
             assert(row != nullptr);
@@ -363,7 +363,7 @@ public:
         return _core_local.local().client_state;
     }
 
-    virtual database& local_db() override {
+    virtual replica::database& local_db() override {
         return _db.local();
     }
 
@@ -371,7 +371,7 @@ public:
         return _qp.local();
     }
 
-    sharded<database>& db() override {
+    sharded<replica::database>& db() override {
         return _db;
     }
 
@@ -458,7 +458,7 @@ public:
             sharded<abort_source> abort_sources;
             abort_sources.start().get();
             auto stop_abort_sources = defer([&] { abort_sources.stop().get(); });
-            sharded<database> db;
+            sharded<replica::database> db;
             debug::the_database = &db;
             auto reset_db_ptr = defer([] {
                 debug::the_database = nullptr;
@@ -592,7 +592,7 @@ public:
                 sst_dir_semaphore.stop().get();
             });
 
-            database_config dbcfg;
+            replica::database_config dbcfg;
             if (cfg_in.dbcfg) {
                 dbcfg = std::move(*cfg_in.dbcfg);
             } else {
@@ -614,7 +614,7 @@ public:
                 db.stop().get();
             });
 
-            db.invoke_on_all(&database::start).get();
+            db.invoke_on_all(&replica::database::start).get();
 
             feature_service.invoke_on_all([] (auto& fs) {
                 fs.enable(fs.known_feature_set());
@@ -638,7 +638,7 @@ public:
             auto stop_mm = defer([&mm] { mm.stop().get(); });
 
             cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
-            auto local_data_dict = seastar::sharded_parameter([] (const database& db) { return db.as_data_dictionary(); }, std::ref(db));
+            auto local_data_dict = seastar::sharded_parameter([] (const replica::database& db) { return db.as_data_dictionary(); }, std::ref(db));
             qp.start(std::ref(proxy), std::move(local_data_dict), std::ref(mm_notif), std::ref(mm), qp_mcfg, std::ref(cql_config)).get();
             auto stop_qp = defer([&qp] { qp.stop().get(); });
 
@@ -679,9 +679,9 @@ public:
             }).get();
             distributed_loader::init_non_system_keyspaces(db, proxy).get();
 
-            db.invoke_on_all([] (database& db) {
+            db.invoke_on_all([] (replica::database& db) {
                 for (auto& x : db.get_column_families()) {
-                    table& t = *(x.second);
+                    replica::table& t = *(x.second);
                     t.enable_auto_compaction();
                 }
             }).get();
@@ -689,7 +689,7 @@ public:
             auto stop_system_keyspace = defer([] { db::qctx = {}; });
 
             auto shutdown_db = defer([&db] {
-                db.invoke_on_all(&database::shutdown).get();
+                db.invoke_on_all(&replica::database::shutdown).get();
             });
             // XXX: stop_raft before stopping the database and
             // query processor. Group registry stop raft groups
@@ -858,6 +858,6 @@ cql_test_config raft_cql_test_config() {
 
 namespace debug {
 
-seastar::sharded<database>* the_database;
+seastar::sharded<replica::database>* the_database;
 
 }

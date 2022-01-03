@@ -123,7 +123,7 @@ public:
 /**
  * Returns the keyspaces, ordered by name, as selected by the partition_range.
  */
-static std::vector<sstring> get_keyspaces(const schema& s, const database& db, dht::partition_range range) {
+static std::vector<sstring> get_keyspaces(const schema& s, const replica::database& db, dht::partition_range range) {
     struct keyspace_less_comparator {
         const schema& _s;
         keyspace_less_comparator(const schema& s) : _s(s) { }
@@ -174,7 +174,7 @@ static dht::partition_range as_ring_position_range(dht::token_range& r) {
 /**
  * Add a new range_estimates for the specified range, considering the sstables associated with `cf`.
  */
-static system_keyspace::range_estimates estimate(const column_family& cf, const token_range& r) {
+static system_keyspace::range_estimates estimate(const replica::column_family& cf, const token_range& r) {
     int64_t count{0};
     utils::estimated_histogram hist{0};
     auto from_bytes = [] (auto& b) {
@@ -198,7 +198,7 @@ static system_keyspace::range_estimates estimate(const column_family& cf, const 
 /**
  * Returns the primary ranges for the local node.
  */
-static future<std::vector<token_range>> get_local_ranges(database& db) {
+static future<std::vector<token_range>> get_local_ranges(replica::database& db) {
     return db::system_keyspace::get_local_tokens().then([&db] (auto&& tokens) {
         auto ranges = db.get_token_metadata().get_primary_ranges_for(std::move(tokens));
         std::vector<token_range> local_ranges;
@@ -230,11 +230,11 @@ static future<std::vector<token_range>> get_local_ranges(database& db) {
     });
 }
 
-future<std::vector<token_range>> test_get_local_ranges(database& db) {
+future<std::vector<token_range>> test_get_local_ranges(replica::database& db) {
     return get_local_ranges(db);
 }
 
-size_estimates_mutation_reader::size_estimates_mutation_reader(database& db, schema_ptr schema, reader_permit permit, const dht::partition_range& prange,
+size_estimates_mutation_reader::size_estimates_mutation_reader(replica::database& db, schema_ptr schema, reader_permit permit, const dht::partition_range& prange,
         const query::partition_slice& slice, streamed_mutation::forwarding fwd)
             : impl(std::move(schema), std::move(permit))
             , _db(db)

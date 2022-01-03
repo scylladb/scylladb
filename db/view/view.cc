@@ -1271,7 +1271,7 @@ future<> mutate_MV(
         dht::token base_token,
         utils::chunked_vector<frozen_mutation_and_schema> view_updates,
         db::view::stats& stats,
-        cf_stats& cf_stats,
+        replica::cf_stats& cf_stats,
         tracing::trace_state_ptr tr_state,
         db::timeout_semaphore_units pending_view_updates,
         service::allow_hints allow_hints,
@@ -1387,7 +1387,7 @@ future<> mutate_MV(
     });
 }
 
-view_builder::view_builder(database& db, db::system_distributed_keyspace& sys_dist_ks, service::migration_notifier& mn)
+view_builder::view_builder(replica::database& db, db::system_distributed_keyspace& sys_dist_ks, service::migration_notifier& mn)
         : _db(db)
         , _sys_dist_ks(sys_dist_ks)
         , _mnotifier(mn)
@@ -1625,7 +1625,7 @@ void view_builder::setup_shard_build_step(
         try {
             _db.find_schema(view->view_info()->base_id());
             return true;
-        } catch (const no_such_column_family&) {
+        } catch (const replica::no_such_column_family&) {
             return false;
         }
     };
@@ -1640,7 +1640,7 @@ void view_builder::setup_shard_build_step(
             }
             // The view was dropped and a table was re-created with the same name,
             // but the write to the view-related system tables didn't make it.
-        } catch (const no_such_column_family&) {
+        } catch (const replica::no_such_column_family&) {
             // Fall-through
         }
         if (this_shard_id() == 0) {
@@ -1687,7 +1687,7 @@ future<> view_builder::calculate_shard_build_step(view_builder_init_state& vbi) 
         try {
             _db.find_schema(view->view_info()->base_id());
             return true;
-        } catch (const no_such_column_family&) {
+        } catch (const replica::no_such_column_family&) {
             return false;
         }
     };
@@ -1749,7 +1749,7 @@ future<> view_builder::add_new_view(view_ptr view, build_step& step) {
             system_keyspace::register_view_for_building(view->ks_name(), view->cf_name(), step.current_token())).discard_result();
 }
 
-static future<> flush_base(lw_shared_ptr<column_family> base, abort_source& as) {
+static future<> flush_base(lw_shared_ptr<replica::column_family> base, abort_source& as) {
     struct empty_state { };
     return exponential_backoff_retry::do_until_value(1s, 1min, as, [base = std::move(base)] {
         return base->flush().then_wrapped([base] (future<> f) -> std::optional<empty_state> {
@@ -1784,7 +1784,7 @@ void view_builder::on_create_view(const sstring& ks_name, const sstring& view_na
             });
           });
         });
-    }).handle_exception_type([] (no_such_column_family&) { });
+    }).handle_exception_type([] (replica::no_such_column_family&) { });
 }
 
 void view_builder::on_update_view(const sstring& ks_name, const sstring& view_name, bool) {
@@ -1801,7 +1801,7 @@ void view_builder::on_update_view(const sstring& ks_name, const sstring& view_na
         if (status_it != step_it->second.build_status.end()) {
             status_it->view = std::move(view);
         }
-    }).handle_exception_type([] (no_such_column_family&) { });
+    }).handle_exception_type([] (replica::no_such_column_family&) { });
 }
 
 void view_builder::on_drop_view(const sstring& ks_name, const sstring& view_name) {
@@ -2157,7 +2157,7 @@ future<bool> check_view_build_ongoing(db::system_distributed_keyspace& sys_dist_
     });
 }
 
-future<bool> check_needs_view_update_path(db::system_distributed_keyspace& sys_dist_ks, const table& t, streaming::stream_reason reason) {
+future<bool> check_needs_view_update_path(db::system_distributed_keyspace& sys_dist_ks, const replica::table& t, streaming::stream_reason reason) {
     if (is_internal_keyspace(t.schema()->ks_name())) {
         return make_ready_future<bool>(false);
     }
@@ -2206,7 +2206,7 @@ void view_updating_consumer::maybe_flush_buffer_mid_partition() {
     }
 }
 
-view_updating_consumer::view_updating_consumer(schema_ptr schema, reader_permit permit, table& table, std::vector<sstables::shared_sstable> excluded_sstables, const seastar::abort_source& as,
+view_updating_consumer::view_updating_consumer(schema_ptr schema, reader_permit permit, replica::table& table, std::vector<sstables::shared_sstable> excluded_sstables, const seastar::abort_source& as,
         evictable_reader_handle& staging_reader_handle)
     : view_updating_consumer(std::move(schema), std::move(permit), as, staging_reader_handle,
             [table = table.shared_from_this(), excluded_sstables = std::move(excluded_sstables)] (mutation m) mutable {

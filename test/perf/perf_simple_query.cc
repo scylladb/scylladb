@@ -125,7 +125,7 @@ static void create_partitions(cql_test_env& env, test_config& cfg) {
 
     if (cfg.flush_memtables) {
         std::cout << "Flushing partitions..." << std::endl;
-        env.db().invoke_on_all(&database::flush_all_memtables).get();
+        env.db().invoke_on_all(&replica::database::flush_all_memtables).get();
     }
 }
 

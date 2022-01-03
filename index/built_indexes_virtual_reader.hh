@@ -35,10 +35,10 @@
 namespace db::index {
 
 class built_indexes_virtual_reader {
-    database& _db;
+    replica::database& _db;
 
     struct built_indexes_reader : flat_mutation_reader::impl {
-        database& _db;
+        replica::database& _db;
         schema_ptr _schema;
         query::partition_slice _view_names_slice;
         flat_mutation_reader _underlying;
@@ -111,10 +111,10 @@ class built_indexes_virtual_reader {
         }
 
         built_indexes_reader(
-                database& db,
+                replica::database& db,
                 schema_ptr schema,
                 reader_permit permit,
-                column_family& built_views,
+                replica::column_family& built_views,
                 const dht::partition_range& range,
                 const query::partition_slice& slice,
                 const io_priority_class& pc,
@@ -141,7 +141,7 @@ class built_indexes_virtual_reader {
             try {
                 auto s = _db.find_schema(_current_keyspace, view_name);
                 return s->is_view() && _db.find_column_family(s->view_info()->base_id()).get_index_manager().is_index(view_ptr(s));
-            } catch (const no_such_column_family&) {
+            } catch (const replica::no_such_column_family&) {
                 return false;
             }
         }
@@ -222,7 +222,7 @@ class built_indexes_virtual_reader {
     };
 
 public:
-    built_indexes_virtual_reader(database& db)
+    built_indexes_virtual_reader(replica::database& db)
             : _db(db) {
     }
 

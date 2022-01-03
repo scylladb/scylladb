@@ -81,7 +81,7 @@ validate_cql_key(const schema& schema, partition_key_view key) {
  * Based on org.apache.cassandra.thrift.ThriftValidation#validateColumnFamily(java.lang.String, java.lang.String)
  */
 schema_ptr
-validate_column_family(const database& db, const sstring& keyspace_name, const sstring& cf_name) {
+validate_column_family(const replica::database& db, const sstring& keyspace_name, const sstring& cf_name) {
     validate_keyspace(db, keyspace_name);
 
     if (cf_name.empty()) {
@@ -95,7 +95,7 @@ validate_column_family(const database& db, const sstring& keyspace_name, const s
     }
 }
 
-void validate_keyspace(const database& db, const sstring& keyspace_name) {
+void validate_keyspace(const replica::database& db, const sstring& keyspace_name) {
     if (keyspace_name.empty()) {
         throw exceptions::invalid_request_exception("Keyspace not set");
     }

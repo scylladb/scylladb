@@ -48,4 +48,4 @@ gc_clock::time_point get_gc_before_for_key(schema_ptr s, const dht::decorated_ke
 
 void update_repair_time(schema_ptr s, const dht::token_range& range, gc_clock::time_point repair_time);
 
-void validate_tombstone_gc_options(const tombstone_gc_options* options, const database& db, sstring ks_name);
+void validate_tombstone_gc_options(const tombstone_gc_options* options, const replica::database& db, sstring ks_name);

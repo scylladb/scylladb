@@ -82,12 +82,12 @@ struct send_info {
     size_t mutations_nr{0};
     semaphore mutations_done{0};
     bool error_logged = false;
-    column_family& cf;
+    replica::column_family& cf;
     dht::token_range_vector ranges;
     dht::partition_range_vector prs;
     flat_mutation_reader reader;
     noncopyable_function<void(size_t)> update;
-    send_info(netw::messaging_service& ms_, utils::UUID plan_id_, table& tbl_, reader_permit permit_,
+    send_info(netw::messaging_service& ms_, utils::UUID plan_id_, replica::table& tbl_, reader_permit permit_,
               dht::token_range_vector ranges_, netw::messaging_service::msg_addr id_,
               uint32_t dst_cpu_id_, stream_reason reason_, noncopyable_function<void(size_t)> update_fn)
         : ms(ms_)

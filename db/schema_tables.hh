@@ -61,7 +61,9 @@ class keyspace_metadata;
 
 using keyspace_metadata = data_dictionary::keyspace_metadata;
 
+namespace replica {
 class database;
+}
 
 namespace query {
 class result_set;
@@ -88,8 +90,8 @@ class config;
 class schema_ctxt {
 public:
     schema_ctxt(const config&);
-    schema_ctxt(const database&);
-    schema_ctxt(distributed<database>&);
+    schema_ctxt(const replica::database&);
+    schema_ctxt(distributed<replica::database>&);
     schema_ctxt(distributed<service::storage_proxy>&);
 
     const db::extensions& extensions() const {
@@ -217,7 +219,7 @@ std::vector<mutation> make_create_type_mutations(lw_shared_ptr<keyspace_metadata
 
 std::vector<user_type> create_types_from_schema_partition(keyspace_metadata& ks, lw_shared_ptr<query::result_set> result);
 
-std::vector<shared_ptr<cql3::functions::user_function>> create_functions_from_schema_partition(database& db, lw_shared_ptr<query::result_set> result);
+std::vector<shared_ptr<cql3::functions::user_function>> create_functions_from_schema_partition(replica::database& db, lw_shared_ptr<query::result_set> result);
 
 std::vector<mutation> make_create_function_mutations(shared_ptr<cql3::functions::user_function> func, api::timestamp_type timestamp);
 
@@ -234,7 +236,7 @@ void add_type_to_schema_mutation(user_type type, api::timestamp_type timestamp, 
 std::vector<mutation> make_create_table_mutations(lw_shared_ptr<keyspace_metadata> keyspace, schema_ptr table, api::timestamp_type timestamp);
 
 std::vector<mutation> make_update_table_mutations(
-    database& db,
+    replica::database& db,
     lw_shared_ptr<keyspace_metadata> keyspace,
     schema_ptr old_table,
     schema_ptr new_table,
@@ -264,7 +266,7 @@ std::vector<mutation> make_drop_view_mutations(lw_shared_ptr<keyspace_metadata> 
 
 class preserve_version_tag {};
 using preserve_version = bool_class<preserve_version_tag>;
-view_ptr maybe_fix_legacy_secondary_index_mv_schema(database& db, const view_ptr& v, schema_ptr base_schema, preserve_version preserve_version);
+view_ptr maybe_fix_legacy_secondary_index_mv_schema(replica::database& db, const view_ptr& v, schema_ptr base_schema, preserve_version preserve_version);
 
 sstring serialize_kind(column_kind kind);
 column_kind deserialize_kind(sstring kind);

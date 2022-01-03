@@ -30,7 +30,11 @@
 using namespace seastar;
 
 class thrift_server;
+
+namespace replica {
 class database;
+}
+
 namespace auth { class service; }
 namespace cql3 { class query_processor; }
 namespace service {
@@ -44,7 +48,7 @@ class thrift_controller : public protocol_server {
     semaphore _ops_sem; /* protects start/stop operations on _server */
     bool _stopped = false;
 
-    distributed<database>& _db;
+    distributed<replica::database>& _db;
     sharded<auth::service>& _auth_service;
     sharded<cql3::query_processor>& _qp;
     sharded<service::memory_limiter>& _mem_limiter;
@@ -55,7 +59,7 @@ class thrift_controller : public protocol_server {
     future<> do_stop_server();
 
 public:
-    thrift_controller(distributed<database>&, sharded<auth::service>&, sharded<cql3::query_processor>&, sharded<service::memory_limiter>&, sharded<service::storage_service>& ss, sharded<service::storage_proxy>& proxy);
+    thrift_controller(distributed<replica::database>&, sharded<auth::service>&, sharded<cql3::query_processor>&, sharded<service::memory_limiter>&, sharded<service::storage_service>& ss, sharded<service::storage_proxy>& proxy);
     virtual sstring name() const override;
     virtual sstring protocol() const override;
     virtual sstring protocol_version() const override;

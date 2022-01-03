@@ -61,7 +61,7 @@ namespace bpo = boost::program_options;
 // DEBUG [shard 0] gossip - ep=127.0.0.2, eps=HeartBeatState = { generation = 1446454380, version = 27 }, AppStateMap = { LOAD : Value(0.5005,26) }
 
 int main(int ac, char ** av) {
-    distributed<database> db;
+    distributed<replica::database> db;
     app_template app;
     app.add_options()
         ("seed", bpo::value<std::vector<std::string>>(), "IP address of seed node")

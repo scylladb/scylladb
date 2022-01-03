@@ -33,7 +33,9 @@
 #include "utils/maybe_yield.hh"
 
 // forward declaration since replica/database.hh includes this file
+namespace replica {
 class keyspace;
+}
 
 namespace locator {
 

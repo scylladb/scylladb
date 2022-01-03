@@ -79,11 +79,11 @@ public:
 };
 
 class secondary_index_manager {
-    column_family& _cf;
+    replica::column_family& _cf;
     /// The key of the map is the name of the index as stored in system tables.
     std::unordered_map<sstring, index> _indices;
 public:
-    secondary_index_manager(column_family& cf);
+    secondary_index_manager(replica::column_family& cf);
     void reload();
     view_ptr create_view_for_index(const index_metadata& index, bool new_token_column_computation) const;
     std::vector<index_metadata> get_dependent_indices(const column_definition& cdef) const;

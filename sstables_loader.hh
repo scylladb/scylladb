@@ -27,7 +27,10 @@
 
 using namespace seastar;
 
+namespace replica {
 class database;
+}
+
 namespace netw { class messaging_service; }
 namespace db {
 class system_distributed_keyspace;
@@ -41,7 +44,7 @@ class view_update_generator;
 // Gets sstables from the upload directory and makes them available in the
 // system. Built on top of the distributed_loader functionality.
 class sstables_loader : public seastar::peering_sharded_service<sstables_loader> {
-    sharded<database>& _db;
+    sharded<replica::database>& _db;
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
     sharded<db::view::view_update_generator>& _view_update_generator;
     netw::messaging_service& _messaging;
@@ -59,7 +62,7 @@ class sstables_loader : public seastar::peering_sharded_service<sstables_loader>
             bool primary_replica_only);
 
 public:
-    sstables_loader(sharded<database>& db,
+    sstables_loader(sharded<replica::database>& db,
             sharded<db::system_distributed_keyspace>& sys_dist_ks,
             sharded<db::view::view_update_generator>& view_update_generator,
             netw::messaging_service& messaging)

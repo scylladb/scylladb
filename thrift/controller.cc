@@ -27,7 +27,7 @@
 
 static logging::logger clogger("thrift_controller");
 
-thrift_controller::thrift_controller(distributed<database>& db, sharded<auth::service>& auth,
+thrift_controller::thrift_controller(distributed<replica::database>& db, sharded<auth::service>& auth,
         sharded<cql3::query_processor>& qp, sharded<service::memory_limiter>& ml,
         sharded<service::storage_service>& ss, sharded<service::storage_proxy>& proxy)
     : _ops_sem(1)

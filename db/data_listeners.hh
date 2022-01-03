@@ -126,7 +126,7 @@ struct toppartitions_global_item_key {
 class toppartitions_data_listener : public data_listener, public weakly_referencable<toppartitions_data_listener> {
     friend class toppartitions_query;
 
-    database& _db;
+    replica::database& _db;
     std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> _table_filters;
     std::unordered_set<sstring> _keyspace_filters;
 
@@ -141,7 +141,7 @@ private:
     top_k _top_k_write;
 
 public:
-    toppartitions_data_listener(database& db, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters, std::unordered_set<sstring> keyspace_filters);
+    toppartitions_data_listener(replica::database& db, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters, std::unordered_set<sstring> keyspace_filters);
     ~toppartitions_data_listener();
 
     virtual flat_mutation_reader on_read(const schema_ptr& s, const dht::partition_range& range,
@@ -153,7 +153,7 @@ public:
 };
 
 class toppartitions_query {
-    distributed<database>& _xdb;
+    distributed<replica::database>& _xdb;
     std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> _table_filters;
     std::unordered_set<sstring> _keyspace_filters;
     std::chrono::milliseconds _duration;
@@ -162,7 +162,7 @@ class toppartitions_query {
     std::unique_ptr<sharded<toppartitions_data_listener>> _query;
 
 public:
-    toppartitions_query(seastar::distributed<database>& xdb, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash>&& table_filters,
+    toppartitions_query(seastar::distributed<replica::database>& xdb, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash>&& table_filters,
         std::unordered_set<sstring>&& keyspace_filters, std::chrono::milliseconds duration, size_t list_size, size_t capacity);
 
     struct results {

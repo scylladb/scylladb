@@ -57,7 +57,10 @@ namespace service {
     class migration_manager;
 } // namespace service
 
+namespace replica {
 class database;
+}
+
 class exponential_backoff_retry;
 
 namespace db::view {
@@ -142,7 +145,7 @@ class view_builder final : public service::migration_listener::only_view_notific
     struct build_step final {
         // Ensure we pin the column_family. It may happen that all views are removed,
         // and that the base table is too before we can detect it.
-        lw_shared_ptr<column_family> base;
+        lw_shared_ptr<replica::column_family> base;
         query::partition_slice pslice;
         dht::partition_range prange;
         flat_mutation_reader reader{nullptr};
@@ -156,7 +159,7 @@ class view_builder final : public service::migration_listener::only_view_notific
 
     using base_to_build_step_type = std::unordered_map<utils::UUID, build_step>;
 
-    database& _db;
+    replica::database& _db;
     db::system_distributed_keyspace& _sys_dist_ks;
     service::migration_notifier& _mnotifier;
     reader_permit _permit;
@@ -195,7 +198,7 @@ public:
     static constexpr size_t batch_memory_max = 1024*1024;
 
 public:
-    view_builder(database&, db::system_distributed_keyspace&, service::migration_notifier&);
+    view_builder(replica::database&, db::system_distributed_keyspace&, service::migration_notifier&);
     view_builder(view_builder&&) = delete;
 
     /**

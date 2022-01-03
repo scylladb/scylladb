@@ -111,7 +111,7 @@ class stream_manager : public gms::i_endpoint_state_change_subscriber, public en
      * receiving ones withing the same JVM.
      */
 private:
-    sharded<database>& _db;
+    sharded<replica::database>& _db;
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
     sharded<db::view::view_update_generator>& _view_update_generator;
     sharded<netw::messaging_service>& _ms;
@@ -127,7 +127,7 @@ private:
     seastar::metrics::metric_groups _metrics;
 
 public:
-    stream_manager(sharded<database>& db,
+    stream_manager(sharded<replica::database>& db,
             sharded<db::system_distributed_keyspace>& sys_dist_ks,
             sharded<db::view::view_update_generator>& view_update_generator,
             sharded<netw::messaging_service>& ms,
@@ -149,7 +149,7 @@ public:
 
     std::vector<shared_ptr<stream_result_future>> get_all_streams() const;
 
-    database& db() noexcept { return _db.local(); }
+    replica::database& db() noexcept { return _db.local(); }
     netw::messaging_service& ms() noexcept { return _ms.local(); }
 
     const std::unordered_map<UUID, shared_ptr<stream_result_future>>& get_initiated_streams() const {

@@ -77,20 +77,20 @@ io_error_handler error_handler_gen_for_upload_dir(disk_error_signal_type& dummy)
 
 // global_column_family_ptr provides a way to easily retrieve local instance of a given column family.
 class global_column_family_ptr {
-    distributed<database>& _db;
+    distributed<replica::database>& _db;
     utils::UUID _id;
 private:
-    column_family& get() const { return _db.local().find_column_family(_id); }
+    replica::column_family& get() const { return _db.local().find_column_family(_id); }
 public:
-    global_column_family_ptr(distributed<database>& db, sstring ks_name, sstring cf_name)
+    global_column_family_ptr(distributed<replica::database>& db, sstring ks_name, sstring cf_name)
         : _db(db)
         , _id(_db.local().find_column_family(ks_name, cf_name).schema()->id()) {
     }
 
-    column_family* operator->() const {
+    replica::column_family* operator->() const {
         return &get();
     }
-    column_family& operator*() const {
+    replica::column_family& operator*() const {
         return get();
     }
 };
@@ -115,7 +115,7 @@ distributed_loader::process_sstable_dir(sharded<sstables::sstable_directory>& di
 }
 
 future<>
-distributed_loader::lock_table(sharded<sstables::sstable_directory>& dir, sharded<database>& db, sstring ks_name, sstring cf_name) {
+distributed_loader::lock_table(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring cf_name) {
     return dir.invoke_on_all([&db, ks_name, cf_name] (sstables::sstable_directory& d) {
         auto& table = db.local().find_column_family(ks_name, cf_name);
         d.store_phaser(table.write_in_progress());
@@ -195,7 +195,7 @@ distribute_reshard_jobs(sstables::sstable_directory::sstable_info_vector source)
 }
 
 future<> run_resharding_jobs(sharded<sstables::sstable_directory>& dir, std::vector<reshard_shard_descriptor> reshard_jobs,
-                             sharded<database>& db, sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator) {
+                             sharded<replica::database>& db, sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator) {
 
     uint64_t total_size = boost::accumulate(reshard_jobs | boost::adaptors::transformed(std::mem_fn(&reshard_shard_descriptor::size)), uint64_t(0));
     if (total_size == 0) {
@@ -229,7 +229,7 @@ future<> run_resharding_jobs(sharded<sstables::sstable_directory>& dir, std::vec
 //  - The second part calls each shard's distributed object to reshard the SSTables they were
 //    assigned.
 future<>
-distributed_loader::reshard(sharded<sstables::sstable_directory>& dir, sharded<database>& db, sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator) {
+distributed_loader::reshard(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator) {
     return collect_all_shared_sstables(dir).then([] (sstables::sstable_directory::sstable_info_vector all_jobs) mutable {
         return distribute_reshard_jobs(std::move(all_jobs));
     }).then([&dir, &db, ks_name, table_name, creator = std::move(creator)] (std::vector<reshard_shard_descriptor> destinations) mutable {
@@ -253,7 +253,7 @@ highest_version_seen(sharded<sstables::sstable_directory>& dir, sstables::sstabl
 }
 
 future<>
-distributed_loader::reshape(sharded<sstables::sstable_directory>& dir, sharded<database>& db, sstables::reshape_mode mode,
+distributed_loader::reshape(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstables::reshape_mode mode,
         sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator) {
 
     auto start = std::chrono::steady_clock::now();
@@ -273,7 +273,7 @@ distributed_loader::reshape(sharded<sstables::sstable_directory>& dir, sharded<d
 
 // Loads SSTables into the main directory (or staging) and returns how many were loaded
 future<size_t>
-distributed_loader::make_sstables_available(sstables::sstable_directory& dir, sharded<database>& db,
+distributed_loader::make_sstables_available(sstables::sstable_directory& dir, sharded<replica::database>& db,
         sharded<db::view::view_update_generator>& view_update_generator, fs::path datadir, sstring ks, sstring cf) {
 
     auto& table = db.local().find_column_family(ks, cf);
@@ -319,7 +319,7 @@ distributed_loader::make_sstables_available(sstables::sstable_directory& dir, sh
 }
 
 future<>
-distributed_loader::process_upload_dir(distributed<database>& db, distributed<db::system_distributed_keyspace>& sys_dist_ks,
+distributed_loader::process_upload_dir(distributed<replica::database>& db, distributed<db::system_distributed_keyspace>& sys_dist_ks,
         distributed<db::view::view_update_generator>& view_update_generator, sstring ks, sstring cf) {
     seastar::thread_attributes attr;
     attr.sched_group = db.local().get_streaming_scheduling_group();
@@ -388,7 +388,7 @@ distributed_loader::process_upload_dir(distributed<database>& db, distributed<db
 }
 
 future<std::tuple<utils::UUID, std::vector<std::vector<sstables::shared_sstable>>>>
-distributed_loader::get_sstables_from_upload_dir(distributed<database>& db, sstring ks, sstring cf) {
+distributed_loader::get_sstables_from_upload_dir(distributed<replica::database>& db, sstring ks, sstring cf) {
     return seastar::async([&db, ks = std::move(ks), cf = std::move(cf)] {
         global_column_family_ptr global_table(db, ks, cf);
         sharded<sstables::sstable_directory> directory;
@@ -464,7 +464,7 @@ future<> distributed_loader::handle_sstables_pending_delete(sstring pending_dele
     });
 }
 
-future<> distributed_loader::populate_column_family(distributed<database>& db, sstring sstdir, sstring ks, sstring cf, bool must_exist) {
+future<> distributed_loader::populate_column_family(distributed<replica::database>& db, sstring sstdir, sstring ks, sstring cf, bool must_exist) {
     return async([&db, sstdir = std::move(sstdir), ks = std::move(ks), cf = std::move(cf), must_exist] {
         assert(this_shard_id() == 0);
 
@@ -509,7 +509,7 @@ future<> distributed_loader::populate_column_family(distributed<database>& db, s
         auto sst_version = highest_version_seen(directory, sys_format).get0();
         auto generation = highest_generation_seen(directory).get0();
 
-        db.invoke_on_all([&global_table, generation] (database& db) {
+        db.invoke_on_all([&global_table, generation] (replica::database& db) {
             global_table->update_sstables_known_generation(generation);
             return global_table->disable_auto_compaction();
         }).get();
@@ -537,7 +537,7 @@ future<> distributed_loader::populate_column_family(distributed<database>& db, s
     });
 }
 
-future<> distributed_loader::populate_keyspace(distributed<database>& db, sstring datadir, sstring ks_name) {
+future<> distributed_loader::populate_keyspace(distributed<replica::database>& db, sstring datadir, sstring ks_name) {
     auto ksdir = datadir + "/" + ks_name;
     auto& keyspaces = db.local().get_keyspaces();
     auto i = keyspaces.find(ks_name);
@@ -552,7 +552,7 @@ future<> distributed_loader::populate_keyspace(distributed<database>& db, sstrin
         return parallel_for_each(ks.metadata()->cf_meta_data() | boost::adaptors::map_values,
             [ks_name, ksdir, &ks, &column_families, &db] (schema_ptr s) {
                 utils::UUID uuid = s->id();
-                lw_shared_ptr<column_family> cf = column_families[uuid];
+                lw_shared_ptr<replica::column_family> cf = column_families[uuid];
                 sstring cfname = cf->schema()->cf_name();
                 auto sstdir = ks.column_family_directory(ksdir, cfname, uuid);
                 dblog.info("Keyspace {}: Reading CF {} id={} version={}", ks_name, cfname, uuid, s->version());
@@ -580,9 +580,9 @@ future<> distributed_loader::populate_keyspace(distributed<database>& db, sstrin
     }
 }
 
-future<> distributed_loader::init_system_keyspace(distributed<database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, db::config& cfg) {
+future<> distributed_loader::init_system_keyspace(distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, db::config& cfg) {
     return seastar::async([&db, &ss, &cfg, &g] {
-        db.invoke_on_all([&db, &ss, &cfg, &g] (database&) {
+        db.invoke_on_all([&db, &ss, &cfg, &g] (replica::database&) {
             return db::system_keyspace::make(db, ss, g, cfg);
         }).get();
 
@@ -593,7 +593,7 @@ future<> distributed_loader::init_system_keyspace(distributed<database>& db, dis
             }
         }
 
-        db.invoke_on_all([] (database& db) {
+        db.invoke_on_all([] (replica::database& db) {
             for (auto ksname : system_keyspaces) {
                 auto& ks = db.find_keyspace(ksname);
                 for (auto& pair : ks.metadata()->cf_meta_data()) {
@@ -612,7 +612,7 @@ future<> distributed_loader::init_system_keyspace(distributed<database>& db, dis
     });
 }
 
-future<> distributed_loader::ensure_system_table_directories(distributed<database>& db) {
+future<> distributed_loader::ensure_system_table_directories(distributed<replica::database>& db) {
     return parallel_for_each(system_keyspaces, [&db](std::string_view ksname) {
         auto& ks = db.local().find_keyspace(ksname);
         return parallel_for_each(ks.metadata()->cf_meta_data(), [&ks] (auto& pair) {
@@ -622,10 +622,10 @@ future<> distributed_loader::ensure_system_table_directories(distributed<databas
     });
 }
 
-future<> distributed_loader::init_non_system_keyspaces(distributed<database>& db,
+future<> distributed_loader::init_non_system_keyspaces(distributed<replica::database>& db,
         distributed<service::storage_proxy>& proxy) {
     return seastar::async([&db, &proxy] {
-        db.invoke_on_all([&proxy] (database& db) {
+        db.invoke_on_all([&proxy] (replica::database& db) {
             return db.parse_system_tables(proxy);
         }).get();
 
@@ -644,7 +644,7 @@ future<> distributed_loader::init_non_system_keyspaces(distributed<database>& db
             });
         }).get();
 
-        db.invoke_on_all([&dirs] (database& db) {
+        db.invoke_on_all([&dirs] (replica::database& db) {
             for (auto& [name, ks] : db.get_keyspaces()) {
                 // mark all user keyspaces that are _not_ on disk as already
                 // populated.
@@ -668,7 +668,7 @@ future<> distributed_loader::init_non_system_keyspaces(distributed<database>& db
                 auto& datadir = p.second;
                 return distributed_loader::populate_keyspace(db, datadir, ks_name);
             }).finally([&] {
-                return db.invoke_on_all([ks_name] (database& db) {
+                return db.invoke_on_all([ks_name] (replica::database& db) {
                     // can be false if running test environment
                     // or ks_name was just a borked directory not representing
                     // a keyspace in schema tables.
@@ -682,8 +682,8 @@ future<> distributed_loader::init_non_system_keyspaces(distributed<database>& db
 
         when_all_succeed(futures.begin(), futures.end()).discard_result().get();
 
-        db.invoke_on_all([] (database& db) {
-            return parallel_for_each(db.get_non_system_column_families(), [] (lw_shared_ptr<table> table) {
+        db.invoke_on_all([] (replica::database& db) {
+            return parallel_for_each(db.get_non_system_column_families(), [] (lw_shared_ptr<replica::table> table) {
                 // Make sure this is called even if the table is empty
                 table->mark_ready_for_writes();
                 return make_ready_future<>();

@@ -27,7 +27,10 @@
 
 using namespace seastar;
 
+namespace replica {
 class database;
+}
+
 namespace gms { class gossiper; }
 
 namespace service {
@@ -43,7 +46,7 @@ private:
 public:
     future<std::map<sstring, double>> get_load_map();
 
-    future<> init(distributed<database>& db, gms::gossiper& gossiper);
+    future<> init(distributed<replica::database>& db, gms::gossiper& gossiper);
     future<> exit();
 };
 

@@ -195,7 +195,7 @@ schema_ptr executor::find_table(service::storage_proxy& proxy, const rjson::valu
     }
     try {
         return proxy.get_db().local().find_schema(sstring(executor::KEYSPACE_NAME_PREFIX) + sstring(*table_name), *table_name);
-    } catch(no_such_column_family&) {
+    } catch(replica::no_such_column_family&) {
         throw api_error::resource_not_found(
                 format("Requested resource not found: Table: {} not found", *table_name));
     }
@@ -244,7 +244,7 @@ get_table_or_view(service::storage_proxy& proxy, const rjson::value& request) {
     if (is_internal_table) {
         try {
             return { proxy.get_db().local().find_schema(sstring(internal_ks_name), sstring(internal_table_name)), type };
-        } catch (no_such_column_family&) {
+        } catch (replica::no_such_column_family&) {
             throw api_error::resource_not_found(
                 format("Requested resource not found: Internal table: {}.{} not found", internal_ks_name, internal_table_name));
         }
@@ -271,7 +271,7 @@ get_table_or_view(service::storage_proxy& proxy, const rjson::value& request) {
 
     try {
         return { proxy.get_db().local().find_schema(keyspace_name, table_name), type };
-    } catch(no_such_column_family&) {
+    } catch(replica::no_such_column_family&) {
         if (index_name) {
             // DynamoDB returns a different error depending on whether the
             // base table doesn't exist (ResourceNotFoundException) or it
@@ -420,7 +420,7 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
     // Add base table's KeySchema and collect types for AttributeDefinitions:
     describe_key_schema(table_description, *schema, key_attribute_types);
 
-    table& t = _proxy.get_db().local().find_column_family(schema);
+    replica::table& t = _proxy.get_db().local().find_column_family(schema);
     if (!t.views().empty()) {
         rjson::value gsi_array = rjson::empty_array();
         rjson::value lsi_array = rjson::empty_array();
@@ -592,7 +592,7 @@ static schema_ptr get_table_from_arn(service::storage_proxy& proxy, std::string_
         std::string_view table_name = arn.substr(table_start + 1);
         // FIXME: remove sstring creation once find_schema gains a view-based interface
         return proxy.get_db().local().find_schema(sstring(keyspace_name), sstring(table_name));
-    } catch (const no_such_column_family& e) {
+    } catch (const replica::no_such_column_family& e) {
         throw api_error::access_denied("Incorrect resource identifier");
     } catch (const std::out_of_range& e) {
         throw api_error::access_denied("Incorrect resource identifier");
@@ -1699,7 +1699,7 @@ static schema_ptr get_table_from_batch_request(const service::storage_proxy& pro
     validate_table_name(table_name);
     try {
         return proxy.get_db().local().find_schema(sstring(executor::KEYSPACE_NAME_PREFIX) + table_name, table_name);
-    } catch(no_such_column_family&) {
+    } catch(replica::no_such_column_family&) {
         throw api_error::resource_not_found(format("Requested resource not found: Table: {} not found", table_name));
     }
 }
@@ -3967,10 +3967,10 @@ future<executor::request_return_type> executor::list_tables(client_state& client
 
     auto table_names = _proxy.get_db().local().get_column_families()
             | boost::adaptors::map_values
-            | boost::adaptors::filtered([] (const lw_shared_ptr<table>& t) {
+            | boost::adaptors::filtered([] (const lw_shared_ptr<replica::table>& t) {
                         return t->schema()->ks_name().find(KEYSPACE_NAME_PREFIX) == 0 && !t->schema()->is_view();
                     })
-            | boost::adaptors::transformed([] (const lw_shared_ptr<table>& t) {
+            | boost::adaptors::transformed([] (const lw_shared_ptr<replica::table>& t) {
                         return t->schema()->cf_name();
                     });
 

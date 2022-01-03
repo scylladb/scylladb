@@ -59,7 +59,7 @@ SEASTAR_TEST_CASE(test_large_row_count) {
 }
 
 static void flush(cql_test_env& e) {
-    e.db().invoke_on_all([](database& dbi) {
+    e.db().invoke_on_all([](replica::database& dbi) {
         return dbi.flush_all_memtables();
     }).get();
 }
@@ -128,7 +128,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_data) {
         // * do a major compaction, so that the tombstone is combined with the old entry,
         //   and the old sstable is deleted.
         flush(e);
-        e.db().invoke_on_all([] (database& dbi) {
+        e.db().invoke_on_all([] (replica::database& dbi) {
             return parallel_for_each(dbi.get_column_families(), [&dbi] (auto& table) {
                 return dbi.get_compaction_manager().perform_major_compaction(&*table.second);
             });

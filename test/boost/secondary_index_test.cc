@@ -720,7 +720,7 @@ SEASTAR_TEST_CASE(test_local_secondary_index) {
         BOOST_REQUIRE_THROW(e.execute_cql("select * from t where v1 = 1").get(), exceptions::invalid_request_exception);
 
         auto get_local_index_read_count = [&] {
-            return e.db().map_reduce0([] (database& local_db) {
+            return e.db().map_reduce0([] (replica::database& local_db) {
                 return local_db.find_column_family("ks", "local_t_v1_index").get_stats().reads.hist.count;
             }, 0, std::plus<int64_t>()).get0();
         };
@@ -759,12 +759,12 @@ SEASTAR_TEST_CASE(test_local_and_global_secondary_index) {
         e.execute_cql("insert into t (p,c,v1,v2) values (2,6,3,5)").get();
 
         auto get_local_index_read_count = [&] {
-            return e.db().map_reduce0([] (database& local_db) {
+            return e.db().map_reduce0([] (replica::database& local_db) {
                 return local_db.find_column_family("ks", "local_t_v1_index").get_stats().reads.hist.count;
             }, 0, std::plus<int64_t>()).get0();
         };
         auto get_global_index_read_count = [&] {
-            return e.db().map_reduce0([] (database& local_db) {
+            return e.db().map_reduce0([] (replica::database& local_db) {
                 return local_db.find_column_family("ks", "global_t_v1_index").get_stats().reads.hist.count;
             }, 0, std::plus<int64_t>()).get0();
         };

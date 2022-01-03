@@ -74,7 +74,7 @@ sstring validate_keyspace(http_context& ctx, const parameters& param) {
     if (ctx.db.local().has_keyspace(ks_name)) {
         return ks_name;
     }
-    throw bad_param_exception(no_such_keyspace(ks_name).what());
+    throw bad_param_exception(replica::no_such_keyspace(ks_name).what());
 }
 
 // splits a request parameter assumed to hold a comma-separated list of table names
@@ -90,7 +90,7 @@ std::vector<sstring> parse_tables(const sstring& ks_name, http_context& ctx, con
         for (const auto& table_name : names) {
             ctx.db.local().find_column_family(ks_name, table_name);
         }
-    } catch (const no_such_column_family& e) {
+    } catch (const replica::no_such_column_family& e) {
         throw bad_param_exception(e.what());
     }
     return names;
@@ -165,11 +165,11 @@ future<json::json_return_type> set_tables_autocompaction(http_context& ctx, serv
 
     apilog.info("set_tables_autocompaction: enabled={} keyspace={} tables={}", enabled, keyspace, tables);
     return do_with(keyspace, std::move(tables), [&ctx, enabled] (const sstring &keyspace, const std::vector<sstring>& tables) {
-        return ctx.db.invoke_on(0, [&ctx, &keyspace, &tables, enabled] (database& db) {
-            auto g = database::autocompaction_toggle_guard(db);
-            return ctx.db.invoke_on_all([&keyspace, &tables, enabled] (database& db) {
+        return ctx.db.invoke_on(0, [&ctx, &keyspace, &tables, enabled] (replica::database& db) {
+            auto g = replica::database::autocompaction_toggle_guard(db);
+            return ctx.db.invoke_on_all([&keyspace, &tables, enabled] (replica::database& db) {
                 return parallel_for_each(tables, [&db, &keyspace, enabled] (const sstring& table) {
-                    column_family& cf = db.find_column_family(keyspace, table);
+                    replica::column_family& cf = db.find_column_family(keyspace, table);
                     if (enabled) {
                         cf.enable_auto_compaction();
                     } else {
@@ -562,7 +562,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::get_load.set(r, [&ctx](std::unique_ptr<request> req) {
-        return get_cf_stats(ctx, &column_family_stats::live_disk_space_used);
+        return get_cf_stats(ctx, &replica::column_family_stats::live_disk_space_used);
     });
 
     ss::get_load_map.set(r, [&ctx] (std::unique_ptr<request> req) {
@@ -606,7 +606,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         if (column_families.empty()) {
             column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
         }
-        return ctx.db.invoke_on_all([keyspace, column_families] (database& db) -> future<> {
+        return ctx.db.invoke_on_all([keyspace, column_families] (replica::database& db) -> future<> {
             auto table_ids = boost::copy_range<std::vector<utils::UUID>>(column_families | boost::adaptors::transformed([&] (auto& cf_name) {
                 return db.find_uuid(keyspace, cf_name);
             }));
@@ -636,7 +636,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                 return make_exception_future<json::json_return_type>(
                         std::runtime_error("Can not perform cleanup operation when topology changes"));
             }
-            return ctx.db.invoke_on_all([keyspace, column_families] (database& db) -> future<> {
+            return ctx.db.invoke_on_all([keyspace, column_families] (replica::database& db) -> future<> {
                 auto table_ids = boost::copy_range<std::vector<utils::UUID>>(column_families | boost::adaptors::transformed([&] (auto& table_name) {
                     return db.find_uuid(keyspace, table_name);
                 }));
@@ -647,7 +647,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                 auto& cm = db.get_compaction_manager();
                 // as a table can be dropped during loop below, let's find it before issuing the cleanup request.
                 for (auto& id : table_ids) {
-                    table& t = db.find_column_family(id);
+                    replica::table& t = db.find_column_family(id);
                     co_await cm.perform_cleanup(db, &t);
                 }
                 co_return;
@@ -660,7 +660,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::upgrade_sstables.set(r, wrap_ks_cf(ctx, [] (http_context& ctx, std::unique_ptr<request> req, sstring keyspace, std::vector<sstring> column_families) {
         bool exclude_current_version = req_param<bool>(*req, "exclude_current_version", false);
 
-        return ctx.db.invoke_on_all([=] (database& db) {
+        return ctx.db.invoke_on_all([=] (replica::database& db) {
             return do_for_each(column_families, [=, &db](sstring cfname) {
                 auto& cm = db.get_compaction_manager();
                 auto& cf = db.find_column_family(keyspace, cfname);
@@ -677,7 +677,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         if (column_families.empty()) {
             column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
         }
-        return ctx.db.invoke_on_all([keyspace, column_families] (database& db) {
+        return ctx.db.invoke_on_all([keyspace, column_families] (replica::database& db) {
             return parallel_for_each(column_families, [&db, keyspace](const sstring& cf) mutable {
                 return db.find_column_family(keyspace, cf).flush();
             });
@@ -766,7 +766,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::get_drain_progress.set(r, [&ctx](std::unique_ptr<request> req) {
-        return ctx.db.map_reduce(adder<database::drain_progress>(), [] (auto& db) {
+        return ctx.db.map_reduce(adder<replica::database::drain_progress>(), [] (auto& db) {
             return db.get_drain_progress();
         }).then([] (auto&& progress) {
             auto progress_str = format("Drained {}/{} ColumnFamilies", progress.remaining_cfs, progress.total_cfs);
@@ -873,7 +873,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::is_incremental_backups_enabled.set(r, [&ctx](std::unique_ptr<request> req) {
         // If this is issued in parallel with an ongoing change, we may see values not agreeing.
         // Reissuing is asking for trouble, so we will just return true upon seeing any true value.
-        return ctx.db.map_reduce(adder<bool>(), [] (database& db) {
+        return ctx.db.map_reduce(adder<bool>(), [] (replica::database& db) {
             for (auto& pair: db.get_keyspaces()) {
                 auto& ks = pair.second;
                 if (ks.incremental_backups_enabled()) {
@@ -889,7 +889,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::set_incremental_backups_enabled.set(r, [&ctx](std::unique_ptr<request> req) {
         auto val_str = req->get_query_param("value");
         bool value = (val_str == "True") || (val_str == "true") || (val_str == "1");
-        return ctx.db.invoke_on_all([value] (database& db) {
+        return ctx.db.invoke_on_all([value] (replica::database& db) {
             db.set_enable_incremental_backups(value);
 
             // Change both KS and CF, so they are in sync
@@ -1087,7 +1087,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::get_metrics_load.set(r, [&ctx](std::unique_ptr<request> req) {
-        return get_cf_stats(ctx, &column_family_stats::live_disk_space_used);
+        return get_cf_stats(ctx, &replica::column_family_stats::live_disk_space_used);
     });
 
     ss::get_exceptions.set(r, [&ss](const_req req) {
@@ -1149,7 +1149,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                         }
                     }
                 }
-            }, [ks, cf](const database& db) {
+            }, [ks, cf](const replica::database& db) {
                 // see above
                 table_sstables_list res;
 
@@ -1374,7 +1374,7 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
             throw std::invalid_argument(fmt::format("Unknown argument for 'quarantine_mode' parameter: {}", quarantine_mode_str));
         }
         return f.then([&ctx, keyspace, column_families, opts] {
-            return ctx.db.invoke_on_all([=] (database& db) {
+            return ctx.db.invoke_on_all([=] (replica::database& db) {
                 return do_for_each(column_families, [=, &db](sstring cfname) {
                     auto& cm = db.get_compaction_manager();
                     auto& cf = db.find_column_family(keyspace, cfname);

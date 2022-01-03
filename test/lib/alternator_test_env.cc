@@ -58,5 +58,5 @@ future<> alternator_test_env::stop() {
 }
 
 future<> alternator_test_env::flush_memtables() {
-    return _proxy.local().get_db().invoke_on_all(&database::flush_all_memtables);
+    return _proxy.local().get_db().invoke_on_all(&replica::database::flush_all_memtables);
 }

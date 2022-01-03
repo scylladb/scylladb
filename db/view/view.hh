@@ -29,7 +29,10 @@
 #include "frozen_mutation.hh"
 
 class frozen_mutation_and_schema;
+
+namespace replica {
 struct cf_stats;
+}
 
 namespace service {
 struct allow_hints_tag;
@@ -232,7 +235,7 @@ future<> mutate_MV(
         dht::token base_token,
         utils::chunked_vector<frozen_mutation_and_schema> view_updates,
         db::view::stats& stats,
-        cf_stats& cf_stats,
+        replica::cf_stats& cf_stats,
         tracing::trace_state_ptr tr_state,
         db::timeout_semaphore_units pending_view_updates,
         service::allow_hints allow_hints,

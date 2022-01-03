@@ -42,7 +42,10 @@
 
 class flat_mutation_reader;
 
+namespace replica {
 class database;
+}
+
 class repair_service;
 namespace db {
     namespace view {
@@ -102,19 +105,19 @@ enum class repair_status { RUNNING, SUCCESSFUL, FAILED };
 
 // repair_get_status() returns a future because it needs to run code on a
 // different CPU (cpu 0) and that might be a deferring operation.
-future<repair_status> repair_get_status(seastar::sharded<database>& db, int id);
+future<repair_status> repair_get_status(seastar::sharded<replica::database>& db, int id);
 
 // If the repair job is finished (SUCCESSFUL or FAILED), it returns immediately.
 // It blocks if the repair job is still RUNNING until timeout.
-future<repair_status> repair_await_completion(seastar::sharded<database>& db, int id, std::chrono::steady_clock::time_point timeout);
+future<repair_status> repair_await_completion(seastar::sharded<replica::database>& db, int id, std::chrono::steady_clock::time_point timeout);
 
 // returns a vector with the ids of the active repairs
-future<std::vector<int>> get_active_repairs(seastar::sharded<database>& db);
+future<std::vector<int>> get_active_repairs(seastar::sharded<replica::database>& db);
 
 void check_in_shutdown();
 
 // Abort all the repairs
-future<> repair_abort_all(seastar::sharded<database>& db);
+future<> repair_abort_all(seastar::sharded<replica::database>& db);
 
 enum class repair_checksum {
     legacy = 0,
@@ -169,7 +172,7 @@ public:
 class repair_info {
 public:
     repair_service& rs;
-    seastar::sharded<database>& db;
+    seastar::sharded<replica::database>& db;
     seastar::sharded<netw::messaging_service>& messaging;
     sharded<db::system_distributed_keyspace>& sys_dist_ks;
     sharded<db::view::view_update_generator>& view_update_generator;
@@ -290,7 +293,7 @@ public:
     void abort_repair_node_ops(utils::UUID ops_uuid);
 };
 
-future<uint64_t> estimate_partitions(seastar::sharded<database>& db, const sstring& keyspace,
+future<uint64_t> estimate_partitions(seastar::sharded<replica::database>& db, const sstring& keyspace,
         const sstring& cf, const dht::token_range& range);
 
 // Represent a position of a mutation_fragment read from a flat mutation

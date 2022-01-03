@@ -188,7 +188,7 @@ future<> paxos_state::learn(storage_proxy& sp, schema_ptr schema, proposal decis
     return do_with(std::move(decision), [&sp, tr_state = std::move(tr_state), schema, timeout] (proposal& decision) {
         auto f = utils::get_local_injector().inject("paxos_state_learn_timeout", timeout);
 
-        table& cf = sp.get_db().local().find_column_family(schema);
+        replica::table& cf = sp.get_db().local().find_column_family(schema);
         db_clock::time_point t = cf.get_truncation_record();
         auto truncated_at = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch());
         // When saving a decision, also delete the last accepted proposal. This is just an

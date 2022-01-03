@@ -43,7 +43,7 @@ class cache_hitrate_calculator : public seastar::async_sharded_service<cache_hit
         }
     };
 
-    seastar::sharded<database>& _db;
+    seastar::sharded<replica::database>& _db;
     gms::gossiper& _gossiper;
     timer<lowres_clock> _timer;
     bool _stopped = false;
@@ -56,7 +56,7 @@ class cache_hitrate_calculator : public seastar::async_sharded_service<cache_hit
     future<lowres_clock::duration> recalculate_hitrates();
     void recalculate_timer();
 public:
-    cache_hitrate_calculator(seastar::sharded<database>& db, gms::gossiper& g);
+    cache_hitrate_calculator(seastar::sharded<replica::database>& db, gms::gossiper& g);
     void run_on(size_t master, lowres_clock::duration d = std::chrono::milliseconds(2000));
 
     future<> stop();

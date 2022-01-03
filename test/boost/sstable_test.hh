@@ -41,9 +41,9 @@ constexpr auto la = sstables::sstable::version_types::la;
 constexpr auto big = sstables::sstable::format_types::big;
 
 class column_family_test {
-    lw_shared_ptr<column_family> _cf;
+    lw_shared_ptr<replica::column_family> _cf;
 public:
-    column_family_test(lw_shared_ptr<column_family> cf) : _cf(cf) {}
+    column_family_test(lw_shared_ptr<replica::column_family> cf) : _cf(cf) {}
 
     void add_sstable(sstables::shared_sstable sstable) {
         _cf->_main_sstables->insert(std::move(sstable));
@@ -54,21 +54,21 @@ public:
     void rebuild_sstable_list(const std::vector<sstables::shared_sstable>& new_sstables,
             const std::vector<sstables::shared_sstable>& sstables_to_remove) {
         auto permit = seastar::get_units(_cf->_sstable_set_mutation_sem, 1).get0();
-        auto builder = table::sstable_list_builder(std::move(permit));
+        auto builder = replica::table::sstable_list_builder(std::move(permit));
         _cf->_main_sstables = builder.build_new_list(*_cf->_main_sstables, _cf->_compaction_strategy.make_sstable_set(_cf->schema()), new_sstables, sstables_to_remove).get0();
         _cf->refresh_compound_sstable_set();
     }
 
-    static void update_sstables_known_generation(column_family& cf, unsigned generation) {
+    static void update_sstables_known_generation(replica::column_family& cf, unsigned generation) {
         cf.update_sstables_known_generation(generation);
     }
 
-    static uint64_t calculate_generation_for_new_table(column_family& cf) {
+    static uint64_t calculate_generation_for_new_table(replica::column_family& cf) {
         return cf.calculate_generation_for_new_table();
     }
 
     static int64_t calculate_shard_from_sstable_generation(int64_t generation) {
-        return column_family::calculate_shard_from_sstable_generation(generation);
+        return replica::column_family::calculate_shard_from_sstable_generation(generation);
     }
 
     future<stop_iteration> try_flush_memtable_to_sstable(lw_shared_ptr<memtable> mt) {

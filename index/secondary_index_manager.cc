@@ -73,7 +73,7 @@ const index_metadata& index::metadata() const {
     return _im;
 }
 
-secondary_index_manager::secondary_index_manager(column_family& cf)
+secondary_index_manager::secondary_index_manager(replica::column_family& cf)
     : _cf{cf}
 {}
 

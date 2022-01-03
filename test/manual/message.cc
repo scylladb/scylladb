@@ -176,7 +176,7 @@ int main(int ac, char ** av) {
         ("stay-alive", bpo::value<bool>()->default_value(false), "Do not kill the test server after the test")
         ("cpuid", bpo::value<uint32_t>()->default_value(0), "Server cpuid");
 
-    distributed<database> db;
+    distributed<replica::database> db;
 
     return app.run_deprecated(ac, av, [&app] {
         auto config = app.configuration();

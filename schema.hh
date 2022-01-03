@@ -54,7 +54,9 @@ namespace cdc {
 class options;
 }
 
+namespace replica {
 class database;
+}
 
 using column_count_type = uint32_t;
 
@@ -960,7 +962,7 @@ public:
      * Index or Local Index).
      *
      */
-    std::ostream& describe(database& db, std::ostream& os) const;
+    std::ostream& describe(replica::database& db, std::ostream& os) const;
     friend bool operator==(const schema&, const schema&);
     const column_mapping& get_column_mapping() const;
     friend class schema_registry_entry;

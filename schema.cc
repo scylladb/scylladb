@@ -755,16 +755,16 @@ static std::ostream& column_definition_as_cql_key(std::ostream& os, const column
     return os;
 }
 
-static bool is_global_index(database& db, const utils::UUID& id, const schema& s) {
+static bool is_global_index(replica::database& db, const utils::UUID& id, const schema& s) {
     return  db.find_column_family(id).get_index_manager().is_global_index(s);
 }
 
-static bool is_index(database& db, const utils::UUID& id, const schema& s) {
+static bool is_index(replica::database& db, const utils::UUID& id, const schema& s) {
     return  db.find_column_family(id).get_index_manager().is_index(s);
 }
 
 
-std::ostream& schema::describe(database& db, std::ostream& os) const {
+std::ostream& schema::describe(replica::database& db, std::ostream& os) const {
     os << "CREATE ";
     int n = 0;
 

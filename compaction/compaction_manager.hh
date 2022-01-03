@@ -44,7 +44,10 @@
 #include "backlog_controller.hh"
 #include "seastarx.hh"
 
+namespace replica {
 class table;
+}
+
 class compacting_sstable_registration;
 
 // Compaction manager provides facilities to submit and track compaction jobs on
@@ -83,7 +86,7 @@ private:
     };
 
     struct task {
-        table* compacting_table = nullptr;
+        replica::table* compacting_table = nullptr;
         shared_future<> compaction_done = make_ready_future<>();
         exponential_backoff_retry compaction_retry = exponential_backoff_retry(std::chrono::seconds(5), std::chrono::seconds(300));
         bool stopping = false;
@@ -94,7 +97,7 @@ private:
         compaction_state& compaction_state;
         gate::holder gate_holder;
 
-        explicit task(table* t, sstables::compaction_type type, struct compaction_state& cs)
+        explicit task(replica::table* t, sstables::compaction_type type, struct compaction_state& cs)
             : compacting_table(t)
             , type(type)
             , compaction_state(cs)
@@ -146,12 +149,12 @@ private:
     future<> _waiting_reevalution = make_ready_future<>();
     condition_variable _postponed_reevaluation;
     // tables that wait for compaction but had its submission postponed due to ongoing compaction.
-    std::unordered_set<table*> _postponed;
+    std::unordered_set<replica::table*> _postponed;
     // tracks taken weights of ongoing compactions, only one compaction per weight is allowed.
     // weight is value assigned to a compaction job that is log base N of total size of all input sstables.
     std::unordered_set<int> _weight_tracker;
 
-    std::unordered_map<table*, compaction_state> _compaction_state;
+    std::unordered_map<replica::table*, compaction_state> _compaction_state;
 
     // Purpose is to serialize all maintenance (non regular) compaction activity to reduce aggressiveness and space requirement.
     // If the operation must be serialized with regular, then the per-table write lock must be taken.
@@ -170,7 +173,7 @@ private:
     unsigned current_compaction_fan_in_threshold() const;
 
     // Return true if compaction can be initiated
-    bool can_register_compaction(table* t, int weight, unsigned fan_in) const;
+    bool can_register_compaction(replica::table* t, int weight, unsigned fan_in) const;
     // Register weight for a table. Do that only if can_register_weight()
     // returned true.
     void register_weight(int weight);
@@ -178,14 +181,14 @@ private:
     void deregister_weight(int weight);
 
     // Get candidates for compaction strategy, which are all sstables but the ones being compacted.
-    std::vector<sstables::shared_sstable> get_candidates(const table& t);
+    std::vector<sstables::shared_sstable> get_candidates(const replica::table& t);
 
     void register_compacting_sstables(const std::vector<sstables::shared_sstable>& sstables);
     void deregister_compacting_sstables(const std::vector<sstables::shared_sstable>& sstables);
 
     // gets the table's compaction state
     // throws std::out_of_range exception if not found.
-    compaction_state& get_compaction_state(table* t);
+    compaction_state& get_compaction_state(replica::table* t);
 
     // Return true if compaction manager and task weren't asked to stop.
     inline bool can_proceed(const lw_shared_ptr<task>& task);
@@ -201,9 +204,9 @@ private:
     void reevaluate_postponed_compactions();
     // Postpone compaction for a table that couldn't be executed due to ongoing
     // similar-sized compaction.
-    void postpone_compaction_for_table(table* t);
+    void postpone_compaction_for_table(replica::table* t);
 
-    future<> perform_sstable_scrub_validate_mode(table* t);
+    future<> perform_sstable_scrub_validate_mode(replica::table* t);
 
     compaction_controller _compaction_controller;
     compaction_backlog_manager _backlog_manager;
@@ -214,7 +217,7 @@ private:
     class can_purge_tombstones_tag;
     using can_purge_tombstones = bool_class<can_purge_tombstones_tag>;
 
-    future<> rewrite_sstables(table* t, sstables::compaction_type_options options, get_candidates_func, can_purge_tombstones can_purge = can_purge_tombstones::yes);
+    future<> rewrite_sstables(replica::table* t, sstables::compaction_type_options options, get_candidates_func, can_purge_tombstones can_purge = can_purge_tombstones::yes);
 
     optimized_optional<abort_source::subscription> _early_abort_subscription;
 
@@ -246,10 +249,10 @@ public:
     void really_do_stop();
 
     // Submit a table to be compacted.
-    void submit(table* t);
+    void submit(replica::table* t);
 
     // Submit a table to be off-strategy compacted.
-    void submit_offstrategy(table* t);
+    void submit_offstrategy(replica::table* t);
 
     // Submit a table to be cleaned up and wait for its termination.
     //
@@ -258,16 +261,16 @@ public:
     // Cleanup is about discarding keys that are no longer relevant for a
     // given sstable, e.g. after node loses part of its token range because
     // of a newly added node.
-    future<> perform_cleanup(database& db, table* t);
+    future<> perform_cleanup(replica::database& db, replica::table* t);
 
     // Submit a table to be upgraded and wait for its termination.
-    future<> perform_sstable_upgrade(database& db, table* t, bool exclude_current_version);
+    future<> perform_sstable_upgrade(replica::database& db, replica::table* t, bool exclude_current_version);
 
     // Submit a table to be scrubbed and wait for its termination.
-    future<> perform_sstable_scrub(table* t, sstables::compaction_type_options::scrub opts);
+    future<> perform_sstable_scrub(replica::table* t, sstables::compaction_type_options::scrub opts);
 
     // Submit a table for major compaction.
-    future<> perform_major_compaction(table* t);
+    future<> perform_major_compaction(replica::table* t);
 
 
     // Run a custom job for a given table, defined by a function
@@ -277,42 +280,42 @@ public:
     // parameter type is the compaction type the operation can most closely be
     //      associated with, use compaction_type::Compaction, if none apply.
     // parameter job is a function that will carry the operation
-    future<> run_custom_job(table* t, sstables::compaction_type type, noncopyable_function<future<>(sstables::compaction_data&)> job);
+    future<> run_custom_job(replica::table* t, sstables::compaction_type type, noncopyable_function<future<>(sstables::compaction_data&)> job);
 
     // Run a function with compaction temporarily disabled for a table T.
-    future<> run_with_compaction_disabled(table* t, std::function<future<> ()> func);
+    future<> run_with_compaction_disabled(replica::table* t, std::function<future<> ()> func);
 
     // Adds a table to the compaction manager.
     // Creates a compaction_state structure that can be used for submitting
     // compaction jobs of all types.
-    void add(table* t);
+    void add(replica::table* t);
 
     // Remove a table from the compaction manager.
     // Cancel requests on table and wait for possible ongoing compactions.
-    future<> remove(table* t);
+    future<> remove(replica::table* t);
 
     const stats& get_stats() const {
         return _stats;
     }
 
-    const std::vector<sstables::compaction_info> get_compactions(table* t = nullptr) const;
+    const std::vector<sstables::compaction_info> get_compactions(replica::table* t = nullptr) const;
 
     // Returns true if table has an ongoing compaction, running on its behalf
-    bool has_table_ongoing_compaction(const table* t) const {
+    bool has_table_ongoing_compaction(const replica::table* t) const {
         return std::any_of(_tasks.begin(), _tasks.end(), [t] (const lw_shared_ptr<task>& task) {
             return task->compacting_table == t && task->compaction_running;
         });
     };
 
-    bool compaction_disabled(table* t) const {
+    bool compaction_disabled(replica::table* t) const {
         return _compaction_state.contains(t) && _compaction_state.at(t).compaction_disabled();
     }
 
     // Stops ongoing compaction of a given type.
-    future<> stop_compaction(sstring type, table* table = nullptr);
+    future<> stop_compaction(sstring type, replica::table* table = nullptr);
 
     // Stops ongoing compaction of a given table and/or compaction_type.
-    future<> stop_ongoing_compactions(sstring reason, table* t = nullptr, std::optional<sstables::compaction_type> type_opt = {});
+    future<> stop_ongoing_compactions(sstring reason, replica::table* t = nullptr, std::optional<sstables::compaction_type> type_opt = {});
 
     double backlog() {
         return _backlog_manager.backlog();
@@ -323,7 +326,7 @@ public:
     }
 
     // Propagate replacement of sstables to all ongoing compaction of a given table
-    void propagate_replacement(table* t, const std::vector<sstables::shared_sstable>& removed, const std::vector<sstables::shared_sstable>& added);
+    void propagate_replacement(replica::table* t, const std::vector<sstables::shared_sstable>& removed, const std::vector<sstables::shared_sstable>& added);
 
     static sstables::compaction_data create_compaction_data();
 

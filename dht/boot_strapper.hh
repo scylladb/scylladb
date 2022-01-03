@@ -55,7 +55,7 @@ class boot_strapper {
     using token_metadata = locator::token_metadata;
     using token_metadata_ptr = locator::token_metadata_ptr;
     using token = dht::token;
-    distributed<database>& _db;
+    distributed<replica::database>& _db;
     sharded<streaming::stream_manager>& _stream_manager;
     abort_source& _abort_source;
     /* endpoint that needs to be bootstrapped */
@@ -64,7 +64,7 @@ class boot_strapper {
     std::unordered_set<token> _tokens;
     const token_metadata_ptr _token_metadata_ptr;
 public:
-    boot_strapper(distributed<database>& db, sharded<streaming::stream_manager>& sm, abort_source& abort_source, inet_address addr, std::unordered_set<token> tokens, const token_metadata_ptr tmptr)
+    boot_strapper(distributed<replica::database>& db, sharded<streaming::stream_manager>& sm, abort_source& abort_source, inet_address addr, std::unordered_set<token> tokens, const token_metadata_ptr tmptr)
         : _db(db)
         , _stream_manager(sm)
         , _abort_source(abort_source)
@@ -80,7 +80,7 @@ public:
      * otherwise, if num_tokens == 1, pick a token to assume half the load of the most-loaded node.
      * else choose num_tokens tokens at random
      */
-    static std::unordered_set<token> get_bootstrap_tokens(const token_metadata_ptr tmptr, database& db);
+    static std::unordered_set<token> get_bootstrap_tokens(const token_metadata_ptr tmptr, replica::database& db);
 
     static std::unordered_set<token> get_random_tokens(const token_metadata_ptr tmptr, size_t num_tokens);
 #if 0

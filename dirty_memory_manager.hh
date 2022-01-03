@@ -77,7 +77,7 @@ class dirty_memory_manager: public logalloc::region_group_reclaimer {
     // mounting, in which case the pressure flag could be set back on if we force it off.
     bool _db_shutdown_requested = false;
 
-    database* _db;
+    replica::database* _db;
     // The _real_region_group protects against actual dirty memory usage hitting the maximum. Usage
     // for this group is the real dirty memory usage of the system.
     logalloc::region_group _real_region_group;
@@ -151,7 +151,7 @@ public:
     //
     // We then set the soft limit to 80 % of the virtual dirty hard limit, which is equal to 40 % of
     // the user-supplied threshold.
-    dirty_memory_manager(database& db, size_t threshold, double soft_limit, scheduling_group deferred_work_sg)
+    dirty_memory_manager(replica::database& db, size_t threshold, double soft_limit, scheduling_group deferred_work_sg)
         : logalloc::region_group_reclaimer(threshold / 2, threshold * soft_limit / 2)
         , _real_dirty_reclaimer(threshold)
         , _db(&db)

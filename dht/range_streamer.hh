@@ -50,7 +50,10 @@
 #include <unordered_map>
 #include <memory>
 
+namespace replica {
 class database;
+}
+
 namespace gms { class gossiper; }
 
 namespace dht {
@@ -102,7 +105,7 @@ public:
         }
     };
 
-    range_streamer(distributed<database>& db, sharded<streaming::stream_manager>& sm, const token_metadata_ptr tmptr, abort_source& abort_source, std::unordered_set<token> tokens, inet_address address, sstring description, streaming::stream_reason reason)
+    range_streamer(distributed<replica::database>& db, sharded<streaming::stream_manager>& sm, const token_metadata_ptr tmptr, abort_source& abort_source, std::unordered_set<token> tokens, inet_address address, sstring description, streaming::stream_reason reason)
         : _db(db)
         , _stream_manager(sm)
         , _token_metadata_ptr(std::move(tmptr))
@@ -115,7 +118,7 @@ public:
         _abort_source.check();
     }
 
-    range_streamer(distributed<database>& db, sharded<streaming::stream_manager>& sm, const token_metadata_ptr tmptr, abort_source& abort_source, inet_address address, sstring description, streaming::stream_reason reason)
+    range_streamer(distributed<replica::database>& db, sharded<streaming::stream_manager>& sm, const token_metadata_ptr tmptr, abort_source& abort_source, inet_address address, sstring description, streaming::stream_reason reason)
         : range_streamer(db, sm, std::move(tmptr), abort_source, std::unordered_set<token>(), address, description, reason) {
     }
 
@@ -170,7 +173,7 @@ public:
     future<> do_stream_async();
     size_t nr_ranges_to_stream();
 private:
-    distributed<database>& _db;
+    distributed<replica::database>& _db;
     sharded<streaming::stream_manager>& _stream_manager;
     const token_metadata_ptr _token_metadata_ptr;
     abort_source& _abort_source;
