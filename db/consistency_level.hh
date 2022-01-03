@@ -47,7 +47,7 @@
 #include "gms/inet_address.hh"
 #include "inet_address_vectors.hh"
 #include "log.hh"
-#include "database_fwd.hh"
+#include "replica/database_fwd.hh"
 
 #include <iosfwd>
 #include <vector>

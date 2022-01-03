@@ -39,7 +39,7 @@
 #include "lister.hh"
 #include "db/timeout_clock.hh"
 #include "service/priority_manager.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "service_permit.hh"
 #include "utils/directories.hh"
 #include "locator/abstract_replication_strategy.hh"

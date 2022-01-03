@@ -33,7 +33,7 @@
 #include "test/perf/perf.hh"
 #include <seastar/core/app-template.hh>
 #include "schema_builder.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "release.hh"
 #include "db/config.hh"
 #include "partition_slice_builder.hh"

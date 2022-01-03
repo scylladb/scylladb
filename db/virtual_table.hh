@@ -24,7 +24,7 @@
 #include "mutation_reader.hh"
 #include "memtable.hh"
 #include "schema.hh"
-#include "database_fwd.hh"
+#include "replica/database_fwd.hh"
 
 namespace db {
 

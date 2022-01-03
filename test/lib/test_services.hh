@@ -28,7 +28,7 @@
 #include "schema.hh"
 #include "schema_builder.hh"
 #include "row_cache.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "cell_locking.hh"
 #include "compaction/compaction_manager.hh"
 #include "db/large_data_handler.hh"

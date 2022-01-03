@@ -24,7 +24,7 @@
 #include <map>
 #include <memory>
 #include <iosfwd>
-#include "database_fwd.hh"
+#include "replica/database_fwd.hh"
 #include "dht/i_partitioner.hh"
 #include "schema_fwd.hh"
 #include "encoding_stats.hh"

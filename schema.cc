@@ -36,7 +36,7 @@
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include "view_info.hh"
 #include "partition_slice_builder.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "dht/i_partitioner.hh"
 #include "dht/token-sharding.hh"
 #include "cdc/cdc_extension.hh"

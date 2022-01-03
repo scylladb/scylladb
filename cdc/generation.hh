@@ -36,7 +36,7 @@
 #include <unordered_set>
 #include <seastar/util/noncopyable_function.hh>
 
-#include "database_fwd.hh"
+#include "replica/database_fwd.hh"
 #include "db_clock.hh"
 #include "dht/token.hh"
 #include "locator/token_metadata.hh"

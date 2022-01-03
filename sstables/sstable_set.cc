@@ -33,7 +33,7 @@
 
 #include "sstable_set_impl.hh"
 
-#include "database.hh"
+#include "replica/database.hh"
 
 namespace sstables {
 

@@ -11,7 +11,7 @@
 #include "sstables/sstables.hh"
 #include <seastar/testing/test_case.hh>
 #include "schema.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "dht/murmur3_partitioner.hh"
 #include "compaction/compaction_manager.hh"
 #include "mutation_reader.hh"

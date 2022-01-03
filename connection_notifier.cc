@@ -21,7 +21,7 @@
 
 #include "connection_notifier.hh"
 #include "cql3/constants.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "service/storage_proxy.hh"
 
 #include <stdexcept>

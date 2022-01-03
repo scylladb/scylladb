@@ -34,7 +34,7 @@
 #include <seastar/testing/thread_test_case.hh>
 #include "schema.hh"
 #include "schema_builder.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "compaction/leveled_manifest.hh"
 #include "sstables/metadata_collector.hh"
 #include "sstables/sstable_writer.hh"

@@ -21,7 +21,7 @@
 
 #include "test/lib/alternator_test_env.hh"
 #include "alternator/rmw_operation.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include <seastar/core/coroutine.hh>
 
 #include "service/storage_proxy.hh"

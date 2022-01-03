@@ -28,7 +28,7 @@
 
 #include "utils/base64.hh"
 #include "log.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "db/config.hh"
 
 #include "cdc/log.hh"

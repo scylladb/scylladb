@@ -27,7 +27,7 @@
 #include "db/config.hh"
 #include "log.hh"
 #include "auth/common.hh"
-#include "database.hh"
+#include "replica/database.hh"
 
 static logging::logger slogger("controller");
 

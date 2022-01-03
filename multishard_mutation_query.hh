@@ -21,7 +21,7 @@
 
 #pragma once
 
-#include "database_fwd.hh"
+#include "replica/database_fwd.hh"
 #include "schema_fwd.hh"
 #include "cache_temperature.hh"
 #include "db/timeout_clock.hh"

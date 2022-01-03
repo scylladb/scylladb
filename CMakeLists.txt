@@ -436,7 +436,6 @@ set(scylla_sources
     cql3/ut_name.cc
     cql3/values.cc
     data_dictionary/data_dictionary.cc
-    database.cc
     db/batchlog_manager.cc
     db/commitlog/commitlog.cc
     db/commitlog/commitlog_entry.cc
@@ -555,6 +554,8 @@ set(scylla_sources
     release.cc
     repair/repair.cc
     repair/row_level.cc
+    replica/database.cc
+    replica/table.cc
     row_cache.cc
     schema.cc
     schema_mutations.cc
@@ -611,7 +612,6 @@ set(scylla_sources
     streaming/stream_summary.cc
     streaming/stream_task.cc
     streaming/stream_transfer_task.cc
-    table.cc
     table_helper.cc
     thrift/controller.cc
     thrift/handler.cc

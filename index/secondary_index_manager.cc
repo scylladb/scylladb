@@ -47,7 +47,7 @@
 #include "index/target_parser.hh"
 #include "db/query_context.hh"
 #include "schema_builder.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "db/view/view.hh"
 
 #include <boost/range/adaptor/map.hpp>

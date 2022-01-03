@@ -53,7 +53,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/semaphore.hh>
 
-// forward declaration since database.hh includes this file
+// forward declaration since replica/database.hh includes this file
 class keyspace;
 
 namespace locator {

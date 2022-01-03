@@ -29,7 +29,7 @@
 #include "locator/token_metadata.hh"
 #include "exceptions/exceptions.hh"
 #include "locator/abstract_replication_strategy.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "gms/feature_service.hh"
 
 extern logging::logger dblog;

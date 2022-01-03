@@ -40,7 +40,7 @@
  */
 
 #include "validation.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "exceptions/exceptions.hh"
 
 namespace validation {

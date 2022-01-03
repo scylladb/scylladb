@@ -32,7 +32,7 @@
 #include "test/lib/log.hh"
 #include "test/lib/random_utils.hh"
 
-#include "database.hh"
+#include "replica/database.hh"
 #include "lister.hh"
 #include "partition_slice_builder.hh"
 #include "frozen_mutation.hh"

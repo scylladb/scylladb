@@ -90,7 +90,7 @@
 #include <seastar/core/execution_stage.hh>
 #include "db/timeout_clock.hh"
 #include "multishard_mutation_query.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "db/consistency_level_validations.hh"
 #include "cdc/log.hh"
 #include "cdc/stats.hh"

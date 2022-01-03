@@ -28,7 +28,7 @@
 
 #include "keys.hh"
 #include "schema_builder.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "dht/token-sharding.hh"

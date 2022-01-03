@@ -26,7 +26,7 @@
 #include <seastar/http/exception.hh>
 #include "utils/logalloc.hh"
 #include "log.hh"
-#include "database.hh"
+#include "replica/database.hh"
 
 namespace api {
 

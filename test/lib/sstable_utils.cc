@@ -21,7 +21,7 @@
 
 #include "test/lib/sstable_utils.hh"
 
-#include "database.hh"
+#include "replica/database.hh"
 #include "memtable-sstable.hh"
 #include "dht/i_partitioner.hh"
 #include "dht/murmur3_partitioner.hh"

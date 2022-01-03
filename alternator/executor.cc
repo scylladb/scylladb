@@ -29,7 +29,7 @@
 #include "schema_builder.hh"
 #include "exceptions/exceptions.hh"
 #include "timestamp.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "types/map.hh"
 #include "schema.hh"
 #include "query-request.hh"

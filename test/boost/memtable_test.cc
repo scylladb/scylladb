@@ -21,7 +21,7 @@
 
 #include <boost/test/unit_test.hpp>
 #include "service/priority_manager.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "db/config.hh"
 #include "utils/UUID_gen.hh"
 #include <seastar/testing/test_case.hh>

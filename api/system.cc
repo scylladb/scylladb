@@ -25,7 +25,7 @@
 #include <seastar/core/reactor.hh>
 #include <seastar/http/exception.hh>
 #include "log.hh"
-#include "database.hh"
+#include "replica/database.hh"
 
 extern logging::logger apilog;
 

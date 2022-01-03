@@ -23,7 +23,7 @@
 #include <iterator>
 #include <seastar/core/thread.hh>
 #include <seastar/util/defer.hh>
-#include "database_fwd.hh"
+#include "replica/database_fwd.hh"
 #include "sstables/sstables.hh"
 #include <seastar/core/do_with.hh>
 #include "test/lib/cql_test_env.hh"

@@ -21,7 +21,7 @@
 
 #include "thrift/controller.hh"
 #include "thrift/server.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "db/config.hh"
 #include "log.hh"
 

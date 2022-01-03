@@ -40,7 +40,7 @@
 #include "dht/range_streamer.hh"
 #include "utils/fb_utilities.hh"
 #include "locator/snitch_base.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "gms/gossiper.hh"
 #include "gms/failure_detector.hh"
 #include "log.hh"

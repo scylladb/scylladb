@@ -52,7 +52,7 @@
 #include "cell_locking.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstable_set_impl.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "partition_slice_builder.hh"
 #include "schema_registry.hh"
 #include "service/priority_manager.hh"

@@ -56,7 +56,7 @@
 #include <unordered_set>
 #include <chrono>
 
-#include "database.hh"
+#include "replica/database.hh"
 #include "legacy_schema_migrator.hh"
 #include "system_keyspace.hh"
 #include "schema_tables.hh"

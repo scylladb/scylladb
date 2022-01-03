@@ -33,7 +33,7 @@
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/gate.hh>
 
-#include "database_fwd.hh"
+#include "replica/database_fwd.hh"
 #include "frozen_mutation.hh"
 #include "utils/UUID.hh"
 #include "utils/hash.hh"

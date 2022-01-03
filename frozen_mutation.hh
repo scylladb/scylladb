@@ -22,7 +22,7 @@
 #pragma once
 
 #include "dht/i_partitioner.hh"
-#include "database_fwd.hh"
+#include "replica/database_fwd.hh"
 #include "mutation_fragment.hh"
 
 class mutation;

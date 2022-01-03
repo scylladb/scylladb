@@ -23,7 +23,7 @@
 #include <seastar/http/httpd.hh>
 #include <seastar/core/future.hh>
 
-#include "database_fwd.hh"
+#include "replica/database_fwd.hh"
 #include "seastarx.hh"
 
 namespace service {

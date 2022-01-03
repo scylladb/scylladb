@@ -28,14 +28,14 @@
 #include <boost/range/algorithm/sort.hpp>
 
 #include "clustering_bounds_comparator.hh"
-#include "database_fwd.hh"
+#include "replica/database_fwd.hh"
 #include "db/system_keyspace.hh"
 #include "dht/i_partitioner.hh"
 #include "partition_range_compat.hh"
 #include "range.hh"
 #include "mutation_fragment.hh"
 #include "sstables/sstables.hh"
-#include "database.hh"
+#include "replica/database.hh"
 
 #include "db/size_estimates_virtual_reader.hh"
 

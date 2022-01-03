@@ -46,7 +46,7 @@
 #include "release.hh"
 #include "compaction/compaction_manager.hh"
 #include "sstables/sstables.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "db/extensions.hh"
 #include "db/snapshot-ctl.hh"
 #include "transport/controller.hh"

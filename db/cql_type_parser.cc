@@ -41,7 +41,7 @@
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/sliced.hpp>
 
-#include "database.hh"
+#include "replica/database.hh"
 #include "service/storage_proxy.hh"
 #include "cql3/CqlParser.hpp"
 #include "cql3/util.hh"

@@ -20,7 +20,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "database.hh"
+#include "replica/database.hh"
 #include "schema_builder.hh"
 #include "test/perf/perf.hh"
 #include <seastar/core/app-template.hh>

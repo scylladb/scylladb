@@ -40,7 +40,7 @@
 
 #include <boost/range/adaptors.hpp>
 #include "db/snapshot-ctl.hh"
-#include "database.hh"
+#include "replica/database.hh"
 
 namespace db {
 

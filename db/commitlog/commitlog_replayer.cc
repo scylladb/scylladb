@@ -50,7 +50,7 @@
 
 #include "commitlog.hh"
 #include "commitlog_replayer.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "sstables/sstables.hh"
 #include "db/system_keyspace.hh"
 #include "log.hh"

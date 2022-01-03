@@ -21,7 +21,7 @@
 
 #include "log.hh"
 #include "lister.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include <seastar/core/future-util.hh>
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"

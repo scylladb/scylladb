@@ -28,7 +28,7 @@
 #include "service/storage_proxy.hh"
 #include "lang/lua.hh"
 #include "data_dictionary/data_dictionary.hh"
-#include "database.hh" // for wasm
+#include "replica/database.hh" // for wasm
 #include "cql3/query_processor.hh"
 
 namespace cql3 {

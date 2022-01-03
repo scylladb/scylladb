@@ -80,7 +80,7 @@
 #include "sstables/sstables.hh"
 #include "db/config.hh"
 #include "db/schema_tables.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include <seastar/core/metrics.hh>
 #include "cdc/generation.hh"
 #include "cdc/generation_service.hh"

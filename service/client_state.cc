@@ -50,7 +50,7 @@
 #include "db/schema_tables.hh"
 #include "tracing/trace_keyspace_helper.hh"
 #include "db/system_distributed_keyspace.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "cdc/log.hh"
 #include "utils/overloaded_functor.hh"
 #include <seastar/core/coroutine.hh>

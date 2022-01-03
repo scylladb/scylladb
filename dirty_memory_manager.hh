@@ -26,7 +26,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/semaphore.hh>
-#include "database_fwd.hh"
+#include "replica/database_fwd.hh"
 #include "utils/logalloc.hh"
 
 class dirty_memory_manager;

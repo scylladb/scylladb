@@ -22,7 +22,7 @@
 #include "server.hh"
 #include "handler.hh"
 #include "db/config.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include <seastar/core/future-util.hh>
 #include <seastar/core/circular_buffer.hh>
 #include <seastar/core/metrics.hh>

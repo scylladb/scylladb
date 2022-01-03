@@ -26,7 +26,7 @@
 #include "service/paxos/paxos_state.hh"
 #include "db/system_keyspace.hh"
 #include "schema_registry.hh"
-#include "database.hh"
+#include "replica/database.hh"
 
 #include "utils/error_injection.hh"
 

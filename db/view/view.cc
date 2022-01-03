@@ -57,7 +57,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 
-#include "database.hh"
+#include "replica/database.hh"
 #include "clustering_bounds_comparator.hh"
 #include "cql3/statements/select_statement.hh"
 #include "cql3/util.hh"

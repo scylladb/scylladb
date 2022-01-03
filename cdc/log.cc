@@ -34,7 +34,7 @@
 #include "cdc/change_visitor.hh"
 #include "cdc/metadata.hh"
 #include "bytes.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "db/schema_tables.hh"
 #include "partition_slice_builder.hh"
 #include "schema.hh"

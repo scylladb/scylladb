@@ -22,7 +22,7 @@
 
 #include "sstables-format-selector.hh"
 #include "log.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "gms/gossiper.hh"
 #include "gms/feature_service.hh"
 #include "gms/versioned_value.hh"

@@ -34,7 +34,7 @@
 #include <seastar/testing/test_case.hh>
 #include "schema.hh"
 #include "compress.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include <memory>
 #include "test/boost/sstable_test.hh"
 #include "test/lib/tmpdir.hh"

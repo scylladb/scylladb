@@ -44,7 +44,7 @@
 
 #include <seastar/core/sharded.hh>
 #include <seastar/core/future.hh>
-#include "database_fwd.hh"
+#include "replica/database_fwd.hh"
 #include <seastar/core/gate.hh>
 #include <seastar/core/rwlock.hh>
 

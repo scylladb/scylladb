@@ -43,7 +43,7 @@
 
 #include "schema.hh"
 
-#include "database_fwd.hh"
+#include "replica/database_fwd.hh"
 
 #include <vector>
 #include <set>

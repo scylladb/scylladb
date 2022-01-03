@@ -48,7 +48,7 @@
 #include "exceptions/exceptions.hh"
 #include <seastar/core/sstring.hh>
 #include "schema.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "unimplemented.hh"
 #include "db/read_repair_decision.hh"
 #include "locator/abstract_replication_strategy.hh"

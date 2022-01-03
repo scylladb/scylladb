@@ -19,7 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "database.hh"
+#include "replica/database.hh"
 #include "db/system_keyspace.hh"
 #include "flat_mutation_reader.hh"
 #include "mutation_fragment.hh"

@@ -19,7 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "database.hh"
+#include "replica/database.hh"
 #include "db/system_keyspace.hh"
 #include "db/timeout_clock.hh"
 #include "dht/i_partitioner.hh"

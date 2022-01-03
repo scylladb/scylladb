@@ -33,7 +33,7 @@
 #include "utils/UUID.hh"
 #include "utils/hash.hh"
 #include "service/priority_manager.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include <seastar/util/bool_class.hh>
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/coroutine.hh>

@@ -35,7 +35,7 @@
 #include <seastar/util/alloc_failure_injector.hh>
 #include <seastar/util/closeable.hh>
 
-#include "database.hh"
+#include "replica/database.hh"
 #include "utils/UUID_gen.hh"
 #include "mutation_reader.hh"
 #include "clustering_interval_set.hh"

@@ -41,7 +41,7 @@
 
 #pragma once
 
-#include "database_fwd.hh"
+#include "replica/database_fwd.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "message/messaging_service_fwd.hh"
 #include "query-request.hh"

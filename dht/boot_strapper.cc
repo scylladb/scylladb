@@ -44,7 +44,7 @@
 #include "gms/gossiper.hh"
 #include "log.hh"
 #include "db/config.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "streaming/stream_reason.hh"
 #include "locator/abstract_replication_strategy.hh"
 

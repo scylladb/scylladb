@@ -26,7 +26,7 @@
 #include "log.hh"
 #include "sstable_directory.hh"
 #include "lister.hh"
-#include "database.hh"
+#include "replica/database.hh"
 
 static logging::logger dirlog("sstable_directory");
 

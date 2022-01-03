@@ -21,7 +21,7 @@
 
 #pragma once
 
-#include "database.hh"
+#include "replica/database.hh"
 #include "sstables/shared_sstable.hh"
 
 #include <seastar/core/abort_source.hh>

@@ -22,7 +22,7 @@
 #include "db/system_distributed_keyspace.hh"
 
 #include "cql3/untyped_result_set.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "db/consistency_level_type.hh"
 #include "db/system_keyspace.hh"
 #include "schema_builder.hh"

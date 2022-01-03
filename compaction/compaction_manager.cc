@@ -24,7 +24,7 @@
 #include "compaction_backlog_manager.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include <seastar/core/metrics.hh>
 #include <seastar/core/coroutine.hh>
 #include "sstables/exceptions.hh"

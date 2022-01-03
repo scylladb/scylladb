@@ -22,7 +22,7 @@
 #include "schema_registry.hh"
 #include "service/priority_manager.hh"
 #include "multishard_mutation_query.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "db/config.hh"
 #include "query-result-writer.hh"
 

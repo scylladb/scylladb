@@ -27,7 +27,7 @@
 #include "Cassandra.h"
 #include <seastar/core/distributed.hh>
 #include <seastar/core/coroutine.hh>
-#include "database.hh"
+#include "replica/database.hh"
 #include <seastar/core/sstring.hh>
 #include <seastar/core/print.hh>
 #include "frozen_mutation.hh"

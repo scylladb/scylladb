@@ -26,7 +26,7 @@
 #include "service/storage_service.hh"
 #include "db/config.hh"
 #include "utils/histogram.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "seastar/core/scheduling_specific.hh"
 
 namespace api {

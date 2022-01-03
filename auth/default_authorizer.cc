@@ -61,7 +61,7 @@ extern "C" {
 #include "cql3/untyped_result_set.hh"
 #include "exceptions/exceptions.hh"
 #include "log.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "utils/class_registrator.hh"
 
 namespace auth {

@@ -34,7 +34,7 @@
 #include "db/cql_type_parser.hh"
 #include "db/config.hh"
 #include "db/schema_tables.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "gms/feature_service.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/snitch_base.hh"

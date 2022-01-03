@@ -23,7 +23,7 @@
 #include <seastar/rpc/rpc.hh>
 #include "sstables_loader.hh"
 #include "distributed_loader.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "sstables/sstables.hh"
 #include "gms/inet_address.hh"
 #include "streaming/stream_mutation_fragments_cmd.hh"

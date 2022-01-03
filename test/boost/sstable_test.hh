@@ -24,7 +24,7 @@
 
 #include "types/map.hh"
 #include "sstables/sstables.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "schema.hh"
 #include "schema_builder.hh"
 #include "types/set.hh"

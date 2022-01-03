@@ -22,7 +22,7 @@
 #pragma once
 
 #include "schema.hh"
-#include "database_fwd.hh"
+#include "replica/database_fwd.hh"
 #include "cdc/log.hh"
 #include "dht/i_partitioner.hh"
 #include "tombstone_gc_options.hh"

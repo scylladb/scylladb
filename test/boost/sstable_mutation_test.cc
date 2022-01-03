@@ -31,7 +31,7 @@
 #include <seastar/core/do_with.hh>
 #include <seastar/core/thread.hh>
 #include "sstables/sstables.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "timestamp.hh"
 #include "schema_builder.hh"
 #include "mutation_reader.hh"

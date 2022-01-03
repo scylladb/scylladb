@@ -21,7 +21,7 @@
 
 #include <boost/test/unit_test.hpp>
 
-#include "database.hh"
+#include "replica/database.hh"
 #include "db/view/view_builder.hh"
 #include "db/view/view_updating_consumer.hh"
 #include "db/system_keyspace.hh"

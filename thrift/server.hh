@@ -31,7 +31,7 @@
 #include <memory>
 #include <cstdint>
 #include <boost/intrusive/list.hpp>
-#include "database_fwd.hh"
+#include "replica/database_fwd.hh"
 #include "utils/updateable_value.hh"
 #include "service_permit.hh"
 

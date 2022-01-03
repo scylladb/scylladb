@@ -53,7 +53,7 @@
 #include "gms/gossiper.hh"
 #include "view_info.hh"
 #include "schema_builder.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "db/schema_tables.hh"
 #include "types/user.hh"
 #include "db/schema_tables.hh"

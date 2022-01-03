@@ -35,7 +35,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "log.hh"
 #include "gc_clock.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "service_permit.hh"
 #include "timestamp.hh"
 #include "service/storage_proxy.hh"

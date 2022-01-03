@@ -26,7 +26,7 @@
 
 #include "schema_builder.hh"
 #include "row_cache.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "db/config.hh"
 #include "db/commitlog/commitlog.hh"
 

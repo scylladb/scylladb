@@ -24,7 +24,7 @@
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/util/closeable.hh>
 
-#include "database.hh"
+#include "replica/database.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include "service/priority_manager.hh"

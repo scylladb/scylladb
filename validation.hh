@@ -42,7 +42,7 @@
 #pragma once
 
 #include <seastar/core/sstring.hh>
-#include "database_fwd.hh"
+#include "replica/database_fwd.hh"
 #include "schema_fwd.hh"
 
 using namespace seastar;

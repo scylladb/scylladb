@@ -24,7 +24,7 @@
 
 #include "Cassandra.h"
 #include "auth/service.hh"
-#include "database_fwd.hh"
+#include "replica/database_fwd.hh"
 #include <seastar/core/distributed.hh>
 #include "cql3/query_processor.hh"
 #include <memory>

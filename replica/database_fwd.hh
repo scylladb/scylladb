@@ -21,7 +21,7 @@
 
 #pragma once
 
-// database.hh
+// replica/database.hh
 class database;
 class keyspace;
 class table;
