@@ -21,15 +21,15 @@
 
 #pragma once
 
-#include <utility>
-
-#include <seastar/core/print.hh>
-#include <seastar/net/ip.hh>
+#include <seastar/net/ipv4_address.hh>
 #include <seastar/net/inet_address.hh>
 #include <seastar/net/socket_defs.hh>
-#include "utils/serialization.hh"
-#include <sstream>
+#include <iosfwd>
 #include <optional>
+#include <functional>
+
+#include "bytes.hh"
+#include "seastarx.hh"
 
 namespace gms {
 
@@ -74,9 +74,7 @@ public:
     uint32_t raw_addr() const {
         return addr().as_ipv4_address().ip;
     }
-    sstring to_sstring() const {
-        return format("{}", *this);
-    }
+    sstring to_sstring() const;
     friend inline bool operator==(const inet_address& x, const inet_address& y) noexcept {
         return x._addr == y._addr;
     }

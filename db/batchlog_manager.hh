@@ -49,8 +49,6 @@
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/abort_source.hh>
 
-#include "gms/inet_address.hh"
-#include "inet_address_vectors.hh"
 #include "db_clock.hh"
 #include "mutation.hh"
 #include "utils/UUID.hh"
