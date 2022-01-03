@@ -1540,8 +1540,13 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
 
         f = make_checked_file(commit_error_handler, std::move(f));
     } catch (...) {
+        ep = std::current_exception();
+    }
+    if (ep) {
+        // do this early, so iff we are to fast-fail server,
+        // we do it before anything else can go wrong.
         try {
-            commit_error_handler(std::current_exception());
+            commit_error_handler(ep);
         } catch (...) {
             ep = std::current_exception();
         }
