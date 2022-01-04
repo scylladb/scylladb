@@ -394,7 +394,7 @@ void compaction_manager::task::setup_new_compaction() {
     compaction_running = true;
 }
 
-void compaction_manager::task::finish_compaction() {
+void compaction_manager::task::finish_compaction() noexcept {
     compaction_running = false;
     output_run_identifier = {};
 }

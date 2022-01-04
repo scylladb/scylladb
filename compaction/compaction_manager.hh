@@ -105,7 +105,7 @@ private:
         task(const task&) = delete;
 
         void setup_new_compaction();
-        void finish_compaction();
+        void finish_compaction() noexcept;
 
         bool generating_output_run() const noexcept {
             return compaction_running && output_run_identifier;
