@@ -167,7 +167,9 @@ const std::vector<action_handler> action_handlers = {
 
 }
 
-int main(int argc, char** argv) {
+namespace tools {
+
+int scylla_types_main(int argc, char** argv) {
     namespace bpo = boost::program_options;
 
     app_template::config app_cfg;
@@ -254,3 +256,5 @@ $ scylla-types --print --prefix-compound -t TimeUUIDType -t Int32Type 0010d00819
         return make_ready_future<>();
     });
 }
+
+} // namespace tools

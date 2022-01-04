@@ -96,6 +96,7 @@
 #include "service/storage_proxy.hh"
 #include "alternator/controller.hh"
 #include "alternator/ttl.hh"
+#include "tools/entry_point.hh"
 
 #include "service/raft/raft_group_registry.hh"
 
@@ -399,7 +400,7 @@ sharded<database>* the_database;
 sharded<streaming::stream_manager> *the_stream_manager;
 }
 
-int main(int ac, char** av) {
+static int scylla_main(int ac, char** av) {
     // Allow core dumps. The would be disabled by default if
     // CAP_SYS_NICE was added to the binary, as is suggested by the
     // epoll backend.
@@ -410,14 +411,24 @@ int main(int ac, char** av) {
     }
 
   try {
-    // early check to avoid triggering
-    if (!cpu_sanity()) {
-        _exit(71);
-    }
     runtime::init_uptime();
     std::setvbuf(stdout, nullptr, _IOLBF, 1000);
     app_template::config app_cfg;
     app_cfg.name = "Scylla";
+    app_cfg.description =
+R"(scylla - NoSQL data store using the seastar framework, compatible with Apache Cassandra
+
+For more information, see https://github.com/scylladb/scylla.
+
+The scylla executable hosts multiple apps:
+* server (default) - the scylla server itself.
+* types - a command-line tool to examine values belonging to scylla types.
+* sstable - a multifunctional command-line tool to examine the content of sstables.
+
+Usage: scylla {app_name} [...]
+
+For more information about individual apps, run: scylla {app_name} --help
+)";
     app_cfg.default_task_quota = 500us;
     app_cfg.auto_handle_sigint_sigterm = false;
     app_cfg.max_networking_aio_io_control_blocks = 50000;
@@ -1456,4 +1467,41 @@ int main(int ac, char** av) {
       fmt::print(std::cerr, "FATAL: Exception during startup, aborting: {}\n", std::current_exception());
       return 7; // 1 has a special meaning for upstart
   }
+}
+
+int main(int ac, char** av) {
+    // early check to avoid triggering
+    if (!cpu_sanity()) {
+        _exit(71);
+    }
+
+    std::function<int(int, char**)> main_func;
+
+    std::string exec_name;
+    if (ac >= 2) {
+        exec_name = av[1];
+    }
+
+    bool recognized = true;
+    if (exec_name == "server") {
+        main_func = scylla_main;
+    } else if (exec_name == "types") {
+        main_func = tools::scylla_types_main;
+    } else if (exec_name == "sstable") {
+        main_func = tools::scylla_sstable_main;
+    } else {
+        fmt::print("Unrecognized or missing app name (argv[1]={}), assuming server\n", exec_name);
+        main_func = scylla_main;
+        recognized = false;
+    }
+
+    if (recognized) {
+        // shift args to consume the recognized app name
+        --ac;
+        for (int i = 1; i < ac; ++i) {
+            std::swap(av[i], av[i + 1]);
+        }
+    }
+
+    return main_func(ac, av);
 }
