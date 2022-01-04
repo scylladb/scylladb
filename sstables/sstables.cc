@@ -31,7 +31,6 @@
 #include <seastar/core/shared_ptr_incomplete.hh>
 #include <seastar/core/do_with.hh>
 #include <seastar/core/thread.hh>
-#include <seastar/core/shared_future.hh>
 #include <seastar/core/byteorder.hh>
 #include <seastar/core/aligned_buffer.hh>
 #include <seastar/util/closeable.hh>
@@ -51,14 +50,10 @@
 #include "unimplemented.hh"
 #include "index_reader.hh"
 #include "memtable.hh"
-#include "range.hh"
 #include "downsampling.hh"
 #include <boost/algorithm/string.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/transformed.hpp>
-#include <boost/range/algorithm_ext/insert.hpp>
-#include <boost/range/algorithm_ext/push_back.hpp>
-#include <boost/range/algorithm/set_algorithm.hpp>
 #include <boost/range/algorithm_ext/is_sorted.hpp>
 #include <boost/range/algorithm/sort.hpp>
 #include <regex>
@@ -80,7 +75,6 @@
 #include "sstables/sstables_manager.hh"
 #include "sstables/partition_index_cache.hh"
 #include "utils/UUID_gen.hh"
-#include "database.hh"
 #include "sstables_manager.hh"
 #include <boost/algorithm/string/predicate.hpp>
 #include "tracing/traced_file.hh"
