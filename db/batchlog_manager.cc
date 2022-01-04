@@ -56,7 +56,6 @@
 #include "log.hh"
 #include "serializer.hh"
 #include "db_clock.hh"
-#include "database.hh"
 #include "unimplemented.hh"
 #include "gms/failure_detector.hh"
 #include "gms/gossiper.hh"
@@ -273,7 +272,7 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
         }).then_wrapped([this, id](future<> batch_result) {
             try {
                 batch_result.get();
-            } catch (no_such_keyspace& ex) {
+            } catch (data_dictionary::no_such_keyspace& ex) {
                 // should probably ignore and drop the batch
             } catch (...) {
                 // timeout, overload etc.

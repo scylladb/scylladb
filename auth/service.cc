@@ -39,7 +39,8 @@
 #include "log.hh"
 #include "service/migration_manager.hh"
 #include "utils/class_registrator.hh"
-#include "database.hh"
+#include "locator/abstract_replication_strategy.hh"
+#include "data_dictionary/keyspace_metadata.hh"
 
 namespace auth {
 
@@ -146,7 +147,7 @@ future<> service::create_keyspace_if_missing(::service::migration_manager& mm) c
     if (!db.has_keyspace(meta::AUTH_KS)) {
         locator::replication_strategy_config_options opts{{"replication_factor", "1"}};
 
-        auto ksm = keyspace_metadata::new_keyspace(
+        auto ksm = data_dictionary::keyspace_metadata::new_keyspace(
                 meta::AUTH_KS,
                 "org.apache.cassandra.locator.SimpleStrategy",
                 opts,

@@ -44,7 +44,6 @@
 #include "streaming/stream_manager.hh"
 #include "mutation_reader.hh"
 #include "dht/i_partitioner.hh"
-#include "database.hh"
 #include "utils/fb_utilities.hh"
 #include "streaming/stream_plan.hh"
 #include <seastar/core/sleep.hh>
