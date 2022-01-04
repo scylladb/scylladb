@@ -36,7 +36,8 @@
 #include "to_string.hh"
 #include "duration.hh"
 #include "marshal_exception.hh"
-#include <seastar/net/ip.hh>
+#include <seastar/net/ipv4_address.hh>
+#include <seastar/net/ipv6_address.hh>
 #include <seastar/net/inet_address.hh>
 #include <seastar/util/backtrace.hh>
 #include "hashing.hh"

@@ -23,6 +23,7 @@
 
 #include <seastar/util/bool_class.hh>
 #include <seastar/core/future.hh>
+#include <seastar/core/circular_buffer.hh>
 
 #include "dht/i_partitioner.hh"
 #include "mutation_fragment.hh"

@@ -43,6 +43,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/http/response_parser.hh>
+#include <seastar/net/api.hh>
 #include <seastar/net/dns.hh>
 
 #include <boost/algorithm/string/classification.hpp>

@@ -22,6 +22,7 @@
 
 #include "locator/production_snitch_base.hh"
 #include <seastar/http/response_parser.hh>
+#include <seastar/net/api.hh>
 
 namespace locator {
 class ec2_snitch : public production_snitch_base {

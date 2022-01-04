@@ -22,6 +22,7 @@
 #pragma once
 
 #include "dht/token.hh"
+#include <seastar/core/smp.hh>
 
 namespace dht {
 

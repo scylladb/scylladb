@@ -70,6 +70,7 @@
 #include "db/hints/host_filter.hh"
 #include "utils/small_vector.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
+#include <seastar/core/circular_buffer.hh>
 
 class reconcilable_result;
 class frozen_mutation_and_schema;
