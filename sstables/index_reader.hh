@@ -119,6 +119,7 @@ class index_consume_entry_context : public data_consumer::continuous_data_consum
     using continuous_data_consumer = data_consumer::continuous_data_consumer<index_consume_entry_context<IndexConsumer>>;
     using read_status = typename continuous_data_consumer::read_status;
 private:
+    const sstable& _sst;
     IndexConsumer& _consumer;
     file _index_file;
     uint64_t _entry_offset;
@@ -300,11 +301,11 @@ public:
         return proceed::yes;
     }
 
-    index_consume_entry_context(reader_permit permit, IndexConsumer& consumer, trust_promoted_index trust_pi,
+    index_consume_entry_context(const sstable& sst, reader_permit permit, IndexConsumer& consumer, trust_promoted_index trust_pi,
             file index_file, file_input_stream_options options, uint64_t start,
             uint64_t maxlen, std::optional<column_values_fixed_lengths> ck_values_fixed_lengths, tracing::trace_state_ptr trace_state = {})
         : continuous_data_consumer(std::move(permit), make_file_input_stream(index_file, start, maxlen, options), start, maxlen)
-        , _consumer(consumer), _index_file(index_file)
+        , _sst(sst), _consumer(consumer), _index_file(index_file)
         , _entry_offset(start), _trust_pi(trust_pi), _ck_values_fixed_lengths(std::move(ck_values_fixed_lengths))
         , _trace_state(std::move(trace_state))
     {}
@@ -458,7 +459,7 @@ class index_reader {
         reader(shared_sstable sst, reader_permit permit, const io_priority_class& pc, tracing::trace_state_ptr trace_state, uint64_t begin, uint64_t end, uint64_t quantity,
                use_caching caching)
             : _consumer(sst->manager().get_cache_tracker().region(), sst->get_schema(), quantity)
-            , _context(permit, _consumer,
+            , _context(*sst, permit, _consumer,
                        trust_promoted_index(sst->has_correct_promoted_index_entries()),
                        make_tracked_index_file(*sst, permit, trace_state, caching),
                        get_file_input_stream_options(sst, pc), begin, end - begin,
