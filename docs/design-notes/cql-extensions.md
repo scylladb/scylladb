@@ -70,3 +70,11 @@ explicitly defined or provided as a marker:
 ```cql
 	INSERT INTO t(a,b,c) VALUES (?,?,?) USING TIMESTAMP 42 AND TIMEOUT 50ms;
 ```
+
+## CALL statement
+
+The `CALL` statement allows calling of previously registered routines, removing the need of external tools like nodetool for many operations. Arguments can be passed to the routines in a form of a named parameter map.
+
+```cql
+CALL system.keyspace_repair(ks => 'test');
+```

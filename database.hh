@@ -129,6 +129,7 @@ class extensions;
 class rp_handle;
 class data_listeners;
 class large_data_handler;
+class builtin_routine_registry;
 
 future<> system_keyspace_make(distributed<database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, db::config& cfg);
 
@@ -1283,6 +1284,7 @@ private:
             db::commitlog_force_sync> _apply_stage;
 
     flat_hash_map<sstring, keyspace> _keyspaces;
+    std::unique_ptr<db::builtin_routine_registry> _builtin_routine_registry;
     std::unordered_map<utils::UUID, lw_shared_ptr<column_family>> _column_families;
     using ks_cf_to_uuid_t =
         flat_hash_map<std::pair<sstring, sstring>, utils::UUID, utils::tuple_hash, string_pair_eq>;
@@ -1502,6 +1504,10 @@ public:
 
     flat_hash_map<sstring, keyspace>& get_keyspaces() {
         return _keyspaces;
+    }
+
+    db::builtin_routine_registry& get_builtin_routine_registry() {
+        return *_builtin_routine_registry;
     }
 
     const std::unordered_map<utils::UUID, lw_shared_ptr<column_family>>& get_column_families() const {

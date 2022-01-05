@@ -78,6 +78,7 @@ options {
 #include "cql3/statements/revoke_role_statement.hh"
 #include "cql3/statements/drop_role_statement.hh"
 #include "cql3/statements/create_role_statement.hh"
+#include "cql3/statements/raw/call_statement.hh"
 #include "cql3/statements/index_target.hh"
 #include "cql3/statements/ks_prop_defs.hh"
 #include "cql3/selection/raw_selector.hh"
@@ -393,6 +394,7 @@ cqlStatement returns [std::unique_ptr<raw::parsed_statement> stmt]
     | st45=detachServiceLevelStatement { $stmt = std::move(st45); }
     | st46=listServiceLevelStatement { $stmt = std::move(st46); }
     | st47=listServiceLevelAttachStatement { $stmt = std::move(st47); }
+    | st48=callStatement               { $stmt = std::move(st48); }
     ;
 
 /*
@@ -1235,6 +1237,26 @@ dropRoleStatement returns [std::unique_ptr<drop_role_statement> stmt]
       { $stmt = std::make_unique<drop_role_statement>(name, if_exists); }
     ;
 
+named_parameter[std::unordered_map<sstring, sstring> &params]
+    : k1=cident '=>' v1=constant
+    {
+        params.emplace(k1->to_string(), v1.raw_text);
+    }
+    ;
+
+/**
+  * CALL proc(name1 => value, name2 => value2, ...);
+  */
+callStatement returns  [std::unique_ptr<raw::call_statement> stmt]
+    @init {
+        std::unordered_map<sstring, sstring> params;
+    }
+    : K_CALL cf=columnFamilyName '(' (named_parameter[params] (',' named_parameter[params])* )? ')'
+      {
+          $stmt = std::make_unique<raw::call_statement>(std::move(cf), std::move(params));
+      }
+    ;
+
 /**
  * LIST ROLES [OF <rolename>] [NORECURSIVE]
  */
@@ -1911,6 +1933,7 @@ basic_unreserved_keyword returns [sstring str]
         | K_SERVICE
         | K_LEVEL
         | K_LEVELS
+        | K_CALL
         ) { $str = $k.text; }
     ;
 
@@ -1945,6 +1968,7 @@ K_CREATE:      C R E A T E;
 K_KEYSPACE:    ( K E Y S P A C E
                  | S C H E M A );
 K_KEYSPACES:   K E Y S P A C E S;
+K_CALL:        C A L L;
 K_COLUMNFAMILY:( C O L U M N F A M I L Y
                  | T A B L E );
 K_MATERIALIZED:M A T E R I A L I Z E D;
