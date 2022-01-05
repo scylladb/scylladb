@@ -716,6 +716,45 @@ flat_mutation_reader make_multishard_combining_reader_for_tests(
         tracing::trace_state_ptr trace_state = nullptr,
         mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no);
 
+/// Make a multishard_combining_reader.
+///
+/// multishard_combining_reader takes care of reading a range from all shards
+/// that own a subrange in the range. Shard reader are created on-demand, when
+/// the shard is visited for the first time.
+///
+/// The read starts with a concurrency of one, that is the reader reads from a
+/// single shard at a time. The concurrency is exponentially increased (to a
+/// maximum of the number of shards) when a reader's buffer is empty after
+/// moving the next shard. This condition is important as we only wan't to
+/// increase concurrency for sparse tables that have little data and the reader
+/// has to move between shards often. When concurrency is > 1, the reader
+/// issues background read-aheads to the next shards so that by the time it
+/// needs to move to them they have the data ready.
+/// For dense tables (where we rarely cross shards) we rely on the
+/// foreign_reader to issue sufficient read-aheads on its own to avoid blocking.
+///
+/// The readers' life-cycles are managed through the supplied lifecycle policy.
+flat_mutation_reader_v2 make_multishard_combining_reader_v2(
+        shared_ptr<reader_lifecycle_policy_v2> lifecycle_policy,
+        schema_ptr schema,
+        reader_permit permit,
+        const dht::partition_range& pr,
+        const query::partition_slice& ps,
+        const io_priority_class& pc,
+        tracing::trace_state_ptr trace_state = nullptr,
+        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no);
+
+flat_mutation_reader_v2 make_multishard_combining_reader_v2_for_tests(
+        const dht::sharder& sharder,
+        shared_ptr<reader_lifecycle_policy_v2> lifecycle_policy,
+        schema_ptr schema,
+        reader_permit permit,
+        const dht::partition_range& pr,
+        const query::partition_slice& ps,
+        const io_priority_class& pc,
+        tracing::trace_state_ptr trace_state = nullptr,
+        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no);
+
 class queue_reader;
 
 /// Calls to different methods cannot overlap!
