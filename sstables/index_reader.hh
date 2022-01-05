@@ -120,7 +120,6 @@ class index_consume_entry_context : public data_consumer::continuous_data_consum
     using read_status = typename continuous_data_consumer::read_status;
 private:
     IndexConsumer& _consumer;
-    sstring _file_name;
     file _index_file;
     uint64_t _entry_offset;
 
@@ -162,7 +161,6 @@ private:
     std::optional<deletion_time> _deletion_time;
 
     trust_promoted_index _trust_pi;
-    const schema& _s;
     std::optional<column_values_fixed_lengths> _ck_values_fixed_lengths;
     tracing::trace_state_ptr _trace_state;
 
@@ -302,12 +300,12 @@ public:
         return proceed::yes;
     }
 
-    index_consume_entry_context(reader_permit permit, IndexConsumer& consumer, trust_promoted_index trust_pi, const schema& s,
+    index_consume_entry_context(reader_permit permit, IndexConsumer& consumer, trust_promoted_index trust_pi,
             file index_file, file_input_stream_options options, uint64_t start,
             uint64_t maxlen, std::optional<column_values_fixed_lengths> ck_values_fixed_lengths, tracing::trace_state_ptr trace_state = {})
         : continuous_data_consumer(std::move(permit), make_file_input_stream(index_file, start, maxlen, options), start, maxlen)
         , _consumer(consumer), _index_file(index_file)
-        , _entry_offset(start), _trust_pi(trust_pi), _s(s), _ck_values_fixed_lengths(std::move(ck_values_fixed_lengths))
+        , _entry_offset(start), _trust_pi(trust_pi), _ck_values_fixed_lengths(std::move(ck_values_fixed_lengths))
         , _trace_state(std::move(trace_state))
     {}
 };
@@ -461,7 +459,7 @@ class index_reader {
                use_caching caching)
             : _consumer(sst->manager().get_cache_tracker().region(), sst->get_schema(), quantity)
             , _context(permit, _consumer,
-                       trust_promoted_index(sst->has_correct_promoted_index_entries()), *sst->_schema,
+                       trust_promoted_index(sst->has_correct_promoted_index_entries()),
                        make_tracked_index_file(*sst, permit, trace_state, caching),
                        get_file_input_stream_options(sst, pc), begin, end - begin,
                        (sst->get_version() >= sstable_version_types::mc
