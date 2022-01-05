@@ -3506,3 +3506,8 @@ bool abstract_type::bound_value_needs_to_be_reserialized(const cql_serialization
 
     return false;
 }
+
+// compile once the template instance that was externed in marshal_exception.hh
+namespace seastar {
+template void throw_with_backtrace<marshal_exception, sstring>(sstring&&);
+}
