@@ -49,6 +49,21 @@ class storage_proxy;
 template<typename M>
 concept MergeableMutation = std::is_same<M, canonical_mutation>::value || std::is_same<M, frozen_mutation>::value;
 
+class group0_guard {
+    friend class migration_manager;
+    struct impl;
+    std::unique_ptr<impl> _impl;
+
+    group0_guard(std::unique_ptr<impl>);
+
+public:
+    ~group0_guard();
+    group0_guard(group0_guard&&) noexcept;
+
+    // Use this timestamp when creating group 0 mutations.
+    api::timestamp_type write_timestamp() const;
+};
+
 class migration_manager : public seastar::async_sharded_service<migration_manager>,
                             public gms::i_endpoint_state_change_subscriber,
                             public seastar::peering_sharded_service<migration_manager> {

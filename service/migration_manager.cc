@@ -863,6 +863,27 @@ future<> migration_manager::push_schema_mutation(const gms::inet_address& endpoi
     return _messaging.send_definitions_update(id, std::move(fm), std::move(cm));
 }
 
+struct group0_guard::impl {
+    api::timestamp_type _write_timestamp;
+
+    impl(const impl&) = delete;
+    impl& operator=(const impl&) = delete;
+
+    impl(api::timestamp_type write_timestamp)
+        : _write_timestamp(write_timestamp)
+    {}
+};
+
+group0_guard::group0_guard(std::unique_ptr<impl> p) : _impl(std::move(p)) {}
+
+group0_guard::~group0_guard() = default;
+
+group0_guard::group0_guard(group0_guard&&) noexcept = default;
+
+api::timestamp_type group0_guard::write_timestamp() const {
+    return _impl->_write_timestamp;
+}
+
 future<> migration_manager::announce_with_raft(std::vector<mutation> schema) {
     assert(this_shard_id() == 0);
     auto schema_features = _feat.cluster_schema_features();
