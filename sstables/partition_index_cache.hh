@@ -233,7 +233,7 @@ public:
 
         // No exceptions before then_wrapped() is installed so that ptr will be eventually populated.
 
-        return futurize_invoke(loader, key).then_wrapped([this, key, ptr] (auto&& f) mutable {
+        return futurize_invoke(loader, key).then_wrapped([this, key, ptr = std::move(ptr)] (auto&& f) mutable {
             entry& e = ptr.get_entry();
             try {
                 partition_index_page&& page = f.get0();
@@ -241,15 +241,15 @@ public:
                 e.set_page(std::move(page));
                 _shard_stats.used_bytes += e.size_in_allocator();
                 ++_shard_stats.populations;
+                return ptr;
             } catch (...) {
                 e.promise()->set_exception(std::current_exception());
+                ptr = {};
                 with_allocator(_region.allocator(), [&] {
                     _cache.erase(key);
                 });
                 throw;
             }
-        }).then([ptr] {
-            return ptr;
         });
     }
 
