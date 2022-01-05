@@ -135,7 +135,7 @@ future<> service::create_keyspace_if_missing(::service::migration_manager& mm) c
     auto db = _qp.db();
 
     if (!db.has_keyspace(meta::AUTH_KS)) {
-        co_await mm.schema_read_barrier();
+        co_await mm.start_group0_operation();
 
         if (!db.has_keyspace(meta::AUTH_KS)) {
             locator::replication_strategy_config_options opts{{"replication_factor", "1"}};

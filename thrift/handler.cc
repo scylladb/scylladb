@@ -863,7 +863,7 @@ public:
         auto func = [ddl, &dmm] (cql3::query_processor& qp) -> future<std::string> {
             auto& mm = dmm.local();
 
-            co_await mm.schema_read_barrier();
+            co_await mm.start_group0_operation();
 
             co_await mm.announce(co_await ddl(mm, qp.db()));
 

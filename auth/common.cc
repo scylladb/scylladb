@@ -68,7 +68,7 @@ static future<> create_metadata_table_if_missing_impl(
     schema_ptr table = b.build();
 
     if (!db.has_schema(table->ks_name(), table->cf_name())) {
-        co_await mm.schema_read_barrier();
+        co_await mm.start_group0_operation();
         try {
             co_return co_await mm.announce(co_await mm.prepare_new_column_family_announcement(table, api::new_timestamp()));
         } catch (exceptions::already_exists_exception&) {}

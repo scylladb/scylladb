@@ -33,7 +33,7 @@ future<> table_helper::setup_table(cql3::query_processor& qp, const sstring& cre
 
     auto& mm = qp.get_migration_manager();
 
-    co_await mm.schema_read_barrier();
+    co_await mm.start_group0_operation();
 
     if (db.has_schema(schema->ks_name(), schema->cf_name())) { // re-check after read barrier
         co_return;
@@ -128,7 +128,7 @@ future<> table_helper::setup_keyspace(cql3::query_processor& qp, std::string_vie
     auto& mm = qp.get_migration_manager();
 
     if (!db.has_keyspace(keyspace_name)) {
-        co_await mm.schema_read_barrier();
+        co_await mm.start_group0_operation();
 
         // Create a keyspace
         if (!db.has_keyspace(keyspace_name)) {

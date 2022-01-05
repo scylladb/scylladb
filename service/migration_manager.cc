@@ -908,7 +908,7 @@ future<> migration_manager::announce(std::vector<mutation> schema) {
     return announce_without_raft(std::move(schema));
 }
 
-future<> migration_manager::schema_read_barrier() {
+future<> migration_manager::start_group0_operation() {
     if (_raft_gr.is_enabled()) {
         assert(this_shard_id() == 0);
         return _raft_gr.group0().read_barrier();

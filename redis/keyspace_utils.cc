@@ -179,7 +179,7 @@ future<> create_keyspace_if_not_exists_impl(seastar::sharded<service::storage_pr
     auto& mml = mm.local();
     auto tm = proxy.local().get_token_metadata_ptr();
 
-    co_await mml.schema_read_barrier();
+    co_await mml.start_group0_operation();
 
     std::vector<mutation> ks_mutations;
     for (auto& ks_name: ks_names) {

@@ -245,7 +245,7 @@ future<> system_distributed_keyspace::start() {
     }
 
     if (!_sp.get_db().local().has_keyspace(NAME)) {
-        co_await _mm.schema_read_barrier();
+        co_await _mm.start_group0_operation();
 
         try {
             auto ksm = keyspace_metadata::new_keyspace(
@@ -260,7 +260,7 @@ future<> system_distributed_keyspace::start() {
     }
 
     if (!_sp.get_db().local().has_keyspace(NAME_EVERYWHERE)) {
-        co_await _mm.schema_read_barrier();
+        co_await _mm.start_group0_operation();
 
         try {
             auto ksm = keyspace_metadata::new_keyspace(
@@ -280,7 +280,7 @@ future<> system_distributed_keyspace::start() {
     });
 
     if (!exist) {
-        co_await _mm.schema_read_barrier();
+        co_await _mm.start_group0_operation();
 
         auto m = co_await map_reduce(tables,
         /* Mapper */ [this] (auto&& table) -> future<std::vector<mutation>> {
@@ -302,7 +302,7 @@ future<> system_distributed_keyspace::start() {
 
     _started = true;
     if (has_missing_columns(_qp.db())) {
-        co_await _mm.schema_read_barrier();
+        co_await _mm.start_group0_operation();
         co_await add_new_columns_if_missing(_qp.db().real_database(), _mm);
     } else {
         dlogger.info("All schemas are uptodate on start");

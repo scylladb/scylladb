@@ -138,8 +138,11 @@ public:
 
     future<std::vector<mutation>> prepare_view_drop_announcement(const sstring& ks_name, const sstring& cf_name, api::timestamp_type);
 
-    // the function need to be called if a user wants to access most up-to-date schema state
-    future<> schema_read_barrier();
+    // The function needs to be called if the user wants to read most up-to-date group0 state (including schema state)
+    // (the function ensures that all previously finished group0 operations are visible on this node) or to write it.
+    // Call ONLY on shard 0.
+    // Requires a quorum of nodes to be available.
+    future<> start_group0_operation();
 
     // used to check if raft is enabled on the cluster
     bool is_raft_enabled() { return _raft_gr.is_enabled(); }
