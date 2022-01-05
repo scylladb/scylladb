@@ -230,7 +230,7 @@ static future<> add_new_columns_if_missing(replica::database& db, ::service::mig
         if (updated) {
             schema_ptr table = b.build();
             try {
-                co_return co_await mm.announce(co_await mm.prepare_column_family_update_announcement(table, false, std::vector<view_ptr>(), api::timestamp_type(1)));
+                co_return co_await mm.announce(co_await mm.prepare_column_family_update_announcement(table, false, std::vector<view_ptr>(), api::new_timestamp()));
             } catch (...) {}
         }
     } catch (...) {
@@ -285,7 +285,7 @@ future<> system_distributed_keyspace::start() {
         auto m = co_await map_reduce(tables,
         /* Mapper */ [this] (auto&& table) -> future<std::vector<mutation>> {
             try {
-                co_return co_await _mm.prepare_new_column_family_announcement(std::move(table), api::min_timestamp);
+                co_return co_await _mm.prepare_new_column_family_announcement(std::move(table), api::new_timestamp());
             } catch (exceptions::already_exists_exception&) {
                 co_return std::vector<mutation>();
             }
