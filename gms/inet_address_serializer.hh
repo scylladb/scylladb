@@ -21,6 +21,8 @@
 
 #pragma once
 
+#include <seastar/net/ipv4_address.hh>
+#include <seastar/net/ipv6_address.hh>
 #include "inet_address.hh"
 #include "serializer.hh"
 

@@ -24,6 +24,7 @@
 #include <boost/intrusive/list.hpp>
 #include <seastar/core/future.hh>
 #include <seastar/core/gate.hh>
+#include <seastar/core/queue.hh>
 #include "reader_permit.hh"
 #include "flat_mutation_reader_v2.hh"
 

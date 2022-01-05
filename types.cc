@@ -29,7 +29,6 @@
 #include "cql3/util.hh"
 #include "concrete_types.hh"
 #include <seastar/core/print.hh>
-#include <seastar/net/ip.hh>
 #include "utils/exceptions.hh"
 #include "utils/serialization.hh"
 #include "vint-serialization.hh"

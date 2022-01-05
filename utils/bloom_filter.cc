@@ -45,6 +45,7 @@
 #include "utils/murmur_hash.hh"
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/align.hh>
+#include <seastar/core/loop.hh>
 #include "utils/large_bitset.hh"
 #include <array>
 #include <cstdlib>

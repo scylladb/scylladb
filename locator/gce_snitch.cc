@@ -38,6 +38,7 @@
  * Copyright (C) 2018-present ScyllaDB
  */
 
+#include <seastar/net/api.hh>
 #include <seastar/net/dns.hh>
 #include <seastar/core/seastar.hh>
 #include "locator/gce_snitch.hh"
