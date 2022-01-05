@@ -76,12 +76,12 @@ schema_altering_statement::execute0(query_processor& qp, service::query_state& s
                     std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls()));
     }
 
-    co_await mm.start_group0_operation();
+    auto group0_guard = co_await mm.start_group0_operation();
 
-    auto [ret, m] = co_await prepare_schema_mutations(qp, api::new_timestamp());
+    auto [ret, m] = co_await prepare_schema_mutations(qp, group0_guard.write_timestamp());
 
     if (!m.empty()) {
-        co_await mm.announce(std::move(m));
+        co_await mm.announce(std::move(m), std::move(group0_guard));
     }
 
     ce = std::move(ret);

@@ -884,7 +884,7 @@ api::timestamp_type group0_guard::write_timestamp() const {
     return _impl->_write_timestamp;
 }
 
-future<> migration_manager::announce_with_raft(std::vector<mutation> schema) {
+future<> migration_manager::announce_with_raft(std::vector<mutation> schema, group0_guard guard) {
     assert(this_shard_id() == 0);
     auto schema_features = _feat.cluster_schema_features();
     auto adjusted_schema = db::schema_tables::adjust_schema_for_schema_features(schema, schema_features);
@@ -922,19 +922,27 @@ future<> migration_manager::announce_without_raft(std::vector<mutation> schema) 
 }
 
 // Returns a future on the local application of the schema
-future<> migration_manager::announce(std::vector<mutation> schema) {
+future<> migration_manager::announce(std::vector<mutation> schema, group0_guard guard) {
     if (_raft_gr.is_enabled()) {
-        return announce_with_raft(std::move(schema));
+        return announce_with_raft(std::move(schema), std::move(guard));
     }
     return announce_without_raft(std::move(schema));
 }
 
-future<> migration_manager::start_group0_operation() {
+future<group0_guard> migration_manager::start_group0_operation() {
     if (_raft_gr.is_enabled()) {
-        assert(this_shard_id() == 0);
-        return _raft_gr.group0().read_barrier();
+        if (this_shard_id() != 0) {
+            on_internal_error(mlogger, "start_group0_operation: must run on shard 0");
+        }
+
+        co_await _raft_gr.group0().read_barrier();
     }
-    return make_ready_future();
+
+    co_return group0_guard {
+        std::make_unique<group0_guard::impl>(
+            api::new_timestamp()
+        )
+    };
 }
 
 /**

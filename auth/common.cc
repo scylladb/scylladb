@@ -68,9 +68,10 @@ static future<> create_metadata_table_if_missing_impl(
     schema_ptr table = b.build();
 
     if (!db.has_schema(table->ks_name(), table->cf_name())) {
-        co_await mm.start_group0_operation();
+        auto group0_guard = co_await mm.start_group0_operation();
+        auto ts = group0_guard.write_timestamp();
         try {
-            co_return co_await mm.announce(co_await mm.prepare_new_column_family_announcement(table, api::new_timestamp()));
+            co_return co_await mm.announce(co_await mm.prepare_new_column_family_announcement(table, ts), std::move(group0_guard));
         } catch (exceptions::already_exists_exception&) {}
     }
 }

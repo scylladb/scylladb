@@ -135,7 +135,8 @@ future<> service::create_keyspace_if_missing(::service::migration_manager& mm) c
     auto db = _qp.db();
 
     if (!db.has_keyspace(meta::AUTH_KS)) {
-        co_await mm.start_group0_operation();
+        auto group0_guard = co_await mm.start_group0_operation();
+        auto ts = group0_guard.write_timestamp();
 
         if (!db.has_keyspace(meta::AUTH_KS)) {
             locator::replication_strategy_config_options opts{{"replication_factor", "1"}};
@@ -146,7 +147,7 @@ future<> service::create_keyspace_if_missing(::service::migration_manager& mm) c
                     opts,
                     true);
 
-            co_return co_await mm.announce(mm.prepare_new_keyspace_announcement(ksm, api::new_timestamp()));
+            co_return co_await mm.announce(mm.prepare_new_keyspace_announcement(ksm, ts), std::move(group0_guard));
         }
     }
 }

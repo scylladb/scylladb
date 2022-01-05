@@ -271,7 +271,9 @@ public:
         schema_builder builder(make_lw_shared<schema>(schema_maker(ks_name)));
         builder.set_uuid(id);
         auto s = builder.build(schema_builder::compact_storage::no);
-        co_return co_await _mm.local().announce(co_await _mm.local().prepare_new_column_family_announcement(s, api::new_timestamp()));
+        auto group0_guard = co_await _mm.local().start_group0_operation();
+        auto ts = group0_guard.write_timestamp();
+        co_return co_await _mm.local().announce(co_await _mm.local().prepare_new_column_family_announcement(s, ts), std::move(group0_guard));
     }
 
     virtual future<> require_keyspace_exists(const sstring& ks_name) override {

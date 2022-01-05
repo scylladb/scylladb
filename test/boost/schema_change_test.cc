@@ -44,7 +44,11 @@ SEASTAR_TEST_CASE(test_new_schema_with_no_structural_change_is_propagated) {
 
             auto& mm = e.migration_manager().local();
 
-            mm.announce(mm.prepare_new_column_family_announcement(old_schema, api::new_timestamp()).get()).get();
+            {
+                auto group0_guard = mm.start_group0_operation().get();
+                auto ts = group0_guard.write_timestamp();
+                mm.announce(mm.prepare_new_column_family_announcement(old_schema, ts).get(), std::move(group0_guard)).get();
+            }
 
             auto old_table_version = e.db().local().find_schema(old_schema->id())->version();
             auto old_node_version = e.db().local().get_version();
@@ -52,7 +56,9 @@ SEASTAR_TEST_CASE(test_new_schema_with_no_structural_change_is_propagated) {
             auto new_schema = partial.build();
             BOOST_REQUIRE_NE(new_schema->version(), old_schema->version());
 
-            mm.announce(mm.prepare_column_family_update_announcement(new_schema, false, std::vector<view_ptr>(), api::new_timestamp()).get()).get();
+            auto group0_guard = mm.start_group0_operation().get();
+            auto ts = group0_guard.write_timestamp();
+            mm.announce(mm.prepare_column_family_update_announcement(new_schema, false, std::vector<view_ptr>(), ts).get(), std::move(group0_guard)).get();
 
             BOOST_REQUIRE_NE(e.db().local().find_schema(old_schema->id())->version(), old_table_version);
             BOOST_REQUIRE_NE(e.db().local().get_version(), old_node_version);
@@ -72,7 +78,11 @@ SEASTAR_TEST_CASE(test_schema_is_updated_in_keyspace) {
             auto old_schema = builder.build();
 
             auto& mm = e.migration_manager().local();
-            mm.announce(mm.prepare_new_column_family_announcement(old_schema, api::new_timestamp()).get()).get();
+            {
+                auto group0_guard = mm.start_group0_operation().get();
+                auto ts = group0_guard.write_timestamp();
+                mm.announce(mm.prepare_new_column_family_announcement(old_schema, ts).get(), std::move(group0_guard)).get();
+            }
 
             auto s = e.local_db().find_schema(old_schema->id());
             BOOST_REQUIRE_EQUAL(*old_schema, *s);
@@ -82,7 +92,9 @@ SEASTAR_TEST_CASE(test_schema_is_updated_in_keyspace) {
             builder.set_gc_grace_seconds(1);
             auto new_schema = builder.build();
 
-            mm.announce(mm.prepare_column_family_update_announcement(new_schema, false, std::vector<view_ptr>(), api::new_timestamp()).get()).get();
+            auto group0_guard = mm.start_group0_operation().get();
+            auto ts = group0_guard.write_timestamp();
+            mm.announce(mm.prepare_column_family_update_announcement(new_schema, false, std::vector<view_ptr>(), ts).get(), std::move(group0_guard)).get();
 
             s = e.local_db().find_schema(old_schema->id());
             BOOST_REQUIRE_NE(*old_schema, *s);
@@ -104,7 +116,9 @@ SEASTAR_TEST_CASE(test_tombstones_are_ignored_in_version_calculation) {
                     .build();
 
             auto& mm = e.migration_manager().local();
-            mm.announce(mm.prepare_new_column_family_announcement(table_schema, api::new_timestamp()).get()).get();
+            auto group0_guard = mm.start_group0_operation().get();
+            auto ts = group0_guard.write_timestamp();
+            mm.announce(mm.prepare_new_column_family_announcement(table_schema, ts).get(), std::move(group0_guard)).get();
 
             auto old_table_version = e.db().local().find_schema(table_schema->id())->version();
             auto old_node_version = e.db().local().get_version();
@@ -116,7 +130,7 @@ SEASTAR_TEST_CASE(test_tombstones_are_ignored_in_version_calculation) {
                 mutation m(s, pkey);
                 auto ckey = clustering_key::from_exploded(*s, {utf8_type->decompose(table_schema->cf_name()), "v1"});
                 m.partition().apply_delete(*s, ckey, tombstone(api::min_timestamp, gc_clock::now()));
-                e.migration_manager().local().announce(std::vector<mutation>({m})).get();
+                mm.announce(std::vector<mutation>({m}), mm.start_group0_operation().get()).get();
             }
 
             auto new_table_version = e.db().local().find_schema(table_schema->id())->version();
@@ -152,15 +166,20 @@ SEASTAR_TEST_CASE(test_concurrent_column_addition) {
                     .with_column("v2", bytes_type)
                     .build();
 
-            mm.announce(mm.prepare_new_column_family_announcement(s1, api::new_timestamp()).get()).get();
+            {
+                auto group0_guard = mm.start_group0_operation().get();
+                auto ts = group0_guard.write_timestamp();
+                mm.announce(mm.prepare_new_column_family_announcement(s1, ts).get(), std::move(group0_guard)).get();
+            }
             auto old_version = e.db().local().find_schema(s1->id())->version();
 
             // Apply s0 -> s2 change.
             {
+                auto group0_guard = mm.start_group0_operation().get();
                 auto&& keyspace = e.db().local().find_keyspace(s0->ks_name()).metadata();
                 auto muts = db::schema_tables::make_update_table_mutations(e.db().local(), keyspace, s0, s2,
-                    api::new_timestamp(), false);
-                mm.announce(std::move(muts)).get();
+                        group0_guard.write_timestamp(), false);
+                mm.announce(std::move(muts), std::move(group0_guard)).get();
             }
 
             auto new_schema = e.db().local().find_schema(s1->id());
@@ -178,22 +197,25 @@ SEASTAR_TEST_CASE(test_concurrent_column_addition) {
 SEASTAR_TEST_CASE(test_sort_type_in_update) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         service::migration_manager& mm = e.migration_manager().local();
+        auto group0_guard = mm.start_group0_operation().get();
+        auto ts = group0_guard.write_timestamp();
+
         auto&& keyspace = e.db().local().find_keyspace("ks").metadata();
 
         auto type1 = user_type_impl::get_instance("ks", to_bytes("type1"), {}, {}, true);
-        auto muts1 = db::schema_tables::make_create_type_mutations(keyspace, type1, api::new_timestamp());
+        auto muts1 = db::schema_tables::make_create_type_mutations(keyspace, type1, ts);
 
         auto type3 = user_type_impl::get_instance("ks", to_bytes("type3"), {}, {}, true);
-        auto muts3 = db::schema_tables::make_create_type_mutations(keyspace, type3, api::new_timestamp());
+        auto muts3 = db::schema_tables::make_create_type_mutations(keyspace, type3, ts);
 
         // type2 must be created after type1 and type3. This tests that announce sorts them.
         auto type2 = user_type_impl::get_instance("ks", to_bytes("type2"), {"field1", "field3"}, {type1, type3}, true);
-        auto muts2 = db::schema_tables::make_create_type_mutations(keyspace, type2, api::new_timestamp());
+        auto muts2 = db::schema_tables::make_create_type_mutations(keyspace, type2, ts);
 
         auto muts = muts2;
         muts.insert(muts.end(), muts1.begin(), muts1.end());
         muts.insert(muts.end(), muts3.begin(), muts3.end());
-        mm.announce(std::move(muts)).get();
+        mm.announce(std::move(muts), std::move(group0_guard)).get();
     });
 }
 
@@ -295,7 +317,11 @@ SEASTAR_TEST_CASE(test_combined_column_add_and_drop) {
                     .with_column("v1", bytes_type)
                     .build();
 
-            mm.announce(mm.prepare_new_column_family_announcement(s1, api::new_timestamp()).get()).get();
+            {
+                auto group0_guard = mm.start_group0_operation().get();
+                auto ts = group0_guard.write_timestamp();
+                mm.announce(mm.prepare_new_column_family_announcement(s1, ts).get(), std::move(group0_guard)).get();
+            }
 
             auto&& keyspace = e.db().local().find_keyspace(s1->ks_name()).metadata();
 
@@ -306,9 +332,10 @@ SEASTAR_TEST_CASE(test_combined_column_add_and_drop) {
 
             // Drop v1
             {
+                auto group0_guard = mm.start_group0_operation().get();
                 auto muts = db::schema_tables::make_update_table_mutations(e.db().local(), keyspace, s1, s2,
-                    api::new_timestamp(), false);
-                mm.announce(std::move(muts)).get();
+                    group0_guard.write_timestamp(), false);
+                mm.announce(std::move(muts), std::move(group0_guard)).get();
             }
 
             // Add a new v1 and drop it
@@ -323,9 +350,10 @@ SEASTAR_TEST_CASE(test_combined_column_add_and_drop) {
                         .without_column("v1", list_type_impl::get_instance(int32_type, true), api::new_timestamp())
                         .build();
 
+                auto group0_guard = mm.start_group0_operation().get();
                 auto muts = db::schema_tables::make_update_table_mutations(e.db().local(), keyspace, s3, s4,
-                    api::new_timestamp(), false);
-                mm.announce(std::move(muts)).get();
+                    group0_guard.write_timestamp(), false);
+                mm.announce(std::move(muts), std::move(group0_guard)).get();
             }
 
             auto new_schema = e.db().local().find_schema(s1->id());
@@ -352,21 +380,31 @@ SEASTAR_TEST_CASE(test_merging_does_not_alter_tables_which_didnt_change) {
                 return e.db().local().find_column_family("ks", "table1");
             };
 
-            auto muts1 = db::schema_tables::make_create_table_mutations(keyspace, s0, api::new_timestamp());
-            mm.announce(muts1).get();
+            std::vector<mutation> muts1;
+            {
+                auto group0_guard = mm.start_group0_operation().get();
+                muts1 = db::schema_tables::make_create_table_mutations(keyspace, s0, group0_guard.write_timestamp());
+                mm.announce(muts1, std::move(group0_guard)).get();
+            }
 
             auto s1 = find_table().schema();
 
             auto legacy_version = s1->version();
 
-            mm.announce(muts1).get();
+            {
+                auto group0_guard = mm.start_group0_operation().get();
+                mm.announce(muts1, std::move(group0_guard)).get();
+            }
 
             BOOST_REQUIRE(s1 == find_table().schema());
             BOOST_REQUIRE_EQUAL(legacy_version, find_table().schema()->version());
 
-            auto muts2 = muts1;
-            muts2.push_back(db::schema_tables::make_scylla_tables_mutation(s0, api::new_timestamp()));
-            mm.announce(muts2).get();
+            {
+                auto group0_guard = mm.start_group0_operation().get();
+                auto muts2 = muts1;
+                muts2.push_back(db::schema_tables::make_scylla_tables_mutation(s0, group0_guard.write_timestamp()));
+                mm.announce(muts2, std::move(group0_guard)).get();
+            }
 
             BOOST_REQUIRE(s1 == find_table().schema());
             BOOST_REQUIRE_EQUAL(legacy_version, find_table().schema()->version());
@@ -443,17 +481,19 @@ SEASTAR_TEST_CASE(test_nested_type_mutation_in_update) {
         BOOST_REQUIRE_EQUAL(listener.create_user_type_count, 2);
 
         service::migration_manager& mm = e.migration_manager().local();
+        auto group0_guard = mm.start_group0_operation().get();
+        auto ts = group0_guard.write_timestamp();
         auto&& keyspace = e.db().local().find_keyspace("ks").metadata();
 
         auto type1 = user_type_impl::get_instance("ks", to_bytes("foo"), {"foo_k", "extra"}, {int32_type, int32_type}, true);
-        auto muts1 = db::schema_tables::make_create_type_mutations(keyspace, type1, api::new_timestamp());
+        auto muts1 = db::schema_tables::make_create_type_mutations(keyspace, type1, ts);
 
         auto type2 = user_type_impl::get_instance("ks", to_bytes("bar"), {"bar_k", "extra"}, {type1, int32_type}, true);
-        auto muts2 = db::schema_tables::make_create_type_mutations(keyspace, type2, api::new_timestamp());
+        auto muts2 = db::schema_tables::make_create_type_mutations(keyspace, type2, ts);
 
         auto muts = muts1;
         muts.insert(muts.end(), muts2.begin(), muts2.end());
-        mm.announce(std::move(muts)).get();
+        mm.announce(std::move(muts), std::move(group0_guard)).get();
 
         BOOST_REQUIRE_EQUAL(listener.create_user_type_count, 2);
         BOOST_REQUIRE_EQUAL(listener.update_user_type_count, 2);

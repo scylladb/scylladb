@@ -157,17 +157,14 @@ public:
     // (the function ensures that all previously finished group0 operations are visible on this node) or to write it.
     // Call ONLY on shard 0.
     // Requires a quorum of nodes to be available.
-    future<> start_group0_operation();
+    future<group0_guard> start_group0_operation();
 
     // used to check if raft is enabled on the cluster
     bool is_raft_enabled() { return _raft_gr.is_enabled(); }
 
-    /**
-     * actively announce a new version to active hosts via rpc
-     * @param schema The schema mutation to be applied
-     */
-    // Returns a future on the local application of the schema
-    future<> announce(std::vector<mutation> schema);
+    // Apply a group 0 change.
+    // The future resolves after the change is applied locally.
+    future<> announce(std::vector<mutation> schema, group0_guard);
 
     void passive_announce(utils::UUID version);
 
@@ -194,7 +191,7 @@ private:
 
     future<> maybe_schedule_schema_pull(const utils::UUID& their_version, const gms::inet_address& endpoint);
 
-    future<> announce_with_raft(std::vector<mutation> schema);
+    future<> announce_with_raft(std::vector<mutation> schema, group0_guard);
     future<> announce_without_raft(std::vector<mutation> schema);
 
 public:

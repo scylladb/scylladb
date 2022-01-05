@@ -54,7 +54,7 @@ logging::logger elogger("alternator-executor");
 
 namespace alternator {
 
-static future<std::vector<mutation>> create_keyspace(std::string_view keyspace_name, service::migration_manager& mm, gms::gossiper& gossiper);
+static future<std::vector<mutation>> create_keyspace(std::string_view keyspace_name, service::migration_manager& mm, gms::gossiper& gossiper, api::timestamp_type);
 
 static map_type attrs_type() {
     static thread_local auto t = map_type_impl::get_instance(utf8_type, bytes_type, true);
@@ -494,18 +494,18 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
     auto& p = _proxy.container();
 
     co_await _mm.container().invoke_on(0, [&] (service::migration_manager& mm) -> future<> {
-        co_await mm.start_group0_operation();
+        auto group0_guard = co_await mm.start_group0_operation();
 
         if (!p.local().data_dictionary().has_schema(keyspace_name, table_name)) {
             throw api_error::resource_not_found(format("Requested resource not found: Table: {} not found", table_name));
         }
 
-        auto m = co_await mm.prepare_column_family_drop_announcement(keyspace_name, table_name, api::new_timestamp(), service::migration_manager::drop_views::yes);
-        auto m2 = mm.prepare_keyspace_drop_announcement(keyspace_name, api::new_timestamp());
+        auto m = co_await mm.prepare_column_family_drop_announcement(keyspace_name, table_name, group0_guard.write_timestamp(), service::migration_manager::drop_views::yes);
+        auto m2 = mm.prepare_keyspace_drop_announcement(keyspace_name, group0_guard.write_timestamp());
 
         std::move(m2.begin(), m2.end(), std::back_inserter(m));
 
-        co_await mm.announce(std::move(m));
+        co_await mm.announce(std::move(m), std::move(group0_guard));
     });
 
     // FIXME: need more attributes?
@@ -750,14 +750,14 @@ static void update_tags_map(const rjson::value& tags, std::map<sstring, sstring>
 // are fixed, this issue will automatically get fixed as well.
 future<> update_tags(service::migration_manager& mm, schema_ptr schema, std::map<sstring, sstring>&& tags_map) {
     co_await mm.container().invoke_on(0, [s = global_schema_ptr(std::move(schema)), tags_map = std::move(tags_map)] (service::migration_manager& mm) -> future<> {
-        co_await mm.start_group0_operation();
+        auto group0_guard = co_await mm.start_group0_operation();
 
         schema_builder builder(s);
         builder.add_extension(tags_extension::NAME, ::make_shared<tags_extension>(tags_map));
 
-        auto m = co_await mm.prepare_column_family_update_announcement(builder.build(), false, std::vector<view_ptr>(), api::new_timestamp());
+        auto m = co_await mm.prepare_column_family_update_announcement(builder.build(), false, std::vector<view_ptr>(), group0_guard.write_timestamp());
 
-        co_await mm.announce(std::move(m));
+        co_await mm.announce(std::move(m), std::move(group0_guard));
     });
 }
 
@@ -874,8 +874,6 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
     builder.with_column(bytes(executor::ATTRS_COLUMN_NAME), attrs_type(), column_kind::regular_column);
 
     verify_billing_mode(request);
-
-    co_await mm.start_group0_operation();
 
     schema_ptr partial_schema = builder.build();
 
@@ -1036,7 +1034,9 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
     }
 
     try {
-        co_await mm.announce(co_await create_keyspace(keyspace_name, mm, gossiper));
+        auto group0_guard_ks = co_await mm.start_group0_operation();
+        auto ts = group0_guard_ks.write_timestamp();
+        co_await mm.announce(co_await create_keyspace(keyspace_name, mm, gossiper, ts), std::move(group0_guard_ks));
     } catch (exceptions::already_exists_exception&) {
         // Ignore the fact that the keyspace may already exist. See discussion in #6340
     }
@@ -1045,22 +1045,32 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
         // The code should be rewritten in a way that allows creating mutations
         // for all the changes in a single mutation array before announcing.
         // See https://github.com/scylladb/scylla/issues/9868
-        co_await mm.announce(co_await mm.prepare_new_column_family_announcement(schema, api::new_timestamp()));
+        {
+            auto group0_guard_cf = co_await mm.start_group0_operation();
+            auto ts = group0_guard_cf.write_timestamp();
+            co_await mm.announce(co_await mm.prepare_new_column_family_announcement(schema, ts), std::move(group0_guard_cf));
+        }
 
-        std::vector<mutation> m;
+        {
+            std::vector<mutation> m;
+            auto group0_guard_views = co_await mm.start_group0_operation();
+            auto ts = group0_guard_views.write_timestamp();
+            co_await parallel_for_each(std::move(view_builders), [&mm, schema, &m, ts] (schema_builder builder) -> future<> {
+                auto vm = co_await mm.prepare_new_view_announcement(view_ptr(builder.build()), ts);
+                std::move(vm.begin(), vm.end(), std::back_inserter(m));
+            });
 
-        co_await parallel_for_each(std::move(view_builders), [&mm, schema, &m] (schema_builder builder) -> future<> {
-            auto vm = co_await mm.prepare_new_view_announcement(view_ptr(builder.build()), api::new_timestamp());
-            std::move(vm.begin(), vm.end(), std::back_inserter(m));
-        });
-
-        co_await mm.announce(std::move(m));
+            co_await mm.announce(std::move(m), std::move(group0_guard_views));
+        }
 
         if (!tags_map.empty()) {
+            auto group0_guard_tags = co_await mm.start_group0_operation();
+            auto ts = group0_guard_tags.write_timestamp();
+
             schema_builder builder(schema);
             builder.add_extension(tags_extension::NAME, ::make_shared<tags_extension>(tags_map));
 
-            co_await mm.announce(co_await mm.prepare_column_family_update_announcement(builder.build(), false, std::vector<view_ptr>(), api::new_timestamp()));
+            co_await mm.announce(co_await mm.prepare_column_family_update_announcement(builder.build(), false, std::vector<view_ptr>(), ts), std::move(group0_guard_tags));
         }
 
         co_await wait_for_schema_agreement(mm, db::timeout_clock::now() + 10s);
@@ -1108,7 +1118,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
 
     co_return co_await _mm.container().invoke_on(0, [&p = _proxy.container(), request = std::move(request), gt = tracing::global_trace_state_ptr(std::move(trace_state))]
                                                 (service::migration_manager& mm) mutable -> future<executor::request_return_type> {
-        co_await mm.start_group0_operation();
+        auto group0_guard = co_await mm.start_group0_operation();
 
         schema_ptr tab = get_table(p.local(), request);
 
@@ -1129,9 +1139,9 @@ future<executor::request_return_type> executor::update_table(client_state& clien
 
         auto schema = builder.build();
 
-        auto m = co_await mm.prepare_column_family_update_announcement(schema, false,  std::vector<view_ptr>(), api::new_timestamp());
+        auto m = co_await mm.prepare_column_family_update_announcement(schema, false,  std::vector<view_ptr>(), group0_guard.write_timestamp());
 
-        co_await mm.announce(std::move(m));
+        co_await mm.announce(std::move(m), std::move(group0_guard));
 
         co_await wait_for_schema_agreement(mm, db::timeout_clock::now() + 10s);
 
@@ -4171,7 +4181,7 @@ static std::map<sstring, sstring> get_network_topology_options(gms::gossiper& go
 // of nodes in the cluster: A cluster with 3 or more live nodes, gets RF=3.
 // A smaller cluster (presumably, a test only), gets RF=1. The user may
 // manually create the keyspace to override this predefined behavior.
-static future<std::vector<mutation>> create_keyspace(std::string_view keyspace_name, service::migration_manager& mm, gms::gossiper& gossiper) {
+static future<std::vector<mutation>> create_keyspace(std::string_view keyspace_name, service::migration_manager& mm, gms::gossiper& gossiper, api::timestamp_type ts) {
     sstring keyspace_name_str(keyspace_name);
     int endpoint_count = co_await gms::get_all_endpoint_count(gossiper);
     int rf = 3;
@@ -4183,7 +4193,7 @@ static future<std::vector<mutation>> create_keyspace(std::string_view keyspace_n
     auto opts = get_network_topology_options(gossiper, rf);
     auto ksm = keyspace_metadata::new_keyspace(keyspace_name_str, "org.apache.cassandra.locator.NetworkTopologyStrategy", std::move(opts), true);
 
-    co_return mm.prepare_new_keyspace_announcement(ksm, api::new_timestamp());
+    co_return mm.prepare_new_keyspace_announcement(ksm, ts);
 }
 
 future<> executor::start() {
