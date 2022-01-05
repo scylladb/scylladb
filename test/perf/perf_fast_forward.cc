@@ -796,6 +796,10 @@ class clustered_ds {
 public:
     virtual int n_rows(const table_config&) = 0;
 
+    virtual partition_key make_pk(const schema& s) {
+        return partition_key::from_single_value(s, serialized(0));
+    }
+
     virtual clustering_key make_ck(const schema& s, int ck) {
         return clustering_key::from_single_value(s, serialized(ck));
     }
@@ -907,7 +911,7 @@ static test_result slice_rows_by_ck(column_family& cf, clustered_ds& ds, int off
             ds.make_ck(*cf.schema(), offset),
             ds.make_ck(*cf.schema(), offset + n_read - 1)))
         .build();
-    auto pr = dht::partition_range::make_singular(make_pkey(*cf.schema(), 0));
+    auto pr = dht::partition_range::make_singular(dht::decorate_key(*cf.schema(), ds.make_pk(*cf.schema())));
     auto rd = cf.make_reader(cf.schema(), semaphore.make_permit(), pr, slice);
     auto close_rd = deferred_close(rd);
 
@@ -1019,6 +1023,10 @@ public:
         return clustering_key::from_single_value(s, serialized<int64_t>(ck));
     }
 
+    partition_key make_pk(const schema& s) override {
+        return partition_key::from_single_value(s, serialized<int64_t>(0));
+    }
+
     bool enabled_by_default() const override {
         return false;
     }
@@ -1031,7 +1039,7 @@ public:
     generator_fn make_generator(schema_ptr s, const table_config& cfg) override {
         auto value = serialized(make_blob(cfg.value_size));
         auto& value_cdef = *s->get_column_definition("value");
-        auto pk = partition_key::from_single_value(*s, serialized(0));
+        auto pk = make_pk(*s);
         return [this, s, ck = 0, n_ck = n_rows(cfg), &value_cdef, value, pk] () mutable -> std::optional<mutation> {
             if (ck == n_ck) {
                 return std::nullopt;
@@ -1053,7 +1061,7 @@ public:
     generator_fn make_generator(schema_ptr s, const table_config& cfg) override {
         auto value = serialized(make_blob(cfg.value_size));
         auto& value_cdef = *s->get_column_definition("v");
-        auto pk = partition_key::from_single_value(*s, serialized<int64_t>(0));
+        auto pk = make_pk(*s);
         return [this, s, ck = 0, n_ck = n_rows(cfg), &value_cdef, value, pk] () mutable -> std::optional<mutation> {
             if (ck == n_ck) {
                 return std::nullopt;
