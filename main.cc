@@ -417,18 +417,19 @@ static int scylla_main(int ac, char** av) {
     app_template::config app_cfg;
     app_cfg.name = "Scylla";
     app_cfg.description =
-R"(scylla - NoSQL data store using the seastar framework, compatible with Apache Cassandra
+R"(scylla - NoSQL data store using the seastar framework
 
 For more information, see https://github.com/scylladb/scylla.
 
-The scylla executable hosts multiple apps:
-* server (default) - the scylla server itself.
+The scylla executable hosts tools in addition to the main scylla server:
 * types - a command-line tool to examine values belonging to scylla types.
 * sstable - a multifunctional command-line tool to examine the content of sstables.
 
-Usage: scylla {app_name} [...]
+Usage: scylla {tool_name} [...]
 
-For more information about individual apps, run: scylla {app_name} --help
+For more information about individual tools, run: scylla {tool_name} --help
+
+To start the scylla server proper, simply invoke as: scylla server (or just scylla).
 )";
     app_cfg.default_task_quota = 500us;
     app_cfg.auto_handle_sigint_sigterm = false;
@@ -1498,7 +1499,7 @@ int main(int ac, char** av) {
     }
 
     if (recognized) {
-        // shift args to consume the recognized app name
+        // shift args to consume the recognized tool name
         --ac;
         for (int i = 1; i < ac; ++i) {
             std::swap(av[i], av[i + 1]);
