@@ -170,7 +170,7 @@ private:
 public:
     void verify_end_state() const {
         if (this->_remain > 0) {
-            throw std::runtime_error("index_consume_entry_context - no more data but parsing is incomplete");
+            throw malformed_sstable_exception(fmt::format("index_consume_entry_context (state={}): parsing ended but there is unconsumed data", _state), _sst.filename(component_type::Index));
         }
     }
 
