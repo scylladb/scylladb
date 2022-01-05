@@ -1498,10 +1498,12 @@ int main(int ac, char** av) {
         main_func = tools::scylla_types_main;
     } else if (exec_name == "sstable") {
         main_func = tools::scylla_sstable_main;
-    } else {
-        fmt::print("Unrecognized or missing app name (argv[1]={}), assuming server\n", exec_name);
+    } else if (exec_name[0] == '-') {
         main_func = scylla_main;
         recognized = false;
+    } else {
+        fmt::print("error: unrecognized first argument: expected it to be \"server\", a regular command-line argument or a valid tool name (see `scylla --list-tools`), but got {}\n", exec_name);
+        return 1;
     }
 
     if (recognized) {
