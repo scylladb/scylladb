@@ -172,6 +172,9 @@ public:
         if (this->_remain > 0) {
             throw malformed_sstable_exception(fmt::format("index_consume_entry_context (state={}): parsing ended but there is unconsumed data", _state), _sst.filename(component_type::Index));
         }
+        if (_state != state::KEY_SIZE && _state != state::START) {
+            throw malformed_sstable_exception(fmt::format("index_consume_entry_context (state={}): cannot finish parsing current entry, no more data", _state), _sst.filename(component_type::Index));
+        }
     }
 
     bool non_consuming() const {

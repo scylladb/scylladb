@@ -77,7 +77,7 @@ SEASTAR_TEST_CASE(test_empty_index) {
     sstable_ptr sstp = env.reusable_sst(s, "test/resource/sstables/empty_index", 36, sstable_version_types::mc).get0();
     auto fut = sstables::test(sstp).read_indexes(env.make_reader_permit());
     BOOST_REQUIRE_EXCEPTION(fut.get(), malformed_sstable_exception, exception_predicate::message_matches(
-        "missing index entry for summary index 0 \\(bound 0x[0-9a-f]+\\) in sstable test/resource/sstables/empty_index/mc-36-big-Index.db"));
+        "index_consume_entry_context \\(state=.*\\): cannot finish parsing current entry, no more data in sstable test/resource/sstables/empty_index/mc-36-big-Index.db"));
   });
 }
 
