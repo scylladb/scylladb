@@ -105,7 +105,7 @@ private:
         task(const task&) = delete;
 
         void setup_new_compaction();
-        void finish_compaction();
+        void finish_compaction() noexcept;
 
         bool generating_output_run() const noexcept {
             return compaction_running && output_run_identifier;
@@ -195,7 +195,7 @@ private:
     // Compaction manager stop itself if it finds an storage I/O error which results in
     // stop of transportation services. It cannot make progress anyway.
     // Returns true if error is judged not fatal, and compaction can be retried.
-    inline bool maybe_stop_on_error(future<> f, stop_iteration will_stop = stop_iteration::no);
+    inline bool maybe_stop_on_error(std::exception_ptr err, bool can_retry);
 
     void postponed_compactions_reevaluation();
     void reevaluate_postponed_compactions();
