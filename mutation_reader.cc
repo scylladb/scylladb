@@ -858,6 +858,17 @@ struct remote_fill_buffer_result {
     }
 };
 
+struct remote_fill_buffer_result_v2 {
+    foreign_ptr<std::unique_ptr<const flat_mutation_reader_v2::tracked_buffer>> buffer;
+    bool end_of_stream = false;
+
+    remote_fill_buffer_result_v2() = default;
+    remote_fill_buffer_result_v2(flat_mutation_reader_v2::tracked_buffer&& buffer, bool end_of_stream)
+        : buffer(make_foreign(std::make_unique<const flat_mutation_reader_v2::tracked_buffer>(std::move(buffer))))
+        , end_of_stream(end_of_stream) {
+    }
+};
+
 }
 
 /// See make_foreign_reader() for description.
@@ -2239,6 +2250,241 @@ future<> shard_reader::fast_forward_to(position_range) {
 }
 
 void shard_reader::read_ahead() {
+    if (_read_ahead || is_end_of_stream() || !is_buffer_empty()) {
+        return;
+    }
+
+    _read_ahead.emplace(do_fill_buffer());
+}
+
+// A special-purpose shard reader.
+//
+// Shard reader manages a reader located on a remote shard. It transparently
+// supports read-ahead (background fill_buffer() calls).
+// This reader is not for general use, it was designed to serve the
+// multishard_combining_reader.
+// Although it implements the flat_mutation_reader_v2:impl interface it cannot be
+// wrapped into a flat_mutation_reader_v2, as it needs to be managed by a shared
+// pointer.
+class shard_reader_v2 : public flat_mutation_reader_v2::impl {
+private:
+    shared_ptr<reader_lifecycle_policy_v2> _lifecycle_policy;
+    const unsigned _shard;
+    foreign_ptr<lw_shared_ptr<const dht::partition_range>> _pr;
+    const query::partition_slice& _ps;
+    const io_priority_class& _pc;
+    tracing::global_trace_state_ptr _trace_state;
+    const mutation_reader::forwarding _fwd_mr;
+    std::optional<future<>> _read_ahead;
+    foreign_ptr<std::unique_ptr<evictable_reader_v2>> _reader;
+
+private:
+    future<> do_fill_buffer();
+
+public:
+    shard_reader_v2(
+            schema_ptr schema,
+            reader_permit permit,
+            shared_ptr<reader_lifecycle_policy_v2> lifecycle_policy,
+            unsigned shard,
+            const dht::partition_range& pr,
+            const query::partition_slice& ps,
+            const io_priority_class& pc,
+            tracing::trace_state_ptr trace_state,
+            mutation_reader::forwarding fwd_mr)
+        : impl(std::move(schema), std::move(permit))
+        , _lifecycle_policy(std::move(lifecycle_policy))
+        , _shard(shard)
+        , _pr(make_foreign(make_lw_shared<const dht::partition_range>(pr)))
+        , _ps(ps)
+        , _pc(pc)
+        , _trace_state(std::move(trace_state))
+        , _fwd_mr(fwd_mr) {
+    }
+
+    shard_reader_v2(shard_reader_v2&&) = delete;
+    shard_reader_v2& operator=(shard_reader_v2&&) = delete;
+
+    shard_reader_v2(const shard_reader_v2&) = delete;
+    shard_reader_v2& operator=(const shard_reader_v2&) = delete;
+
+    const mutation_fragment_v2& peek_buffer() const {
+        return buffer().front();
+    }
+    virtual future<> fill_buffer() override;
+    virtual future<> next_partition() override;
+    virtual future<> fast_forward_to(const dht::partition_range& pr) override;
+    virtual future<> fast_forward_to(position_range) override;
+    virtual future<> close() noexcept override;
+    bool done() const {
+        return _reader && is_buffer_empty() && is_end_of_stream();
+    }
+    void read_ahead();
+    bool is_read_ahead_in_progress() const {
+        return _read_ahead.has_value();
+    }
+};
+
+future<> shard_reader_v2::close() noexcept {
+    // Nothing to do if there was no reader created, nor is there a background
+    // read ahead in progress which will create one.
+    if (!_reader && !_read_ahead) {
+        co_return;
+    }
+
+    if (_read_ahead) {
+        try {
+            co_await *std::exchange(_read_ahead, std::nullopt);
+        } catch (...) {
+            mrlog.warn("shard_reader::close(): read_ahead on shard {} failed: {}", _shard, std::current_exception());
+        }
+    }
+
+    try {
+        co_await smp::submit_to(_shard, [this] {
+            auto irh = std::move(*_reader).inactive_read_handle();
+            return with_closeable(flat_mutation_reader_v2(_reader.release()), [this] (flat_mutation_reader_v2& reader) mutable {
+                auto permit = reader.permit();
+                const auto& schema = *reader.schema();
+
+                auto unconsumed_fragments = reader.detach_buffer();
+                auto rit = std::reverse_iterator(buffer().cend());
+                auto rend = std::reverse_iterator(buffer().cbegin());
+                for (; rit != rend; ++rit) {
+                    unconsumed_fragments.emplace_front(schema, permit, *rit); // we are copying from the remote shard.
+                }
+
+                return unconsumed_fragments;
+            }).then([this, irh = std::move(irh)] (flat_mutation_reader_v2::tracked_buffer&& buf) mutable {
+                return _lifecycle_policy->destroy_reader({std::move(irh), std::move(buf)});
+            });
+        });
+    } catch (...) {
+        mrlog.error("shard_reader::close(): failed to stop reader on shard {}: {}", _shard, std::current_exception());
+    }
+}
+
+future<> shard_reader_v2::do_fill_buffer() {
+    auto fill_buf_fut = make_ready_future<remote_fill_buffer_result_v2>();
+
+    struct reader_and_buffer_fill_result {
+        foreign_ptr<std::unique_ptr<evictable_reader_v2>> reader;
+        remote_fill_buffer_result_v2 result;
+    };
+
+    if (!_reader) {
+        fill_buf_fut = smp::submit_to(_shard, [this, gs = global_schema_ptr(_schema)] () -> future<reader_and_buffer_fill_result> {
+            auto ms = mutation_source([lifecycle_policy = _lifecycle_policy.get()] (
+                        schema_ptr s,
+                        reader_permit permit,
+                        const dht::partition_range& pr,
+                        const query::partition_slice& ps,
+                        const io_priority_class& pc,
+                        tracing::trace_state_ptr ts,
+                        streamed_mutation::forwarding,
+                        mutation_reader::forwarding fwd_mr) {
+                return lifecycle_policy->create_reader(std::move(s), std::move(permit), pr, ps, pc, std::move(ts), fwd_mr);
+            });
+            auto s = gs.get();
+            auto permit = co_await _lifecycle_policy->obtain_reader_permit(s, "shard-reader", timeout());
+            auto rreader = make_foreign(std::make_unique<evictable_reader_v2>(evictable_reader_v2::auto_pause::yes, std::move(ms),
+                        s, std::move(permit), *_pr, _ps, _pc, _trace_state, _fwd_mr));
+
+            std::exception_ptr ex;
+            try {
+                tracing::trace(_trace_state, "Creating shard reader on shard: {}", this_shard_id());
+                reader_permit::used_guard ug{rreader->permit()};
+                co_await rreader->fill_buffer();
+                auto res = remote_fill_buffer_result_v2(rreader->detach_buffer(), rreader->is_end_of_stream());
+                co_return reader_and_buffer_fill_result{std::move(rreader), std::move(res)};
+            } catch (...) {
+                ex = std::current_exception();
+            }
+            co_await rreader->close();
+            std::rethrow_exception(std::move(ex));
+        }).then([this] (reader_and_buffer_fill_result res) {
+            _reader = std::move(res.reader);
+            return std::move(res.result);
+        });
+    } else {
+        fill_buf_fut = smp::submit_to(_shard, [this] () mutable {
+            reader_permit::used_guard ug{_reader->permit()};
+            return _reader->fill_buffer().then([this, ug = std::move(ug)] {
+                return remote_fill_buffer_result_v2(_reader->detach_buffer(), _reader->is_end_of_stream());
+            });
+        });
+    }
+
+    return fill_buf_fut.then([this] (remote_fill_buffer_result_v2 res) mutable {
+        _end_of_stream = res.end_of_stream;
+        for (const auto& mf : *res.buffer) {
+            push_mutation_fragment(mutation_fragment_v2(*_schema, _permit, mf));
+        }
+    });
+}
+
+future<> shard_reader_v2::fill_buffer() {
+    // FIXME: want to move this to the inner scopes but it makes clang miscompile the code.
+    reader_permit::blocked_guard guard(_permit);
+    if (_read_ahead) {
+        co_await *std::exchange(_read_ahead, std::nullopt);
+        co_return;
+    }
+    if (!is_buffer_empty()) {
+        co_return;
+    }
+    co_await do_fill_buffer();
+}
+
+future<> shard_reader_v2::next_partition() {
+    if (!_reader) {
+        co_return;
+    }
+
+    // FIXME: want to move this to the inner scopes but it makes clang miscompile the code.
+    reader_permit::blocked_guard guard(_permit);
+
+    if (_read_ahead) {
+        co_await *std::exchange(_read_ahead, std::nullopt);
+    }
+    clear_buffer_to_next_partition();
+    if (!is_buffer_empty()) {
+        co_return;
+    }
+    co_return co_await smp::submit_to(_shard, [this] {
+        return _reader->next_partition();
+    });
+}
+
+future<> shard_reader_v2::fast_forward_to(const dht::partition_range& pr) {
+    if (!_reader && !_read_ahead) {
+        // No need to fast-forward uncreated readers, they will be passed the new
+        // range when created.
+        _pr = make_foreign(make_lw_shared<const dht::partition_range>(pr));
+        co_return;
+    }
+
+    reader_permit::blocked_guard guard(_permit);
+
+    if (_read_ahead) {
+        co_await *std::exchange(_read_ahead, std::nullopt);
+    }
+    _end_of_stream = false;
+    clear_buffer();
+
+    _pr = co_await smp::submit_to(_shard, [this, &pr] () -> future<foreign_ptr<lw_shared_ptr<const dht::partition_range>>> {
+        auto new_pr = make_lw_shared<const dht::partition_range>(pr);
+        co_await _reader->fast_forward_to(*new_pr);
+        _lifecycle_policy->update_read_range(new_pr);
+        co_return make_foreign(std::move(new_pr));
+    });
+}
+
+future<> shard_reader_v2::fast_forward_to(position_range) {
+    return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
+}
+
+void shard_reader_v2::read_ahead() {
     if (_read_ahead || is_end_of_stream() || !is_buffer_empty()) {
         return;
     }
