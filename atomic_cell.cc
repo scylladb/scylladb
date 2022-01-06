@@ -79,6 +79,44 @@ atomic_cell::atomic_cell(const abstract_type& type, atomic_cell_view other)
     set_view(_data);
 }
 
+// Based on:
+//  - org.apache.cassandra.db.AbstractCell#reconcile()
+//  - org.apache.cassandra.db.BufferExpiringCell#reconcile()
+//  - org.apache.cassandra.db.BufferDeletedCell#reconcile()
+int
+compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right) {
+    if (left.timestamp() != right.timestamp()) {
+        return left.timestamp() > right.timestamp() ? 1 : -1;
+    }
+    if (left.is_live() != right.is_live()) {
+        return left.is_live() ? -1 : 1;
+    }
+    if (left.is_live()) {
+        auto c = compare_unsigned(left.value(), right.value());
+        if (c != 0) {
+            return c;
+        }
+        if (left.is_live_and_has_ttl() != right.is_live_and_has_ttl()) {
+            // prefer expiring cells.
+            return left.is_live_and_has_ttl() ? 1 : -1;
+        }
+        if (left.is_live_and_has_ttl() && left.expiry() != right.expiry()) {
+            return left.expiry() < right.expiry() ? -1 : 1;
+        }
+    } else {
+        // Both are deleted
+        if (left.deletion_time() != right.deletion_time()) {
+            // Origin compares big-endian serialized deletion time. That's because it
+            // delegates to AbstractCell.reconcile() which compares values after
+            // comparing timestamps, which in case of deleted cells will hold
+            // serialized expiry.
+            return (uint64_t) left.deletion_time().time_since_epoch().count()
+                   < (uint64_t) right.deletion_time().time_since_epoch().count() ? -1 : 1;
+        }
+    }
+    return 0;
+}
+
 atomic_cell_or_collection atomic_cell_or_collection::copy(const abstract_type& type) const {
     if (_data.empty()) {
         return atomic_cell_or_collection();
