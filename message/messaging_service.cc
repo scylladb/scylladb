@@ -65,8 +65,10 @@
 #include "idl/paxos.dist.hh"
 #include "idl/raft.dist.hh"
 #include "idl/group0.dist.hh"
+#include "idl/storage_proxy.dist.hh"
 #include "serializer_impl.hh"
 #include "serialization_visitors.hh"
+#include "message/rpc_protocol_impl.hh"
 #include "idl/consistency_level.dist.impl.hh"
 #include "idl/tracing.dist.impl.hh"
 #include "idl/result.dist.impl.hh"
@@ -88,10 +90,11 @@
 #include "idl/paxos.dist.impl.hh"
 #include "idl/raft.dist.impl.hh"
 #include "idl/group0.dist.impl.hh"
+#include "idl/view.dist.impl.hh"
+#include "idl/storage_proxy.dist.impl.hh"
 #include <seastar/rpc/lz4_compressor.hh>
 #include <seastar/rpc/lz4_fragmented_compressor.hh>
 #include <seastar/rpc/multi_algo_compressor_factory.hh>
-#include "idl/view.dist.impl.hh"
 #include "partition_range_compat.hh"
 #include <boost/range/adaptor/filtered.hpp>
 #include <boost/range/adaptor/indirected.hpp>
@@ -101,7 +104,6 @@
 #include "streaming/stream_mutation_fragments_cmd.hh"
 #include "locator/snitch_base.hh"
 
-#include "message/rpc_protocol_impl.hh"
 #include "idl/partition_checksum.dist.impl.hh"
 
 namespace netw {
@@ -1045,59 +1047,6 @@ future<rpc::tuple<std::vector<frozen_mutation>, rpc::optional<std::vector<canoni
             std::move(id), options);
 }
 
-void messaging_service::register_mutation(std::function<future<rpc::no_wait_type> (const rpc::client_info&, rpc::opt_time_point, frozen_mutation fm, inet_address_vector_replica_set forward,
-    inet_address reply_to, unsigned shard, response_id_type response_id, rpc::optional<std::optional<tracing::trace_info>> trace_info)>&& func) {
-    register_handler(this, netw::messaging_verb::MUTATION, std::move(func));
-}
-future<> messaging_service::unregister_mutation() {
-    return unregister_handler(netw::messaging_verb::MUTATION);
-}
-future<> messaging_service::send_mutation(msg_addr id, clock_type::time_point timeout, const frozen_mutation& fm, inet_address_vector_replica_set forward,
-    inet_address reply_to, unsigned shard, response_id_type response_id, std::optional<tracing::trace_info> trace_info) {
-    return send_message_oneway_timeout(this, timeout, messaging_verb::MUTATION, std::move(id), fm, std::move(forward),
-        std::move(reply_to), shard, std::move(response_id), std::move(trace_info));
-}
-
-void messaging_service::register_counter_mutation(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, std::vector<frozen_mutation> fms, db::consistency_level cl, std::optional<tracing::trace_info> trace_info)>&& func) {
-    register_handler(this, netw::messaging_verb::COUNTER_MUTATION, std::move(func));
-}
-future<> messaging_service::unregister_counter_mutation() {
-    return unregister_handler(netw::messaging_verb::COUNTER_MUTATION);
-}
-future<> messaging_service::send_counter_mutation(msg_addr id, clock_type::time_point timeout, std::vector<frozen_mutation> fms, db::consistency_level cl, std::optional<tracing::trace_info> trace_info) {
-    return send_message_timeout<void>(this, messaging_verb::COUNTER_MUTATION, std::move(id), timeout, std::move(fms), cl, std::move(trace_info));
-}
-
-void messaging_service::register_mutation_done(std::function<future<rpc::no_wait_type> (const rpc::client_info& cinfo, unsigned shard, response_id_type response_id, rpc::optional<db::view::update_backlog> backlog)>&& func) {
-    register_handler(this, netw::messaging_verb::MUTATION_DONE, std::move(func));
-}
-future<> messaging_service::unregister_mutation_done() {
-    return unregister_handler(netw::messaging_verb::MUTATION_DONE);
-}
-future<> messaging_service::send_mutation_done(msg_addr id, unsigned shard, response_id_type response_id, db::view::update_backlog backlog) {
-    return send_message_oneway(this, messaging_verb::MUTATION_DONE, std::move(id), shard, std::move(response_id), std::move(backlog));
-}
-
-void messaging_service::register_mutation_failed(std::function<future<rpc::no_wait_type> (const rpc::client_info& cinfo, unsigned shard, response_id_type response_id, size_t num_failed, rpc::optional<db::view::update_backlog> backlog)>&& func) {
-    register_handler(this, netw::messaging_verb::MUTATION_FAILED, std::move(func));
-}
-future<> messaging_service::unregister_mutation_failed() {
-    return unregister_handler(netw::messaging_verb::MUTATION_FAILED);
-}
-future<> messaging_service::send_mutation_failed(msg_addr id, unsigned shard, response_id_type response_id, size_t num_failed, db::view::update_backlog backlog) {
-    return send_message_oneway(this, messaging_verb::MUTATION_FAILED, std::move(id), shard, std::move(response_id), num_failed, std::move(backlog));
-}
-
-void messaging_service::register_read_data(std::function<future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> (const rpc::client_info&, rpc::opt_time_point t, query::read_command cmd, ::compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> oda)>&& func) {
-    register_handler(this, netw::messaging_verb::READ_DATA, std::move(func));
-}
-future<> messaging_service::unregister_read_data() {
-    return unregister_handler(netw::messaging_verb::READ_DATA);
-}
-future<rpc::tuple<query::result, rpc::optional<cache_temperature>>> messaging_service::send_read_data(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const dht::partition_range& pr, query::digest_algorithm da) {
-    return send_message_timeout<future<rpc::tuple<query::result, rpc::optional<cache_temperature>>>>(this, messaging_verb::READ_DATA, std::move(id), timeout, cmd, pr, da);
-}
-
 void messaging_service::register_get_schema_version(std::function<future<frozen_schema>(unsigned, table_schema_version)>&& func) {
     register_handler(this, netw::messaging_verb::GET_SCHEMA_VERSION, std::move(func));
 }
@@ -1116,39 +1065,6 @@ future<> messaging_service::unregister_schema_check() {
 }
 future<utils::UUID> messaging_service::send_schema_check(msg_addr dst) {
     return send_message<utils::UUID>(this, netw::messaging_verb::SCHEMA_CHECK, dst);
-}
-
-void messaging_service::register_read_mutation_data(std::function<future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> (const rpc::client_info&, rpc::opt_time_point t, query::read_command cmd, ::compat::wrapping_partition_range pr)>&& func) {
-    register_handler(this, netw::messaging_verb::READ_MUTATION_DATA, std::move(func));
-}
-future<> messaging_service::unregister_read_mutation_data() {
-    return unregister_handler(netw::messaging_verb::READ_MUTATION_DATA);
-}
-future<rpc::tuple<reconcilable_result, rpc::optional<cache_temperature>>> messaging_service::send_read_mutation_data(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const dht::partition_range& pr) {
-    return send_message_timeout<future<rpc::tuple<reconcilable_result, rpc::optional<cache_temperature>>>>(this, messaging_verb::READ_MUTATION_DATA, std::move(id), timeout, cmd, pr);
-}
-
-void messaging_service::register_read_digest(std::function<future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>> (const rpc::client_info&, rpc::opt_time_point timeout, query::read_command cmd, ::compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> oda)>&& func) {
-    register_handler(this, netw::messaging_verb::READ_DIGEST, std::move(func));
-}
-future<> messaging_service::unregister_read_digest() {
-    return unregister_handler(netw::messaging_verb::READ_DIGEST);
-}
-future<rpc::tuple<query::result_digest, rpc::optional<api::timestamp_type>, rpc::optional<cache_temperature>>> messaging_service::send_read_digest(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const dht::partition_range& pr, query::digest_algorithm da) {
-    return send_message_timeout<future<rpc::tuple<query::result_digest, rpc::optional<api::timestamp_type>, rpc::optional<cache_temperature>>>>(this, netw::messaging_verb::READ_DIGEST, std::move(id), timeout, cmd, pr, da);
-}
-
-// Wrapper for TRUNCATE
-void messaging_service::register_truncate(std::function<future<> (sstring, sstring)>&& func) {
-    register_handler(this, netw::messaging_verb::TRUNCATE, std::move(func));
-}
-
-future<> messaging_service::unregister_truncate() {
-    return unregister_handler(netw::messaging_verb::TRUNCATE);
-}
-
-future<> messaging_service::send_truncate(msg_addr id, std::chrono::milliseconds timeout, sstring ks, sstring cf) {
-    return send_message_timeout<void>(this, netw::messaging_verb::TRUNCATE, std::move(id), std::move(timeout), std::move(ks), std::move(cf));
 }
 
 // Wrapper for REPLICATION_FINISHED
@@ -1281,80 +1197,6 @@ future<> messaging_service::unregister_node_ops_cmd() {
 }
 future<node_ops_cmd_response> messaging_service::send_node_ops_cmd(msg_addr id, node_ops_cmd_request req) {
     return send_message<future<node_ops_cmd_response>>(this, messaging_verb::NODE_OPS_CMD, std::move(id), std::move(req));
-}
-
-void
-messaging_service::register_paxos_prepare(std::function<future<foreign_ptr<std::unique_ptr<service::paxos::prepare_response>>>(
-        const rpc::client_info&, rpc::opt_time_point, query::read_command cmd, partition_key key, utils::UUID ballot,
-        bool only_digest, query::digest_algorithm da, std::optional<tracing::trace_info>)>&& func) {
-    register_handler(this, messaging_verb::PAXOS_PREPARE, std::move(func));
-}
-future<> messaging_service::unregister_paxos_prepare() {
-    return unregister_handler(netw::messaging_verb::PAXOS_PREPARE);
-}
-future<service::paxos::prepare_response>
-messaging_service::send_paxos_prepare(gms::inet_address peer, clock_type::time_point timeout,
-        const query::read_command& cmd, const partition_key& key, utils::UUID ballot,
-        bool only_digest, query::digest_algorithm da, std::optional<tracing::trace_info> trace_info) {
-    return send_message_timeout<service::paxos::prepare_response>(this,
-        messaging_verb::PAXOS_PREPARE, netw::msg_addr(peer), timeout, cmd, key, ballot, only_digest, da, std::move(trace_info));
-}
-
-void messaging_service::register_paxos_accept(std::function<future<bool>(
-        const rpc::client_info&, rpc::opt_time_point, service::paxos::proposal proposal,
-        std::optional<tracing::trace_info>)>&& func) {
-    register_handler(this, messaging_verb::PAXOS_ACCEPT, std::move(func));
-}
-future<> messaging_service::unregister_paxos_accept() {
-    return unregister_handler(netw::messaging_verb::PAXOS_ACCEPT);
-}
-future<bool>
-messaging_service::send_paxos_accept(gms::inet_address peer, clock_type::time_point timeout,
-        const service::paxos::proposal& proposal, std::optional<tracing::trace_info> trace_info) {
-
-    return send_message_timeout<future<bool>>(this,
-        messaging_verb::PAXOS_ACCEPT, netw::msg_addr(peer), timeout, proposal, std::move(trace_info));
-}
-
-void messaging_service::register_paxos_learn(std::function<future<rpc::no_wait_type> (const rpc::client_info&,
-    rpc::opt_time_point, service::paxos::proposal decision, inet_address_vector_replica_set forward, inet_address reply_to,
-    unsigned shard, response_id_type response_id, std::optional<tracing::trace_info> trace_info)>&& func) {
-    register_handler(this, netw::messaging_verb::PAXOS_LEARN, std::move(func));
-}
-future<> messaging_service::unregister_paxos_learn() {
-    return unregister_handler(netw::messaging_verb::PAXOS_LEARN);
-}
-future<> messaging_service::send_paxos_learn(msg_addr id, clock_type::time_point timeout, const service::paxos::proposal& decision,
-    inet_address_vector_replica_set forward, inet_address reply_to, unsigned shard, response_id_type response_id,
-    std::optional<tracing::trace_info> trace_info) {
-    return send_message_oneway_timeout(this, timeout, messaging_verb::PAXOS_LEARN, std::move(id), decision, std::move(forward),
-        std::move(reply_to), shard, std::move(response_id), std::move(trace_info));
-}
-
-void messaging_service::register_paxos_prune(std::function<future<rpc::no_wait_type>(
-        const rpc::client_info&, rpc::opt_time_point, UUID schema_id, partition_key key, utils::UUID ballot, std::optional<tracing::trace_info>)>&& func) {
-    register_handler(this, messaging_verb::PAXOS_PRUNE, std::move(func));
-}
-future<> messaging_service::unregister_paxos_prune() {
-    return unregister_handler(netw::messaging_verb::PAXOS_PRUNE);
-}
-future<>
-messaging_service::send_paxos_prune(gms::inet_address peer, clock_type::time_point timeout, UUID schema_id,
-        const partition_key& key, utils::UUID ballot, std::optional<tracing::trace_info> trace_info) {
-    return send_message_oneway_timeout(this, timeout, messaging_verb::PAXOS_PRUNE, netw::msg_addr(peer), schema_id, key, ballot, std::move(trace_info));
-}
-
-void messaging_service::register_hint_mutation(std::function<future<rpc::no_wait_type> (const rpc::client_info&, rpc::opt_time_point, frozen_mutation fm, inet_address_vector_replica_set forward,
-        inet_address reply_to, unsigned shard, response_id_type response_id, rpc::optional<std::optional<tracing::trace_info>> trace_info)>&& func) {
-    register_handler(this, netw::messaging_verb::HINT_MUTATION, std::move(func));
-}
-future<> messaging_service::unregister_hint_mutation() {
-    return unregister_handler(netw::messaging_verb::HINT_MUTATION);
-}
-future<> messaging_service::send_hint_mutation(msg_addr id, clock_type::time_point timeout, const frozen_mutation& fm, inet_address_vector_replica_set forward,
-        inet_address reply_to, unsigned shard, response_id_type response_id, std::optional<tracing::trace_info> trace_info) {
-    return send_message_oneway_timeout(this, timeout, messaging_verb::HINT_MUTATION, std::move(id), fm, std::move(forward),
-        std::move(reply_to), shard, std::move(response_id), std::move(trace_info));
 }
 
 void messaging_service::register_raft_send_snapshot(std::function<future<raft::snapshot_reply> (const rpc::client_info&, rpc::opt_time_point, raft::group_id gid, raft::server_id from_id, raft::server_id dst_id, raft::install_snapshot)>&& func) {
