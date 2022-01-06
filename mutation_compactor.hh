@@ -513,7 +513,7 @@ public:
     void start_new_page(uint64_t row_limit,
             uint32_t partition_limit,
             gc_clock::time_point query_time,
-            mutation_fragment::kind next_fragment_kind,
+            partition_region next_fragment_region,
             Consumer& consumer) {
         _empty_partition = true;
         _static_row_live = false;
@@ -524,8 +524,7 @@ public:
         _query_time = query_time;
         _stats = {};
 
-        if ((next_fragment_kind == mutation_fragment::kind::clustering_row || next_fragment_kind == mutation_fragment::kind::range_tombstone)
-                && _last_static_row) {
+        if (next_fragment_region == partition_region::clustered && _last_static_row) {
             // Stopping here would cause an infinite loop so ignore return value.
             noop_compacted_fragments_consumer nc;
             consume(*std::exchange(_last_static_row, {}), consumer, nc);

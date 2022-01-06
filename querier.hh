@@ -86,8 +86,8 @@ auto consume_page(flat_mutation_reader& reader,
         gc_clock::time_point query_time) {
     return reader.peek().then([=, &reader, consumer = std::move(consumer), &slice] (
                 mutation_fragment* next_fragment) mutable {
-        const auto next_fragment_kind = next_fragment ? next_fragment->mutation_fragment_kind() : mutation_fragment::kind::partition_end;
-        compaction_state->start_new_page(row_limit, partition_limit, query_time, next_fragment_kind, consumer);
+        const auto next_fragment_region = next_fragment ? next_fragment->position().region() : partition_region::partition_end;
+        compaction_state->start_new_page(row_limit, partition_limit, query_time, next_fragment_region, consumer);
 
         auto last_ckey = make_lw_shared<std::optional<clustering_key_prefix>>();
         auto reader_consumer = make_stable_flattened_mutations_consumer<compact_for_query<OnlyLive, clustering_position_tracker<Consumer>>>(
