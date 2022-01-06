@@ -193,6 +193,12 @@ struct column_value {
     column_value(const column_definition* col, expr::expression sub) : col(col), sub(std::move(sub)) {}
 };
 
+/// A subscripted value, eg list_colum[2], val[sub]
+struct subscript {
+    expression val;
+    expression sub;
+};
+
 /// Represents token function on LHS of an operator relation.  No need to list column definitions
 /// here -- token takes exactly the partition key as its argument.
 struct token {};
