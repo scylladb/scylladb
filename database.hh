@@ -666,6 +666,14 @@ public:
     // Mutations returned by the reader will all have given schema.
     // If I/O needs to be issued to read anything in the specified range, the operations
     // will be scheduled under the priority class given by pc.
+    flat_mutation_reader_v2 make_reader_v2(schema_ptr schema,
+            reader_permit permit,
+            const dht::partition_range& range,
+            const query::partition_slice& slice,
+            const io_priority_class& pc = default_priority_class(),
+            tracing::trace_state_ptr trace_state = nullptr,
+            streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
+            mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes) const;
     flat_mutation_reader make_reader(schema_ptr schema,
             reader_permit permit,
             const dht::partition_range& range,
