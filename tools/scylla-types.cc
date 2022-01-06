@@ -225,7 +225,6 @@ $ scylla-types --print --prefix-compound -t TimeUUIDType -t Int32Type 0010d00819
         {"value", bpo::value<std::vector<sstring>>(), "value(s) to process, can also be provided as positional arguments", -1}
     });
 
-    //FIXME: this exposes all core options, which we are not interested in.
     return app.run(argc, argv, [&app] {
         const action_handler& handler = tools::utils::get_selected_operation(app.configuration(), action_handlers, "action");
 

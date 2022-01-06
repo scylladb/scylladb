@@ -1189,8 +1189,6 @@ $ scylla-sstable --validate /path/to/md-123456-big-Data.db /path/to/md-123457-bi
         {"sstables", bpo::value<std::vector<sstring>>(), "sstable(s) to process, can also be provided as positional arguments", -1},
     });
 
-    //FIXME: this exposes all core options, which we are not interested in.
-    //FIXME: make WARN the default log level
     return app.run(argc, argv, [&app] {
         return async([&app] {
             auto& app_config = app.configuration();
