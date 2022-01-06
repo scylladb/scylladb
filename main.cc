@@ -421,12 +421,10 @@ R"(scylla - NoSQL data store using the seastar framework
 
 For more information, see https://github.com/scylladb/scylla.
 
-The scylla executable hosts tools in addition to the main scylla server:
-* types - a command-line tool to examine values belonging to scylla types.
-* sstable - a multifunctional command-line tool to examine the content of sstables.
+The scylla executable hosts tools in addition to the main scylla server, these
+can be invoked as: scylla {tool_name} [...]
 
-Usage: scylla {tool_name} [...]
-
+For a list of available tools, run: scylla --list-tools
 For more information about individual tools, run: scylla {tool_name} --help
 
 To start the scylla server proper, simply invoke as: scylla server (or just scylla).
@@ -448,6 +446,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     init("version", bpo::bool_switch(), "print version number and exit");
     init("build-id", bpo::bool_switch(), "print build-id and exit");
     init("build-mode", bpo::bool_switch(), "print build mode and exit");
+    init("list-tools", bpo::bool_switch(), "list included tools and exit");
 
     bpo::options_description deprecated("Deprecated options - ignored");
     deprecated.add_options()
@@ -476,6 +475,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     }
     if (vm["build-mode"].as<bool>()) {
         fmt::print("{}\n", scylla_build_mode());
+        return 0;
+    }
+    if (vm["list-tools"].as<bool>()) {
+        fmt::print(
+                "types - a command-line tool to examine values belonging to scylla types\n"
+                "sstable - a multifunctional command-line tool to examine the content of sstables\n"
+        );
         return 0;
     }
 
