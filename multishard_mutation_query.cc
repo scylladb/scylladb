@@ -451,11 +451,13 @@ read_context::dismantle_buffer_stats read_context::dismantle_compaction_state(de
     auto& sharder = _schema->get_sharder();
     const auto shard = sharder.shard_of(compaction_state.partition_start.key().token());
 
+    auto& range_tombstones = std::get<std::deque<range_tombstone>>(compaction_state.range_tombstones);
+
     // It is possible that the reader this partition originates from does not
     // exist anymore. Either because we failed stopping it or because it was
     // evicted.
     if (_readers[shard].state != reader_state::saving) {
-        for (auto& rt : compaction_state.range_tombstones) {
+        for (auto& rt : range_tombstones) {
             stats.add_discarded(*_schema, rt);
         }
         if (compaction_state.static_row) {
@@ -467,7 +469,7 @@ read_context::dismantle_buffer_stats read_context::dismantle_compaction_state(de
 
     auto& shard_buffer = _readers[shard].get_dismantled_buffer(_permit);
 
-    for (auto& rt : compaction_state.range_tombstones | boost::adaptors::reversed) {
+    for (auto& rt : range_tombstones | boost::adaptors::reversed) {
         stats.add(*_schema, rt);
         shard_buffer.emplace_front(*_schema, _permit, std::move(rt));
     }
