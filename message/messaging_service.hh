@@ -461,7 +461,7 @@ public:
     // FIXME: response_id_type is an alias in service::storage_proxy::response_id_type
     using response_id_type = uint64_t;
     // Wrapper for MUTATION
-    void register_mutation(std::function<future<rpc::no_wait_type> (const rpc::client_info&, rpc::opt_time_point, frozen_mutation fm, std::vector<inet_address> forward,
+    void register_mutation(std::function<future<rpc::no_wait_type> (const rpc::client_info&, rpc::opt_time_point, frozen_mutation fm, inet_address_vector_replica_set forward,
         inet_address reply_to, unsigned shard, response_id_type response_id, rpc::optional<std::optional<tracing::trace_info>> trace_info)>&& func);
     future<> unregister_mutation();
     future<> send_mutation(msg_addr id, clock_type::time_point timeout, const frozen_mutation& fm, inet_address_vector_replica_set forward,
@@ -539,7 +539,7 @@ public:
             const service::paxos::proposal& proposal, std::optional<tracing::trace_info> trace_info);
 
     void register_paxos_learn(std::function<future<rpc::no_wait_type> (const rpc::client_info&,
-                rpc::opt_time_point, service::paxos::proposal decision, std::vector<inet_address> forward, inet_address reply_to,
+                rpc::opt_time_point, service::paxos::proposal decision, inet_address_vector_replica_set forward, inet_address reply_to,
                 unsigned shard, response_id_type response_id, std::optional<tracing::trace_info> trace_info)>&& func);
 
     future<> unregister_paxos_learn();
@@ -556,7 +556,7 @@ public:
     future<> send_paxos_prune(gms::inet_address peer, clock_type::time_point timeout, UUID schema_id, const partition_key& key,
             utils::UUID ballot, std::optional<tracing::trace_info> trace_info);
 
-    void register_hint_mutation(std::function<future<rpc::no_wait_type> (const rpc::client_info&, rpc::opt_time_point, frozen_mutation fm, std::vector<inet_address> forward,
+    void register_hint_mutation(std::function<future<rpc::no_wait_type> (const rpc::client_info&, rpc::opt_time_point, frozen_mutation fm, inet_address_vector_replica_set forward,
         inet_address reply_to, unsigned shard, response_id_type response_id, rpc::optional<std::optional<tracing::trace_info>> trace_info)>&& func);
     future<> unregister_hint_mutation();
     future<> send_hint_mutation(msg_addr id, clock_type::time_point timeout, const frozen_mutation& fm, inet_address_vector_replica_set forward,

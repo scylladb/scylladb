@@ -1045,7 +1045,7 @@ future<rpc::tuple<std::vector<frozen_mutation>, rpc::optional<std::vector<canoni
             std::move(id), options);
 }
 
-void messaging_service::register_mutation(std::function<future<rpc::no_wait_type> (const rpc::client_info&, rpc::opt_time_point, frozen_mutation fm, std::vector<inet_address> forward,
+void messaging_service::register_mutation(std::function<future<rpc::no_wait_type> (const rpc::client_info&, rpc::opt_time_point, frozen_mutation fm, inet_address_vector_replica_set forward,
     inet_address reply_to, unsigned shard, response_id_type response_id, rpc::optional<std::optional<tracing::trace_info>> trace_info)>&& func) {
     register_handler(this, netw::messaging_verb::MUTATION, std::move(func));
 }
@@ -1317,7 +1317,7 @@ messaging_service::send_paxos_accept(gms::inet_address peer, clock_type::time_po
 }
 
 void messaging_service::register_paxos_learn(std::function<future<rpc::no_wait_type> (const rpc::client_info&,
-    rpc::opt_time_point, service::paxos::proposal decision, std::vector<inet_address> forward, inet_address reply_to,
+    rpc::opt_time_point, service::paxos::proposal decision, inet_address_vector_replica_set forward, inet_address reply_to,
     unsigned shard, response_id_type response_id, std::optional<tracing::trace_info> trace_info)>&& func) {
     register_handler(this, netw::messaging_verb::PAXOS_LEARN, std::move(func));
 }
@@ -1344,7 +1344,7 @@ messaging_service::send_paxos_prune(gms::inet_address peer, clock_type::time_poi
     return send_message_oneway_timeout(this, timeout, messaging_verb::PAXOS_PRUNE, netw::msg_addr(peer), schema_id, key, ballot, std::move(trace_info));
 }
 
-void messaging_service::register_hint_mutation(std::function<future<rpc::no_wait_type> (const rpc::client_info&, rpc::opt_time_point, frozen_mutation fm, std::vector<inet_address> forward,
+void messaging_service::register_hint_mutation(std::function<future<rpc::no_wait_type> (const rpc::client_info&, rpc::opt_time_point, frozen_mutation fm, inet_address_vector_replica_set forward,
         inet_address reply_to, unsigned shard, response_id_type response_id, rpc::optional<std::optional<tracing::trace_info>> trace_info)>&& func) {
     register_handler(this, netw::messaging_verb::HINT_MUTATION, std::move(func));
 }
