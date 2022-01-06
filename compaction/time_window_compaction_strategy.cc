@@ -130,9 +130,9 @@ reader_consumer time_window_compaction_strategy::make_interposer_consumer(const 
     }
     return [options = _options, end_consumer = std::move(end_consumer)] (flat_mutation_reader rd) mutable -> future<> {
         return mutation_writer::segregate_by_timestamp(
-                std::move(rd),
+                upgrade_to_v2(std::move(rd)),
                 classify_by_timestamp(std::move(options)),
-                std::move(end_consumer));
+                [end_consumer = std::move(end_consumer)] (flat_mutation_reader_v2 rd) { return end_consumer(downgrade_to_v1(std::move(rd))); });
     };
 }
 
