@@ -2368,7 +2368,7 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<replica::datab
             _contexts[shard].read_operation = make_foreign(std::make_unique<utils::phased_barrier::operation>(cf.read_in_progress()));
             _contexts[shard].semaphore = &cf.streaming_read_concurrency_semaphore();
 
-            return cf.make_streaming_reader(std::move(schema), std::move(permit), *_contexts[shard].range, slice, fwd_mr);
+            return downgrade_to_v1(cf.make_streaming_reader(std::move(schema), std::move(permit), *_contexts[shard].range, slice, fwd_mr));
         }
         virtual void update_read_range(lw_shared_ptr<const dht::partition_range> range) override {
             const auto shard = this_shard_id();
