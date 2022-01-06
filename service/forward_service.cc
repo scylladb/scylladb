@@ -11,16 +11,21 @@
 #include <boost/range/algorithm/remove_if.hpp>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/future-util.hh>
+#include <seastar/core/smp.hh>
 
 #include "cql_serialization_format.hh"
 #include "db/consistency_level.hh"
+#include "dht/i_partitioner.hh"
+#include "dht/sharder.hh"
 #include "gms/gossiper.hh"
 #include "idl/forward_request.dist.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "log.hh"
 #include "message/messaging_service.hh"
+#include "query-request.hh"
 #include "query_ranges_to_vnodes.hh"
 #include "replica/database.hh"
+#include "schema.hh"
 #include "schema_registry.hh"
 #include "service/pager/query_pagers.hh"
 #include "tracing/trace_state.hh"
@@ -67,6 +72,67 @@ static void retain_local_endpoints(inet_address_vector_replica_set& eps) {
     eps.erase(itend, eps.end());
 }
 
+// Given an initial partition range vector, iterate through ranges owned by
+// current shard.
+class partition_ranges_owned_by_this_shard {
+    schema_ptr _s;
+    // _partition_ranges will contain a list of partition ranges that are known
+    // to be owned by this node. We'll further need to split each such range to
+    // the pieces owned by the current shard, using _intersecter.
+    const dht::partition_range_vector _partition_ranges;
+    size_t _range_idx;
+    std::optional<dht::ring_position_range_sharder> _intersecter;
+public:
+    partition_ranges_owned_by_this_shard(schema_ptr s, dht::partition_range_vector v)
+        :  _s(s)
+        , _partition_ranges(v)
+        , _range_idx(0)
+    {}
+
+    // Return the next partition_range owned by this shard, or nullopt when the
+    // iteration ends.
+    std::optional<dht::partition_range> next(const schema& s) {
+        // We may need three or more iterations in the following loop if a
+        // vnode doesn't intersect with the given shard at all (such a small
+        // vnode is unlikely, but possible). The loop cannot be infinite
+        // because each iteration of the loop advances _range_idx.
+        for (;;) {
+            if (_intersecter) {
+                // Filter out ranges that are not owned by this shard.
+                while (auto ret = _intersecter->next(s)) {
+                    if (ret->shard == this_shard_id()) {
+                        return {ret->ring_range};
+                    }
+                }
+
+                // Done with this range, go to next one.
+                ++_range_idx;
+                _intersecter = std::nullopt;
+            }
+
+            if (_range_idx == _partition_ranges.size()) {
+                return std::nullopt;
+            }
+
+            _intersecter.emplace(_s->get_sharder(), std::move(_partition_ranges[_range_idx]));
+        }
+    }
+};
+
+static dht::partition_range_vector retain_ranges_owned_by_this_shard(
+    schema_ptr schema,
+    dht::partition_range_vector pr
+) {
+    partition_ranges_owned_by_this_shard owned_iter(schema, std::move(pr));
+    dht::partition_range_vector res;
+    while (std::optional<dht::partition_range> p = owned_iter.next(*schema)) {
+        res.push_back(*p);
+    }
+
+    return res;
+}
+
+
 locator::token_metadata_ptr forward_service::get_token_metadata_ptr() const noexcept {
     return _shared_token_metadata.get();
 }
@@ -102,7 +168,30 @@ static shared_ptr<cql3::selection::selection> mock_selection(
     return cql3::selection::selection::from_selectors(db.as_data_dictionary(), schema, std::move(raw_selectors));
 }
 
-future<query::forward_result> forward_service::execute(
+future<query::forward_result> forward_service::dispatch_to_shards(
+    query::forward_request req,
+    std::optional<tracing::trace_info> tr_info
+) {
+    auto result = co_await container().map_reduce0(
+        [req, tr_info] (auto& fs) {
+            return fs.execute_on_this_shard(req, tr_info);
+        },
+        std::optional<query::forward_result>(),
+        [&req] (std::optional<query::forward_result> partial, query::forward_result mapped) -> std::optional<query::forward_result>{
+            if (partial) {
+                mapped.merge(*partial, req.reduction_types);
+            }
+            return {mapped};
+        }
+    );
+
+    co_return *result;
+}
+
+// This function executes forward_request on a shard.
+// It retains partition ranges owned by this shard from requested partition
+// ranges vector, so that only owned ones are queried.
+future<query::forward_result> forward_service::execute_on_this_shard(
     query::forward_request req,
     std::optional<tracing::trace_info> tr_info
 ) {
@@ -142,7 +231,7 @@ future<query::forward_result> forward_service::execute(
         *query_state,
         *query_options,
         make_lw_shared<query::read_command>(std::move(req.cmd)),
-        std::move(req.pr),
+        retain_ranges_owned_by_this_shard(schema, std::move(req.pr)),
         nullptr // No filtering restrictions
     );
     auto rs_builder = cql3::selection::result_set_builder(
@@ -168,6 +257,13 @@ future<query::forward_result> forward_service::execute(
             throw std::runtime_error("aggregation result column count does not match requested column count");
         }
         query::forward_result res = { .query_results = rows[0] };
+
+        query::forward_result::printer res_printer{
+            .types = reduction_types,
+            .res = res
+        };
+        tracing::trace(tr_state, "On shard execution result is {}", res_printer);
+
         return res;
     });
 }
@@ -176,7 +272,7 @@ void forward_service::init_messaging_service() {
     ser::forward_request_rpc_verbs::register_forward_request(
         &_messaging,
         [this](query::forward_request req, std::optional<tracing::trace_info> tr_info) -> future<query::forward_result> {
-            return execute(req, tr_info);
+            return dispatch_to_shards(req, tr_info);
         }
     );
 }
@@ -234,7 +330,7 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
 
             query::forward_result partial_result = co_await [&] {
                 if (utils::fb_utilities::is_me(addr.addr)) {
-                    return execute(req_with_modified_pr, tr_info);
+                    return dispatch_to_shards(req_with_modified_pr, tr_info);
                 } else {
                     return ser::forward_request_rpc_verbs::send_forward_request(
                         &_messaging, addr, req_with_modified_pr, tr_info
