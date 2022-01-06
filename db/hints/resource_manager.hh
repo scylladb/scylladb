@@ -22,6 +22,7 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/gate.hh>
@@ -31,8 +32,11 @@
 #include <unordered_set>
 #include "utils/small_vector.hh"
 #include "utils/updateable_value.hh"
-#include "lister.hh"
 #include "enum_set.hh"
+
+// Usually we don't define namespace aliases in our headers
+// but this one is already entrenched.
+namespace fs = std::filesystem;
 
 namespace service {
 class storage_proxy;
