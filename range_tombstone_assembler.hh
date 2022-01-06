@@ -53,6 +53,10 @@ private:
         return _prev_rt && _prev_rt->tombstone();
     }
 public:
+    tombstone get_current_tombstone() const {
+        return _prev_rt ? _prev_rt->tombstone() : tombstone();
+    }
+
     void reset() {
         _prev_rt = std::nullopt;
     }
