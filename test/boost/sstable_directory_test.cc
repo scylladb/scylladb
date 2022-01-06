@@ -30,6 +30,7 @@
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/tmpdir.hh"
 #include "db/config.hh"
+#include "lister.hh"
 
 #include "fmt/format.h"
 
