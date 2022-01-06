@@ -216,13 +216,13 @@ querier_cache::querier_cache(std::chrono::seconds entry_ttl)
 }
 
 struct querier_utils {
-    static flat_mutation_reader get_reader(querier_base& q) noexcept {
-        return std::move(std::get<flat_mutation_reader>(q._reader));
+    static flat_mutation_reader_v2 get_reader(querier_base& q) noexcept {
+        return std::move(std::get<flat_mutation_reader_v2>(q._reader));
     }
     static reader_concurrency_semaphore::inactive_read_handle get_inactive_read_handle(querier_base& q) noexcept {
         return std::move(std::get<reader_concurrency_semaphore::inactive_read_handle>(q._reader));
     }
-    static void set_reader(querier_base& q, flat_mutation_reader r) noexcept {
+    static void set_reader(querier_base& q, flat_mutation_reader_v2 r) noexcept {
         q._reader = std::move(r);
     }
     static void set_inactive_read_handle(querier_base& q, reader_concurrency_semaphore::inactive_read_handle h) noexcept {
@@ -255,7 +255,7 @@ void querier_cache::insert_querier(
 
     auto& sem = q.permit().semaphore();
 
-    auto irh = sem.register_inactive_read(upgrade_to_v2(querier_utils::get_reader(q)));
+    auto irh = sem.register_inactive_read(querier_utils::get_reader(q));
     if (!irh) {
         ++stats.resource_based_evictions;
         return;
@@ -340,7 +340,7 @@ std::optional<Querier> querier_cache::lookup_querier(
         throw std::runtime_error("lookup_querier(): found querier that is evicted");
     }
     reader_opt->set_timeout(timeout);
-    querier_utils::set_reader(q, downgrade_to_v1(std::move(*reader_opt)));
+    querier_utils::set_reader(q, std::move(*reader_opt));
     --stats.population;
 
     const auto can_be_used = can_be_used_for_page(q, s, ranges.front(), slice);
@@ -393,7 +393,7 @@ std::optional<shard_mutation_querier> querier_cache::lookup_shard_mutation_queri
 future<> querier_base::close() noexcept {
     struct variant_closer {
         querier_base& q;
-        future<> operator()(flat_mutation_reader& reader) {
+        future<> operator()(flat_mutation_reader_v2& reader) {
             return reader.close();
         }
         future<> operator()(reader_concurrency_semaphore::inactive_read_handle& irh) {
