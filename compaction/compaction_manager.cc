@@ -636,7 +636,7 @@ inline future<> compaction_manager::put_task_to_sleep(lw_shared_ptr<task>& task)
 }
 
 inline bool compaction_manager::maybe_stop_on_error(std::exception_ptr err, bool can_retry) {
-    bool retry = false;
+    bool requires_stop = true;
 
     try {
         std::rethrow_exception(err);
@@ -651,10 +651,10 @@ inline bool compaction_manager::maybe_stop_on_error(std::exception_ptr err, bool
         do_stop();
     } catch (...) {
         _stats.errors++;
-        retry = can_retry;
-        cmlog.error("compaction failed: {}: {}", std::current_exception(), retry ? "retrying" : "stopping");
+        requires_stop = !can_retry;
+        cmlog.error("compaction failed: {}: {}", std::current_exception(), requires_stop ? "stopping" : "retrying");
     }
-    return retry;
+    return requires_stop;
 }
 
 void compaction_manager::submit(table* t) {
@@ -708,7 +708,7 @@ void compaction_manager::submit(table* t) {
 
                 if (f.failed()) {
                     auto ex = f.get_exception();
-                    if (maybe_stop_on_error(std::move(ex), can_proceed(task))) {
+                    if (!maybe_stop_on_error(std::move(ex), can_proceed(task))) {
                         _stats.pending_tasks++;
                         return put_task_to_sleep(task).then([] {
                             return make_ready_future<stop_iteration>(stop_iteration::no);
@@ -846,7 +846,7 @@ future<> compaction_manager::rewrite_sstables(table* t, sstables::compaction_typ
                     ex = std::current_exception();
                 }
                 if (ex) {
-                    if (maybe_stop_on_error(std::move(ex), can_proceed(task))) {
+                    if (!maybe_stop_on_error(std::move(ex), can_proceed(task))) {
                         _stats.pending_tasks++;
                         co_await put_task_to_sleep(task);
                         co_return stop_iteration::no;
