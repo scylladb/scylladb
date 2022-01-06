@@ -741,7 +741,12 @@ private:
     }
 
     virtual reader_consumer make_interposer_consumer(reader_consumer end_consumer) {
-        return _table_s.get_compaction_strategy().make_interposer_consumer(_ms_metadata, std::move(end_consumer));
+        auto consumer = _table_s.get_compaction_strategy().make_interposer_consumer(_ms_metadata, [end_consumer = std::move(end_consumer)] (flat_mutation_reader_v2 reader) {
+            return end_consumer(downgrade_to_v1(std::move(reader)));
+        });
+        return [consumer = std::move(consumer)] (flat_mutation_reader reader) mutable -> future<> {
+            return consumer(upgrade_to_v2(std::move(reader)));
+        };
     }
 
     virtual bool use_interposer_consumer() const {
