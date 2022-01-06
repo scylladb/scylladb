@@ -76,7 +76,7 @@
 #include "compaction/compaction_manager.hh"
 #include "sstables/sstables.hh"
 #include "gms/feature_service.hh"
-#include "distributed_loader.hh"
+#include "replica/distributed_loader.hh"
 #include "sstables_loader.hh"
 #include "cql3/cql_config.hh"
 #include "connection_notifier.hh"
@@ -916,7 +916,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // Iteration through column family directory for sstable loading is
             // done only by shard 0, so we'll no longer face race conditions as
             // described here: https://github.com/scylladb/scylla/issues/1014
-            distributed_loader::init_system_keyspace(db, ss, gossiper, *cfg).get();
+            replica::distributed_loader::init_system_keyspace(db, ss, gossiper, *cfg).get();
 
             smp::invoke_on_all([blocked_reactor_notify_ms] {
                 engine().update_blocked_reactor_notify_ms(blocked_reactor_notify_ms);
@@ -985,13 +985,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             supervisor::notify("loading system sstables");
 
-            distributed_loader::ensure_system_table_directories(db).get();
+            replica::distributed_loader::ensure_system_table_directories(db).get();
 
             // making compaction manager api available, after system keyspace has already been established.
             api::set_server_compaction_manager(ctx).get();
 
             supervisor::notify("loading non-system sstables");
-            distributed_loader::init_non_system_keyspaces(db, proxy).get();
+            replica::distributed_loader::init_non_system_keyspaces(db, proxy).get();
 
             supervisor::notify("starting view update generator");
             view_update_generator.start(std::ref(db)).get();

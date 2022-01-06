@@ -65,8 +65,12 @@ namespace gms {
 class gossiper;
 }
 
+class distributed_loader_for_tests;
+
+namespace replica {
+
 class distributed_loader {
-    friend class distributed_loader_for_tests;
+    friend class ::distributed_loader_for_tests;
 
     static future<> reshape(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstables::reshape_mode mode,
             sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator);
@@ -95,3 +99,5 @@ public:
     static future<> process_upload_dir(distributed<replica::database>& db, distributed<db::system_distributed_keyspace>& sys_dist_ks,
             distributed<db::view::view_update_generator>& view_update_generator, sstring ks_name, sstring cf_name);
 };
+
+}

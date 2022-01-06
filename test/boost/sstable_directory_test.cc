@@ -25,7 +25,7 @@
 #include <seastar/core/sstring.hh>
 #include "sstables/shared_sstable.hh"
 #include "sstables/sstable_directory.hh"
-#include "distributed_loader.hh"
+#include "replica/distributed_loader.hh"
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/tmpdir.hh"
@@ -36,13 +36,13 @@
 class distributed_loader_for_tests {
 public:
     static future<> process_sstable_dir(sharded<sstables::sstable_directory>& dir, bool sort_sstables_according_to_owner = true) {
-        return distributed_loader::process_sstable_dir(dir, sort_sstables_according_to_owner);
+        return replica::distributed_loader::process_sstable_dir(dir, sort_sstables_according_to_owner);
     }
     static future<> lock_table(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring cf_name) {
-        return distributed_loader::lock_table(dir, db, std::move(ks_name), std::move(cf_name));
+        return replica::distributed_loader::lock_table(dir, db, std::move(ks_name), std::move(cf_name));
     }
     static future<> reshard(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator) {
-        return distributed_loader::reshard(dir, db, std::move(ks_name), std::move(table_name), std::move(creator));
+        return replica::distributed_loader::reshard(dir, db, std::move(ks_name), std::move(table_name), std::move(creator));
     }
 };
 
