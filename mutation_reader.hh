@@ -359,26 +359,6 @@ snapshot_source make_empty_snapshot_source();
 
 using mutation_source_opt = optimized_optional<mutation_source>;
 
-// Adapts a non-movable FlattenedConsumer to a movable one.
-template<typename FlattenedConsumer>
-class stable_flattened_mutations_consumer {
-    std::unique_ptr<FlattenedConsumer> _ptr;
-public:
-    stable_flattened_mutations_consumer(std::unique_ptr<FlattenedConsumer> ptr) : _ptr(std::move(ptr)) {}
-    auto consume_new_partition(const dht::decorated_key& dk) { return _ptr->consume_new_partition(dk); }
-    auto consume(tombstone t) { return _ptr->consume(t); }
-    auto consume(static_row&& sr) { return _ptr->consume(std::move(sr)); }
-    auto consume(clustering_row&& cr) { return _ptr->consume(std::move(cr)); }
-    auto consume(range_tombstone&& rt) { return _ptr->consume(std::move(rt)); }
-    auto consume_end_of_partition() { return _ptr->consume_end_of_partition(); }
-    auto consume_end_of_stream() { return _ptr->consume_end_of_stream(); }
-};
-
-template<typename FlattenedConsumer, typename... Args>
-stable_flattened_mutations_consumer<FlattenedConsumer> make_stable_flattened_mutations_consumer(Args&&... args) {
-    return { std::make_unique<FlattenedConsumer>(std::forward<Args>(args)...) };
-}
-
 /// Make a foreign_reader.
 ///
 /// foreign_reader is a local representant of a reader located on a remote

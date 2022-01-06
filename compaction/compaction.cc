@@ -699,7 +699,7 @@ private:
         auto consumer = make_interposer_consumer([this] (flat_mutation_reader reader) mutable {
             return seastar::async([this, reader = std::move(reader)] () mutable {
                 auto close_reader = deferred_close(reader);
-                auto cfc = make_stable_flattened_mutations_consumer<compacted_fragments_writer>(get_compacted_fragments_writer());
+                auto cfc = compacted_fragments_writer(get_compacted_fragments_writer());
                 reader.consume_in_thread(std::move(cfc));
             });
         });
@@ -721,7 +721,7 @@ private:
 
                 if (enable_garbage_collected_sstable_writer()) {
                     using compact_mutations = compact_for_compaction<compacted_fragments_writer, compacted_fragments_writer>;
-                    auto cfc = make_stable_flattened_mutations_consumer<compact_mutations>(*schema(), now,
+                    auto cfc = compact_mutations(*schema(), now,
                         max_purgeable_func(),
                         get_compacted_fragments_writer(),
                         get_gc_compacted_fragments_writer());
@@ -730,7 +730,7 @@ private:
                     return;
                 }
                 using compact_mutations = compact_for_compaction<compacted_fragments_writer, noop_compacted_fragments_consumer>;
-                auto cfc = make_stable_flattened_mutations_consumer<compact_mutations>(*schema(), now,
+                auto cfc = compact_mutations(*schema(), now,
                     max_purgeable_func(),
                     get_compacted_fragments_writer(),
                     noop_compacted_fragments_consumer());

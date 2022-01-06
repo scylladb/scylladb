@@ -90,7 +90,7 @@ auto consume_page(flat_mutation_reader& reader,
         compaction_state->start_new_page(row_limit, partition_limit, query_time, next_fragment_region, consumer);
 
         auto last_ckey = make_lw_shared<std::optional<clustering_key_prefix>>();
-        auto reader_consumer = make_stable_flattened_mutations_consumer<compact_for_query<OnlyLive, clustering_position_tracker<Consumer>>>(
+        auto reader_consumer = compact_for_query<OnlyLive, clustering_position_tracker<Consumer>>(
                 compaction_state,
                 clustering_position_tracker(std::move(consumer), last_ckey));
 
