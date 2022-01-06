@@ -16,12 +16,12 @@ class migration_manager;
 
 class migration_manager;
 
-// Raft state machine implementation for managing schema changes.
-// NOTE: schema raft server is always instantiated on shard 0.
-class schema_raft_state_machine : public raft_state_machine {
+// Raft state machine implementation for managing group 0 changes (e.g. schema changes).
+// NOTE: group 0 raft server is always instantiated on shard 0.
+class group0_state_machine : public raft_state_machine {
     migration_manager& _mm;
 public:
-    schema_raft_state_machine(migration_manager& mm) : _mm(mm) {}
+    group0_state_machine(migration_manager& mm) : _mm(mm) {}
     future<> apply(std::vector<raft::command_cref> command) override;
     future<raft::snapshot_id> take_snapshot() override;
     void drop_snapshot(raft::snapshot_id id) override;
