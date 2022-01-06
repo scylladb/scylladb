@@ -122,6 +122,7 @@ public:
     static constexpr auto RAFT_SNAPSHOTS = "raft_snapshots";
     static constexpr auto RAFT_CONFIG = "raft_config";
     static constexpr auto REPAIR_HISTORY = "repair_history";
+    static constexpr auto GROUP0_HISTORY = "group0_history";
     static const char *const CLIENTS;
 
     struct v3 {
@@ -204,6 +205,7 @@ public:
     static schema_ptr raft();
     static schema_ptr raft_snapshots();
     static schema_ptr repair_history();
+    static schema_ptr group0_history();
 
     static table_schema_version generate_schema_version(utils::UUID table_id, uint16_t offset = 0);
 
@@ -409,6 +411,22 @@ public:
 
     // Save advertised gossip feature set to system.local
     static future<> save_local_supported_features(const std::set<std::string_view>& feats);
+
+    // Get the last (the greatest in timeuuid order) state ID in the group 0 history table.
+    // Assumes that the history table exists, i.e. Raft experimental feature is enabled.
+    static future<utils::UUID> get_last_group0_state_id();
+
+    // Checks whether the group 0 history table contains the given state ID.
+    // Assumes that the history table exists, i.e. Raft experimental feature is enabled.
+    static future<bool> group0_history_contains(utils::UUID state_id);
+
+    // The mutation appends the given state ID to the group 0 history table, with the given description if non-empty.
+    // The mutation's timestamp is extracted from the state ID.
+    static mutation make_group0_history_state_id_mutation(utils::UUID state_id, std::string_view description = "");
+
+    // Obtain the contents of the group 0 history table in mutation form.
+    // Assumes that the history table exists, i.e. Raft experimental feature is enabled.
+    static future<mutation> get_group0_history(distributed<service::storage_proxy>&);
 }; // class system_keyspace
 
 future<> system_keyspace_make(distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g);

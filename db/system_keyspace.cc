@@ -953,6 +953,25 @@ schema_ptr system_keyspace::v3::scylla_views_builds_in_progress() {
     return cdc_local;
 }
 
+schema_ptr system_keyspace::group0_history() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, GROUP0_HISTORY);
+        return schema_builder(NAME, GROUP0_HISTORY, id)
+            // this is a single-partition table with key 'history'
+            .with_column("key", utf8_type, column_kind::partition_key)
+            // group0 state timeuuid, descending order
+            .with_column("state_id", reversed_type_impl::get_instance(timeuuid_type), column_kind::clustering_key)
+            // human-readable description of the change
+            .with_column("description", utf8_type)
+
+            .set_comment("History of Raft group 0 state changes")
+            .with_version(generate_schema_version(id))
+            .with_null_sharder()
+            .build();
+    }();
+    return schema;
+}
+
 schema_ptr system_keyspace::legacy::hints() {
     static thread_local auto schema = [] {
         schema_builder builder(generate_legacy_id(NAME, HINTS), NAME, HINTS,
@@ -2517,7 +2536,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
                     v3::cdc_local(),
     });
     if (cfg.check_experimental(db::experimental_features_t::RAFT)) {
-        r.insert(r.end(), {raft(), raft_snapshots(), raft_config()});
+        r.insert(r.end(), {raft(), raft_snapshots(), raft_config(), group0_history()});
     }
     // legacy schema
     r.insert(r.end(), {
@@ -3002,6 +3021,62 @@ future<> system_keyspace::set_raft_group0_id(utils::UUID uuid) {
 
 future<> system_keyspace::set_raft_server_id(utils::UUID uuid) {
     return set_scylla_local_param_as<utils::UUID>("raft_server_id", uuid);
+}
+
+static constexpr auto GROUP0_HISTORY_KEY = "history";
+
+future<utils::UUID> system_keyspace::get_last_group0_state_id() {
+    auto rs = co_await qctx->execute_cql(
+        format(
+            "SELECT state_id FROM system.{} WHERE key = '{}' LIMIT 1",
+            GROUP0_HISTORY, GROUP0_HISTORY_KEY));
+    assert(rs);
+    if (rs->empty()) {
+        co_return utils::UUID{};
+    }
+    co_return rs->one().get_as<utils::UUID>("state_id");
+}
+
+future<bool> system_keyspace::group0_history_contains(utils::UUID state_id) {
+    auto rs = co_await qctx->execute_cql(
+        format(
+            "SELECT state_id FROM system.{} WHERE key = '{}' AND state_id = ?",
+            GROUP0_HISTORY, GROUP0_HISTORY_KEY),
+        state_id);
+    assert(rs);
+    co_return !rs->empty();
+}
+
+mutation system_keyspace::make_group0_history_state_id_mutation(utils::UUID state_id, std::string_view description) {
+    auto s = group0_history();
+    mutation m(s, partition_key::from_singular(*s, GROUP0_HISTORY_KEY));
+    auto& row = m.partition().clustered_row(*s, clustering_key::from_singular(*s, state_id));
+    auto ts = utils::UUID_gen::micros_timestamp(state_id);
+    row.apply(row_marker(ts));
+    if (!description.empty()) {
+        auto cdef = s->get_column_definition("description");
+        assert(cdef);
+        row.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, ts, cdef->type->decompose(description)));
+    }
+    return m;
+}
+
+future<mutation> system_keyspace::get_group0_history(distributed<service::storage_proxy>& sp) {
+    auto s = group0_history();
+    auto rs = co_await db::system_keyspace::query_mutations(sp, db::system_keyspace::NAME, db::system_keyspace::GROUP0_HISTORY);
+    assert(rs);
+    auto& ps = rs->partitions();
+    for (auto& p: ps) {
+        auto mut = p.mut().unfreeze(s);
+        auto partition_key = value_cast<sstring>(utf8_type->deserialize(mut.key().get_component(*s, 0)));
+        if (partition_key == GROUP0_HISTORY_KEY) {
+            co_return mut;
+        }
+        slogger.warn("get_group0_history: unexpected partition in group0 history table: {}", partition_key);
+    }
+
+    slogger.warn("get_group0_history: '{}' partition not found", GROUP0_HISTORY_KEY);
+    co_return mutation(s, partition_key::from_singular(*s, GROUP0_HISTORY_KEY));
 }
 
 sstring system_keyspace_name() {
