@@ -2409,8 +2409,8 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<replica::datab
     });
     auto&& full_slice = schema->full_slice();
     auto& cf = db.local().find_column_family(schema);
-    return make_flat_multi_range_reader(schema, std::move(permit), std::move(ms),
-            std::move(range_generator), std::move(full_slice), service::get_local_streaming_priority(), {}, mutation_reader::forwarding::no);
+    return downgrade_to_v1(make_flat_multi_range_reader(schema, std::move(permit), std::move(ms),
+            std::move(range_generator), std::move(full_slice), service::get_local_streaming_priority(), {}, mutation_reader::forwarding::no));
 }
 
 std::ostream& operator<<(std::ostream& os, gc_clock::time_point tp) {

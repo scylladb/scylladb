@@ -928,12 +928,12 @@ make_flat_mutation_reader_from_mutations_v2(schema_ptr s, reader_permit permit, 
 /// has to be fast-forwardable.
 /// Delays the creation of the underlying reader until it is first
 /// fast-forwarded and thus a range is available.
-class forwardable_empty_mutation_reader : public flat_mutation_reader::impl {
+class forwardable_empty_mutation_reader : public flat_mutation_reader_v2::impl {
     mutation_source _source;
     const query::partition_slice& _slice;
     const io_priority_class& _pc;
     tracing::trace_state_ptr _trace_state;
-    flat_mutation_reader_opt _reader;
+    flat_mutation_reader_v2_opt _reader;
 public:
     forwardable_empty_mutation_reader(schema_ptr s,
             reader_permit permit,
@@ -965,7 +965,7 @@ public:
     }
     virtual future<> fast_forward_to(const dht::partition_range& pr) override {
         if (!_reader) {
-            _reader = _source.make_reader(_schema, _permit, pr, _slice, _pc, std::move(_trace_state), streamed_mutation::forwarding::no,
+            _reader = _source.make_reader_v2(_schema, _permit, pr, _slice, _pc, std::move(_trace_state), streamed_mutation::forwarding::no,
                     mutation_reader::forwarding::yes);
             _end_of_stream = false;
             return make_ready_future<>();
@@ -994,9 +994,9 @@ public:
 };
 
 template<typename Generator>
-class flat_multi_range_mutation_reader : public flat_mutation_reader::impl {
+class flat_multi_range_mutation_reader : public flat_mutation_reader_v2::impl {
     std::optional<Generator> _generator;
-    flat_mutation_reader _reader;
+    flat_mutation_reader_v2 _reader;
 
     const dht::partition_range* next() {
         if (!_generator) {
@@ -1017,7 +1017,7 @@ public:
             tracing::trace_state_ptr trace_state)
         : impl(s, std::move(permit))
         , _generator(std::move(generator))
-        , _reader(source.make_reader(s, _permit, first_range, slice, pc, trace_state, streamed_mutation::forwarding::no, mutation_reader::forwarding::yes))
+        , _reader(source.make_reader_v2(s, _permit, first_range, slice, pc, trace_state, streamed_mutation::forwarding::no, mutation_reader::forwarding::yes))
     {
     }
 
@@ -1065,7 +1065,7 @@ public:
     }
 };
 
-flat_mutation_reader
+flat_mutation_reader_v2
 make_flat_multi_range_reader(schema_ptr s, reader_permit permit, mutation_source source, const dht::partition_range_vector& ranges,
                         const query::partition_slice& slice, const io_priority_class& pc,
                         tracing::trace_state_ptr trace_state,
@@ -1088,20 +1088,20 @@ make_flat_multi_range_reader(schema_ptr s, reader_permit permit, mutation_source
 
     if (ranges.empty()) {
         if (fwd_mr) {
-            return make_flat_mutation_reader<forwardable_empty_mutation_reader>(std::move(s), std::move(permit), std::move(source), slice, pc,
+            return make_flat_mutation_reader_v2<forwardable_empty_mutation_reader>(std::move(s), std::move(permit), std::move(source), slice, pc,
                     std::move(trace_state));
         } else {
-            return make_empty_flat_reader(std::move(s), std::move(permit));
+            return make_empty_flat_reader_v2(std::move(s), std::move(permit));
         }
     } else if (ranges.size() == 1) {
-        return source.make_reader(std::move(s), std::move(permit), ranges.front(), slice, pc, std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr);
+        return source.make_reader_v2(std::move(s), std::move(permit), ranges.front(), slice, pc, std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr);
     } else {
-        return make_flat_mutation_reader<flat_multi_range_mutation_reader<adapter>>(std::move(s), std::move(permit), std::move(source),
+        return make_flat_mutation_reader_v2<flat_multi_range_mutation_reader<adapter>>(std::move(s), std::move(permit), std::move(source),
                 ranges.front(), adapter(std::next(ranges.cbegin()), ranges.cend()), slice, pc, std::move(trace_state));
     }
 }
 
-flat_mutation_reader
+flat_mutation_reader_v2
 make_flat_multi_range_reader(
         schema_ptr s,
         reader_permit permit,
@@ -1137,12 +1137,12 @@ make_flat_multi_range_reader(
     auto* first_range = adapted_generator();
     if (!first_range) {
         if (fwd_mr) {
-            return make_flat_mutation_reader<forwardable_empty_mutation_reader>(std::move(s), std::move(permit), std::move(source), slice, pc, std::move(trace_state));
+            return make_flat_mutation_reader_v2<forwardable_empty_mutation_reader>(std::move(s), std::move(permit), std::move(source), slice, pc, std::move(trace_state));
         } else {
-            return make_empty_flat_reader(std::move(s), std::move(permit));
+            return make_empty_flat_reader_v2(std::move(s), std::move(permit));
         }
     } else {
-        return make_flat_mutation_reader<flat_multi_range_mutation_reader<adapter>>(std::move(s), std::move(permit), std::move(source),
+        return make_flat_mutation_reader_v2<flat_multi_range_mutation_reader<adapter>>(std::move(s), std::move(permit), std::move(source),
                 *first_range, std::move(adapted_generator), slice, pc, std::move(trace_state));
     }
 }
