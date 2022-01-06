@@ -130,6 +130,15 @@ void migration_manager::init_messaging_service()
         auto features = self._feat.cluster_schema_features();
         auto& proxy = self._storage_proxy.container();
         auto cm = co_await db::schema_tables::convert_schema_to_mutations(proxy, features);
+        if (self._raft_gr.is_enabled() && options->group0_snapshot_transfer) {
+            // if `group0_snapshot_transfer` is `true`, the sender must also understand canonical mutations
+            // (`group0_snapshot_transfer` was added more recently).
+            if (!cm_retval_supported) {
+                on_internal_error(mlogger,
+                    "migration request handler: group0 snapshot transfer requested, but canonical mutations not supported");
+            }
+            cm.emplace_back(co_await db::system_keyspace::get_group0_history(proxy));
+        }
         if (cm_retval_supported) {
             co_return rpc::tuple(std::vector<frozen_mutation>{}, std::move(cm));
         }
