@@ -31,21 +31,21 @@
 namespace mutation_writer {
 
 class shard_based_splitting_mutation_writer {
-    using shard_writer = bucket_writer;
+    using shard_writer = bucket_writer_v2;
 
 private:
     schema_ptr _schema;
     reader_permit _permit;
-    reader_consumer _consumer;
+    reader_consumer_v2 _consumer;
     unsigned _current_shard;
     std::vector<std::optional<shard_writer>> _shards;
 
-    future<> write_to_shard(mutation_fragment&& mf) {
+    future<> write_to_shard(mutation_fragment_v2&& mf) {
         auto& writer = *_shards[_current_shard];
         return writer.consume(std::move(mf));
     }
 public:
-    shard_based_splitting_mutation_writer(schema_ptr schema, reader_permit permit, reader_consumer consumer)
+    shard_based_splitting_mutation_writer(schema_ptr schema, reader_permit permit, reader_consumer_v2 consumer)
         : _schema(std::move(schema))
         , _permit(std::move(permit))
         , _consumer(std::move(consumer))
@@ -57,23 +57,23 @@ public:
         if (!_shards[_current_shard]) {
             _shards[_current_shard] = shard_writer(_schema, _permit, _consumer);
         }
-        return write_to_shard(mutation_fragment(*_schema, _permit, std::move(ps)));
+        return write_to_shard(mutation_fragment_v2(*_schema, _permit, std::move(ps)));
     }
 
     future<> consume(static_row&& sr) {
-        return write_to_shard(mutation_fragment(*_schema, _permit, std::move(sr)));
+        return write_to_shard(mutation_fragment_v2(*_schema, _permit, std::move(sr)));
     }
 
     future<> consume(clustering_row&& cr) {
-        return write_to_shard(mutation_fragment(*_schema, _permit, std::move(cr)));
+        return write_to_shard(mutation_fragment_v2(*_schema, _permit, std::move(cr)));
     }
 
-    future<> consume(range_tombstone&& rt) {
-        return write_to_shard(mutation_fragment(*_schema, _permit, std::move(rt)));
+    future<> consume(range_tombstone_change&& rt) {
+        return write_to_shard(mutation_fragment_v2(*_schema, _permit, std::move(rt)));
     }
 
     future<> consume(partition_end&& pe) {
-        return write_to_shard(mutation_fragment(*_schema, _permit, std::move(pe)));
+        return write_to_shard(mutation_fragment_v2(*_schema, _permit, std::move(pe)));
     }
 
     void consume_end_of_stream() {
@@ -97,7 +97,7 @@ public:
     }
 };
 
-future<> segregate_by_shard(flat_mutation_reader producer, reader_consumer consumer) {
+future<> segregate_by_shard(flat_mutation_reader_v2 producer, reader_consumer_v2 consumer) {
     auto schema = producer.schema();
     auto permit = producer.permit();
     return feed_writer(
