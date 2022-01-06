@@ -195,6 +195,20 @@ const abstract_type* get_value_comparator(const column_value& cv) {
             : get_value_comparator(cv.col);
 }
 
+/// Type for comparing results of get_value().
+__attribute__((unused)) // For now mark as unused so that the code compiles, will be used soon
+const abstract_type* get_value_comparator(const column_maybe_subscripted& col) {
+    return std::visit(overloaded_functor {
+        [](const column_value* cv) {
+            return get_value_comparator(*cv);
+        },
+        [](const subscript* s) {
+            const column_value& cv = get_subscripted_column(*s);
+            return static_pointer_cast<const collection_type_impl>(cv.col->type)->value_comparator().get();
+        }
+    }, col);
+}
+
 /// True iff lhs's value equals rhs.
 bool equal(const managed_bytes_opt& rhs, const column_value& lhs, const column_value_eval_bag& bag) {
     if (!rhs) {
