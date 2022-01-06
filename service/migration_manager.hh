@@ -31,7 +31,9 @@
 
 class canonical_mutation;
 class frozen_mutation;
-namespace cql3 { namespace functions { class user_function; class user_aggregate; }}
+namespace cql3 {
+namespace functions { class user_function; class user_aggregate; }
+}
 namespace netw { class messaging_service; }
 
 namespace gms {
@@ -49,6 +51,9 @@ class storage_proxy;
 template<typename M>
 concept MergeableMutation = std::is_same<M, canonical_mutation>::value || std::is_same<M, frozen_mutation>::value;
 
+// Obtaining this object means that all previously finished operations on group 0 are visible on this node.
+// It is also required in order to perform group 0 changes (through `announce`).
+// See `group0_guard::impl` for more detailed explanations.
 class group0_guard {
     friend class migration_manager;
     struct impl;
@@ -60,8 +65,18 @@ public:
     ~group0_guard();
     group0_guard(group0_guard&&) noexcept;
 
+    utils::UUID observed_group0_state_id() const;
+    utils::UUID new_group0_state_id() const;
+
     // Use this timestamp when creating group 0 mutations.
     api::timestamp_type write_timestamp() const;
+};
+
+class group0_concurrent_modification : public std::runtime_error {
+public:
+    group0_concurrent_modification()
+        : std::runtime_error("Failed to apply group 0 change due to concurrent modification")
+    {}
 };
 
 class migration_manager : public seastar::async_sharded_service<migration_manager>,
@@ -82,6 +97,11 @@ private:
     service::raft_group_registry& _raft_gr;
     serialized_action _schema_push;
     utils::UUID _schema_version_to_publish;
+
+    friend class group0_state_machine;
+    // See `group0_guard::impl` for explanation of the purpose of these locks.
+    semaphore _group0_read_apply_mutex;
+    semaphore _group0_operation_mutex;
 public:
     migration_manager(migration_notifier&, gms::feature_service&, netw::messaging_service& ms, service::storage_proxy&, gms::gossiper& gossiper, service::raft_group_registry& raft_gr);
 
@@ -153,10 +173,14 @@ public:
 
     future<std::vector<mutation>> prepare_view_drop_announcement(const sstring& ks_name, const sstring& cf_name, api::timestamp_type);
 
-    // The function needs to be called if the user wants to read most up-to-date group0 state (including schema state)
+    // The function needs to be called if the user wants to read most up-to-date group 0 state (including schema state)
     // (the function ensures that all previously finished group0 operations are visible on this node) or to write it.
+    //
+    // Call this *before* reading group 0 state (e.g. when performing a schema change, call this before validation).
+    // Use `group0_guard::write_timestamp()` when creating mutations which modify group 0 (e.g. schema tables mutations).
+    //
     // Call ONLY on shard 0.
-    // Requires a quorum of nodes to be available.
+    // Requires a quorum of nodes to be available in order to finish.
     future<group0_guard> start_group0_operation();
 
     // used to check if raft is enabled on the cluster
