@@ -177,6 +177,20 @@ class compact_mutation_state {
 
     compaction_stats _stats;
 private:
+    template <typename Consumer, typename GCConsumer>
+    requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
+    stop_iteration do_consume(range_tombstone&& rt, Consumer& consumer, GCConsumer& gc_consumer) {
+        if (rt.tomb <= _range_tombstones.get_partition_tombstone()) {
+            return stop_iteration::no;
+        }
+        if (can_purge_tombstone(rt.tomb)) {
+            partition_is_not_empty_for_gc_consumer(gc_consumer);
+            return gc_consumer.consume(std::move(rt));
+        } else {
+            partition_is_not_empty(consumer);
+            return consumer.consume(std::move(rt));
+        }
+    }
     static constexpr bool only_live() {
         return OnlyLive == emit_only_live_rows::yes;
     }
@@ -409,16 +423,7 @@ public:
         ++_stats.range_tombstones;
         _range_tombstones.apply(rt);
         // FIXME: drop tombstone if it is fully covered by other range tombstones
-        if (rt.tomb > _range_tombstones.get_partition_tombstone()) {
-            if (can_purge_tombstone(rt.tomb)) {
-                partition_is_not_empty_for_gc_consumer(gc_consumer);
-                return gc_consumer.consume(std::move(rt));
-            } else {
-                partition_is_not_empty(consumer);
-                return consumer.consume(std::move(rt));
-            }
-         }
-        return stop_iteration::no;
+        return do_consume(std::move(rt), consumer, gc_consumer);
     }
 
     template <typename Consumer, typename GCConsumer>
