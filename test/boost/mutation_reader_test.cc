@@ -2444,13 +2444,13 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_streaming_reader) {
         auto& local_partitioner = schema->get_sharder();
         auto remote_partitioner = dht::sharder(local_partitioner.shard_count() - 1, local_partitioner.sharding_ignore_msb());
 
-        auto tested_reader = make_multishard_streaming_reader(env.db(), schema, make_reader_permit(env),
+        auto tested_reader = downgrade_to_v1(make_multishard_streaming_reader(env.db(), schema, make_reader_permit(env),
                 [sharder = dht::selective_token_range_sharder(remote_partitioner, token_range, 0)] () mutable -> std::optional<dht::partition_range> {
             if (auto next = sharder.next()) {
                 return dht::to_partition_range(*next);
             }
             return std::nullopt;
-        });
+        }));
         auto close_tested_reader = deferred_close(tested_reader);
 
         auto reader_factory = [db = &env.db()] (

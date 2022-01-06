@@ -2337,10 +2337,10 @@ database::as_data_dictionary() const {
 template <typename T>
 using foreign_unique_ptr = foreign_ptr<std::unique_ptr<T>>;
 
-flat_mutation_reader make_multishard_streaming_reader(distributed<replica::database>& db, schema_ptr schema, reader_permit permit,
+flat_mutation_reader_v2 make_multishard_streaming_reader(distributed<replica::database>& db, schema_ptr schema, reader_permit permit,
         std::function<std::optional<dht::partition_range>()> range_generator) {
     class streaming_reader_lifecycle_policy
-            : public reader_lifecycle_policy
+            : public reader_lifecycle_policy_v2
             , public enable_shared_from_this<streaming_reader_lifecycle_policy> {
         struct reader_context {
             foreign_ptr<lw_shared_ptr<const dht::partition_range>> range;
@@ -2353,7 +2353,7 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<replica::datab
     public:
         streaming_reader_lifecycle_policy(distributed<replica::database>& db, utils::UUID table_id) : _db(db), _table_id(table_id), _contexts(smp::count) {
         }
-        virtual flat_mutation_reader create_reader(
+        virtual flat_mutation_reader_v2 create_reader(
                 schema_ptr schema,
                 reader_permit permit,
                 const dht::partition_range& range,
@@ -2368,7 +2368,7 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<replica::datab
             _contexts[shard].read_operation = make_foreign(std::make_unique<utils::phased_barrier::operation>(cf.read_in_progress()));
             _contexts[shard].semaphore = &cf.streaming_read_concurrency_semaphore();
 
-            return downgrade_to_v1(cf.make_streaming_reader(std::move(schema), std::move(permit), *_contexts[shard].range, slice, fwd_mr));
+            return cf.make_streaming_reader(std::move(schema), std::move(permit), *_contexts[shard].range, slice, fwd_mr);
         }
         virtual void update_read_range(lw_shared_ptr<const dht::partition_range> range) override {
             const auto shard = this_shard_id();
@@ -2404,13 +2404,13 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<replica::datab
             streamed_mutation::forwarding,
             mutation_reader::forwarding fwd_mr) {
         auto table_id = s->id();
-        return make_multishard_combining_reader(make_shared<streaming_reader_lifecycle_policy>(db, table_id), std::move(s), std::move(permit), pr, ps, pc,
+        return make_multishard_combining_reader_v2(make_shared<streaming_reader_lifecycle_policy>(db, table_id), std::move(s), std::move(permit), pr, ps, pc,
                 std::move(trace_state), fwd_mr);
     });
     auto&& full_slice = schema->full_slice();
     auto& cf = db.local().find_column_family(schema);
-    return downgrade_to_v1(make_flat_multi_range_reader(schema, std::move(permit), std::move(ms),
-            std::move(range_generator), std::move(full_slice), service::get_local_streaming_priority(), {}, mutation_reader::forwarding::no));
+    return make_flat_multi_range_reader(schema, std::move(permit), std::move(ms),
+            std::move(range_generator), std::move(full_slice), service::get_local_streaming_priority(), {}, mutation_reader::forwarding::no);
 }
 
 std::ostream& operator<<(std::ostream& os, gc_clock::time_point tp) {
