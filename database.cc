@@ -1348,44 +1348,6 @@ database::existing_index_names(const sstring& ks_name, const sstring& cf_to_excl
     return names;
 }
 
-// Based on:
-//  - org.apache.cassandra.db.AbstractCell#reconcile()
-//  - org.apache.cassandra.db.BufferExpiringCell#reconcile()
-//  - org.apache.cassandra.db.BufferDeletedCell#reconcile()
-std::strong_ordering
-compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right) {
-    if (left.timestamp() != right.timestamp()) {
-        return left.timestamp() <=> right.timestamp();
-    }
-    if (left.is_live() != right.is_live()) {
-        return left.is_live() ? std::strong_ordering::less : std::strong_ordering::greater;
-    }
-    if (left.is_live()) {
-        auto c = compare_unsigned(left.value(), right.value()) <=> 0;
-        if (c != 0) {
-            return c;
-        }
-        if (left.is_live_and_has_ttl() != right.is_live_and_has_ttl()) {
-            // prefer expiring cells.
-            return left.is_live_and_has_ttl() ? std::strong_ordering::greater : std::strong_ordering::less;
-        }
-        if (left.is_live_and_has_ttl() && left.expiry() != right.expiry()) {
-            return left.expiry() <=> right.expiry();
-        }
-    } else {
-        // Both are deleted
-        if (left.deletion_time() != right.deletion_time()) {
-            // Origin compares big-endian serialized deletion time. That's because it
-            // delegates to AbstractCell.reconcile() which compares values after
-            // comparing timestamps, which in case of deleted cells will hold
-            // serialized expiry.
-            return (uint64_t) left.deletion_time().time_since_epoch().count()
-                   <=> (uint64_t) right.deletion_time().time_since_epoch().count();
-        }
-    }
-    return std::strong_ordering::equal;
-}
-
 future<std::tuple<lw_shared_ptr<query::result>, cache_temperature>>
 database::query(schema_ptr s, const query::read_command& cmd, query::result_options opts, const dht::partition_range_vector& ranges,
                 tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout) {
