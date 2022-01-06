@@ -543,7 +543,7 @@ class RpcVerb(ASTBase):
 
     def send_function_invocation(self):
         res = 'return ' + self.send_function_name()
-        if not (self.one_way and self.with_timeout):
+        if not (self.one_way):
             res += '<' + self.send_function_return_type() + '>'
         res += '(' + self.send_message_argument_list() + ');'
         return res
