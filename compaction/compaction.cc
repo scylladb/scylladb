@@ -696,14 +696,14 @@ private:
     // compacting_reader. It's useful for allowing data from different buckets
     // to be compacted together.
     future<> consume_without_gc_writer(gc_clock::time_point compaction_time) {
-        auto consumer = make_interposer_consumer([this] (flat_mutation_reader reader) mutable {
-            return seastar::async([this, reader = std::move(reader)] () mutable {
+        auto consumer = make_interposer_consumer([this] (flat_mutation_reader_v2 reader) mutable {
+            return seastar::async([this, reader = downgrade_to_v1(std::move(reader))] () mutable {
                 auto close_reader = deferred_close(reader);
                 auto cfc = compacted_fragments_writer(get_compacted_fragments_writer());
                 reader.consume_in_thread(std::move(cfc));
             });
         });
-        return consumer(make_compacting_reader(downgrade_to_v1(make_sstable_reader()), compaction_time, max_purgeable_func()));
+        return consumer(upgrade_to_v2(make_compacting_reader(downgrade_to_v1(make_sstable_reader()), compaction_time, max_purgeable_func())));
     }
 
     future<> consume() {
@@ -714,7 +714,7 @@ private:
         if (!enable_garbage_collected_sstable_writer() && use_interposer_consumer()) {
             return consume_without_gc_writer(now);
         }
-        auto consumer = make_interposer_consumer([this, now] (flat_mutation_reader reader) mutable
+        auto consumer = make_interposer_consumer([this, now] (flat_mutation_reader_v2 reader) mutable
         {
             return seastar::async([this, reader = std::move(reader), now] () mutable {
                 auto close_reader = deferred_close(reader);
@@ -737,16 +737,11 @@ private:
                 reader.consume_in_thread(std::move(cfc));
             });
         });
-        return consumer(downgrade_to_v1(make_sstable_reader()));
+        return consumer(make_sstable_reader());
     }
 
-    virtual reader_consumer make_interposer_consumer(reader_consumer end_consumer) {
-        auto consumer = _table_s.get_compaction_strategy().make_interposer_consumer(_ms_metadata, [end_consumer = std::move(end_consumer)] (flat_mutation_reader_v2 reader) {
-            return end_consumer(downgrade_to_v1(std::move(reader)));
-        });
-        return [consumer = std::move(consumer)] (flat_mutation_reader reader) mutable -> future<> {
-            return consumer(upgrade_to_v2(std::move(reader)));
-        };
+    virtual reader_consumer_v2 make_interposer_consumer(reader_consumer_v2 end_consumer) {
+        return _table_s.get_compaction_strategy().make_interposer_consumer(_ms_metadata, std::move(end_consumer));
     }
 
     virtual bool use_interposer_consumer() const {
@@ -1471,16 +1466,16 @@ public:
         }
     }
 
-    reader_consumer make_interposer_consumer(reader_consumer end_consumer) override {
+    reader_consumer_v2 make_interposer_consumer(reader_consumer_v2 end_consumer) override {
         if (!use_interposer_consumer()) {
             return end_consumer;
         }
-        return [this, end_consumer = std::move(end_consumer)] (flat_mutation_reader reader) mutable -> future<> {
+        return [this, end_consumer = std::move(end_consumer)] (flat_mutation_reader_v2 reader) mutable -> future<> {
             auto cfg = mutation_writer::segregate_config{_io_priority, memory::stats().total_memory() / 10};
-            return mutation_writer::segregate_by_partition(std::move(reader), cfg,
+            return mutation_writer::segregate_by_partition(downgrade_to_v1(std::move(reader)), cfg,
                     [consumer = std::move(end_consumer), this] (flat_mutation_reader rd) {
                 ++_bucket_count;
-                return consumer(std::move(rd));
+                return consumer(upgrade_to_v2(std::move(rd)));
             });
         };
     }
@@ -1554,11 +1549,9 @@ public:
 
     }
 
-    reader_consumer make_interposer_consumer(reader_consumer end_consumer) override {
-        return [this, end_consumer = std::move(end_consumer)] (flat_mutation_reader reader) mutable -> future<> {
-            return mutation_writer::segregate_by_shard(upgrade_to_v2(std::move(reader)), [end_consumer = std::move(end_consumer)] (flat_mutation_reader_v2 rd) {
-                return end_consumer(downgrade_to_v1(std::move(rd)));
-            });
+    reader_consumer_v2 make_interposer_consumer(reader_consumer_v2 end_consumer) override {
+        return [this, end_consumer = std::move(end_consumer)] (flat_mutation_reader_v2 reader) mutable -> future<> {
+            return mutation_writer::segregate_by_shard(std::move(reader), std::move(end_consumer));
         };
     }
 
