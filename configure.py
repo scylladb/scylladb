@@ -1338,7 +1338,8 @@ def clang_inline_threshold():
         return args.clang_inline_threshold
     elif platform.machine() == 'aarch64':
         # we see miscompiles with 1200 and above with format("{}", uuid)
-        return 600
+        # also coroutine miscompiles with 600
+        return 300
     else:
         return 2500
 
