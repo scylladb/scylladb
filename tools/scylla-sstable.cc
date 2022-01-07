@@ -1094,7 +1094,7 @@ void sstable_consumer_operation(schema_ptr schema, reader_permit permit, const s
 }
 
 const std::vector<operation> operations{
-    {"dump", "Dump content of sstable(s).", sstable_consumer_operation<dumping_consumer>},
+    {"dump-data", "Dump content of sstable(s).", sstable_consumer_operation<dumping_consumer>},
     {"dump-index", "Dump content of sstable index(es).", dump_index_operation},
     {"dump-compression-info", "Dump content of sstable compression info(s).", dump_compression_info_operation},
     {"dump-summary", "Dump content of sstable summary(es).", dump_summary_operation},
@@ -1152,10 +1152,10 @@ The supported operations are:
 Examples:
 
 # dump the content of the sstable
-$ scylla sstable dump /path/to/md-123456-big-Data.db
+$ scylla sstable dump-data /path/to/md-123456-big-Data.db
 
 # dump the content of the two sstable(s) as a unified stream
-$ scylla sstable dump --merge /path/to/md-123456-big-Data.db /path/to/md-123457-big-Data.db
+$ scylla sstable dump-data --merge /path/to/md-123456-big-Data.db /path/to/md-123457-big-Data.db
 
 # generate a joint histogram for the specified partition
 $ scylla sstable writetime-histogram --partition={{myhexpartitionkey}} /path/to/md-123456-big-Data.db
