@@ -50,7 +50,7 @@
 #include "db/schema_tables.hh"
 #include "tracing/trace_keyspace_helper.hh"
 #include "db/system_distributed_keyspace.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "cdc/log.hh"
 #include "utils/overloaded_functor.hh"
 #include <seastar/core/coroutine.hh>
@@ -105,13 +105,13 @@ future<> service::client_state::has_all_keyspaces_access(
     co_return co_await ensure_has_permission({p, r});
 }
 
-future<> service::client_state::has_keyspace_access(const database& db, const sstring& ks,
+future<> service::client_state::has_keyspace_access(const replica::database& db, const sstring& ks,
                 auth::permission p) const {
     auth::resource r = auth::make_data_resource(ks);
     co_return co_await has_access(db, ks, {p, r});
 }
 
-future<> service::client_state::has_column_family_access(const database& db, const sstring& ks,
+future<> service::client_state::has_column_family_access(const replica::database& db, const sstring& ks,
                 const sstring& cf, auth::permission p, auth::command_desc::type t) const {
     // NOTICE: callers of this function tend to assume that this error will be thrown
     // synchronously and will be intercepted in a try-catch block. Thus, this function can only
@@ -123,12 +123,12 @@ future<> service::client_state::has_column_family_access(const database& db, con
     });
 }
 
-future<> service::client_state::has_schema_access(const database& db, const schema& s, auth::permission p) const {
+future<> service::client_state::has_schema_access(const replica::database& db, const schema& s, auth::permission p) const {
     auth::resource r = auth::make_data_resource(s.ks_name(), s.cf_name());
     co_return co_await has_access(db, s.ks_name(), {p, r});
 }
 
-future<> service::client_state::has_access(const database& db, const sstring& ks, auth::command_desc cmd) const {
+future<> service::client_state::has_access(const replica::database& db, const sstring& ks, auth::command_desc cmd) const {
     if (ks.empty()) {
         return make_exception_future<>(exceptions::invalid_request_exception("You have not set a keyspace for this session"));
     }
@@ -246,7 +246,7 @@ future<> service::client_state::ensure_has_permission(auth::command_desc cmd) co
     });
 }
 
-void service::client_state::set_keyspace(database& db, std::string_view keyspace) {
+void service::client_state::set_keyspace(replica::database& db, std::string_view keyspace) {
     // Skip keyspace validation for non-authenticated users. Apparently, some client libraries
     // call set_keyspace() before calling login(), and we have to handle that.
     if (_user && !db.has_keyspace(keyspace)) {

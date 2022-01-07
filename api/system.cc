@@ -25,7 +25,7 @@
 #include <seastar/core/reactor.hh>
 #include <seastar/http/exception.hh>
 #include "log.hh"
-#include "database.hh"
+#include "replica/database.hh"
 
 extern logging::logger apilog;
 
@@ -76,7 +76,7 @@ void set_system(http_context& ctx, routes& r) {
 
     hs::drop_sstable_caches.set(r, [&ctx](std::unique_ptr<request> req) {
         apilog.info("Dropping sstable caches");
-        return ctx.db.invoke_on_all([] (database& db) {
+        return ctx.db.invoke_on_all([] (replica::database& db) {
             return db.drop_caches();
         }).then([] {
             apilog.info("Caches dropped");

@@ -34,7 +34,7 @@
 #include "cdc/change_visitor.hh"
 #include "cdc/metadata.hh"
 #include "bytes.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "db/schema_tables.hh"
 #include "partition_slice_builder.hh"
 #include "schema.hh"
@@ -254,7 +254,7 @@ public:
     future<> append_mutations(Iter i, Iter e, schema_ptr s, lowres_clock::time_point, std::vector<mutation>&);
 
 private:
-    static void check_for_attempt_to_create_nested_cdc_log(database& db, const schema& schema) {
+    static void check_for_attempt_to_create_nested_cdc_log(replica::database& db, const schema& schema) {
         const auto& cf_name = schema.cf_name();
         const auto cf_name_view = std::string_view(cf_name.data(), cf_name.size());
         if (is_log_for_some_table(db, schema.ks_name(), cf_name_view)) {
@@ -263,7 +263,7 @@ private:
         }
     }
 
-    static void check_that_cdc_log_table_does_not_exist(database& db, const schema& schema, const sstring& logname) {
+    static void check_that_cdc_log_table_does_not_exist(replica::database& db, const schema& schema, const sstring& logname) {
         if (db.has_schema(schema.ks_name(), logname)) {
             throw exceptions::invalid_request_exception(format("Cannot create CDC log table for table {}.{} because a table of name {}.{} already exists",
                     schema.ks_name(), schema.cf_name(),
@@ -428,7 +428,7 @@ bool is_cdc_metacolumn_name(const sstring& name) {
     return name.compare(0, cdc_meta_column_prefix.size(), cdc_meta_column_prefix) == 0;
 }
 
-bool is_log_for_some_table(const database& db, const sstring& ks_name, const std::string_view& table_name) {
+bool is_log_for_some_table(const replica::database& db, const sstring& ks_name, const std::string_view& table_name) {
     auto base_schema = get_base_table(db, ks_name, table_name);
     if (!base_schema) {
         return false;
@@ -436,11 +436,11 @@ bool is_log_for_some_table(const database& db, const sstring& ks_name, const std
     return base_schema->cdc_options().enabled();
 }
 
-schema_ptr get_base_table(const database& db, const schema& s) {
+schema_ptr get_base_table(const replica::database& db, const schema& s) {
     return get_base_table(db, s.ks_name(), s.cf_name());
 }
 
-schema_ptr get_base_table(const database& db, sstring_view ks_name,std::string_view table_name) {
+schema_ptr get_base_table(const replica::database& db, sstring_view ks_name,std::string_view table_name) {
     if (!is_log_name(table_name)) {
         return nullptr;
     }

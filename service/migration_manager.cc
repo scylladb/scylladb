@@ -53,7 +53,7 @@
 #include "gms/gossiper.hh"
 #include "view_info.hh"
 #include "schema_builder.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "db/schema_tables.hh"
 #include "types/user.hh"
 #include "db/schema_tables.hh"
@@ -257,7 +257,7 @@ future<> migration_manager::maybe_schedule_schema_pull(const utils::UUID& their_
         return make_ready_future<>();
     }
 
-    if (db.get_version() == database::empty_version || runtime::get_uptime() < migration_delay) {
+    if (db.get_version() == replica::database::empty_version || runtime::get_uptime() < migration_delay) {
         // If we think we may be bootstrapping or have recently started, submit MigrationTask immediately
         mlogger.debug("Submitting migration task for {}", endpoint);
         return submit_migration_task(endpoint);
@@ -354,7 +354,7 @@ future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr 
             mutations.emplace_back(cm.to_mutation(
                     tbl.schema()));
         }
-    } catch (no_such_column_family& e) {
+    } catch (replica::no_such_column_family& e) {
         mlogger.error("Error while applying schema mutations from {}: {}", src, e);
         return make_exception_future<>(std::make_exception_ptr<std::runtime_error>(
                     std::runtime_error(fmt::format("Error while applying schema mutations: {}", e))));
@@ -702,7 +702,7 @@ future<std::vector<mutation>> migration_manager::prepare_new_column_family_annou
         }).then([this, ksm](std::vector<mutation> mutations) {
             return include_keyspace(*ksm, std::move(mutations));
         });
-    } catch (const no_such_keyspace& e) {
+    } catch (const replica::no_such_keyspace& e) {
         throw exceptions::configuration_exception(format("Cannot add table '{}' to non existing keyspace '{}'.", cfm->cf_name(), cfm->ks_name()));
     }
 }
@@ -732,7 +732,7 @@ future<std::vector<mutation>> migration_manager::prepare_column_family_update_an
         }
         get_notifier().before_update_column_family(*cfm, *old_schema, mutations, ts);
         co_return co_await include_keyspace(*keyspace, std::move(mutations));
-    } catch (const no_such_column_family& e) {
+    } catch (const replica::no_such_column_family& e) {
         co_return coroutine::make_exception(exceptions::configuration_exception(format("Cannot update non existing table '{}' in keyspace '{}'.",
                                                          cfm->cf_name(), cfm->ks_name())));
     }
@@ -885,7 +885,7 @@ future<std::vector<mutation>> migration_manager::prepare_column_family_drop_anno
             get_notifier().before_drop_column_family(*schema, mutations, ts);
         });
         co_return co_await include_keyspace(*keyspace, std::move(mutations));
-    } catch (const no_such_column_family& e) {
+    } catch (const replica::no_such_column_family& e) {
         co_return coroutine::make_exception(exceptions::configuration_exception(format("Cannot drop non existing table '{}' in keyspace '{}'.", cf_name, ks_name)));
     }
 }
@@ -918,7 +918,7 @@ future<std::vector<mutation>> migration_manager::prepare_new_view_announcement(v
         mlogger.info("Create new view: {}", view);
         auto mutations = db::schema_tables::make_create_view_mutations(keyspace, std::move(view), api::new_timestamp());
         co_return co_await include_keyspace(*keyspace, std::move(mutations));
-    } catch (const no_such_keyspace& e) {
+    } catch (const replica::no_such_keyspace& e) {
         co_return coroutine::make_exception(exceptions::configuration_exception(format("Cannot add view '{}' to non existing keyspace '{}'.", view->cf_name(), view->ks_name())));
     }
 }
@@ -964,7 +964,7 @@ future<std::vector<mutation>> migration_manager::prepare_view_drop_announcement(
         mlogger.info("Drop view '{}.{}'", view->ks_name(), view->cf_name());
         auto mutations = db::schema_tables::make_drop_view_mutations(keyspace, view_ptr(std::move(view)), api::new_timestamp());
         return include_keyspace(*keyspace, std::move(mutations));
-    } catch (const no_such_column_family& e) {
+    } catch (const replica::no_such_column_family& e) {
         throw exceptions::configuration_exception(format("Cannot drop non existing materialized view '{}' in keyspace '{}'.",
                                                          cf_name, ks_name));
     }
@@ -1205,7 +1205,7 @@ future<schema_ptr> migration_manager::get_schema_for_write(table_schema_version 
     });
 }
 
-future<> migration_manager::sync_schema(const database& db, const std::vector<gms::inet_address>& nodes) {
+future<> migration_manager::sync_schema(const replica::database& db, const std::vector<gms::inet_address>& nodes) {
     using schema_and_hosts = std::unordered_map<utils::UUID, std::vector<gms::inet_address>>;
     return do_with(schema_and_hosts(), db.get_version(), [this, &nodes] (schema_and_hosts& schema_map, utils::UUID& my_version) {
         return parallel_for_each(nodes, [this, &schema_map, &my_version] (const gms::inet_address& node) {

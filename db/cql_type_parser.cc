@@ -41,7 +41,7 @@
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/sliced.hpp>
 
-#include "database.hh"
+#include "replica/database.hh"
 #include "service/storage_proxy.hh"
 #include "cql3/CqlParser.hpp"
 #include "cql3/util.hh"
@@ -71,16 +71,16 @@ data_type db::cql_type_parser::parse(const sstring& keyspace, const sstring& str
     }
 
     const auto& sp = service::get_storage_proxy();
-    const user_types_metadata& user_types =
+    const replica::user_types_metadata& user_types =
             sp.local_is_initialized() ? sp.local().get_db().local().find_keyspace(keyspace).metadata()->user_types()
-                                      : user_types_metadata{};
+                                      : replica::user_types_metadata{};
     auto raw = parse_raw(str);
     return raw->prepare_internal(keyspace, user_types).get_type();
 }
 
 class db::cql_type_parser::raw_builder::impl {
 public:
-    impl(keyspace_metadata &ks)
+    impl(replica::keyspace_metadata &ks)
         : _ks(ks)
     {}
 
@@ -91,7 +91,7 @@ public:
         std::vector<sstring> field_names;
         std::vector<::shared_ptr<cql3::cql3_type::raw>> field_types;
 
-        user_type prepare(const sstring& keyspace, user_types_metadata& user_types) const {
+        user_type prepare(const sstring& keyspace, replica::user_types_metadata& user_types) const {
             std::vector<data_type> fields;
             fields.reserve(field_types.size());
             std::transform(field_types.begin(), field_types.end(), std::back_inserter(fields), [&](auto& r) {
@@ -151,7 +151,7 @@ public:
         // Create a copy of the existing types, so that we don't
         // modify the one in the keyspace. It is up to the caller to
         // do that.
-        user_types_metadata types = _ks.user_types();
+        replica::user_types_metadata types = _ks.user_types();
 
         const auto &ks_name = _ks.name();
         std::vector<user_type> created;

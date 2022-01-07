@@ -20,7 +20,7 @@
  */
 
 #include "memtable.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "frozen_mutation.hh"
 #include "partition_snapshot_reader.hh"
 #include "partition_builder.hh"
@@ -123,7 +123,7 @@ void memtable::memtable_encoding_stats_collector::update(const ::schema& s, cons
     }
 }
 
-memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm, table_stats& table_stats,
+memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm, replica::table_stats& table_stats,
     memtable_list* memtable_list, seastar::scheduling_group compaction_scheduling_group)
         : logalloc::region(dmm.region_group())
         , _dirty_mgr(dmm)
@@ -135,7 +135,7 @@ memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm, table_stats& ta
 }
 
 static thread_local dirty_memory_manager mgr_for_tests;
-static thread_local table_stats stats_for_tests;
+static thread_local replica::table_stats stats_for_tests;
 
 memtable::memtable(schema_ptr schema)
         : memtable(std::move(schema), mgr_for_tests, stats_for_tests)

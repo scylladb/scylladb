@@ -47,7 +47,7 @@
 #include "db/config.hh"
 #include <iostream>
 #include <chrono>
-#include "database.hh"
+#include "replica/database.hh"
 
 namespace gms {
 

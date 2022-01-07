@@ -1005,7 +1005,7 @@ def for_each_table(db=None):
         db = find_db()
     cfs = db['_column_families']
     for (key, value) in unordered_map(cfs):
-        yield value['_p'].reinterpret_cast(gdb.lookup_type('column_family').pointer()).dereference()  # it's a lw_shared_ptr
+        yield value['_p'].reinterpret_cast(lookup_type(['replica::table', 'column_family'])[1].pointer()).dereference()  # it's a lw_shared_ptr
 
 
 def lookup_type(type_names):
@@ -1163,7 +1163,7 @@ class scylla_databases(gdb.Command):
     def invoke(self, arg, from_tty):
         for shard in range(cpus()):
             db = find_db(shard)
-            gdb.write('{:5} (database*){}\n'.format(shard, db))
+            gdb.write('{:5} (replica::database*){}\n'.format(shard, db))
 
 
 class scylla_keyspaces(gdb.Command):
@@ -1175,7 +1175,7 @@ class scylla_keyspaces(gdb.Command):
             db = find_db(shard)
             keyspaces = db['_keyspaces']
             for (key, value) in unordered_map(keyspaces):
-                gdb.write('{:5} {:20} (keyspace*){}\n'.format(shard, str(key), value.address))
+                gdb.write('{:5} {:20} (replica::keyspace*){}\n'.format(shard, str(key), value.address))
 
 
 class scylla_column_families(gdb.Command):
@@ -1187,11 +1187,11 @@ class scylla_column_families(gdb.Command):
             db = find_db(shard)
             cfs = db['_column_families']
             for (key, value) in unordered_map(cfs):
-                value = value['_p'].reinterpret_cast(gdb.lookup_type('column_family').pointer()).dereference()  # it's a lw_shared_ptr
+                value = value['_p'].reinterpret_cast(lookup_type(['replica::table', 'column_family'])[1].pointer()).dereference()  # it's a lw_shared_ptr
                 schema = value['_schema']['_p'].reinterpret_cast(gdb.lookup_type('schema').pointer())
                 name = str(schema['_raw']['_ks_name']) + '/' + str(schema['_raw']['_cf_name'])
                 schema_version = str(schema['_raw']['_version'])
-                gdb.write('{:5} {} v={} {:45} (column_family*){}\n'.format(shard, key, schema_version, name, value.address))
+                gdb.write('{:5} {} v={} {:45} (replica::table*){}\n'.format(shard, key, schema_version, name, value.address))
 
 
 class scylla_task_histogram(gdb.Command):
@@ -1751,20 +1751,21 @@ class scylla_memory(gdb.Command):
             for key, sem in [('user_mem_str', db['_read_concurrency_sem']), ('streaming_mem_str', db['_streaming_concurrency_sem']), ('system_mem_str', db['_system_read_concurrency_sem'])]:
                 mem_stats[key] = 'remaining mem: {:>13} B'.format(int(sem['_resources']['memory']))
 
+        database_typename = lookup_type(['replica::database', 'database'])[1].name
         gdb.write('Replica:\n')
         gdb.write('  Read Concurrency Semaphores:\n'
                 '    user sstable reads:      {user_sst_rd_count:>3}/{user_sst_rd_max_count:>3}, {user_mem_str}, queued: {user_sst_rd_queued}\n'
                 '    streaming sstable reads: {streaming_sst_rd_count:>3}/{streaming_sst_rd_max_count:>3}, {streaming_mem_str}, queued: {streaming_sst_rd_queued}\n'
                 '    system sstable reads:    {system_sst_rd_count:>3}/{system_sst_rd_max_count:>3}, {system_mem_str}, queued: {system_sst_rd_queued}\n'
                 .format(
-                        user_sst_rd_count=int(gdb.parse_and_eval('database::max_count_concurrent_reads')) - int(db['_read_concurrency_sem']['_resources']['count']),
-                        user_sst_rd_max_count=int(gdb.parse_and_eval('database::max_count_concurrent_reads')),
+                        user_sst_rd_count=int(gdb.parse_and_eval(f'{database_typename}::max_count_concurrent_reads')) - int(db['_read_concurrency_sem']['_resources']['count']),
+                        user_sst_rd_max_count=int(gdb.parse_and_eval(f'{database_typename}::max_count_concurrent_reads')),
                         user_sst_rd_queued=int(db['_read_concurrency_sem']['_wait_list']['_size']),
-                        streaming_sst_rd_count=int(gdb.parse_and_eval('database::max_count_streaming_concurrent_reads')) - int(db['_streaming_concurrency_sem']['_resources']['count']),
-                        streaming_sst_rd_max_count=int(gdb.parse_and_eval('database::max_count_streaming_concurrent_reads')),
+                        streaming_sst_rd_count=int(gdb.parse_and_eval(f'{database_typename}::max_count_streaming_concurrent_reads')) - int(db['_streaming_concurrency_sem']['_resources']['count']),
+                        streaming_sst_rd_max_count=int(gdb.parse_and_eval(f'{database_typename}::max_count_streaming_concurrent_reads')),
                         streaming_sst_rd_queued=int(db['_streaming_concurrency_sem']['_wait_list']['_size']),
-                        system_sst_rd_count=int(gdb.parse_and_eval('database::max_count_system_concurrent_reads')) - int(db['_system_read_concurrency_sem']['_resources']['count']),
-                        system_sst_rd_max_count=int(gdb.parse_and_eval('database::max_count_system_concurrent_reads')),
+                        system_sst_rd_count=int(gdb.parse_and_eval(f'{database_typename}::max_count_system_concurrent_reads')) - int(db['_system_read_concurrency_sem']['_resources']['count']),
+                        system_sst_rd_max_count=int(gdb.parse_and_eval(f'{database_typename}::max_count_system_concurrent_reads')),
                         system_sst_rd_queued=int(db['_system_read_concurrency_sem']['_wait_list']['_size']),
                         **mem_stats))
 

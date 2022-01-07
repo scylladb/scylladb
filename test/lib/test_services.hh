@@ -28,7 +28,7 @@
 #include "schema.hh"
 #include "schema_builder.hh"
 #include "row_cache.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "cell_locking.hh"
 #include "compaction/compaction_manager.hh"
 #include "db/large_data_handler.hh"
@@ -38,18 +38,18 @@ extern db::nop_large_data_handler nop_lp_handler;
 extern db::config test_db_config;
 extern gms::feature_service test_feature_service;
 
-column_family::config column_family_test_config(sstables::sstables_manager& sstables_manager, reader_concurrency_semaphore& compaction_semaphore);
+replica::column_family::config column_family_test_config(sstables::sstables_manager& sstables_manager, reader_concurrency_semaphore& compaction_semaphore);
 
 struct column_family_for_tests {
     struct data {
         schema_ptr s;
         reader_concurrency_semaphore semaphore;
         cache_tracker tracker;
-        ::cf_stats cf_stats{0};
-        column_family::config cfg;
+        replica::cf_stats cf_stats{0};
+        replica::column_family::config cfg;
         cell_locker_stats cl_stats;
         compaction_manager cm;
-        lw_shared_ptr<column_family> cf;
+        lw_shared_ptr<replica::column_family> cf;
 
         data();
     };
@@ -61,10 +61,10 @@ struct column_family_for_tests {
 
     schema_ptr schema() { return _data->s; }
 
-    operator lw_shared_ptr<column_family>() { return _data->cf; }
+    operator lw_shared_ptr<replica::column_family>() { return _data->cf; }
 
-    column_family& operator*() { return *_data->cf; }
-    column_family* operator->() { return _data->cf.get(); }
+    replica::column_family& operator*() { return *_data->cf; }
+    replica::column_family* operator->() { return _data->cf.get(); }
 
     future<> stop() {
         return when_all_succeed(_data->cm.stop(), _data->semaphore.stop()).discard_result();

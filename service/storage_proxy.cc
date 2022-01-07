@@ -90,7 +90,7 @@
 #include <seastar/core/execution_stage.hh>
 #include "db/timeout_clock.hh"
 #include "multishard_mutation_query.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "db/consistency_level_validations.hh"
 #include "cdc/log.hh"
 #include "cdc/stats.hh"
@@ -409,7 +409,7 @@ protected:
     }
 
 public:
-    abstract_write_response_handler(shared_ptr<storage_proxy> p, keyspace& ks, db::consistency_level cl, db::write_type type,
+    abstract_write_response_handler(shared_ptr<storage_proxy> p, replica::keyspace& ks, db::consistency_level cl, db::write_type type,
             std::unique_ptr<mutation_holder> mh, inet_address_vector_replica_set targets, tracing::trace_state_ptr trace_state,
             storage_proxy::write_stats& stats, service_permit permit, size_t pending_endpoints = 0, inet_address_vector_topology_change dead_endpoints = {})
             : _id(p->get_next_response_id()), _proxy(std::move(p)), _trace_state(trace_state), _cl(cl), _type(type), _mutation_holder(std::move(mh)), _targets(std::move(targets)),
@@ -659,7 +659,7 @@ class datacenter_write_response_handler : public abstract_write_response_handler
     }
 
 public:
-    datacenter_write_response_handler(shared_ptr<storage_proxy> p, keyspace& ks, db::consistency_level cl, db::write_type type,
+    datacenter_write_response_handler(shared_ptr<storage_proxy> p, replica::keyspace& ks, db::consistency_level cl, db::write_type type,
             std::unique_ptr<mutation_holder> mh, inet_address_vector_replica_set targets,
             const inet_address_vector_topology_change& pending_endpoints, inet_address_vector_topology_change dead_endpoints, tracing::trace_state_ptr tr_state,
             storage_proxy::write_stats& stats, service_permit permit) :
@@ -674,7 +674,7 @@ class write_response_handler : public abstract_write_response_handler {
         return true;
     }
 public:
-    write_response_handler(shared_ptr<storage_proxy> p, keyspace& ks, db::consistency_level cl, db::write_type type,
+    write_response_handler(shared_ptr<storage_proxy> p, replica::keyspace& ks, db::consistency_level cl, db::write_type type,
             std::unique_ptr<mutation_holder> mh, inet_address_vector_replica_set targets,
             const inet_address_vector_topology_change& pending_endpoints, inet_address_vector_topology_change dead_endpoints, tracing::trace_state_ptr tr_state,
             storage_proxy::write_stats& stats, service_permit permit) :
@@ -686,7 +686,7 @@ public:
 
 class view_update_write_response_handler : public write_response_handler, public bi::list_base_hook<bi::link_mode<bi::auto_unlink>> {
 public:
-    view_update_write_response_handler(shared_ptr<storage_proxy> p, keyspace& ks, db::consistency_level cl,
+    view_update_write_response_handler(shared_ptr<storage_proxy> p, replica::keyspace& ks, db::consistency_level cl,
             std::unique_ptr<mutation_holder> mh, inet_address_vector_replica_set targets,
             const inet_address_vector_topology_change& pending_endpoints, inet_address_vector_topology_change dead_endpoints, tracing::trace_state_ptr tr_state,
             storage_proxy::write_stats& stats, service_permit permit):
@@ -766,7 +766,7 @@ class datacenter_sync_write_response_handler : public abstract_write_response_ha
         return false;
     }
 public:
-    datacenter_sync_write_response_handler(shared_ptr<storage_proxy> p, keyspace& ks, db::consistency_level cl, db::write_type type,
+    datacenter_sync_write_response_handler(shared_ptr<storage_proxy> p, replica::keyspace& ks, db::consistency_level cl, db::write_type type,
             std::unique_ptr<mutation_holder> mh, inet_address_vector_replica_set targets, const inet_address_vector_topology_change& pending_endpoints,
             inet_address_vector_topology_change dead_endpoints, tracing::trace_state_ptr tr_state, storage_proxy::write_stats& stats, service_permit permit) :
         abstract_write_response_handler(std::move(p), ks, cl, type, std::move(mh), targets, std::move(tr_state), stats, std::move(permit), 0, dead_endpoints) {
@@ -1450,7 +1450,7 @@ future<> storage_proxy::response_wait(storage_proxy::response_id_type id, clock_
         return _response_handlers.find(id)->second;
 }
 
-storage_proxy::response_id_type storage_proxy::create_write_response_handler(keyspace& ks, db::consistency_level cl, db::write_type type, std::unique_ptr<mutation_holder> m,
+storage_proxy::response_id_type storage_proxy::create_write_response_handler(replica::keyspace& ks, db::consistency_level cl, db::write_type type, std::unique_ptr<mutation_holder> m,
                              inet_address_vector_replica_set targets, const inet_address_vector_topology_change& pending_endpoints, inet_address_vector_topology_change dead_endpoints, tracing::trace_state_ptr tr_state,
                              storage_proxy::write_stats& stats, service_permit permit)
 {
@@ -1815,7 +1815,7 @@ inline std::ostream& operator<<(std::ostream& os, const hint_wrapper& h) {
 using namespace std::literals::chrono_literals;
 
 storage_proxy::~storage_proxy() {}
-storage_proxy::storage_proxy(distributed<database>& db, gms::gossiper& gossiper, storage_proxy::config cfg, db::view::node_update_backlog& max_view_update_backlog,
+storage_proxy::storage_proxy(distributed<replica::database>& db, gms::gossiper& gossiper, storage_proxy::config cfg, db::view::node_update_backlog& max_view_update_backlog,
         scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, locator::effective_replication_map_factory& erm_factory, netw::messaging_service& ms)
     : _db(db)
     , _gossiper(gossiper)
@@ -1892,7 +1892,7 @@ storage_proxy::mutate_locally(const mutation& m, tracing::trace_state_ptr tr_sta
              m = freeze(m),
              gtr = tracing::global_trace_state_ptr(std::move(tr_state)),
              timeout,
-             sync] (database& db) mutable -> future<> {
+             sync] (replica::database& db) mutable -> future<> {
         return db.apply(s, m, gtr.get(), sync, timeout);
     });
 }
@@ -1903,7 +1903,7 @@ storage_proxy::mutate_locally(const schema_ptr& s, const frozen_mutation& m, tra
     auto shard = _db.local().shard_of(m);
     get_stats().replica_cross_shard_ops += shard != this_shard_id();
     return _db.invoke_on(shard, {smp_grp, timeout},
-            [&m, gs = global_schema_ptr(s), gtr = tracing::global_trace_state_ptr(std::move(tr_state)), timeout, sync] (database& db) mutable -> future<> {
+            [&m, gs = global_schema_ptr(s), gtr = tracing::global_trace_state_ptr(std::move(tr_state)), timeout, sync] (replica::database& db) mutable -> future<> {
         return db.apply(gs, m, gtr.get(), sync, timeout);
     });
 }
@@ -1925,7 +1925,7 @@ future<>
 storage_proxy::mutate_hint(const schema_ptr& s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, clock_type::time_point timeout) {
     auto shard = _db.local().shard_of(m);
     get_stats().replica_cross_shard_ops += shard != this_shard_id();
-    return _db.invoke_on(shard, {_hints_write_smp_service_group, timeout}, [&m, gs = global_schema_ptr(s), tr_state = std::move(tr_state), timeout] (database& db) mutable -> future<> {
+    return _db.invoke_on(shard, {_hints_write_smp_service_group, timeout}, [&m, gs = global_schema_ptr(s), tr_state = std::move(tr_state), timeout] (replica::database& db) mutable -> future<> {
         return db.apply_hint(gs, m, std::move(tr_state), timeout);
     });
 }
@@ -1947,7 +1947,7 @@ storage_proxy::mutate_counter_on_leader_and_replicate(const schema_ptr& s, froze
     auto shard = _db.local().shard_of(fm);
     bool local = shard == this_shard_id();
     get_stats().replica_cross_shard_ops += !local;
-    return _db.invoke_on(shard, {_write_smp_service_group, timeout}, [gs = global_schema_ptr(s), fm = std::move(fm), cl, timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state)), permit = std::move(permit), local] (database& db) {
+    return _db.invoke_on(shard, {_write_smp_service_group, timeout}, [gs = global_schema_ptr(s), fm = std::move(fm), cl, timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state)), permit = std::move(permit), local] (replica::database& db) {
         auto trace_state = gt.get();
         auto p = local ? std::move(permit) : /* FIXME: either obtain a real permit on this shard or hold original one across shard */ empty_service_permit();
         return db.apply_counter_update(gs, fm, timeout, trace_state).then([cl, timeout, trace_state, p = std::move(p)] (mutation m) mutable {
@@ -1960,7 +1960,7 @@ storage_proxy::response_id_type
 storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::token& token, std::unique_ptr<mutation_holder> mh,
         db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit) {
     auto keyspace_name = s->ks_name();
-    keyspace& ks = _db.local().find_keyspace(keyspace_name);
+    replica::keyspace& ks = _db.local().find_keyspace(keyspace_name);
     auto erm = ks.get_effective_replication_map();
     inet_address_vector_replica_set natural_endpoints = erm->get_natural_endpoints_without_node_being_replaced(token);
     inet_address_vector_topology_change pending_endpoints = erm->get_token_metadata_ptr()->pending_endpoints_for(token, keyspace_name);
@@ -2044,7 +2044,7 @@ storage_proxy::create_write_response_handler(const std::unordered_map<gms::inet_
     tracing::trace(tr_state, "Creating write handler for read repair token: {} endpoint: {}", mh->token(), endpoints);
 
     auto keyspace_name = mh->schema()->ks_name();
-    keyspace& ks = _db.local().find_keyspace(keyspace_name);
+    replica::keyspace& ks = _db.local().find_keyspace(keyspace_name);
 
     return create_write_response_handler(ks, cl, type, std::move(mh), std::move(endpoints), inet_address_vector_topology_change(), inet_address_vector_topology_change(), std::move(tr_state), get_stats(), std::move(permit));
 }
@@ -2067,7 +2067,7 @@ storage_proxy::create_write_response_handler(const std::tuple<lw_shared_ptr<paxo
     tracing::trace(tr_state, "Creating write handler for paxos repair token: {} endpoint: {}", token, endpoints);
 
     auto keyspace_name = s->ks_name();
-    keyspace& ks = _db.local().find_keyspace(keyspace_name);
+    replica::keyspace& ks = _db.local().find_keyspace(keyspace_name);
 
     return create_write_response_handler(ks, cl, db::write_type::CAS, std::make_unique<cas_mutation>(std::move(commit), s, nullptr), std::move(endpoints),
                     inet_address_vector_topology_change(), inet_address_vector_topology_change(), std::move(tr_state), get_stats(), std::move(permit));
@@ -2165,7 +2165,7 @@ future<> storage_proxy::mutate_end(future<> mutate_result, utils::latency_counte
         mutate_result.get();
         tracing::trace(trace_state, "Mutation successfully completed");
         return make_ready_future<>();
-    } catch (no_such_keyspace& ex) {
+    } catch (replica::no_such_keyspace& ex) {
         tracing::trace(trace_state, "Mutation failed: write to non existing keyspace: {}", ex.what());
         slogger.trace("Write to non existing keyspace: {}", ex.what());
         return make_exception_future<>(std::current_exception());
@@ -2285,7 +2285,7 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
 
 storage_proxy::paxos_participants
 storage_proxy::get_paxos_participants(const sstring& ks_name, const dht::token &token, db::consistency_level cl_for_paxos) {
-    keyspace& ks = _db.local().find_keyspace(ks_name);
+    replica::keyspace& ks = _db.local().find_keyspace(ks_name);
     auto erm = ks.get_effective_replication_map();
     inet_address_vector_replica_set natural_endpoints = erm->get_natural_endpoints_without_node_being_replaced(token);
     inet_address_vector_topology_change pending_endpoints = erm->get_token_metadata_ptr()->pending_endpoints_for(token, ks_name);
@@ -3507,7 +3507,7 @@ protected:
     inet_address_vector_replica_set _used_targets;
     promise<foreign_ptr<lw_shared_ptr<query::result>>> _result_promise;
     tracing::trace_state_ptr _trace_state;
-    lw_shared_ptr<column_family> _cf;
+    lw_shared_ptr<replica::column_family> _cf;
     bool _foreground = true;
     service_permit _permit; // holds admission permit until operation completes
 
@@ -3518,7 +3518,7 @@ private:
         _foreground = false;
     }
 public:
-    abstract_read_executor(schema_ptr s, lw_shared_ptr<column_family> cf, shared_ptr<storage_proxy> proxy, lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, size_t block_for,
+    abstract_read_executor(schema_ptr s, lw_shared_ptr<replica::column_family> cf, shared_ptr<storage_proxy> proxy, lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, size_t block_for,
             inet_address_vector_replica_set targets, tracing::trace_state_ptr trace_state, service_permit permit) :
                            _schema(std::move(s)), _proxy(std::move(proxy)), _cmd(std::move(cmd)), _partition_range(std::move(pr)), _cl(cl), _block_for(block_for), _targets(std::move(targets)), _trace_state(std::move(trace_state)),
                            _cf(std::move(cf)), _permit(std::move(permit)) {
@@ -3820,7 +3820,7 @@ public:
         return _result_promise.get_future();
     }
 
-    lw_shared_ptr<column_family>& get_cf() {
+    lw_shared_ptr<replica::column_family>& get_cf() {
         return _cf;
     }
 
@@ -3844,7 +3844,7 @@ private:
 
 class never_speculating_read_executor : public abstract_read_executor {
 public:
-    never_speculating_read_executor(schema_ptr s, lw_shared_ptr<column_family> cf, shared_ptr<storage_proxy> proxy, lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, inet_address_vector_replica_set targets, tracing::trace_state_ptr trace_state,
+    never_speculating_read_executor(schema_ptr s, lw_shared_ptr<replica::column_family> cf, shared_ptr<storage_proxy> proxy, lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, inet_address_vector_replica_set targets, tracing::trace_state_ptr trace_state,
                                     service_permit permit) :
                                         abstract_read_executor(std::move(s), std::move(cf), std::move(proxy), std::move(cmd), std::move(pr), cl, 0, std::move(targets), std::move(trace_state), std::move(permit)) {
         _block_for = _targets.size();
@@ -3943,7 +3943,7 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
         bool& is_read_non_local,
         service_permit permit) {
     const dht::token& token = pr.start()->value().token();
-    keyspace& ks = _db.local().find_keyspace(schema->ks_name());
+    replica::keyspace& ks = _db.local().find_keyspace(schema->ks_name());
     speculative_retry::type retry_type = schema->speculative_retry().get_type();
     gms::inet_address extra_replica;
 
@@ -4023,7 +4023,7 @@ storage_proxy::query_result_local(schema_ptr s, lw_shared_ptr<query::read_comman
     if (pr.is_singular()) {
         unsigned shard = dht::shard_of(*s, pr.start()->value().token());
         get_stats().replica_cross_shard_ops += shard != this_shard_id();
-        return _db.invoke_on(shard, _read_smp_service_group, [gs = global_schema_ptr(s), prv = dht::partition_range_vector({pr}) /* FIXME: pr is copied */, cmd, opts, timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state))] (database& db) mutable {
+        return _db.invoke_on(shard, _read_smp_service_group, [gs = global_schema_ptr(s), prv = dht::partition_range_vector({pr}) /* FIXME: pr is copied */, cmd, opts, timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state))] (replica::database& db) mutable {
             auto trace_state = gt.get();
             tracing::trace(trace_state, "Start querying singular range {}", prv.front());
             return db.query(gs, *cmd, opts, prv, trace_state, timeout).then([trace_state](std::tuple<lw_shared_ptr<query::result>, cache_temperature>&& f_ht) {
@@ -4150,7 +4150,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
         replicas_per_token_range preferred_replicas,
         service_permit permit) {
     schema_ptr schema = local_schema_registry().get(cmd->schema_version);
-    keyspace& ks = _db.local().find_keyspace(schema->ks_name());
+    replica::keyspace& ks = _db.local().find_keyspace(schema->ks_name());
     std::vector<::shared_ptr<abstract_read_executor>> exec;
     auto p = shared_from_this();
     auto& cf= _db.local().find_column_family(schema);
@@ -4247,7 +4247,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                 // check that merged set hit rate is not to low
                 auto find_min = [pcf] (const inet_address_vector_replica_set& range) {
                     struct {
-                        column_family* cf = nullptr;
+                        replica::column_family* cf = nullptr;
                         float operator()(const gms::inet_address& ep) const {
                             return float(cf->get_hit_rate(ep).rate);
                         }
@@ -4343,7 +4343,7 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
         db::consistency_level cl,
         storage_proxy::coordinator_query_options query_options) {
     schema_ptr schema = local_schema_registry().get(cmd->schema_version);
-    keyspace& ks = _db.local().find_keyspace(schema->ks_name());
+    replica::keyspace& ks = _db.local().find_keyspace(schema->ks_name());
 
     // when dealing with LocalStrategy keyspaces, we can skip the range splitting and merging (which can be
     // expensive in clusters with vnodes)
@@ -4465,7 +4465,7 @@ storage_proxy::do_query(schema_ptr s,
                         p->get_stats().estimated_read.add(lc.latency());
                     }
                 });
-            } catch (const no_such_column_family&) {
+            } catch (const replica::no_such_column_family&) {
                 get_stats().read.mark(lc.stop().latency());
                 return make_empty();
             }
@@ -4749,7 +4749,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
     co_return condition_met;
 }
 
-inet_address_vector_replica_set storage_proxy::get_live_endpoints(keyspace& ks, const dht::token& token) const {
+inet_address_vector_replica_set storage_proxy::get_live_endpoints(replica::keyspace& ks, const dht::token& token) const {
     auto erm = ks.get_effective_replication_map();
     inet_address_vector_replica_set eps = erm->get_natural_endpoints_without_node_being_replaced(token);
     auto itend = boost::range::remove_if(eps, std::not1(std::bind1st(std::mem_fn(&gms::gossiper::is_alive), &_gossiper)));
@@ -4766,7 +4766,7 @@ void storage_proxy::sort_endpoints_by_proximity(inet_address_vector_replica_set&
     }
 }
 
-inet_address_vector_replica_set storage_proxy::get_live_sorted_endpoints(keyspace& ks, const dht::token& token) const {
+inet_address_vector_replica_set storage_proxy::get_live_sorted_endpoints(replica::keyspace& ks, const dht::token& token) const {
     auto eps = get_live_endpoints(ks, token);
     sort_endpoints_by_proximity(eps);
     return eps;
@@ -5329,7 +5329,7 @@ storage_proxy::query_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_c
     if (pr.is_singular()) {
         unsigned shard = dht::shard_of(*s, pr.start()->value().token());
         get_stats().replica_cross_shard_ops += shard != this_shard_id();
-        return _db.invoke_on(shard, _read_smp_service_group, [cmd, &pr, gs=global_schema_ptr(s), timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state))] (database& db) mutable {
+        return _db.invoke_on(shard, _read_smp_service_group, [cmd, &pr, gs=global_schema_ptr(s), timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state))] (replica::database& db) mutable {
             return db.query_mutations(gs, *cmd, pr, gt, timeout).then([] (std::tuple<reconcilable_result, cache_temperature> result_ht) {
                 auto&& [result, ht] = result_ht;
                 return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>(rpc::tuple(make_foreign(make_lw_shared<reconcilable_result>(std::move(result))), ht));

@@ -28,7 +28,7 @@
 
 #include "utils/base64.hh"
 #include "log.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "db/config.hh"
 
 #include "cdc/log.hh"
@@ -169,7 +169,7 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
     // between queries may or may not miss info. But that should be rare,
     // and we can probably expect this to be a single call.
     if (streams_start) {
-        i = std::find_if(i, e, [&](const std::pair<utils::UUID, lw_shared_ptr<column_family>>& p) {
+        i = std::find_if(i, e, [&](const std::pair<utils::UUID, lw_shared_ptr<replica::column_family>>& p) {
             return p.first == streams_start 
                 && cdc::get_base_table(db, *p.second->schema())
                 && is_alternator_keyspace(p.second->schema()->ks_name())
@@ -424,7 +424,7 @@ using namespace std::string_literals;
  * This will be a partial overlap, but it is the best we can do.
  */
 
-static std::chrono::seconds confidence_interval(const database& db) {
+static std::chrono::seconds confidence_interval(const replica::database& db) {
     return std::chrono::seconds(db.get_config().alternator_streams_time_window_s());
 }
 

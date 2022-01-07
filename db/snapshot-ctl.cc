@@ -40,7 +40,7 @@
 
 #include <boost/range/adaptors.hpp>
 #include "db/snapshot-ctl.hh"
-#include "database.hh"
+#include "replica/database.hh"
 
 namespace db {
 
@@ -91,7 +91,7 @@ future<> snapshot_ctl::take_snapshot(sstring tag, std::vector<sstring> keyspace_
         return parallel_for_each(keyspace_names, [tag, this] (auto& ks_name) {
             return check_snapshot_not_exist(ks_name, tag);
         }).then([this, tag, keyspace_names, sf] {
-            return _db.invoke_on_all([tag = std::move(tag), keyspace_names, sf] (database& db) {
+            return _db.invoke_on_all([tag = std::move(tag), keyspace_names, sf] (replica::database& db) {
                 return parallel_for_each(keyspace_names, [&db, tag = std::move(tag), sf] (auto& ks_name) {
                     auto& ks = db.find_keyspace(ks_name);
                     return parallel_for_each(ks.metadata()->cf_meta_data(), [&db, tag = std::move(tag), sf] (auto& pair) {
@@ -122,7 +122,7 @@ future<> snapshot_ctl::take_column_family_snapshot(sstring ks_name, std::vector<
                     if (table_name.find(".") != sstring::npos) {
                         throw std::invalid_argument("Cannot take a snapshot of a secondary index by itself. Run snapshot on the table that owns the index.");
                     }
-                    return _db.invoke_on_all([ks_name, table_name, tag, sf] (database &db) {
+                    return _db.invoke_on_all([ks_name, table_name, tag, sf] (replica::database &db) {
                         auto& cf = db.find_column_family(ks_name, table_name);
                         return cf.snapshot(db, tag, bool(sf));
                     });
@@ -144,7 +144,7 @@ future<> snapshot_ctl::clear_snapshot(sstring tag, std::vector<sstring> keyspace
 
 future<std::unordered_map<sstring, std::vector<snapshot_ctl::snapshot_details>>>
 snapshot_ctl::get_snapshot_details() {
-    using cf_snapshot_map = std::unordered_map<utils::UUID, column_family::snapshot_details>;
+    using cf_snapshot_map = std::unordered_map<utils::UUID, replica::column_family::snapshot_details>;
     using snapshot_map = std::unordered_map<sstring, cf_snapshot_map>;
 
     class snapshot_reducer {
@@ -175,7 +175,7 @@ snapshot_ctl::get_snapshot_details() {
     };
 
     return run_snapshot_list_operation([this] {
-        return _db.map_reduce(snapshot_reducer(), [] (database& db) {
+        return _db.map_reduce(snapshot_reducer(), [] (replica::database& db) {
             auto local_snapshots = make_lw_shared<snapshot_map>();
             return parallel_for_each(db.get_column_families(), [local_snapshots] (auto& cf_pair) {
                 return cf_pair.second->get_snapshot_details().then([uuid = cf_pair.first, local_snapshots] (auto map) {
@@ -207,7 +207,7 @@ snapshot_ctl::get_snapshot_details() {
 
 future<int64_t> snapshot_ctl::true_snapshots_size() {
     return run_snapshot_list_operation([this] {
-        return _db.map_reduce(adder<int64_t>(), [] (database& db) {
+        return _db.map_reduce(adder<int64_t>(), [] (replica::database& db) {
             return do_with(int64_t(0), [&db] (auto& local_total) {
                 return parallel_for_each(db.get_column_families(), [&local_total] (auto& cf_pair) {
                     return cf_pair.second->get_snapshot_details().then([&local_total] (auto map) {

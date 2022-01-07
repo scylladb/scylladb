@@ -49,7 +49,7 @@ namespace streaming {
 
 extern logging::logger sslog;
 
-stream_manager::stream_manager(sharded<database>& db,
+stream_manager::stream_manager(sharded<replica::database>& db,
             sharded<db::system_distributed_keyspace>& sys_dist_ks,
             sharded<db::view::view_update_generator>& view_update_generator,
             sharded<netw::messaging_service>& ms,

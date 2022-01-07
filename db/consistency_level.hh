@@ -47,7 +47,7 @@
 #include "gms/inet_address.hh"
 #include "inet_address_vectors.hh"
 #include "log.hh"
-#include "database_fwd.hh"
+#include "replica/database_fwd.hh"
 
 #include <iosfwd>
 #include <vector>
@@ -57,15 +57,15 @@ namespace db {
 
 extern logging::logger cl_logger;
 
-size_t quorum_for(const keyspace& ks);
+size_t quorum_for(const replica::keyspace& ks);
 
-size_t local_quorum_for(const keyspace& ks, const sstring& dc);
+size_t local_quorum_for(const replica::keyspace& ks, const sstring& dc);
 
-size_t block_for_local_serial(keyspace& ks);
+size_t block_for_local_serial(replica::keyspace& ks);
 
-size_t block_for_each_quorum(keyspace& ks);
+size_t block_for_each_quorum(replica::keyspace& ks);
 
-size_t block_for(keyspace& ks, consistency_level cl);
+size_t block_for(replica::keyspace& ks, consistency_level cl);
 
 bool is_datacenter_local(consistency_level l);
 
@@ -78,18 +78,18 @@ inline size_t count_local_endpoints(const Range& live_endpoints) {
 
 inet_address_vector_replica_set
 filter_for_query(consistency_level cl,
-                 keyspace& ks,
+                 replica::keyspace& ks,
                  inet_address_vector_replica_set live_endpoints,
                  const inet_address_vector_replica_set& preferred_endpoints,
                  read_repair_decision read_repair,
                  gms::inet_address* extra,
-                 column_family* cf);
+                 replica::column_family* cf);
 
 inet_address_vector_replica_set filter_for_query(consistency_level cl,
-        keyspace& ks,
+        replica::keyspace& ks,
         inet_address_vector_replica_set& live_endpoints,
         const inet_address_vector_replica_set& preferred_endpoints,
-        column_family* cf);
+        replica::column_family* cf);
 
 struct dc_node_count {
     size_t live = 0;
@@ -98,17 +98,17 @@ struct dc_node_count {
 
 bool
 is_sufficient_live_nodes(consistency_level cl,
-                         keyspace& ks,
+                         replica::keyspace& ks,
                          const inet_address_vector_replica_set& live_endpoints);
 
 template<typename Range, typename PendingRange = std::array<gms::inet_address, 0>>
 void assure_sufficient_live_nodes(
         consistency_level cl,
-        keyspace& ks,
+        replica::keyspace& ks,
         const Range& live_endpoints,
         const PendingRange& pending_endpoints = std::array<gms::inet_address, 0>());
 
-extern template void assure_sufficient_live_nodes(consistency_level, keyspace&, const inet_address_vector_replica_set&, const std::array<gms::inet_address, 0>&);
-extern template void assure_sufficient_live_nodes(db::consistency_level, keyspace&, const inet_address_vector_replica_set&, const utils::small_vector<gms::inet_address, 1ul>&);
+extern template void assure_sufficient_live_nodes(consistency_level, replica::keyspace&, const inet_address_vector_replica_set&, const std::array<gms::inet_address, 0>&);
+extern template void assure_sufficient_live_nodes(db::consistency_level, replica::keyspace&, const inet_address_vector_replica_set&, const utils::small_vector<gms::inet_address, 1ul>&);
 
 }

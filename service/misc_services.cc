@@ -46,7 +46,7 @@
 #include "gms/application_state.hh"
 #include "service/storage_proxy.hh"
 #include "service/view_update_backlog_broker.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "locator/abstract_replication_strategy.hh"
 
 #include <cstdlib>
@@ -57,7 +57,7 @@ constexpr std::chrono::milliseconds load_broadcaster::BROADCAST_INTERVAL;
 
 logging::logger llogger("load_broadcaster");
 
-future<> load_meter::init(distributed<database>& db, gms::gossiper& gms) {
+future<> load_meter::init(distributed<replica::database>& db, gms::gossiper& gms) {
     _lb = make_shared<load_broadcaster>(db, gms);
     _lb->start_broadcasting();
     return make_ready_future<>();
@@ -111,7 +111,7 @@ void load_broadcaster::start_broadcasting() {
 
     _timer.set_callback([this] {
         llogger.debug("Disseminating load info ...");
-        _done = _db.map_reduce0([](database& db) {
+        _done = _db.map_reduce0([](replica::database& db) {
             int64_t res = 0;
             for (auto i : db.get_column_families()) {
                 res += i.second->get_stats().live_disk_space_used;
@@ -140,7 +140,7 @@ future<> load_broadcaster::stop_broadcasting() {
 
 
 // cache_hitrate_calculator implementation
-cache_hitrate_calculator::cache_hitrate_calculator(seastar::sharded<database>& db, gms::gossiper& g)
+cache_hitrate_calculator::cache_hitrate_calculator(seastar::sharded<replica::database>& db, gms::gossiper& g)
         : _db(db), _gossiper(g),
         _timer(std::bind(std::mem_fn(&cache_hitrate_calculator::recalculate_timer), this))
 {}
@@ -167,13 +167,13 @@ void cache_hitrate_calculator::run_on(size_t master, lowres_clock::duration d) {
 }
 
 future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() {
-    auto non_system_filter = [&] (const std::pair<utils::UUID, lw_shared_ptr<column_family>>& cf) {
+    auto non_system_filter = [&] (const std::pair<utils::UUID, lw_shared_ptr<replica::column_family>>& cf) {
         return _db.local().find_keyspace(cf.second->schema()->ks_name()).get_replication_strategy().get_type() != locator::replication_strategy_type::local;
     };
 
-    auto cf_to_cache_hit_stats = [non_system_filter] (database& db) {
+    auto cf_to_cache_hit_stats = [non_system_filter] (replica::database& db) {
         return boost::copy_range<std::unordered_map<utils::UUID, stat>>(db.get_column_families() | boost::adaptors::filtered(non_system_filter) |
-                boost::adaptors::transformed([]  (const std::pair<utils::UUID, lw_shared_ptr<column_family>>& cf) {
+                boost::adaptors::transformed([]  (const std::pair<utils::UUID, lw_shared_ptr<replica::column_family>>& cf) {
             auto& stats = cf.second->get_row_cache().stats();
             return std::make_pair(cf.first, stat{float(stats.reads_with_no_misses.rate().rates[0]), float(stats.reads_with_misses.rate().rates[0])});
         }));
@@ -192,7 +192,7 @@ future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() 
         _slen = 0;
         _rates = std::move(rates);
         // set calculated rates on all shards
-        return _db.invoke_on_all([this, cpuid = this_shard_id(), non_system_filter] (database& db) {
+        return _db.invoke_on_all([this, cpuid = this_shard_id(), non_system_filter] (replica::database& db) {
             return do_for_each(_rates, [this, cpuid, &db] (auto&& r) mutable {
                 auto it = db.get_column_families().find(r.first);
                 if (it == db.get_column_families().end()) { // a table may be added before map/reduce completes and this code runs

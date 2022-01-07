@@ -42,28 +42,28 @@
 
 const sstring KEYSPACE_NAME = "multishard_mutation_query_test";
 
-static uint64_t aggregate_querier_cache_stat(distributed<database>& db, uint64_t query::querier_cache::stats::*stat) {
+static uint64_t aggregate_querier_cache_stat(distributed<replica::database>& db, uint64_t query::querier_cache::stats::*stat) {
     return map_reduce(boost::irange(0u, smp::count), [stat, &db] (unsigned shard) {
-        return db.invoke_on(shard, [stat] (database& local_db) {
+        return db.invoke_on(shard, [stat] (replica::database& local_db) {
             auto& stats = local_db.get_querier_cache_stats();
             return stats.*stat;
         });
     }, 0, std::plus<size_t>()).get0();
 }
 
-static void check_cache_population(distributed<database>& db, size_t queriers,
+static void check_cache_population(distributed<replica::database>& db, size_t queriers,
         std::experimental::source_location sl = std::experimental::source_location::current()) {
     testlog.info("{}() called from {}() {}:{:d}", __FUNCTION__, sl.function_name(), sl.file_name(), sl.line());
 
     parallel_for_each(boost::irange(0u, smp::count), [queriers, &db] (unsigned shard) {
-        return db.invoke_on(shard, [queriers] (database& local_db) {
+        return db.invoke_on(shard, [queriers] (replica::database& local_db) {
             auto& stats = local_db.get_querier_cache_stats();
             tests::require_equal(stats.population, queriers);
         });
     }).get0();
 }
 
-static void require_eventually_empty_caches(distributed<database>& db,
+static void require_eventually_empty_caches(distributed<replica::database>& db,
         std::experimental::source_location sl = std::experimental::source_location::current()) {
     testlog.info("{}() called from {}() {}:{:d}", __FUNCTION__, sl.function_name(), sl.file_name(), sl.line());
 
@@ -78,7 +78,7 @@ SEASTAR_THREAD_TEST_CASE(test_abandoned_read) {
     do_with_cql_env_thread([] (cql_test_env& env) -> future<> {
         using namespace std::chrono_literals;
 
-        env.db().invoke_on_all([] (database& db) {
+        env.db().invoke_on_all([] (replica::database& db) {
             db.set_querier_cache_entry_ttl(1s);
         }).get();
 
@@ -100,14 +100,14 @@ SEASTAR_THREAD_TEST_CASE(test_abandoned_read) {
     }).get();
 }
 
-static std::vector<mutation> read_all_partitions_one_by_one(distributed<database>& db, schema_ptr s, std::vector<dht::decorated_key> pkeys,
+static std::vector<mutation> read_all_partitions_one_by_one(distributed<replica::database>& db, schema_ptr s, std::vector<dht::decorated_key> pkeys,
         const query::partition_slice& slice) {
     const auto& sharder = s->get_sharder();
     std::vector<mutation> results;
     results.reserve(pkeys.size());
 
     for (const auto& pkey : pkeys) {
-        const auto res = db.invoke_on(sharder.shard_of(pkey.token()), [gs = global_schema_ptr(s), &pkey, &slice] (database& db) {
+        const auto res = db.invoke_on(sharder.shard_of(pkey.token()), [gs = global_schema_ptr(s), &pkey, &slice] (replica::database& db) {
             return async([s = gs.get(), &pkey, &slice, &db] () mutable {
                 const auto cmd = query::read_command(s->id(), s->version(), slice,
                         query::max_result_size(query::result_memory_limiter::unlimited_result_size));
@@ -124,7 +124,7 @@ static std::vector<mutation> read_all_partitions_one_by_one(distributed<database
     return results;
 }
 
-static std::vector<mutation> read_all_partitions_one_by_one(distributed<database>& db, schema_ptr s, std::vector<dht::decorated_key> pkeys) {
+static std::vector<mutation> read_all_partitions_one_by_one(distributed<replica::database>& db, schema_ptr s, std::vector<dht::decorated_key> pkeys) {
     return read_all_partitions_one_by_one(db, s, pkeys, s->full_slice());
 }
 
@@ -132,7 +132,7 @@ using stateful_query = bool_class<class stateful>;
 
 template <typename ResultBuilder>
 static std::pair<typename ResultBuilder::end_result_type, size_t>
-read_partitions_with_generic_paged_scan(distributed<database>& db, schema_ptr s, uint32_t page_size, uint64_t max_size, stateful_query is_stateful,
+read_partitions_with_generic_paged_scan(distributed<replica::database>& db, schema_ptr s, uint32_t page_size, uint64_t max_size, stateful_query is_stateful,
         const dht::partition_range_vector& original_ranges, const query::partition_slice& slice, const std::function<void(size_t)>& page_hook = {}) {
     const auto query_uuid = is_stateful ? utils::make_random_uuid() : utils::UUID{};
     ResultBuilder res_builder(s, slice);
@@ -203,7 +203,7 @@ read_partitions_with_generic_paged_scan(distributed<database>& db, schema_ptr s,
 
 template <typename ResultBuilder>
 static std::pair<typename ResultBuilder::end_result_type, size_t>
-read_partitions_with_generic_paged_scan(distributed<database>& db, schema_ptr s, uint32_t page_size, uint64_t max_size, stateful_query is_stateful,
+read_partitions_with_generic_paged_scan(distributed<replica::database>& db, schema_ptr s, uint32_t page_size, uint64_t max_size, stateful_query is_stateful,
         const dht::partition_range& range, const query::partition_slice& slice, const std::function<void(size_t)>& page_hook = {}) {
     dht::partition_range_vector ranges{range};
     return read_partitions_with_generic_paged_scan<ResultBuilder>(db, std::move(s), page_size, max_size, is_stateful, ranges, slice, page_hook);
@@ -235,7 +235,7 @@ private:
 
 public:
     static foreign_ptr<lw_shared_ptr<reconcilable_result>> query(
-            distributed<database>& db,
+            distributed<replica::database>& db,
             schema_ptr s,
             const query::read_command& cmd,
             const dht::partition_range_vector& ranges,
@@ -319,7 +319,7 @@ private:
 
 public:
     static foreign_ptr<lw_shared_ptr<query::result>> query(
-            distributed<database>& db,
+            distributed<replica::database>& db,
             schema_ptr s,
             const query::read_command& cmd,
             const dht::partition_range_vector& ranges,
@@ -359,13 +359,13 @@ public:
 };
 
 static std::pair<std::vector<mutation>, size_t>
-read_partitions_with_paged_scan(distributed<database>& db, schema_ptr s, uint32_t page_size, uint64_t max_size, stateful_query is_stateful,
+read_partitions_with_paged_scan(distributed<replica::database>& db, schema_ptr s, uint32_t page_size, uint64_t max_size, stateful_query is_stateful,
         const dht::partition_range& range, const query::partition_slice& slice, const std::function<void(size_t)>& page_hook = {}) {
     return read_partitions_with_generic_paged_scan<mutation_result_builder>(db, std::move(s), page_size, max_size, is_stateful, range, slice, page_hook);
 }
 
 static std::pair<std::vector<mutation>, size_t>
-read_all_partitions_with_paged_scan(distributed<database>& db, schema_ptr s, uint32_t page_size, stateful_query is_stateful,
+read_all_partitions_with_paged_scan(distributed<replica::database>& db, schema_ptr s, uint32_t page_size, stateful_query is_stateful,
         const std::function<void(size_t)>& page_hook) {
     return read_partitions_with_paged_scan(db, s, page_size, std::numeric_limits<uint64_t>::max(), is_stateful, query::full_partition_range,
             s->full_slice(), page_hook);
@@ -390,7 +390,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_all) {
     do_with_cql_env_thread([] (cql_test_env& env) -> future<> {
         using namespace std::chrono_literals;
 
-        env.db().invoke_on_all([] (database& db) {
+        env.db().invoke_on_all([] (replica::database& db) {
             db.set_querier_cache_entry_ttl(2s);
         }).get();
 
@@ -431,7 +431,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_all_multi_range) {
     do_with_cql_env_thread([] (cql_test_env& env) -> future<> {
         using namespace std::chrono_literals;
 
-        env.db().invoke_on_all([] (database& db) {
+        env.db().invoke_on_all([] (replica::database& db) {
             db.set_querier_cache_entry_ttl(2s);
         }).get();
 
@@ -486,7 +486,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_with_partition_row_limits) {
     do_with_cql_env_thread([this] (cql_test_env& env) -> future<> {
         using namespace std::chrono_literals;
 
-        env.db().invoke_on_all([] (database& db) {
+        env.db().invoke_on_all([] (replica::database& db) {
             db.set_querier_cache_entry_ttl(2s);
         }).get();
 
@@ -532,7 +532,7 @@ SEASTAR_THREAD_TEST_CASE(test_evict_a_shard_reader_on_each_page) {
     do_with_cql_env_thread([] (cql_test_env& env) -> future<> {
         using namespace std::chrono_literals;
 
-        env.db().invoke_on_all([] (database& db) {
+        env.db().invoke_on_all([] (replica::database& db) {
             db.set_querier_cache_entry_ttl(2s);
         }).get();
 
@@ -545,7 +545,7 @@ SEASTAR_THREAD_TEST_CASE(test_evict_a_shard_reader_on_each_page) {
         auto [results2, npages] = read_all_partitions_with_paged_scan(env.db(), s, 4, stateful_query::yes, [&] (size_t page) {
             check_cache_population(env.db(), 1);
 
-            env.db().invoke_on(page % smp::count, [&] (database& db) {
+            env.db().invoke_on(page % smp::count, [&] (replica::database& db) {
                 return db.get_querier_cache().evict_one();
             }).get();
 
@@ -1173,7 +1173,7 @@ struct fuzzy_test_config {
 };
 
 static void
-run_fuzzy_test_scan(size_t i, fuzzy_test_config cfg, distributed<database>& db, schema_ptr schema,
+run_fuzzy_test_scan(size_t i, fuzzy_test_config cfg, distributed<replica::database>& db, schema_ptr schema,
         const std::vector<test::partition_description>& part_descs) {
     const auto seed = cfg.seed + (i + 1) * this_shard_id();
     auto rnd_engine = std::mt19937(seed);
@@ -1243,7 +1243,7 @@ future<> run_concurrently(size_t count, size_t concurrency, noncopyable_function
 }
 
 static future<>
-run_fuzzy_test_workload(fuzzy_test_config cfg, distributed<database>& db, schema_ptr schema,
+run_fuzzy_test_workload(fuzzy_test_config cfg, distributed<replica::database>& db, schema_ptr schema,
         const std::vector<test::partition_description>& part_descs) {
     return run_concurrently(cfg.scans, cfg.concurrency, [cfg, &db, schema = std::move(schema), &part_descs] (size_t i) {
         return seastar::async([i, cfg, &db, schema, &part_descs] () mutable {

@@ -25,7 +25,7 @@
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/log.hh"
 #include <seastar/core/app-template.hh>
-#include "database.hh"
+#include "replica/database.hh"
 #include "db/config.hh"
 #include "db/commitlog/commitlog.hh"
 #include "partition_slice_builder.hh"
@@ -89,9 +89,9 @@ int main(int argc, char** argv) {
             completion_timer.arm(std::chrono::seconds(seconds));
 
             env.execute_cql("CREATE TABLE ks.cf (pk text, ck int, v text, PRIMARY KEY (pk, ck)) WITH CLUSTERING ORDER BY (ck DESC)").get();
-            database& db = env.local_db();
+            replica::database& db = env.local_db();
             auto s = db.find_schema("ks", "cf");
-            column_family& cf = db.find_column_family(s->id());
+            replica::column_family& cf = db.find_column_family(s->id());
             cf.set_compaction_strategy(sstables::compaction_strategy_type::null);
 
             uint64_t mutations = 0;

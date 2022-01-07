@@ -80,7 +80,7 @@
 #include "sstables/sstables.hh"
 #include "db/config.hh"
 #include "db/schema_tables.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include <seastar/core/metrics.hh>
 #include "cdc/generation.hh"
 #include "cdc/generation_service.hh"
@@ -107,7 +107,7 @@ namespace service {
 static logging::logger slogger("storage_service");
 
 storage_service::storage_service(abort_source& abort_source,
-    distributed<database>& db, gms::gossiper& gossiper,
+    distributed<replica::database>& db, gms::gossiper& gossiper,
     sharded<db::system_distributed_keyspace>& sys_dist_ks,
     gms::feature_service& feature_service,
     storage_service_config config,
@@ -594,7 +594,7 @@ void storage_service::join_token_ring(int delay) {
 }
 
 void storage_service::mark_existing_views_as_built() {
-    _db.invoke_on(0, [this] (database& db) {
+    _db.invoke_on(0, [this] (replica::database& db) {
         return do_with(db.get_views(), [this] (std::vector<view_ptr>& views) {
             return parallel_for_each(views, [this] (view_ptr& view) {
                 return db::system_keyspace::mark_view_as_built(view->ks_name(), view->cf_name()).then([this, view] {
@@ -700,7 +700,7 @@ void storage_service::bootstrap() {
         }
     }
 
-    _db.invoke_on_all([this] (database& db) {
+    _db.invoke_on_all([this] (replica::database& db) {
         for (auto& cf : db.get_non_system_column_families()) {
             cf->notify_bootstrap_or_replace_start();
         }
@@ -717,7 +717,7 @@ void storage_service::bootstrap() {
             bs.bootstrap(streaming::stream_reason::bootstrap, _gossiper).get();
         }
     }
-    _db.invoke_on_all([this] (database& db) {
+    _db.invoke_on_all([this] (replica::database& db) {
         for (auto& cf : db.get_non_system_column_families()) {
             cf->notify_bootstrap_or_replace_end();
         }
@@ -1621,7 +1621,7 @@ future<std::map<gms::inet_address, float>> storage_service::effective_ownership(
     return run_with_no_api_lock([keyspace_name] (storage_service& ss) mutable -> future<std::map<gms::inet_address, float>> {
         if (keyspace_name != "") {
             //find throws no such keyspace if it is missing
-            const keyspace& ks = ss._db.local().find_keyspace(keyspace_name);
+            const replica::keyspace& ks = ss._db.local().find_keyspace(keyspace_name);
             // This is ugly, but it follows origin
             auto&& rs = ks.get_replication_strategy();  // clang complains about typeid(ks.get_replication_strategy());
             if (typeid(rs) == typeid(locator::local_strategy)) {
@@ -1674,7 +1674,7 @@ future<std::map<gms::inet_address, float>> storage_service::effective_ownership(
                         }
                     }
                     final_ownership[endpoint] = ownership;
-                }  catch (no_such_keyspace&) {
+                }  catch (replica::no_such_keyspace&) {
                     // In case ss.get_ranges_for_endpoint(keyspace_name, endpoint) is not found, just mark it as zero and continue
                     final_ownership[endpoint] = 0;
                 }
@@ -2402,7 +2402,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             return resp;
         } else if (req.cmd == node_ops_cmd::repair_updater) {
             slogger.debug("repair[{}]: Got repair_updater request from {}", ops_uuid, coordinator);
-            _db.invoke_on_all([coordinator, ops_uuid, tables = req.repair_tables] (database &db) {
+            _db.invoke_on_all([coordinator, ops_uuid, tables = req.repair_tables] (replica::database &db) {
                 for (const auto& table_id : tables) {
                     auto& table = db.find_column_family(table_id);
                     table.update_off_strategy_trigger();
@@ -2496,7 +2496,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
         } else if (req.cmd == node_ops_cmd::decommission_done) {
             slogger.info("decommission[{}]: Marked ops done from coordinator={}", req.ops_uuid, coordinator);
             slogger.debug("Triggering off-strategy compaction for all non-system tables on decommission completion");
-            _db.invoke_on_all([](database &db) {
+            _db.invoke_on_all([](replica::database &db) {
                 for (auto& table : db.get_non_system_column_families()) {
                     table->trigger_offstrategy_compaction();
                 }
@@ -2636,7 +2636,7 @@ future<> storage_service::do_drain() {
         _migration_manager.invoke_on_all(&service::migration_manager::drain).get();
 
         set_mode(mode::DRAINING, "flushing column families", false);
-        _db.invoke_on_all(&database::drain).get();
+        _db.invoke_on_all(&replica::database::drain).get();
     });
 }
 
@@ -3381,7 +3381,7 @@ future<> storage_service::force_remove_completion() {
  * Takes an ordered list of adjacent tokens and divides them in the specified number of ranges.
  */
 static std::vector<std::pair<dht::token_range, uint64_t>>
-calculate_splits(std::vector<dht::token> tokens, uint64_t split_count, column_family& cf) {
+calculate_splits(std::vector<dht::token> tokens, uint64_t split_count, replica::column_family& cf) {
     auto sstables = cf.get_sstables();
     const double step = static_cast<double>(tokens.size() - 1) / split_count;
     auto prev_token_idx = 0;

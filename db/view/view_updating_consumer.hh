@@ -71,7 +71,7 @@ public:
             , _view_update_pusher(std::move(view_update_pusher))
     { }
 
-    view_updating_consumer(schema_ptr schema, reader_permit permit, table& table, std::vector<sstables::shared_sstable> excluded_sstables, const seastar::abort_source& as,
+    view_updating_consumer(schema_ptr schema, reader_permit permit, replica::table& table, std::vector<sstables::shared_sstable> excluded_sstables, const seastar::abort_source& as,
             evictable_reader_handle& staging_reader_handle);
 
     view_updating_consumer(view_updating_consumer&&) = default;

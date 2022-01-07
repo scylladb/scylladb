@@ -86,7 +86,7 @@
 #include "view_info.hh"
 #include "cql_type_parser.hh"
 #include "db/timeout_clock.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "data_dictionary/user_types_metadata.hh"
 
 #include "index/target_parser.hh"
@@ -123,11 +123,11 @@ schema_ctxt::schema_ctxt(const db::config& cfg)
     , _schema_registry_grace_period(cfg.schema_registry_grace_period())
 {}
 
-schema_ctxt::schema_ctxt(const database& db)
+schema_ctxt::schema_ctxt(const replica::database& db)
     : schema_ctxt(db.get_config())
 {}
 
-schema_ctxt::schema_ctxt(distributed<database>& db)
+schema_ctxt::schema_ctxt(distributed<replica::database>& db)
     : schema_ctxt(db.local())
 {}
 
@@ -889,7 +889,7 @@ static
 future<> update_schema_version_and_announce(distributed<service::storage_proxy>& proxy, schema_features features) {
     auto uuid = co_await calculate_schema_digest(proxy, features);
     co_await db::system_keyspace::update_schema_version(uuid);
-    co_await proxy.local().get_db().invoke_on_all([uuid] (database& db) {
+    co_await proxy.local().get_db().invoke_on_all([uuid] (replica::database& db) {
         db.update_version(uuid);
     });
     slogger.info("Schema version changed to {}", uuid);
@@ -1070,7 +1070,7 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std:
     co_await proxy.local().mutate_locally(std::move(mutations), tracing::trace_state_ptr());
 
     if (do_flush) {
-        co_await proxy.local().get_db().invoke_on_all([&] (database& db) -> future<> {
+        co_await proxy.local().get_db().invoke_on_all([&] (replica::database& db) -> future<> {
             auto& cfs = column_families;
             co_await parallel_for_each(cfs.begin(), cfs.end(), [&] (const utils::UUID& id) -> future<> {
                 auto& cf = db.find_column_family(id);
@@ -1096,7 +1096,7 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std:
     co_await merge_aggregates(proxy, std::move(old_aggregates), std::move(new_aggregates));
     co_await types_to_drop.drop();
 
-    co_await proxy.local().get_db().invoke_on_all([&] (database& db) -> future<> {
+    co_await proxy.local().get_db().invoke_on_all([&] (replica::database& db) -> future<> {
         // it is safe to drop a keyspace only when all nested ColumnFamilies where deleted
         for (auto keyspace_to_drop : keyspaces_to_drop) {
             db.drop_keyspace(keyspace_to_drop);
@@ -1136,7 +1136,7 @@ future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& p
         slogger.info("Altering keyspace {}", key);
         altered.emplace_back(key);
     }
-    co_await proxy.local().get_db().invoke_on_all([&] (database& db) -> future<> {
+    co_await proxy.local().get_db().invoke_on_all([&] (replica::database& db) -> future<> {
         for (auto&& val : created) {
             auto ksm = create_keyspace_from_schema_partition(val);
             co_await db.create_keyspace(ksm, proxy.local().get_erm_factory());
@@ -1263,7 +1263,7 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
         return vp;
     });
 
-    co_await proxy.local().get_db().invoke_on_all([&] (database& db) -> future<> {
+    co_await proxy.local().get_db().invoke_on_all([&] (replica::database& db) -> future<> {
         // First drop views and *only then* the tables, if interleaved it can lead
         // to a mv not finding its schema when snapshoting since the main table
         // was already dropped (see https://github.com/scylladb/scylla/issues/5614)
@@ -1442,7 +1442,7 @@ template <typename T> static std::vector<user_type> create_types(keyspace_metada
 // Given a set of rows that is sorted by keyspace, create types for each keyspace.
 // The topological sort in each keyspace is necessary when creating types, since we can only create a type when the
 // types it reference have already been created.
-static std::vector<user_type> create_types(database& db, const std::vector<const query::result_set_row*>& rows) {
+static std::vector<user_type> create_types(replica::database& db, const std::vector<const query::result_set_row*>& rows) {
     std::vector<user_type> ret;
     for (auto i = rows.begin(), e = rows.end(); i != e;) {
         const auto &row = *i;
@@ -1467,7 +1467,7 @@ static future<user_types_to_drop> merge_types(distributed<service::storage_proxy
     // use those types. Similarly, defer dropping until after tables/views that may use
     // some of these user types are dropped.
 
-    co_await proxy.local().get_db().invoke_on_all([&] (database& db) -> future<> {
+    co_await proxy.local().get_db().invoke_on_all([&] (replica::database& db) -> future<> {
         for (auto&& user_type : create_types(db, diff.created)) {
             db.find_keyspace(user_type->_keyspace).add_user_type(user_type);
             co_await db.get_notifier().create_user_type(user_type);
@@ -1479,7 +1479,7 @@ static future<user_types_to_drop> merge_types(distributed<service::storage_proxy
     });
 
     co_return user_types_to_drop{[&proxy, before = std::move(before), rows = std::move(diff.dropped)] () mutable -> future<> {
-        co_await proxy.local().get_db().invoke_on_all([&] (database& db) -> future<> {
+        co_await proxy.local().get_db().invoke_on_all([&] (replica::database& db) -> future<> {
             auto dropped = create_types(db, rows);
             for (auto& user_type : dropped) {
                 db.find_keyspace(user_type->_keyspace).remove_user_type(user_type);
@@ -1552,7 +1552,7 @@ static std::vector<data_type> read_arg_types(const query::result_set_row& row, c
     }
 #endif
 
-static shared_ptr<cql3::functions::user_function> create_func(database& db, const query::result_set_row& row) {
+static shared_ptr<cql3::functions::user_function> create_func(replica::database& db, const query::result_set_row& row) {
     cql3::functions::function_name name{
             row.get_nonnull<sstring>("keyspace_name"), row.get_nonnull<sstring>("function_name")};
     auto arg_types = read_arg_types(row, name.keyspace);
@@ -1590,7 +1590,7 @@ static shared_ptr<cql3::functions::user_function> create_func(database& db, cons
     }
 }
 
-static shared_ptr<cql3::functions::user_aggregate> create_aggregate(database& db, const query::result_set_row& row) {
+static shared_ptr<cql3::functions::user_aggregate> create_aggregate(replica::database& db, const query::result_set_row& row) {
     cql3::functions::function_name name{
             row.get_nonnull<sstring>("keyspace_name"), row.get_nonnull<sstring>("aggregate_name")};
     auto arg_types = read_arg_types(row, name.keyspace);
@@ -1619,10 +1619,10 @@ static shared_ptr<cql3::functions::user_aggregate> create_aggregate(database& db
 }
 
 static future<> merge_functions(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after,
-        std::function<shared_ptr<cql3::functions::function>(database& db, const query::result_set_row& row)> create) {
+        std::function<shared_ptr<cql3::functions::function>(replica::database& db, const query::result_set_row& row)> create) {
     auto diff = diff_rows(before, after);
 
-    co_await proxy.local().get_db().invoke_on_all([&] (database& db) {
+    co_await proxy.local().get_db().invoke_on_all([&] (replica::database& db) {
         for (const auto& val : diff.created) {
             cql3::functions::functions::add_function(create(db, *val));
         }
@@ -1794,7 +1794,7 @@ std::vector<user_type> create_types_from_schema_partition(
 }
 
 std::vector<shared_ptr<cql3::functions::user_function>> create_functions_from_schema_partition(
-        database& db, lw_shared_ptr<query::result_set> result) {
+        replica::database& db, lw_shared_ptr<query::result_set> result) {
     std::vector<shared_ptr<cql3::functions::user_function>> ret;
     for (const auto& row : result->rows()) {
         ret.emplace_back(create_func(db, row));
@@ -2181,7 +2181,7 @@ static schema_mutations make_view_mutations(view_ptr view, api::timestamp_type t
 static void make_drop_table_or_view_mutations(schema_ptr schema_table, schema_ptr table_or_view, api::timestamp_type timestamp, std::vector<mutation>& mutations);
 
 static void make_update_indices_mutations(
-        database& db,
+        replica::database& db,
         schema_ptr old_table,
         schema_ptr new_table,
         api::timestamp_type timestamp,
@@ -2279,7 +2279,7 @@ static void make_update_columns_mutations(schema_ptr old_table,
     }
 }
 
-std::vector<mutation> make_update_table_mutations(database& db,
+std::vector<mutation> make_update_table_mutations(replica::database& db,
     lw_shared_ptr<keyspace_metadata> keyspace,
     schema_ptr old_table,
     schema_ptr new_table,
@@ -3168,7 +3168,7 @@ std::vector<sstring> all_table_names(schema_features features) {
            boost::adaptors::transformed([] (auto schema) { return schema->cf_name(); }));
 }
 
-view_ptr maybe_fix_legacy_secondary_index_mv_schema(database& db, const view_ptr& v, schema_ptr base_schema, preserve_version preserve_version) {
+view_ptr maybe_fix_legacy_secondary_index_mv_schema(replica::database& db, const view_ptr& v, schema_ptr base_schema, preserve_version preserve_version) {
     // Legacy format for a secondary index used a hardcoded "token" column, which ensured a proper
     // order for indexed queries. This "token" column is now implemented as a computed column,
     // but for the sake of compatibility we assume that there might be indexes created in the legacy

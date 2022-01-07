@@ -169,7 +169,7 @@ database::get_config() const {
     return _ops->get_config(*this);
 }
 
-::database&
+replica::database&
 database::real_database() const {
     return _ops->real_database(*this);
 }

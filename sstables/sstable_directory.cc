@@ -26,7 +26,7 @@
 #include "log.hh"
 #include "sstable_directory.hh"
 #include "lister.hh"
-#include "database.hh"
+#include "replica/database.hh"
 
 static logging::logger dirlog("sstable_directory");
 
@@ -335,7 +335,7 @@ sstable_directory::collect_output_sstables_from_reshaping(std::vector<sstables::
     });
 }
 
-future<uint64_t> sstable_directory::reshape(compaction_manager& cm, table& table, sstables::compaction_sstable_creator_fn creator, const ::io_priority_class& iop, sstables::reshape_mode mode)
+future<uint64_t> sstable_directory::reshape(compaction_manager& cm, replica::table& table, sstables::compaction_sstable_creator_fn creator, const ::io_priority_class& iop, sstables::reshape_mode mode)
 {
     return do_with(uint64_t(0), [this, &cm, &table, creator = std::move(creator), iop, mode] (uint64_t & reshaped_size) mutable {
         return repeat([this, &cm, &table, creator = std::move(creator), iop, &reshaped_size, mode] () mutable {
@@ -378,7 +378,7 @@ future<uint64_t> sstable_directory::reshape(compaction_manager& cm, table& table
 }
 
 future<>
-sstable_directory::reshard(sstable_info_vector shared_info, compaction_manager& cm, table& table,
+sstable_directory::reshard(sstable_info_vector shared_info, compaction_manager& cm, replica::table& table,
                            unsigned max_sstables_per_job, sstables::compaction_sstable_creator_fn creator, const ::io_priority_class& iop)
 {
     // Resharding doesn't like empty sstable sets, so bail early. There is nothing

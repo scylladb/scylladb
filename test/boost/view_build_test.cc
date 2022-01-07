@@ -21,7 +21,7 @@
 
 #include <boost/test/unit_test.hpp>
 
-#include "database.hh"
+#include "replica/database.hh"
 #include "db/view/view_builder.hh"
 #include "db/view/view_updating_consumer.hh"
 #include "db/system_keyspace.hh"
@@ -433,7 +433,7 @@ SEASTAR_TEST_CASE(test_view_update_generator) {
 
         std::vector<shared_sstable> ssts;
 
-        lw_shared_ptr<table> t = e.local_db().find_column_family("ks", "t").shared_from_this();
+        lw_shared_ptr<replica::table> t = e.local_db().find_column_family("ks", "t").shared_from_this();
 
         auto write_to_sstable = [&] (mutation m) {
             auto sst = t->make_streaming_staging_sstable();
@@ -527,14 +527,14 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_deadlock) {
         }
 
         // We need data on the disk so that the pre-image reader is forced to go to disk.
-        e.db().invoke_on_all([] (database& db) {
+        e.db().invoke_on_all([] (replica::database& db) {
             return db.flush_all_memtables();
         }).get();
 
         auto& view_update_generator = e.local_view_update_generator();
         auto s = test_table_schema();
 
-        lw_shared_ptr<table> t = e.local_db().find_column_family("ks", "t").shared_from_this();
+        lw_shared_ptr<replica::table> t = e.local_db().find_column_family("ks", "t").shared_from_this();
 
         auto key = partition_key::from_exploded(*s, {to_bytes(key1)});
         mutation m(s, key);
@@ -560,7 +560,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_deadlock) {
         }).get0();
 
         // consume all units except what is needed to admit a single reader.
-        const auto consumed_resources = sem.initial_resources() - reader_resources{1, new_reader_base_cost};
+        const auto consumed_resources = sem.initial_resources() - reader_resources{1, replica::new_reader_base_cost};
         sem.consume(consumed_resources);
         auto release_resources = defer([&sem, consumed_resources] {
             sem.signal(consumed_resources);
@@ -603,14 +603,14 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_register_semaphore_unit_leak
         }
 
         // We need data on the disk so that the pre-image reader is forced to go to disk.
-        e.db().invoke_on_all([] (database& db) {
+        e.db().invoke_on_all([] (replica::database& db) {
             return db.flush_all_memtables();
         }).get();
 
         auto& view_update_generator = e.local_view_update_generator();
         auto s = test_table_schema();
 
-        lw_shared_ptr<table> t = e.local_db().find_column_family("ks", "t").shared_from_this();
+        lw_shared_ptr<replica::table> t = e.local_db().find_column_family("ks", "t").shared_from_this();
 
         auto key = partition_key::from_exploded(*s, {to_bytes(key1)});
 
@@ -728,7 +728,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
         void check(mutation mut) {
             // First we check that we would be able to create a reader, even
             // though the staging reader consumed all resources.
-            auto permit = _semaphore.obtain_permit(_schema.get(), "consumer_verifier", new_reader_base_cost, db::timeout_clock::now()).get0();
+            auto permit = _semaphore.obtain_permit(_schema.get(), "consumer_verifier", replica::new_reader_base_cost, db::timeout_clock::now()).get0();
 
             const size_t current_rows = rows_in_mut(mut);
             const auto total_rows = _partition_rows.at(mut.decorated_key());
@@ -796,7 +796,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
         }
     };
 
-    reader_concurrency_semaphore sem(reader_concurrency_semaphore::for_tests{}, get_name(), 1, new_reader_base_cost);
+    reader_concurrency_semaphore sem(reader_concurrency_semaphore::for_tests{}, get_name(), 1, replica::new_reader_base_cost);
     auto stop_sem = deferred_stop(sem);
 
     auto schema = schema_builder("ks", "cf")
@@ -833,7 +833,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
             return less(a.decorated_key(), b.decorated_key());
         });
 
-        auto permit = sem.obtain_permit(schema.get(), get_name(), new_reader_base_cost, db::no_timeout).get0();
+        auto permit = sem.obtain_permit(schema.get(), get_name(), replica::new_reader_base_cost, db::no_timeout).get0();
 
         auto mt = make_lw_shared<memtable>(schema);
         for (const auto& mut : muts) {

@@ -357,7 +357,7 @@ SEASTAR_TEST_CASE(test_merging_does_not_alter_tables_which_didnt_change) {
                 .with_column("v1", bytes_type)
                 .build();
 
-            auto find_table = [&] () -> column_family& {
+            auto find_table = [&] () -> replica::column_family& {
                 return e.db().local().find_column_family("ks", "table1");
             };
 
@@ -770,7 +770,7 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_cdc_options) {
 // for newly added schema tables.
 SEASTAR_TEST_CASE(test_schema_tables_use_null_sharder) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
-        e.db().invoke_on_all([] (database& db) {
+        e.db().invoke_on_all([] (replica::database& db) {
             {
                 auto ks_metadata = db.find_keyspace("system_schema").metadata();
                 auto& cf_metadata = ks_metadata->cf_meta_data();

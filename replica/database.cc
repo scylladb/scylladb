@@ -21,7 +21,7 @@
 
 #include "log.hh"
 #include "lister.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include <seastar/core/future-util.hh>
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
@@ -83,6 +83,8 @@ logging::logger dblog("database");
 // Used for tests where the CF exists without a database object. We need to pass a valid
 // dirty_memory manager in that case.
 thread_local dirty_memory_manager default_dirty_memory_manager;
+
+namespace replica {
 
 inline
 flush_controller
@@ -383,6 +385,8 @@ const db::extensions& database::extensions() const {
     return get_config().extensions();
 }
 
+} // namespace replica
+
 void backlog_controller::adjust() {
     auto backlog = _current_backlog();
 
@@ -446,6 +450,8 @@ dirty_memory_manager::setup_collectd(sstring namestr) {
                        sm::description("Holds the size of used memory in bytes. Compare it to \"dirty_bytes\" to see how many memory is wasted (neither used nor available).")),
     });
 }
+
+namespace replica {
 
 static const metrics::label class_label("class");
 
@@ -1285,6 +1291,8 @@ database::existing_index_names(const sstring& ks_name, const sstring& cf_to_excl
     return names;
 }
 
+} // namespace replica
+
 // Based on:
 //  - org.apache.cassandra.db.AbstractCell#reconcile()
 //  - org.apache.cassandra.db.BufferExpiringCell#reconcile()
@@ -1322,6 +1330,8 @@ compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right) {
     }
     return std::strong_ordering::equal;
 }
+
+namespace replica {
 
 future<std::tuple<lw_shared_ptr<query::result>, cache_temperature>>
 database::query(schema_ptr s, const query::read_command& cmd, query::result_options opts, const dht::partition_range_vector& ranges,
@@ -1617,6 +1627,8 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
     });
 }
 
+} // namespace replica
+
 future<> dirty_memory_manager::shutdown() {
     _db_shutdown_requested = true;
     _should_flush.signal();
@@ -1717,6 +1729,8 @@ future<> dirty_memory_manager::flush_when_needed() {
 void dirty_memory_manager::start_reclaiming() noexcept {
     _should_flush.signal();
 }
+
+namespace replica {
 
 future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&& h, db::timeout_clock::time_point timeout) {
     auto& cf = find_column_family(m.column_family_id());
@@ -1902,6 +1916,8 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
     return cfg;
 }
 
+} // namespace replica
+
 namespace db {
 
 std::ostream& operator<<(std::ostream& os, const write_type& t) {
@@ -1943,6 +1959,8 @@ operator<<(std::ostream& os, const exploded_clustering_prefix& ecp) {
     fmt::print(os, "prefix{{{}}}", ::join(":", ecp._v | boost::adaptors::transformed(enhex)));
     return os;
 }
+
+namespace replica {
 
 sstring database::get_available_index_name(const sstring &ks_name, const sstring &cf_name,
                                            std::optional<sstring> index_name_root) const
@@ -2258,28 +2276,32 @@ future<> database::drain() {
     co_await _commitlog->shutdown();
 }
 
+} // namespace replica
+
 namespace cdc {
-schema_ptr get_base_table(const database& db, const schema& s);
+schema_ptr get_base_table(const replica::database& db, const schema& s);
 }
 
+namespace replica {
+
 class database::data_dictionary_impl : public data_dictionary::impl {
-    const data_dictionary::database wrap(const ::database& db) const {
+    const data_dictionary::database wrap(const replica::database& db) const {
         return make_database(this, &db);
     }
-    data_dictionary::keyspace wrap(const ::keyspace& ks) const {
+    data_dictionary::keyspace wrap(const replica::keyspace& ks) const {
         return make_keyspace(this, &ks);
     }
-    data_dictionary::table wrap(const ::table& t) const {
+    data_dictionary::table wrap(const replica::table& t) const {
         return make_table(this, &t);
     }
-    static const ::database& unwrap(data_dictionary::database db) {
-        return *static_cast<const ::database*>(extract(db));
+    static const replica::database& unwrap(data_dictionary::database db) {
+        return *static_cast<const replica::database*>(extract(db));
     }
-    static const ::keyspace& unwrap(data_dictionary::keyspace ks) {
-        return *static_cast<const ::keyspace*>(extract(ks));
+    static const replica::keyspace& unwrap(data_dictionary::keyspace ks) {
+        return *static_cast<const replica::keyspace*>(extract(ks));
     }
-    static const ::table& unwrap(data_dictionary::table t) {
-        return *static_cast<const ::table*>(extract(t));
+    static const replica::table& unwrap(data_dictionary::table t) {
+        return *static_cast<const replica::table*>(extract(t));
     }
     friend class database;
 public:
@@ -2311,7 +2333,7 @@ public:
         return unwrap(t).views();
     }
     virtual const secondary_index::secondary_index_manager& get_index_manager(data_dictionary::table t) const override {
-        return const_cast<::table&>(unwrap(t)).get_index_manager();
+        return const_cast<replica::table&>(unwrap(t)).get_index_manager();
     }
     virtual lw_shared_ptr<keyspace_metadata> get_keyspace_metadata(data_dictionary::keyspace ks) const override {
         return unwrap(ks).metadata();
@@ -2338,8 +2360,8 @@ public:
     virtual const gms::feature_service& get_features(data_dictionary::database db) const override {
         return unwrap(db).features();
     }
-    virtual ::database& real_database(data_dictionary::database db) const override {
-        return const_cast<::database&>(unwrap(db));
+    virtual replica::database& real_database(data_dictionary::database db) const override {
+        return const_cast<replica::database&>(unwrap(db));
     }
     virtual schema_ptr get_cdc_base_table(data_dictionary::database db, const schema& s) const override {
         return cdc::get_base_table(unwrap(db), s);
@@ -2352,10 +2374,12 @@ database::as_data_dictionary() const {
     return _impl.wrap(*this);
 }
 
+} // namespace replica
+
 template <typename T>
 using foreign_unique_ptr = foreign_ptr<std::unique_ptr<T>>;
 
-flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db, schema_ptr schema, reader_permit permit,
+flat_mutation_reader make_multishard_streaming_reader(distributed<replica::database>& db, schema_ptr schema, reader_permit permit,
         std::function<std::optional<dht::partition_range>()> range_generator) {
     class streaming_reader_lifecycle_policy
             : public reader_lifecycle_policy
@@ -2365,11 +2389,11 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db,
             foreign_unique_ptr<utils::phased_barrier::operation> read_operation;
             reader_concurrency_semaphore* semaphore;
         };
-        distributed<database>& _db;
+        distributed<replica::database>& _db;
         utils::UUID _table_id;
         std::vector<reader_context> _contexts;
     public:
-        streaming_reader_lifecycle_policy(distributed<database>& db, utils::UUID table_id) : _db(db), _table_id(table_id), _contexts(smp::count) {
+        streaming_reader_lifecycle_policy(distributed<replica::database>& db, utils::UUID table_id) : _db(db), _table_id(table_id), _contexts(smp::count) {
         }
         virtual flat_mutation_reader create_reader(
                 schema_ptr schema,

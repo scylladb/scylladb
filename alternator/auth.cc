@@ -34,7 +34,7 @@
 #include "service/storage_proxy.hh"
 #include "alternator/executor.hh"
 #include "cql3/selection/selection.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "query-result-set.hh"
 #include "cql3/result_set.hh"
 #include <seastar/core/coroutine.hh>

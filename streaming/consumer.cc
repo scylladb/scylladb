@@ -32,7 +32,7 @@
 namespace streaming {
 
 std::function<future<> (flat_mutation_reader)> make_streaming_consumer(sstring origin,
-        sharded<database>& db,
+        sharded<replica::database>& db,
         sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<db::view::view_update_generator>& vug,
         uint64_t estimated_partitions,

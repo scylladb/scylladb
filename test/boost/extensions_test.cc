@@ -102,7 +102,7 @@ SEASTAR_TEST_CASE(simple_sstable_extension) {
             // minimal data
             return e.execute_cql("insert into ks.cf (id, value) values (1, 100);").discard_result().then([&e] {
                 // flush all shards
-                return e.db().invoke_on_all([](database& db) {
+                return e.db().invoke_on_all([](replica::database& db) {
                     auto& cf = db.find_column_family("ks", "cf");
                     return cf.flush();
                 }).then([] {

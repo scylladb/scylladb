@@ -21,7 +21,7 @@
 
 #pragma once
 
-#include "database_fwd.hh"
+#include "replica/database_fwd.hh"
 #include "bytes_ostream.hh"
 #include "mutation_fragment.hh"
 

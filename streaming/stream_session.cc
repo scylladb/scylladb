@@ -106,7 +106,7 @@ void stream_manager::init_messaging_service_handler() {
         auto from = netw::messaging_service::get_source(cinfo);
         auto reason = reason_opt ? *reason_opt: stream_reason::unspecified;
         sslog.trace("Got stream_mutation_fragments from {} reason {}", from, int(reason));
-        table& cf = _db.local().find_column_family(cf_id);
+        replica::table& cf = _db.local().find_column_family(cf_id);
         if (!_sys_dist_ks.local_is_initialized() || !_view_update_generator.local_is_initialized()) {
             return make_exception_future<rpc::sink<int>>(std::runtime_error(format("Node {} is not fully initialized for streaming, try again later",
                     utils::fb_utilities::get_broadcast_address())));
@@ -303,7 +303,7 @@ future<prepare_message> stream_session::prepare(std::vector<stream_request> requ
         for (auto& cf : request.column_families) {
             try {
                 db.find_column_family(ks, cf);
-            } catch (no_such_column_family&) {
+            } catch (replica::no_such_column_family&) {
                 auto err = format("[Stream #{}] prepare requested ks={} cf={} does not exist", plan_id, ks, cf);
                 sslog.warn("{}", err.c_str());
                 throw std::runtime_error(err);
@@ -317,7 +317,7 @@ future<prepare_message> stream_session::prepare(std::vector<stream_request> requ
         // Make sure cf the peer node will send to us exists
         try {
             db.find_column_family(cf_id);
-        } catch (no_such_column_family&) {
+        } catch (replica::no_such_column_family&) {
             auto err = format("[Stream #{}] prepare cf_id={} does not exist", plan_id, cf_id);
             sslog.warn("{}", err.c_str());
             throw std::runtime_error(err);
@@ -437,13 +437,13 @@ void stream_session::start_streaming_files() {
     });
 }
 
-std::vector<column_family*> stream_session::get_column_family_stores(const sstring& keyspace, const std::vector<sstring>& column_families) {
+std::vector<replica::column_family*> stream_session::get_column_family_stores(const sstring& keyspace, const std::vector<sstring>& column_families) {
     // if columnfamilies are not specified, we add all cf under the keyspace
-    std::vector<column_family*> stores;
+    std::vector<replica::column_family*> stores;
     auto& db = manager().db();
     if (column_families.empty()) {
         for (auto& x : db.get_column_families()) {
-            column_family& cf = *(x.second);
+            replica::column_family& cf = *(x.second);
             auto cf_name = cf.schema()->cf_name();
             auto ks_name = cf.schema()->ks_name();
             if (ks_name == keyspace) {
@@ -457,7 +457,7 @@ std::vector<column_family*> stream_session::get_column_family_stores(const sstri
             try {
                 auto& x = db.find_column_family(keyspace, cf_name);
                 stores.push_back(&x);
-            } catch (no_such_column_family&) {
+            } catch (replica::no_such_column_family&) {
                 sslog.warn("stream_session: {}.{} does not exist: {}\n", keyspace, cf_name, std::current_exception());
                 continue;
             }

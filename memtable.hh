@@ -24,7 +24,7 @@
 #include <map>
 #include <memory>
 #include <iosfwd>
-#include "database_fwd.hh"
+#include "replica/database_fwd.hh"
 #include "dht/i_partitioner.hh"
 #include "schema_fwd.hh"
 #include "encoding_stats.hh"
@@ -106,7 +106,10 @@ public:
 };
 
 class dirty_memory_manager;
+
+namespace replica {
 struct table_stats;
+}
 
 // Managed by lw_shared_ptr<>.
 class memtable final : public enable_lw_shared_from_this<memtable>, private logalloc::region {
@@ -133,7 +136,7 @@ private:
     // monotonic. That combined source in this case is cache + memtable.
     mutation_source_opt _underlying;
     uint64_t _flushed_memory = 0;
-    table_stats& _table_stats;
+    replica::table_stats& _table_stats;
 
     class memtable_encoding_stats_collector : public encoding_stats_collector {
     private:
@@ -178,7 +181,7 @@ private:
     void clear() noexcept;
     uint64_t dirty_size() const;
 public:
-    explicit memtable(schema_ptr schema, dirty_memory_manager&, table_stats& table_stats, memtable_list *memtable_list = nullptr,
+    explicit memtable(schema_ptr schema, dirty_memory_manager&, replica::table_stats& table_stats, memtable_list *memtable_list = nullptr,
             seastar::scheduling_group compaction_scheduling_group = seastar::current_scheduling_group());
     // Used for testing that want to control the flush process.
     explicit memtable(schema_ptr schema);

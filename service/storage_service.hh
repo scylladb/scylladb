@@ -53,7 +53,7 @@
 #include <seastar/core/gate.hh>
 #include "utils/fb_utilities.hh"
 #include "utils/serialized_action.hh"
-#include "database_fwd.hh"
+#include "replica/database_fwd.hh"
 #include "db/schema_features.hh"
 #include "streaming/stream_state.hh"
 #include "streaming/stream_reason.hh"
@@ -171,7 +171,7 @@ private:
 
     abort_source& _abort_source;
     gms::feature_service& _feature_service;
-    distributed<database>& _db;
+    distributed<replica::database>& _db;
     gms::gossiper& _gossiper;
     // Container for all Raft instances running on this shard.
     raft_group_registry& _raft_gr;
@@ -198,7 +198,7 @@ private:
     void node_ops_singal_abort(std::optional<utils::UUID> ops_uuid);
     future<> node_ops_abort_thread();
 public:
-    storage_service(abort_source& as, distributed<database>& db,
+    storage_service(abort_source& as, distributed<replica::database>& db,
         gms::gossiper& gossiper,
         sharded<db::system_distributed_keyspace>&,
         gms::feature_service& feature_service,

@@ -38,10 +38,10 @@ public:
     static future<> process_sstable_dir(sharded<sstables::sstable_directory>& dir, bool sort_sstables_according_to_owner = true) {
         return distributed_loader::process_sstable_dir(dir, sort_sstables_according_to_owner);
     }
-    static future<> lock_table(sharded<sstables::sstable_directory>& dir, sharded<database>& db, sstring ks_name, sstring cf_name) {
+    static future<> lock_table(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring cf_name) {
         return distributed_loader::lock_table(dir, db, std::move(ks_name), std::move(cf_name));
     }
-    static future<> reshard(sharded<sstables::sstable_directory>& dir, sharded<database>& db, sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator) {
+    static future<> reshard(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator) {
         return distributed_loader::reshard(dir, db, std::move(ks_name), std::move(table_name), std::move(creator));
     }
 };
@@ -85,7 +85,7 @@ make_sstable_for_this_shard(std::function<sstables::shared_sstable()> sst_factor
 /// Arguments passed to the function are passed to table::make_sstable
 template <typename... Args>
 sstables::shared_sstable
-make_sstable_for_all_shards(database& db, table& table, fs::path sstdir, int64_t generation) {
+make_sstable_for_all_shards(replica::database& db, replica::table& table, fs::path sstdir, int64_t generation) {
     // Unlike the previous helper, we'll assume we're in a thread here. It's less flexible
     // but the users are usually in a thread, and rewrite_toc_without_scylla_component requires
     // a thread. We could fix that, but deferring that for now.
@@ -439,7 +439,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_lock_works) {
         e.execute_cql("insert into cf (p, c) values ('one', 1)").get();
 
         testlog.debug("Flushing cf");
-        e.db().invoke_on_all([&] (database& db) {
+        e.db().invoke_on_all([&] (replica::database& db) {
             auto& cf = db.find_column_family(ks_name, cf_name);
             return cf.flush();
         }).get();
@@ -480,11 +480,11 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_lock_works) {
 
         auto table_exists = [&] () {
             try {
-                e.db().invoke_on_all([ks_name, cf_name] (database& db) {
+                e.db().invoke_on_all([ks_name, cf_name] (replica::database& db) {
                     db.find_column_family(ks_name, cf_name);
                 }).get();
                 return true;
-            } catch (no_such_column_family&) {
+            } catch (replica::no_such_column_family&) {
                 return false;
             }
         };
@@ -533,7 +533,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly) {
         auto& cf = e.local_db().find_column_family("ks", "cf");
         auto upload_path = fs::path(cf.dir()) / sstables::upload_dir;
 
-        e.db().invoke_on_all([] (database& db) {
+        e.db().invoke_on_all([] (replica::database& db) {
             auto& cf = db.find_column_family("ks", "cf");
             return cf.disable_auto_compaction();
         }).get();
@@ -582,7 +582,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_distributes_well_eve
         auto& cf = e.local_db().find_column_family("ks", "cf");
         auto upload_path = fs::path(cf.dir()) / sstables::upload_dir;
 
-        e.db().invoke_on_all([] (database& db) {
+        e.db().invoke_on_all([] (replica::database& db) {
             auto& cf = db.find_column_family("ks", "cf");
             return cf.disable_auto_compaction();
         }).get();
@@ -631,7 +631,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_respect_max_threshol
         auto& cf = e.local_db().find_column_family("ks", "cf");
         auto upload_path = fs::path(cf.dir()) / sstables::upload_dir;
 
-        e.db().invoke_on_all([] (database& db) {
+        e.db().invoke_on_all([] (replica::database& db) {
             auto& cf = db.find_column_family("ks", "cf");
             return cf.disable_auto_compaction();
         }).get();

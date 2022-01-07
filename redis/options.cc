@@ -23,7 +23,7 @@
 #include "types.hh"
 #include "service/storage_proxy.hh"
 #include "schema.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include <seastar/core/print.hh>
 #include "redis/keyspace_utils.hh"
 

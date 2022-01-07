@@ -22,7 +22,7 @@
 #include "server.hh"
 #include "handler.hh"
 #include "db/config.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include <seastar/core/future-util.hh>
 #include <seastar/core/circular_buffer.hh>
 #include <seastar/core/metrics.hh>
@@ -66,7 +66,7 @@ public:
     thrift_stats(thrift_server& server);
 };
 
-thrift_server::thrift_server(distributed<database>& db,
+thrift_server::thrift_server(distributed<replica::database>& db,
                              distributed<cql3::query_processor>& qp,
                              sharded<service::storage_service>& ss,
                              sharded<service::storage_proxy>& proxy,

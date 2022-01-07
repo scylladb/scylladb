@@ -35,7 +35,7 @@
 #include <seastar/util/alloc_failure_injector.hh>
 #include <seastar/util/closeable.hh>
 
-#include "database.hh"
+#include "replica/database.hh"
 #include "utils/UUID_gen.hh"
 #include "mutation_reader.hh"
 #include "clustering_interval_set.hh"
@@ -101,13 +101,13 @@ static mutation_partition get_partition(reader_permit permit, memtable& mt, cons
 }
 
 future<>
-with_column_family(schema_ptr s, column_family::config cfg, noncopyable_function<future<> (column_family&)> func) {
+with_column_family(schema_ptr s, replica::column_family::config cfg, noncopyable_function<future<> (replica::column_family&)> func) {
     auto tracker = make_lw_shared<cache_tracker>();
     auto dir = tmpdir();
     cfg.datadir = dir.path().string();
     auto cm = make_lw_shared<compaction_manager>();
     auto cl_stats = make_lw_shared<cell_locker_stats>();
-    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm, *cl_stats, *tracker);
+    auto cf = make_lw_shared<replica::column_family>(s, cfg, replica::column_family::no_commitlog(), *cm, *cl_stats, *tracker);
     cf->mark_ready_for_writes();
     return func(*cf).then([cf, cm] {
         return cf->stop();
@@ -498,14 +498,14 @@ SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
     auto s = make_shared_schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type);
 
-    auto cf_stats = make_lw_shared<::cf_stats>();
-    column_family::config cfg = column_family_test_config(env.manager(), env.semaphore());
+    auto cf_stats = make_lw_shared<replica::cf_stats>();
+    replica::column_family::config cfg = column_family_test_config(env.manager(), env.semaphore());
     cfg.enable_disk_reads = false;
     cfg.enable_disk_writes = false;
     cfg.enable_incremental_backups = false;
     cfg.cf_stats = &*cf_stats;
 
-    with_column_family(s, cfg, [s, &env] (column_family& cf) {
+    with_column_family(s, cfg, [s, &env] (replica::column_family& cf) {
         const column_definition& r1_col = *s->get_column_definition("r1");
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
 
@@ -549,16 +549,16 @@ SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
         .with_column("v", bytes_type)
         .build();
 
-    auto cf_stats = make_lw_shared<::cf_stats>();
+    auto cf_stats = make_lw_shared<replica::cf_stats>();
 
-    column_family::config cfg = column_family_test_config(env.manager(), env.semaphore());
+    replica::column_family::config cfg = column_family_test_config(env.manager(), env.semaphore());
     cfg.enable_disk_reads = true;
     cfg.enable_disk_writes = true;
     cfg.enable_cache = true;
     cfg.enable_incremental_backups = false;
     cfg.cf_stats = &*cf_stats;
 
-    return with_column_family(s, cfg, [&env, s](column_family& cf) {
+    return with_column_family(s, cfg, [&env, s](replica::column_family& cf) {
         return seastar::async([&env, s, &cf] {
             // populate
             auto new_key = [&] {
@@ -631,9 +631,9 @@ SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
     auto s = make_shared_schema({}, some_keyspace, some_column_family,
             {{"p1", int32_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type);
 
-    auto cf_stats = make_lw_shared<::cf_stats>();
+    auto cf_stats = make_lw_shared<replica::cf_stats>();
 
-    column_family::config cfg = column_family_test_config(env.manager(), env.semaphore());
+    replica::column_family::config cfg = column_family_test_config(env.manager(), env.semaphore());
     cfg.enable_disk_reads = false;
     cfg.enable_disk_writes = false;
     cfg.enable_incremental_backups = false;

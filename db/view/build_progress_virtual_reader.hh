@@ -19,7 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "database.hh"
+#include "replica/database.hh"
 #include "db/system_keyspace.hh"
 #include "db/timeout_clock.hh"
 #include "dht/i_partitioner.hh"
@@ -50,7 +50,7 @@ namespace db::view {
 // the same as the previous one (as a result of trimming cpu_id),
 // the duplicated fragment is ignored.
 class build_progress_virtual_reader {
-    database& _db;
+    replica::database& _db;
 
     struct build_progress_reader : flat_mutation_reader::impl {
         column_id _scylla_next_token_col;
@@ -65,7 +65,7 @@ class build_progress_virtual_reader {
         build_progress_reader(
                 schema_ptr legacy_schema,
                 reader_permit permit,
-                column_family& scylla_views_build_progress,
+                replica::column_family& scylla_views_build_progress,
                 const dht::partition_range& range,
                 const query::partition_slice& slice,
                 const io_priority_class& pc,
@@ -189,7 +189,7 @@ class build_progress_virtual_reader {
     };
 
 public:
-    build_progress_virtual_reader(database& db)
+    build_progress_virtual_reader(replica::database& db)
             : _db(db) {
     }
 

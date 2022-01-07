@@ -44,7 +44,7 @@
 
 #include <seastar/core/sharded.hh>
 #include <seastar/core/future.hh>
-#include "database_fwd.hh"
+#include "replica/database_fwd.hh"
 #include <seastar/core/gate.hh>
 #include <seastar/core/rwlock.hh>
 
@@ -62,7 +62,7 @@ public:
         sstring cf;
         sstring ks;
     };
-    explicit snapshot_ctl(sharded<database>& db) : _db(db) {}
+    explicit snapshot_ctl(sharded<replica::database>& db) : _db(db) {}
 
     future<> stop() {
         return _ops.close();
@@ -114,7 +114,7 @@ public:
 
     future<int64_t> true_snapshots_size();
 private:
-    sharded<database>& _db;
+    sharded<replica::database>& _db;
     seastar::rwlock _lock;
     seastar::gate _ops;
 

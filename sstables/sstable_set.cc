@@ -33,7 +33,7 @@
 
 #include "sstable_set_impl.hh"
 
-#include "database.hh"
+#include "replica/database.hh"
 
 namespace sstables {
 
@@ -733,7 +733,7 @@ filter_sstable_for_reader_by_pk(std::vector<shared_sstable>&& sstables, const sc
 // Filter out sstables for reader using sstable metadata that keeps track
 // of a range for each clustering component.
 static std::vector<shared_sstable>
-filter_sstable_for_reader_by_ck(std::vector<shared_sstable>&& sstables, column_family& cf, const schema_ptr& schema,
+filter_sstable_for_reader_by_ck(std::vector<shared_sstable>&& sstables, replica::column_family& cf, const schema_ptr& schema,
         const query::partition_slice& slice) {
     // no clustering filtering is applied if schema defines no clustering key or
     // compaction strategy thinks it will not benefit from such an optimization,
@@ -742,7 +742,7 @@ filter_sstable_for_reader_by_ck(std::vector<shared_sstable>&& sstables, column_f
         return std::move(sstables);
     }
 
-    ::cf_stats* stats = cf.cf_stats();
+    replica::cf_stats* stats = cf.cf_stats();
     stats->clustering_filter_count++;
     stats->sstables_checked_by_clustering_filter += sstables.size();
 
@@ -771,7 +771,7 @@ sstable_set_impl::select_sstable_runs(const std::vector<shared_sstable>& sstable
 
 flat_mutation_reader_v2
 sstable_set_impl::create_single_key_sstable_reader(
-        column_family* cf,
+        replica::column_family* cf,
         schema_ptr schema,
         reader_permit permit,
         utils::estimated_histogram& sstable_histogram,
@@ -814,7 +814,7 @@ sstable_set_impl::create_single_key_sstable_reader(
 
 flat_mutation_reader_v2
 time_series_sstable_set::create_single_key_sstable_reader(
-        column_family* cf,
+        replica::column_family* cf,
         schema_ptr schema,
         reader_permit permit,
         utils::estimated_histogram& sstable_histogram,
@@ -1035,7 +1035,7 @@ sstable_set make_compound_sstable_set(schema_ptr schema, std::vector<lw_shared_p
 
 flat_mutation_reader_v2
 compound_sstable_set::create_single_key_sstable_reader(
-        column_family* cf,
+        replica::column_family* cf,
         schema_ptr schema,
         reader_permit permit,
         utils::estimated_histogram& sstable_histogram,
@@ -1069,7 +1069,7 @@ compound_sstable_set::create_single_key_sstable_reader(
 
 flat_mutation_reader_v2
 sstable_set::create_single_key_sstable_reader(
-        column_family* cf,
+        replica::column_family* cf,
         schema_ptr schema,
         reader_permit permit,
         utils::estimated_histogram& sstable_histogram,

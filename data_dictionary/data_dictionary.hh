@@ -28,7 +28,10 @@
 #include "seastarx.hh"
 #include "utils/UUID.hh"
 
+namespace replica {
 class database; // For transition; remove
+}
+
 class schema;
 using schema_ptr = lw_shared_ptr<const schema>;
 class view_ptr;
@@ -127,7 +130,7 @@ public:
     schema_ptr get_cdc_base_table(const schema&) const;
     const db::extensions& extensions() const;
     const gms::feature_service& features() const;
-    ::database& real_database() const; // For transition; remove
+    replica::database& real_database() const; // For transition; remove
 };
 
 }

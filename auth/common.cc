@@ -25,7 +25,7 @@
 
 #include "cql3/query_processor.hh"
 #include "cql3/statements/create_table_statement.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "schema_builder.hh"
 #include "service/migration_manager.hh"
 #include "timeout_config.hh"
@@ -92,12 +92,12 @@ future<> create_metadata_table_if_missing(
     return futurize_invoke(create_metadata_table_if_missing_impl, table_name, qp, cql, mm);
 }
 
-future<> wait_for_schema_agreement(::service::migration_manager& mm, const database& db, seastar::abort_source& as) {
+future<> wait_for_schema_agreement(::service::migration_manager& mm, const replica::database& db, seastar::abort_source& as) {
     static const auto pause = [] { return sleep(std::chrono::milliseconds(500)); };
 
     return do_until([&db, &as] {
         as.check();
-        return db.get_version() != database::empty_version;
+        return db.get_version() != replica::database::empty_version;
     }, pause).then([&mm, &as] {
         return do_until([&mm, &as] {
             as.check();

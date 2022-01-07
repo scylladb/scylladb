@@ -40,7 +40,7 @@
 
 #pragma once
 
-#include "database_fwd.hh"
+#include "replica/database_fwd.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "gms/gossiper.hh"
 
@@ -51,7 +51,7 @@ public:
     static constexpr std::chrono::milliseconds BROADCAST_INTERVAL{60 * 1000};
 
 private:
-    distributed<database>& _db;
+    distributed<replica::database>& _db;
     gms::gossiper& _gossiper;
     std::unordered_map<gms::inet_address, double> _load_info;
     timer<> _timer;
@@ -59,7 +59,7 @@ private:
     bool _stopped = false;
 
 public:
-    load_broadcaster(distributed<database>& db, gms::gossiper& g) : _db(db), _gossiper(g) {
+    load_broadcaster(distributed<replica::database>& db, gms::gossiper& g) : _db(db), _gossiper(g) {
         _gossiper.register_(shared_from_this());
     }
     ~load_broadcaster() {

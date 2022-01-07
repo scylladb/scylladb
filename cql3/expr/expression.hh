@@ -41,7 +41,7 @@
 #include "utils/overloaded_functor.hh"
 #include "utils/variant_element.hh"
 #include "cql3/values.hh"
-#include "database_fwd.hh"
+#include "replica/database_fwd.hh"
 
 class row;
 

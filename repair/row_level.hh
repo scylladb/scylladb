@@ -54,7 +54,7 @@ public:
 class repair_service : public seastar::peering_sharded_service<repair_service> {
     distributed<gms::gossiper>& _gossiper;
     netw::messaging_service& _messaging;
-    sharded<database>& _db;
+    sharded<replica::database>& _db;
     sharded<service::storage_proxy>& _sp;
     sharded<db::batchlog_manager>& _bm;
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
@@ -78,7 +78,7 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
 public:
     repair_service(distributed<gms::gossiper>& gossiper,
             netw::messaging_service& ms,
-            sharded<database>& db,
+            sharded<replica::database>& db,
             sharded<service::storage_proxy>& sp,
             sharded<db::batchlog_manager>& bm,
             sharded<db::system_distributed_keyspace>& sys_dist_ks,
@@ -133,7 +133,7 @@ private:
 
 public:
     netw::messaging_service& get_messaging() noexcept { return _messaging; }
-    sharded<database>& get_db() noexcept { return _db; }
+    sharded<replica::database>& get_db() noexcept { return _db; }
     service::migration_manager& get_migration_manager() noexcept { return _mm; }
     sharded<db::system_distributed_keyspace>& get_sys_dist_ks() noexcept { return _sys_dist_ks; }
     sharded<db::view::view_update_generator>& get_view_update_generator() noexcept { return _view_update_generator; }

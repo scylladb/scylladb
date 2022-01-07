@@ -31,7 +31,7 @@
 #include "service/priority_manager.hh"
 #include "message/messaging_service.hh"
 #include "sstables/sstables.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "db/config.hh"
 #include "hashers.hh"
 #include "locator/network_topology_strategy.hh"
@@ -153,7 +153,7 @@ std::ostream& operator<<(std::ostream& out, row_level_diff_detect_algorithm algo
     return out << "unknown";
 }
 
-static std::vector<sstring> list_column_families(const database& db, const sstring& keyspace) {
+static std::vector<sstring> list_column_families(const replica::database& db, const sstring& keyspace) {
     std::vector<sstring> ret;
     for (auto &&e : db.get_column_families_mapping()) {
         if (e.first.first == keyspace) {
@@ -168,7 +168,7 @@ std::ostream& operator<<(std::ostream& os, const repair_uniq_id& x) {
 }
 
 // Must run inside a seastar thread
-static std::vector<utils::UUID> get_table_ids(const database& db, const sstring& keyspace, const std::vector<sstring>& tables) {
+static std::vector<utils::UUID> get_table_ids(const replica::database& db, const sstring& keyspace, const std::vector<sstring>& tables) {
     std::vector<utils::UUID> table_ids;
     table_ids.reserve(tables.size());
     for (auto& table : tables) {
@@ -178,7 +178,7 @@ static std::vector<utils::UUID> get_table_ids(const database& db, const sstring&
     return table_ids;
 }
 
-static std::vector<sstring> get_table_names(const database& db, const std::vector<utils::UUID>& table_ids) {
+static std::vector<sstring> get_table_names(const replica::database& db, const std::vector<utils::UUID>& table_ids) {
     std::vector<sstring> table_names;
     table_names.reserve(table_ids.size());
     for (auto& table_id : table_ids) {
@@ -196,13 +196,13 @@ void remove_item(Collection& c, T& item) {
 }
 
 // Return all of the neighbors with whom we share the provided range.
-static std::vector<gms::inet_address> get_neighbors(database& db,
+static std::vector<gms::inet_address> get_neighbors(replica::database& db,
         const sstring& ksname, query::range<dht::token> range,
         const std::vector<sstring>& data_centers,
         const std::vector<sstring>& hosts,
         const std::unordered_set<gms::inet_address>& ignore_nodes) {
 
-    keyspace& ks = db.find_keyspace(ksname);
+    replica::keyspace& ks = db.find_keyspace(ksname);
     auto erm = ks.get_effective_replication_map();
 
     dht::token tok = range.end() ? range.end()->value() : dht::maximum_token();
@@ -315,7 +315,7 @@ static std::vector<gms::inet_address> get_neighbors(database& db,
 #endif
 }
 
-static future<std::list<gms::inet_address>> get_hosts_participating_in_repair(database& db,
+static future<std::list<gms::inet_address>> get_hosts_participating_in_repair(replica::database& db,
         const sstring& ksname,
         const dht::token_range_vector& ranges,
         const std::vector<sstring>& data_centers,
@@ -539,7 +539,7 @@ void check_in_shutdown() {
     repair_tracker().check_in_shutdown();
 }
 
-future<uint64_t> estimate_partitions(seastar::sharded<database>& db, const sstring& keyspace,
+future<uint64_t> estimate_partitions(seastar::sharded<replica::database>& db, const sstring& keyspace,
         const sstring& cf, const dht::token_range& range) {
     return db.map_reduce0(
         [keyspace, cf, range] (auto& db) {
@@ -559,14 +559,14 @@ future<uint64_t> estimate_partitions(seastar::sharded<database>& db, const sstri
 
 static
 const dht::sharder&
-get_sharder_for_tables(seastar::sharded<database>& db, const sstring& keyspace, const std::vector<utils::UUID>& table_ids) {
+get_sharder_for_tables(seastar::sharded<replica::database>& db, const sstring& keyspace, const std::vector<utils::UUID>& table_ids) {
     schema_ptr last_s;
     for (size_t idx = 0 ; idx < table_ids.size(); idx++) {
         schema_ptr s;
         try {
             s = db.local().find_column_family(table_ids[idx]).schema();
         } catch(...) {
-            throw no_such_column_family(keyspace, table_ids[idx]);
+            throw replica::no_such_column_family(keyspace, table_ids[idx]);
         }
         if (last_s && last_s->get_sharder() != s->get_sharder()) {
             throw std::runtime_error(
@@ -695,14 +695,14 @@ future<> repair_info::repair_range(const dht::token_range& range) {
             sstring cf;
             try {
                 cf = db.local().find_column_family(table_id).schema()->cf_name();
-            } catch (no_such_column_family&) {
+            } catch (replica::no_such_column_family&) {
                 return make_ready_future<>();
             }
             // Row level repair
             if (dropped_tables.contains(cf)) {
                 return make_ready_future<>();
             }
-            return repair_cf_range_row_level(*this, cf, table_id, range, neighbors).handle_exception_type([this, cf] (no_such_column_family&) mutable {
+            return repair_cf_range_row_level(*this, cf, table_id, range, neighbors).handle_exception_type([this, cf] (replica::no_such_column_family&) mutable {
                 dropped_tables.insert(cf);
                 return make_ready_future<>();
             }).handle_exception([this] (std::exception_ptr ep) mutable {
@@ -715,12 +715,12 @@ future<> repair_info::repair_range(const dht::token_range& range) {
 }
 
 static dht::token_range_vector get_primary_ranges_for_endpoint(
-        database& db, sstring keyspace, gms::inet_address ep) {
+        replica::database& db, sstring keyspace, gms::inet_address ep) {
     return db.find_keyspace(keyspace).get_effective_replication_map()->get_primary_ranges(ep);
 }
 
 static dht::token_range_vector get_primary_ranges(
-        database& db, sstring keyspace) {
+        replica::database& db, sstring keyspace) {
     return get_primary_ranges_for_endpoint(db, keyspace,
             utils::fb_utilities::get_broadcast_address());
 }
@@ -730,7 +730,7 @@ static dht::token_range_vector get_primary_ranges(
 // across the entire cluster, here each range is assigned a primary
 // owner in each of the clusters.
 static dht::token_range_vector get_primary_ranges_within_dc(
-        database& db, sstring keyspace) {
+        replica::database& db, sstring keyspace) {
     return db.find_keyspace(keyspace).get_effective_replication_map()->get_primary_ranges_within_dc(utils::fb_utilities::get_broadcast_address());
 }
 
@@ -1027,7 +1027,7 @@ static future<> repair_ranges(lw_shared_ptr<repair_info> ri) {
 // repairs). It is fine to always do this on one CPU, because the function
 // itself does very little (mainly tell other nodes and CPUs what to do).
 int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring, sstring> options_map) {
-    seastar::sharded<database>& db = get_db();
+    seastar::sharded<replica::database>& db = get_db();
     check_in_shutdown();
 
     repair_options options(options_map);
@@ -1237,20 +1237,20 @@ future<int> repair_start(seastar::sharded<repair_service>& repair,
     });
 }
 
-future<std::vector<int>> get_active_repairs(seastar::sharded<database>& db) {
-    return db.invoke_on(0, [] (database& localdb) {
+future<std::vector<int>> get_active_repairs(seastar::sharded<replica::database>& db) {
+    return db.invoke_on(0, [] (replica::database& localdb) {
         return repair_tracker().get_active();
     });
 }
 
-future<repair_status> repair_get_status(seastar::sharded<database>& db, int id) {
-    return db.invoke_on(0, [id] (database& localdb) {
+future<repair_status> repair_get_status(seastar::sharded<replica::database>& db, int id) {
+    return db.invoke_on(0, [id] (replica::database& localdb) {
         return repair_tracker().get(id);
     });
 }
 
-future<repair_status> repair_await_completion(seastar::sharded<database>& db, int id, std::chrono::steady_clock::time_point timeout) {
-    return db.invoke_on(0, [id, timeout] (database& localdb) {
+future<repair_status> repair_await_completion(seastar::sharded<replica::database>& db, int id, std::chrono::steady_clock::time_point timeout) {
+    return db.invoke_on(0, [id, timeout] (replica::database& localdb) {
         return repair_tracker().repair_await_completion(id, timeout);
     });
 }
@@ -1262,8 +1262,8 @@ future<> repair_service::shutdown() {
     }
 }
 
-future<> repair_abort_all(seastar::sharded<database>& db) {
-    return db.invoke_on_all([] (database& localdb) {
+future<> repair_abort_all(seastar::sharded<replica::database>& db) {
+    return db.invoke_on_all([] (replica::database& localdb) {
         repair_tracker().abort_all_repairs();
     });
 }
@@ -1288,7 +1288,7 @@ future<> repair_service::do_sync_data_using_repair(
         std::unordered_map<dht::token_range, repair_neighbors> neighbors,
         streaming::stream_reason reason,
         std::optional<utils::UUID> ops_uuid) {
-    seastar::sharded<database>& db = get_db();
+    seastar::sharded<replica::database>& db = get_db();
 
     repair_uniq_id id = repair_tracker().next_repair_command();
     rlogger.info("repair id {} to sync data for keyspace={}, status=started", id, keyspace);
@@ -1344,7 +1344,7 @@ future<> repair_service::do_sync_data_using_repair(
 future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> bootstrap_tokens) {
     using inet_address = gms::inet_address;
     return seastar::async([this, tmptr = std::move(tmptr), tokens = std::move(bootstrap_tokens)] () mutable {
-        seastar::sharded<database>& db = get_db();
+        seastar::sharded<replica::database>& db = get_db();
         auto keyspaces = db.local().get_non_system_keyspaces();
         auto myip = utils::fb_utilities::get_broadcast_address();
         auto reason = streaming::stream_reason::bootstrap;
@@ -1360,7 +1360,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
             seastar::thread::maybe_yield();
             nr_ranges_total += desired_ranges.size();
         }
-        db.invoke_on_all([nr_ranges_total] (database&) {
+        db.invoke_on_all([nr_ranges_total] (replica::database&) {
             _node_ops_metrics.bootstrap_finished_ranges = 0;
             _node_ops_metrics.bootstrap_total_ranges = nr_ranges_total;
         }).get();
@@ -1518,7 +1518,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
 future<> repair_service::do_decommission_removenode_with_repair(locator::token_metadata_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops) {
     using inet_address = gms::inet_address;
     return seastar::async([this, tmptr = std::move(tmptr), leaving_node = std::move(leaving_node), ops] () mutable {
-        seastar::sharded<database>& db = get_db();
+        seastar::sharded<replica::database>& db = get_db();
         auto myip = utils::fb_utilities::get_broadcast_address();
         auto keyspaces = db.local().get_non_system_keyspaces();
         bool is_removenode = myip != leaving_node;
@@ -1534,12 +1534,12 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
             nr_ranges_total += ranges.size();
         }
         if (reason == streaming::stream_reason::decommission) {
-            db.invoke_on_all([nr_ranges_total] (database&) {
+            db.invoke_on_all([nr_ranges_total] (replica::database&) {
                 _node_ops_metrics.decommission_finished_ranges = 0;
                 _node_ops_metrics.decommission_total_ranges = nr_ranges_total;
             }).get();
         } else if (reason == streaming::stream_reason::removenode) {
-            db.invoke_on_all([nr_ranges_total] (database&) {
+            db.invoke_on_all([nr_ranges_total] (replica::database&) {
                 _node_ops_metrics.removenode_finished_ranges = 0;
                 _node_ops_metrics.removenode_total_ranges = nr_ranges_total;
             }).get();
@@ -1690,11 +1690,11 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
             }
             temp.clear_gently().get();
             if (reason == streaming::stream_reason::decommission) {
-                db.invoke_on_all([nr_ranges_skipped] (database&) {
+                db.invoke_on_all([nr_ranges_skipped] (replica::database&) {
                     _node_ops_metrics.decommission_finished_ranges += nr_ranges_skipped;
                 }).get();
             } else if (reason == streaming::stream_reason::removenode) {
-                db.invoke_on_all([nr_ranges_skipped] (database&) {
+                db.invoke_on_all([nr_ranges_skipped] (replica::database&) {
                     _node_ops_metrics.removenode_finished_ranges += nr_ranges_skipped;
                 }).get();
             }
@@ -1718,8 +1718,8 @@ future<> repair_service::decommission_with_repair(locator::token_metadata_ptr tm
 future<> repair_service::removenode_with_repair(locator::token_metadata_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops) {
     return do_decommission_removenode_with_repair(std::move(tmptr), std::move(leaving_node), std::move(ops)).then([this] {
         rlogger.debug("Triggering off-strategy compaction for all non-system tables on removenode completion");
-        seastar::sharded<database>& db = get_db();
-        return db.invoke_on_all([](database &db) {
+        seastar::sharded<replica::database>& db = get_db();
+        return db.invoke_on_all([](replica::database &db) {
             for (auto& table : db.get_non_system_column_families()) {
                 table->trigger_offstrategy_compaction();
             }
@@ -1735,7 +1735,7 @@ future<> abort_repair_node_ops(utils::UUID ops_uuid) {
 
 future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_ptr tmptr, sstring op, sstring source_dc, streaming::stream_reason reason, std::list<gms::inet_address> ignore_nodes) {
     return seastar::async([this, tmptr = std::move(tmptr), source_dc = std::move(source_dc), op = std::move(op), reason, ignore_nodes = std::move(ignore_nodes)] () mutable {
-        seastar::sharded<database>& db = get_db();
+        seastar::sharded<replica::database>& db = get_db();
         auto keyspaces = db.local().get_non_system_keyspaces();
         auto myip = utils::fb_utilities::get_broadcast_address();
         size_t nr_ranges_total = 0;
@@ -1751,12 +1751,12 @@ future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_
 
         }
         if (reason == streaming::stream_reason::rebuild) {
-            db.invoke_on_all([nr_ranges_total] (database&) {
+            db.invoke_on_all([nr_ranges_total] (replica::database&) {
                 _node_ops_metrics.rebuild_finished_ranges = 0;
                 _node_ops_metrics.rebuild_total_ranges = nr_ranges_total;
             }).get();
         } else if (reason == streaming::stream_reason::replace) {
-            db.invoke_on_all([nr_ranges_total] (database&) {
+            db.invoke_on_all([nr_ranges_total] (replica::database&) {
                 _node_ops_metrics.replace_finished_ranges = 0;
                 _node_ops_metrics.replace_total_ranges = nr_ranges_total;
             }).get();
@@ -1800,11 +1800,11 @@ future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_
                 }
             }
             if (reason == streaming::stream_reason::rebuild) {
-                db.invoke_on_all([nr_ranges_skipped] (database&) {
+                db.invoke_on_all([nr_ranges_skipped] (replica::database&) {
                     _node_ops_metrics.rebuild_finished_ranges += nr_ranges_skipped;
                 }).get();
             } else if (reason == streaming::stream_reason::replace) {
-                db.invoke_on_all([nr_ranges_skipped] (database&) {
+                db.invoke_on_all([nr_ranges_skipped] (replica::database&) {
                     _node_ops_metrics.replace_finished_ranges += nr_ranges_skipped;
                 }).get();
             }
@@ -1823,7 +1823,7 @@ future<> repair_service::rebuild_with_repair(locator::token_metadata_ptr tmptr, 
     }
     auto reason = streaming::stream_reason::rebuild;
     co_await do_rebuild_replace_with_repair(std::move(tmptr), std::move(op), std::move(source_dc), reason, {});
-    co_await get_db().invoke_on_all([](database& db) {
+    co_await get_db().invoke_on_all([](replica::database& db) {
         for (auto& t : db.get_non_system_column_families()) {
             t->trigger_offstrategy_compaction();
         }

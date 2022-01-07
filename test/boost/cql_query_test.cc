@@ -2797,7 +2797,7 @@ SEASTAR_TEST_CASE(test_reversed_slice_with_many_clustering_ranges) {
             e.execute_prepared(id, {cql3_pk, cql3_ck, cql3_value}).get();
         }
 
-        e.db().invoke_on_all([] (database& db) {
+        e.db().invoke_on_all([] (replica::database& db) {
             return db.flush_all_memtables();
         }).get();
 
@@ -3501,7 +3501,7 @@ SEASTAR_TEST_CASE(test_select_with_mixed_order_table) {
 uint64_t
 run_and_examine_cache_read_stats_change(cql_test_env& e, std::string_view cf_name, std::function<void (cql_test_env& e)> func) {
     auto read_stat = [&] {
-        return e.db().map_reduce0([&cf_name] (const database& db) {
+        return e.db().map_reduce0([&cf_name] (const replica::database& db) {
             auto& t = db.find_column_family("ks", cf_name);
             auto& stats = t.get_row_cache().stats();
             return stats.reads_with_misses.count() + stats.reads_with_no_misses.count();
@@ -4713,8 +4713,8 @@ static future<> test_clustering_filtering_with_compaction_strategy(const std::st
     return do_with_cql_env_thread([&cs] (cql_test_env& e) {
         cquery_nofail(e, format("CREATE TABLE cf(pk text, ck int, v text, PRIMARY KEY(pk, ck)) WITH COMPACTION = {{'class': '{}'}}", cs));
         cquery_nofail(e, "INSERT INTO  cf(pk, ck, v) VALUES ('a', 1, 'a1')");
-        e.db().invoke_on_all([] (database& db) { return db.flush_all_memtables(); }).get();
-        e.db().invoke_on_all([] (database& db) { db.row_cache_tracker().clear(); }).get();
+        e.db().invoke_on_all([] (replica::database& db) { return db.flush_all_memtables(); }).get();
+        e.db().invoke_on_all([] (replica::database& db) { db.row_cache_tracker().clear(); }).get();
         require_rows(e, "SELECT v FROM cf WHERE pk='a' AND ck=0 ALLOW FILTERING", {});
         require_rows(e, "SELECT v FROM cf", {{T("a1")}});
     }, cql_test_config(db_config));
@@ -4738,8 +4738,8 @@ static future<> test_clustering_filtering_2_with_compaction_strategy(const std::
         cquery_nofail(e, format("CREATE TABLE cf(pk text, ck int, v text, PRIMARY KEY(pk, ck)) WITH COMPACTION = {{'class': '{}'}}", cs));
         cquery_nofail(e, "INSERT INTO  cf(pk, ck, v) VALUES ('a', 1, 'a1')");
         cquery_nofail(e, "INSERT INTO  cf(pk, ck, v) VALUES ('b', 2, 'b2')");
-        e.db().invoke_on_all([] (database& db) { return db.flush_all_memtables(); }).get();
-        e.db().invoke_on_all([] (database& db) { db.row_cache_tracker().clear(); }).get();
+        e.db().invoke_on_all([] (replica::database& db) { return db.flush_all_memtables(); }).get();
+        e.db().invoke_on_all([] (replica::database& db) { db.row_cache_tracker().clear(); }).get();
         require_rows(e, "SELECT v FROM cf WHERE pk='a' AND ck=0 ALLOW FILTERING", {});
         require_rows(e, "SELECT v FROM cf", {{T("a1")}, {T("b2")}});
     }, cql_test_config(db_config));
@@ -4761,15 +4761,15 @@ static future<> test_clustering_filtering_3_with_compaction_strategy(const std::
 
     return do_with_cql_env_thread([&cs] (cql_test_env& e) {
         cquery_nofail(e, format("CREATE TABLE cf(pk text, ck int, v text, PRIMARY KEY(pk, ck)) WITH COMPACTION = {{'class': '{}'}}", cs));
-        e.db().invoke_on_all([] (database& db) {
+        e.db().invoke_on_all([] (replica::database& db) {
             auto& table = db.find_column_family("ks", "cf");
             return table.disable_auto_compaction();
         }).get();
         cquery_nofail(e, "INSERT INTO  cf(pk, ck, v) VALUES ('a', 1, 'a1')");
-        e.db().invoke_on_all([] (database& db) { return db.flush_all_memtables(); }).get();
+        e.db().invoke_on_all([] (replica::database& db) { return db.flush_all_memtables(); }).get();
         cquery_nofail(e, "INSERT INTO  cf(pk, ck, v) VALUES ('b', 0, 'b0')");
-        e.db().invoke_on_all([] (database& db) { return db.flush_all_memtables(); }).get();
-        e.db().invoke_on_all([] (database& db) { db.row_cache_tracker().clear(); }).get();
+        e.db().invoke_on_all([] (replica::database& db) { return db.flush_all_memtables(); }).get();
+        e.db().invoke_on_all([] (replica::database& db) { db.row_cache_tracker().clear(); }).get();
         require_rows(e, "SELECT v FROM cf WHERE pk='a' AND ck=0 ALLOW FILTERING", {});
         require_rows(e, "SELECT v FROM cf", {{T("a1")}, {T("b0")}});
     }, cql_test_config(db_config));
@@ -4824,7 +4824,7 @@ SEASTAR_THREAD_TEST_CASE(test_twcs_non_optimal_query_path) {
         e.execute_cql("INSERT INTO tbl (pk, ck, v) VALUES (0, 1, 0)").get();
         e.execute_cql("INSERT INTO tbl (pk, ck, v) VALUES (1, 1, 0)").get();
 
-        e.db().invoke_on_all([] (database& db) {
+        e.db().invoke_on_all([] (replica::database& db) {
             return db.flush_all_memtables();
         }).get();
 
@@ -4850,7 +4850,7 @@ SEASTAR_THREAD_TEST_CASE(test_twcs_optimal_query_path) {
 
         e.execute_cql("INSERT INTO tbl (pk, ck, v) VALUES (0, 0, 0)").get();
 
-        e.db().invoke_on_all([] (database& db) {
+        e.db().invoke_on_all([] (replica::database& db) {
             return db.flush_all_memtables();
         }).get();
 

@@ -26,7 +26,7 @@
 
 #include "schema_builder.hh"
 #include "row_cache.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "db/config.hh"
 #include "db/commitlog/commitlog.hh"
 
@@ -221,7 +221,7 @@ void test_main_thread(cql_test_env& env) {
                            "AND compaction = {{'class' : 'NullCompactionStrategy'}};",
         "create table test (pk int, ck int, value blob, primary key (pk,ck))", compressor)).get();
 
-    table& tab = env.local_db().find_column_family("ks", "test");
+    replica::table& tab = env.local_db().find_column_family("ks", "test");
     auto s = tab.schema();
 
     auto value = serialized(tests::random::get_bytes(clustering_row_size));

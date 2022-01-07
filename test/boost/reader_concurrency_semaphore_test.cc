@@ -452,17 +452,17 @@ SEASTAR_TEST_CASE(reader_restriction_file_tracking) {
 
 SEASTAR_TEST_CASE(reader_concurrency_semaphore_timeout) {
     return async([&] () {
-        reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), 2, new_reader_base_cost);
+        reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), 2, replica::new_reader_base_cost);
         auto stop_sem = deferred_stop(semaphore);
 
         {
             auto timeout = db::timeout_clock::now() + std::chrono::duration_cast<db::timeout_clock::time_point::duration>(std::chrono::milliseconds{1});
 
-            reader_permit_opt permit1 = semaphore.obtain_permit(nullptr, "permit1", new_reader_base_cost, timeout).get();
+            reader_permit_opt permit1 = semaphore.obtain_permit(nullptr, "permit1", replica::new_reader_base_cost, timeout).get();
 
-            auto permit2_fut = semaphore.obtain_permit(nullptr, "permit2", new_reader_base_cost, timeout);
+            auto permit2_fut = semaphore.obtain_permit(nullptr, "permit2", replica::new_reader_base_cost, timeout);
 
-            auto permit3_fut = semaphore.obtain_permit(nullptr, "permit3", new_reader_base_cost, timeout);
+            auto permit3_fut = semaphore.obtain_permit(nullptr, "permit3", replica::new_reader_base_cost, timeout);
 
             BOOST_REQUIRE_EQUAL(semaphore.waiters(), 2);
 
@@ -490,25 +490,25 @@ SEASTAR_TEST_CASE(reader_concurrency_semaphore_timeout) {
        }
 
         // All units should have been deposited back.
-        REQUIRE_EVENTUALLY_EQUAL(new_reader_base_cost, semaphore.available_resources().memory);
+        REQUIRE_EVENTUALLY_EQUAL(replica::new_reader_base_cost, semaphore.available_resources().memory);
     });
 }
 
 SEASTAR_TEST_CASE(reader_concurrency_semaphore_max_queue_length) {
     return async([&] () {
-        reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), 1, new_reader_base_cost, 2);
+        reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), 1, replica::new_reader_base_cost, 2);
         auto stop_sem = deferred_stop(semaphore);
 
         {
-            reader_permit_opt permit1 = semaphore.obtain_permit(nullptr, "permit1", new_reader_base_cost, db::no_timeout).get();
+            reader_permit_opt permit1 = semaphore.obtain_permit(nullptr, "permit1", replica::new_reader_base_cost, db::no_timeout).get();
 
-            auto permit2_fut = semaphore.obtain_permit(nullptr, "permit2", new_reader_base_cost, db::no_timeout);
+            auto permit2_fut = semaphore.obtain_permit(nullptr, "permit2", replica::new_reader_base_cost, db::no_timeout);
 
-            auto permit3_fut = semaphore.obtain_permit(nullptr, "permit3", new_reader_base_cost, db::no_timeout);
+            auto permit3_fut = semaphore.obtain_permit(nullptr, "permit3", replica::new_reader_base_cost, db::no_timeout);
 
             BOOST_REQUIRE_EQUAL(semaphore.waiters(), 2);
 
-            auto permit4_fut = semaphore.obtain_permit(nullptr, "permit4", new_reader_base_cost, db::no_timeout);
+            auto permit4_fut = semaphore.obtain_permit(nullptr, "permit4", replica::new_reader_base_cost, db::no_timeout);
 
             // The queue should now be full.
             BOOST_REQUIRE_THROW(permit4_fut.get(), std::runtime_error);
@@ -522,7 +522,7 @@ SEASTAR_TEST_CASE(reader_concurrency_semaphore_max_queue_length) {
             }
         }
 
-        REQUIRE_EVENTUALLY_EQUAL(new_reader_base_cost, semaphore.available_resources().memory);
+        REQUIRE_EVENTUALLY_EQUAL(replica::new_reader_base_cost, semaphore.available_resources().memory);
     });
 }
 

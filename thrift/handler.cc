@@ -27,7 +27,7 @@
 #include "Cassandra.h"
 #include <seastar/core/distributed.hh>
 #include <seastar/core/coroutine.hh>
-#include "database.hh"
+#include "replica/database.hh"
 #include <seastar/core/sstring.hh>
 #include <seastar/core/print.hh>
 #include "frozen_mutation.hh"
@@ -107,9 +107,9 @@ public:
             throw make_exception<InvalidRequestException>(ce.what());
         } catch (exceptions::invalid_request_exception& ire) {
             throw make_exception<InvalidRequestException>(ire.what());
-        } catch (no_such_column_family& nocf) {
+        } catch (replica::no_such_column_family& nocf) {
             throw make_exception<InvalidRequestException>(nocf.what());
-        } catch (no_such_keyspace&) {
+        } catch (replica::no_such_keyspace&) {
             throw NotFoundException();
         } catch (exceptions::syntax_exception& se) {
             throw make_exception<InvalidRequestException>("syntax error: {}", se.what());
@@ -203,7 +203,7 @@ concept Aggregator =
 enum class query_order { no, yes };
 
 class thrift_handler : public CassandraCobSvIf {
-    distributed<database>& _db;
+    distributed<replica::database>& _db;
     distributed<cql3::query_processor>& _query_processor;
     sharded<service::storage_service>& _ss;
     sharded<service::storage_proxy>& _proxy;
@@ -224,7 +224,7 @@ private:
         });
     }
 public:
-    explicit thrift_handler(distributed<database>& db, distributed<cql3::query_processor>& qp, sharded<service::storage_service>& ss, sharded<service::storage_proxy>& proxy,
+    explicit thrift_handler(distributed<replica::database>& db, distributed<cql3::query_processor>& qp, sharded<service::storage_service>& ss, sharded<service::storage_proxy>& proxy,
             auth::service& auth_service, ::timeout_config timeout_config, service_permit& current_permit)
         : _db(db)
         , _query_processor(qp)
@@ -1206,7 +1206,7 @@ private:
         result.__set_rows(std::move(v._rows));
         return result;
     }
-    static KsDef get_keyspace_definition(const keyspace& ks) {
+    static KsDef get_keyspace_definition(const replica::keyspace& ks) {
         auto make_options = [](auto&& m) {
             return std::map<std::string, std::string>(m.begin(), m.end());
         };
@@ -1399,7 +1399,7 @@ private:
             ks_def.durable_writes,
             std::move(cf_defs));
     }
-    static schema_ptr lookup_schema(database& db, const sstring& ks_name, const sstring& cf_name) {
+    static schema_ptr lookup_schema(replica::database& db, const sstring& ks_name, const sstring& cf_name) {
         if (ks_name.empty()) {
             throw make_exception<InvalidRequestException>("keyspace not set");
         }
@@ -1993,7 +1993,7 @@ private:
         }
         return ret;
     }
-    static std::pair<std::vector<mutation>, std::vector<schema_ptr>> prepare_mutations(database& db, const sstring& ks_name, const mutation_map& m) {
+    static std::pair<std::vector<mutation>, std::vector<schema_ptr>> prepare_mutations(replica::database& db, const sstring& ks_name, const mutation_map& m) {
         std::vector<mutation> muts;
         std::vector<schema_ptr> schemas;
         auto m_by_cf = group_by_cf(const_cast<mutation_map&>(m));
@@ -2020,7 +2020,7 @@ protected:
 };
 
 class handler_factory : public CassandraCobSvIfFactory {
-    distributed<database>& _db;
+    distributed<replica::database>& _db;
     distributed<cql3::query_processor>& _query_processor;
     sharded<service::storage_service>& _ss;
     sharded<service::storage_proxy>& _proxy;
@@ -2028,7 +2028,7 @@ class handler_factory : public CassandraCobSvIfFactory {
     timeout_config _timeout_config;
     service_permit& _current_permit;
 public:
-    explicit handler_factory(distributed<database>& db,
+    explicit handler_factory(distributed<replica::database>& db,
                              distributed<cql3::query_processor>& qp,
                              sharded<service::storage_service>& ss,
                              sharded<service::storage_proxy>& proxy,
@@ -2046,7 +2046,7 @@ public:
 };
 
 std::unique_ptr<CassandraCobSvIfFactory>
-create_handler_factory(distributed<database>& db, distributed<cql3::query_processor>& qp,
+create_handler_factory(distributed<replica::database>& db, distributed<cql3::query_processor>& qp,
         sharded<service::storage_service>& ss, sharded<service::storage_proxy>& proxy,
         auth::service& auth_service, ::timeout_config timeout_config, service_permit& current_permit) {
     return std::make_unique<handler_factory>(db, qp, ss, proxy, auth_service, timeout_config, current_permit);

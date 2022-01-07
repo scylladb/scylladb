@@ -41,7 +41,7 @@
 
 #pragma once
 
-#include "database_fwd.hh"
+#include "replica/database_fwd.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "message/messaging_service_fwd.hh"
 #include "query-request.hh"
@@ -265,7 +265,7 @@ public:
     query::max_result_size get_max_result_size(const query::partition_slice& slice) const;
 
 private:
-    distributed<database>& _db;
+    distributed<replica::database>& _db;
     gms::gossiper& _gossiper;
     const locator::shared_token_metadata& _shared_token_metadata;
     locator::effective_replication_map_factory& _erm_factory;
@@ -348,7 +348,7 @@ private:
     response_id_type create_write_response_handler_helper(schema_ptr s, const dht::token& token,
             std::unique_ptr<mutation_holder> mh, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state,
             service_permit permit);
-    response_id_type create_write_response_handler(keyspace& ks, db::consistency_level cl, db::write_type type, std::unique_ptr<mutation_holder> m, inet_address_vector_replica_set targets,
+    response_id_type create_write_response_handler(replica::keyspace& ks, db::consistency_level cl, db::write_type type, std::unique_ptr<mutation_holder> m, inet_address_vector_replica_set targets,
             const inet_address_vector_topology_change& pending_endpoints, inet_address_vector_topology_change, tracing::trace_state_ptr tr_state, storage_proxy::write_stats& stats, service_permit permit);
     response_id_type create_write_response_handler(const mutation&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit);
     response_id_type create_write_response_handler(const hint_wrapper&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit);
@@ -366,9 +366,9 @@ private:
     bool cannot_hint(const Range& targets, db::write_type type) const;
     bool hints_enabled(db::write_type type) const noexcept;
     db::hints::manager& hints_manager_for(db::write_type type);
-    inet_address_vector_replica_set get_live_endpoints(keyspace& ks, const dht::token& token) const;
+    inet_address_vector_replica_set get_live_endpoints(replica::keyspace& ks, const dht::token& token) const;
     static void sort_endpoints_by_proximity(inet_address_vector_replica_set& eps);
-    inet_address_vector_replica_set get_live_sorted_endpoints(keyspace& ks, const dht::token& token) const;
+    inet_address_vector_replica_set get_live_sorted_endpoints(replica::keyspace& ks, const dht::token& token) const;
     db::read_repair_decision new_read_repair_decision(const schema& s);
     ::shared_ptr<abstract_read_executor> get_read_executor(lw_shared_ptr<query::read_command> cmd,
             schema_ptr schema,
@@ -463,22 +463,22 @@ private:
     void retire_view_response_handlers(noncopyable_function<bool(const abstract_write_response_handler&)> filter_fun);
     void connection_dropped(gms::inet_address);
 public:
-    storage_proxy(distributed<database>& db, gms::gossiper& gossiper, config cfg, db::view::node_update_backlog& max_view_update_backlog,
+    storage_proxy(distributed<replica::database>& db, gms::gossiper& gossiper, config cfg, db::view::node_update_backlog& max_view_update_backlog,
             scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, locator::effective_replication_map_factory& erm_factory, netw::messaging_service& ms);
     ~storage_proxy();
-    const distributed<database>& get_db() const {
+    const distributed<replica::database>& get_db() const {
         return _db;
     }
-    distributed<database>& get_db() {
+    distributed<replica::database>& get_db() {
         return _db;
     }
-    const database& local_db() const noexcept {
+    const replica::database& local_db() const noexcept {
         return _db.local();
     }
 
     const data_dictionary::database data_dictionary() const;
 
-    database& local_db() noexcept {
+    replica::database& local_db() noexcept {
         return _db.local();
     }
 

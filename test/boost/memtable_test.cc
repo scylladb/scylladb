@@ -21,7 +21,7 @@
 
 #include <boost/test/unit_test.hpp>
 #include "service/priority_manager.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "db/config.hh"
 #include "utils/UUID_gen.hh"
 #include <seastar/testing/test_case.hh>
@@ -141,7 +141,7 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
     return seastar::async([] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
-        auto make_memtable = [] (dirty_memory_manager& mgr, table_stats& tbl_stats, std::vector<mutation> muts) {
+        auto make_memtable = [] (dirty_memory_manager& mgr, replica::table_stats& tbl_stats, std::vector<mutation> muts) {
             assert(!muts.empty());
             auto mt = make_lw_shared<memtable>(muts.front().schema(), mgr, tbl_stats);
             for (auto& m : muts) {
@@ -152,7 +152,7 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
 
         auto test_random_streams = [&] (random_mutation_generator&& gen) {
             for (auto i = 0; i < 4; i++) {
-                table_stats tbl_stats;
+                replica::table_stats tbl_stats;
                 dirty_memory_manager mgr;
                 const auto muts = gen(4);
                 const auto now = gc_clock::now();
@@ -265,7 +265,7 @@ SEASTAR_TEST_CASE(test_virtual_dirty_accounting_on_flush) {
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
         dirty_memory_manager mgr;
-        table_stats tbl_stats;
+        replica::table_stats tbl_stats;
 
         auto mt = make_lw_shared<memtable>(s, mgr, tbl_stats);
 
@@ -399,7 +399,7 @@ SEASTAR_TEST_CASE(test_segment_migration_during_flush) {
 
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
-        table_stats tbl_stats;
+        replica::table_stats tbl_stats;
         dirty_memory_manager mgr;
 
         auto mt = make_lw_shared<memtable>(s, mgr, tbl_stats);
@@ -675,8 +675,8 @@ SEASTAR_TEST_CASE(memtable_flush_compresses_mutations) {
         env.execute_cql(format("CREATE KEYSPACE {} WITH REPLICATION = {{'class' : 'SimpleStrategy', 'replication_factor' : 1}};", ks_name)).get();
         env.execute_cql(format("CREATE TABLE {}.{} (pk int, ck int, id int, PRIMARY KEY(pk, ck));", ks_name, table_name)).get();
 
-        database& db = env.local_db();
-        table& t = db.find_column_family(ks_name, table_name);
+        replica::database& db = env.local_db();
+        replica::table& t = db.find_column_family(ks_name, table_name);
         tests::reader_concurrency_semaphore_wrapper semaphore;
         schema_ptr s = t.schema();
 
@@ -708,7 +708,7 @@ SEASTAR_TEST_CASE(sstable_compaction_does_not_resurrect_data) {
     auto db_config = make_shared<db::config>();
     db_config->enable_cache.set(false);
     return do_with_cql_env_thread([](cql_test_env& env) {
-        database& db = env.local_db();
+        replica::database& db = env.local_db();
         service::migration_manager& mm = env.migration_manager().local();
 
         sstring ks_name = "ks";
@@ -722,7 +722,7 @@ SEASTAR_TEST_CASE(sstable_compaction_does_not_resurrect_data) {
             .build();
         mm.announce_new_column_family(s).get();
 
-        table& t = db.find_column_family(ks_name, table_name);
+        replica::table& t = db.find_column_family(ks_name, table_name);
 
         dht::decorated_key pk = dht::decorate_key(*s, partition_key::from_single_value(*s, serialized(1)));
         clustering_key ck_to_delete = clustering_key::from_single_value(*s, serialized(2));

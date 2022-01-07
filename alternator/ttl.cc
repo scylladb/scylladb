@@ -35,7 +35,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "log.hh"
 #include "gc_clock.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "service_permit.hh"
 #include "timestamp.hh"
 #include "service/storage_proxy.hh"
@@ -178,7 +178,7 @@ future<executor::request_return_type> executor::describe_time_to_live(client_sta
 // like user deletions, will also appear on the CDC log and therefore
 // Alternator Streams if enabled (FIXME: explain how we mark the
 // deletion different from user deletes. We don't do it yet.).
-expiration_service::expiration_service(database& db, service::storage_proxy& proxy)
+expiration_service::expiration_service(replica::database& db, service::storage_proxy& proxy)
         : _db(db)
         , _proxy(proxy)
 {
@@ -436,7 +436,7 @@ class token_ranges_owned_by_this_shard {
     size_t _end_idx;
     std::optional<dht::selective_token_range_sharder> _intersecter;
 public:
-    token_ranges_owned_by_this_shard(database& db, schema_ptr s)
+    token_ranges_owned_by_this_shard(replica::database& db, schema_ptr s)
         :  _s(s)
         , _token_ranges(db.find_keyspace(s->ks_name()).get_effective_replication_map(),
                 utils::fb_utilities::get_broadcast_address())
@@ -642,7 +642,7 @@ static future<> scan_table_ranges(
 // reboot.
 static future<bool> scan_table(
     service::storage_proxy& proxy,
-    database& db,
+    replica::database& db,
     schema_ptr s,
     abort_source& abort_source,
     named_semaphore& page_sem)

@@ -26,7 +26,10 @@
 #include <seastar/core/gate.hh>
 #include <seastar/core/metrics_registration.hh>
 
+namespace replica {
 class database;
+}
+
 class service_permit;
 
 namespace service {
@@ -42,15 +45,15 @@ class redis_message;
 
 class query_processor {
     service::storage_proxy& _proxy;
-    seastar::sharded<database>& _db;
+    seastar::sharded<replica::database>& _db;
     seastar::metrics::metric_groups _metrics;
     seastar::gate _pending_command_gate;
 public:
-    query_processor(service::storage_proxy& proxy, seastar::sharded<database>& db);
+    query_processor(service::storage_proxy& proxy, seastar::sharded<replica::database>& db);
 
     ~query_processor();
 
-    seastar::sharded<database>& db() {
+    seastar::sharded<replica::database>& db() {
         return _db;
     }
 

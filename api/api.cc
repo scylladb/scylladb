@@ -49,7 +49,7 @@ namespace api {
 static std::unique_ptr<reply> exception_reply(std::exception_ptr eptr) {
     try {
         std::rethrow_exception(eptr);
-    } catch (const no_such_keyspace& ex) {
+    } catch (const replica::no_such_keyspace& ex) {
         throw bad_param_exception(ex.what());
     }
     // We never going to get here

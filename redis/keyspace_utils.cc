@@ -35,7 +35,7 @@
 #include "transport/server.hh"
 #include "db/system_keyspace.hh"
 #include "schema.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "gms/gossiper.hh"
 #include <seastar/core/print.hh>
 #include "db/config.hh"

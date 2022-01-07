@@ -37,7 +37,7 @@ SEASTAR_TEST_CASE(test_index_with_paging) {
             e.execute_cql(format("INSERT INTO tab (pk, ck, v, v2, v3) VALUES ({}, 'hello{}', 1, {}, '{}')", i % 3, i, i, big_string)).get();
         }
 
-        e.db().invoke_on_all([] (database& db) {
+        e.db().invoke_on_all([] (replica::database& db) {
             // The semaphore's queue has to able to absorb one read / row in this test.
             db.get_reader_concurrency_semaphore().set_max_queue_length(64 * 1024);
         }).get();

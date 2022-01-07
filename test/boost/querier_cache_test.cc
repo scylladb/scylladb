@@ -640,7 +640,7 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
         try {
             db.find_keyspace("querier_cache");
             env.execute_cql("drop keyspace querier_cache;").get();
-        } catch (const no_such_keyspace&) {
+        } catch (const replica::no_such_keyspace&) {
             // expected
         }
 

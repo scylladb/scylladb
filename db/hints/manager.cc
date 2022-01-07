@@ -39,7 +39,7 @@
 #include "lister.hh"
 #include "db/timeout_clock.hh"
 #include "service/priority_manager.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "service_permit.hh"
 #include "utils/directories.hh"
 #include "locator/abstract_replication_strategy.hh"
@@ -58,7 +58,7 @@ const std::string manager::FILENAME_PREFIX("HintsLog" + commitlog::descriptor::S
 const std::chrono::seconds manager::hint_file_write_timeout = std::chrono::seconds(2);
 const std::chrono::seconds manager::hints_flush_period = std::chrono::seconds(10);
 
-manager::manager(sstring hints_directory, host_filter filter, int64_t max_hint_window_ms, resource_manager& res_manager, distributed<database>& db)
+manager::manager(sstring hints_directory, host_filter filter, int64_t max_hint_window_ms, resource_manager& res_manager, distributed<replica::database>& db)
     : _hints_dir(fs::path(hints_directory) / format("{:d}", this_shard_id()))
     , _host_filter(std::move(filter))
     , _local_snitch_ptr(locator::i_endpoint_snitch::get_local_snitch_ptr())
@@ -754,7 +754,7 @@ void manager::drain_for(gms::inet_address endpoint) {
     });
 }
 
-manager::end_point_hints_manager::sender::sender(end_point_hints_manager& parent, service::storage_proxy& local_storage_proxy, database& local_db, gms::gossiper& local_gossiper) noexcept
+manager::end_point_hints_manager::sender::sender(end_point_hints_manager& parent, service::storage_proxy& local_storage_proxy,replica::database& local_db, gms::gossiper& local_gossiper) noexcept
     : _stopped(make_ready_future<>())
     , _ep_key(parent.end_point_key())
     , _ep_manager(parent)
@@ -864,7 +864,7 @@ void manager::end_point_hints_manager::sender::start() {
 }
 
 future<> manager::end_point_hints_manager::sender::send_one_mutation(frozen_mutation_and_schema m) {
-    keyspace& ks = _db.find_keyspace(m.s->ks_name());
+    replica::keyspace& ks = _db.find_keyspace(m.s->ks_name());
     auto token = dht::get_token(*m.s, m.fm.key());
     inet_address_vector_replica_set natural_endpoints = ks.get_effective_replication_map()->get_natural_endpoints(std::move(token));
 
@@ -897,10 +897,10 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
                 });
 
             // ignore these errors and move on - probably this hint is too old and the KS/CF has been deleted...
-            } catch (no_such_column_family& e) {
+            } catch (replica::no_such_column_family& e) {
                 manager_logger.debug("send_hints(): no_such_column_family: {}", e.what());
                 ++this->shard_stats().discarded;
-            } catch (no_such_keyspace& e) {
+            } catch (replica::no_such_keyspace& e) {
                 manager_logger.debug("send_hints(): no_such_keyspace: {}", e.what());
                 ++this->shard_stats().discarded;
             } catch (no_column_mapping& e) {

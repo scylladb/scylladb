@@ -20,7 +20,7 @@
  */
 
 #include "db/data_listeners.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "db_clock.hh"
 
 #include <tuple>
@@ -63,7 +63,7 @@ toppartitions_item_key::operator sstring() const {
     return oss.str();
 }
 
-toppartitions_data_listener::toppartitions_data_listener(database& db, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters,
+toppartitions_data_listener::toppartitions_data_listener(replica::database& db, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters,
         std::unordered_set<sstring> keyspace_filters) : _db(db), _table_filters(std::move(table_filters)), _keyspace_filters(std::move(keyspace_filters)) {
     dblog.debug("toppartitions_data_listener: installing {}", fmt::ptr(this));
     _db.data_listeners().install(this);
@@ -126,7 +126,7 @@ toppartitions_data_listener::localize(const global_top_k::results& r) {
     return n;
 }
 
-toppartitions_query::toppartitions_query(distributed<database>& xdb, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash>&& table_filters,
+toppartitions_query::toppartitions_query(distributed<replica::database>& xdb, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash>&& table_filters,
         std::unordered_set<sstring>&& keyspace_filters, std::chrono::milliseconds duration, size_t list_size, size_t capacity)
         : _xdb(xdb), _table_filters(std::move(table_filters)), _keyspace_filters(std::move(keyspace_filters)), _duration(duration), _list_size(list_size), _capacity(capacity),
           _query(std::make_unique<sharded<toppartitions_data_listener>>()) {

@@ -666,9 +666,9 @@ scylla_raft_core = [
     'raft/log.cc',
 ]
 
-scylla_core = (['database.cc',
+scylla_core = (['replica/database.cc',
+                'replica/table.cc',
                 'absl-flat_hash_map.cc',
-                'table.cc',
                 'atomic_cell.cc',
                 'caching_options.cc',
                 'collection_mutation.cc',

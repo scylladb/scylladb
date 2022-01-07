@@ -34,7 +34,7 @@
 #include "db/cql_type_parser.hh"
 #include "db/config.hh"
 #include "db/schema_tables.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "gms/feature_service.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/snitch_base.hh"
@@ -56,7 +56,7 @@ std::vector<schema_ptr> do_load_schemas(std::string_view schema_str) {
     cfg.enable_cache(false);
     cfg.volatile_system_keyspace_for_testing(true);
 
-    database_config dbcfg;
+    replica::database_config dbcfg;
     dbcfg.available_memory = 1'000'000'000; // 1G
     service::migration_notifier migration_notifier;
     gms::feature_service feature_service(gms::feature_config_from_db_config(cfg));
@@ -80,7 +80,7 @@ std::vector<schema_ptr> do_load_schemas(std::string_view schema_str) {
         locator::i_endpoint_snitch::create_snitch(cfg.endpoint_snitch()).get();
     }
 
-    database db(cfg, dbcfg, migration_notifier, feature_service, token_metadata.local(), as, sst_dir_sem);
+    replica::database db(cfg, dbcfg, migration_notifier, feature_service, token_metadata.local(), as, sst_dir_sem);
     auto stop_db = deferred_stop(db);
 
     // Mock system_schema keyspace to be able to parse modification statements
@@ -95,10 +95,10 @@ std::vector<schema_ptr> do_load_schemas(std::string_view schema_str) {
 
     std::vector<schema_ptr> schemas;
 
-    auto find_or_create_keyspace = [&] (const sstring& name) -> keyspace& {
+    auto find_or_create_keyspace = [&] (const sstring& name) -> replica::keyspace& {
         try {
             return db.find_keyspace(name);
-        } catch (no_such_keyspace&) {
+        } catch (replica::no_such_keyspace&) {
             // fall-though to below
         }
         auto raw_statement = cql3::query_processor::parse_statement(

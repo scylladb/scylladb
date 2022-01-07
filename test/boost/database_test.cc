@@ -32,7 +32,7 @@
 #include "test/lib/log.hh"
 #include "test/lib/random_utils.hh"
 
-#include "database.hh"
+#include "replica/database.hh"
 #include "lister.hh"
 #include "partition_slice_builder.hh"
 #include "frozen_mutation.hh"
@@ -51,9 +51,9 @@
 using namespace std::chrono_literals;
 
 class database_test {
-    database& _db;
+    replica::database& _db;
 public:
-    explicit database_test(database& db) : _db(db) { }
+    explicit database_test(replica::database& db) : _db(db) { }
 
     reader_concurrency_semaphore& get_user_read_concurrency_semaphore() {
         return _db._read_concurrency_sem;
@@ -156,11 +156,11 @@ static void test_database(void (*run_tests)(populate_fn_ex, bool)) {
             try {
                 e.local_db().find_column_family(s->ks_name(), s->cf_name());
                 e.migration_manager().local().announce_column_family_drop(s->ks_name(), s->cf_name()).get();
-            } catch (const no_such_column_family&) {
+            } catch (const replica::no_such_column_family&) {
                 // expected
             }
             e.migration_manager().local().announce_new_column_family(s).get();
-            column_family& cf = e.local_db().find_column_family(s);
+            replica::column_family& cf = e.local_db().find_column_family(s);
             for (auto&& m : partitions) {
                 e.local_db().apply(cf.schema(), freeze(m), tracing::trace_state_ptr(), db::commitlog::force_sync::no, db::no_timeout).get();
             }
@@ -398,8 +398,8 @@ future<> do_with_some_data(std::function<future<> (cql_test_env& env)> func, lw_
     });
 }
 
-future<> take_snapshot(sharded<database>& db, bool skip_flush = false) {
-    return db.invoke_on_all([skip_flush] (database& db) {
+future<> take_snapshot(sharded<replica::database>& db, bool skip_flush = false) {
+    return db.invoke_on_all([skip_flush] (replica::database& db) {
         auto& cf = db.find_column_family("ks", "cf");
         return cf.snapshot(db, "test", skip_flush);
     });
@@ -789,9 +789,9 @@ SEASTAR_THREAD_TEST_CASE(max_result_size_for_unlimited_query_selection_test) {
 // Refs: #9494 (https://github.com/scylladb/scylla/issues/9494)
 SEASTAR_TEST_CASE(upgrade_sstables) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
-        e.db().invoke_on_all([&e] (database& db) {
+        e.db().invoke_on_all([&e] (replica::database& db) {
             auto& cm = db.get_compaction_manager();
-            return do_for_each(db.get_column_families(), [&] (std::pair<utils::UUID, lw_shared_ptr<column_family>> t) {
+            return do_for_each(db.get_column_families(), [&] (std::pair<utils::UUID, lw_shared_ptr<replica::column_family>> t) {
                 constexpr bool exclude_current_version = false;
                 return cm.perform_sstable_upgrade(db, t.second.get(), exclude_current_version);
             });
@@ -806,14 +806,14 @@ SEASTAR_TEST_CASE(populate_from_quarantine_works) {
     // move a random sstable to quarantine
     co_await do_with_some_data([] (cql_test_env& e) -> future<> {
         auto& db = e.db();
-        co_await db.invoke_on_all([] (database& db) {
+        co_await db.invoke_on_all([] (replica::database& db) {
             auto& cf = db.find_column_family("ks", "cf");
             return cf.flush();
         });
         auto shard = tests::random::get_int<unsigned>(0, smp::count);
         auto found = false;
         for (auto i = 0; i < smp::count && !found; i++) {
-            found = co_await db.invoke_on((shard + i) % smp::count, [] (database& db) -> future<bool> {
+            found = co_await db.invoke_on((shard + i) % smp::count, [] (replica::database& db) -> future<bool> {
                 auto& cf = db.find_column_family("ks", "cf");
                 auto sstables = cf.in_strategy_sstables();
                 if (sstables.empty()) {
@@ -848,7 +848,7 @@ SEASTAR_TEST_CASE(populate_from_quarantine_works) {
 SEASTAR_TEST_CASE(snapshot_with_quarantine_works) {
     return do_with_some_data([] (cql_test_env& e) -> future<> {
         auto& db = e.db();
-        co_await db.invoke_on_all([] (database& db) {
+        co_await db.invoke_on_all([] (replica::database& db) {
             auto& cf = db.find_column_family("ks", "cf");
             return cf.flush();
         });
@@ -861,7 +861,7 @@ SEASTAR_TEST_CASE(snapshot_with_quarantine_works) {
         auto shard = tests::random::get_int<unsigned>(0, smp::count);
         auto found = false;
         for (auto i = 0; i < smp::count; i++) {
-            co_await db.invoke_on((shard + i) % smp::count, [&] (database& db) -> future<> {
+            co_await db.invoke_on((shard + i) % smp::count, [&] (replica::database& db) -> future<> {
                 auto& cf = db.find_column_family("ks", "cf");
                 auto sstables = cf.in_strategy_sstables();
                 if (sstables.empty()) {

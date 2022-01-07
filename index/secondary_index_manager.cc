@@ -47,7 +47,7 @@
 #include "index/target_parser.hh"
 #include "db/query_context.hh"
 #include "schema_builder.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "db/view/view.hh"
 
 #include <boost/range/adaptor/map.hpp>
@@ -73,7 +73,7 @@ const index_metadata& index::metadata() const {
     return _im;
 }
 
-secondary_index_manager::secondary_index_manager(column_family& cf)
+secondary_index_manager::secondary_index_manager(replica::column_family& cf)
     : _cf{cf}
 {}
 

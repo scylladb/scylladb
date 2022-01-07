@@ -23,7 +23,7 @@
 #include "bytes.hh"
 #include "schema_fwd.hh"
 #include <seastar/core/future.hh>
-#include "database_fwd.hh"
+#include "replica/database_fwd.hh"
 #include "keys.hh"
 #include "compound_compat.hh"
 #include "dht/i_partitioner.hh"

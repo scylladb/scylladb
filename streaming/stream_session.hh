@@ -262,7 +262,7 @@ public:
      */
     void add_transfer_ranges(sstring keyspace, dht::token_range_vector ranges, std::vector<sstring> column_families);
 
-    std::vector<column_family*> get_column_family_stores(const sstring& keyspace, const std::vector<sstring>& column_families);
+    std::vector<replica::column_family*> get_column_family_stores(const sstring& keyspace, const std::vector<sstring>& column_families);
 
     void close_session(stream_session_state final_state);
 

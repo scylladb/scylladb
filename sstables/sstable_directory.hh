@@ -185,12 +185,12 @@ public:
     //
     // A creator function must be passed that will create an SSTable object in the correct shard,
     // and an I/O priority must be specified.
-    future<> reshard(sstable_info_vector info, compaction_manager& cm, table& table,
+    future<> reshard(sstable_info_vector info, compaction_manager& cm, replica::table& table,
                      unsigned max_sstables_per_job, sstables::compaction_sstable_creator_fn creator,
                      const ::io_priority_class& iop);
 
     // reshapes a collection of SSTables, and returns the total amount of bytes reshaped.
-    future<uint64_t> reshape(compaction_manager& cm, table& table,
+    future<uint64_t> reshape(compaction_manager& cm, replica::table& table,
                      sstables::compaction_sstable_creator_fn creator,
                      const ::io_priority_class& iop,
                      sstables::reshape_mode mode);

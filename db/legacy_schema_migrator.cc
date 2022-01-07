@@ -56,7 +56,7 @@
 #include <unordered_set>
 #include <chrono>
 
-#include "database.hh"
+#include "replica/database.hh"
 #include "legacy_schema_migrator.hh"
 #include "system_keyspace.hh"
 #include "schema_tables.hh"
@@ -81,7 +81,7 @@ class migrator {
 public:
     static const std::unordered_set<sstring> legacy_schema_tables;
 
-    migrator(sharded<service::storage_proxy>& sp, sharded<database>& db, cql3::query_processor& qp)
+    migrator(sharded<service::storage_proxy>& sp, sharded<replica::database>& db, cql3::query_processor& qp)
                     : _sp(sp), _db(db), _qp(qp) {
     }
     migrator(migrator&&) = default;
@@ -568,7 +568,7 @@ public:
         return parallel_for_each(legacy_schema_tables, [this](const sstring& cfname) {
             return do_with(utils::make_joinpoint([] { return db_clock::now();}),[this, cfname](auto& tsf) {
                 auto with_snapshot = !_keyspaces.empty();
-                return _db.invoke_on_all([&tsf, cfname, with_snapshot](database& db) {
+                return _db.invoke_on_all([&tsf, cfname, with_snapshot](replica::database& db) {
                     return db.drop_column_family(db::system_keyspace::NAME, cfname, [&tsf] { return tsf.value(); }, with_snapshot);
                 });
             });
@@ -602,7 +602,7 @@ public:
     }
 
     future<> flush_schemas() {
-        return _qp.proxy().get_db().invoke_on_all([this] (database& db) {
+        return _qp.proxy().get_db().invoke_on_all([this] (replica::database& db) {
             return parallel_for_each(db::schema_tables::all_table_names(schema_features::full()), [this, &db](const sstring& cf_name) {
                 auto& cf = db.find_column_family(db::schema_tables::NAME, cf_name);
                 return cf.flush();
@@ -621,7 +621,7 @@ public:
     }
 
     sharded<service::storage_proxy>& _sp;
-    sharded<database>& _db;
+    sharded<replica::database>& _db;
     cql3::query_processor& _qp;
     std::vector<keyspace> _keyspaces;
 };
@@ -640,7 +640,7 @@ const std::unordered_set<sstring> migrator::legacy_schema_tables = {
 }
 
 future<>
-db::legacy_schema_migrator::migrate(sharded<service::storage_proxy>& sp, sharded<database>& db, cql3::query_processor& qp) {
+db::legacy_schema_migrator::migrate(sharded<service::storage_proxy>& sp, sharded<replica::database>& db, cql3::query_processor& qp) {
     return do_with(migrator(sp, db, qp), std::bind(&migrator::migrate, std::placeholders::_1));
 }
 

@@ -23,7 +23,7 @@
 #include <boost/test/unit_test.hpp>
 #include <boost/range/adaptor/map.hpp>
 
-#include "database.hh"
+#include "replica/database.hh"
 #include "types/user.hh"
 #include "db/view/node_view_update_backlog.hh"
 #include "db/view/view_builder.hh"
@@ -3005,20 +3005,20 @@ SEASTAR_TEST_CASE(test_view_update_generating_writetime) {
                          "WHERE k IS NOT NULL AND c IS NOT NULL AND a IS NOT NULL PRIMARY KEY (c, k, a)").get();
 
         auto total_t_view_updates = [&] {
-            return e.db().map_reduce0([] (database& local_db) {
+            return e.db().map_reduce0([] (replica::database& local_db) {
                 const db::view::stats& local_stats = local_db.find_column_family("ks", "t").get_view_stats();
                 return local_stats.view_updates_pushed_local + local_stats.view_updates_pushed_remote;
             }, 0, std::plus<int64_t>()).get0();
         };
 
         auto total_mv1_updates = [&] {
-            return e.db().map_reduce0([] (database& local_db) {
+            return e.db().map_reduce0([] (replica::database& local_db) {
                 return local_db.find_column_family("ks", "mv1").get_stats().writes.hist.count;
             }, 0, std::plus<int64_t>()).get0();
         };
 
         auto total_mv2_updates = [&] {
-            return e.db().map_reduce0([] (database& local_db) {
+            return e.db().map_reduce0([] (replica::database& local_db) {
                 return local_db.find_column_family("ks", "mv2").get_stats().writes.hist.count;
             }, 0, std::plus<int64_t>()).get0();
         };

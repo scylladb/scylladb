@@ -44,7 +44,7 @@
 #include "gms/gossiper.hh"
 #include "log.hh"
 #include "db/config.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "streaming/stream_reason.hh"
 #include "locator/abstract_replication_strategy.hh"
 
@@ -86,7 +86,7 @@ future<> boot_strapper::bootstrap(streaming::stream_reason reason, gms::gossiper
     }
 }
 
-std::unordered_set<token> boot_strapper::get_bootstrap_tokens(const token_metadata_ptr tmptr, database& db) {
+std::unordered_set<token> boot_strapper::get_bootstrap_tokens(const token_metadata_ptr tmptr, replica::database& db) {
     auto initial_tokens = db.get_initial_tokens();
     // if user specified tokens, use those
     if (initial_tokens.size() > 0) {

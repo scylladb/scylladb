@@ -21,7 +21,7 @@
 
 #include "test/lib/alternator_test_env.hh"
 #include "alternator/rmw_operation.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include <seastar/core/coroutine.hh>
 
 #include "service/storage_proxy.hh"
@@ -58,5 +58,5 @@ future<> alternator_test_env::stop() {
 }
 
 future<> alternator_test_env::flush_memtables() {
-    return _proxy.local().get_db().invoke_on_all(&database::flush_all_memtables);
+    return _proxy.local().get_db().invoke_on_all(&replica::database::flush_all_memtables);
 }

@@ -48,7 +48,7 @@
 #include "exceptions/exceptions.hh"
 #include <seastar/core/sstring.hh>
 #include "schema.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "unimplemented.hh"
 #include "db/read_repair_decision.hh"
 #include "locator/abstract_replication_strategy.hh"
@@ -60,12 +60,12 @@ namespace db {
 
 logging::logger cl_logger("consistency");
 
-size_t quorum_for(const keyspace& ks) {
+size_t quorum_for(const replica::keyspace& ks) {
     size_t replication_factor = ks.get_effective_replication_map()->get_replication_factor();
     return replication_factor ? (replication_factor / 2) + 1 : 0;
 }
 
-size_t local_quorum_for(const keyspace& ks, const sstring& dc) {
+size_t local_quorum_for(const replica::keyspace& ks, const sstring& dc) {
     using namespace locator;
 
     auto& rs = ks.get_replication_strategy();
@@ -80,7 +80,7 @@ size_t local_quorum_for(const keyspace& ks, const sstring& dc) {
     return quorum_for(ks);
 }
 
-size_t block_for_local_serial(keyspace& ks) {
+size_t block_for_local_serial(replica::keyspace& ks) {
     using namespace locator;
 
     //
@@ -95,7 +95,7 @@ size_t block_for_local_serial(keyspace& ks) {
     return local_quorum_for(ks, snitch_ptr->get_datacenter(local_addr));
 }
 
-size_t block_for_each_quorum(keyspace& ks) {
+size_t block_for_each_quorum(replica::keyspace& ks) {
     using namespace locator;
 
     auto& rs = ks.get_replication_strategy();
@@ -115,7 +115,7 @@ size_t block_for_each_quorum(keyspace& ks) {
     }
 }
 
-size_t block_for(keyspace& ks, consistency_level cl) {
+size_t block_for(replica::keyspace& ks, consistency_level cl) {
     switch (cl) {
     case consistency_level::ONE:
     case consistency_level::LOCAL_ONE:
@@ -158,7 +158,7 @@ bool is_local(gms::inet_address endpoint) {
 
 template <typename Range, typename PendingRange = std::array<gms::inet_address, 0>>
 std::unordered_map<sstring, dc_node_count> count_per_dc_endpoints(
-        keyspace& ks,
+        replica::keyspace& ks,
         const Range& live_endpoints,
         const PendingRange& pending_endpoints = std::array<gms::inet_address, 0>()) {
     using namespace locator;
@@ -193,7 +193,7 @@ std::unordered_map<sstring, dc_node_count> count_per_dc_endpoints(
 template<typename Range, typename PendingRange>
 bool assure_sufficient_live_nodes_each_quorum(
         consistency_level cl,
-        keyspace& ks,
+        replica::keyspace& ks,
         const Range& live_endpoints,
         const PendingRange& pending_endpoints) {
     using namespace locator;
@@ -220,7 +220,7 @@ bool assure_sufficient_live_nodes_each_quorum(
 template<typename Range, typename PendingRange>
 void assure_sufficient_live_nodes(
         consistency_level cl,
-        keyspace& ks,
+        replica::keyspace& ks,
         const Range& live_endpoints,
         const PendingRange& pending_endpoints) {
     size_t need = block_for(ks, cl);
@@ -267,17 +267,17 @@ void assure_sufficient_live_nodes(
     }
 }
 
-template void assure_sufficient_live_nodes(consistency_level, keyspace&, const inet_address_vector_replica_set&, const std::array<gms::inet_address, 0>&);
-template void assure_sufficient_live_nodes(db::consistency_level, keyspace&, const inet_address_vector_replica_set&, const utils::small_vector<gms::inet_address, 1ul>&);
+template void assure_sufficient_live_nodes(consistency_level, replica::keyspace&, const inet_address_vector_replica_set&, const std::array<gms::inet_address, 0>&);
+template void assure_sufficient_live_nodes(db::consistency_level, replica::keyspace&, const inet_address_vector_replica_set&, const utils::small_vector<gms::inet_address, 1ul>&);
 
 inet_address_vector_replica_set
 filter_for_query(consistency_level cl,
-                 keyspace& ks,
+                 replica::keyspace& ks,
                  inet_address_vector_replica_set live_endpoints,
                  const inet_address_vector_replica_set& preferred_endpoints,
                  read_repair_decision read_repair,
                  gms::inet_address* extra,
-                 column_family* cf) {
+                 replica::column_family* cf) {
     size_t local_count;
 
     if (read_repair == read_repair_decision::GLOBAL) { // take RRD.GLOBAL out of the way
@@ -383,16 +383,16 @@ filter_for_query(consistency_level cl,
 }
 
 inet_address_vector_replica_set filter_for_query(consistency_level cl,
-        keyspace& ks,
+        replica::keyspace& ks,
         inet_address_vector_replica_set& live_endpoints,
         const inet_address_vector_replica_set& preferred_endpoints,
-        column_family* cf) {
+        replica::column_family* cf) {
     return filter_for_query(cl, ks, live_endpoints, preferred_endpoints, read_repair_decision::NONE, nullptr, cf);
 }
 
 bool
 is_sufficient_live_nodes(consistency_level cl,
-                         keyspace& ks,
+                         replica::keyspace& ks,
                          const inet_address_vector_replica_set& live_endpoints) {
     using namespace locator;
 

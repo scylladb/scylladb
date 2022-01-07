@@ -32,8 +32,10 @@
 #include <seastar/util/bool_class.hh>
 #include "utils/maybe_yield.hh"
 
-// forward declaration since database.hh includes this file
+// forward declaration since replica/database.hh includes this file
+namespace replica {
 class keyspace;
+}
 
 namespace locator {
 

@@ -23,7 +23,7 @@
 
 #include "bytes.hh"
 #include "schema_fwd.hh"
-#include "database_fwd.hh"
+#include "replica/database_fwd.hh"
 #include "bytes_ostream.hh"
 #include <iosfwd>
 

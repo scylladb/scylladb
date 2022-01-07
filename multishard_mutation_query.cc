@@ -22,7 +22,7 @@
 #include "schema_registry.hh"
 #include "service/priority_manager.hh"
 #include "multishard_mutation_query.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "db/config.hh"
 #include "query-result-writer.hh"
 
@@ -201,7 +201,7 @@ class read_context : public reader_lifecycle_policy {
         }
     };
 
-    distributed<database>& _db;
+    distributed<replica::database>& _db;
     schema_ptr _schema;
     reader_permit _permit;
     const query::read_command& _cmd;
@@ -219,7 +219,7 @@ class read_context : public reader_lifecycle_policy {
     future<> save_reader(shard_id shard, const dht::decorated_key& last_pkey, const std::optional<clustering_key_prefix>& last_ckey);
 
 public:
-    read_context(distributed<database>& db, schema_ptr s, const query::read_command& cmd, const dht::partition_range_vector& ranges,
+    read_context(distributed<replica::database>& db, schema_ptr s, const query::read_command& cmd, const dht::partition_range_vector& ranges,
             tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout)
             : _db(db)
             , _schema(std::move(s))
@@ -238,7 +238,7 @@ public:
     read_context& operator=(read_context&&) = delete;
     read_context& operator=(const read_context&) = delete;
 
-    distributed<database>& db() {
+    distributed<replica::database>& db() {
         return _db;
     }
 
@@ -383,7 +383,7 @@ future<> read_context::destroy_reader(stopped_reader reader) noexcept {
 future<> read_context::stop() {
     return parallel_for_each(smp::all_cpus(), [this] (unsigned shard) {
         if (_readers[shard].rparts) {
-            return _db.invoke_on(shard, [&rparts_fptr = _readers[shard].rparts] (database& db) mutable {
+            return _db.invoke_on(shard, [&rparts_fptr = _readers[shard].rparts] (replica::database& db) mutable {
                 auto rparts = rparts_fptr.release();
                 if (rparts->handle) {
                     auto reader_opt = rparts->permit.semaphore().unregister_inactive_read(std::move(*rparts->handle));
@@ -486,7 +486,7 @@ read_context::dismantle_buffer_stats read_context::dismantle_compaction_state(de
 future<> read_context::save_reader(shard_id shard, const dht::decorated_key& last_pkey, const std::optional<clustering_key_prefix>& last_ckey) {
   return do_with(std::exchange(_readers[shard], {}), [this, shard, &last_pkey, &last_ckey] (reader_meta& rm) mutable {
     return _db.invoke_on(shard, [this, query_uuid = _cmd.query_uuid, query_ranges = _ranges, &rm,
-            &last_pkey, &last_ckey, gts = tracing::global_trace_state_ptr(_trace_state)] (database& db) mutable {
+            &last_pkey, &last_ckey, gts = tracing::global_trace_state_ptr(_trace_state)] (replica::database& db) mutable {
         try {
             auto rparts = rm.rparts.release(); // avoid another round-trip when destroying rparts
             auto reader_opt = rparts->permit.semaphore().unregister_inactive_read(std::move(*rparts->handle));
@@ -559,7 +559,7 @@ future<> read_context::lookup_readers(db::timeout_clock::time_point timeout) {
 
     return parallel_for_each(boost::irange(0u, smp::count), [this, timeout] (shard_id shard) {
         return _db.invoke_on(shard, [this, shard, cmd = &_cmd, ranges = &_ranges, gs = global_schema_ptr(_schema),
-                gts = tracing::global_trace_state_ptr(_trace_state), timeout] (database& db) mutable {
+                gts = tracing::global_trace_state_ptr(_trace_state), timeout] (replica::database& db) mutable {
             auto schema = gs.get();
             auto querier_opt = db.get_querier_cache().lookup_shard_mutation_querier(cmd->query_uuid, *schema, *ranges, cmd->slice, gts.get(), timeout);
             auto& table = db.find_column_family(schema);
@@ -747,7 +747,7 @@ future<page_consume_result<ResultBuilder>> read_page(
 
 template <typename ResultBuilder>
 future<typename ResultBuilder::result_type> do_query(
-        distributed<database>& db,
+        distributed<replica::database>& db,
         schema_ptr s,
         const query::read_command& cmd,
         const dht::partition_range_vector& ranges,
@@ -780,7 +780,7 @@ future<typename ResultBuilder::result_type> do_query(
 
 template <typename ResultBuilder>
 static future<std::tuple<foreign_ptr<lw_shared_ptr<typename ResultBuilder::result_type>>, cache_temperature>> do_query_on_all_shards(
-        distributed<database>& db,
+        distributed<replica::database>& db,
         schema_ptr s,
         const query::read_command& cmd,
         const dht::partition_range_vector& ranges,
@@ -866,7 +866,7 @@ public:
 } // anonymous namespace
 
 future<std::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> query_mutations_on_all_shards(
-        distributed<database>& db,
+        distributed<replica::database>& db,
         schema_ptr table_schema,
         const query::read_command& cmd,
         const dht::partition_range_vector& ranges,
@@ -881,7 +881,7 @@ future<std::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_tempera
 }
 
 future<std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> query_data_on_all_shards(
-        distributed<database>& db,
+        distributed<replica::database>& db,
         schema_ptr table_schema,
         const query::read_command& cmd,
         const dht::partition_range_vector& ranges,

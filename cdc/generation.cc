@@ -28,7 +28,7 @@
 
 #include "keys.hh"
 #include "schema_builder.hh"
-#include "database.hh"
+#include "replica/database.hh"
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "dht/token-sharding.hh"
@@ -684,7 +684,7 @@ constexpr char could_not_retrieve_msg_template[]
 generation_service::generation_service(
             config cfg, gms::gossiper& g, sharded<db::system_distributed_keyspace>& sys_dist_ks,
             abort_source& abort_src, const locator::shared_token_metadata& stm, gms::feature_service& f,
-            database& db)
+            replica::database& db)
         : _cfg(std::move(cfg))
         , _gossiper(g)
         , _sys_dist_ks(sys_dist_ks)

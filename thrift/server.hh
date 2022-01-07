@@ -31,7 +31,7 @@
 #include <memory>
 #include <cstdint>
 #include <boost/intrusive/list.hpp>
-#include "database_fwd.hh"
+#include "replica/database_fwd.hh"
 #include "utils/updateable_value.hh"
 #include "service_permit.hh"
 
@@ -129,7 +129,7 @@ private:
     boost::intrusive::list<connection> _connections_list;
     seastar::gate _stop_gate;
 public:
-    thrift_server(distributed<database>& db, distributed<cql3::query_processor>& qp, sharded<service::storage_service>& ss, sharded<service::storage_proxy>& proxy, auth::service&, service::memory_limiter& ml, thrift_server_config config);
+    thrift_server(distributed<replica::database>& db, distributed<cql3::query_processor>& qp, sharded<service::storage_service>& ss, sharded<service::storage_proxy>& proxy, auth::service&, service::memory_limiter& ml, thrift_server_config config);
     ~thrift_server();
     future<> listen(socket_address addr, bool keepalive);
     future<> stop();

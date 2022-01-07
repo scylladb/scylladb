@@ -244,7 +244,7 @@ SEASTAR_TEST_CASE(test_alter_with_timeouts) {
         cquery_nofail(e, "INSERT INTO t (id, v) VALUES (2, 3)");
         cquery_nofail(e, "INSERT INTO t (id, v) VALUES (3, 4)");
         // Avoid reading from memtables, which does not check timeouts due to being too fast
-        e.db().invoke_on_all([] (database& db) { return db.flush_all_memtables(); }).get();
+        e.db().invoke_on_all([] (replica::database& db) { return db.flush_all_memtables(); }).get();
 
 	    auto msg = cquery_nofail(e, "SELECT timeout FROM system_distributed.service_levels");
         assert_that(msg).is_rows().with_rows({{
@@ -295,7 +295,7 @@ SEASTAR_TEST_CASE(test_alter_with_timeouts) {
         cquery_nofail(e, "GRANT user4 TO user2");
         e.refresh_client_state().get();
         // Avoid reading from memtables, which does not check timeouts due to being too fast
-        e.db().invoke_on_all([] (database& db) { return db.flush_all_memtables(); }).get();
+        e.db().invoke_on_all([] (replica::database& db) { return db.flush_all_memtables(); }).get();
         // For user1, operations should time out
         BOOST_REQUIRE_THROW(e.execute_cql("SELECT * FROM t where id = 1 BYPASS CACHE").get(), exceptions::read_timeout_exception);
         BOOST_REQUIRE_THROW(e.execute_cql("SELECT * FROM t BYPASS CACHE").get(), exceptions::read_timeout_exception);
