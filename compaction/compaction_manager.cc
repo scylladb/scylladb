@@ -631,7 +631,7 @@ void compaction_manager::do_stop() noexcept {
 
 inline bool compaction_manager::can_proceed(const lw_shared_ptr<task>& task) {
     return (_state == state::enabled) && !task->stopping && _compaction_state.contains(task->compacting_table) &&
-        (task->type != sstables::compaction_type::Compaction || !_compaction_state[task->compacting_table].compaction_disabled());
+        !_compaction_state[task->compacting_table].compaction_disabled();
 }
 
 inline future<> compaction_manager::put_task_to_sleep(lw_shared_ptr<task>& task) {
