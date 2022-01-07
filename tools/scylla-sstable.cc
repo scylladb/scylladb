@@ -1113,11 +1113,18 @@ const std::vector<operation> operations{
 namespace tools {
 
 int scylla_sstable_main(int argc, char** argv) {
+    const operation* found_op = nullptr;
+    if (std::strcmp(argv[1], "--help") != 0 && std::strcmp(argv[1], "-h") != 0) {
+        found_op = &tools::utils::get_selected_operation(argc, argv, operations, "operation");
+    }
+
     app_template::seastar_options app_cfg;
     app_cfg.name = app_name;
 
     const auto description_template =
 R"(scylla-sstable - a multifunctional command-line tool to examine the content of sstables.
+
+Usage: scylla sstable {{operation}} [--option1] [--option2] ... {{sstable_path1}} [{{sstable_path2}}] ...
 
 Allows examining the contents of sstables with various built-in tools
 (operations). The sstables to-be-examined are passed as positional
@@ -1145,16 +1152,16 @@ The supported operations are:
 Examples:
 
 # dump the content of the sstable
-$ scylla-sstable --dump /path/to/md-123456-big-Data.db
+$ scylla sstable dump /path/to/md-123456-big-Data.db
 
 # dump the content of the two sstable(s) as a unified stream
-$ scylla-sstable --dump --merge /path/to/md-123456-big-Data.db /path/to/md-123457-big-Data.db
+$ scylla sstable dump --merge /path/to/md-123456-big-Data.db /path/to/md-123457-big-Data.db
 
 # generate a joint histogram for the specified partition
-$ scylla-sstable --writetime-histogram --partition={{myhexpartitionkey}} /path/to/md-123456-big-Data.db
+$ scylla sstable writetime-histogram --partition={{myhexpartitionkey}} /path/to/md-123456-big-Data.db
 
 # validate the specified sstables
-$ scylla-sstable --validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-Data.db
+$ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-Data.db
 )";
     app_cfg.description = format(description_template, app_name, boost::algorithm::join(operations | boost::adaptors::transformed([] (const auto& op) {
         if (op.available_options().empty()) {
@@ -1168,10 +1175,6 @@ $ scylla-sstable --validate /path/to/md-123456-big-Data.db /path/to/md-123457-bi
     tools::utils::configure_tool_mode(app_cfg, sst_log.name());
 
     app_template app(std::move(app_cfg));
-
-    for (const auto& op : operations) {
-        app.add_options()(op.name().c_str(), op.description().c_str());
-    }
 
     app.add_options()
         ("schema-file", bpo::value<sstring>()->default_value("schema.cql"), "file containing the schema description")
@@ -1189,11 +1192,11 @@ $ scylla-sstable --validate /path/to/md-123456-big-Data.db /path/to/md-123457-bi
         {"sstables", bpo::value<std::vector<sstring>>(), "sstable(s) to process, can also be provided as positional arguments", -1},
     });
 
-    return app.run(argc, argv, [&app] {
-        return async([&app] {
+    return app.run(argc, argv, [&app, found_op] {
+        return async([&app, found_op] {
             auto& app_config = app.configuration();
 
-            const auto& operation = tools::utils::get_selected_operation(app.configuration(), operations, "operation");
+            const auto& operation = *found_op;
 
             options opts;
             opts.merge = app_config.count("merge");
