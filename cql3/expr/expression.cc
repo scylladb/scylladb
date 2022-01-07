@@ -557,6 +557,25 @@ bool is_satisfied_by(const binary_operator& opr, const column_value_eval_bag& ba
                     throw exceptions::unsupported_operation_exception(format("Unhandled binary_operator: {}", opr));
                 }
             },
+            [&] (const subscript& sub) {
+                if (opr.op == oper_t::EQ) {
+                    return equal(opr.rhs, &sub, bag);
+                } else if (opr.op == oper_t::NEQ) {
+                    return !equal(opr.rhs, &sub, bag);
+                } else if (is_slice(opr.op)) {
+                    return limits(&sub, opr.op, opr.rhs, bag);
+                } else if (opr.op == oper_t::CONTAINS) {
+                    throw exceptions::unsupported_operation_exception("CONTAINS lhs is subscripted");
+                } else if (opr.op == oper_t::CONTAINS_KEY) {
+                    throw exceptions::unsupported_operation_exception("CONTAINS KEY lhs is subscripted");
+                } else if (opr.op == oper_t::LIKE) {
+                    throw exceptions::unsupported_operation_exception("LIKE lhs is subscripted");
+                } else if (opr.op == oper_t::IN) {
+                    return is_one_of(&sub, opr.rhs, bag);
+                } else {
+                    throw exceptions::unsupported_operation_exception(format("Unhandled binary_operator: {}", opr));
+                }
+            },
             [&] (const tuple_constructor& cvs) {
                 if (opr.op == oper_t::EQ) {
                     return equal(opr.rhs, cvs, bag);
@@ -635,6 +654,9 @@ bool is_satisfied_by(const expression& restr, const column_value_eval_bag& bag) 
             [&] (const binary_operator& opr) { return is_satisfied_by(opr, bag); },
             [] (const column_value&) -> bool {
                 on_internal_error(expr_logger, "is_satisfied_by: a column cannot serve as a restriction by itself");
+            },
+            [] (const subscript&) -> bool {
+                on_internal_error(expr_logger, "is_satisfied_by: a subscript cannot serve as a restriction by itself");
             },
             [] (const token&) -> bool {
                 on_internal_error(expr_logger, "is_satisfied_by: the token function cannot serve as a restriction by itself");
