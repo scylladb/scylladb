@@ -1275,20 +1275,31 @@ Usage: scylla sstable {{operation}} [--option1] [--option2] ... {{sstable_path1}
 Allows examining the contents of sstables with various built-in tools
 (operations). The sstables to-be-examined are passed as positional
 command line arguments. Sstables will be processed by the selected
-operation one-by-one (can be changed with --merge). Any number of
-sstables can be passed but mind the open file limits. Pass the full path
-to the data component of the sstables (*-Data.db). For now it is
-required that the sstable is found at a valid data path:
-
-    /path/to/datadir/{{keyspace_name}}/{{table_name}}-{{table_id}}/
-
+operation one-by-one. Any number of sstables can be passed but mind the
+open file limits. Always pass the path to the data component of the
+sstables (*-Data.db) even if you want to examine another component.
 The schema to read the sstables is read from a schema.cql file. This
-should contain the keyspace and table definitions, as well as any UDTs
-used.
-Filtering the sstable()s to process only certain partition(s) is
-supported via the --partition and --partitions-file command line flags.
-Partition keys are expected to be in the hexdump format used by scylla
-(hex representation of the raw buffer).
+should contain the keyspace and table definitions, any UDTs used and
+dropped columns in the form of relevant CQL statements. The keyspace
+definition is allowed to be missing, in which case one will be
+auto-generated. Dropped columns should be present in the form of insert
+statements into the system_schema.dropped_columns table.
+Example scylla.cql:
+
+    CREATE KEYSPACE ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
+
+    CREATE TYPE ks.type1 (f1 int, f2 text);
+
+    CREATE TABLE ks.cf (pk int PRIMARY KEY, v frozen<type1>);
+
+    INSERT
+    INTO system_schema.dropped_columns (keyspace_name, table_name, column_name, dropped_time, type)
+    VALUES ('ks', 'cf', 'v2', 1631011979170675, 'int');
+
+In general you should be able to use the output of `DESCRIBE TABLE` or
+the relevant parts of `DESCRIBE KEYSPACE` of `cqlsh` as well as the
+`schema.cql` produced by snapshots.
+
 Operations write their output to stdout, or file(s). The tool logs to
 stderr, with a logger called {}.
 
