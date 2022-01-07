@@ -80,6 +80,11 @@ database::find_keyspace(std::string_view name) const {
     return *ks;
 }
 
+std::vector<keyspace>
+database::get_keyspaces() const {
+    return _ops->get_keyspaces(*this);
+}
+
 std::optional<table>
 database::try_find_table(std::string_view ks, std::string_view table) const {
     return _ops->try_find_table(*this, ks, table);

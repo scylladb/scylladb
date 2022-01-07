@@ -2276,6 +2276,15 @@ public:
             return std::nullopt;
         }
     }
+    virtual std::vector<data_dictionary::keyspace> get_keyspaces(data_dictionary::database db) const override {
+        std::vector<data_dictionary::keyspace> ret;
+        const auto& keyspaces = unwrap(db).get_keyspaces();
+        ret.reserve(keyspaces.size());
+        for (auto& ks : keyspaces) {
+            ret.push_back(wrap(ks.second));
+        }
+        return ret;
+    }
     virtual std::optional<data_dictionary::table> try_find_table(data_dictionary::database db, std::string_view ks, std::string_view table) const override {
         try {
             return wrap(unwrap(db).find_column_family(ks, table));
