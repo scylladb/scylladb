@@ -368,6 +368,9 @@ future<uint64_t> sstable_directory::reshape(compaction_manager& cm, replica::tab
                 } catch (sstables::compaction_stopped_exception& e) {
                     dirlog.info("Table {}.{} with compaction strategy {} had reshape successfully aborted.", table.schema()->ks_name(), table.schema()->cf_name(), table.get_compaction_strategy().name());
                     return make_ready_future<stop_iteration>(stop_iteration::yes);
+                } catch (...) {
+                    dirlog.info("Reshape failed for Table {}.{} with compaction strategy {} due to {}", table.schema()->ks_name(), table.schema()->cf_name(), table.get_compaction_strategy().name(), std::current_exception());
+                    return make_ready_future<stop_iteration>(stop_iteration::yes);
                 }
                 return make_ready_future<stop_iteration>(stop_iteration::no);
             });
