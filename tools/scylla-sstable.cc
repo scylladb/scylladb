@@ -249,32 +249,6 @@ public:
     }
 };
 
-// Result can be plotted with the following example script:
-//
-//     import datetime
-//     import json
-//     import matplotlib.pyplot as plt
-//
-//     with open('histogram.json', 'r') as f:
-//         data = json.load(f)
-//
-//     x = data['buckets']
-//     y = data['counts']
-//
-//     max_y = max(y)
-//
-//     x = [datetime.date.fromtimestamp(i / 1000000).strftime('%Y.%m') for i in x]
-//     y = [i / max_y for i in y]
-//
-//     fig, ax = plt.subplots()
-//
-//     ax.set_xlabel('Timestamp')
-//     ax.set_ylabel('Normalized cell count')
-//     ax.set_title('Histogram of data write-time')
-//     ax.bar(x, y)
-//
-//     plt.show()
-//
 class writetime_histogram_collecting_consumer : public sstable_consumer {
 private:
     enum class bucket {
@@ -564,19 +538,21 @@ using operation_func = void(*)(schema_ptr, reader_permit, const std::vector<ssta
 
 class operation {
     std::string _name;
+    std::string _summary;
     std::string _description;
     std::vector<std::string> _available_options;
     operation_func _func;
 
 public:
-    operation(std::string name, std::string description, operation_func func)
-        : _name(std::move(name)), _description(std::move(description)), _func(func) {
+    operation(std::string name, std::string summary, std::string description, operation_func func)
+        : _name(std::move(name)), _summary(std::move(summary)), _description(std::move(description)), _func(func) {
     }
-    operation(std::string name, std::string description, std::vector<std::string> available_options, operation_func func)
-        : _name(std::move(name)), _description(std::move(description)), _available_options(std::move(available_options)), _func(func) {
+    operation(std::string name, std::string summary, std::string description, std::vector<std::string> available_options, operation_func func)
+        : _name(std::move(name)), _summary(std::move(summary)), _description(std::move(description)), _available_options(std::move(available_options)), _func(func) {
     }
 
     const std::string& name() const { return _name; }
+    const std::string& summary() const { return _summary; }
     const std::string& description() const { return _description; }
     const std::vector<std::string>& available_options() const { return _available_options; }
 
@@ -1111,18 +1087,171 @@ const std::vector<option> all_options {
 };
 
 const std::vector<operation> operations{
-    {"dump-data", "Dump content of sstable(s).", {"partition", "partitions-file", "merge", "no-skips"}, sstable_consumer_operation<dumping_consumer>},
-    {"dump-index", "Dump content of sstable index(es).", dump_index_operation},
-    {"dump-compression-info", "Dump content of sstable compression info(s).", dump_compression_info_operation},
-    {"dump-summary", "Dump content of sstable summary(es).", dump_summary_operation},
-    {"dump-statistics", "Dump content of sstable statistics(s).", dump_statistics_operation},
-    {"dump-scylla-metadata", "Dump content of sstable scylla metadata(s).", dump_scylla_metadata_operation},
+/* dump-data */
+    {"dump-data",
+            "Dump content of sstable(s)",
+R"(
+Dump the content of the data component. This component contains the data-proper
+of the sstable. This might produce a huge amount of output. In general the
+human-readable output will be larger than the binary file.
+For more information about the sstable components and the format itself, visit
+https://docs.scylladb.com/architecture/sstable/.
+
+It is possible to filter the data to print via the --partitions or
+--partitions-file options. Both expect partition key values in the hexdump
+format.
+)",
+            {"partition", "partitions-file", "merge", "no-skips"},
+            sstable_consumer_operation<dumping_consumer>},
+/* dump-index */
+    {"dump-index",
+            "Dump content of sstable index(es)",
+R"(
+Dump the content of the index component. Contains the partition-index of the data
+component. This is effectively a list of all the partitions in the sstable, with
+their starting position in the data component and optionally a promoted index,
+which contains a sampled index of the clustering rows in the partition.
+Positions (both that of partition and that of rows) is valid for uncompressed
+data.
+For more information about the sstable components and the format itself, visit
+https://docs.scylladb.com/architecture/sstable/.
+)",
+            dump_index_operation},
+/* dump-compression-info */
+    {"dump-compression-info",
+            "Dump content of sstable compression info(s)",
+R"(
+Dump the content of the compression-info component. Contains compression
+parameters and maps positions into the uncompressed data to that into compressed
+data. Note that compression happens over chunks with configurable size, so to
+get data at a position in the middle of a compressed chunk, the entire chunk has
+to be decompressed.
+For more information about the sstable components and the format itself, visit
+https://docs.scylladb.com/architecture/sstable/.
+)",
+            dump_compression_info_operation},
+/* dump-summary */
+    {"dump-summary",
+            "Dump content of sstable summary(es)",
+R"(
+Dump the content of the summary component. The summary is a sampled index of the
+content of the index-component. An index of the index. Sampling rate is chosen
+such that this file is small enough to be kept in memory even for very large
+sstables.
+For more information about the sstable components and the format itself, visit
+https://docs.scylladb.com/architecture/sstable/.
+)",
+            dump_summary_operation},
+/* dump-statistics */
+    {"dump-statistics",
+            "Dump content of sstable statistics(s)",
+R"(
+Dump the content of the statistics component. Contains various metadata about the
+data component. In the sstable 3 format, this component is critical for parsing
+the data component.
+For more information about the sstable components and the format itself, visit
+https://docs.scylladb.com/architecture/sstable/.
+)",
+            dump_statistics_operation},
+/* dump-scylla-metadata */
+    {"dump-scylla-metadata",
+            "Dump content of sstable scylla metadata(s)",
+R"(
+Dump the content of the scylla-metadata component. Contains scylla-specific
+metadata about the data component. This component won't be present in sstables
+produced by Apache Cassandra.
+For more information about the sstable components and the format itself, visit
+https://docs.scylladb.com/architecture/sstable/.
+)",
+            dump_scylla_metadata_operation},
+/* writetime-histogram */
     {"writetime-histogram",
-            "Generate a histogram (bucket=month) of all the timestamps (writetime), written to histogram.json.",
+            "Generate a histogram of all the timestamps (writetime)",
+R"(
+Crawl over all timestamps in the data component and add them to a histogram. The
+bucket size by default is a month, tunable with the --bucket option.
+The timestamp of all objects that have one are added to the histogram:
+* cells (atomic and collection cells)
+* tombstones (partition-tombstone, range-tombstone, row-tombstone,
+  shadowable-tombstone, cell-tombstone, collection-tombstone, cell-tombstone)
+* row-marker
+
+This allows determining when the data was written, provided the writer of the
+data didn't mangle with the timestamps.
+This produces a json file `histogram.json` whose content can be plotted with the
+following example python script:
+
+     import datetime
+     import json
+     import matplotlib.pyplot as plt # requires the matplotlib python package
+
+     with open('histogram.json', 'r') as f:
+         data = json.load(f)
+
+     x = data['buckets']
+     y = data['counts']
+
+     max_y = max(y)
+
+     x = [datetime.date.fromtimestamp(i / 1000000).strftime('%Y.%m') for i in x]
+     y = [i / max_y for i in y]
+
+     fig, ax = plt.subplots()
+
+     ax.set_xlabel('Timestamp')
+     ax.set_ylabel('Normalized cell count')
+     ax.set_title('Histogram of data write-time')
+     ax.bar(x, y)
+
+     plt.show()
+)",
             {"bucket"},
             sstable_consumer_operation<writetime_histogram_collecting_consumer>},
-    {"custom", "Hackable custom operation for expert users, until scripting support is implemented.", sstable_consumer_operation<custom_consumer>},
-    {"validate", "Validate sstable(s) with the mutation fragment stream validator, same as scrub in validate mode.", {"merge"}, validate_operation},
+/* custom */
+    {"custom",
+            "Hackable custom operation for expert users, until scripting support is implemented",
+R"(
+Poor man's scripting support. Aimed at developers as it requires editing C++
+source code and re-building the binary. Will be replaced by proper scripting
+support soon (don't quote me on that).
+)",
+            sstable_consumer_operation<custom_consumer>},
+/* validate */
+    {"validate",
+            "Validate the sstable(s), same as scrub in validate mode",
+R"(
+On a conceptual level, the data in sstables is represented by objects called
+mutation fragments. We have the following kinds of fragments:
+* partition-start (1)
+* static-row (0-1)
+* clustering-row (0-N)
+* range-tombstone/range-tombstone-change (0-N)
+* partition-end (1)
+
+Data from the sstable is parsed into these fragments. We use these fragments to
+stream data because it allows us to represent as little as part of a partition
+or as many as the entire content of an sstable.
+
+This operation validates data on the mutation-fragment level. Any parsing errors
+will also be detected, but after successful parsing the validation will happen
+on the fragment level. The following things are validated:
+* Partitions are ordered in strictly monotonic ascending order [1].
+* Fragments are correctly ordered. Fragments must follow the order defined in the
+  listing above also respecting the occurrence numbers within a partition. Note
+  that clustering rows and range tombstone [change] fragments can be intermingled.
+* Clustering elements are ordered according in a strictly increasing clustering
+  order as defined by the schema. Range tombstones (but not range tombstone
+  changes) are allowed to have weakly monotonically increasing positions.
+* The stream ends with a partition-end fragment.
+
+[1] Although partitions are said to be unordered, this is only true w.r.t. the
+data type of the key components. Partitions are ordered according to their tokens
+(hashes), so partitions are unordered in the sense that a hash-table is
+unordered: they have a random order as perceived by they user but they have a
+well defined internal order.
+)",
+            {"merge"},
+            validate_operation},
 };
 
 } // anonymous namespace
@@ -1182,9 +1311,14 @@ $ scylla sstable writetime-histogram --partition={{myhexpartitionkey}} /path/to/
 # validate the specified sstables
 $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-Data.db
 )";
-    app_cfg.description = format(description_template, app_name, boost::algorithm::join(operations | boost::adaptors::transformed([] (const auto& op) {
-        return format("* {}: {}", op.name(), op.description());
-    }), "\n"));
+
+    if (found_op) {
+        app_cfg.description = format("{}\n\n{}\n", found_op->summary(), found_op->description());
+    } else  {
+        app_cfg.description = format(description_template, app_name, boost::algorithm::join(operations | boost::adaptors::transformed([] (const auto& op) {
+            return format("* {}: {}", op.name(), op.summary());
+        }), "\n"));
+    }
 
     tools::utils::configure_tool_mode(app_cfg, sst_log.name());
 
