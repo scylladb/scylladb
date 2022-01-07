@@ -85,7 +85,7 @@ future<> thrift_controller::do_start_server() {
     tsc.max_request_size = cfg.thrift_max_message_length_in_mb() * (uint64_t(1) << 20);
     return utils::resolve(cfg.rpc_address, family, preferred).then([this, tserver, port = cfg.rpc_port(), keepalive, tsc] (gms::inet_address ip) {
         _addr.emplace(ip, port);
-        return tserver->start(std::ref(_db), std::ref(_qp), std::ref(_ss), std::ref(_proxy), std::ref(_auth_service), std::ref(_mem_limiter), tsc).then([tserver, port, ip, keepalive] {
+        return tserver->start(sharded_parameter([this] { return _db.local().as_data_dictionary(); }), std::ref(_qp), std::ref(_ss), std::ref(_proxy), std::ref(_auth_service), std::ref(_mem_limiter), tsc).then([tserver, port, ip, keepalive] {
             // #293 - do not stop anything
             //engine().at_exit([tserver] {
             //    return tserver->stop();
