@@ -70,7 +70,7 @@ using partition_set = std::unordered_set<dht::decorated_key, decorated_key_hash,
 template <typename T>
 using partition_map = std::unordered_map<dht::decorated_key, T, decorated_key_hash, decorated_key_equal>;
 
-partition_set get_partitions(schema_ptr schema, bpo::variables_map& app_config) {
+partition_set get_partitions(schema_ptr schema, const bpo::variables_map& app_config) {
     partition_set partitions(app_config.count("partition"), {}, decorated_key_equal(*schema));
     auto pk_type = schema->partition_key_type();
 
@@ -201,13 +201,11 @@ public:
     }
 };
 
-using operation_specific_options = std::unordered_map<sstring, sstring>;
-
 class dumping_consumer : public sstable_consumer {
     schema_ptr _schema;
 
 public:
-    explicit dumping_consumer(schema_ptr s, reader_permit, const operation_specific_options&) : _schema(std::move(s)) {
+    explicit dumping_consumer(schema_ptr s, reader_permit, const bpo::variables_map&) : _schema(std::move(s)) {
     }
     virtual future<> on_start_of_stream() override {
         std::cout << "{stream_start}" << std::endl;
@@ -365,8 +363,10 @@ private:
     }
 
 public:
-    explicit writetime_histogram_collecting_consumer(schema_ptr s, reader_permit, const operation_specific_options& op_opts) : _schema(std::move(s)) {
-        for (const auto& [key, value] : op_opts) {
+    explicit writetime_histogram_collecting_consumer(schema_ptr s, reader_permit, const bpo::variables_map& vm) : _schema(std::move(s)) {
+        auto it = vm.find("bucket");
+        if (it != vm.end()) {
+            auto value = it->second.as<std::string>();
             if (value == "years") {
                 _bucket = bucket::years;
             } else if (value == "months") {
@@ -457,7 +457,7 @@ class custom_consumer : public sstable_consumer {
     schema_ptr _schema;
     reader_permit _permit;
 public:
-    explicit custom_consumer(schema_ptr s, reader_permit p, const operation_specific_options&)
+    explicit custom_consumer(schema_ptr s, reader_permit p, const bpo::variables_map&)
         : _schema(std::move(s)), _permit(std::move(p))
     { }
     virtual future<> on_start_of_stream() override {
@@ -560,51 +560,35 @@ void consume_sstables(schema_ptr schema, reader_permit permit, std::vector<sstab
     }
 }
 
-struct options {
-    bool merge = false;
-    bool no_skips = false;
-};
-
-using operation_func = void(*)(schema_ptr, reader_permit, const std::vector<sstables::shared_sstable>&, const partition_set&, const options&,
-        const operation_specific_options&);
+using operation_func = void(*)(schema_ptr, reader_permit, const std::vector<sstables::shared_sstable>&, const bpo::variables_map&);
 
 class operation {
-public:
-    struct option {
-        sstring name;
-        sstring description;
-    };
-private:
     std::string _name;
     std::string _description;
-    std::vector<option> _available_options;
+    std::vector<std::string> _available_options;
     operation_func _func;
 
 public:
     operation(std::string name, std::string description, operation_func func)
         : _name(std::move(name)), _description(std::move(description)), _func(func) {
     }
-    operation(std::string name, std::string description, std::vector<option> available_options, operation_func func)
+    operation(std::string name, std::string description, std::vector<std::string> available_options, operation_func func)
         : _name(std::move(name)), _description(std::move(description)), _available_options(std::move(available_options)), _func(func) {
     }
 
     const std::string& name() const { return _name; }
     const std::string& description() const { return _description; }
-    const std::vector<option>& available_options() const { return _available_options; }
+    const std::vector<std::string>& available_options() const { return _available_options; }
 
-    void operator()(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
-            const partition_set& partitions, const options& opts, const operation_specific_options& op_opts) const {
-        _func(std::move(schema), std::move(permit), sstables, partitions, opts, op_opts);
+    void operator()(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map& vm) const {
+        _func(std::move(schema), std::move(permit), sstables, vm);
     }
 };
 
-void validate_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const partition_set& partitions,
-        const options& opts, const operation_specific_options& op_opts) {
-    if (!partitions.empty()) {
-        sst_log.warn("partition-filter is not supported for validate, ignoring");
-    }
+void validate_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map& vm) {
+    const auto merge = vm.count("merge");
     sstables::compaction_data info;
-    consume_sstables(schema, permit, sstables, opts.merge, true, [&info] (flat_mutation_reader& rd, sstables::sstable* sst) {
+    consume_sstables(schema, permit, sstables, merge, true, [&info] (flat_mutation_reader& rd, sstables::sstable* sst) {
         if (sst) {
             sst_log.info("validating {}", sst->get_filename());
         }
@@ -614,22 +598,7 @@ void validate_operation(schema_ptr schema, reader_permit permit, const std::vect
     });
 }
 
-void check_flags_unusable_for_component_dump(const char* dump_name, const partition_set& partitions, const options& opts) {
-    if (!partitions.empty()) {
-        sst_log.warn("partition-filter is not supported for dump-{}, ignoring", dump_name);
-    }
-    if (opts.merge) {
-        sst_log.warn("--merge not supported for dump-{}, ignoring", dump_name);
-    }
-    if (opts.no_skips) {
-        sst_log.warn("--no-skips not supported for dump-{}, ignoring", dump_name);
-    }
-}
-
-void dump_index_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const partition_set& partitions,
-        const options& opts, const operation_specific_options& op_opts) {
-    check_flags_unusable_for_component_dump("index", partitions, opts);
-
+void dump_index_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map&) {
     std::cout << "{stream_start}" << std::endl;
     for (auto& sst : sstables) {
         sstables::index_reader idx_reader(sst, permit, default_priority_class(), {}, sstables::use_caching::yes);
@@ -655,9 +624,7 @@ sstring disk_string_to_string(const sstables::disk_string<Integer>& ds) {
     return sstring(ds.value.begin(), ds.value.end());
 }
 
-void dump_compression_info_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const partition_set& partitions,
-        const options& opts, const operation_specific_options& op_opts) {
-    check_flags_unusable_for_component_dump("compression-info", partitions, opts);
+void dump_compression_info_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map&) {
     fmt::print("{{stream_start}}\n");
 
     for (auto& sst : sstables) {
@@ -688,10 +655,7 @@ void dump_compression_info_operation(schema_ptr schema, reader_permit permit, co
     fmt::print("{{stream_end}}\n");
 }
 
-void dump_summary_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const partition_set& partitions,
-        const options& opts, const operation_specific_options& op_opts) {
-    check_flags_unusable_for_component_dump("summary", partitions, opts);
-
+void dump_summary_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map&) {
     const auto composite_to_hex = [] (bytes_view bv) {
         auto cv = composite_view(bv, true);
         auto key = partition_key::from_exploded_view(cv.explode());
@@ -920,10 +884,7 @@ void dump_serialization_header(sstables::sstable_version_types version, const ss
     });
 }
 
-void dump_statistics_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const partition_set& partitions,
-        const options& opts, const operation_specific_options& op_opts) {
-    check_flags_unusable_for_component_dump("statistics", partitions, opts);
-
+void dump_statistics_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map&) {
     auto to_string = [] (sstables::metadata_type t) {
         switch (t) {
             case sstables::metadata_type::Validation: return "validation";
@@ -1062,10 +1023,7 @@ struct scylla_metadata_visitor : public boost::static_visitor<> {
     scylla_metadata_visitor() = default;
 };
 
-void dump_scylla_metadata_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const partition_set& partitions,
-        const options& opts, const operation_specific_options& op_opts) {
-    check_flags_unusable_for_component_dump("scylla_metadata", partitions, opts);
-
+void dump_scylla_metadata_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map&) {
     fmt::print("{{stream_start}}\n");
     for (auto& sst : sstables) {
         fmt::print("{{sstable_scylla_metadata_start: {}}}\n", sst->get_filename());
@@ -1083,18 +1041,77 @@ void dump_scylla_metadata_operation(schema_ptr schema, reader_permit permit, con
 }
 
 template <typename SstableConsumer>
-void sstable_consumer_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
-        const partition_set& partitions, const options& opts, const operation_specific_options& op_opts) {
-    auto consumer = std::make_unique<SstableConsumer>(schema, permit, op_opts);
+void sstable_consumer_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map& vm) {
+    const auto merge = vm.count("merge");
+    const auto no_skips = vm.count("no-skips");
+    const auto partitions = get_partitions(schema, vm);
+    auto consumer = std::make_unique<SstableConsumer>(schema, permit, vm);
     consumer->on_start_of_stream().get();
-    consume_sstables(schema, permit, sstables, opts.merge, opts.no_skips || partitions.empty(), [&, &consumer = *consumer] (flat_mutation_reader& rd, sstables::sstable* sst) {
-        return consume_reader(std::move(rd), consumer, sst, partitions, opts.no_skips);
+    consume_sstables(schema, permit, sstables, merge, no_skips || partitions.empty(), [&, &consumer = *consumer] (flat_mutation_reader& rd, sstables::sstable* sst) {
+        return consume_reader(std::move(rd), consumer, sst, partitions, no_skips);
     });
     consumer->on_end_of_stream().get();
 }
 
+class basic_option {
+public:
+    const char* name;
+    const char* description;
+
+public:
+    basic_option(const char* name, const char* description) : name(name), description(description) { }
+
+    virtual void add_option(bpo::options_description& opts) const = 0;
+};
+
+template <typename T = std::monostate>
+class typed_option : public basic_option {
+    std::optional<T> _default_value;
+
+    virtual void add_option(bpo::options_description& opts) const override {
+        if (_default_value) {
+            opts.add_options()(name, bpo::value<T>()->default_value(*_default_value), description);
+        } else {
+            opts.add_options()(name, bpo::value<T>(), description);
+        }
+    }
+
+public:
+    typed_option(const char* name, const char* description) : basic_option(name, description) { }
+    typed_option(const char* name, T default_value, const char* description) : basic_option(name, description), _default_value(std::move(default_value)) { }
+};
+
+template <>
+class typed_option<std::monostate> : public basic_option {
+    virtual void add_option(bpo::options_description& opts) const override {
+        opts.add_options()(name, description);
+    }
+public:
+    typed_option(const char* name, const char* description) : basic_option(name, description) { }
+};
+
+class option {
+    shared_ptr<basic_option> _opt; // need copy to support convenient range declaration of std::vector<option>
+
+public:
+    template <typename T>
+    option(typed_option<T> opt) : _opt(make_shared<typed_option<T>>(std::move(opt))) { }
+
+    const char* name() const { return _opt->name; }
+    const char* description() const { return _opt->description; }
+    void add_option(bpo::options_description& opts) const { _opt->add_option(opts); }
+};
+
+const std::vector<option> all_options {
+    typed_option<std::vector<sstring>>("partition", "partition(s) to filter for, partitions are expected to be in the hex format"),
+    typed_option<sstring>("partitions-file", "file containing partition(s) to filter for, partitions are expected to be in the hex format"),
+    typed_option<>("merge", "merge all sstables into a single mutation fragment stream (use a combining reader over all sstable readers)"),
+    typed_option<>("no-skips", "don't use skips to skip to next partition when the partition filter rejects one, this is slower but works with corrupt index"),
+    typed_option<std::string>("bucket", "months", "the unit of time to use as bucket, one of (years, months, weeks, days, hours)"),
+};
+
 const std::vector<operation> operations{
-    {"dump-data", "Dump content of sstable(s).", sstable_consumer_operation<dumping_consumer>},
+    {"dump-data", "Dump content of sstable(s).", {"partition", "partitions-file", "merge", "no-skips"}, sstable_consumer_operation<dumping_consumer>},
     {"dump-index", "Dump content of sstable index(es).", dump_index_operation},
     {"dump-compression-info", "Dump content of sstable compression info(s).", dump_compression_info_operation},
     {"dump-summary", "Dump content of sstable summary(es).", dump_summary_operation},
@@ -1102,10 +1119,10 @@ const std::vector<operation> operations{
     {"dump-scylla-metadata", "Dump content of sstable scylla metadata(s).", dump_scylla_metadata_operation},
     {"writetime-histogram",
             "Generate a histogram (bucket=month) of all the timestamps (writetime), written to histogram.json.",
-            {{"bucket", "the unit of time to use as bucket, one of (years, months, weeks, days, hours)"}},
+            {"bucket"},
             sstable_consumer_operation<writetime_histogram_collecting_consumer>},
     {"custom", "Hackable custom operation for expert users, until scripting support is implemented.", sstable_consumer_operation<custom_consumer>},
-    {"validate", "Validate sstable(s) with the mutation fragment stream validator, same as scrub in validate mode.", validate_operation},
+    {"validate", "Validate sstable(s) with the mutation fragment stream validator, same as scrub in validate mode.", {"merge"}, validate_operation},
 };
 
 } // anonymous namespace
@@ -1149,6 +1166,8 @@ stderr, with a logger called {}.
 The supported operations are:
 {}
 
+For more details on an operation, run: scylla sstable {{operation}} --help
+
 Examples:
 
 # dump the content of the sstable
@@ -1164,12 +1183,7 @@ $ scylla sstable writetime-histogram --partition={{myhexpartitionkey}} /path/to/
 $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-Data.db
 )";
     app_cfg.description = format(description_template, app_name, boost::algorithm::join(operations | boost::adaptors::transformed([] (const auto& op) {
-        if (op.available_options().empty()) {
-            return format("* {}: {}", op.name(), op.description());
-        }
-        const auto opt_list = boost::algorithm::join(op.available_options() | boost::adaptors::transformed(
-                        [] (const auto& opt) { return fmt::format("    - {}: {}", opt.name, opt.description); }), "\n");
-        return format("* {}: {}\n  Options:\n{}", op.name(), op.description(), opt_list);
+        return format("* {}: {}", op.name(), op.description());
     }), "\n"));
 
     tools::utils::configure_tool_mode(app_cfg, sst_log.name());
@@ -1178,42 +1192,29 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
 
     app.add_options()
         ("schema-file", bpo::value<sstring>()->default_value("schema.cql"), "file containing the schema description")
-        ("partition", bpo::value<std::vector<sstring>>(), "partition(s) to filter for, partitions are expected to be in the hex format")
-        ("partitions-file", bpo::value<sstring>(), "file containing partition(s) to filter for, partitions are expected to be in the hex format")
-        ("merge", "merge all sstables into a single mutation fragment stream (use a combining reader over all sstable readers)")
-        ("no-skips", "don't use skips to skip to next partition when the partition filter rejects one, this is slower but works with corrupt index")
-        ("operation-option", bpo::value<program_options::string_map>()->default_value({}),
-                 "Map of operation-option names to values. The format is \"OPTION0=VALUE0[:OPTION1=VALUE1:...]\". "
-                 "Valid options are listed in the operation descriptions."
-                 "This option can be specified multiple times.")
         ;
 
     app.add_positional_options({
         {"sstables", bpo::value<std::vector<sstring>>(), "sstable(s) to process, can also be provided as positional arguments", -1},
     });
 
+    if (found_op) {
+        bpo::options_description op_desc(found_op->name());
+        for (const auto& opt_name : found_op->available_options()) {
+            auto it = std::find_if(all_options.begin(), all_options.end(), [&] (const option& opt) { return opt.name() == opt_name; });
+            assert(it != all_options.end());
+            it->add_option(op_desc);
+        }
+        if (!found_op->available_options().empty()) {
+            app.get_options_description().add(op_desc);
+        }
+    }
+
     return app.run(argc, argv, [&app, found_op] {
         return async([&app, found_op] {
             auto& app_config = app.configuration();
 
             const auto& operation = *found_op;
-
-            options opts;
-            opts.merge = app_config.count("merge");
-            opts.no_skips = app_config.count("no-skips");
-
-            const auto operation_opts_raw = app_config["operation-option"].as<program_options::string_map>();
-            const auto operation_opts = operation_specific_options(operation_opts_raw.begin(), operation_opts_raw.end());
-
-            for (const auto& [key, _] : operation_opts) {
-                auto it = std::find_if(operation.available_options().begin(), operation.available_options().end(), [&name = key] (const operation::option& opt) {
-                    return opt.name == name;
-                });
-                if (it == operation.available_options().end()) {
-                    sst_log.error("error: operation {} doesn't have option {}", operation.name(), key);
-                    return 2;
-                }
-            }
 
             schema_ptr schema;
             try {
@@ -1222,8 +1223,6 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
                 std::cerr << "error: could not load schema file '" << app_config["schema-file"].as<sstring>() << "': " << std::current_exception() << std::endl;
                 return 1;
             }
-
-            const auto partitions = get_partitions(schema, app_config);
 
             db::config dbcfg;
             gms::feature_service feature_service(gms::feature_config_from_db_config(dbcfg));
@@ -1242,7 +1241,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
 
             const auto permit = rcs_sem.make_tracking_only_permit(schema.get(), app_name, db::no_timeout);
 
-            operation(schema, permit, sstables, partitions, opts, operation_opts);
+            operation(schema, permit, sstables, app_config);
 
             return 0;
         });
