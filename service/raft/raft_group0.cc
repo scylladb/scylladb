@@ -50,7 +50,7 @@ raft_server_for_group raft_group0::create_server_for_group(raft::group_id gid,
         raft::server_address my_addr) {
 
     _raft_gr.address_map().set(my_addr);
-    auto state_machine = std::make_unique<group0_state_machine>(_mm);
+    auto state_machine = std::make_unique<group0_state_machine>(_mm, _qp.proxy());
     auto rpc = std::make_unique<raft_rpc>(*state_machine, _ms, _raft_gr.address_map(), gid, my_addr.id);
     // Keep a reference to a specific RPC class.
     auto& rpc_ref = *rpc;

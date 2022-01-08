@@ -26,6 +26,7 @@ namespace service {
 static logging::logger slogger("schema_raft_sm");
 
 future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
+    (void)_sp;
     slogger.trace("apply() is called");
     for (auto&& c : command) {
         auto is = ser::as_input_stream(c);
