@@ -608,6 +608,7 @@ gms::inet_address messaging_service::get_preferred_ip(gms::inet_address ep) {
 
 void messaging_service::init_local_preferred_ip_cache(const std::unordered_map<gms::inet_address, gms::inet_address>& ips_cache) {
     _preferred_ip_cache = ips_cache;
+    _preferred_to_endpoint.clear();
     //
     // Reset the connections to the endpoints that have entries in
     // _preferred_ip_cache so that they reopen with the preferred IPs we've
@@ -615,11 +616,18 @@ void messaging_service::init_local_preferred_ip_cache(const std::unordered_map<g
     //
     for (auto& p : _preferred_ip_cache) {
         this->remove_rpc_client(msg_addr(p.first));
+        _preferred_to_endpoint[p.second] = p.first;
     }
 }
 
 void messaging_service::cache_preferred_ip(gms::inet_address ep, gms::inet_address ip) {
     _preferred_ip_cache[ep] = ip;
+    _preferred_to_endpoint[ip] = ep;
+}
+
+gms::inet_address messaging_service::get_public_endpoint_for(const gms::inet_address& ip) const {
+    auto i = _preferred_to_endpoint.find(ip);
+    return i != _preferred_to_endpoint.end() ? i->second : ip;
 }
 
 shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::get_rpc_client(messaging_verb verb, msg_addr id) {
@@ -635,7 +643,12 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
         remove_error_rpc_client(verb, id);
     }
 
-    auto must_encrypt = [&id, &verb, this] {
+    auto addr = get_preferred_ip(id.addr);
+    auto broadcast_address = utils::fb_utilities::get_broadcast_address();
+    bool listen_to_bc = _cfg.listen_on_broadcast_address && _cfg.ip != broadcast_address;
+    auto laddr = socket_address(listen_to_bc ? broadcast_address : _cfg.ip, 0);
+
+    auto must_encrypt = [&] {
         if (_cfg.encrypt == encrypt_what::none) {
             return false;
         }
@@ -653,13 +666,27 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
         auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
 
         // either rack/dc need to be in same dc to use non-tls
-        if (snitch_ptr->get_datacenter(id.addr) != snitch_ptr->get_datacenter(utils::fb_utilities::get_broadcast_address())) {
+        auto my_dc = snitch_ptr->get_datacenter(broadcast_address);
+        if (snitch_ptr->get_datacenter(addr) != my_dc) {
+            return true;
+        }
+        // #9653 - if our idea of dc for bind address differs from our official endpoint address,
+        // we cannot trust downgrading. We need to ensure either (local) bind address is same as
+        // broadcast or that the dc info we get for it is the same.
+        if (broadcast_address != laddr && snitch_ptr->get_datacenter(laddr) != my_dc) {
             return true;
         }
         // if cross-rack tls, check rack.
-        return _cfg.encrypt == encrypt_what::rack &&
-            snitch_ptr->get_rack(id.addr) != snitch_ptr->get_rack(utils::fb_utilities::get_broadcast_address())
-            ;
+        if (_cfg.encrypt == encrypt_what::dc) {
+            return false;
+        }
+        auto my_rack = snitch_ptr->get_rack(broadcast_address);
+        if (snitch_ptr->get_rack(addr) != my_rack) {
+            return true;
+        }
+        // See above: We need to ensure either (local) bind address is same as
+        // broadcast or that the rack info we get for it is the same.
+        return broadcast_address != laddr && snitch_ptr->get_rack(laddr) != my_rack;
     }();
 
     auto must_compress = [&id, this] {
@@ -688,7 +715,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
         return true;
     }();
 
-    auto remote_addr = socket_address(get_preferred_ip(id.addr), must_encrypt ? _cfg.ssl_port : _cfg.port);
+    auto remote_addr = socket_address(addr, must_encrypt ? _cfg.ssl_port : _cfg.port);
 
     rpc::client_options opts;
     // send keepalive messages each minute if connection is idle, drop connection after 10 failures
@@ -703,8 +730,6 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
         opts.isolation_cookie = _scheduling_info_for_connection_index[idx].isolation_cookie;
     }
 
-    bool listen_to_bc = _cfg.listen_on_broadcast_address && _cfg.ip != utils::fb_utilities::get_broadcast_address();
-    auto laddr = socket_address(listen_to_bc ? utils::fb_utilities::get_broadcast_address() : _cfg.ip, 0);
     auto client = must_encrypt ?
                     ::make_shared<rpc_protocol_client_wrapper>(_rpc->protocol(), std::move(opts),
                                     remote_addr, laddr, _credentials) :
