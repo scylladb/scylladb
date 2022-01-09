@@ -442,7 +442,7 @@ class RpcVerb(ASTBase):
 
     These are the methods being created for each RPC verb:
 
-            static void register_my_verb(netw::messaging_service* ms, std::function<return_type(args...)>&&);
+            static void register_my_verb(netw::messaging_service* ms, std::function<return_value(args...)>&&);
             static future<> unregister_my_verb(netw::messaging_service* ms);
             static future<> send_my_verb(netw::messaging_service* ms, netw::msg_addr id, args...);
 
@@ -466,20 +466,20 @@ class RpcVerb(ASTBase):
       future<rpc::no_wait_type> return type to designate that a client
       doesn't need to wait for an answer.
 
-    The `-> return_type` clause is optional for two-way messages. If omitted,
+    The `-> return_values` clause is optional for two-way messages. If omitted,
     the return type is set to be `future<>`.
     For one-way verbs, the use of return clause is prohibited and the
     signature of `send*` function always returns `future<>`."""
-    def __init__(self, name, parameters, return_type, with_client_info, with_timeout, one_way):
+    def __init__(self, name, parameters, return_values, with_client_info, with_timeout, one_way):
         super().__init__(name)
         self.params = parameters
-        self.return_type = return_type
+        self.return_values = return_values
         self.with_client_info = with_client_info
         self.with_timeout = with_timeout
         self.one_way = one_way
 
     def __str__(self):
-        return f"<RpcVerb(name={self.name}, params={self.params}, return_type={self.return_type}, with_client_info={self.with_client_info}, with_timeout={self.with_timeout}, one_way={self.one_way})>"
+        return f"<RpcVerb(name={self.name}, params={self.params}, return_values={self.return_values}, with_client_info={self.with_client_info}, with_timeout={self.with_timeout}, one_way={self.one_way})>"
 
     def __repr__(self):
         return self.__str__()
@@ -492,15 +492,31 @@ class RpcVerb(ASTBase):
             send_fn += '_timeout'
         return send_fn
 
-    def handler_function_return_type(self):
+    def handler_function_return_values(self):
         if self.one_way:
             return 'future<rpc::no_wait_type>'
-        return f"future<{self.return_type.to_string() if self.return_type else ''}>"
+        if not self.return_values:
+            return 'future<>'
+        l = len(self.return_values)
+        ret = 'rpc::tuple<' if l > 1 else ''
+        for t in self.return_values:
+            ret = ret + t.to_string_send_fn_signature() + ', '
+        ret = ret[:-2]
+        if l > 1:
+            ret = ret + '>'
+        return f"future<{ret}>"
 
     def send_function_return_type(self):
-        if self.one_way:
+        if self.one_way or not self.return_values:
             return 'future<>'
-        return self.handler_function_return_type()
+        l = len(self.return_values)
+        ret = 'rpc::tuple<' if l > 1 else ''
+        for t in self.return_values:
+            ret = ret + t.to_string() + ', '
+        ret = ret[:-2]
+        if l > 1:
+            ret = ret + '>'
+        return f"future<{ret}>"
 
     def messaging_verb_enum_case(self):
         return f'netw::messaging_verb::{self.name.upper()}'
@@ -644,6 +660,10 @@ def rpc_verb_param_parse_action(tokens):
     attrs = tokens['attrs']
     return RpcVerbParam(type=type, name=name, attributes=attrs)
 
+def rpc_verb_return_val_parse_action(tokens):
+    type = tokens['type']
+    attrs = tokens['attrs']
+    return RpcVerbParam(type=type, name='', attributes=attrs)
 
 def rpc_verb_parse_action(tokens):
     name = tokens['name']
@@ -652,9 +672,9 @@ def rpc_verb_parse_action(tokens):
     with_timeout = not raw_attrs.empty() and 'with_timeout' in raw_attrs.attr_items
     with_client_info = not raw_attrs.empty() and 'with_client_info' in raw_attrs.attr_items
     one_way = not raw_attrs.empty() and 'one_way' in raw_attrs.attr_items
-    if one_way and 'return_type' in tokens:
+    if one_way and 'return_values' in tokens:
         raise Exception(f"Invalid return type specification for one-way RPC verb '{name}'")
-    return RpcVerb(name=name, parameters=params, return_type=tokens.get('return_type'), with_client_info=with_client_info, with_timeout=with_timeout, one_way=one_way)
+    return RpcVerb(name=name, parameters=params, return_values=tokens.get('return_values'), with_client_info=with_client_info, with_timeout=with_timeout, one_way=one_way)
 
 
 def namespace_parse_action(tokens):
@@ -736,9 +756,13 @@ def parse_file(file_name):
     rpc_verb_param.setParseAction(rpc_verb_param_parse_action)
     rpc_verb_params = pp.delimitedList(rpc_verb_param)
 
+    rpc_verb_return_val = type("type") - opt_attributes("attrs")
+    rpc_verb_return_val.setParseAction(rpc_verb_return_val_parse_action)
+    rpc_verb_return_vals = pp.delimitedList(rpc_verb_return_val)
+
     rpc_verb = verb - opt_attributes - identifier("name") - \
         lparen.suppress() - pp.Optional(rpc_verb_params("params")) - rparen.suppress() - \
-        pp.Optional(pp.Literal("->").suppress() - type("return_type")) - pp.Optional(semi)
+        pp.Optional(pp.Literal("->").suppress() - rpc_verb_return_vals("return_values")) - pp.Optional(semi)
     rpc_verb.setParseAction(rpc_verb_parse_action)
 
     namespace = ns - identifier("name") - lbrace - pp.OneOrMore(content)("ns_members") - rbrace
@@ -1516,7 +1540,7 @@ def generate_rpc_verbs_declarations(hout, module_name):
     fprintln(hout, f'struct {module_name}_rpc_verbs {{')
     for name, verb in rpc_verbs.items():
         fprintln(hout, reindent(4, f'''static void register_{name}(netw::messaging_service* ms,
-    std::function<{verb.handler_function_return_type()} ({verb.handler_function_parameters_str()})>&&);
+    std::function<{verb.handler_function_return_values()} ({verb.handler_function_parameters_str()})>&&);
 static future<> unregister_{name}(netw::messaging_service* ms);
 static {verb.send_function_return_type()} send_{name}({verb.send_function_signature_params_list(include_placeholder_names=False)});
 '''))
@@ -1530,7 +1554,7 @@ def generate_rpc_verbs_definitions(cout, module_name):
     for name, verb in rpc_verbs.items():
         fprintln(cout, f'''
 void {module_name}_rpc_verbs::register_{name}(netw::messaging_service* ms,
-        std::function<{verb.handler_function_return_type()} ({verb.handler_function_parameters_str()})>&& f) {{
+        std::function<{verb.handler_function_return_values()} ({verb.handler_function_parameters_str()})>&& f) {{
     register_handler(ms, {verb.messaging_verb_enum_case()}, std::move(f));
 }}
 
