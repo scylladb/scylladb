@@ -33,6 +33,7 @@
 #include <seastar/core/thread.hh>
 #include <seastar/core/byteorder.hh>
 #include <seastar/core/aligned_buffer.hh>
+#include <seastar/core/metrics.hh>
 #include <seastar/util/closeable.hh>
 #include <iterator>
 #include <seastar/core/coroutine.hh>
