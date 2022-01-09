@@ -51,15 +51,14 @@ namespace tracing {
 
 class trace_keyspace_helper final : public i_tracing_backend_helper {
 public:
-    static const sstring KEYSPACE_NAME;
-    static const sstring SESSIONS;
-    static const sstring SESSIONS_TIME_IDX;
-    static const sstring EVENTS;
+    static constexpr std::string_view KEYSPACE_NAME = "system_traces";
+    static constexpr std::string_view SESSIONS = "sessions";
+    static constexpr std::string_view SESSIONS_TIME_IDX = "sessions_time_idx";
+    static constexpr std::string_view EVENTS = "events";
 
     // Performance related tables
-    static const sstring NODE_SLOW_QUERY_LOG;
-    static const sstring NODE_SLOW_QUERY_LOG_TIME_IDX;
-
+    static constexpr std::string_view NODE_SLOW_QUERY_LOG = "node_slow_log";
+    static constexpr std::string_view NODE_SLOW_QUERY_LOG_TIME_IDX = "node_slow_log_time_idx";
 private:
     static constexpr int bad_column_family_message_period = 10000;
 
