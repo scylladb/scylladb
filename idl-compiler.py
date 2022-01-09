@@ -401,7 +401,11 @@ class RpcVerbParam(ASTBase):
     of the argument in the argument list for an RPC verb.
 
     If the [[version]] attribute is specified, then handler function signature for an RPC verb will contain this
-    argument as an `rpc::optional<>`."""
+    argument as an `rpc::optional<>`.
+    If the [[unique_ptr]] attribute is specified then handler function signature for an RPC verb will contain this
+    argument as an `foreign_ptr<unique_ptr<>>`
+    If the [[lw_shared_ptr]] attribute is specified then handler function signature for an RPC verb will contain this
+    argument as an `foreign_ptr<lw_shared_ptr<>>`"""
     def __init__(self, type, name, attributes=Attributes()):
         self.type = type
         self.name = name
@@ -414,7 +418,13 @@ class RpcVerbParam(ASTBase):
         return self.__str__()
 
     def is_optional(self):
-        return bool([a.startswith('version') for a in self.attributes.attr_items])
+        return True in [a.startswith('version') for a in self.attributes.attr_items]
+
+    def is_lw_shared(self):
+        return True in [a.startswith('lw_shared_ptr') for a in self.attributes.attr_items]
+
+    def is_unique(self):
+        return True in [a.startswith('unique_ptr') for a in self.attributes.attr_items]
 
     def to_string(self):
         res = self.type.to_string()
@@ -427,6 +437,14 @@ class RpcVerbParam(ASTBase):
 
     def to_string_send_fn_signature(self):
         return self.to_string() if not self.is_optional() else self.type.to_string() + ' ' + self.name
+
+    def to_string_handle_ret_value(self):
+        res = self.type.to_string()
+        if self.is_unique():
+            res = 'foreign_ptr<std::unique_ptr<' + res + '>>'
+        elif self.is_lw_shared():
+            res = 'foreign_ptr<lw_shared_ptr<' + res + '>>'
+        return res
 
 
 class RpcVerb(ASTBase):
@@ -500,7 +518,7 @@ class RpcVerb(ASTBase):
         l = len(self.return_values)
         ret = 'rpc::tuple<' if l > 1 else ''
         for t in self.return_values:
-            ret = ret + t.to_string_send_fn_signature() + ', '
+            ret = ret + t.to_string_handle_ret_value() + ', '
         ret = ret[:-2]
         if l > 1:
             ret = ret + '>'
