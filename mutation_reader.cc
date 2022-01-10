@@ -1604,15 +1604,14 @@ private:
     void do_pause(flat_mutation_reader_v2 reader);
     void maybe_pause(flat_mutation_reader_v2 reader);
     flat_mutation_reader_v2_opt try_resume();
-    void update_next_position(flat_mutation_reader_v2& reader);
+    void update_next_position();
     void adjust_partition_slice();
     flat_mutation_reader_v2 recreate_reader();
     future<flat_mutation_reader_v2> resume_or_create_reader();
     void maybe_validate_partition_start(const flat_mutation_reader_v2::tracked_buffer& buffer);
     void validate_position_in_partition(position_in_partition_view pos) const;
     bool should_drop_fragment(const mutation_fragment_v2& mf);
-    future<> do_fill_buffer(flat_mutation_reader_v2& reader);
-    future<> fill_buffer(flat_mutation_reader_v2& reader);
+    future<> do_fill_buffer();
 
 public:
     evictable_reader_v2(
@@ -1673,7 +1672,7 @@ flat_mutation_reader_v2_opt evictable_reader_v2::try_resume() {
     return {};
 }
 
-void evictable_reader_v2::update_next_position(flat_mutation_reader_v2& reader) {
+void evictable_reader_v2::update_next_position() {
     if (is_buffer_empty()) {
         return;
     }
@@ -1693,8 +1692,8 @@ void evictable_reader_v2::update_next_position(flat_mutation_reader_v2& reader) 
             _next_position_in_partition = position_in_partition::before_all_clustered_rows();
             break;
         case partition_region::clustered:
-            if (!reader.is_buffer_empty() && reader.peek_buffer().is_end_of_partition()) {
-                push_mutation_fragment(reader.pop_mutation_fragment());
+            if (!_reader->is_buffer_empty() && _reader->peek_buffer().is_end_of_partition()) {
+                push_mutation_fragment(_reader->pop_mutation_fragment());
                 _next_position_in_partition = position_in_partition::for_partition_start();
             } else {
                 _next_position_in_partition = position_in_partition::after_key(last_pos);
@@ -1891,31 +1890,25 @@ bool evictable_reader_v2::should_drop_fragment(const mutation_fragment_v2& mf) {
     return false;
 }
 
-future<> evictable_reader_v2::do_fill_buffer(flat_mutation_reader_v2& reader) {
+future<> evictable_reader_v2::do_fill_buffer() {
     if (!_drop_partition_start && !_drop_static_row) {
-        auto fill_buf_fut = reader.fill_buffer();
+        auto fill_buf_fut = _reader->fill_buffer();
         if (_validate_partition_key) {
-            fill_buf_fut = fill_buf_fut.then([this, &reader] {
-                maybe_validate_partition_start(reader.buffer());
+            fill_buf_fut = fill_buf_fut.then([this] {
+                maybe_validate_partition_start(_reader->buffer());
             });
         }
         return fill_buf_fut;
     }
-    return repeat([this, &reader] {
-        return reader.fill_buffer().then([this, &reader] {
-            maybe_validate_partition_start(reader.buffer());
-            while (!reader.is_buffer_empty() && should_drop_fragment(reader.peek_buffer())) {
-                reader.pop_mutation_fragment();
+    return repeat([this] {
+        return _reader->fill_buffer().then([this] {
+            maybe_validate_partition_start(_reader->buffer());
+            while (!_reader->is_buffer_empty() && should_drop_fragment(_reader->peek_buffer())) {
+                _reader->pop_mutation_fragment();
             }
-            return stop_iteration(reader.is_buffer_full() || reader.is_end_of_stream());
+            return stop_iteration(_reader->is_buffer_full() || _reader->is_end_of_stream());
         });
     });
-}
-
-future<> evictable_reader_v2::fill_buffer(flat_mutation_reader_v2& reader) {
-    co_await do_fill_buffer(reader);
-    reader.move_buffer_content_to(*this);
-    update_next_position(reader);
 }
 
 evictable_reader_v2::evictable_reader_v2(
@@ -1944,7 +1937,9 @@ future<> evictable_reader_v2::fill_buffer() {
         co_return;
     }
     _reader = co_await resume_or_create_reader();
-    co_await fill_buffer(*_reader);
+    co_await do_fill_buffer();
+    _reader->move_buffer_content_to(*this);
+    update_next_position();
     _end_of_stream = _reader->is_end_of_stream() && _reader->is_buffer_empty();
     maybe_pause(std::move(*_reader));
 }
