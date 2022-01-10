@@ -60,7 +60,7 @@
 #include "unit_test_service_levels_accessor.hh"
 #include "db/view/view_builder.hh"
 #include "db/view/node_view_update_backlog.hh"
-#include "distributed_loader.hh"
+#include "replica/distributed_loader.hh"
 // TODO: remove (#293)
 #include "message/messaging_service.hh"
 #include "gms/gossiper.hh"
@@ -670,14 +670,14 @@ public:
                 std::ref(bm)).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
-            distributed_loader::init_system_keyspace(db, ss, gossiper, *cfg).get();
+            replica::distributed_loader::init_system_keyspace(db, ss, gossiper, *cfg).get();
 
             auto& ks = db.local().find_keyspace(db::system_keyspace::NAME);
             parallel_for_each(ks.metadata()->cf_meta_data(), [&ks] (auto& pair) {
                 auto cfm = pair.second;
                 return ks.make_directory_for_column_family(cfm->cf_name(), cfm->id());
             }).get();
-            distributed_loader::init_non_system_keyspaces(db, proxy).get();
+            replica::distributed_loader::init_non_system_keyspaces(db, proxy).get();
 
             db.invoke_on_all([] (replica::database& db) {
                 for (auto& x : db.get_column_families()) {

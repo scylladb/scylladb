@@ -52,9 +52,9 @@ private:
     bool _is_fallback_stmt = false;
 
 public:
-    table_helper(sstring keyspace, sstring name, sstring create_cql, sstring insert_cql, std::optional<sstring> insert_cql_fallback = std::nullopt)
-        : _keyspace(std::move(keyspace))
-        , _name(std::move(name))
+    table_helper(std::string_view keyspace, std::string_view name, sstring create_cql, sstring insert_cql, std::optional<sstring> insert_cql_fallback = std::nullopt)
+        : _keyspace(keyspace)
+        , _name(name)
         , _create_cql(std::move(create_cql))
         , _insert_cql(std::move(insert_cql))
         , _insert_cql_fallback(std::move(insert_cql_fallback)) {}
@@ -105,7 +105,7 @@ public:
 
     future<> insert(cql3::query_processor& qp, service::query_state& qs, noncopyable_function<cql3::query_options ()> opt_maker);
 
-    static future<> setup_keyspace(cql3::query_processor& qp, const sstring& keyspace_name, sstring replication_factor, service::query_state& qs, std::vector<table_helper*> tables);
+    static future<> setup_keyspace(cql3::query_processor& qp, std::string_view keyspace_name, sstring replication_factor, service::query_state& qs, std::vector<table_helper*> tables);
 
     /**
      * Makes a monotonically increasing value in 100ns ("nanos") based on the given time

@@ -65,6 +65,8 @@ bool is_internal_keyspace(std::string_view name) {
     return internal_keyspaces.contains(name);
 }
 
+namespace replica {
+
 static io_error_handler error_handler_for_upload_dir() {
     return [] (std::exception_ptr eptr) {
         // do nothing about sstable exception and caller will just rethrow it.
@@ -692,3 +694,4 @@ future<> distributed_loader::init_non_system_keyspaces(distributed<replica::data
     });
 }
 
+}

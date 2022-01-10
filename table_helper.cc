@@ -115,7 +115,7 @@ future<> table_helper::insert(cql3::query_processor& qp, service::query_state& q
     }).discard_result();
 }
 
-future<> table_helper::setup_keyspace(cql3::query_processor& qp, const sstring& keyspace_name, sstring replication_factor, service::query_state& qs, std::vector<table_helper*> tables) {
+future<> table_helper::setup_keyspace(cql3::query_processor& qp, std::string_view keyspace_name, sstring replication_factor, service::query_state& qs, std::vector<table_helper*> tables) {
     if (this_shard_id() == 0) {
         size_t n = tables.size();
         for (size_t i = 0; i < n; ++i) {
@@ -123,7 +123,7 @@ future<> table_helper::setup_keyspace(cql3::query_processor& qp, const sstring& 
                 throw std::invalid_argument("setup_keyspace called with table_helper for different keyspace");
             }
         }
-        return seastar::async([&qp, &keyspace_name, replication_factor, &qs, tables] {
+        return seastar::async([&qp, keyspace_name, replication_factor, &qs, tables] {
             data_dictionary::database db = qp.db();
 
             // Create a keyspace

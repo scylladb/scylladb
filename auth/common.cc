@@ -34,9 +34,9 @@ namespace auth {
 
 namespace meta {
 
-constexpr std::string_view AUTH_KS("system_auth");
-constexpr std::string_view USERS_CF("users");
-constexpr std::string_view AUTH_PACKAGE_NAME("org.apache.cassandra.auth.");
+constinit const std::string_view AUTH_KS("system_auth");
+constinit const std::string_view USERS_CF("users");
+constinit const std::string_view AUTH_PACKAGE_NAME("org.apache.cassandra.auth.");
 
 }
 

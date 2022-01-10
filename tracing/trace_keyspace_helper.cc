@@ -57,14 +57,6 @@ using namespace std::chrono_literals;
 
 static logging::logger tlogger("trace_keyspace_helper");
 
-const sstring trace_keyspace_helper::KEYSPACE_NAME("system_traces");
-const sstring trace_keyspace_helper::SESSIONS("sessions");
-const sstring trace_keyspace_helper::SESSIONS_TIME_IDX("sessions_time_idx");
-const sstring trace_keyspace_helper::EVENTS("events");
-
-const sstring trace_keyspace_helper::NODE_SLOW_QUERY_LOG("node_slow_log");
-const sstring trace_keyspace_helper::NODE_SLOW_QUERY_LOG_TIME_IDX("node_slow_log_time_idx");
-
 static service::client_state& tracing_client_state() {
     static timeout_config tracing_db_timeout_config {
         5s, 5s, 5s, 5s, 5s, 5s, 5s,
