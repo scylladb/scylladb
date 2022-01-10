@@ -1472,10 +1472,10 @@ public:
         }
         return [this, end_consumer = std::move(end_consumer)] (flat_mutation_reader_v2 reader) mutable -> future<> {
             auto cfg = mutation_writer::segregate_config{_io_priority, memory::stats().total_memory() / 10};
-            return mutation_writer::segregate_by_partition(downgrade_to_v1(std::move(reader)), cfg,
-                    [consumer = std::move(end_consumer), this] (flat_mutation_reader rd) {
+            return mutation_writer::segregate_by_partition(std::move(reader), cfg,
+                    [consumer = std::move(end_consumer), this] (flat_mutation_reader_v2 rd) {
                 ++_bucket_count;
-                return consumer(upgrade_to_v2(std::move(rd)));
+                return consumer(std::move(rd));
             });
         };
     }
