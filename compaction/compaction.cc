@@ -1220,7 +1220,7 @@ public:
                 action.empty() ? "" : "; ",
                 action);
     }
-    static void report_invalid_mutation_fragment(compaction_type type, mutation_fragment_stream_validator& validator, const mutation_fragment& mf,
+    static void report_invalid_mutation_fragment(compaction_type type, mutation_fragment_stream_validator& validator, const mutation_fragment_v2& mf,
             std::string_view action = "") {
         const auto& schema = validator.schema();
         const auto& key = validator.previous_partition_key();
@@ -1254,11 +1254,11 @@ private:
         return utils::utf8::validate((const uint8_t*)ret.data(), ret.size()) ? ret : "<non-utf8-key>";
     }
 
-    class reader : public flat_mutation_reader::impl {
+    class reader : public flat_mutation_reader_v2::impl {
         using skip = bool_class<class skip_tag>;
     private:
         compaction_type_options::scrub::mode _scrub_mode;
-        flat_mutation_reader _reader;
+        flat_mutation_reader_v2 _reader;
         mutation_fragment_stream_validator _validator;
         bool _skip_to_next_partition = false;
 
@@ -1269,12 +1269,12 @@ private:
             }
         }
 
-        void on_unexpected_partition_start(const mutation_fragment& ps) {
+        void on_unexpected_partition_start(const mutation_fragment_v2& ps) {
             maybe_abort_scrub();
             report_invalid_partition_start(compaction_type::Scrub, _validator, ps.as_partition_start().key(),
                     "Rectifying by adding assumed missing partition-end");
 
-            auto pe = mutation_fragment(*_schema, _permit, partition_end{});
+            auto pe = mutation_fragment_v2(*_schema, _permit, partition_end{});
             if (!_validator(pe)) {
                 throw compaction_aborted_exception(
                         _schema->ks_name(),
@@ -1304,7 +1304,7 @@ private:
             return skip::yes;
         }
 
-        skip on_invalid_mutation_fragment(const mutation_fragment& mf) {
+        skip on_invalid_mutation_fragment(const mutation_fragment_v2& mf) {
             maybe_abort_scrub();
 
             const auto& key = _validator.previous_partition_key();
@@ -1319,7 +1319,7 @@ private:
 
                 // We loose the partition tombstone if any, but it will be
                 // picked up when compaction merges these partitions back.
-                push_mutation_fragment(mutation_fragment(*_schema, _permit, partition_start(key, {})));
+                push_mutation_fragment(mutation_fragment_v2(*_schema, _permit, partition_start(key, {})));
 
                 _validator.reset(mf);
 
@@ -1335,7 +1335,7 @@ private:
         void on_invalid_end_of_stream() {
             maybe_abort_scrub();
             // Handle missing partition_end
-            push_mutation_fragment(mutation_fragment(*_schema, _permit, partition_end{}));
+            push_mutation_fragment(mutation_fragment_v2(*_schema, _permit, partition_end{}));
             report_invalid_end_of_stream(compaction_type::Scrub, _validator, "Rectifying by adding missing partition-end to the end of the stream");
         }
 
@@ -1379,7 +1379,7 @@ private:
         }
 
     public:
-        reader(flat_mutation_reader underlying, compaction_type_options::scrub::mode scrub_mode)
+        reader(flat_mutation_reader_v2 underlying, compaction_type_options::scrub::mode scrub_mode)
             : impl(underlying.schema(), underlying.permit())
             , _scrub_mode(scrub_mode)
             , _reader(std::move(underlying))
@@ -1452,8 +1452,8 @@ public:
     }
 
     flat_mutation_reader_v2 make_sstable_reader() const override {
-        auto crawling_reader = downgrade_to_v1(_compacting->make_crawling_reader(_schema, _permit, _io_priority, nullptr));
-        return upgrade_to_v2(make_flat_mutation_reader<reader>(std::move(crawling_reader), _options.operation_mode));
+        auto crawling_reader = _compacting->make_crawling_reader(_schema, _permit, _io_priority, nullptr);
+        return make_flat_mutation_reader_v2<reader>(std::move(crawling_reader), _options.operation_mode);
     }
 
     uint64_t partitions_per_sstable() const override {
@@ -1484,11 +1484,16 @@ public:
         return _options.operation_mode == compaction_type_options::scrub::mode::segregate;
     }
 
+    friend flat_mutation_reader_v2 make_scrubbing_reader(flat_mutation_reader_v2 rd, compaction_type_options::scrub::mode scrub_mode);
     friend flat_mutation_reader make_scrubbing_reader(flat_mutation_reader rd, compaction_type_options::scrub::mode scrub_mode);
 };
 
+flat_mutation_reader_v2 make_scrubbing_reader(flat_mutation_reader_v2 rd, compaction_type_options::scrub::mode scrub_mode) {
+    return make_flat_mutation_reader_v2<scrub_compaction::reader>(std::move(rd), scrub_mode);
+}
+
 flat_mutation_reader make_scrubbing_reader(flat_mutation_reader rd, compaction_type_options::scrub::mode scrub_mode) {
-    return make_flat_mutation_reader<scrub_compaction::reader>(std::move(rd), scrub_mode);
+    return downgrade_to_v1(make_flat_mutation_reader_v2<scrub_compaction::reader>(upgrade_to_v2(std::move(rd)), scrub_mode));
 }
 
 class resharding_compaction final : public compaction {
@@ -1646,7 +1651,7 @@ static std::unique_ptr<compaction> make_compaction(table_state& table_s, sstable
     return descriptor.options.visit(visitor_factory);
 }
 
-future<bool> scrub_validate_mode_validate_reader(flat_mutation_reader reader, const compaction_data& cdata) {
+future<bool> scrub_validate_mode_validate_reader(flat_mutation_reader_v2 reader, const compaction_data& cdata) {
     auto schema = reader.schema();
 
     bool valid = true;
@@ -1699,6 +1704,9 @@ future<bool> scrub_validate_mode_validate_reader(flat_mutation_reader reader, co
 
     co_return valid;
 }
+future<bool> scrub_validate_mode_validate_reader(flat_mutation_reader reader, const compaction_data& cdata) {
+    return scrub_validate_mode_validate_reader(upgrade_to_v2(std::move(reader)), cdata);
+}
 
 static future<compaction_result> scrub_sstables_validate_mode(sstables::compaction_descriptor descriptor, compaction_data& cdata, table_state& table_s) {
     auto schema = table_s.schema();
@@ -1713,7 +1721,7 @@ static future<compaction_result> scrub_sstables_validate_mode(sstables::compacti
     clogger.info("Scrubbing in validate mode {}", sstables_list_msg);
 
     auto permit = table_s.make_compaction_reader_permit();
-    auto reader = downgrade_to_v1(sstables->make_crawling_reader(schema, permit, descriptor.io_priority, nullptr));
+    auto reader = sstables->make_crawling_reader(schema, permit, descriptor.io_priority, nullptr);
 
     const auto valid = co_await scrub_validate_mode_validate_reader(std::move(reader), cdata);
 
