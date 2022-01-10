@@ -1492,10 +1492,6 @@ flat_mutation_reader_v2 make_scrubbing_reader(flat_mutation_reader_v2 rd, compac
     return make_flat_mutation_reader_v2<scrub_compaction::reader>(std::move(rd), scrub_mode);
 }
 
-flat_mutation_reader make_scrubbing_reader(flat_mutation_reader rd, compaction_type_options::scrub::mode scrub_mode) {
-    return downgrade_to_v1(make_flat_mutation_reader_v2<scrub_compaction::reader>(upgrade_to_v2(std::move(rd)), scrub_mode));
-}
-
 class resharding_compaction final : public compaction {
     // Partition count estimation for a shard S:
     //
@@ -1703,9 +1699,6 @@ future<bool> scrub_validate_mode_validate_reader(flat_mutation_reader_v2 reader,
     }
 
     co_return valid;
-}
-future<bool> scrub_validate_mode_validate_reader(flat_mutation_reader reader, const compaction_data& cdata) {
-    return scrub_validate_mode_validate_reader(upgrade_to_v2(std::move(reader)), cdata);
 }
 
 static future<compaction_result> scrub_sstables_validate_mode(sstables::compaction_descriptor descriptor, compaction_data& cdata, table_state& table_s) {
