@@ -135,6 +135,13 @@ public:
         return mutation_fragment(*_s, std::move(permit), std::move(row));
     }
 
+    mutation_fragment_v2 make_row_v2(reader_permit permit, const clustering_key& key, sstring v) {
+        auto row = clustering_row(key);
+        const column_definition& v_def = get_v_def(*_s);
+        row.cells().apply(v_def, atomic_cell::make_live(*v_def.type, new_timestamp(), serialized(v)));
+        return mutation_fragment_v2(*_s, std::move(permit), std::move(row));
+    }
+
     mutation_fragment make_row_from_serialized_value(reader_permit permit, const clustering_key& key, bytes_view v) {
         auto row = clustering_row(key);
         const column_definition& v_def = get_v_def(*_s);
@@ -147,6 +154,13 @@ public:
         const column_definition& s_def = *_s->get_column_definition(to_bytes("s1"));
         row.cells().apply(s_def, atomic_cell::make_live(*s_def.type, new_timestamp(), serialized(v)));
         return mutation_fragment(*_s, std::move(permit), std::move(row));
+    }
+
+    mutation_fragment_v2 make_static_row_v2(reader_permit permit, sstring v) {
+        static_row row;
+        const column_definition& s_def = *_s->get_column_definition(to_bytes("s1"));
+        row.cells().apply(s_def, atomic_cell::make_live(*s_def.type, new_timestamp(), serialized(v)));
+        return mutation_fragment_v2(*_s, std::move(permit), std::move(row));
     }
 
     void set_schema(schema_ptr s) {
