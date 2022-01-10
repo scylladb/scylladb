@@ -1554,10 +1554,24 @@ void flat_mutation_reader::on_close_error(std::unique_ptr<impl> i, std::exceptio
 invalid_mutation_fragment_stream::invalid_mutation_fragment_stream(std::runtime_error e) : std::runtime_error(std::move(e)) {
 }
 
+static mutation_fragment_v2::kind to_mutation_fragment_kind_v2(mutation_fragment::kind k) {
+    switch (k) {
+        case mutation_fragment::kind::partition_start:
+            return mutation_fragment_v2::kind::partition_start;
+        case mutation_fragment::kind::static_row:
+            return mutation_fragment_v2::kind::static_row;
+        case mutation_fragment::kind::clustering_row:
+            return mutation_fragment_v2::kind::clustering_row;
+        case mutation_fragment::kind::range_tombstone:
+            return mutation_fragment_v2::kind::range_tombstone_change;
+        case mutation_fragment::kind::partition_end:
+            return mutation_fragment_v2::kind::partition_end;
+    }
+}
 
 mutation_fragment_stream_validator::mutation_fragment_stream_validator(const ::schema& s)
     : _schema(s)
-    , _prev_kind(mutation_fragment::kind::partition_end)
+    , _prev_kind(mutation_fragment_v2::kind::partition_end)
     , _prev_pos(position_in_partition::end_of_partition_tag_t{})
     , _prev_partition_key(dht::minimum_token(), partition_key::make_empty()) {
 }
@@ -1578,11 +1592,11 @@ bool mutation_fragment_stream_validator::operator()(dht::token t) {
     return false;
 }
 
-bool mutation_fragment_stream_validator::operator()(mutation_fragment::kind kind, position_in_partition_view pos) {
-    if (_prev_kind == mutation_fragment::kind::partition_end) {
-        const bool valid = (kind == mutation_fragment::kind::partition_start);
+bool mutation_fragment_stream_validator::operator()(mutation_fragment_v2::kind kind, position_in_partition_view pos) {
+    if (_prev_kind == mutation_fragment_v2::kind::partition_end) {
+        const bool valid = (kind == mutation_fragment_v2::kind::partition_start);
         if (valid) {
-            _prev_kind = mutation_fragment::kind::partition_start;
+            _prev_kind = mutation_fragment_v2::kind::partition_start;
             _prev_pos = pos;
         }
         return valid;
@@ -1590,7 +1604,7 @@ bool mutation_fragment_stream_validator::operator()(mutation_fragment::kind kind
     auto cmp = position_in_partition::tri_compare(_schema);
     auto res = cmp(_prev_pos, pos);
     bool valid = true;
-    if (_prev_kind == mutation_fragment::kind::range_tombstone) {
+    if (_prev_kind == mutation_fragment_v2::kind::range_tombstone_change) {
         valid = res <= 0;
     } else {
         valid = res < 0;
@@ -1601,25 +1615,31 @@ bool mutation_fragment_stream_validator::operator()(mutation_fragment::kind kind
     }
     return valid;
 }
-
-bool mutation_fragment_stream_validator::operator()(const mutation_fragment& mf) {
-    return (*this)(mf.mutation_fragment_kind(), mf.position());
+bool mutation_fragment_stream_validator::operator()(mutation_fragment::kind kind, position_in_partition_view pos) {
+    return (*this)(to_mutation_fragment_kind_v2(kind), pos);
 }
 
-bool mutation_fragment_stream_validator::operator()(mutation_fragment::kind kind) {
+bool mutation_fragment_stream_validator::operator()(const mutation_fragment_v2& mf) {
+    return (*this)(mf.mutation_fragment_kind(), mf.position());
+}
+bool mutation_fragment_stream_validator::operator()(const mutation_fragment& mf) {
+    return (*this)(to_mutation_fragment_kind_v2(mf.mutation_fragment_kind()), mf.position());
+}
+
+bool mutation_fragment_stream_validator::operator()(mutation_fragment_v2::kind kind) {
     bool valid = true;
     switch (_prev_kind) {
-        case mutation_fragment::kind::partition_start:
-            valid = kind != mutation_fragment::kind::partition_start;
+        case mutation_fragment_v2::kind::partition_start:
+            valid = kind != mutation_fragment_v2::kind::partition_start;
             break;
-        case mutation_fragment::kind::static_row: // fall-through
-        case mutation_fragment::kind::clustering_row: // fall-through
-        case mutation_fragment::kind::range_tombstone:
-            valid = kind != mutation_fragment::kind::partition_start &&
-                    kind != mutation_fragment::kind::static_row;
+        case mutation_fragment_v2::kind::static_row: // fall-through
+        case mutation_fragment_v2::kind::clustering_row: // fall-through
+        case mutation_fragment_v2::kind::range_tombstone_change:
+            valid = kind != mutation_fragment_v2::kind::partition_start &&
+                    kind != mutation_fragment_v2::kind::static_row;
             break;
-        case mutation_fragment::kind::partition_end:
-            valid = kind == mutation_fragment::kind::partition_start;
+        case mutation_fragment_v2::kind::partition_end:
+            valid = kind == mutation_fragment_v2::kind::partition_start;
             break;
     }
     if (valid) {
@@ -1627,20 +1647,27 @@ bool mutation_fragment_stream_validator::operator()(mutation_fragment::kind kind
     }
     return valid;
 }
+bool mutation_fragment_stream_validator::operator()(mutation_fragment::kind kind) {
+    return (*this)(to_mutation_fragment_kind_v2(kind));
+}
 
 bool mutation_fragment_stream_validator::on_end_of_stream() {
-    return _prev_kind == mutation_fragment::kind::partition_end;
+    return _prev_kind == mutation_fragment_v2::kind::partition_end;
 }
 
 void mutation_fragment_stream_validator::reset(dht::decorated_key dk) {
     _prev_partition_key = dk;
     _prev_pos = position_in_partition::for_partition_start();
-    _prev_kind = mutation_fragment::kind::partition_start;
+    _prev_kind = mutation_fragment_v2::kind::partition_start;
 }
 
-void mutation_fragment_stream_validator::reset(const mutation_fragment& mf) {
+void mutation_fragment_stream_validator::reset(const mutation_fragment_v2& mf) {
     _prev_pos = mf.position();
     _prev_kind = mf.mutation_fragment_kind();
+}
+void mutation_fragment_stream_validator::reset(const mutation_fragment& mf) {
+    _prev_pos = mf.position();
+    _prev_kind = to_mutation_fragment_kind_v2(mf.mutation_fragment_kind());
 }
 
 namespace {
@@ -1700,7 +1727,7 @@ mutation_fragment_stream_validating_filter::mutation_fragment_stream_validating_
     }
 }
 
-bool mutation_fragment_stream_validating_filter::operator()(mutation_fragment::kind kind, position_in_partition_view pos) {
+bool mutation_fragment_stream_validating_filter::operator()(mutation_fragment_v2::kind kind, position_in_partition_view pos) {
     bool valid = false;
 
     fmr_logger.debug("[validator {}] {}:{}", static_cast<void*>(this), kind, pos);
@@ -1726,9 +1753,15 @@ bool mutation_fragment_stream_validating_filter::operator()(mutation_fragment::k
 
     return true;
 }
+bool mutation_fragment_stream_validating_filter::operator()(mutation_fragment::kind kind, position_in_partition_view pos) {
+    return (*this)(to_mutation_fragment_kind_v2(kind), pos);
+}
 
-bool mutation_fragment_stream_validating_filter::operator()(const mutation_fragment& mv) {
+bool mutation_fragment_stream_validating_filter::operator()(const mutation_fragment_v2& mv) {
     return (*this)(mv.mutation_fragment_kind(), mv.position());
+}
+bool mutation_fragment_stream_validating_filter::operator()(const mutation_fragment& mv) {
+    return (*this)(to_mutation_fragment_kind_v2(mv.mutation_fragment_kind()), mv.position());
 }
 
 bool mutation_fragment_stream_validating_filter::on_end_of_partition() {
