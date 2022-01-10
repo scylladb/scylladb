@@ -67,64 +67,42 @@ void node_ops_info::check_abort() {
     }
 }
 
-class node_ops_metrics {
-public:
-    node_ops_metrics() {
-        namespace sm = seastar::metrics;
-        auto ops_label_type = sm::label("ops");
-        _metrics.add_group("node_ops", {
-            sm::make_gauge("finished_percentage", [this] { return bootstrap_finished_percentage(); },
-                    sm::description("Finished percentage of node operation on this shard"), {ops_label_type("bootstrap")}),
-            sm::make_gauge("finished_percentage", [this] { return replace_finished_percentage(); },
-                    sm::description("Finished percentage of node operation on this shard"), {ops_label_type("replace")}),
-            sm::make_gauge("finished_percentage", [this] { return rebuild_finished_percentage(); },
-                    sm::description("Finished percentage of node operation on this shard"), {ops_label_type("rebuild")}),
-            sm::make_gauge("finished_percentage", [this] { return decommission_finished_percentage(); },
-                    sm::description("Finished percentage of node operation on this shard"), {ops_label_type("decommission")}),
-            sm::make_gauge("finished_percentage", [this] { return removenode_finished_percentage(); },
-                    sm::description("Finished percentage of node operation on this shard"), {ops_label_type("removenode")}),
-            sm::make_gauge("finished_percentage", [this] { return repair_finished_percentage(); },
-                    sm::description("Finished percentage of node operation on this shard"), {ops_label_type("repair")}),
-        });
-    }
-    uint64_t bootstrap_total_ranges{0};
-    uint64_t bootstrap_finished_ranges{0};
-    uint64_t replace_total_ranges{0};
-    uint64_t replace_finished_ranges{0};
-    uint64_t rebuild_total_ranges{0};
-    uint64_t rebuild_finished_ranges{0};
-    uint64_t decommission_total_ranges{0};
-    uint64_t decommission_finished_ranges{0};
-    uint64_t removenode_total_ranges{0};
-    uint64_t removenode_finished_ranges{0};
-    uint64_t repair_total_ranges_sum{0};
-    uint64_t repair_finished_ranges_sum{0};
-private:
-    seastar::metrics::metric_groups _metrics;
-    float bootstrap_finished_percentage() {
-        return bootstrap_total_ranges == 0 ? 1 : float(bootstrap_finished_ranges) / float(bootstrap_total_ranges);
-    }
-    float replace_finished_percentage() {
-        return replace_total_ranges == 0 ? 1 : float(replace_finished_ranges) / float(replace_total_ranges);
-    }
-    float rebuild_finished_percentage() {
-        return rebuild_total_ranges == 0 ? 1 : float(rebuild_finished_ranges) / float(rebuild_total_ranges);
-    }
-    float decommission_finished_percentage() {
-        return decommission_total_ranges == 0 ? 1 : float(decommission_finished_ranges) / float(decommission_total_ranges);
-    }
-    float removenode_finished_percentage() {
-        return removenode_total_ranges == 0 ? 1 : float(removenode_finished_ranges) / float(removenode_total_ranges);
-    }
-    float repair_finished_percentage();
-public:
-    void init() {
-        // Dummy function to call during startup to initialize the thread local
-        // variable node_ops_metrics _node_ops_metrics below.
-    }
-};
+node_ops_metrics::node_ops_metrics(tracker& tracker)
+    : _tracker(tracker)
+{
+    namespace sm = seastar::metrics;
+    auto ops_label_type = sm::label("ops");
+    _metrics.add_group("node_ops", {
+        sm::make_gauge("finished_percentage", [this] { return bootstrap_finished_percentage(); },
+                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("bootstrap")}),
+        sm::make_gauge("finished_percentage", [this] { return replace_finished_percentage(); },
+                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("replace")}),
+        sm::make_gauge("finished_percentage", [this] { return rebuild_finished_percentage(); },
+                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("rebuild")}),
+        sm::make_gauge("finished_percentage", [this] { return decommission_finished_percentage(); },
+                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("decommission")}),
+        sm::make_gauge("finished_percentage", [this] { return removenode_finished_percentage(); },
+                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("removenode")}),
+        sm::make_gauge("finished_percentage", [this] { return repair_finished_percentage(); },
+                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("repair")}),
+    });
+}
 
-static thread_local node_ops_metrics _node_ops_metrics;
+float node_ops_metrics::bootstrap_finished_percentage() {
+    return bootstrap_total_ranges == 0 ? 1 : float(bootstrap_finished_ranges) / float(bootstrap_total_ranges);
+}
+float node_ops_metrics::replace_finished_percentage() {
+    return replace_total_ranges == 0 ? 1 : float(replace_finished_ranges) / float(replace_total_ranges);
+}
+float node_ops_metrics::rebuild_finished_percentage() {
+    return rebuild_total_ranges == 0 ? 1 : float(rebuild_finished_ranges) / float(rebuild_total_ranges);
+}
+float node_ops_metrics::decommission_finished_percentage() {
+    return decommission_total_ranges == 0 ? 1 : float(decommission_finished_ranges) / float(decommission_total_ranges);
+}
+float node_ops_metrics::removenode_finished_percentage() {
+    return removenode_total_ranges == 0 ? 1 : float(removenode_finished_ranges) / float(removenode_total_ranges);
+}
 
 template <typename T1, typename T2>
 inline
@@ -338,38 +316,18 @@ static future<std::list<gms::inet_address>> get_hosts_participating_in_repair(re
     co_return std::list<gms::inet_address>(participating_hosts.begin(), participating_hosts.end());
 }
 
-static tracker* _the_tracker = nullptr;
-
-tracker& repair_tracker() {
-    if (_the_tracker) {
-        return *_the_tracker;
-    } else {
-        throw std::runtime_error("The repair tracker is not initialized yet");
-    }
-}
-
 float node_ops_metrics::repair_finished_percentage() {
-    if (_the_tracker) {
-        return repair_tracker().report_progress(streaming::stream_reason::repair);
-    }
-    return 1;
+    return _tracker.report_progress(streaming::stream_reason::repair);
 }
 
-tracker::tracker(size_t nr_shards, size_t max_repair_memory)
+tracker::tracker(size_t max_repair_memory)
     : _shutdown(false)
-    , _repairs(nr_shards) {
-    auto nr = std::max(size_t(1), size_t(max_repair_memory / max_repair_memory_per_range() / 4));
+    , _range_parallelism_semaphore(std::max(size_t(1), size_t(max_repair_memory / max_repair_memory_per_range() / 4)),
+            named_semaphore_exception_factory{"repair range parallelism"})
+{
+    auto nr = _range_parallelism_semaphore.available_units();
     rlogger.info("Setting max_repair_memory={}, max_repair_memory_per_range={}, max_repair_ranges_in_parallel={}",
         max_repair_memory, max_repair_memory_per_range(), nr);
-    _range_parallelism_semaphores.reserve(nr_shards);
-    while (nr_shards--) {
-        _range_parallelism_semaphores.emplace_back(named_semaphore(nr, named_semaphore_exception_factory{"repair range parallelism"}));
-    }
-    _the_tracker = this;
-}
-
-tracker::~tracker() {
-    _the_tracker = nullptr;
 }
 
 void tracker::start(repair_uniq_id id) {
@@ -384,7 +342,7 @@ void tracker::done(repair_uniq_id id, bool succeeded) {
     }
     _done_cond.broadcast();
 }
-repair_status tracker::get(int id) {
+repair_status tracker::get(int id) const {
     if (id >= _next_repair_command) {
         throw std::runtime_error(format("unknown repair id {}", id));
     }
@@ -426,7 +384,6 @@ repair_uniq_id tracker::next_repair_command() {
 
 future<> tracker::shutdown() {
     _shutdown.store(true, std::memory_order_relaxed);
-    _shutdown_as.request_abort();
     return _gate.close();
 }
 
@@ -436,21 +393,17 @@ void tracker::check_in_shutdown() {
     }
 }
 
-seastar::abort_source& tracker::get_shutdown_abort_source() {
-    return _shutdown_as;
-}
-
 void tracker::add_repair_info(int id, lw_shared_ptr<repair_info> ri) {
-    _repairs[this_shard_id()].emplace(id, ri);
+    _repairs.emplace(id, ri);
 }
 
 void tracker::remove_repair_info(int id) {
-    _repairs[this_shard_id()].erase(id);
+    _repairs.erase(id);
 }
 
 lw_shared_ptr<repair_info> tracker::get_repair_info(int id) {
-    auto it = _repairs[this_shard_id()].find(id);
-    if (it != _repairs[this_shard_id()].end()) {
+    auto it = _repairs.find(id);
+    if (it != _repairs.end()) {
         return it->second;
     }
     return {};
@@ -480,23 +433,15 @@ size_t tracker::nr_running_repair_jobs() {
 
 void tracker::abort_all_repairs() {
     size_t count = nr_running_repair_jobs();
-    for (auto& x : _repairs[this_shard_id()]) {
+    for (auto& x : _repairs) {
         auto& ri = x.second;
         ri->abort();
-    }
-    if (this_shard_id() == 0) {
-        _abort_all_as.request_abort();
-        _abort_all_as = seastar::abort_source();
     }
     rlogger.info0("Aborted {} repair job(s)", count);
 }
 
-seastar::abort_source& tracker::get_abort_all_abort_source() {
-    return _abort_all_as;
-}
-
 void tracker::abort_repair_node_ops(utils::UUID ops_uuid) {
-    for (auto& x : _repairs[this_shard_id()]) {
+    for (auto& x : _repairs) {
         auto& ri = x.second;
         if (ri->ops_uuid() && ri->ops_uuid().value() == ops_uuid) {
             rlogger.info0("Aborted repair jobs for ops_uuid={}", ops_uuid);
@@ -508,7 +453,7 @@ void tracker::abort_repair_node_ops(utils::UUID ops_uuid) {
 float tracker::report_progress(streaming::stream_reason reason) {
     uint64_t nr_ranges_finished = 0;
     uint64_t nr_ranges_total = 0;
-    for (auto& x : _repairs[this_shard_id()]) {
+    for (auto& x : _repairs) {
         auto& ri = x.second;
         if (ri->reason == reason) {
             nr_ranges_total += ri->nr_ranges_total;
@@ -519,7 +464,7 @@ float tracker::report_progress(streaming::stream_reason reason) {
 }
 
 named_semaphore& tracker::range_parallelism_semaphore() {
-    return _range_parallelism_semaphores[this_shard_id()];
+    return _range_parallelism_semaphore;
 }
 
 future<> tracker::run(repair_uniq_id id, std::function<void ()> func) {
@@ -535,8 +480,8 @@ future<> tracker::run(repair_uniq_id id, std::function<void ()> func) {
     });
 }
 
-void check_in_shutdown() {
-    repair_tracker().check_in_shutdown();
+void repair_info::check_in_shutdown() {
+    rs.repair_tracker().check_in_shutdown();
 }
 
 future<uint64_t> estimate_partitions(seastar::sharded<replica::database>& db, const sstring& keyspace,
@@ -984,20 +929,20 @@ private:
 static future<> do_repair_ranges(lw_shared_ptr<repair_info> ri) {
     // repair all the ranges in limited parallelism
     return parallel_for_each(ri->ranges, [ri] (auto&& range) {
-        return with_semaphore(repair_tracker().range_parallelism_semaphore(), 1, [ri, &range] {
+        return with_semaphore(ri->rs.repair_tracker().range_parallelism_semaphore(), 1, [ri, &range] {
             return ri->repair_range(range).then([ri] {
                 if (ri->reason == streaming::stream_reason::bootstrap) {
-                    _node_ops_metrics.bootstrap_finished_ranges++;
+                    ri->rs.get_metrics().bootstrap_finished_ranges++;
                 } else if (ri->reason == streaming::stream_reason::replace) {
-                    _node_ops_metrics.replace_finished_ranges++;
+                    ri->rs.get_metrics().replace_finished_ranges++;
                 } else if (ri->reason == streaming::stream_reason::rebuild) {
-                    _node_ops_metrics.rebuild_finished_ranges++;
+                    ri->rs.get_metrics().rebuild_finished_ranges++;
                 } else if (ri->reason == streaming::stream_reason::decommission) {
-                    _node_ops_metrics.decommission_finished_ranges++;
+                    ri->rs.get_metrics().decommission_finished_ranges++;
                 } else if (ri->reason == streaming::stream_reason::removenode) {
-                    _node_ops_metrics.removenode_finished_ranges++;
+                    ri->rs.get_metrics().removenode_finished_ranges++;
                 } else if (ri->reason == streaming::stream_reason::repair) {
-                    _node_ops_metrics.repair_finished_ranges_sum++;
+                    ri->rs.get_metrics().repair_finished_ranges_sum++;
                     ri->nr_ranges_finished++;
                 }
             });
@@ -1010,13 +955,13 @@ static future<> do_repair_ranges(lw_shared_ptr<repair_info> ri) {
 // is assumed to be a indivisible in the sense that all the tokens in has the
 // same nodes as replicas.
 static future<> repair_ranges(lw_shared_ptr<repair_info> ri) {
-    repair_tracker().add_repair_info(ri->id.id, ri);
+    ri->rs.repair_tracker().add_repair_info(ri->id.id, ri);
     return do_repair_ranges(ri).then([ri] {
         ri->check_failed_ranges();
-        repair_tracker().remove_repair_info(ri->id.id);
+        ri->rs.repair_tracker().remove_repair_info(ri->id.id);
         return make_ready_future<>();
     }).handle_exception([ri] (std::exception_ptr eptr) {
-        repair_tracker().remove_repair_info(ri->id.id);
+        ri->rs.repair_tracker().remove_repair_info(ri->id.id);
         return make_exception_future<>(std::move(eptr));
     });
 }
@@ -1028,7 +973,7 @@ static future<> repair_ranges(lw_shared_ptr<repair_info> ri) {
 // itself does very little (mainly tell other nodes and CPUs what to do).
 int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring, sstring> options_map) {
     seastar::sharded<replica::database>& db = get_db();
-    check_in_shutdown();
+    repair_tracker().check_in_shutdown();
 
     repair_options options(options_map);
 
@@ -1201,7 +1146,7 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
         for (auto shard : boost::irange(unsigned(0), smp::count)) {
             auto f = container().invoke_on(shard, [keyspace, table_ids, id, ranges, hints_batchlog_flushed,
                     data_centers = options.data_centers, hosts = options.hosts, ignore_nodes] (repair_service& local_repair) mutable {
-                _node_ops_metrics.repair_total_ranges_sum += ranges.size();
+                local_repair.get_metrics().repair_total_ranges_sum += ranges.size();
                 auto ri = make_lw_shared<repair_info>(local_repair,
                         std::move(keyspace), std::move(ranges), std::move(table_ids),
                         id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), streaming::stream_reason::repair, id.uuid, hints_batchlog_flushed);
@@ -1237,34 +1182,34 @@ future<int> repair_start(seastar::sharded<repair_service>& repair,
     });
 }
 
-future<std::vector<int>> get_active_repairs(seastar::sharded<replica::database>& db) {
-    return db.invoke_on(0, [] (replica::database& localdb) {
-        return repair_tracker().get_active();
+future<std::vector<int>> repair_service::get_active_repairs() {
+    return container().invoke_on(0, [] (repair_service& rs) {
+        return rs.repair_tracker().get_active();
     });
 }
 
-future<repair_status> repair_get_status(seastar::sharded<replica::database>& db, int id) {
-    return db.invoke_on(0, [id] (replica::database& localdb) {
-        return repair_tracker().get(id);
+future<repair_status> repair_service::get_status(int id) {
+    return container().invoke_on(0, [id] (repair_service& rs) {
+        return rs.repair_tracker().get(id);
     });
 }
 
-future<repair_status> repair_await_completion(seastar::sharded<replica::database>& db, int id, std::chrono::steady_clock::time_point timeout) {
-    return db.invoke_on(0, [id, timeout] (replica::database& localdb) {
-        return repair_tracker().repair_await_completion(id, timeout);
+future<repair_status> repair_service::await_completion(int id, std::chrono::steady_clock::time_point timeout) {
+    return container().invoke_on(0, [id, timeout] (repair_service& rs) {
+        return rs.repair_tracker().repair_await_completion(id, timeout);
     });
 }
 
 future<> repair_service::shutdown() {
+    co_await repair_tracker().shutdown();
     if (this_shard_id() == 0) {
-        co_await repair_tracker().shutdown();
         co_await shutdown_all_row_level_repair();
     }
 }
 
-future<> repair_abort_all(seastar::sharded<replica::database>& db) {
-    return db.invoke_on_all([] (replica::database& localdb) {
-        repair_tracker().abort_all_repairs();
+future<> repair_service::abort_all() {
+    return container().invoke_on_all([] (repair_service& rs) {
+        return rs.repair_tracker().abort_all_repairs();
     });
 }
 
@@ -1360,9 +1305,9 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
             seastar::thread::maybe_yield();
             nr_ranges_total += desired_ranges.size();
         }
-        db.invoke_on_all([nr_ranges_total] (replica::database&) {
-            _node_ops_metrics.bootstrap_finished_ranges = 0;
-            _node_ops_metrics.bootstrap_total_ranges = nr_ranges_total;
+        container().invoke_on_all([nr_ranges_total] (repair_service& rs) {
+            rs.get_metrics().bootstrap_finished_ranges = 0;
+            rs.get_metrics().bootstrap_total_ranges = nr_ranges_total;
         }).get();
         rlogger.info("bootstrap_with_repair: started with keyspaces={}, nr_ranges_total={}", keyspaces, nr_ranges_total);
         for (auto& keyspace_name : keyspaces) {
@@ -1534,14 +1479,14 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
             nr_ranges_total += ranges.size();
         }
         if (reason == streaming::stream_reason::decommission) {
-            db.invoke_on_all([nr_ranges_total] (replica::database&) {
-                _node_ops_metrics.decommission_finished_ranges = 0;
-                _node_ops_metrics.decommission_total_ranges = nr_ranges_total;
+            container().invoke_on_all([nr_ranges_total] (repair_service& rs) {
+                rs.get_metrics().decommission_finished_ranges = 0;
+                rs.get_metrics().decommission_total_ranges = nr_ranges_total;
             }).get();
         } else if (reason == streaming::stream_reason::removenode) {
-            db.invoke_on_all([nr_ranges_total] (replica::database&) {
-                _node_ops_metrics.removenode_finished_ranges = 0;
-                _node_ops_metrics.removenode_total_ranges = nr_ranges_total;
+            container().invoke_on_all([nr_ranges_total] (repair_service& rs) {
+                rs.get_metrics().removenode_finished_ranges = 0;
+                rs.get_metrics().removenode_total_ranges = nr_ranges_total;
             }).get();
         }
         rlogger.info("{}: started with keyspaces={}, leaving_node={}", op, keyspaces, leaving_node);
@@ -1690,12 +1635,12 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
             }
             temp.clear_gently().get();
             if (reason == streaming::stream_reason::decommission) {
-                db.invoke_on_all([nr_ranges_skipped] (replica::database&) {
-                    _node_ops_metrics.decommission_finished_ranges += nr_ranges_skipped;
+                container().invoke_on_all([nr_ranges_skipped] (repair_service& rs) {
+                    rs.get_metrics().decommission_finished_ranges += nr_ranges_skipped;
                 }).get();
             } else if (reason == streaming::stream_reason::removenode) {
-                db.invoke_on_all([nr_ranges_skipped] (replica::database&) {
-                    _node_ops_metrics.removenode_finished_ranges += nr_ranges_skipped;
+                container().invoke_on_all([nr_ranges_skipped] (repair_service& rs) {
+                    rs.get_metrics().removenode_finished_ranges += nr_ranges_skipped;
                 }).get();
             }
             if (is_removenode) {
@@ -1727,9 +1672,9 @@ future<> repair_service::removenode_with_repair(locator::token_metadata_ptr tmpt
     });
 }
 
-future<> abort_repair_node_ops(utils::UUID ops_uuid) {
-    return smp::invoke_on_all([ops_uuid] {
-        return repair_tracker().abort_repair_node_ops(ops_uuid);
+future<> repair_service::abort_repair_node_ops(utils::UUID ops_uuid) {
+    return container().invoke_on_all([ops_uuid] (repair_service& rs) {
+        rs.repair_tracker().abort_repair_node_ops(ops_uuid);
     });
 }
 
@@ -1751,14 +1696,14 @@ future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_
 
         }
         if (reason == streaming::stream_reason::rebuild) {
-            db.invoke_on_all([nr_ranges_total] (replica::database&) {
-                _node_ops_metrics.rebuild_finished_ranges = 0;
-                _node_ops_metrics.rebuild_total_ranges = nr_ranges_total;
+            container().invoke_on_all([nr_ranges_total] (repair_service& rs) {
+                rs.get_metrics().rebuild_finished_ranges = 0;
+                rs.get_metrics().rebuild_total_ranges = nr_ranges_total;
             }).get();
         } else if (reason == streaming::stream_reason::replace) {
-            db.invoke_on_all([nr_ranges_total] (replica::database&) {
-                _node_ops_metrics.replace_finished_ranges = 0;
-                _node_ops_metrics.replace_total_ranges = nr_ranges_total;
+            container().invoke_on_all([nr_ranges_total] (repair_service& rs) {
+                rs.get_metrics().replace_finished_ranges = 0;
+                rs.get_metrics().replace_total_ranges = nr_ranges_total;
             }).get();
         }
         rlogger.info("{}: started with keyspaces={}, source_dc={}, nr_ranges_total={}, ignore_nodes={}", op, keyspaces, source_dc, nr_ranges_total, ignore_nodes);
@@ -1800,12 +1745,12 @@ future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_
                 }
             }
             if (reason == streaming::stream_reason::rebuild) {
-                db.invoke_on_all([nr_ranges_skipped] (replica::database&) {
-                    _node_ops_metrics.rebuild_finished_ranges += nr_ranges_skipped;
+                container().invoke_on_all([nr_ranges_skipped] (repair_service& rs) {
+                    rs.get_metrics().rebuild_finished_ranges += nr_ranges_skipped;
                 }).get();
             } else if (reason == streaming::stream_reason::replace) {
-                db.invoke_on_all([nr_ranges_skipped] (replica::database&) {
-                    _node_ops_metrics.replace_finished_ranges += nr_ranges_skipped;
+                container().invoke_on_all([nr_ranges_skipped] (repair_service& rs) {
+                    rs.get_metrics().replace_finished_ranges += nr_ranges_skipped;
                 }).get();
             }
             auto nr_ranges = ranges.size();
@@ -1840,11 +1785,6 @@ future<> repair_service::replace_with_repair(locator::token_metadata_ptr tmptr, 
     auto cloned_tmptr = make_token_metadata_ptr(std::move(cloned_tm));
     co_await cloned_tmptr->update_normal_tokens(replacing_tokens, utils::fb_utilities::get_broadcast_address());
     co_return co_await do_rebuild_replace_with_repair(std::move(cloned_tmptr), std::move(op), std::move(source_dc), reason, std::move(ignore_nodes));
-}
-
-future<> repair_service::init_metrics() {
-    _node_ops_metrics.init();
-    return make_ready_future<>();
 }
 
 std::ostream& operator<<(std::ostream& out, node_ops_cmd cmd) {

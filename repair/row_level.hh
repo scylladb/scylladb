@@ -51,6 +51,33 @@ public:
     gc_clock::time_point repair_time = gc_clock::time_point::max();
 };
 
+class node_ops_metrics {
+    tracker& _tracker;
+public:
+    node_ops_metrics(tracker& tracker);
+
+    uint64_t bootstrap_total_ranges{0};
+    uint64_t bootstrap_finished_ranges{0};
+    uint64_t replace_total_ranges{0};
+    uint64_t replace_finished_ranges{0};
+    uint64_t rebuild_total_ranges{0};
+    uint64_t rebuild_finished_ranges{0};
+    uint64_t decommission_total_ranges{0};
+    uint64_t decommission_finished_ranges{0};
+    uint64_t removenode_total_ranges{0};
+    uint64_t removenode_finished_ranges{0};
+    uint64_t repair_total_ranges_sum{0};
+    uint64_t repair_finished_ranges_sum{0};
+private:
+    seastar::metrics::metric_groups _metrics;
+    float bootstrap_finished_percentage();
+    float replace_finished_percentage();
+    float rebuild_finished_percentage();
+    float decommission_finished_percentage();
+    float removenode_finished_percentage();
+    float repair_finished_percentage();
+};
+
 class repair_service : public seastar::peering_sharded_service<repair_service> {
     distributed<gms::gossiper>& _gossiper;
     netw::messaging_service& _messaging;
@@ -60,11 +87,12 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
     sharded<db::view::view_update_generator>& _view_update_generator;
     service::migration_manager& _mm;
+    tracker _tracker;
+    node_ops_metrics _node_ops_metrics;
 
     std::unordered_map<utils::UUID, repair_history> _finished_ranges_history;
 
     shared_ptr<row_level_repair_gossip_helper> _gossip_helper;
-    std::unique_ptr<tracker> _tracker;
     bool _stopped = false;
 
     size_t _max_repair_memory;
@@ -72,8 +100,6 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
 
     future<> init_ms_handlers();
     future<> uninit_ms_handlers();
-
-    future<> init_metrics();
 
 public:
     repair_service(distributed<gms::gossiper>& gossiper,
@@ -140,6 +166,34 @@ public:
     gms::gossiper& get_gossiper() noexcept { return _gossiper.local(); }
     size_t max_repair_memory() const { return _max_repair_memory; }
     seastar::semaphore& memory_sem() { return _memory_sem; }
+    tracker& repair_tracker() {
+        return _tracker;
+    }
+    const tracker& repair_tracker() const {
+        return _tracker;
+    }
+
+    const node_ops_metrics& get_metrics() const noexcept {
+        return _node_ops_metrics;
+    };
+    node_ops_metrics& get_metrics() noexcept {
+        return _node_ops_metrics;
+    };
+
+    // returns a vector with the ids of the active repairs
+    future<std::vector<int>> get_active_repairs();
+
+    // returns the status of repair task `id`
+    future<repair_status> get_status(int id);
+
+    // If the repair job is finished (SUCCESSFUL or FAILED), it returns immediately.
+    // It blocks if the repair job is still RUNNING until timeout.
+    future<repair_status> await_completion(int id, std::chrono::steady_clock::time_point timeout);
+
+    // Abort all the repairs
+    future<> abort_all();
+
+    future<> abort_repair_node_ops(utils::UUID ops_uuid);
 };
 
 class repair_info;

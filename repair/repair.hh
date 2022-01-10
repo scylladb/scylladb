@@ -87,8 +87,6 @@ struct node_ops_info {
     void check_abort();
 };
 
-future<> abort_repair_node_ops(utils::UUID ops_uuid);
-
 // NOTE: repair_start() can be run on any node, but starts a node-global
 // operation.
 // repair_start() starts the requested repair on this node. It returns an
@@ -102,22 +100,6 @@ future<int> repair_start(seastar::sharded<repair_service>& repair,
 // TODO: Have repair_progress contains a percentage progress estimator
 // instead of just "RUNNING".
 enum class repair_status { RUNNING, SUCCESSFUL, FAILED };
-
-// repair_get_status() returns a future because it needs to run code on a
-// different CPU (cpu 0) and that might be a deferring operation.
-future<repair_status> repair_get_status(seastar::sharded<replica::database>& db, int id);
-
-// If the repair job is finished (SUCCESSFUL or FAILED), it returns immediately.
-// It blocks if the repair job is still RUNNING until timeout.
-future<repair_status> repair_await_completion(seastar::sharded<replica::database>& db, int id, std::chrono::steady_clock::time_point timeout);
-
-// returns a vector with the ids of the active repairs
-future<std::vector<int>> get_active_repairs(seastar::sharded<replica::database>& db);
-
-void check_in_shutdown();
-
-// Abort all the repairs
-future<> repair_abort_all(seastar::sharded<replica::database>& db);
 
 enum class repair_checksum {
     legacy = 0,
@@ -215,6 +197,7 @@ public:
     void check_failed_ranges();
     void abort();
     void check_in_abort();
+    void check_in_shutdown();
     repair_neighbors get_repair_neighbors(const dht::token_range& range);
     void update_statistics(const repair_stats& stats) {
         _stats.add(stats);
@@ -254,37 +237,27 @@ private:
     seastar::gate _gate;
     // Set when the repair service is being shutdown
     std::atomic_bool _shutdown alignas(seastar::cache_line_size);
-    // Triggered when service is being shutdown
-    seastar::abort_source _shutdown_as;
-    // Triggered when all repairs are requested to be aborted.
-    // It is immediately initialized again after an abort.
-    seastar::abort_source _abort_all_as;
-    // Map repair id into repair_info. The vector has smp::count elements, each
-    // element will be accessed by only one shard.
-    std::vector<std::unordered_map<int, lw_shared_ptr<repair_info>>> _repairs;
-    // Each element in the vector is the semaphore used to control the maximum
-    // ranges that can be repaired in parallel. Each element will be accessed
-    // by one shared.
-    std::vector<named_semaphore> _range_parallelism_semaphores;
+    // Map repair id into repair_info.
+    std::unordered_map<int, lw_shared_ptr<repair_info>> _repairs;
+    // The semaphore used to control the maximum
+    // ranges that can be repaired in parallel.
+    named_semaphore _range_parallelism_semaphore;
     static constexpr size_t _max_repair_memory_per_range = 32 * 1024 * 1024;
     seastar::condition_variable _done_cond;
     void start(repair_uniq_id id);
     void done(repair_uniq_id id, bool succeeded);
 public:
-    explicit tracker(size_t nr_shards, size_t max_repair_memory);
-    ~tracker();
-    repair_status get(int id);
+    explicit tracker(size_t max_repair_memory);
+    repair_status get(int id) const;
     repair_uniq_id next_repair_command();
     future<> shutdown();
     void check_in_shutdown();
-    seastar::abort_source& get_shutdown_abort_source();
     void add_repair_info(int id, lw_shared_ptr<repair_info> ri);
     void remove_repair_info(int id);
     lw_shared_ptr<repair_info> get_repair_info(int id);
     std::vector<int> get_active() const;
     size_t nr_running_repair_jobs();
     void abort_all_repairs();
-    seastar::abort_source& get_abort_all_abort_source();
     named_semaphore& range_parallelism_semaphore();
     static size_t max_repair_memory_per_range() { return _max_repair_memory_per_range; }
     future<> run(repair_uniq_id id, std::function<void ()> func);
