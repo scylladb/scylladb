@@ -3,7 +3,7 @@ import pytest
 # Convenience function to execute a scylla command in gdb, returning its
 # output as a string - or a gdb.error exception.
 def scylla(gdb, cmd):
-    gdb.execute('scylla ' + cmd, from_tty=False, to_string=True)
+    return gdb.execute('scylla ' + cmd, from_tty=False, to_string=True)
 
 # Check that trying an unknown subcommand of the "scylla" subcommand
 # produces the right error message.
@@ -122,17 +122,18 @@ def test_generate_object_graph(gdb, schema, request):
     tmpdir = request.config.getoption('scylla_tmp_dir')
     scylla(gdb, f'generate-object-graph -o {tmpdir}/og.dot -d 2 -t 10 {schema}')
 
-# Some commands need a task to work on. This finds one.
-# FIXME: Currently, this fails because get_local_tasks() finds no task.
-# The problem is that we attached gdb to Scylla while Scylla was idle,
-# and had no task to run :-(
+# Some commands need a task to work on. The following fixture finds one.
+# Because we stopped Scylla while it was idle, we don't expect to find
+# any ready task with get_local_tasks(), but we can find one with a
+# find_vptrs() loop. I noticed that a nice one (with multiple tasks chained
+# to it for "scylla fiber") is one from http_server::do_accept_one.
 @pytest.fixture(scope="module")
 def task(gdb, scylla_gdb):
-    gdb.set_convenience_variable('task', 
-        next(scylla_gdb.get_local_tasks()))
-    yield '$task'
+    for obj_addr, vtable_addr in scylla_gdb.find_vptrs():
+        name = scylla_gdb.resolve(vtable_addr, startswith='vtable for seastar::continuation')
+        if name and 'do_accept_one' in name:
+            return obj_addr.cast(gdb.lookup_type('uintptr_t'))
 
-@pytest.mark.xfail(reason="FIXME: get_local_tasks() returns nothing when we attach gdb :-(")
 def test_fiber(gdb, task):
     scylla(gdb, f'fiber {task}')
 
