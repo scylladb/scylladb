@@ -426,6 +426,10 @@ class RpcVerbParam(ASTBase):
     def is_unique(self):
         return True in [a.startswith('unique_ptr') for a in self.attributes.attr_items]
 
+    def is_ref(self):
+        return True in [a.startswith('ref') for a in self.attributes.attr_items]
+
+
     def to_string(self):
         res = self.type.to_string()
         if self.is_optional():
@@ -436,7 +440,13 @@ class RpcVerbParam(ASTBase):
         return res
 
     def to_string_send_fn_signature(self):
-        return self.to_string() if not self.is_optional() else self.type.to_string() + ' ' + self.name
+        res = self.type.to_string()
+        if self.is_ref():
+            res = 'const ' + res + '&'
+        if self.name:
+            res += ' '
+            res += self.name
+        return res
 
     def to_string_handle_ret_value(self):
         res = self.type.to_string()
