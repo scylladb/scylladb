@@ -2334,7 +2334,7 @@ SEASTAR_THREAD_TEST_CASE(scrub_validate_mode_validate_reader_test) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
     auto permit = semaphore.make_permit();
 
-    std::deque<mutation_fragment> frags;
+    std::deque<mutation_fragment_v2> frags;
 
     const auto ts = api::timestamp_type{1};
     auto local_keys = make_local_keys(5, schema);
@@ -2342,11 +2342,11 @@ SEASTAR_THREAD_TEST_CASE(scrub_validate_mode_validate_reader_test) {
     auto make_partition_start = [&, schema] (unsigned pk) {
         auto pkey = partition_key::from_deeply_exploded(*schema, { local_keys.at(pk) });
         auto dkey = dht::decorate_key(*schema, pkey);
-        return mutation_fragment(*schema, permit, partition_start(std::move(dkey), {}));
+        return mutation_fragment_v2(*schema, permit, partition_start(std::move(dkey), {}));
     };
 
     auto make_partition_end = [&, schema] {
-        return mutation_fragment(*schema, permit, partition_end());
+        return mutation_fragment_v2(*schema, permit, partition_end());
     };
 
     auto make_static_row = [&, schema, ts] {
@@ -2354,7 +2354,7 @@ SEASTAR_THREAD_TEST_CASE(scrub_validate_mode_validate_reader_test) {
         auto cdef = schema->static_column_at(0);
         auto ac = atomic_cell::make_live(*cdef.type, ts, cdef.type->decompose(data_value(1)));
         r.apply(cdef, atomic_cell_or_collection{std::move(ac)});
-        return mutation_fragment(*schema, permit, static_row(*schema, std::move(r)));
+        return mutation_fragment_v2(*schema, permit, static_row(*schema, std::move(r)));
     };
 
     auto make_clustering_row = [&, schema, ts] (unsigned i) {
@@ -2362,7 +2362,7 @@ SEASTAR_THREAD_TEST_CASE(scrub_validate_mode_validate_reader_test) {
         auto cdef = schema->regular_column_at(0);
         auto ac = atomic_cell::make_live(*cdef.type, ts, cdef.type->decompose(data_value(1)));
         r.apply(cdef, atomic_cell_or_collection{std::move(ac)});
-        return mutation_fragment(*schema, permit,
+        return mutation_fragment_v2(*schema, permit,
                 clustering_row(clustering_key::from_single_value(*schema, int32_type->decompose(data_value(int(i)))), {}, {}, std::move(r)));
     };
 
