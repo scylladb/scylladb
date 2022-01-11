@@ -3009,6 +3009,69 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
     });
 }
 
+// is_big() checks approximately if the given JSON value is "bigger" than
+// the given big_size number of bytes. The goal is to *quickly* detect
+// oversized JSON that, for example, is too large to be serialized to a
+// contiguous string - we don't need an accurate size for that. Moreover,
+// as soon as we detect that the JSON is indeed "big", we can return true
+// and don't need to continue calculating its exact size.
+// For simplicity, we use a recursive implementation. This is fine because
+// Alternator limits the depth of JSONs it reads from inputs, and doesn't
+// add more than a couple of levels in its own output construction.
+
+static void check_big_object(const rjson::value& val, int& size_left);
+static void check_big_array(const rjson::value& val, int& size_left);
+
+static bool is_big(const rjson::value& val, int big_size = 100'000) {
+    if (val.IsString()) {
+        return val.GetStringLength() > big_size;
+    } else if (val.IsObject()) {
+        check_big_object(val, big_size);
+        return big_size < 0;
+    } else if (val.IsArray()) {
+        check_big_array(val, big_size);
+        return big_size < 0;
+    }
+    return false;
+}
+
+static void check_big_array(const rjson::value& val, int& size_left) {
+    // Assume a fixed size of 10 bytes for each number, boolean, etc., or
+    // beginning of a sub-object. This doesn't have to be accurate.
+    size_left -= 10 * val.Size();
+    for (const auto& v : val.GetArray()) {
+        if (size_left < 0) {
+            return;
+        }
+        // Note that we avoid recursive calls for the leaves (anything except
+        // array or object) because usually those greatly outnumber the trunk.
+        if (v.IsString()) {
+            size_left -= v.GetStringLength();
+        } else if (v.IsObject()) {
+            check_big_object(v, size_left);
+        } else if (v.IsArray()) {
+            check_big_array(v, size_left);
+        }
+    }
+}
+
+static void check_big_object(const rjson::value& val, int& size_left) {
+    size_left -= 10 * val.MemberCount();
+    for (const auto& m : val.GetObject()) {
+        if (size_left < 0) {
+            return;
+        }
+        size_left -= m.name.GetStringLength();
+        if (m.value.IsString()) {
+            size_left -= m.value.GetStringLength();
+        } else if (m.value.IsObject()) {
+            check_big_object(m.value, size_left);
+        } else if (m.value.IsArray()) {
+            check_big_array(m.value, size_left);
+        }
+    }
+}
+
 future<executor::request_return_type> executor::batch_get_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
     // FIXME: In this implementation, an unbounded batch size can cause
     // unbounded response JSON object to be buffered in memory, unbounded
@@ -3097,7 +3160,11 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
                 rjson::push_back(response["Responses"][std::get<0>(t)], std::move(*std::get<1>(t)));
             }
         }
-        return make_ready_future<executor::request_return_type>(make_jsonable(std::move(response)));
+        if (is_big(response)) {
+            return make_ready_future<executor::request_return_type>(make_streamed(std::move(response)));
+        } else {
+            return make_ready_future<executor::request_return_type>(make_jsonable(std::move(response)));
+        }
     });
 }
 
