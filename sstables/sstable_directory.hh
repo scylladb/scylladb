@@ -21,7 +21,6 @@
 
 #pragma once
 
-#include "lister.hh"
 #include <filesystem>
 #include <seastar/core/file.hh>
 #include <seastar/core/sharded.hh>

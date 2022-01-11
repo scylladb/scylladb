@@ -51,6 +51,7 @@
 #include "gms/gossiper.hh"
 #include "db/config.hh"
 #include "db/commitlog/commitlog.hh"
+#include "lister.hh"
 
 #include <boost/range/algorithm/remove_if.hpp>
 #include <boost/range/algorithm.hpp>
