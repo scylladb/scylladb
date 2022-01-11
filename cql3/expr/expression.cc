@@ -146,6 +146,20 @@ managed_bytes_opt get_value(const column_value& col, const column_value_eval_bag
 /// column that might be subscripted - e.g col1, col2, col3[sub1]
 using column_maybe_subscripted = std::variant<const column_value*, const subscript*>;
 
+/// Converts an expression to column_maybe subscripted
+__attribute__((unused))
+column_maybe_subscripted as_column_maybe_subscripted(const expression& e) {
+    // TODO(subscript): Uncomment once subscript is added to expression
+    // if (auto cval = as_if<subscript>(&e)) {
+    //     return cval;
+    // }
+
+    if (!is<column_value>(e)) {
+        on_internal_error(expr_logger, format("as_column_maybe_subscripted: bad expression: {}", e));
+    }
+    return &as<column_value>(e);
+}
+
 /// Returns col's value from queried data.
 __attribute__((unused)) // For now mark as unused so that the code compiles, will be used soon
 static managed_bytes_opt get_value(const column_maybe_subscripted& col, const column_value_eval_bag& bag) {
