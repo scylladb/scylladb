@@ -1067,7 +1067,8 @@ future<> table::run_offstrategy_compaction(sstables::compaction_data& info) {
 
     const auto old_sstables = boost::copy_range<std::vector<sstables::shared_sstable>>(*_maintenance_sstables->all());
     std::vector<sstables::shared_sstable> reshape_candidates = old_sstables;
-    std::vector<sstables::shared_sstable> new_unused_sstables, sstables_to_remove;
+    std::vector<sstables::shared_sstable> sstables_to_remove;
+    std::unordered_set<sstables::shared_sstable> new_unused_sstables;
 
     auto cleanup_new_unused_sstables_on_failure = defer([&new_unused_sstables] {
         for (auto& sst : new_unused_sstables) {
@@ -1086,7 +1087,7 @@ future<> table::run_offstrategy_compaction(sstables::compaction_data& info) {
 
         desc.creator = [this, &new_unused_sstables] (shard_id dummy) {
             auto sst = make_sstable();
-            new_unused_sstables.push_back(sst);
+            new_unused_sstables.insert(sst);
             return sst;
         };
         auto input = boost::copy_range<std::unordered_set<sstables::shared_sstable>>(desc.sstables);
@@ -1097,7 +1098,20 @@ future<> table::run_offstrategy_compaction(sstables::compaction_data& info) {
         auto it = boost::remove_if(reshape_candidates, [&] (auto& s) { return input.contains(s); });
         reshape_candidates.erase(it, reshape_candidates.end());
         std::move(ret.new_sstables.begin(), ret.new_sstables.end(), std::back_inserter(reshape_candidates));
-        std::move(input.begin(), input.end(), std::back_inserter(sstables_to_remove));
+
+        // If compaction strategy is unable to reshape input data in a single round, it may happen that a SSTable A
+        // created in round 1 will be compacted in a next round producing SSTable B. As SSTable A is no longer needed,
+        // it can be removed immediately. Let's remove all such SSTables immediately to reduce off-strategy space requirement.
+        // Input SSTables from maintenance set can only be removed later, as SSTable sets are only updated on completion.
+        auto can_remove_now = [&] (const sstables::shared_sstable& s) { return new_unused_sstables.contains(s); };
+        for (auto&& sst : input) {
+            if (can_remove_now(sst)) {
+                co_await sst->unlink();
+                new_unused_sstables.erase(std::move(sst));
+            } else {
+                sstables_to_remove.push_back(std::move(sst));
+            }
+        }
     }
 
     cleanup_new_unused_sstables_on_failure.cancel();
