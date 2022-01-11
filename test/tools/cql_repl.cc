@@ -70,6 +70,10 @@ public:
         assert(false);
     }
 
+    virtual void visit(const cql_transport::messages::result_message::exception& m) override {
+        m.throw_me();
+    }
+
     virtual void visit(const cql_transport::messages::result_message::rows& m) override {
         Json::Value& output_rows = _root["rows"];
         const auto input_rows = m.rs().result_set().rows();
