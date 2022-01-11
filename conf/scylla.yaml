@@ -518,22 +518,8 @@ commitlog_total_space_in_mb: -1
 # Keep at 12 for new clusters.
 murmur3_partitioner_ignore_msb_bits: 12
 
-# Use a new implementation of reversed reads in sstables when performing
-# reversed queries. Bypasses the cache for reversed reads even when
-# `bypass cache` is not explicitly specified in the query.
-# The new implementation does not require unbounded memory
-# (compared to the old implementation which had to fetch entire partitions
-# into memory) but does not work with the cache yet. Turn this option off
-# if your partitions are small so the old implementation is good enough;
-# your queries can then utilize the cache and potentially be faster
-# (since they don't need to use sstables as much). You can also turn
-# this option off and explicitly perform `bypass cache` queries to
-# use the new method.
-# This option is temporary and will be removed as soon as the cache
-# and sstable reverse read algorithms are updated to handle reversed
-# queries correctly.
-# The option can be updated without restarting Scylla.
-# reversed_reads_auto_bypass_cache: true
+# Bypass in-memory data cache (the row cache) when performing reversed queries.
+# reversed_reads_auto_bypass_cache: false
 
 # Use a new optimized algorithm for performing reversed reads.
 # Set to `false` to fall-back to the old algorithm.
