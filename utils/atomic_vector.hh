@@ -50,7 +50,7 @@ public:
     // We would take callbacks that take a T&, but we had bugs in the
     // past with some of those callbacks holding that reference past a
     // preemption.
-    void for_each(seastar::noncopyable_function<void(T)> func) {
+    void thread_for_each(seastar::noncopyable_function<void(T)> func) {
         _vec_lock.for_read().lock().get();
         auto unlock = seastar::defer([this] {
             _vec_lock.for_read().unlock();

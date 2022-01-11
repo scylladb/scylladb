@@ -3475,7 +3475,7 @@ storage_service::get_natural_endpoints(const sstring& keyspace, const token& pos
 
 future<> endpoint_lifecycle_notifier::notify_down(gms::inet_address endpoint) {
     return seastar::async([this, endpoint] {
-        _subscribers.for_each([endpoint] (endpoint_lifecycle_subscriber* subscriber) {
+        _subscribers.thread_for_each([endpoint] (endpoint_lifecycle_subscriber* subscriber) {
             try {
                 subscriber->on_down(endpoint);
             } catch (...) {
@@ -3495,7 +3495,7 @@ void storage_service::notify_down(inet_address endpoint) {
 
 future<> endpoint_lifecycle_notifier::notify_left(gms::inet_address endpoint) {
     return seastar::async([this, endpoint] {
-        _subscribers.for_each([endpoint] (endpoint_lifecycle_subscriber* subscriber) {
+        _subscribers.thread_for_each([endpoint] (endpoint_lifecycle_subscriber* subscriber) {
             try {
                 subscriber->on_leave_cluster(endpoint);
             } catch (...) {
@@ -3514,7 +3514,7 @@ void storage_service::notify_left(inet_address endpoint) {
 
 future<> endpoint_lifecycle_notifier::notify_up(gms::inet_address endpoint) {
     return seastar::async([this, endpoint] {
-        _subscribers.for_each([endpoint] (endpoint_lifecycle_subscriber* subscriber) {
+        _subscribers.thread_for_each([endpoint] (endpoint_lifecycle_subscriber* subscriber) {
             try {
                 subscriber->on_up(endpoint);
             } catch (...) {
@@ -3537,7 +3537,7 @@ void storage_service::notify_up(inet_address endpoint)
 
 future<> endpoint_lifecycle_notifier::notify_joined(gms::inet_address endpoint) {
     return seastar::async([this, endpoint] {
-        _subscribers.for_each([endpoint] (endpoint_lifecycle_subscriber* subscriber) {
+        _subscribers.thread_for_each([endpoint] (endpoint_lifecycle_subscriber* subscriber) {
             try {
                 subscriber->on_join_cluster(endpoint);
             } catch (...) {
