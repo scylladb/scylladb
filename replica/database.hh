@@ -398,6 +398,8 @@ public:
         // for easy access from `table` member functions:
         utils::updateable_value<bool> reversed_reads_auto_bypass_cache{false};
         utils::updateable_value<bool> enable_optimized_reversed_reads{true};
+        // Can be updated by a schema change:
+        bool enable_optimized_twcs_queries{true};
     };
     struct no_commitlog {};
 
@@ -604,6 +606,9 @@ private:
     void on_compaction_completion(sstables::compaction_completion_desc& desc);
 
     void rebuild_statistics();
+
+    // Called on schema change.
+    void update_optimized_twcs_queries_flag();
 private:
     mutation_source_opt _virtual_reader;
     std::optional<noncopyable_function<future<>(const frozen_mutation&)>> _virtual_writer;

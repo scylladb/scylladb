@@ -833,8 +833,10 @@ time_series_sstable_set::create_single_key_sstable_reader(
     //    this condition.
     // 3. The sstables cannot have partition tombstones for the same reason as above.
     //    TWCS sstables will usually pass this condition.
+    // 4. The optimized query path must be enabled.
     using sst_entry = std::pair<position_in_partition, shared_sstable>;
-    if (schema->has_static_columns()
+    if (!cf->get_config().enable_optimized_twcs_queries
+            || schema->has_static_columns()
             || std::any_of(_sstables->begin(), _sstables->end(),
                 [] (const sst_entry& e) {
                     return e.second->get_version() < sstable_version_types::md
