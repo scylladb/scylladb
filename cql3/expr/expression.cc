@@ -479,16 +479,17 @@ bool like(const column_value& cv, const raw_value_view& pattern, const column_va
 }
 
 /// True iff the column value is in the set defined by rhs.
-bool is_one_of(const column_value& col, const expression& rhs, const column_value_eval_bag& bag) {
+bool is_one_of(const column_maybe_subscripted& col, const expression& rhs, const column_value_eval_bag& bag) {
     const constant in_list = evaluate_IN_list(rhs, bag.options);
+    const column_definition* cdef = get_subscripted_column(col).col;
     statements::request_validations::check_false(
-            in_list.is_null(), "Invalid null value for column {}", col.col->name_as_text());
+            in_list.is_null(), "Invalid null value for column {}", cdef->name_as_text());
 
     if (!in_list.type->without_reversed().is_list()) {
         throw std::logic_error("unexpected expression type in is_one_of(single column)");
     }
     return boost::algorithm::any_of(get_list_elements(in_list), [&] (const managed_bytes_opt& b) {
-        return equal(b, as_column_maybe_subscripted(col), bag);
+        return equal(b, col, bag);
     });
 }
 
@@ -555,7 +556,7 @@ bool is_satisfied_by(const binary_operator& opr, const column_value_eval_bag& ba
                     constant val = evaluate(opr.rhs, bag.options);
                     return like(col, val.view(), bag);
                 } else if (opr.op == oper_t::IN) {
-                    return is_one_of(col, opr.rhs, bag);
+                    return is_one_of(&col, opr.rhs, bag);
                 } else {
                     throw exceptions::unsupported_operation_exception(format("Unhandled binary_operator: {}", opr));
                 }
