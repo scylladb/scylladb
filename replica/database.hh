@@ -701,20 +701,20 @@ public:
     //    reader and a _bounded_ amount of writes which arrive later.
     //  - Does not populate the cache
     // Requires ranges to be sorted and disjoint.
-    flat_mutation_reader make_streaming_reader(schema_ptr schema, reader_permit permit,
+    flat_mutation_reader_v2 make_streaming_reader(schema_ptr schema, reader_permit permit,
             const dht::partition_range_vector& ranges) const;
 
     // Single range overload.
-    flat_mutation_reader make_streaming_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range,
+    flat_mutation_reader_v2 make_streaming_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range,
             const query::partition_slice& slice,
             mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no) const;
 
-    flat_mutation_reader make_streaming_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range) {
+    flat_mutation_reader_v2 make_streaming_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range) {
         return make_streaming_reader(std::move(schema), std::move(permit), range, schema->full_slice());
     }
 
     // Stream reader from the given sstables
-    flat_mutation_reader make_streaming_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range,
+    flat_mutation_reader_v2 make_streaming_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range,
             lw_shared_ptr<sstables::sstable_set> sstables) const;
 
     sstables::shared_sstable make_streaming_sstable_for_write(std::optional<sstring> subdir = {});
@@ -1623,7 +1623,7 @@ future<> start_large_data_handler(sharded<replica::database>& db);
 //
 // Shard readers are created via `table::make_streaming_reader()`.
 // Range generator must generate disjoint, monotonically increasing ranges.
-flat_mutation_reader make_multishard_streaming_reader(distributed<replica::database>& db, schema_ptr schema, reader_permit permit,
+flat_mutation_reader_v2 make_multishard_streaming_reader(distributed<replica::database>& db, schema_ptr schema, reader_permit permit,
         std::function<std::optional<dht::partition_range>()> range_generator);
 
 bool is_internal_keyspace(std::string_view name);

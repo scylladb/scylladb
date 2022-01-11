@@ -99,7 +99,7 @@ struct send_info {
         , cf(tbl_)
         , ranges(std::move(ranges_))
         , prs(dht::to_partition_ranges(ranges))
-        , reader(cf.make_streaming_reader(cf.schema(), std::move(permit_), prs))
+        , reader(downgrade_to_v1(cf.make_streaming_reader(cf.schema(), std::move(permit_), prs)))
         , update(std::move(update_fn))
     {
     }

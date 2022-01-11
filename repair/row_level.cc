@@ -414,13 +414,13 @@ public:
                     {},
                     mutation_reader::forwarding::no);
         } else {
-            _reader = make_multishard_streaming_reader(db, _schema, _permit, [this] {
+            _reader = downgrade_to_v1(make_multishard_streaming_reader(db, _schema, _permit, [this] {
                 auto shard_range = _sharder.next();
                 if (shard_range) {
                     return std::optional<dht::partition_range>(dht::to_partition_range(*shard_range));
                 }
                 return std::optional<dht::partition_range>();
-            });
+            }));
         }
     }
 

@@ -819,6 +819,36 @@ make_flat_mutation_reader_from_mutations_v2(schema_ptr schema,
                                     const query::partition_slice& slice,
                                     streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
 
+/// Make a reader that enables the wrapped reader to work with multiple ranges.
+///
+/// \param ranges An range vector that has to contain strictly monotonic
+///     partition ranges, such that successively calling
+///     `flat_mutation_reader::fast_forward_to()` with each one is valid.
+///     An range vector range with 0 or 1 elements is also valid.
+/// \param fwd_mr It is only respected when `ranges` contains 0 or 1 partition
+///     ranges. Otherwise the reader is created with
+///     mutation_reader::forwarding::yes.
+flat_mutation_reader_v2
+make_flat_multi_range_reader(schema_ptr s, reader_permit permit, mutation_source source, const dht::partition_range_vector& ranges,
+                             const query::partition_slice& slice, const io_priority_class& pc = default_priority_class(),
+                             tracing::trace_state_ptr trace_state = nullptr,
+                             flat_mutation_reader::partition_range_forwarding fwd_mr = flat_mutation_reader::partition_range_forwarding::yes);
+
+/// Make a reader that enables the wrapped reader to work with multiple ranges.
+///
+/// Generator overload. The ranges returned by the generator have to satisfy the
+/// same requirements as the `ranges` param of the vector overload.
+flat_mutation_reader_v2
+make_flat_multi_range_reader(
+        schema_ptr s,
+        reader_permit permit,
+        mutation_source source,
+        std::function<std::optional<dht::partition_range>()> generator,
+        const query::partition_slice& slice,
+        const io_priority_class& pc = default_priority_class(),
+        tracing::trace_state_ptr trace_state = nullptr,
+        flat_mutation_reader::partition_range_forwarding fwd_mr = flat_mutation_reader::partition_range_forwarding::yes);
+
 flat_mutation_reader_v2
 make_flat_mutation_reader_from_fragments(schema_ptr, reader_permit, std::deque<mutation_fragment_v2>);
 
