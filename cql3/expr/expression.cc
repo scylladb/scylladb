@@ -147,7 +147,6 @@ managed_bytes_opt get_value(const column_value& col, const column_value_eval_bag
 using column_maybe_subscripted = std::variant<const column_value*, const subscript*>;
 
 /// Converts an expression to column_maybe subscripted
-__attribute__((unused))
 column_maybe_subscripted as_column_maybe_subscripted(const expression& e) {
     // TODO(subscript): Uncomment once subscript is added to expression
     // if (auto cval = as_if<subscript>(&e)) {
@@ -162,7 +161,6 @@ column_maybe_subscripted as_column_maybe_subscripted(const expression& e) {
 
 /// Gets the subscripted column_value out of the column_maybe_subscript.
 /// Only columns can be subscripted in CQL, so we can expect that the subscripted expression is a column_value.
-__attribute__((unused)) // For now mark as unused so that the code compiles, will be used soon
 const column_value& get_subscripted_column(const column_maybe_subscripted& cms) {
     return std::visit(overloaded_functor{
         [&](const column_value* cv) -> const column_value& {
@@ -175,7 +173,6 @@ const column_value& get_subscripted_column(const column_maybe_subscripted& cms) 
 }
 
 /// Returns col's value from queried data.
-__attribute__((unused)) // For now mark as unused so that the code compiles, will be used soon
 static managed_bytes_opt get_value(const column_maybe_subscripted& col, const column_value_eval_bag& bag) {
     const row_data_from_partition_slice& data = bag.row_data;
     const query_options& options = bag.options;
@@ -224,7 +221,6 @@ const abstract_type* get_value_comparator(const column_value& cv) {
 }
 
 /// Type for comparing results of get_value().
-__attribute__((unused)) // For now mark as unused so that the code compiles, will be used soon
 const abstract_type* get_value_comparator(const column_maybe_subscripted& col) {
     return std::visit(overloaded_functor {
         [](const column_value* cv) {
