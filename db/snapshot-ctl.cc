@@ -207,9 +207,8 @@ snapshot_ctl::get_snapshot_details() {
 
 future<int64_t> snapshot_ctl::true_snapshots_size() {
     return run_snapshot_list_operation([this] {
-        return _db.map_reduce(adder<int64_t>(), [] (replica::database& db) {
-            return do_with(int64_t(0), [&db] (auto& local_total) {
-                return parallel_for_each(db.get_column_families(), [&local_total] (auto& cf_pair) {
+            return do_with(int64_t(0), [this] (auto& local_total) {
+                return parallel_for_each(_db.local().get_column_families(), [&local_total] (auto& cf_pair) {
                     return cf_pair.second->get_snapshot_details().then([&local_total] (auto map) {
                         for (auto&& snap_map: map) {
                             local_total += snap_map.second.live;
@@ -220,7 +219,6 @@ future<int64_t> snapshot_ctl::true_snapshots_size() {
                     return make_ready_future<int64_t>(local_total);
                 });
             });
-        });
     });
 }
 
