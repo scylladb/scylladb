@@ -65,7 +65,8 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
             && !cmd.slice.options.contains<query::partition_slice::option::distinct>();
 }
 
-    query_pager::query_pager(schema_ptr s, shared_ptr<const cql3::selection::selection> selection,
+    query_pager::query_pager(service::storage_proxy& p, schema_ptr s,
+                    shared_ptr<const cql3::selection::selection> selection,
                     service::query_state& state,
                     const cql3::query_options& options,
                     lw_shared_ptr<query::read_command> cmd,
@@ -73,6 +74,7 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
                     : _has_clustering_keys(has_clustering_keys(*s, *cmd))
                     , _max(cmd->get_row_limit())
                     , _per_partition_limit(cmd->slice.partition_row_limit())
+                    , _proxy(p.shared_from_this())
                     , _schema(std::move(s))
                     , _selection(selection)
                     , _state(state)
@@ -84,14 +86,12 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
     future<service::storage_proxy::coordinator_query_result> query_pager::do_fetch_page(uint32_t page_size, gc_clock::time_point now, db::timeout_clock::time_point timeout) {
         auto state = _options.get_paging_state();
 
-        auto& proxy = get_local_storage_proxy();
-
         // Most callers should set this but we want to make sure, as results
         // won't be paged without it.
         _cmd->slice.options.set<query::partition_slice::option::allow_short_read>();
         // Override this, to make sure we use the value appropriate for paging
         // (with allow_short_read set).
-        _cmd->max_result_size = proxy.get_max_result_size(_cmd->slice);
+        _cmd->max_result_size = _proxy->get_max_result_size(_cmd->slice);
 
         if (!_last_pkey && state) {
             _max = state->get_remaining();
@@ -199,7 +199,7 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
 
         auto ranges = _ranges;
         auto command = ::make_lw_shared<query::read_command>(*_cmd);
-        return proxy.query(_schema,
+        return _proxy->query(_schema,
                 std::move(command),
                 std::move(ranges),
                 _options.get_consistency(),
@@ -241,13 +241,13 @@ future<cql3::result_generator> query_pager::fetch_page_generator(uint32_t page_s
 class filtering_query_pager : public query_pager {
     ::shared_ptr<cql3::restrictions::statement_restrictions> _filtering_restrictions;
 public:
-    filtering_query_pager(schema_ptr s, shared_ptr<const cql3::selection::selection> selection,
+    filtering_query_pager(service::storage_proxy& p, schema_ptr s, shared_ptr<const cql3::selection::selection> selection,
                 service::query_state& state,
                 const cql3::query_options& options,
                 lw_shared_ptr<query::read_command> cmd,
                 dht::partition_range_vector ranges,
                 ::shared_ptr<cql3::restrictions::statement_restrictions> filtering_restrictions)
-        : query_pager(s, selection, state, options, std::move(cmd), std::move(ranges))
+        : query_pager(p, s, selection, state, options, std::move(cmd), std::move(ranges))
         , _filtering_restrictions(std::move(filtering_restrictions))
         {}
     virtual ~filtering_query_pager() {}
@@ -418,6 +418,7 @@ bool service::pager::query_pagers::may_need_paging(const schema& s, uint32_t pag
 }
 
 std::unique_ptr<service::pager::query_pager> service::pager::query_pagers::pager(
+        service::storage_proxy& proxy,
         schema_ptr s, shared_ptr<const cql3::selection::selection> selection,
         service::query_state& state, const cql3::query_options& options,
         lw_shared_ptr<query::read_command> cmd,
@@ -429,9 +430,9 @@ std::unique_ptr<service::pager::query_pager> service::pager::query_pagers::pager
         filtering_restrictions = ::make_shared<cql3::restrictions::statement_restrictions>(s, true);
     }
     if (filtering_restrictions) {
-        return std::make_unique<filtering_query_pager>(std::move(s), std::move(selection), state,
+        return std::make_unique<filtering_query_pager>(proxy, std::move(s), std::move(selection), state,
                     options, std::move(cmd), std::move(ranges), std::move(filtering_restrictions));
     }
-    return std::make_unique<query_pager>(std::move(s), std::move(selection), state,
+    return std::make_unique<query_pager>(proxy, std::move(s), std::move(selection), state,
             options, std::move(cmd), std::move(ranges));
 }
