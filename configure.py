@@ -168,7 +168,8 @@ def ensure_tmp_dir_exists():
 def try_compile_and_link(compiler, source='', flags=[], verbose=False):
     ensure_tmp_dir_exists()
     with tempfile.NamedTemporaryFile() as sfile:
-        ofile = tempfile.mktemp()
+        ofd, ofile = tempfile.mkstemp()
+        os.close(ofd)
         try:
             sfile.file.write(bytes(source, 'utf-8'))
             sfile.file.flush()
