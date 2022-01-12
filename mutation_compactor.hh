@@ -45,7 +45,7 @@ concept CompactedFragmentsConsumer = requires(T obj, tombstone t, const dht::dec
 struct detached_compaction_state {
     ::partition_start partition_start;
     std::optional<::static_row> static_row;
-    std::variant<std::deque<range_tombstone>, std::optional<range_tombstone_change>> range_tombstones;
+    std::optional<range_tombstone_change> current_tombstone;
 };
 
 class noop_compacted_fragments_consumer {
@@ -148,8 +148,8 @@ class compact_mutation_state {
     uint32_t _partition_limit{};
     uint64_t _partition_row_limit{};
 
-    range_tombstone_accumulator _range_tombstones; // used when consuming v1 stream and for storing the partition tombstone
-    std::optional<range_tombstone_assembler> _rt_assembler; // used when consuming a v2 stream
+    tombstone _partition_tombstone;
+    range_tombstone_assembler _rt_assembler;
 
     bool _static_row_live{};
     uint64_t _rows_in_current_partition;
@@ -171,7 +171,7 @@ private:
     template <typename Consumer, typename GCConsumer>
     requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
     stop_iteration do_consume(range_tombstone&& rt, Consumer& consumer, GCConsumer& gc_consumer) {
-        if (rt.tomb <= _range_tombstones.get_partition_tombstone()) {
+        if (rt.tomb <= _partition_tombstone) {
             return stop_iteration::no;
         }
         if (can_purge_tombstone(rt.tomb)) {
@@ -187,15 +187,12 @@ private:
     }
     template <typename Consumer, typename GCConsumer>
     tombstone tombstone_for_row(const clustering_key& ckey, Consumer& consumer, GCConsumer& gc_consumer) {
-        if (!_rt_assembler) { // we are either consuming v1 or consumed no range tombstone [change] at all
-            return _range_tombstones.tombstone_for_row(ckey);
-        }
-        if (_rt_assembler->needs_flush()) {
-            if (auto rt_opt = _rt_assembler->flush(_schema, position_in_partition::after_key(ckey))) {
+        if (_rt_assembler.needs_flush()) {
+            if (auto rt_opt = _rt_assembler.flush(_schema, position_in_partition::after_key(ckey))) {
                 do_consume(std::move(*rt_opt), consumer, gc_consumer);
             }
         }
-        return std::max(_range_tombstones.get_partition_tombstone(), _rt_assembler->get_current_tombstone());
+        return std::max(_partition_tombstone, _rt_assembler.get_current_tombstone());
     }
     static constexpr bool only_live() {
         return OnlyLive == emit_only_live_rows::yes;
@@ -209,7 +206,7 @@ private:
         if (_empty_partition_in_gc_consumer) {
             _empty_partition_in_gc_consumer = false;
             gc_consumer.consume_new_partition(*_dk);
-            auto pt = _range_tombstones.get_partition_tombstone();
+            auto pt = _partition_tombstone;
             if (pt && can_purge_tombstone(pt)) {
                 gc_consumer.consume(pt);
             }
@@ -222,7 +219,7 @@ private:
             _empty_partition = false;
             ++_stats.partitions;
             consumer.consume_new_partition(*_dk);
-            auto pt = _range_tombstones.get_partition_tombstone();
+            auto pt = _partition_tombstone;
             if (pt && !can_purge_tombstone(pt)) {
                 consumer.consume(pt);
             }
@@ -280,7 +277,6 @@ public:
         , _row_limit(limit)
         , _partition_limit(partition_limit)
         , _partition_row_limit(_slice.options.contains(query::partition_slice::option::distinct) ? 1 : slice.partition_row_limit())
-        , _range_tombstones(s)
         , _last_dk({dht::token(), partition_key::make_empty()})
         , _last_clustering_pos(position_in_partition::before_all_clustered_rows())
     {
@@ -294,7 +290,6 @@ public:
         , _get_max_purgeable(std::move(get_max_purgeable))
         , _can_gc([this] (tombstone t) { return can_gc(t); })
         , _slice(s.full_slice())
-        , _range_tombstones(s)
         , _last_dk({dht::token(), partition_key::make_empty()})
         , _last_clustering_pos(position_in_partition::before_all_clustered_rows())
         , _collector(std::make_unique<mutation_compactor_garbage_collector>(_schema))
@@ -313,10 +308,8 @@ public:
         _empty_partition_in_gc_consumer = true;
         _rows_in_current_partition = 0;
         _static_row_live = false;
-        _range_tombstones.clear();
-        if (_rt_assembler) {
-            _rt_assembler->reset();
-        }
+        _partition_tombstone = {};
+        _rt_assembler.reset();
         _current_partition_limit = std::min(_row_limit, _partition_row_limit);
         _max_purgeable = api::missing_timestamp;
         _gc_before = std::nullopt;
@@ -328,7 +321,7 @@ public:
     template <typename Consumer, typename GCConsumer>
     requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
     void consume(tombstone t, Consumer& consumer, GCConsumer& gc_consumer) {
-        _range_tombstones.set_partition_tombstone(t);
+        _partition_tombstone = t;
         if (!only_live()) {
             if (can_purge_tombstone(t)) {
                 partition_is_not_empty_for_gc_consumer(gc_consumer);
@@ -348,7 +341,7 @@ public:
     requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
     stop_iteration consume(static_row&& sr, Consumer& consumer, GCConsumer& gc_consumer) {
         _last_static_row = static_row(_schema, sr);
-        auto current_tombstone = _range_tombstones.get_partition_tombstone();
+        auto current_tombstone = _partition_tombstone;
         if constexpr (sstable_compaction()) {
             _collector->start_collecting_static_row();
         }
@@ -444,21 +437,9 @@ public:
 
     template <typename Consumer, typename GCConsumer>
     requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
-    stop_iteration consume(range_tombstone&& rt, Consumer& consumer, GCConsumer& gc_consumer) {
-        ++_stats.range_tombstones;
-        _range_tombstones.apply(rt);
-        // FIXME: drop tombstone if it is fully covered by other range tombstones
-        return do_consume(std::move(rt), consumer, gc_consumer);
-    }
-
-    template <typename Consumer, typename GCConsumer>
-    requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
     stop_iteration consume(range_tombstone_change&& rtc, Consumer& consumer, GCConsumer& gc_consumer) {
         ++_stats.range_tombstones;
-        if (!_rt_assembler) {
-            _rt_assembler.emplace();
-        }
-        if (auto rt_opt = _rt_assembler->consume(_schema, std::move(rtc))) {
+        if (auto rt_opt = _rt_assembler.consume(_schema, std::move(rtc))) {
             return do_consume(std::move(*rt_opt), consumer, gc_consumer);
         }
         return stop_iteration::no;
@@ -467,14 +448,12 @@ public:
     template <typename Consumer, typename GCConsumer>
     requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
     stop_iteration consume_end_of_partition(Consumer& consumer, GCConsumer& gc_consumer) {
-        if (_rt_assembler) {
-            if (_current_tombstone = _rt_assembler->get_current_tombstone(); _current_tombstone) {
-                if (auto rt_opt = _rt_assembler->consume(_schema, range_tombstone_change(position_in_partition::after_key(_last_clustering_pos), tombstone{}))) {
-                    do_consume(std::move(*rt_opt), consumer, gc_consumer);
-                }
+        if (_current_tombstone = _rt_assembler.get_current_tombstone(); _current_tombstone) {
+            if (auto rt_opt = _rt_assembler.consume(_schema, range_tombstone_change(position_in_partition::after_key(_last_clustering_pos), tombstone{}))) {
+                do_consume(std::move(*rt_opt), consumer, gc_consumer);
             }
-            _rt_assembler->on_end_of_stream();
         }
+        _rt_assembler.on_end_of_stream();
         if (!_empty_partition_in_gc_consumer) {
             gc_consumer.consume_end_of_partition();
         }
@@ -544,8 +523,7 @@ public:
             consume(*std::exchange(_last_static_row, {}), consumer, nc);
         }
         if (_current_tombstone) {
-            _rt_assembler.emplace();
-            if (auto rt_opt = _rt_assembler->consume(_schema, range_tombstone_change(position_in_partition_view::after_key(_last_clustering_pos), std::exchange(_current_tombstone, {})))) {
+            if (auto rt_opt = _rt_assembler.consume(_schema, range_tombstone_change(position_in_partition_view::after_key(_last_clustering_pos), std::exchange(_current_tombstone, {})))) {
                 do_consume(std::move(*rt_opt), consumer, nc);
             }
         }
@@ -563,15 +541,12 @@ public:
     /// is (given the same outside parameters of course). Practically this
     /// allows the compaction state to be stored in the compacted reader.
     detached_compaction_state detach_state() && {
-        partition_start ps(std::move(_last_dk), _range_tombstones.get_partition_tombstone());
-        if (_rt_assembler) {
-            if (_current_tombstone) {
-                return {std::move(ps), std::move(_last_static_row), range_tombstone_change(position_in_partition_view::after_key(_last_clustering_pos), _current_tombstone)};
-            } else {
-                return {std::move(ps), std::move(_last_static_row), std::optional<range_tombstone_change>{}};
-            }
+        partition_start ps(std::move(_last_dk), _partition_tombstone);
+        if (_current_tombstone) {
+            return {std::move(ps), std::move(_last_static_row), range_tombstone_change(position_in_partition_view::after_key(_last_clustering_pos), _current_tombstone)};
+        } else {
+            return {std::move(ps), std::move(_last_static_row), std::optional<range_tombstone_change>{}};
         }
-        return {std::move(ps), std::move(_last_static_row), std::move(_range_tombstones).range_tombstones()};
     }
 
     const compaction_stats& stats() const { return _stats; }
@@ -622,10 +597,6 @@ public:
 
     stop_iteration consume(clustering_row&& cr) {
         return _state->consume(std::move(cr), _consumer, _gc_consumer);
-    }
-
-    stop_iteration consume(range_tombstone&& rt) {
-        return _state->consume(std::move(rt), _consumer, _gc_consumer);
     }
 
     stop_iteration consume(range_tombstone_change&& rtc) {

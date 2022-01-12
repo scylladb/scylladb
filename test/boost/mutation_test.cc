@@ -2663,8 +2663,8 @@ SEASTAR_THREAD_TEST_CASE(test_compactor_range_tombstone_spanning_many_pages) {
     };
 
     auto restore_state = [&] (flat_mutation_reader_v2& reader, detached_compaction_state&& state) {
-        if (auto rt_opt = std::get_if<std::optional<range_tombstone_change>>(&state.range_tombstones); rt_opt && *rt_opt) {
-            reader.unpop_mutation_fragment(mutation_fragment_v2(*s, permit, std::move(**rt_opt)));
+        if (auto rt_opt = state.current_tombstone) {
+            reader.unpop_mutation_fragment(mutation_fragment_v2(*s, permit, std::move(*rt_opt)));
         }
         if (state.static_row) {
             reader.unpop_mutation_fragment(mutation_fragment_v2(*s, permit, std::move(*state.static_row)));

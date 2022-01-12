@@ -438,13 +438,7 @@ read_context::dismantle_buffer_stats read_context::dismantle_compaction_state(de
     auto& sharder = _schema->get_sharder();
     const auto shard = sharder.shard_of(compaction_state.partition_start.key().token());
 
-    std::optional<range_tombstone_change> rtc_opt;
-    if (auto* rtc_opt_ptr = std::get_if<std::optional<range_tombstone_change>>(&compaction_state.range_tombstones); rtc_opt_ptr) {
-        rtc_opt = std::move(*rtc_opt_ptr);
-    } else {
-        auto& rts = std::get<std::deque<range_tombstone>>(compaction_state.range_tombstones);
-        assert(rts.empty());
-    }
+    auto& rtc_opt = compaction_state.current_tombstone;
 
     // It is possible that the reader this partition originates from does not
     // exist anymore. Either because we failed stopping it or because it was
