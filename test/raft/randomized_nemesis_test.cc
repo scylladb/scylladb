@@ -1682,7 +1682,7 @@ struct wait_for_leader {
                     co_return *it;
                 }
 
-                co_await seastar::later();
+                co_await seastar::yield();
             }
         }(env.weak_from_this(), std::move(nodes)));
 
@@ -1815,7 +1815,7 @@ SEASTAR_TEST_CASE(snapshot_uses_correct_term_test) {
         env.get_network().add_grudge(id1, id2);
 
         while (env.is_leader(id1)) {
-            co_await seastar::later();
+            co_await seastar::yield();
         }
 
         tlogger.trace("remove grudge");
@@ -1897,7 +1897,7 @@ SEASTAR_TEST_CASE(snapshotting_preserves_config_test) {
         env.get_network().add_grudge(id1, id2);
 
         while (env.is_leader(id1)) {
-            co_await seastar::later();
+            co_await seastar::yield();
         }
 
         tlogger.trace("remove grudge");

@@ -586,7 +586,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_stop_waits_on_permits
         // Test will fail via use-after-free
         auto f = semaphore->stop().then([semaphore = std::move(semaphore)] { });
 
-        later().get();
+        yield().get();
         BOOST_REQUIRE(!f.available());
         permit.reset();
 

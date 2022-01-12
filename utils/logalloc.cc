@@ -2540,7 +2540,7 @@ region_group::execution_permitted() noexcept {
 future<>
 region_group::start_releaser(scheduling_group deferred_work_sg) {
     return with_scheduling_group(deferred_work_sg, [this] {
-        return later().then([this] {
+        return yield().then([this] {
             return repeat([this] () noexcept {
                 if (_shutdown_requested) {
                     return make_ready_future<stop_iteration>(stop_iteration::yes);

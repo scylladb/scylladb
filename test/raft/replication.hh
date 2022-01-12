@@ -1026,7 +1026,7 @@ future<> raft_cluster<Clock>::elect_new_leader(size_t new_leader) {
 
         do {
             // Consume leader output messages since a stray append might make new leader step down
-            co_await later();                 // yield
+            co_await yield();                 // yield
             _servers[new_leader].server->wait_until_candidate();
 
             if (both_connected) {
@@ -1064,7 +1064,7 @@ future<> raft_cluster<Clock>::elect_new_leader(size_t new_leader) {
             // Make move all nodes past election threshold, also making old leader follower
             elapse_elections();
             // Consume leader output messages since a stray append might make new leader step down
-            co_await later();                 // yield
+            co_await yield();                 // yield
             _servers[new_leader].server->wait_until_candidate();
             // Re-connect old leader
             _connected->connect(to_raft_id(_leader));
@@ -1271,7 +1271,7 @@ future<> raft_cluster<Clock>::tick(::tick t) {
         for (auto&& s: _servers) {
             s.server->tick();
         }
-        co_await later();
+        co_await yield();
     }
 }
 

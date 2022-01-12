@@ -228,7 +228,7 @@ public:
     }
     void stop() {
         _stop = true;
-        later().get(); // so that the last scheduled tick is counted
+        yield().get(); // so that the last scheduled tick is counted
     }
     const utils::estimated_histogram& histogram() const {
         return _hist;

@@ -664,7 +664,7 @@ SEASTAR_TEST_CASE(test_partition_range_population_with_concurrent_memtable_flush
             if (cancel_updater) {
                 return make_ready_future<stop_iteration>(stop_iteration::yes);
             }
-            return later().then([&] {
+            return yield().then([&] {
                 auto mt = make_lw_shared<memtable>(s);
                 return cache.update(row_cache::external_updater([]{}), *mt).then([mt] {
                     return stop_iteration::no;
@@ -3452,13 +3452,13 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
             }), *mt).get();
             cache_generation = last_generation;
 
-            later().get();
+            yield().get();
             tracker.region().evict_some();
 
             // Don't allow backlog to grow too much to avoid bad_alloc
             const auto max_active_versions = 7;
             while (!done && versions.size() > max_active_versions) {
-                later().get();
+                yield().get();
             }
         }
 
@@ -3513,7 +3513,7 @@ SEASTAR_TEST_CASE(test_alter_then_preempted_update_then_memtable_read) {
 
         // Wait for cache update to enter the partition
         while (tracker.get_stats().partition_merges == 0) {
-            later().get();
+            yield().get();
         }
 
         auto mt2_reader = mt2->make_flat_reader(s, semaphore.make_permit(), pr, s->full_slice(), default_priority_class(),

@@ -70,7 +70,7 @@ SEASTAR_THREAD_TEST_CASE(test_caching) {
     partition_index_cache cache(lru, r);
 
     auto page0_loader = [&] (partition_index_cache::key_type k) {
-        return later().then([&] {
+        return yield().then([&] {
             return make_page0(r, s);
         });
     };

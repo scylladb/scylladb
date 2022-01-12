@@ -4536,7 +4536,7 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
                 }
             }
             max_ongoing_compaction = std::max(cm->get_stats().active_tasks, max_ongoing_compaction);
-            later().get();
+            yield().get();
         }
         BOOST_REQUIRE(cm->get_stats().errors == 0);
         BOOST_REQUIRE(max_ongoing_compaction == 1);
