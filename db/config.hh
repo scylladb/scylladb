@@ -350,6 +350,7 @@ public:
     named_value<bool> cdc_dont_rewrite_streams;
     named_value<tri_mode_restriction> strict_allow_filtering;
     named_value<bool> reversed_reads_auto_bypass_cache;
+    named_value<bool> enable_optimized_reversed_reads;
 
     named_value<uint16_t> alternator_port;
     named_value<uint16_t> alternator_https_port;

@@ -147,14 +147,24 @@ flat_mutation_reader_v2
 table::make_reader_v2(schema_ptr s,
                            reader_permit permit,
                            const dht::partition_range& range,
-                           const query::partition_slice& slice,
+                           const query::partition_slice& query_slice,
                            const io_priority_class& pc,
                            tracing::trace_state_ptr trace_state,
                            streamed_mutation::forwarding fwd,
                            mutation_reader::forwarding fwd_mr) const {
     if (_virtual_reader) [[unlikely]] {
-        return (*_virtual_reader).make_reader_v2(s, std::move(permit), range, slice, pc, trace_state, fwd, fwd_mr);
+        return (*_virtual_reader).make_reader_v2(s, std::move(permit), range, query_slice, pc, trace_state, fwd, fwd_mr);
     }
+
+    bool reversed = query_slice.is_reversed();
+    std::unique_ptr<query::partition_slice> unreversed_slice;
+    if (reversed && !_config.enable_optimized_reversed_reads()) [[unlikely]] {
+        // Make the code below perform a forward query. We'll wrap the result into `make_reversing_reader` at the end.
+        reversed = false;
+        s = s->make_reversed();
+        unreversed_slice = std::make_unique<query::partition_slice>(query::half_reverse_slice(*s, query_slice));
+    }
+    auto& slice = unreversed_slice ? *unreversed_slice : query_slice;
 
     std::vector<flat_mutation_reader_v2> readers;
     readers.reserve(_memtables->size() + 1);
@@ -184,19 +194,31 @@ table::make_reader_v2(schema_ptr s,
     }
 
     const auto bypass_cache = slice.options.contains(query::partition_slice::option::bypass_cache);
-    const auto reversed = slice.is_reversed();
     if (cache_enabled() && !bypass_cache && !(reversed && _config.reversed_reads_auto_bypass_cache())) {
         readers.emplace_back(upgrade_to_v2(_cache.make_reader(s, permit, range, slice, pc, std::move(trace_state), fwd, fwd_mr)));
     } else {
         readers.emplace_back(make_sstable_reader(s, permit, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
     }
 
-    auto comb_reader = make_combined_reader(s, std::move(permit), std::move(readers), fwd, fwd_mr);
+    auto rd = make_combined_reader(s, permit, std::move(readers), fwd, fwd_mr);
+
+    flat_mutation_reader_opt rd_v1;
     if (_config.data_listeners && !_config.data_listeners->empty()) {
-        return upgrade_to_v2(_config.data_listeners->on_read(s, range, slice, downgrade_to_v1(std::move(comb_reader))));
-    } else {
-        return comb_reader;
+        rd_v1 = _config.data_listeners->on_read(s, range, slice, downgrade_to_v1(std::move(rd)));
     }
+
+    if (unreversed_slice) [[unlikely]] {
+        if (!rd_v1) {
+            rd_v1 = downgrade_to_v1(std::move(rd));
+        }
+        rd_v1 = make_reversing_reader(std::move(*rd_v1), permit.max_result_size(), std::move(unreversed_slice));
+    }
+
+    if (rd_v1) {
+        return upgrade_to_v2(std::move(*rd_v1));
+    }
+
+    return rd;
 }
 
 flat_mutation_reader

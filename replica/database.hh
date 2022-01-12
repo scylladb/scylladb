@@ -396,7 +396,8 @@ public:
         db::data_listeners* data_listeners = nullptr;
         // Not really table-specific (it's a global configuration parameter), but stored here
         // for easy access from `table` member functions:
-        utils::updateable_value<bool> reversed_reads_auto_bypass_cache{true};
+        utils::updateable_value<bool> reversed_reads_auto_bypass_cache{false};
+        utils::updateable_value<bool> enable_optimized_reversed_reads{true};
     };
     struct no_commitlog {};
 
