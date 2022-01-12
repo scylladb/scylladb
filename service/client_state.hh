@@ -351,6 +351,7 @@ public:
     future<> has_column_family_access(const replica::database& db, const sstring&, const sstring&, auth::permission,
                                       auth::command_desc::type = auth::command_desc::type::OTHER) const;
     future<> has_schema_access(const replica::database& db, const schema& s, auth::permission p) const;
+    future<> has_schema_access(const replica::database& db, const sstring&, const sstring&, auth::permission p) const;
 
 private:
     future<> has_access(const replica::database& db, const sstring& keyspace, auth::command_desc) const;

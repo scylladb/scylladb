@@ -208,8 +208,6 @@ public:
     future<> start();
     future<> stop() { return make_ready_future<>(); }
 
-    future<> create_keyspace(std::string_view keyspace_name);
-
     static sstring table_name(const schema&);
     static db::timeout_clock::time_point default_timeout();
     static void set_default_timeout(db::timeout_clock::duration timeout);
@@ -239,9 +237,9 @@ public:
         rjson::value&,
         bool = false);
 
-    void add_stream_options(const rjson::value& stream_spec, schema_builder&) const;
-    void supplement_table_info(rjson::value& descr, const schema& schema) const;
-    void supplement_table_stream_info(rjson::value& descr, const schema& schema) const;
+    static void add_stream_options(const rjson::value& stream_spec, schema_builder&, service::storage_proxy& sp);
+    static void supplement_table_info(rjson::value& descr, const schema& schema, service::storage_proxy& sp);
+    static void supplement_table_stream_info(rjson::value& descr, const schema& schema, service::storage_proxy& sp);
 };
 
 }

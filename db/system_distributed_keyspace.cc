@@ -200,11 +200,33 @@ system_distributed_keyspace::system_distributed_keyspace(cql3::query_processor& 
         , _sp(sp) {
 }
 
+static thread_local std::pair<std::string_view, data_type> new_columns[] {
+    {"timeout", duration_type},
+    {"workload_type", utf8_type}
+};
+
+static bool has_missing_columns(data_dictionary::database db) noexcept {
+    assert(this_shard_id() == 0);
+    try {
+        auto schema = db.find_schema(system_distributed_keyspace::NAME, system_distributed_keyspace::SERVICE_LEVELS);
+        for (const auto& col : new_columns) {
+            auto& [col_name, col_type] = col;
+            bytes options_name = to_bytes(col_name.data());
+            if (schema->get_column_definition(options_name)) {
+                continue;
+            }
+            return true;
+        }
+    } catch (...) {
+        dlogger.warn("Failed to update options column in the role attributes table: {}", std::current_exception());
+        return true;
+    }
+
+    return false;
+}
+
 static future<> add_new_columns_if_missing(replica::database& db, ::service::migration_manager& mm) noexcept {
-    static thread_local std::pair<std::string_view, data_type> new_columns[] {
-        {"timeout", duration_type},
-        {"workload_type", utf8_type}
-    };
+    assert(this_shard_id() == 0);
     try {
         auto schema = db.find_schema(system_distributed_keyspace::NAME, system_distributed_keyspace::SERVICE_LEVELS);
         schema_builder b(schema);
@@ -218,14 +240,14 @@ static future<> add_new_columns_if_missing(replica::database& db, ::service::mig
             updated = true;
             b.with_column(options_name, col_type, column_kind::regular_column);
         }
-        if (!updated) {
-            return make_ready_future<>();
+        if (updated) {
+            schema_ptr table = b.build();
+            try {
+                co_return co_await mm.announce(co_await mm.prepare_column_family_update_announcement(table, false, std::vector<view_ptr>(), api::timestamp_type(1)));
+            } catch (...) {}
         }
-        schema_ptr table = b.build();
-        return mm.announce_column_family_update(table, false, api::timestamp_type(1)).handle_exception([] (const std::exception_ptr&) {});
     } catch (...) {
         dlogger.warn("Failed to update options column in the role attributes table: {}", std::current_exception());
-        return make_ready_future<>();
     }
 }
 
@@ -235,38 +257,69 @@ future<> system_distributed_keyspace::start() {
         co_return;
     }
 
-    static auto ignore_existing = [] (seastar::noncopyable_function<future<>()> func) {
-        return futurize_invoke(std::move(func)).handle_exception_type([] (exceptions::already_exists_exception& ignored) { });
-    };
+    if (!_sp.get_db().local().has_keyspace(NAME)) {
+        co_await _mm.schema_read_barrier();
 
-    // We use min_timestamp so that the default keyspace metadata will lose with any manual adjustments.
-    // See issue #2129.
-    co_await ignore_existing([this] {
-        auto ksm = keyspace_metadata::new_keyspace(
-                NAME,
-                "org.apache.cassandra.locator.SimpleStrategy",
-                {{"replication_factor", "3"}},
-                true /* durable_writes */);
-        return _mm.announce_new_keyspace(ksm, api::min_timestamp);
+        try {
+            auto ksm = keyspace_metadata::new_keyspace(
+                    NAME,
+                    "org.apache.cassandra.locator.SimpleStrategy",
+                    {{"replication_factor", "3"}},
+                    true /* durable_writes */);
+            co_await _mm.announce(_mm.prepare_new_keyspace_announcement(ksm));
+        } catch (exceptions::already_exists_exception&) {}
+    } else {
+        dlogger.info("{} keyspase is already present. Not creating", NAME);
+    }
+
+    if (!_sp.get_db().local().has_keyspace(NAME_EVERYWHERE)) {
+        co_await _mm.schema_read_barrier();
+
+        try {
+            auto ksm = keyspace_metadata::new_keyspace(
+                    NAME_EVERYWHERE,
+                    "org.apache.cassandra.locator.EverywhereStrategy",
+                    {},
+                    true /* durable_writes */);
+            co_await _mm.announce(_mm.prepare_new_keyspace_announcement(ksm));
+        } catch (exceptions::already_exists_exception&) {}
+    } else {
+        dlogger.info("{} keyspase is already present. Not creating", NAME_EVERYWHERE);
+    }
+
+    auto tables = ensured_tables();
+    bool exist = std::all_of(tables.begin(), tables.end(), [this] (schema_ptr s) {
+        return _sp.get_db().local().has_schema(s->ks_name(), s->cf_name());
     });
 
-    co_await ignore_existing([this] {
-        auto ksm = keyspace_metadata::new_keyspace(
-                NAME_EVERYWHERE,
-                "org.apache.cassandra.locator.EverywhereStrategy",
-                {},
-                true /* durable_writes */);
-        return _mm.announce_new_keyspace(ksm, api::min_timestamp);
-    });
+    if (!exist) {
+        co_await _mm.schema_read_barrier();
 
-    for (auto&& table : ensured_tables()) {
-        co_await ignore_existing([this, table = std::move(table)] {
-            return _mm.announce_new_column_family(std::move(table), api::min_timestamp);
+        auto m = co_await map_reduce(tables,
+        /* Mapper */ [this] (auto&& table) -> future<std::vector<mutation>> {
+            try {
+                co_return co_await _mm.prepare_new_column_family_announcement(std::move(table), api::min_timestamp);
+            } catch (exceptions::already_exists_exception&) {
+                co_return std::vector<mutation>();
+            }
+        },
+        /* Initial value*/ std::vector<mutation>(),
+        /* Reducer */ [] (std::vector<mutation> m1, std::vector<mutation> m2) {
+            std::move(m2.begin(), m2.end(), std::back_inserter(m1));
+            return m1;
         });
+        co_await _mm.announce(std::move(m));
+    } else {
+        dlogger.info("All tables are present on start");
     }
 
     _started = true;
-    co_await add_new_columns_if_missing(_qp.db().real_database(), _mm);
+    if (has_missing_columns(_qp.db())) {
+        co_await _mm.schema_read_barrier();
+        co_await add_new_columns_if_missing(_qp.db().real_database(), _mm);
+    } else {
+        dlogger.info("All schemas are uptodate on start");
+    }
 }
 
 future<> system_distributed_keyspace::stop() {

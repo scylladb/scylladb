@@ -120,7 +120,7 @@ future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<
     std::vector<mutation> m;
 
     try {
-        m = qp.get_migration_manager().prepare_new_keyspace_announcement(_attrs->as_ks_metadata(_name, tm), api::new_timestamp());
+        m = qp.get_migration_manager().prepare_new_keyspace_announcement(_attrs->as_ks_metadata(_name, tm));
 
         ret = ::make_shared<event::schema_change>(
                 event::schema_change::change_type::CREATED,

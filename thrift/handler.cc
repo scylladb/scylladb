@@ -869,119 +869,149 @@ public:
         });
     }
 
+    static future<std::string> execute_schema_command(distributed<service::migration_manager>& dmm, distributed<replica::database>& db, std::function<future<std::vector<mutation>>(service::migration_manager&, replica::database&)> ddl) {
+        auto func = [ddl, &dmm] (replica::database& db) -> future<std::string> {
+            auto& mm = dmm.local();
+
+            co_await mm.schema_read_barrier();
+
+            co_await mm.announce(co_await ddl(mm, db));
+
+            co_return std::string(db.get_version().to_sstring());
+        };
+        co_return co_await db.invoke_on(0, func);
+    }
+
     void system_add_column_family(thrift_fn::function<void(std::string const& _return)> cob, thrift_fn::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const CfDef& cf_def) {
         service_permit permit = obtain_permit();
-        with_cob(std::move(cob), std::move(exn_cob), [&] {
-            if (!_db.local().has_keyspace(cf_def.keyspace)) {
-                throw NotFoundException();
-            }
-            if (_db.local().has_schema(cf_def.keyspace, cf_def.name)) {
-                throw make_exception<InvalidRequestException>("Column family {} already exists", cf_def.name);
-            }
+        with_cob(std::move(cob), std::move(exn_cob), [this, def = cf_def] () -> future<std::string> {
+            auto& t = *this;
+            auto cf_def = def;
 
-            auto s = schema_from_thrift(cf_def, cf_def.keyspace);
-            return _query_state.get_client_state().has_keyspace_access(_db.local(), cf_def.keyspace, auth::permission::CREATE).then([this, s = std::move(s)] {
-                return _query_processor.local().get_migration_manager().announce_new_column_family(std::move(s)).then([this] {
-                    return std::string(_db.local().get_version().to_sstring());
-                });
+            co_await t._query_state.get_client_state().has_keyspace_access(t._db.local(), cf_def.keyspace, auth::permission::CREATE);
+
+            co_return co_await execute_schema_command(t._query_processor.local().get_migration_manager().container(), _db, [&cf_def] (service::migration_manager& mm, replica::database& db) -> future<std::vector<mutation>> {
+                if (!db.has_keyspace(cf_def.keyspace)) {
+                    throw NotFoundException();
+                }
+                if (db.has_schema(cf_def.keyspace, cf_def.name)) {
+                    throw make_exception<InvalidRequestException>("Column family {} already exists", cf_def.name);
+                }
+
+                auto s = schema_from_thrift(cf_def, cf_def.keyspace);
+                co_return co_await mm.prepare_new_column_family_announcement(std::move(s));
             });
         });
     }
     void system_drop_column_family(thrift_fn::function<void(std::string const& _return)> cob, thrift_fn::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& column_family) {
         service_permit permit = obtain_permit();
-        with_cob(std::move(cob), std::move(exn_cob), [&] {
-            return _query_state.get_client_state().has_column_family_access(_db.local(), current_keyspace(), column_family, auth::permission::DROP).then([this, column_family] {
-                auto& cf = _db.local().find_column_family(current_keyspace(), column_family);
+        with_cob(std::move(cob), std::move(exn_cob), [this, cfm = column_family] () -> future<std::string> {
+            auto& t = *this;
+            auto column_family = cfm;
+            co_await t._query_state.get_client_state().has_column_family_access(t._db.local(), t.current_keyspace(), column_family, auth::permission::DROP);
+
+            co_return co_await execute_schema_command(t._query_processor.local().get_migration_manager().container(), _db,
+                       [&column_family, &current_keyspace = t.current_keyspace()] (service::migration_manager& mm, replica::database& db) -> future<std::vector<mutation>> {
+                auto& cf = db.find_column_family(current_keyspace, column_family);
                 if (cf.schema()->is_view()) {
                     throw make_exception<InvalidRequestException>("Cannot drop Materialized Views from Thrift");
                 }
                 if (!cf.views().empty()) {
                     throw make_exception<InvalidRequestException>("Cannot drop table with Materialized Views {}", column_family);
                 }
-                return _query_processor.local().get_migration_manager().announce_column_family_drop(current_keyspace(), column_family).then([this] {
-                    return std::string(_db.local().get_version().to_sstring());
-                });
+
+                co_return co_await mm.prepare_column_family_drop_announcement(current_keyspace, column_family);
             });
         });
     }
 
     void system_add_keyspace(thrift_fn::function<void(std::string const& _return)> cob, thrift_fn::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const KsDef& ks_def) {
         service_permit permit = obtain_permit();
-        with_cob(std::move(cob), std::move(exn_cob), [&] {
-            auto ksm = keyspace_from_thrift(ks_def);
-            return _query_state.get_client_state().has_all_keyspaces_access(auth::permission::CREATE).then([this, ksm = std::move(ksm)] {
-                return _query_processor.local().get_migration_manager().announce_new_keyspace(std::move(ksm)).then([this] {
-                    return std::string(_db.local().get_version().to_sstring());
-                });
+        with_cob(std::move(cob), std::move(exn_cob), [this, def = ks_def] () -> future<std::string> {
+            auto& t = *this;
+            auto ks_def = def;
+
+            co_await t._query_state.get_client_state().has_all_keyspaces_access(auth::permission::CREATE);
+
+            co_return co_await execute_schema_command(t._query_processor.local().get_migration_manager().container(), _db, [&ks_def] (service::migration_manager& mm, replica::database& db) -> future<std::vector<mutation>> {
+                co_return mm.prepare_new_keyspace_announcement(keyspace_from_thrift(ks_def));
             });
         });
     }
 
     void system_drop_keyspace(thrift_fn::function<void(std::string const& _return)> cob, thrift_fn::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& keyspace) {
         service_permit permit = obtain_permit();
-        with_cob(std::move(cob), std::move(exn_cob), [&] {
-            thrift_validation::validate_keyspace_not_system(keyspace);
-            if (!_db.local().has_keyspace(keyspace)) {
-                throw NotFoundException();
-            }
+        with_cob(std::move(cob), std::move(exn_cob), [this, ks = keyspace] () -> future<std::string> {
+            auto& t = *this;
+            auto keyspace = ks;
 
-            return _query_state.get_client_state().has_keyspace_access(_db.local(), keyspace, auth::permission::DROP).then([this, keyspace] {
-                return _query_processor.local().get_migration_manager().announce_keyspace_drop(keyspace).then([this] {
-                    return std::string(_db.local().get_version().to_sstring());
-                });
+            co_await t._query_state.get_client_state().has_keyspace_access(t._db.local(), keyspace, auth::permission::DROP);
+
+            co_return co_await execute_schema_command(t._query_processor.local().get_migration_manager().container(), _db, [&keyspace] (service::migration_manager& mm, replica::database& db) -> future<std::vector<mutation>> {
+                thrift_validation::validate_keyspace_not_system(keyspace);
+                if (!db.has_keyspace(keyspace)) {
+                    throw NotFoundException();
+                }
+
+                co_return mm.prepare_keyspace_drop_announcement(keyspace);
             });
         });
     }
 
     void system_update_keyspace(thrift_fn::function<void(std::string const& _return)> cob, thrift_fn::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const KsDef& ks_def) {
         service_permit permit = obtain_permit();
-        with_cob(std::move(cob), std::move(exn_cob), [&] {
+        with_cob(std::move(cob), std::move(exn_cob), [this, def = ks_def] () -> future<std::string> {
+            auto& t = *this;
+            auto ks_def = def;
             thrift_validation::validate_keyspace_not_system(ks_def.name);
 
-            if (!_db.local().has_keyspace(ks_def.name)) {
-                throw NotFoundException();
-            }
-            if (!ks_def.cf_defs.empty()) {
-                throw make_exception<InvalidRequestException>("Keyspace update must not contain any column family definitions.");
-            }
+            co_await t._query_state.get_client_state().has_keyspace_access(t._db.local(), ks_def.name, auth::permission::ALTER);
 
-            auto ksm = keyspace_from_thrift(ks_def);
-            return _query_state.get_client_state().has_keyspace_access(_db.local(), ks_def.name, auth::permission::ALTER).then([this, ksm = std::move(ksm)] {
-                return _query_processor.local().get_migration_manager().announce_keyspace_update(std::move(ksm)).then([this] {
-                    return std::string(_db.local().get_version().to_sstring());
-                });
+            co_return co_await execute_schema_command(t._query_processor.local().get_migration_manager().container(), _db, [&ks_def] (service::migration_manager& mm, replica::database& db) -> future<std::vector<mutation>> {
+                if (db.has_keyspace(ks_def.name)) {
+                    throw NotFoundException();
+                }
+                if (!ks_def.cf_defs.empty()) {
+                    throw make_exception<InvalidRequestException>("Keyspace update must not contain any column family definitions.");
+                }
+
+                auto ksm = keyspace_from_thrift(ks_def);
+                co_return mm.prepare_keyspace_update_announcement(std::move(ksm));
             });
         });
     }
 
     void system_update_column_family(thrift_fn::function<void(std::string const& _return)> cob, thrift_fn::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const CfDef& cf_def) {
         service_permit permit = obtain_permit();
-        with_cob(std::move(cob), std::move(exn_cob), [&] {
-            auto& cf = _db.local().find_column_family(cf_def.keyspace, cf_def.name);
-            auto schema = cf.schema();
+        with_cob(std::move(cob), std::move(exn_cob), [this, def = cf_def] () -> future<std::string> {
+            auto& t = *this;
+            auto cf_def = def;
 
-            if (schema->is_cql3_table()) {
-                throw make_exception<InvalidRequestException>("Cannot modify CQL3 table {} as it may break the schema. You should use cqlsh to modify CQL3 tables instead.", cf_def.name);
-            }
+            co_await t._query_state.get_client_state().has_schema_access(t._db.local(), cf_def.keyspace, cf_def.name, auth::permission::ALTER);
 
-            if (schema->is_view()) {
-                throw make_exception<InvalidRequestException>("Cannot modify Materialized View table {} as it may break the schema. "
-                                                              "You should use cqlsh to modify Materialized View tables instead.", cf_def.name);
-            }
+            co_return co_await execute_schema_command(t._query_processor.local().get_migration_manager().container(), _db, [&cf_def] (service::migration_manager& mm, replica::database& db) -> future<std::vector<mutation>> {
+                auto& cf = db.find_column_family(cf_def.keyspace, cf_def.name);
+                auto schema = cf.schema();
 
-            if (!cf.views().empty()) {
-                throw make_exception<InvalidRequestException>("Cannot modify table with Materialized Views {} as it may break the schema. "
-                                                              "You should use cqlsh to modify Materialized View tables instead.", cf_def.name);
-            }
+                if (schema->is_cql3_table()) {
+                    throw make_exception<InvalidRequestException>("Cannot modify CQL3 table {} as it may break the schema. You should use cqlsh to modify CQL3 tables instead.", cf_def.name);
+                }
 
-            auto s = schema_from_thrift(cf_def, cf_def.keyspace, schema->id());
-            if (schema->thrift().is_dynamic() != s->thrift().is_dynamic()) {
-                fail(unimplemented::cause::MIXED_CF);
-            }
-            return _query_state.get_client_state().has_schema_access(_db.local(), *schema, auth::permission::ALTER).then([this, s = std::move(s)] {
-                return _query_processor.local().get_migration_manager().announce_column_family_update(std::move(s), true, std::nullopt).then([this] {
-                    return std::string(_db.local().get_version().to_sstring());
-                });
+                if (schema->is_view()) {
+                    throw make_exception<InvalidRequestException>("Cannot modify Materialized View table {} as it may break the schema. "
+                                                                "You should use cqlsh to modify Materialized View tables instead.", cf_def.name);
+                }
+
+                if (!cf.views().empty()) {
+                    throw make_exception<InvalidRequestException>("Cannot modify table with Materialized Views {} as it may break the schema. "
+                                                                "You should use cqlsh to modify Materialized View tables instead.", cf_def.name);
+                }
+
+                auto s = schema_from_thrift(cf_def, cf_def.keyspace, schema->id());
+                if (schema->thrift().is_dynamic() != s->thrift().is_dynamic()) {
+                    fail(unimplemented::cause::MIXED_CF);
+                }
+                co_return co_await mm.prepare_column_family_update_announcement(std::move(s), true, std::vector<view_ptr>(), std::nullopt);
             });
         });
     }

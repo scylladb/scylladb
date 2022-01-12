@@ -1050,14 +1050,14 @@ future<executor::request_return_type> executor::get_records(client_state& client
     });
 }
 
-void executor::add_stream_options(const rjson::value& stream_specification, schema_builder& builder) const {
+void executor::add_stream_options(const rjson::value& stream_specification, schema_builder& builder, service::storage_proxy& sp) {
     auto stream_enabled = rjson::find(stream_specification, "StreamEnabled");
     if (!stream_enabled || !stream_enabled->IsBool()) {
         throw api_error::validation("StreamSpecification needs boolean StreamEnabled");
     }
 
     if (stream_enabled->GetBool()) {
-        auto& db = _proxy.get_db().local();
+        auto& db = sp.get_db().local();
 
         if (!db.features().cluster_supports_cdc()) {
             throw api_error::validation("StreamSpecification: streams (CDC) feature not enabled in cluster.");
@@ -1094,10 +1094,10 @@ void executor::add_stream_options(const rjson::value& stream_specification, sche
     }
 }
 
-void executor::supplement_table_stream_info(rjson::value& descr, const schema& schema) const {
+void executor::supplement_table_stream_info(rjson::value& descr, const schema& schema, service::storage_proxy& sp) {
     auto& opts = schema.cdc_options();
     if (opts.enabled()) {
-        auto& db = _proxy.get_db().local();
+        auto& db = sp.get_db().local();
         auto& cf = db.find_column_family(schema.ks_name(), cdc::log_name(schema.cf_name()));
         stream_arn arn(cf.schema()->id());
         rjson::add(descr, "LatestStreamArn", arn);

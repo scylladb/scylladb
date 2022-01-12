@@ -19,6 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/coroutine.hh>
 #include "redis/keyspace_utils.hh"
 #include "schema_builder.hh"
 #include "types.hh"
@@ -151,15 +152,17 @@ schema_ptr zsets_schema(sstring ks_name) {
 }
 
 future<> create_keyspace_if_not_exists_impl(seastar::sharded<service::migration_manager>& mm, db::config& config, int default_replication_factor) {
+    assert(this_shard_id() == 0);
     auto keyspace_replication_strategy_options = config.redis_keyspace_replication_strategy_options();
     if (!keyspace_replication_strategy_options.contains("class")) {
         keyspace_replication_strategy_options["class"] = "SimpleStrategy";
         keyspace_replication_strategy_options["replication_factor"] = fmt::format("{}", default_replication_factor);
     }
-    auto keyspace_gen = [&mm, &config, keyspace_replication_strategy_options = std::move(keyspace_replication_strategy_options)]  (sstring name) {
+    auto keyspace_gen = [&mm, &config, keyspace_replication_strategy_options = std::move(keyspace_replication_strategy_options)]  (sstring name) -> future<> {
+        auto& mml = mm.local();
         auto& proxy = service::get_local_storage_proxy();
         if (proxy.get_db().local().has_keyspace(name)) {
-            return make_ready_future<>();
+            co_return;
         }
         auto attrs = make_shared<cql3::statements::ks_prop_defs>();
         attrs->add_property(cql3::statements::ks_prop_defs::KW_DURABLE_WRITES, "true");
@@ -170,18 +173,22 @@ future<> create_keyspace_if_not_exists_impl(seastar::sharded<service::migration_
         attrs->add_property(cql3::statements::ks_prop_defs::KW_REPLICATION, replication_properties); 
         attrs->validate();
         const auto& tm = *proxy.get_token_metadata_ptr();
-        return mm.local().announce_new_keyspace(attrs->as_ks_metadata(name, tm));
+        co_return co_await mml.announce(mml.prepare_new_keyspace_announcement(attrs->as_ks_metadata(name, tm)));
     };
-    auto table_gen = [&mm] (sstring ks_name, sstring cf_name, schema_ptr schema) {
+    auto table_gen = [&mm] (sstring ks_name, sstring cf_name, schema_ptr schema) -> future<> {
+        auto& mml= mm.local();
         auto& proxy = service::get_local_storage_proxy();
         if (proxy.get_db().local().has_schema(ks_name, cf_name)) {
-            return make_ready_future<>();
+            co_return;
         }
         logger.info("Create keyspace: {}, table: {} for redis.", ks_name, cf_name);
-        return mm.local().announce_new_column_family(schema);
+        co_return co_await mml.announce(co_await mml.prepare_new_column_family_announcement(schema));
     };
+
+    co_await mm.local().schema_read_barrier();
+
     // create default databases for redis.
-    return parallel_for_each(boost::irange<unsigned>(0, config.redis_database_count()), [keyspace_gen = std::move(keyspace_gen), table_gen = std::move(table_gen)] (auto c) {
+    co_return co_await parallel_for_each(boost::irange<unsigned>(0, config.redis_database_count()), [keyspace_gen = std::move(keyspace_gen), table_gen = std::move(table_gen)] (auto c) {
         auto ks_name = fmt::format("REDIS_{}", c);
         return keyspace_gen(ks_name).then([ks_name, table_gen] {
             return when_all_succeed(

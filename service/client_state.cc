@@ -128,6 +128,11 @@ future<> service::client_state::has_schema_access(const replica::database& db, c
     co_return co_await has_access(db, s.ks_name(), {p, r});
 }
 
+future<> service::client_state::has_schema_access(const replica::database& db, const sstring& ks_name, const sstring& cf_name, auth::permission p) const {
+    auth::resource r = auth::make_data_resource(ks_name, cf_name);
+    co_return co_await has_access(db, ks_name, {p, r});
+}
+
 future<> service::client_state::has_access(const replica::database& db, const sstring& ks, auth::command_desc cmd) const {
     if (ks.empty()) {
         return make_exception_future<>(exceptions::invalid_request_exception("You have not set a keyspace for this session"));
