@@ -335,11 +335,16 @@ sstable_directory::collect_output_sstables_from_reshaping(std::vector<sstables::
     });
 }
 
-future<uint64_t> sstable_directory::reshape(compaction_manager& cm, replica::table& table, sstables::compaction_sstable_creator_fn creator, const ::io_priority_class& iop, sstables::reshape_mode mode)
+future<uint64_t> sstable_directory::reshape(compaction_manager& cm, replica::table& table, sstables::compaction_sstable_creator_fn creator, const ::io_priority_class& iop,
+                                            sstables::reshape_mode mode, sstable_filter_func_t sstable_filter)
 {
-    return do_with(uint64_t(0), [this, &cm, &table, creator = std::move(creator), iop, mode] (uint64_t & reshaped_size) mutable {
-        return repeat([this, &cm, &table, creator = std::move(creator), iop, &reshaped_size, mode] () mutable {
-            auto desc = table.get_compaction_strategy().get_reshaping_job(_unshared_local_sstables, table.schema(), iop, mode);
+    return do_with(uint64_t(0), std::move(sstable_filter), [this, &cm, &table, creator = std::move(creator), iop, mode] (uint64_t& reshaped_size, sstable_filter_func_t& filter) mutable {
+        return repeat([this, &cm, &table, creator = std::move(creator), iop, &reshaped_size, mode, &filter] () mutable {
+            auto reshape_candidates = boost::copy_range<std::vector<shared_sstable>>(_unshared_local_sstables
+                    | boost::adaptors::filtered([this, &filter] (const auto& sst) {
+                return filter(sst);
+            }));
+            auto desc = table.get_compaction_strategy().get_reshaping_job(std::move(reshape_candidates), table.schema(), iop, mode);
             if (desc.sstables.empty()) {
                 return make_ready_future<stop_iteration>(stop_iteration::yes);
             }
