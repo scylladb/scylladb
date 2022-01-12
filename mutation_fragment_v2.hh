@@ -55,6 +55,9 @@ public:
     size_t external_memory_usage(const schema& s) const {
         return _pos.external_memory_usage();
     }
+    size_t memory_usage(const schema& s) const noexcept {
+        return sizeof(range_tombstone_change) + external_memory_usage(s);
+    }
     bool equal(const schema& s, const range_tombstone_change& other) const {
         position_in_partition::equal_compare eq(s);
         return _tomb == other._tomb && eq(_pos, other._pos);
