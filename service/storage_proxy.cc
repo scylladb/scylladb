@@ -115,6 +115,7 @@
 #include "idl/uuid.dist.impl.hh"
 #include "idl/frozen_schema.dist.hh"
 #include "idl/frozen_schema.dist.impl.hh"
+#include "idl/storage_proxy.dist.hh"
 
 namespace bi = boost::intrusive;
 
@@ -244,7 +245,8 @@ public:
         auto m = _mutations[ep];
         if (m) {
             tracing::trace(tr_state, "Sending a mutation to /{}", ep);
-            return sp._messaging.send_mutation(netw::messaging_service::msg_addr{ep, 0}, timeout, *m,
+            return ser::storage_proxy_rpc_verbs::send_mutation(&sp._messaging,
+                                    netw::messaging_service::msg_addr{ep, 0}, timeout, *m,
                                     std::move(forward), utils::fb_utilities::get_broadcast_address(), this_shard_id(),
                                     response_id, tracing::make_trace_info(tr_state));
         }
@@ -290,7 +292,8 @@ public:
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state) override {
         tracing::trace(tr_state, "Sending a mutation to /{}", ep);
-        return sp._messaging.send_mutation(netw::messaging_service::msg_addr{ep, 0}, timeout, *_mutation,
+        return ser::storage_proxy_rpc_verbs::send_mutation(&sp._messaging,
+                netw::messaging_service::msg_addr{ep, 0}, timeout, *_mutation,
                 std::move(forward), utils::fb_utilities::get_broadcast_address(), this_shard_id(),
                 response_id, tracing::make_trace_info(tr_state));
     }
@@ -319,7 +322,8 @@ public:
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state) override {
         tracing::trace(tr_state, "Sending a hint to /{}", ep);
-        return sp._messaging.send_hint_mutation(netw::messaging_service::msg_addr{ep, 0}, timeout, *_mutation,
+        return ser::storage_proxy_rpc_verbs::send_hint_mutation(&sp._messaging,
+                netw::messaging_service::msg_addr{ep, 0}, timeout, *_mutation,
                 std::move(forward), utils::fb_utilities::get_broadcast_address(), this_shard_id(),
                 response_id, tracing::make_trace_info(tr_state));
     }
@@ -346,7 +350,7 @@ public:
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state) override {
         tracing::trace(tr_state, "Sending a learn to /{}", ep);
-        return sp._messaging.send_paxos_learn(netw::messaging_service::msg_addr{ep, 0}, timeout,
+        return ser::storage_proxy_rpc_verbs::send_paxos_learn(&sp._messaging, netw::messaging_service::msg_addr{ep, 0}, timeout,
                                 *_proposal, std::move(forward), utils::fb_utilities::get_broadcast_address(),
                                 this_shard_id(), response_id, tracing::make_trace_info(tr_state));
     }
@@ -970,7 +974,7 @@ future<paxos::prepare_summary> paxos_response_handler::prepare_ballot(utils::UUI
                     response = co_await paxos::paxos_state::prepare(get_local_storage_proxy(), tr_state, _schema, *_cmd, _key.key(), ballot, only_digest, da, _timeout);
                 } else {
                     tracing::trace(tr_state, "prepare_ballot: sending prepare {} to {}", ballot, peer);
-                    response = co_await _proxy->_messaging.send_paxos_prepare(peer, _timeout, *_cmd, _key.key(), ballot, only_digest, da,
+                    response = co_await ser::storage_proxy_rpc_verbs::send_paxos_prepare(&_proxy->_messaging, netw::msg_addr(peer), _timeout, *_cmd, _key.key(), ballot, only_digest, da,
                             tracing::make_trace_info(tr_state));
                 }
             } catch (...) {
@@ -1131,7 +1135,7 @@ future<bool> paxos_response_handler::accept_proposal(lw_shared_ptr<paxos::propos
                     accepted = co_await paxos::paxos_state::accept(get_local_storage_proxy(), tr_state, _schema, proposal->update.decorated_key(*_schema).token(), *proposal, _timeout);
                 } else {
                     tracing::trace(tr_state, "accept_proposal: send accept {} to {}", *proposal, peer);
-                    accepted = co_await _proxy->_messaging.send_paxos_accept(peer, _timeout, *proposal, tracing::make_trace_info(tr_state));
+                    accepted = co_await ser::storage_proxy_rpc_verbs::send_paxos_accept(&_proxy->_messaging, netw::msg_addr(peer), _timeout, *proposal, tracing::make_trace_info(tr_state));
                 }
             } catch(...) {
                 if (request_tracker.p) {
@@ -1290,7 +1294,7 @@ void paxos_response_handler::prune(utils::UUID ballot) {
             return paxos::paxos_state::prune(_schema, _key.key(), ballot, _timeout, tr_state);
         } else {
             tracing::trace(tr_state, "prune: send prune of {} to {}", ballot, peer);
-            return _proxy->_messaging.send_paxos_prune(peer, _timeout, _schema->version(), _key.key(), ballot, tracing::make_trace_info(tr_state));
+            return ser::storage_proxy_rpc_verbs::send_paxos_prune(&_proxy->_messaging, netw::msg_addr(peer), _timeout, _schema->version(), _key.key(), ballot, tracing::make_trace_info(tr_state));
         }
     }).then_wrapped([this, h = shared_from_this()] (future<> f) {
         h->_proxy->get_stats().cas_now_pruning--;
@@ -2277,7 +2281,7 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
 
             auto msg_addr = netw::messaging_service::msg_addr{ endpoint_and_mutations.first, 0 };
             tracing::trace(tr_state, "Enqueuing counter update to {}", msg_addr);
-            f = _messaging.send_counter_mutation(msg_addr, timeout, std::move(fms), cl, tracing::make_trace_info(tr_state));
+            f = ser::storage_proxy_rpc_verbs::send_counter_mutation(&_messaging, msg_addr, timeout, std::move(fms), cl, tracing::make_trace_info(tr_state));
         }
         return f.handle_exception(std::move(handle_error));
     });
@@ -3546,7 +3550,7 @@ protected:
             return _proxy->query_mutations_locally(_schema, cmd, _partition_range, timeout, _trace_state);
         } else {
             tracing::trace(_trace_state, "read_mutation_data: sending a message to /{}", ep);
-            return _proxy->_messaging.send_read_mutation_data(netw::messaging_service::msg_addr{ep, 0}, timeout, *cmd, _partition_range).then([this, ep](rpc::tuple<reconcilable_result, rpc::optional<cache_temperature>> result_and_hit_rate) {
+            return ser::storage_proxy_rpc_verbs::send_read_mutation_data(&_proxy->_messaging, netw::messaging_service::msg_addr{ep, 0}, timeout, *cmd, _partition_range).then([this, ep](rpc::tuple<reconcilable_result, rpc::optional<cache_temperature>> result_and_hit_rate) {
                 auto&& [result, hit_rate] = result_and_hit_rate;
                 tracing::trace(_trace_state, "read_mutation_data: got response from /{}", ep);
                 return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>(rpc::tuple(make_foreign(::make_lw_shared<reconcilable_result>(std::move(result))), hit_rate.value_or(cache_temperature::invalid())));
@@ -3563,7 +3567,7 @@ protected:
             return _proxy->query_result_local(_schema, _cmd, _partition_range, opts, _trace_state, timeout);
         } else {
             tracing::trace(_trace_state, "read_data: sending a message to /{}", ep);
-            return _proxy->_messaging.send_read_data(netw::messaging_service::msg_addr{ep, 0}, timeout, *_cmd, _partition_range, opts.digest_algo).then([this, ep](rpc::tuple<query::result, rpc::optional<cache_temperature>> result_hit_rate) {
+            return ser::storage_proxy_rpc_verbs::send_read_data(&_proxy->_messaging, netw::messaging_service::msg_addr{ep, 0}, timeout, *_cmd, _partition_range, opts.digest_algo).then([this, ep](rpc::tuple<query::result, rpc::optional<cache_temperature>> result_hit_rate) {
                 auto&& [result, hit_rate] = result_hit_rate;
                 tracing::trace(_trace_state, "read_data: got response from /{}", ep);
                 return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>(rpc::tuple(make_foreign(::make_lw_shared<query::result>(std::move(result))), hit_rate.value_or(cache_temperature::invalid())));
@@ -3578,7 +3582,7 @@ protected:
                         timeout, digest_algorithm(*_proxy));
         } else {
             tracing::trace(_trace_state, "read_digest: sending a message to /{}", ep);
-            return _proxy->_messaging.send_read_digest(netw::messaging_service::msg_addr{ep, 0}, timeout, *_cmd,
+            return ser::storage_proxy_rpc_verbs::send_read_digest(&_proxy->_messaging, netw::messaging_service::msg_addr{ep, 0}, timeout, *_cmd,
                         _partition_range, digest_algorithm(*_proxy)).then([this, ep] (
                     rpc::tuple<query::result_digest, rpc::optional<api::timestamp_type>, rpc::optional<cache_temperature>> digest_timestamp_hit_rate) {
                 auto&& [d, t, hit_rate] = digest_timestamp_hit_rate;
@@ -4898,12 +4902,12 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname) {
 
     auto all_endpoints = _gossiper.get_live_token_owners();
     auto& ms = _messaging;
-    auto timeout = std::chrono::milliseconds(_db.local().get_config().truncate_request_timeout_in_ms());
+    auto timeout = clock_type::now() + std::chrono::milliseconds(_db.local().get_config().truncate_request_timeout_in_ms());
 
     slogger.trace("Enqueuing truncate messages to hosts {}", all_endpoints);
 
     return parallel_for_each(all_endpoints, [keyspace, cfname, &ms, timeout](auto ep) {
-        return ms.send_truncate(netw::messaging_service::msg_addr{ep, 0}, timeout, keyspace, cfname);
+        return ser::storage_proxy_rpc_verbs::send_truncate(&ms, netw::messaging_service::msg_addr{ep, 0}, timeout, keyspace, cfname);
     }).handle_exception([cfname](auto ep) {
        try {
            std::rethrow_exception(ep);
@@ -4918,7 +4922,7 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname) {
 
 void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
     auto& ms = _messaging;
-    ms.register_counter_mutation([&ms, mm] (const rpc::client_info& cinfo, rpc::opt_time_point t, std::vector<frozen_mutation> fms, db::consistency_level cl, std::optional<tracing::trace_info> trace_info) {
+    ser::storage_proxy_rpc_verbs::register_counter_mutation(&ms, [&ms, mm] (const rpc::client_info& cinfo, rpc::opt_time_point t, std::vector<frozen_mutation> fms, db::consistency_level cl, std::optional<tracing::trace_info> trace_info) {
         auto src_addr = netw::messaging_service::get_source(cinfo);
 
         tracing::trace_state_ptr trace_state_ptr;
@@ -4944,7 +4948,7 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
     });
 
     static auto handle_write = [] (netw::messaging_service::msg_addr src_addr, service::migration_manager& mm, rpc::opt_time_point t,
-                      utils::UUID schema_version, auto in, std::vector<gms::inet_address> forward, gms::inet_address reply_to,
+                      utils::UUID schema_version, auto in, inet_address_vector_replica_set forward, gms::inet_address reply_to,
                       unsigned shard, storage_proxy::response_id_type response_id, std::optional<tracing::trace_info> trace_info,
                       auto&& apply_fn, auto&& forward_fn) {
         tracing::trace_state_ptr trace_state_ptr;
@@ -4986,7 +4990,7 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
                     // Usually we will return immediately, since this work only involves appending data to the connection
                     // send buffer.
                     tracing::trace(trace_state_ptr, "Sending mutation_done to /{}", reply_to);
-                    return p->_messaging.send_mutation_done(
+                    return ser::storage_proxy_rpc_verbs::send_mutation_done(&p->_messaging,
                             netw::messaging_service::msg_addr{reply_to, shard},
                             shard,
                             response_id,
@@ -5025,7 +5029,7 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
                 auto fut = make_ready_future<seastar::rpc::no_wait_type>(netw::messaging_service::no_wait());
                 if (errors) {
                     tracing::trace(trace_state_ptr, "Sending mutation_failure with {} failures to /{}", errors, reply_to);
-                    fut = p->_messaging.send_mutation_failed(
+                    fut = ser::storage_proxy_rpc_verbs::send_mutation_failed(&p->_messaging,
                             netw::messaging_service::msg_addr{reply_to, shard},
                             shard,
                             response_id,
@@ -5042,7 +5046,7 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
         });
     };
 
-    auto receive_mutation_handler = [] (shared_ptr<service::migration_manager> mm, smp_service_group smp_grp, const rpc::client_info& cinfo, rpc::opt_time_point t, frozen_mutation in, std::vector<gms::inet_address> forward,
+    auto receive_mutation_handler = [] (shared_ptr<service::migration_manager> mm, smp_service_group smp_grp, const rpc::client_info& cinfo, rpc::opt_time_point t, frozen_mutation in, inet_address_vector_replica_set forward,
             gms::inet_address reply_to, unsigned shard, storage_proxy::response_id_type response_id, rpc::optional<std::optional<tracing::trace_info>> trace_info) {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = netw::messaging_service::get_source(cinfo);
@@ -5057,14 +5061,15 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
                 /* forward_fn */ [] (shared_ptr<storage_proxy>& p, netw::messaging_service::msg_addr addr, clock_type::time_point timeout, const frozen_mutation& m,
                         gms::inet_address reply_to, unsigned shard, response_id_type response_id,
                         std::optional<tracing::trace_info> trace_info) {
-                    return p->_messaging.send_mutation(addr, timeout, m, {}, reply_to, shard, response_id, std::move(trace_info));
+                    return ser::storage_proxy_rpc_verbs::send_mutation(&p->_messaging,
+                                            addr, timeout, m, {}, reply_to, shard, response_id, std::move(trace_info));
                 });
     };
-    ms.register_mutation(std::bind_front<>(receive_mutation_handler, mm, _write_smp_service_group));
-    ms.register_hint_mutation(std::bind_front<>(receive_mutation_handler, mm, _hints_write_smp_service_group));
+    ser::storage_proxy_rpc_verbs::register_mutation(&ms, std::bind_front<>(receive_mutation_handler, mm, _write_smp_service_group));
+    ser::storage_proxy_rpc_verbs::register_hint_mutation(&ms, std::bind_front<>(receive_mutation_handler, mm, _hints_write_smp_service_group));
 
-    ms.register_paxos_learn([this, mm] (const rpc::client_info& cinfo, rpc::opt_time_point t, paxos::proposal decision,
-            std::vector<gms::inet_address> forward, gms::inet_address reply_to, unsigned shard,
+    ser::storage_proxy_rpc_verbs::register_paxos_learn(&ms, [this, mm] (const rpc::client_info& cinfo, rpc::opt_time_point t, paxos::proposal decision,
+            inet_address_vector_replica_set forward, gms::inet_address reply_to, unsigned shard,
             storage_proxy::response_id_type response_id, std::optional<tracing::trace_info> trace_info) {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = netw::messaging_service::get_source(cinfo);
@@ -5079,10 +5084,10 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
               /* forward_fn */ [] (shared_ptr<storage_proxy>& p, netw::messaging_service::msg_addr addr, clock_type::time_point timeout, const paxos::proposal& m,
                       gms::inet_address reply_to, unsigned shard, response_id_type response_id,
                       std::optional<tracing::trace_info> trace_info) {
-                    return p->_messaging.send_paxos_learn(addr, timeout, m, {}, reply_to, shard, response_id, std::move(trace_info));
+                    return ser::storage_proxy_rpc_verbs::send_paxos_learn(&p->_messaging, addr, timeout, m, {}, reply_to, shard, response_id, std::move(trace_info));
               });
     });
-    ms.register_mutation_done([this] (const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id, rpc::optional<db::view::update_backlog> backlog) {
+    ser::storage_proxy_rpc_verbs::register_mutation_done(&ms, [this] (const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id, rpc::optional<db::view::update_backlog> backlog) {
         auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         get_stats().replica_cross_shard_ops += shard != this_shard_id();
         return container().invoke_on(shard, _write_ack_smp_service_group, [from, response_id, backlog = std::move(backlog)] (storage_proxy& sp) mutable {
@@ -5090,7 +5095,7 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
             return netw::messaging_service::no_wait();
         });
     });
-    ms.register_mutation_failed([this] (const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id, size_t num_failed, rpc::optional<db::view::update_backlog> backlog) {
+    ser::storage_proxy_rpc_verbs::register_mutation_failed(&ms, [this] (const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id, size_t num_failed, rpc::optional<db::view::update_backlog> backlog) {
         auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         get_stats().replica_cross_shard_ops += shard != this_shard_id();
         return container().invoke_on(shard, _write_ack_smp_service_group, [from, response_id, num_failed, backlog = std::move(backlog)] (storage_proxy& sp) mutable {
@@ -5098,7 +5103,7 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
             return netw::messaging_service::no_wait();
         });
     });
-    ms.register_read_data([mm] (const rpc::client_info& cinfo, rpc::opt_time_point t, query::read_command cmd, ::compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> oda) {
+    ser::storage_proxy_rpc_verbs::register_read_data(&ms, [mm] (const rpc::client_info& cinfo, rpc::opt_time_point t, query::read_command cmd, ::compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> oda) {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = netw::messaging_service::get_source(cinfo);
         if (cmd.trace_info) {
@@ -5131,7 +5136,7 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
             });
         });
     });
-    ms.register_read_mutation_data([mm] (const rpc::client_info& cinfo, rpc::opt_time_point t, query::read_command cmd, ::compat::wrapping_partition_range pr) {
+    ser::storage_proxy_rpc_verbs::register_read_mutation_data(&ms, [mm] (const rpc::client_info& cinfo, rpc::opt_time_point t, query::read_command cmd, ::compat::wrapping_partition_range pr) {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = netw::messaging_service::get_source(cinfo);
         if (cmd.trace_info) {
@@ -5162,7 +5167,7 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
             });
         });
     });
-    ms.register_read_digest([mm] (const rpc::client_info& cinfo, rpc::opt_time_point t, query::read_command cmd, ::compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> oda) {
+    ser::storage_proxy_rpc_verbs::register_read_digest(&ms, [mm] (const rpc::client_info& cinfo, rpc::opt_time_point t, query::read_command cmd, ::compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> oda) {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = netw::messaging_service::get_source(cinfo);
         if (cmd.trace_info) {
@@ -5190,7 +5195,7 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
             });
         });
     });
-    ms.register_truncate([this](sstring ksname, sstring cfname) {
+    ser::storage_proxy_rpc_verbs::register_truncate(&ms, [this](rpc::opt_time_point timeout, sstring ksname, sstring cfname) {
         return do_with(utils::make_joinpoint([] { return db_clock::now();}),
                         [this, ksname, cfname](auto& tsf) {
             return container().invoke_on_all(_write_smp_service_group, [ksname, cfname, &tsf](storage_proxy& sp) {
@@ -5200,7 +5205,7 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
     });
 
     // Register PAXOS verb handlers
-    ms.register_paxos_prepare([this, mm] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
+    ser::storage_proxy_rpc_verbs::register_paxos_prepare(&ms, [this, mm] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
                 query::read_command cmd, partition_key key, utils::UUID ballot, bool only_digest, query::digest_algorithm da,
                 std::optional<tracing::trace_info> trace_info) {
         auto src_addr = netw::messaging_service::get_source(cinfo);
@@ -5232,7 +5237,7 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
             });
         });
     });
-    ms.register_paxos_accept([this, mm] (const rpc::client_info& cinfo, rpc::opt_time_point timeout, paxos::proposal proposal,
+    ser::storage_proxy_rpc_verbs::register_paxos_accept(&ms, [this, mm] (const rpc::client_info& cinfo, rpc::opt_time_point timeout, paxos::proposal proposal,
             std::optional<tracing::trace_info> trace_info) {
         auto src_addr = netw::messaging_service::get_source(cinfo);
         auto src_ip = src_addr.addr;
@@ -5263,7 +5268,7 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
 
         return f;
     });
-    ms.register_paxos_prune([this, mm] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
+    ser::storage_proxy_rpc_verbs::register_paxos_prune(&ms, [this, mm] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
                 utils::UUID schema_id, partition_key key, utils::UUID ballot, std::optional<tracing::trace_info> trace_info) {
         static thread_local uint16_t pruning = 0;
         static constexpr uint16_t pruning_limit = 1000; // since PRUNE verb is one way replica side has its own queue limit
@@ -5304,22 +5309,7 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
 
 future<> storage_proxy::uninit_messaging_service() {
     auto& ms = _messaging;
-    return when_all_succeed(
-        ms.unregister_counter_mutation(),
-        ms.unregister_mutation(),
-        ms.unregister_hint_mutation(),
-        ms.unregister_mutation_done(),
-        ms.unregister_mutation_failed(),
-        ms.unregister_read_data(),
-        ms.unregister_read_mutation_data(),
-        ms.unregister_read_digest(),
-        ms.unregister_truncate(),
-        ms.unregister_paxos_prepare(),
-        ms.unregister_paxos_accept(),
-        ms.unregister_paxos_learn(),
-        ms.unregister_paxos_prune()
-    ).discard_result();
-
+    return ser::storage_proxy_rpc_verbs::unregister(&ms);
 }
 
 future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>

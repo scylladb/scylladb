@@ -458,36 +458,6 @@ public:
     future<rpc::tuple<std::vector<frozen_mutation>, rpc::optional<std::vector<canonical_mutation>>>> send_migration_request(msg_addr id,
             schema_pull_options options);
 
-    // FIXME: response_id_type is an alias in service::storage_proxy::response_id_type
-    using response_id_type = uint64_t;
-    // Wrapper for MUTATION
-    void register_mutation(std::function<future<rpc::no_wait_type> (const rpc::client_info&, rpc::opt_time_point, frozen_mutation fm, std::vector<inet_address> forward,
-        inet_address reply_to, unsigned shard, response_id_type response_id, rpc::optional<std::optional<tracing::trace_info>> trace_info)>&& func);
-    future<> unregister_mutation();
-    future<> send_mutation(msg_addr id, clock_type::time_point timeout, const frozen_mutation& fm, inet_address_vector_replica_set forward,
-        inet_address reply_to, unsigned shard, response_id_type response_id, std::optional<tracing::trace_info> trace_info = std::nullopt);
-
-    // Wrapper for COUNTER_MUTATION
-    void register_counter_mutation(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, std::vector<frozen_mutation> fms, db::consistency_level cl, std::optional<tracing::trace_info> trace_info)>&& func);
-    future<> unregister_counter_mutation();
-    future<> send_counter_mutation(msg_addr id, clock_type::time_point timeout, std::vector<frozen_mutation> fms, db::consistency_level cl, std::optional<tracing::trace_info> trace_info = std::nullopt);
-
-    // Wrapper for MUTATION_DONE
-    void register_mutation_done(std::function<future<rpc::no_wait_type> (const rpc::client_info& cinfo, unsigned shard, response_id_type response_id, rpc::optional<db::view::update_backlog> backlog)>&& func);
-    future<> unregister_mutation_done();
-    future<> send_mutation_done(msg_addr id, unsigned shard, response_id_type response_id, db::view::update_backlog backlog);
-
-    // Wrapper for MUTATION_FAILED
-    void register_mutation_failed(std::function<future<rpc::no_wait_type> (const rpc::client_info& cinfo, unsigned shard, response_id_type response_id, size_t num_failed, rpc::optional<db::view::update_backlog> backlog)>&& func);
-    future<> unregister_mutation_failed();
-    future<> send_mutation_failed(msg_addr id, unsigned shard, response_id_type response_id, size_t num_failed, db::view::update_backlog backlog);
-
-    // Wrapper for READ_DATA
-    // Note: WTH is future<foreign_ptr<lw_shared_ptr<query::result>>
-    void register_read_data(std::function<future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> (const rpc::client_info&, rpc::opt_time_point timeout, query::read_command cmd, ::compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> digest)>&& func);
-    future<> unregister_read_data();
-    future<rpc::tuple<query::result, rpc::optional<cache_temperature>>> send_read_data(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const dht::partition_range& pr, query::digest_algorithm da);
-
     // Wrapper for GET_SCHEMA_VERSION
     void register_get_schema_version(std::function<future<frozen_schema>(unsigned, table_schema_version)>&& func);
     future<> unregister_get_schema_version();
@@ -498,69 +468,10 @@ public:
     future<> unregister_schema_check();
     future<utils::UUID> send_schema_check(msg_addr);
 
-    // Wrapper for READ_MUTATION_DATA
-    void register_read_mutation_data(std::function<future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> (const rpc::client_info&, rpc::opt_time_point timeout, query::read_command cmd, ::compat::wrapping_partition_range pr)>&& func);
-    future<> unregister_read_mutation_data();
-    future<rpc::tuple<reconcilable_result, rpc::optional<cache_temperature>>> send_read_mutation_data(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const dht::partition_range& pr);
-
-    // Wrapper for READ_DIGEST
-    void register_read_digest(std::function<future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>> (const rpc::client_info&, rpc::opt_time_point timeout, query::read_command cmd, ::compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> digest)>&& func);
-    future<> unregister_read_digest();
-    future<rpc::tuple<query::result_digest, rpc::optional<api::timestamp_type>, rpc::optional<cache_temperature>>> send_read_digest(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const dht::partition_range& pr, query::digest_algorithm da);
-
-    // Wrapper for TRUNCATE
-    void register_truncate(std::function<future<>(sstring, sstring)>&& func);
-    future<> unregister_truncate();
-    future<> send_truncate(msg_addr, std::chrono::milliseconds, sstring, sstring);
-
     // Wrapper for REPLICATION_FINISHED verb
     void register_replication_finished(std::function<future<> (inet_address from)>&& func);
     future<> unregister_replication_finished();
     future<> send_replication_finished(msg_addr id, inet_address from);
-
-    // Wrappers for PAXOS verbs
-    void register_paxos_prepare(std::function<future<foreign_ptr<std::unique_ptr<service::paxos::prepare_response>>>(
-                const rpc::client_info&, rpc::opt_time_point, query::read_command cmd, partition_key key, utils::UUID ballot,
-                bool only_digest, query::digest_algorithm da, std::optional<tracing::trace_info>)>&& func);
-
-    future<> unregister_paxos_prepare();
-
-    future<service::paxos::prepare_response> send_paxos_prepare(
-            gms::inet_address peer, clock_type::time_point timeout, const query::read_command& cmd,
-            const partition_key& key, utils::UUID ballot, bool only_digest, query::digest_algorithm da,
-            std::optional<tracing::trace_info> trace_info);
-
-    void register_paxos_accept(std::function<future<bool>(const rpc::client_info&, rpc::opt_time_point,
-            service::paxos::proposal proposal, std::optional<tracing::trace_info>)>&& func);
-
-    future<> unregister_paxos_accept();
-
-    future<bool> send_paxos_accept(gms::inet_address peer, clock_type::time_point timeout,
-            const service::paxos::proposal& proposal, std::optional<tracing::trace_info> trace_info);
-
-    void register_paxos_learn(std::function<future<rpc::no_wait_type> (const rpc::client_info&,
-                rpc::opt_time_point, service::paxos::proposal decision, std::vector<inet_address> forward, inet_address reply_to,
-                unsigned shard, response_id_type response_id, std::optional<tracing::trace_info> trace_info)>&& func);
-
-    future<> unregister_paxos_learn();
-
-    future<> send_paxos_learn(msg_addr id, clock_type::time_point timeout, const service::paxos::proposal& decision,
-            inet_address_vector_replica_set forward, inet_address reply_to, unsigned shard, response_id_type response_id,
-            std::optional<tracing::trace_info> trace_info = std::nullopt);
-
-    void register_paxos_prune(std::function<future<rpc::no_wait_type>(const rpc::client_info&, rpc::opt_time_point, UUID schema_id, partition_key key,
-            utils::UUID ballot, std::optional<tracing::trace_info>)>&& func);
-
-    future<> unregister_paxos_prune();
-
-    future<> send_paxos_prune(gms::inet_address peer, clock_type::time_point timeout, UUID schema_id, const partition_key& key,
-            utils::UUID ballot, std::optional<tracing::trace_info> trace_info);
-
-    void register_hint_mutation(std::function<future<rpc::no_wait_type> (const rpc::client_info&, rpc::opt_time_point, frozen_mutation fm, std::vector<inet_address> forward,
-        inet_address reply_to, unsigned shard, response_id_type response_id, rpc::optional<std::optional<tracing::trace_info>> trace_info)>&& func);
-    future<> unregister_hint_mutation();
-    future<> send_hint_mutation(msg_addr id, clock_type::time_point timeout, const frozen_mutation& fm, inet_address_vector_replica_set forward,
-        inet_address reply_to, unsigned shard, response_id_type response_id, std::optional<tracing::trace_info> trace_info = std::nullopt);
 
     // RAFT verbs
     void register_raft_send_snapshot(std::function<future<raft::snapshot_reply> (const rpc::client_info&, rpc::opt_time_point, raft::group_id, raft::server_id from_id, raft::server_id dst_id, raft::install_snapshot)>&& func);
