@@ -2309,7 +2309,7 @@ future<mutation_opt> counter_write_query(schema_ptr s, const mutation_source& so
     // do_with() doesn't support immovable objects
     auto r_a_r = std::make_unique<range_and_reader>(s, source, std::move(permit), dk, slice, std::move(trace_ptr));
     auto cwqrb = counter_write_query_result_builder(*s);
-    auto cfq = make_stable_flattened_mutations_consumer<compact_for_query<emit_only_live_rows::yes, counter_write_query_result_builder>>(
+    auto cfq = compact_for_query<emit_only_live_rows::yes, counter_write_query_result_builder>(
             *s, gc_clock::now(), slice, query::max_rows, query::max_partitions, std::move(cwqrb));
     auto f = r_a_r->reader.consume(std::move(cfq));
     return f.finally([r_a_r = std::move(r_a_r)] {

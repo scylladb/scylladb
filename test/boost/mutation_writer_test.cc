@@ -191,6 +191,8 @@ class test_bucket_writer {
     mutation_opt _current_mutation;
     bool _is_first_mutation = true;
 
+    range_tombstone_change _current_rtc;
+
     size_t _throw_after;
     size_t _mutation_consumed = 0;
 
@@ -246,8 +248,10 @@ private:
         }
         verify_row_bucket_id(cr.cells(), column_kind::regular_column);
     }
-    void verify_range_tombstone(const range_tombstone& rt) {
-        check_timestamp(rt.tomb.timestamp);
+    void verify_range_tombstone_change(const range_tombstone_change& rtc) {
+        if (rtc.tombstone()) {
+            check_timestamp(rtc.tombstone().timestamp);
+        }
     }
 
     void maybe_throw() {
@@ -263,6 +267,7 @@ public:
         , _permit(std::move(permit))
         , _classify(std::move(classify))
         , _buckets(buckets)
+        , _current_rtc(position_in_partition::before_all_clustered_rows(), tombstone())
         , _throw_after(throw_after)
     { }
     void consume_new_partition(const dht::decorated_key& dk) {
@@ -290,17 +295,22 @@ public:
         _current_mutation->apply(mutation_fragment(*_schema, _permit, std::move(cr)));
         return stop_iteration::no;
     }
-    stop_iteration consume(range_tombstone&& rt) {
+    stop_iteration consume(range_tombstone_change&& rtc) {
         maybe_throw();
         BOOST_REQUIRE(_current_mutation);
-        verify_range_tombstone(rt);
-        _current_mutation->apply(mutation_fragment(*_schema, _permit, std::move(rt)));
+        verify_range_tombstone_change(rtc);
+        if (_current_rtc.tombstone()) {
+            auto rt = range_tombstone(_current_rtc.position(), position_in_partition_view::before_key(rtc.position()), _current_rtc.tombstone());
+            _current_mutation->apply(mutation_fragment(*_schema, _permit, std::move(rt)));
+        }
+        _current_rtc = std::move(rtc);
         return stop_iteration::no;
     }
     stop_iteration consume_end_of_partition() {
         maybe_throw();
         BOOST_REQUIRE(_current_mutation);
         BOOST_REQUIRE(_bucket_id);
+        BOOST_REQUIRE(!_current_rtc.tombstone());
         auto& bucket = _buckets[*_bucket_id];
 
         if (_is_first_mutation) {
@@ -352,13 +362,13 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer) {
 
     std::unordered_map<int64_t, std::vector<mutation>> buckets;
 
-    auto consumer = [&] (flat_mutation_reader bucket_reader) {
-        return with_closeable(std::move(bucket_reader), [&] (flat_mutation_reader& rd) {
+    auto consumer = [&] (flat_mutation_reader_v2 bucket_reader) {
+        return with_closeable(std::move(bucket_reader), [&] (flat_mutation_reader_v2& rd) {
             return rd.consume(test_bucket_writer(random_schema.schema(), rd.permit(), classify_fn, buckets));
         });
     };
 
-    segregate_by_timestamp(make_flat_mutation_reader_from_mutations(random_schema.schema(), semaphore.make_permit(), muts), classify_fn, std::move(consumer)).get();
+    segregate_by_timestamp(make_flat_mutation_reader_from_mutations_v2(random_schema.schema(), semaphore.make_permit(), muts), classify_fn, std::move(consumer)).get();
 
     testlog.debug("Data split into {} buckets: {}", buckets.size(), boost::copy_range<std::vector<int64_t>>(buckets | boost::adaptors::map_keys));
 
@@ -422,14 +432,14 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer_abort) {
 
     int throw_after = tests::random::get_int(muts.size() - 1);
     testlog.info("Will raise exception after {}/{} mutations", throw_after, muts.size());
-    auto consumer = [&] (flat_mutation_reader bucket_reader) {
-        return with_closeable(std::move(bucket_reader), [&] (flat_mutation_reader& rd) {
+    auto consumer = [&] (flat_mutation_reader_v2 bucket_reader) {
+        return with_closeable(std::move(bucket_reader), [&] (flat_mutation_reader_v2& rd) {
             return rd.consume(test_bucket_writer(random_schema.schema(), rd.permit(), classify_fn, buckets, throw_after));
         });
     };
 
     try {
-        segregate_by_timestamp(make_flat_mutation_reader_from_mutations(random_schema.schema(), semaphore.make_permit(), muts), classify_fn, std::move(consumer)).get();
+        segregate_by_timestamp(make_flat_mutation_reader_from_mutations_v2(random_schema.schema(), semaphore.make_permit(), muts), classify_fn, std::move(consumer)).get();
     } catch (const test_bucket_writer::expected_exception&) {
         BOOST_TEST_PASSPOINT();
     } catch (const seastar::broken_promise&) {

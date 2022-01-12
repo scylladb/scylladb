@@ -31,6 +31,6 @@ namespace mutation_writer {
 // manner. This is useful, for instance, in the resharding process where a user changes
 // the amount of CPU assigned to Scylla and we have to rewrite the SSTables to their new
 // owners.
-future<> segregate_by_shard(flat_mutation_reader producer, reader_consumer consumer);
+future<> segregate_by_shard(flat_mutation_reader_v2 producer, reader_consumer_v2 consumer);
 
 } // namespace mutation_writer

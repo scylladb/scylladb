@@ -47,7 +47,7 @@ std::function<future<> (flat_mutation_reader)> make_streaming_consumer(sstring o
             auto metadata = mutation_source_metadata{};
             auto& cs = cf->get_compaction_strategy();
             const auto adjusted_estimated_partitions = cs.adjust_partition_estimate(metadata, estimated_partitions);
-            auto make_interposer_consumer = [&cs, offstrategy] (const mutation_source_metadata& ms_meta, reader_consumer end_consumer) mutable {
+            auto make_interposer_consumer = [&cs, offstrategy] (const mutation_source_metadata& ms_meta, reader_consumer_v2 end_consumer) mutable {
                 // postpone data segregation to off-strategy compaction if enabled
                 if (offstrategy) {
                     return end_consumer;
@@ -56,7 +56,7 @@ std::function<future<> (flat_mutation_reader)> make_streaming_consumer(sstring o
             };
 
             auto consumer = make_interposer_consumer(metadata,
-                    [cf = std::move(cf), adjusted_estimated_partitions, use_view_update_path, &vug, origin = std::move(origin), offstrategy, reason] (flat_mutation_reader reader) {
+                    [cf = std::move(cf), adjusted_estimated_partitions, use_view_update_path, &vug, origin = std::move(origin), offstrategy, reason] (flat_mutation_reader_v2 reader) {
                 sstables::shared_sstable sst;
                 try {
                     sst = use_view_update_path ? cf->make_streaming_staging_sstable() : cf->make_streaming_sstable_for_write();
@@ -68,7 +68,7 @@ std::function<future<> (flat_mutation_reader)> make_streaming_consumer(sstring o
                 schema_ptr s = reader.schema();
                 auto& pc = service::get_local_streaming_priority();
 
-                return sst->write_components(std::move(reader), adjusted_estimated_partitions, s,
+                return sst->write_components(downgrade_to_v1(std::move(reader)), adjusted_estimated_partitions, s,
                                              cf->get_sstables_manager().configure_writer(origin),
                                              encoding_stats{}, pc).then([sst] {
                     return sst->open_data();
@@ -86,7 +86,7 @@ std::function<future<> (flat_mutation_reader)> make_streaming_consumer(sstring o
                     return vug.local().register_staging_sstable(sst, std::move(cf));
                 });
             });
-            co_return co_await consumer(std::move(reader));
+            co_return co_await consumer(upgrade_to_v2(std::move(reader)));
         } catch (...) {
             ex = std::current_exception();
         }

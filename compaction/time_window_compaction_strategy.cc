@@ -123,12 +123,12 @@ uint64_t time_window_compaction_strategy::adjust_partition_estimate(const mutati
     return partition_estimate / std::max(1UL, uint64_t(estimated_window_count));
 }
 
-reader_consumer time_window_compaction_strategy::make_interposer_consumer(const mutation_source_metadata& ms_meta, reader_consumer end_consumer) {
+reader_consumer_v2 time_window_compaction_strategy::make_interposer_consumer(const mutation_source_metadata& ms_meta, reader_consumer_v2 end_consumer) {
     if (ms_meta.min_timestamp && ms_meta.max_timestamp
             && get_window_for(_options, *ms_meta.min_timestamp) == get_window_for(_options, *ms_meta.max_timestamp)) {
         return end_consumer;
     }
-    return [options = _options, end_consumer = std::move(end_consumer)] (flat_mutation_reader rd) mutable -> future<> {
+    return [options = _options, end_consumer = std::move(end_consumer)] (flat_mutation_reader_v2 rd) mutable -> future<> {
         return mutation_writer::segregate_by_timestamp(
                 std::move(rd),
                 classify_by_timestamp(std::move(options)),

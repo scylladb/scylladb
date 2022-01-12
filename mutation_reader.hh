@@ -359,26 +359,6 @@ snapshot_source make_empty_snapshot_source();
 
 using mutation_source_opt = optimized_optional<mutation_source>;
 
-// Adapts a non-movable FlattenedConsumer to a movable one.
-template<typename FlattenedConsumer>
-class stable_flattened_mutations_consumer {
-    std::unique_ptr<FlattenedConsumer> _ptr;
-public:
-    stable_flattened_mutations_consumer(std::unique_ptr<FlattenedConsumer> ptr) : _ptr(std::move(ptr)) {}
-    auto consume_new_partition(const dht::decorated_key& dk) { return _ptr->consume_new_partition(dk); }
-    auto consume(tombstone t) { return _ptr->consume(t); }
-    auto consume(static_row&& sr) { return _ptr->consume(std::move(sr)); }
-    auto consume(clustering_row&& cr) { return _ptr->consume(std::move(cr)); }
-    auto consume(range_tombstone&& rt) { return _ptr->consume(std::move(rt)); }
-    auto consume_end_of_partition() { return _ptr->consume_end_of_partition(); }
-    auto consume_end_of_stream() { return _ptr->consume_end_of_stream(); }
-};
-
-template<typename FlattenedConsumer, typename... Args>
-stable_flattened_mutations_consumer<FlattenedConsumer> make_stable_flattened_mutations_consumer(Args&&... args) {
-    return { std::make_unique<FlattenedConsumer>(std::forward<Args>(args)...) };
-}
-
 /// Make a foreign_reader.
 ///
 /// foreign_reader is a local representant of a reader located on a remote
@@ -799,6 +779,51 @@ public:
 };
 
 std::pair<flat_mutation_reader, queue_reader_handle> make_queue_reader(schema_ptr s, reader_permit permit);
+
+class queue_reader_v2;
+
+/// Calls to different methods cannot overlap!
+/// The handle can be used only while the reader is still alive. Once
+/// `push_end_of_stream()` is called, the reader and the handle can be destroyed
+/// in any order. The reader can be destroyed at any time.
+class queue_reader_handle_v2 {
+    friend std::pair<flat_mutation_reader_v2, queue_reader_handle_v2> make_queue_reader_v2(schema_ptr, reader_permit);
+    friend class queue_reader_v2;
+
+private:
+    queue_reader_v2* _reader = nullptr;
+    std::exception_ptr _ex;
+
+private:
+    explicit queue_reader_handle_v2(queue_reader_v2& reader) noexcept;
+
+    void abandon() noexcept;
+
+public:
+    queue_reader_handle_v2(queue_reader_handle_v2&& o) noexcept;
+    ~queue_reader_handle_v2();
+    queue_reader_handle_v2& operator=(queue_reader_handle_v2&& o);
+
+    future<> push(mutation_fragment_v2 mf);
+
+    /// Terminate the queue.
+    ///
+    /// The reader will be set to EOS. The handle cannot be used anymore.
+    void push_end_of_stream();
+
+    /// Aborts the queue.
+    ///
+    /// All future operations on the handle or the reader will raise `ep`.
+    void abort(std::exception_ptr ep);
+
+    /// Checks if the queue is already terminated with either a success or failure (abort)
+    bool is_terminated() const;
+
+    /// Get the stored exception, if any
+    std::exception_ptr get_exception() const noexcept;
+};
+
+std::pair<flat_mutation_reader_v2, queue_reader_handle_v2> make_queue_reader_v2(schema_ptr s, reader_permit permit);
 
 /// Creates a compacting reader.
 ///
