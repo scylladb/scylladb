@@ -3137,7 +3137,7 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_consume) {
     testlog.info("Forward");
     {
         for (const auto& mut : muts) {
-            mutation_rebuilder rebuilder(forward_schema);
+            mutation_rebuilder_v2 rebuilder(forward_schema);
             auto rebuilt_mut = *mutation(mut).consume(rebuilder, consume_in_reverse::no).result;
             assert_that(std::move(rebuilt_mut)).is_equal_to(mut);
         }
@@ -3145,7 +3145,7 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_consume) {
     testlog.info("Legacy half reverse");
     {
         for (const auto& mut : muts) {
-            mutation_rebuilder rebuilder(forward_schema);
+            mutation_rebuilder_v2 rebuilder(forward_schema);
             auto rebuilt_mut = *mutation(mut).consume(rebuilder, consume_in_reverse::legacy_half_reverse).result;
             assert_that(std::move(rebuilt_mut)).is_equal_to(mut);
         }
@@ -3153,7 +3153,7 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_consume) {
     testlog.info("Reverse");
     {
         for (const auto& mut : muts) {
-            mutation_rebuilder rebuilder(reverse_schema);
+            mutation_rebuilder_v2 rebuilder(reverse_schema);
             auto rebuilt_mut = *mutation(mut).consume(rebuilder, consume_in_reverse::yes).result;
             assert_that(reverse(std::move(rebuilt_mut))).is_equal_to(mut);
         }
@@ -3188,23 +3188,23 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_consume_position_monotonicity) {
         explicit validating_consumer(const schema& s) : _validator(s) { }
 
         void consume_new_partition(const dht::decorated_key&) {
-            BOOST_REQUIRE(_validator(mutation_fragment::kind::partition_start, position_in_partition_view(position_in_partition_view::partition_start_tag_t{})));
+            BOOST_REQUIRE(_validator(mutation_fragment_v2::kind::partition_start, position_in_partition_view(position_in_partition_view::partition_start_tag_t{})));
         }
         void consume(tombstone) { }
         stop_iteration consume(static_row&& sr) {
-            BOOST_REQUIRE(_validator(mutation_fragment::kind::static_row, sr.position()));
+            BOOST_REQUIRE(_validator(mutation_fragment_v2::kind::static_row, sr.position()));
             return stop_iteration::no;
         }
         stop_iteration consume(clustering_row&& cr) {
-            BOOST_REQUIRE(_validator(mutation_fragment::kind::clustering_row, cr.position()));
+            BOOST_REQUIRE(_validator(mutation_fragment_v2::kind::clustering_row, cr.position()));
             return stop_iteration::no;
         }
-        stop_iteration consume(range_tombstone&& rt) {
-            BOOST_REQUIRE(_validator(mutation_fragment::kind::range_tombstone, rt.position()));
+        stop_iteration consume(range_tombstone_change&& rtc) {
+            BOOST_REQUIRE(_validator(mutation_fragment_v2::kind::range_tombstone_change, rtc.position()));
             return stop_iteration::no;
         }
         stop_iteration consume_end_of_partition() {
-            BOOST_REQUIRE(_validator(mutation_fragment::kind::partition_end, position_in_partition_view(position_in_partition_view::end_of_partition_tag_t{})));
+            BOOST_REQUIRE(_validator(mutation_fragment_v2::kind::partition_end, position_in_partition_view(position_in_partition_view::end_of_partition_tag_t{})));
             return stop_iteration::no;
         }
         void consume_end_of_stream() {
