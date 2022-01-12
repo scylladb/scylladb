@@ -869,7 +869,8 @@ public:
         });
     }
 
-    static future<std::string> execute_schema_command(distributed<service::migration_manager>& dmm, distributed<replica::database>& db, std::function<future<std::vector<mutation>>(service::migration_manager&, replica::database&)> ddl) {
+    future<std::string> execute_schema_command(std::function<future<std::vector<mutation>>(service::migration_manager&, replica::database&)> ddl) {
+        distributed<service::migration_manager>& dmm = _query_processor.local().get_migration_manager().container();
         auto func = [ddl, &dmm] (replica::database& db) -> future<std::string> {
             auto& mm = dmm.local();
 
@@ -879,7 +880,7 @@ public:
 
             co_return std::string(db.get_version().to_sstring());
         };
-        co_return co_await db.invoke_on(0, func);
+        co_return co_await _db.invoke_on(0, func);
     }
 
     void system_add_column_family(thrift_fn::function<void(std::string const& _return)> cob, thrift_fn::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const CfDef& cf_def) {
@@ -890,7 +891,7 @@ public:
 
             co_await t._query_state.get_client_state().has_keyspace_access(t._db.local(), cf_def.keyspace, auth::permission::CREATE);
 
-            co_return co_await execute_schema_command(t._query_processor.local().get_migration_manager().container(), _db, [&cf_def] (service::migration_manager& mm, replica::database& db) -> future<std::vector<mutation>> {
+            co_return co_await t.execute_schema_command([&cf_def] (service::migration_manager& mm, replica::database& db) -> future<std::vector<mutation>> {
                 if (!db.has_keyspace(cf_def.keyspace)) {
                     throw NotFoundException();
                 }
@@ -910,7 +911,7 @@ public:
             auto column_family = cfm;
             co_await t._query_state.get_client_state().has_column_family_access(t._db.local(), t.current_keyspace(), column_family, auth::permission::DROP);
 
-            co_return co_await execute_schema_command(t._query_processor.local().get_migration_manager().container(), _db,
+            co_return co_await t.execute_schema_command(
                        [&column_family, &current_keyspace = t.current_keyspace()] (service::migration_manager& mm, replica::database& db) -> future<std::vector<mutation>> {
                 auto& cf = db.find_column_family(current_keyspace, column_family);
                 if (cf.schema()->is_view()) {
@@ -933,7 +934,7 @@ public:
 
             co_await t._query_state.get_client_state().has_all_keyspaces_access(auth::permission::CREATE);
 
-            co_return co_await execute_schema_command(t._query_processor.local().get_migration_manager().container(), _db, [&ks_def] (service::migration_manager& mm, replica::database& db) -> future<std::vector<mutation>> {
+            co_return co_await t.execute_schema_command([&ks_def] (service::migration_manager& mm, replica::database& db) -> future<std::vector<mutation>> {
                 co_return mm.prepare_new_keyspace_announcement(keyspace_from_thrift(ks_def));
             });
         });
@@ -947,7 +948,7 @@ public:
 
             co_await t._query_state.get_client_state().has_keyspace_access(t._db.local(), keyspace, auth::permission::DROP);
 
-            co_return co_await execute_schema_command(t._query_processor.local().get_migration_manager().container(), _db, [&keyspace] (service::migration_manager& mm, replica::database& db) -> future<std::vector<mutation>> {
+            co_return co_await t.execute_schema_command([&keyspace] (service::migration_manager& mm, replica::database& db) -> future<std::vector<mutation>> {
                 thrift_validation::validate_keyspace_not_system(keyspace);
                 if (!db.has_keyspace(keyspace)) {
                     throw NotFoundException();
@@ -967,7 +968,7 @@ public:
 
             co_await t._query_state.get_client_state().has_keyspace_access(t._db.local(), ks_def.name, auth::permission::ALTER);
 
-            co_return co_await execute_schema_command(t._query_processor.local().get_migration_manager().container(), _db, [&ks_def] (service::migration_manager& mm, replica::database& db) -> future<std::vector<mutation>> {
+            co_return co_await t.execute_schema_command([&ks_def] (service::migration_manager& mm, replica::database& db) -> future<std::vector<mutation>> {
                 if (db.has_keyspace(ks_def.name)) {
                     throw NotFoundException();
                 }
@@ -989,7 +990,7 @@ public:
 
             co_await t._query_state.get_client_state().has_schema_access(t._db.local(), cf_def.keyspace, cf_def.name, auth::permission::ALTER);
 
-            co_return co_await execute_schema_command(t._query_processor.local().get_migration_manager().container(), _db, [&cf_def] (service::migration_manager& mm, replica::database& db) -> future<std::vector<mutation>> {
+            co_return co_await t.execute_schema_command([&cf_def] (service::migration_manager& mm, replica::database& db) -> future<std::vector<mutation>> {
                 auto& cf = db.find_column_family(cf_def.keyspace, cf_def.name);
                 auto schema = cf.schema();
 
