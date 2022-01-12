@@ -91,7 +91,7 @@ private:
                 }
             }
 
-            co_await seastar::later();
+            co_await seastar::yield();
         }
 
         _logger.error("ticker: limit reached");

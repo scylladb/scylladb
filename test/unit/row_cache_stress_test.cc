@@ -129,7 +129,7 @@ struct table {
             p_writetime[i] = t;
             testlog.trace("updated key {}, {} @{}", i, tag, t);
             ++mutations;
-            later().get();
+            yield().get();
         }
         testlog.trace("mutated whole ring");
         ++mutation_phase;

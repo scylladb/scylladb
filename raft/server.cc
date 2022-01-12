@@ -857,9 +857,9 @@ future<> server_impl::io_fiber(index_t last_stable) {
 void server_impl::send_snapshot(server_id dst, install_snapshot&& snp) {
     seastar::abort_source as;
     uint64_t id = _next_snapshot_transfer_id++;
-    // Use `later()` to ensure that `_rpc->send_snapshot` is called after we emplace `f` in `_snapshot_transfers`.
+    // Use `yield()` to ensure that `_rpc->send_snapshot` is called after we emplace `f` in `_snapshot_transfers`.
     // This also catches any exceptions from `_rpc->send_snapshot` into `f`.
-    future<> f = later().then([this, &as, dst, id, snp = std::move(snp)] () mutable {
+    future<> f = yield().then([this, &as, dst, id, snp = std::move(snp)] () mutable {
         return _rpc->send_snapshot(dst, std::move(snp), as).then_wrapped([this, dst, id] (future<snapshot_reply> f) {
             if (_aborted_snapshot_transfers.erase(id)) {
                 // The transfer was aborted
@@ -1241,7 +1241,7 @@ void server_impl::wait_until_candidate() {
 // Wait until candidate is either leader or reverts to follower
 future<> server_impl::wait_election_done() {
     while (_fsm->is_candidate()) {
-        co_await later();
+        co_await yield();
     };
 }
 

@@ -492,7 +492,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_lock_works) {
 
         testlog.debug("Waiting until {}.{} is unlisted from the database", ks_name, cf_name);
         while (table_exists()) {
-            later().get();
+            yield().get();
         }
 
         auto all_sstables_exist = [&] () {
