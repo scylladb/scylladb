@@ -54,7 +54,7 @@ using foreign_unique_ptr = foreign_ptr<std::unique_ptr<T>>;
 /// 3) Both, `read_context::lookup_readers()` and `read_context::save_readers()`
 ///    knows to do nothing when the query is not stateful and just short
 ///    circuit.
-class read_context : public reader_lifecycle_policy {
+class read_context : public reader_lifecycle_policy_v2 {
 
     //              ( )    (O)
     //               |      ^
@@ -93,7 +93,7 @@ class read_context : public reader_lifecycle_policy {
             std::unique_ptr<const query::partition_slice> slice;
             utils::phased_barrier::operation read_operation;
             std::optional<reader_concurrency_semaphore::inactive_read_handle> handle;
-            std::optional<flat_mutation_reader::tracked_buffer> buffer;
+            std::optional<flat_mutation_reader_v2::tracked_buffer> buffer;
 
             remote_parts(
                     reader_permit permit,
@@ -111,7 +111,7 @@ class read_context : public reader_lifecycle_policy {
 
         reader_state state = reader_state::inexistent;
         foreign_unique_ptr<remote_parts> rparts;
-        std::optional<flat_mutation_reader::tracked_buffer> dismantled_buffer;
+        std::optional<flat_mutation_reader_v2::tracked_buffer> dismantled_buffer;
 
         reader_meta() = default;
 
@@ -123,7 +123,7 @@ class read_context : public reader_lifecycle_policy {
             }
         }
 
-        flat_mutation_reader::tracked_buffer& get_dismantled_buffer(const reader_permit& permit) {
+        flat_mutation_reader_v2::tracked_buffer& get_dismantled_buffer(const reader_permit& permit) {
             if (!dismantled_buffer) {
                 dismantled_buffer.emplace(permit);
             }
@@ -139,14 +139,14 @@ class read_context : public reader_lifecycle_policy {
         size_t discarded_fragments = 0;
         size_t discarded_bytes = 0;
 
-        void add(const mutation_fragment& mf) {
+        void add(const mutation_fragment_v2& mf) {
             partitions += unsigned(mf.is_partition_start());
             ++fragments;
             bytes += mf.memory_usage();
         }
-        void add(const schema& s, const range_tombstone& rt) {
+        void add(const schema& s, const range_tombstone_change& rtc) {
             ++fragments;
-            bytes += rt.memory_usage(s);
+            bytes += rtc.memory_usage(s);
         }
         void add(const schema& s, const static_row& sr) {
             ++fragments;
@@ -157,14 +157,14 @@ class read_context : public reader_lifecycle_policy {
             ++fragments;
             bytes += ps.memory_usage(s);
         }
-        void add_discarded(const mutation_fragment& mf) {
+        void add_discarded(const mutation_fragment_v2& mf) {
             discarded_partitions += unsigned(mf.is_partition_start());
             ++discarded_fragments;
             discarded_bytes += mf.memory_usage();
         }
-        void add_discarded(const schema& s, const range_tombstone& rt) {
+        void add_discarded(const schema& s, const range_tombstone_change& rtc) {
             ++discarded_fragments;
-            discarded_bytes += rt.memory_usage(s);
+            discarded_bytes += rtc.memory_usage(s);
         }
         void add_discarded(const schema& s, const static_row& sr) {
             ++discarded_fragments;
@@ -201,7 +201,7 @@ class read_context : public reader_lifecycle_policy {
 
     static std::string_view reader_state_to_string(reader_state rs);
 
-    dismantle_buffer_stats dismantle_combined_buffer(flat_mutation_reader::tracked_buffer combined_buffer, const dht::decorated_key& pkey);
+    dismantle_buffer_stats dismantle_combined_buffer(flat_mutation_reader_v2::tracked_buffer combined_buffer, const dht::decorated_key& pkey);
     dismantle_buffer_stats dismantle_compaction_state(detached_compaction_state compaction_state);
     future<> save_reader(shard_id shard, const dht::decorated_key& last_pkey, const std::optional<clustering_key_prefix>& last_ckey);
 
@@ -237,7 +237,7 @@ public:
         return _cmd.max_result_size ? *_cmd.max_result_size : _db.local().get_unlimited_query_max_result_size();
     }
 
-    virtual flat_mutation_reader create_reader(
+    virtual flat_mutation_reader_v2 create_reader(
             schema_ptr schema,
             reader_permit permit,
             const dht::partition_range& pr,
@@ -272,7 +272,7 @@ public:
 
     future<> lookup_readers(db::timeout_clock::time_point timeout);
 
-    future<> save_readers(flat_mutation_reader::tracked_buffer unconsumed_buffer, detached_compaction_state compaction_state,
+    future<> save_readers(flat_mutation_reader_v2::tracked_buffer unconsumed_buffer, detached_compaction_state compaction_state,
             std::optional<clustering_key_prefix> last_ckey);
 
     future<> stop();
@@ -294,7 +294,7 @@ std::string_view read_context::reader_state_to_string(reader_state rs) {
     return "invalid";
 }
 
-flat_mutation_reader read_context::create_reader(
+flat_mutation_reader_v2 read_context::create_reader(
         schema_ptr schema,
         reader_permit permit,
         const dht::partition_range& pr,
@@ -322,7 +322,7 @@ flat_mutation_reader read_context::create_reader(
             if (reader_opt->permit() != permit) {
                 on_internal_error(mmq_log, "read_context::create_reader(): passed-in permit is different than saved reader's permit");
             }
-            return downgrade_to_v1(std::move(*reader_opt));
+            return std::move(*reader_opt);
         }
     }
 
@@ -342,7 +342,7 @@ flat_mutation_reader read_context::create_reader(
 
     rm.state = reader_state::used;
 
-    return table.as_mutation_source().make_reader(std::move(schema), rm.rparts->permit, *rm.rparts->range, *rm.rparts->slice, pc,
+    return table.as_mutation_source().make_reader_v2(std::move(schema), rm.rparts->permit, *rm.rparts->range, *rm.rparts->slice, pc,
             std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr);
 }
 
@@ -385,11 +385,11 @@ future<> read_context::stop() {
     });
 }
 
-read_context::dismantle_buffer_stats read_context::dismantle_combined_buffer(flat_mutation_reader::tracked_buffer combined_buffer,
+read_context::dismantle_buffer_stats read_context::dismantle_combined_buffer(flat_mutation_reader_v2::tracked_buffer combined_buffer,
         const dht::decorated_key& pkey) {
     auto& sharder = _schema->get_sharder();
 
-    std::vector<mutation_fragment> tmp_buffer;
+    std::vector<mutation_fragment_v2> tmp_buffer;
     dismantle_buffer_stats stats;
 
     auto rit = std::reverse_iterator(combined_buffer.end());
@@ -438,14 +438,20 @@ read_context::dismantle_buffer_stats read_context::dismantle_compaction_state(de
     auto& sharder = _schema->get_sharder();
     const auto shard = sharder.shard_of(compaction_state.partition_start.key().token());
 
-    auto& range_tombstones = std::get<std::deque<range_tombstone>>(compaction_state.range_tombstones);
+    std::optional<range_tombstone_change> rtc_opt;
+    if (auto* rtc_opt_ptr = std::get_if<std::optional<range_tombstone_change>>(&compaction_state.range_tombstones); rtc_opt_ptr) {
+        rtc_opt = std::move(*rtc_opt_ptr);
+    } else {
+        auto& rts = std::get<std::deque<range_tombstone>>(compaction_state.range_tombstones);
+        assert(rts.empty());
+    }
 
     // It is possible that the reader this partition originates from does not
     // exist anymore. Either because we failed stopping it or because it was
     // evicted.
     if (_readers[shard].state != reader_state::saving) {
-        for (auto& rt : range_tombstones) {
-            stats.add_discarded(*_schema, rt);
+        if (rtc_opt) {
+            stats.add_discarded(*_schema, *rtc_opt);
         }
         if (compaction_state.static_row) {
             stats.add_discarded(*_schema, *compaction_state.static_row);
@@ -456,9 +462,9 @@ read_context::dismantle_buffer_stats read_context::dismantle_compaction_state(de
 
     auto& shard_buffer = _readers[shard].get_dismantled_buffer(_permit);
 
-    for (auto& rt : range_tombstones | boost::adaptors::reversed) {
-        stats.add(*_schema, rt);
-        shard_buffer.emplace_front(*_schema, _permit, std::move(rt));
+    if (rtc_opt) {
+        stats.add(*_schema, *rtc_opt);
+        shard_buffer.emplace_front(*_schema, _permit, std::move(*rtc_opt));
     }
 
     if (compaction_state.static_row) {
@@ -483,7 +489,7 @@ future<> read_context::save_reader(shard_id shard, const dht::decorated_key& las
             if (!reader_opt) {
                 return make_ready_future<>();
             }
-            flat_mutation_reader_opt reader = downgrade_to_v1(std::move(*reader_opt));
+            flat_mutation_reader_v2_opt reader = std::move(*reader_opt);
 
             size_t fragments = 0;
             const auto size_before = reader->buffer_size();
@@ -503,7 +509,7 @@ future<> read_context::save_reader(shard_id shard, const dht::decorated_key& las
                 auto rend = std::reverse_iterator(rm.dismantled_buffer->cbegin());
                 for (; rit != rend; ++rit) {
                     // Copy the fragment, the buffer is on another shard.
-                    reader->unpop_mutation_fragment(mutation_fragment(schema, rparts->permit, *rit));
+                    reader->unpop_mutation_fragment(mutation_fragment_v2(schema, rparts->permit, *rit));
                 }
             }
 
@@ -569,7 +575,7 @@ future<> read_context::lookup_readers(db::timeout_clock::time_point timeout) {
                         reinterpret_cast<uintptr_t>(&semaphore)));
             }
 
-            auto handle = semaphore.register_inactive_read(upgrade_to_v2(std::move(q).reader()));
+            auto handle = semaphore.register_inactive_read(std::move(q).reader());
             return reader_meta(
                     reader_state::successful_lookup,
                     reader_meta::remote_parts(q.permit(), std::move(q).reader_range(), std::move(q).reader_slice(), table.read_in_progress(),
@@ -580,7 +586,7 @@ future<> read_context::lookup_readers(db::timeout_clock::time_point timeout) {
     });
 }
 
-future<> read_context::save_readers(flat_mutation_reader::tracked_buffer unconsumed_buffer, detached_compaction_state compaction_state,
+future<> read_context::save_readers(flat_mutation_reader_v2::tracked_buffer unconsumed_buffer, detached_compaction_state compaction_state,
             std::optional<clustering_key_prefix> last_ckey) {
     if (_cmd.query_uuid == utils::UUID{}) {
         return make_ready_future<>();
@@ -616,10 +622,10 @@ template <typename ResultBuilder>
 struct page_consume_result {
     std::optional<clustering_key_prefix> last_ckey;
     typename ResultBuilder::result_type result;
-    flat_mutation_reader::tracked_buffer unconsumed_fragments;
+    flat_mutation_reader_v2::tracked_buffer unconsumed_fragments;
     lw_shared_ptr<compact_for_result_state<ResultBuilder>> compaction_state;
 
-    page_consume_result(std::optional<clustering_key_prefix>&& ckey, typename ResultBuilder::result_type&& result, flat_mutation_reader::tracked_buffer&& unconsumed_fragments,
+    page_consume_result(std::optional<clustering_key_prefix>&& ckey, typename ResultBuilder::result_type&& result, flat_mutation_reader_v2::tracked_buffer&& unconsumed_fragments,
             lw_shared_ptr<compact_for_result_state<ResultBuilder>>&& compaction_state) noexcept
         : last_ckey(std::move(ckey))
         , result(std::move(result))
@@ -639,13 +645,13 @@ struct page_consume_result {
 //   calling detach_buffer() after fill_buffer() is guranted to get all
 //   fragments fetched in that call, none will be left in the underlying
 //   reader's one.
-class multi_range_reader : public flat_mutation_reader::impl {
-    flat_mutation_reader _reader;
+class multi_range_reader : public flat_mutation_reader_v2::impl {
+    flat_mutation_reader_v2 _reader;
     dht::partition_range_vector::const_iterator _it;
     const dht::partition_range_vector::const_iterator _end;
 
 public:
-    multi_range_reader(schema_ptr s, reader_permit permit, flat_mutation_reader rd, const dht::partition_range_vector& ranges)
+    multi_range_reader(schema_ptr s, reader_permit permit, flat_mutation_reader_v2 rd, const dht::partition_range_vector& ranges)
         : impl(std::move(s), std::move(permit)) , _reader(std::move(rd)) , _it(ranges.begin()) , _end(ranges.end()) { }
 
     virtual future<> fill_buffer() override {
@@ -703,10 +709,10 @@ future<page_consume_result<ResultBuilder>> read_page(
     auto compaction_state = make_lw_shared<compact_for_result_state<ResultBuilder>>(*s, cmd.timestamp, cmd.slice, cmd.get_row_limit(),
             cmd.partition_limit);
 
-    auto reader = make_multishard_combining_reader(ctx, s, ctx->permit(), ranges.front(), cmd.slice,
+    auto reader = make_multishard_combining_reader_v2(ctx, s, ctx->permit(), ranges.front(), cmd.slice,
             service::get_local_sstable_query_read_priority(), trace_state, mutation_reader::forwarding(ranges.size() > 1));
     if (ranges.size() > 1) {
-        reader = make_flat_mutation_reader<multi_range_reader>(s, ctx->permit(), std::move(reader), ranges);
+        reader = make_flat_mutation_reader_v2<multi_range_reader>(s, ctx->permit(), std::move(reader), ranges);
     }
 
     std::exception_ptr ex;

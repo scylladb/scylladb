@@ -290,11 +290,11 @@ private:
             std::unique_ptr<const dht::partition_range_vector> query_ranges,
             lw_shared_ptr<const dht::partition_range> reader_range,
             std::unique_ptr<const query::partition_slice> reader_slice,
-            flat_mutation_reader reader,
+            flat_mutation_reader_v2 reader,
             reader_permit permit,
             dht::decorated_key nominal_pkey,
             std::optional<clustering_key_prefix> nominal_ckey)
-        : querier_base(permit, std::move(reader_range), std::move(reader_slice), upgrade_to_v2(std::move(reader)), *query_ranges)
+        : querier_base(permit, std::move(reader_range), std::move(reader_slice), std::move(reader), *query_ranges)
         , _query_ranges(std::move(query_ranges))
         , _nominal_pkey(std::move(nominal_pkey))
         , _nominal_ckey(std::move(nominal_ckey)) {
@@ -306,7 +306,7 @@ public:
             const dht::partition_range_vector query_ranges,
             lw_shared_ptr<const dht::partition_range> reader_range,
             std::unique_ptr<const query::partition_slice> reader_slice,
-            flat_mutation_reader reader,
+            flat_mutation_reader_v2 reader,
             reader_permit permit,
             dht::decorated_key nominal_pkey,
             std::optional<clustering_key_prefix> nominal_ckey)
@@ -326,8 +326,8 @@ public:
         return std::move(_slice);
     }
 
-    flat_mutation_reader reader() && {
-        return downgrade_to_v1(std::move(std::get<flat_mutation_reader_v2>(_reader)));
+    flat_mutation_reader_v2 reader() && {
+        return std::move(std::get<flat_mutation_reader_v2>(_reader));
     }
 };
 
