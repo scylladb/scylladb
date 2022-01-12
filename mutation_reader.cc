@@ -3274,13 +3274,13 @@ class compacting_reader : public flat_mutation_reader::impl {
     friend class compact_mutation_state<emit_only_live_rows::no, compact_for_sstables::yes>;
 
 private:
-    flat_mutation_reader _reader;
+    flat_mutation_reader_v2 _reader;
     compact_mutation_state<emit_only_live_rows::no, compact_for_sstables::yes> _compactor;
     noop_compacted_fragments_consumer _gc_consumer;
 
     // Uncompacted stream
     partition_start _last_uncompacted_partition_start;
-    mutation_fragment::kind _last_uncompacted_kind = mutation_fragment::kind::partition_end;
+    mutation_fragment_v2::kind _last_uncompacted_kind = mutation_fragment_v2::kind::partition_end;
 
     // Compacted stream
     bool _has_compacted_partition_start = false;
@@ -3296,7 +3296,7 @@ private:
     void maybe_inject_partition_end() {
         // The compactor needs a valid stream, but downstream doesn't care about
         // the injected partition end, so ignore it.
-        if (_last_uncompacted_kind != mutation_fragment::kind::partition_end) {
+        if (_last_uncompacted_kind != mutation_fragment_v2::kind::partition_end) {
             _ignore_partition_end = true;
             _compactor.consume_end_of_partition(*this, _gc_consumer);
             _ignore_partition_end = false;
@@ -3340,7 +3340,7 @@ private:
     streamed_mutation::forwarding _fwd;
 
 public:
-    compacting_reader(flat_mutation_reader source, gc_clock::time_point compaction_time,
+    compacting_reader(flat_mutation_reader_v2 source, gc_clock::time_point compaction_time,
             std::function<api::timestamp_type(const dht::decorated_key&)> get_max_purgeable,
             streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no)
         : impl(source.schema(), source.permit())
@@ -3372,16 +3372,16 @@ public:
                     auto mf = _reader.pop_mutation_fragment();
                     _last_uncompacted_kind = mf.mutation_fragment_kind();
                     switch (mf.mutation_fragment_kind()) {
-                    case mutation_fragment::kind::static_row:
+                    case mutation_fragment_v2::kind::static_row:
                         _compactor.consume(std::move(mf).as_static_row(), *this, _gc_consumer);
                         break;
-                    case mutation_fragment::kind::clustering_row:
+                    case mutation_fragment_v2::kind::clustering_row:
                         _compactor.consume(std::move(mf).as_clustering_row(), *this, _gc_consumer);
                         break;
-                    case mutation_fragment::kind::range_tombstone:
-                        _compactor.consume(std::move(mf).as_range_tombstone(), *this, _gc_consumer);
+                    case mutation_fragment_v2::kind::range_tombstone_change:
+                        _compactor.consume(std::move(mf).as_range_tombstone_change(), *this, _gc_consumer);
                         break;
-                    case mutation_fragment::kind::partition_start:
+                    case mutation_fragment_v2::kind::partition_start:
                         _last_uncompacted_partition_start = std::move(mf).as_partition_start();
                         _compactor.consume_new_partition(_last_uncompacted_partition_start.key());
                         if (_last_uncompacted_partition_start.partition_tombstone()) {
@@ -3391,7 +3391,7 @@ public:
                             _compactor.force_partition_not_empty(*this);
                         }
                         break;
-                    case mutation_fragment::kind::partition_end:
+                    case mutation_fragment_v2::kind::partition_end:
                         _compactor.consume_end_of_partition(*this, _gc_consumer);
                         break;
                     }
@@ -3426,7 +3426,7 @@ public:
 
 } // anonymous namespace
 
-flat_mutation_reader make_compacting_reader(flat_mutation_reader source, gc_clock::time_point compaction_time,
+flat_mutation_reader make_compacting_reader(flat_mutation_reader_v2 source, gc_clock::time_point compaction_time,
         std::function<api::timestamp_type(const dht::decorated_key&)> get_max_purgeable, streamed_mutation::forwarding fwd) {
     return make_flat_mutation_reader<compacting_reader>(std::move(source), compaction_time, get_max_purgeable, fwd);
 }

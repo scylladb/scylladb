@@ -2700,7 +2700,7 @@ SEASTAR_THREAD_TEST_CASE(test_compacting_reader_as_mutation_source) {
                 if (fwd_sm == streamed_mutation::forwarding::yes) {
                     source = make_forwardable(std::move(source));
                 }
-                auto mr = make_compacting_reader(std::move(source), query_time,
+                auto mr = make_compacting_reader(upgrade_to_v2(std::move(source)), query_time,
                         [] (const dht::decorated_key&) { return api::min_timestamp; }, fwd_sm);
                 if (single_fragment_buffer) {
                     mr.set_max_buffer_size(1);
@@ -2726,7 +2726,7 @@ SEASTAR_THREAD_TEST_CASE(test_compacting_reader_next_partition) {
     auto mr = [&] () {
         auto permit = semaphore.make_permit();
         const size_t buffer_size = 1024;
-        std::deque<mutation_fragment> mfs;
+        std::deque<mutation_fragment_v2> mfs;
         auto dk0 = ss.make_pkey(0);
         auto dk1 = ss.make_pkey(1);
 
@@ -2735,17 +2735,23 @@ SEASTAR_THREAD_TEST_CASE(test_compacting_reader_next_partition) {
         auto i = 0;
         size_t mfs_size = 0;
         while (mfs_size <= buffer_size) {
-            mfs.emplace_back(*ss.schema(), permit, ss.make_row(permit, ss.make_ckey(i++), "v"));
+            mfs.emplace_back(*ss.schema(), permit, ss.make_row_v2(permit, ss.make_ckey(i++), "v"));
             mfs_size += mfs.back().memory_usage();
         }
         mfs.emplace_back(*ss.schema(), permit, partition_end{});
 
         mfs.emplace_back(*ss.schema(), permit, partition_start(dk1, tombstone{}));
-        mfs.emplace_back(*ss.schema(), permit, ss.make_row(permit, ss.make_ckey(0), "v"));
+        mfs.emplace_back(*ss.schema(), permit, ss.make_row_v2(permit, ss.make_ckey(0), "v"));
         mfs.emplace_back(*ss.schema(), permit, partition_end{});
 
         for (const auto& mf : mfs) {
-            expected.emplace_back(*ss.schema(), permit, mf);
+            if (mf.is_partition_start()) {
+                expected.emplace_back(*ss.schema(), permit, partition_start(mf.as_partition_start()));
+            } else if (mf.is_clustering_row()) {
+                expected.emplace_back(*ss.schema(), permit, clustering_row(*ss.schema(), mf.as_clustering_row()));
+            } else { // partition-end
+                expected.emplace_back(*ss.schema(), permit, partition_end{});
+            }
         }
 
         auto mr = make_compacting_reader(make_flat_mutation_reader_from_fragments(ss.schema(), permit, std::move(mfs)),
