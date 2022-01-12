@@ -186,20 +186,6 @@ table::make_reader_v2(schema_ptr s,
     const auto bypass_cache = slice.options.contains(query::partition_slice::option::bypass_cache);
     const auto reversed = slice.is_reversed();
     if (cache_enabled() && !bypass_cache && !(reversed && _config.reversed_reads_auto_bypass_cache())) {
-        // There are two supported methods of performing reversed queries now.
-        // In the old 'inefficient' method the cache/sstable performs a forward query and we wrap the reader in
-        // `make_reversing_reader` which fetches entire partitions in memory and reverses them; this method
-        // uses unbounded memory.
-        // There's also a new method where the sstable performs the query directly in reverse, which has bounded
-        // memory usage. However, for this method the cache must currently be disabled since fast forwarding
-        // is not yet supported by sstables in reverse mode and the cache algorithms do not handle reverse results
-        // yet.
-        // When the user explicitly bypasses the cache in a query, the new method is automatically used.
-        // Otherwise, we will use the old method with cache enabled, unless the `reversed_reads_auto_bypass_cache`
-        // option is set - which will automatically bypass the cache for reversed queries.
-        // FIXME: remove this workaround (and the `reversed_reads_auto_bypass_cache` option) after:
-        // - support for reversed reads is implemented in the cache,
-        // - fast forwarding is implemented in reversed sstable readers.
         readers.emplace_back(upgrade_to_v2(_cache.make_reader(s, permit, range, slice, pc, std::move(trace_state), fwd, fwd_mr)));
     } else {
         readers.emplace_back(make_sstable_reader(s, permit, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
