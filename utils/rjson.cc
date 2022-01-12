@@ -21,10 +21,14 @@
 
 #include "rjson.hh"
 #include <seastar/core/print.hh>
+#include <seastar/core/coroutine.hh>
 #include <seastar/core/thread.hh>
+#include <seastar/core/iostream.hh>
 #ifdef SANITIZE
 #include <seastar/core/memory.hh>
 #endif
+
+#include <rapidjson/stream.h>
 
 namespace rjson {
 
@@ -101,7 +105,7 @@ public:
  * guarded_json_handler, which accepts an additional max_nested_level parameter.
  * After trying to exceed the max nested level, a proper rjson::error will be thrown.
  */
-template<typename Handler, bool EnableYield>
+template<typename Handler, bool EnableYield, typename Buffer = string_buffer>
 struct guarded_yieldable_json_handler : public Handler {
     size_t _nested_level = 0;
     size_t _max_nested_level;
@@ -109,7 +113,7 @@ public:
     using handler_base = Handler;
 
     explicit guarded_yieldable_json_handler(size_t max_nested_level) : _max_nested_level(max_nested_level) {}
-    guarded_yieldable_json_handler(string_buffer& buf, size_t max_nested_level)
+    guarded_yieldable_json_handler(Buffer& buf, size_t max_nested_level)
             : handler_base(buf), _max_nested_level(max_nested_level) {}
 
     // Parse any stream fitting https://rapidjson.org/classrapidjson_1_1_stream.html
@@ -234,6 +238,67 @@ std::string print(const rjson::value& value, size_t max_nested_level) {
     guarded_yieldable_json_handler<writer, false> writer(buffer, max_nested_level);
     value.Accept(writer);
     return std::string(buffer.GetString());
+}
+
+future<> print(const rjson::value& value, seastar::output_stream<char>& os, size_t max_nested_level) {
+    struct os_buffer {
+        seastar::output_stream<char>& _os;
+        temporary_buffer<char> _buf;
+        size_t _pos = 0;
+        future<> _f = make_ready_future<>();
+
+        using Ch = char;
+
+        void send(bool try_reuse = true) {
+            if (_f.failed()) {
+                _f.get0();
+            }
+            if (!_buf.empty() && _pos > 0) {
+                _buf.trim(_pos);
+                _pos = 0;
+                // Note: we're assuming we're writing to a buffered output_stream (hello http server).
+                // If we were not, or if (http) output_stream supported mixed buffered/packed content
+                // it might be a good idea to instead send our buffer as a packet directly. If so, the
+                // buffer size should probably increase (at least after first send()).
+                _f = _f.then([this, buf = std::move(_buf), &os = _os, try_reuse]() mutable -> future<> {
+                    return os.write(buf.get(), buf.size()).then([this, buf = std::move(buf), try_reuse]() mutable {
+                        // Chances are high we just copied this to output_stream buffer, and got here
+                        // immediately. If so, reuse the buffer.
+                        if (try_reuse && _buf.empty() && _pos == 0) {
+                            _buf = std::move(buf);
+                        }
+                    });
+                });
+            }
+        }
+        void Put(char c) {
+            if (_pos == _buf.size()) {
+                send();
+                if (_buf.empty()) {
+                    _buf = temporary_buffer<char>(512);
+                }
+            }
+            // Second note: Should consider writing directly to the buffer in output_stream
+            // instead of double buffering. But output_stream for a single char has higher
+            // overhead than the above check + once we hit a non-completed future, we'd have
+            // to revert to this method anyway...
+            *(_buf.get_write() + _pos) = c;
+            ++_pos;
+        }
+        void Flush() {
+            send();
+        }
+        future<> finish()&& {
+            send(false);
+            return std::move(_f);
+        }
+    };
+
+    os_buffer osb{ os };
+    using streamer = rapidjson::Writer<os_buffer, encoding, encoding, allocator>;
+    guarded_yieldable_json_handler<streamer, false, os_buffer> writer(osb, max_nested_level);
+    value.Accept(writer);
+    co_return co_await std::move(osb).finish();
 }
 
 rjson::malformed_value::malformed_value(std::string_view name, const rjson::value& value)

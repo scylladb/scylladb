@@ -73,6 +73,16 @@ public:
     explicit make_jsonable(rjson::value&& value);
     std::string to_json() const override;
 };
+
+/**
+ * Make return type for serializing the object "streamed",
+ * i.e. direct to HTTP output stream. Note: only useful for
+ * (very) large objects as there are overhead issues with this
+ * as well, but for massive lists of return objects this can
+ * help avoid large allocations/many re-allocs
+ */ 
+json::json_return_type make_streamed(rjson::value&&);
+
 struct json_string : public json::jsonable {
     std::string _value;
 public:

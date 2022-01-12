@@ -84,6 +84,31 @@ std::string make_jsonable::to_json() const {
     return rjson::print(_value);
 }
 
+json::json_return_type make_streamed(rjson::value&& value) {
+    // CMH. json::json_return_type uses std::function, not noncopyable_function. 
+    // Need to make a copyable version of value. Gah.
+    auto rs = make_shared<rjson::value>(std::move(value));
+    std::function<future<>(output_stream<char>&&)> func = [rs](output_stream<char>&& os) mutable -> future<> {
+        // move objects to coroutine frame.
+        auto los = std::move(os);
+        auto lrs = std::move(rs);
+        try {
+            co_await rjson::print(*lrs, los);
+            co_await los.flush();
+            co_await los.close();
+        } catch (...) {
+            // at this point, we cannot really do anything. HTTP headers and return code are
+            // already written, and quite potentially a portion of the content data.
+            // just log + rethrow. It is probably better the HTTP server closes connection
+            // abruptly or something...
+            elogger.error("Unhandled exception in data streaming: {}", std::current_exception());
+            throw;
+        }
+        co_return;
+    };
+    return func;
+}
+
 json_string::json_string(std::string&& value)
     : _value(std::move(value))
 {}
@@ -3273,16 +3298,17 @@ public:
     }
 };
 
-static rjson::value describe_items(schema_ptr schema, const query::partition_slice& slice, const cql3::selection::selection& selection, std::unique_ptr<cql3::result_set> result_set, attrs_to_get&& attrs_to_get, filter&& filter) {
+static std::tuple<rjson::value, size_t> describe_items(schema_ptr schema, const query::partition_slice& slice, const cql3::selection::selection& selection, std::unique_ptr<cql3::result_set> result_set, attrs_to_get&& attrs_to_get, filter&& filter) {
     describe_items_visitor visitor(selection.get_columns(), attrs_to_get, filter);
     result_set->visit(visitor);
     auto scanned_count = visitor.get_scanned_count();
     rjson::value items = std::move(visitor).get_items();
     rjson::value items_descr = rjson::empty_object();
-    rjson::add(items_descr, "Count", rjson::value(items.Size()));
+    auto size = items.Size();
+    rjson::add(items_descr, "Count", rjson::value(size));
     rjson::add(items_descr, "ScannedCount", rjson::value(scanned_count));
     rjson::add(items_descr, "Items", std::move(items));
-    return items_descr;
+    return {std::move(items_descr), size};
 }
 
 static rjson::value encode_paging_state(const schema& schema, const service::pager::paging_state& paging_state) {
@@ -3365,14 +3391,18 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
         }
         auto paging_state = rs->get_metadata().paging_state();
         bool has_filter = filter;
-        auto items = describe_items(schema, partition_slice, *selection, std::move(rs), std::move(attrs_to_get), std::move(filter));
+        auto [items, size] = describe_items(schema, partition_slice, *selection, std::move(rs), std::move(attrs_to_get), std::move(filter));
         if (paging_state) {
             rjson::add(items, "LastEvaluatedKey", encode_paging_state(*schema, *paging_state));
         }
         if (has_filter){
             cql_stats.filtered_rows_read_total += p->stats().rows_read_total;
             // update our "filtered_row_matched_total" for all the rows matched, despited the filter
-            cql_stats.filtered_rows_matched_total += items["Items"].Size();
+            cql_stats.filtered_rows_matched_total += size;
+        }
+        // TODO: better threshold
+        if (size > 10) {
+            return make_ready_future<executor::request_return_type>(make_streamed(std::move(items)));
         }
         return make_ready_future<executor::request_return_type>(make_jsonable(std::move(items)));
     });

@@ -22,11 +22,11 @@ class qr_clustered_row stub [[writable]] {
 class qr_partition stub [[writable]] {
     std::optional<partition_key> key; // present when send_partition_key option set in partition_slice
     qr_row static_row;
-    std::vector<qr_clustered_row> rows; // ordered by key
+    utils::chunked_vector<qr_clustered_row> rows; // ordered by key
 };
 
 class query_result stub [[writable]] {
-    std::vector<qr_partition> partitions; // in ring order
+    utils::chunked_vector<qr_partition> partitions; // in ring order
 };
 
 enum class digest_algorithm : uint8_t {
