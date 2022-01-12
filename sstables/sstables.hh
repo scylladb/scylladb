@@ -132,6 +132,8 @@ constexpr const char* upload_dir = "upload";
 constexpr const char* snapshots_dir = "snapshots";
 constexpr const char* quarantine_dir = "quarantine";
 
+constexpr const char* repair_origin = "repair";
+
 class sstable : public enable_lw_shared_from_this<sstable> {
     friend ::sstable_assertions;
 public:
