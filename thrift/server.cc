@@ -22,7 +22,6 @@
 #include "server.hh"
 #include "handler.hh"
 #include "db/config.hh"
-#include "replica/database.hh"
 #include <seastar/core/future-util.hh>
 #include <seastar/core/circular_buffer.hh>
 #include <seastar/core/metrics.hh>
@@ -66,7 +65,7 @@ public:
     thrift_stats(thrift_server& server);
 };
 
-thrift_server::thrift_server(distributed<replica::database>& db,
+thrift_server::thrift_server(data_dictionary::database db,
                              distributed<cql3::query_processor>& qp,
                              sharded<service::storage_service>& ss,
                              sharded<service::storage_proxy>& proxy,
@@ -78,7 +77,7 @@ thrift_server::thrift_server(distributed<replica::database>& db,
         , _protocol_factory(new TBinaryProtocolFactoryT<TMemoryBuffer>())
         , _processor_factory(new CassandraAsyncProcessorFactory(_handler_factory))
         , _memory_available(ml.get_semaphore())
-        , _max_concurrent_requests(db.local().get_config().max_concurrent_requests_per_shard)
+        , _max_concurrent_requests(db.get_config().max_concurrent_requests_per_shard)
         , _config(config) {
 }
 
