@@ -170,6 +170,9 @@ prepare_selectable(const schema& s, const expr::expression& raw_selectable) {
             // so bridge them.
             return ::make_shared<selectable_column>(column_identifier(column.col->name(), column.col->name_as_text()));
         },
+        [&] (const expr::subscript& sub) -> shared_ptr<selectable> {
+            on_internal_error(slogger, "no way to express 'SELECT a[b]' in the grammar yet");
+        },
         [&] (const expr::token& tok) -> shared_ptr<selectable> {
             // expr::token implicitly the partition key as arguments, but
             // the selectable equivalent (with_function) needs explicit arguments,
