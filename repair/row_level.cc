@@ -635,6 +635,7 @@ public:
     using msg_addr = netw::messaging_service::msg_addr;
     using tracker_link_type = boost::intrusive::list_member_hook<bi::link_mode<boost::intrusive::auto_unlink>>;
 private:
+    repair_service& _rs;
     seastar::sharded<replica::database>& _db;
     seastar::sharded<netw::messaging_service>& _messaging;
     seastar::sharded<db::system_distributed_keyspace>& _sys_dist_ks;
@@ -726,6 +727,7 @@ public:
 
 public:
     repair_meta(
+            repair_service& rs,
             seastar::sharded<replica::database>& db,
             seastar::sharded<netw::messaging_service>& ms,
             seastar::sharded<db::system_distributed_keyspace>& sys_dist_ks,
@@ -744,7 +746,8 @@ public:
             inet_address_vector_replica_set all_live_peer_nodes,
             size_t nr_peer_nodes = 1,
             row_level_repair* row_level_repair_ptr = nullptr)
-            : _db(db)
+            : _rs(rs)
+            , _db(db)
             , _messaging(ms)
             , _sys_dist_ks(sys_dist_ks)
             , _view_update_generator(view_update_generator)
@@ -890,7 +893,8 @@ public:
                     schema_version,
                     reason] (reader_permit permit) mutable {
             node_repair_meta_id id{from, repair_meta_id};
-            auto rm = make_lw_shared<repair_meta>(db,
+            auto rm = make_lw_shared<repair_meta>(repair,
+                    db,
                     repair.get_messaging().container(),
                     repair.get_sys_dist_ks(),
                     repair.get_view_update_generator(),
@@ -2919,7 +2923,8 @@ public:
 
             auto permit = _ri.db.local().obtain_reader_permit(_cf, "repair-meta", db::no_timeout).get0();
 
-            repair_meta master(_ri.db,
+            repair_meta master(_ri.rs,
+                    _ri.db,
                     _ri.messaging,
                     _ri.sys_dist_ks,
                     _ri.view_update_generator,
