@@ -728,10 +728,6 @@ public:
 public:
     repair_meta(
             repair_service& rs,
-            seastar::sharded<replica::database>& db,
-            seastar::sharded<netw::messaging_service>& ms,
-            seastar::sharded<db::system_distributed_keyspace>& sys_dist_ks,
-            seastar::sharded<db::view::view_update_generator>& view_update_generator,
             replica::column_family& cf,
             schema_ptr s,
             reader_permit permit,
@@ -747,10 +743,10 @@ public:
             size_t nr_peer_nodes = 1,
             row_level_repair* row_level_repair_ptr = nullptr)
             : _rs(rs)
-            , _db(db)
-            , _messaging(ms)
-            , _sys_dist_ks(sys_dist_ks)
-            , _view_update_generator(view_update_generator)
+            , _db(rs.get_db())
+            , _messaging(rs.get_messaging().container())
+            , _sys_dist_ks(rs.get_sys_dist_ks())
+            , _view_update_generator(rs.get_view_update_generator())
             , _cf(cf)
             , _schema(s)
             , _permit(std::move(permit))
@@ -780,16 +776,16 @@ public:
               )
             , _repair_writer(make_lw_shared<repair_writer>(_schema, _permit, _estimated_partitions, _reason))
             , _sink_source_for_get_full_row_hashes(_repair_meta_id, _nr_peer_nodes,
-                    [&ms] (uint32_t repair_meta_id, netw::messaging_service::msg_addr addr) {
-                        return ms.local().make_sink_and_source_for_repair_get_full_row_hashes_with_rpc_stream(repair_meta_id, addr);
+                    [&rs] (uint32_t repair_meta_id, netw::messaging_service::msg_addr addr) {
+                        return rs.get_messaging().make_sink_and_source_for_repair_get_full_row_hashes_with_rpc_stream(repair_meta_id, addr);
                 })
             , _sink_source_for_get_row_diff(_repair_meta_id, _nr_peer_nodes,
-                    [&ms] (uint32_t repair_meta_id, netw::messaging_service::msg_addr addr) {
-                        return ms.local().make_sink_and_source_for_repair_get_row_diff_with_rpc_stream(repair_meta_id, addr);
+                    [&rs] (uint32_t repair_meta_id, netw::messaging_service::msg_addr addr) {
+                        return rs.get_messaging().make_sink_and_source_for_repair_get_row_diff_with_rpc_stream(repair_meta_id, addr);
                 })
             , _sink_source_for_put_row_diff(_repair_meta_id, _nr_peer_nodes,
-                    [&ms] (uint32_t repair_meta_id, netw::messaging_service::msg_addr addr) {
-                        return ms.local().make_sink_and_source_for_repair_put_row_diff_with_rpc_stream(repair_meta_id, addr);
+                    [&rs] (uint32_t repair_meta_id, netw::messaging_service::msg_addr addr) {
+                        return rs.get_messaging().make_sink_and_source_for_repair_put_row_diff_with_rpc_stream(repair_meta_id, addr);
                 })
             , _row_level_repair_ptr(row_level_repair_ptr)
             {
@@ -894,10 +890,6 @@ public:
                     reason] (reader_permit permit) mutable {
             node_repair_meta_id id{from, repair_meta_id};
             auto rm = make_lw_shared<repair_meta>(repair,
-                    db,
-                    repair.get_messaging().container(),
-                    repair.get_sys_dist_ks(),
-                    repair.get_view_update_generator(),
                     cf,
                     s,
                     std::move(permit),
@@ -2924,10 +2916,6 @@ public:
             auto permit = _ri.db.local().obtain_reader_permit(_cf, "repair-meta", db::no_timeout).get0();
 
             repair_meta master(_ri.rs,
-                    _ri.db,
-                    _ri.messaging,
-                    _ri.sys_dist_ks,
-                    _ri.view_update_generator,
                     _cf,
                     s,
                     std::move(permit),
