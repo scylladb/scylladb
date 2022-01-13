@@ -1041,6 +1041,10 @@ struct multi_column_range_accumulator {
         on_internal_error(rlogger, "Column encountered outside binary operator");
     }
 
+    void operator()(const subscript&) {
+        on_internal_error(rlogger, "Subscript encountered outside binary operator");
+    }
+
     void operator()(const token&) {
         on_internal_error(rlogger, "Token encountered outside binary operator");
     }
