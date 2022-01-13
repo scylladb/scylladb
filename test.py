@@ -669,7 +669,7 @@ def parse_cmd_line():
             nr_cpus = multiprocessing.cpu_count()
         else:
             nr_cpus = int(subprocess.check_output(
-                ['taskset', '-c', args.cpus, 'python', '-c',
+                ['taskset', '-c', args.cpus, 'python3', '-c',
                  'import os; print(len(os.sched_getaffinity(0)))']))
 
         cpus_per_test_job = 1
