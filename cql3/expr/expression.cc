@@ -1122,6 +1122,9 @@ std::ostream& operator<<(std::ostream& os, const expression& expr) {
             [&] (const column_value& col) {
                 fmt::print(os, "{}", col);
             },
+            [&] (const subscript& sub) {
+                fmt::print(os, "{}[{}]", sub.val, sub.sub);
+            },
             [&] (const unresolved_identifier& ui) {
                 fmt::print(os, "unresolved({})", *ui.ident);
             },
