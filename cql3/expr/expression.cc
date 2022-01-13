@@ -2242,6 +2242,10 @@ void fill_prepare_context(expression& e, prepare_context& ctx) {
                 fill_prepare_context(*cv.sub, ctx);
             }
         },
+        [&](subscript& s) {
+            fill_prepare_context(s.val, ctx);
+            fill_prepare_context(s.sub, ctx);
+        },
         [](untyped_constant&) {},
         [](null&) {},
         [](constant&) {},
