@@ -818,7 +818,7 @@ dht::partition_range_vector partition_ranges_from_EQs(
         const std::vector<expr::expression>& eq_expressions, const query_options& options, const schema& schema) {
     std::vector<managed_bytes> pk_value(schema.partition_key_size());
     for (const auto& e : eq_expressions) {
-        const auto col = expr::as<column_value>(find(e, oper_t::EQ)->lhs).col;
+        const auto col = expr::get_subscripted_column(find(e, oper_t::EQ)->lhs).col;
         const auto vals = std::get<value_list>(possible_lhs_values(col, e, options));
         if (vals.empty()) { // Case of C=1 AND C=2.
             return {};

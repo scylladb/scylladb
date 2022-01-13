@@ -1225,7 +1225,7 @@ bool is_on_collection(const binary_operator& b) {
         return true;
     }
     if (auto tuple = expr::as_if<tuple_constructor>(&b.lhs)) {
-        return boost::algorithm::any_of(tuple->elements, [] (const expression& v) { return expr::as<column_value>(v).sub; });
+        return boost::algorithm::any_of(tuple->elements, [] (const expression& v) { return expr::is<subscript>(v); });
     }
     return false;
 }
