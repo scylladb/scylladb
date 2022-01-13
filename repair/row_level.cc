@@ -637,7 +637,7 @@ public:
 private:
     repair_service& _rs;
     seastar::sharded<replica::database>& _db;
-    seastar::sharded<netw::messaging_service>& _messaging;
+    netw::messaging_service& _messaging;
     seastar::sharded<db::system_distributed_keyspace>& _sys_dist_ks;
     seastar::sharded<db::view::view_update_generator>& _view_update_generator;
     replica::column_family& _cf;
@@ -744,7 +744,7 @@ public:
             row_level_repair* row_level_repair_ptr = nullptr)
             : _rs(rs)
             , _db(rs.get_db())
-            , _messaging(rs.get_messaging().container())
+            , _messaging(rs.get_messaging())
             , _sys_dist_ks(rs.get_sys_dist_ks())
             , _view_update_generator(rs.get_view_update_generator())
             , _cf(cf)
@@ -1529,7 +1529,7 @@ public:
         if (remote_node == _myip) {
             return get_full_row_hashes_handler();
         }
-        return _messaging.local().send_repair_get_full_row_hashes(msg_addr(remote_node),
+        return _messaging.send_repair_get_full_row_hashes(msg_addr(remote_node),
                 _repair_meta_id).then([this, remote_node] (repair_hash_set hashes) {
             rlogger.debug("Got full hashes from peer={}, nr_hashes={}", remote_node, hashes.size());
             _metrics.rx_hashes_nr += hashes.size();
@@ -1613,7 +1613,7 @@ public:
         if (remote_node == _myip) {
             return get_combined_row_hash_handler(common_sync_boundary);
         }
-        return _messaging.local().send_repair_get_combined_row_hash(msg_addr(remote_node),
+        return _messaging.send_repair_get_combined_row_hash(msg_addr(remote_node),
                 _repair_meta_id, common_sync_boundary).then([this] (get_combined_row_hash_response resp) {
             stats().rpc_call_nr++;
             stats().rx_hashes_nr++;
@@ -1647,7 +1647,7 @@ public:
         // Murmur3 is appropriate because that's the only supported partitioner at
         // the time this change is introduced.
         sstring remote_partitioner_name = "org.apache.cassandra.dht.Murmur3Partitioner";
-        return _messaging.local().send_repair_row_level_start(msg_addr(remote_node),
+        return _messaging.send_repair_row_level_start(msg_addr(remote_node),
                 _repair_meta_id, ks_name, cf_name, std::move(range), _algo, _max_row_buf_size, _seed,
                 _master_node_shard_config.shard, _master_node_shard_config.shard_count, _master_node_shard_config.ignore_msb,
                 remote_partitioner_name, std::move(schema_version), reason).then([ks_name, cf_name] (rpc::optional<repair_row_level_start_response> resp) {
@@ -1679,7 +1679,7 @@ public:
             return stop();
         }
         stats().rpc_call_nr++;
-        return _messaging.local().send_repair_row_level_stop(msg_addr(remote_node),
+        return _messaging.send_repair_row_level_stop(msg_addr(remote_node),
                 _repair_meta_id, std::move(ks_name), std::move(cf_name), std::move(range));
     }
 
@@ -1701,7 +1701,7 @@ public:
             return get_estimated_partitions();
         }
         stats().rpc_call_nr++;
-        return _messaging.local().send_repair_get_estimated_partitions(msg_addr(remote_node), _repair_meta_id);
+        return _messaging.send_repair_get_estimated_partitions(msg_addr(remote_node), _repair_meta_id);
     }
 
 
@@ -1721,7 +1721,7 @@ public:
             return set_estimated_partitions(estimated_partitions);
         }
         stats().rpc_call_nr++;
-        return _messaging.local().send_repair_set_estimated_partitions(msg_addr(remote_node), _repair_meta_id, estimated_partitions);
+        return _messaging.send_repair_set_estimated_partitions(msg_addr(remote_node), _repair_meta_id, estimated_partitions);
     }
 
 
@@ -1742,7 +1742,7 @@ public:
             return get_sync_boundary_handler(skipped_sync_boundary);
         }
         stats().rpc_call_nr++;
-        return _messaging.local().send_repair_get_sync_boundary(msg_addr(remote_node), _repair_meta_id, skipped_sync_boundary);
+        return _messaging.send_repair_get_sync_boundary(msg_addr(remote_node), _repair_meta_id, skipped_sync_boundary);
     }
 
     // RPC handler
@@ -1769,7 +1769,7 @@ public:
                 _metrics.tx_hashes_nr += set_diff.size();
             }
             stats().rpc_call_nr++;
-            repair_rows_on_wire rows = _messaging.local().send_repair_get_row_diff(msg_addr(remote_node),
+            repair_rows_on_wire rows = _messaging.send_repair_get_row_diff(msg_addr(remote_node),
                     _repair_meta_id, std::move(set_diff), bool(needs_all_rows)).get0();
             if (!rows.empty()) {
                 apply_rows_on_master_in_thread(std::move(rows), remote_node, update_working_row_buf::yes, update_peer_row_hash_sets::no, node_idx);
@@ -1783,7 +1783,7 @@ public:
             return;
         }
         stats().rpc_call_nr++;
-        repair_rows_on_wire rows = _messaging.local().send_repair_get_row_diff(msg_addr(remote_node),
+        repair_rows_on_wire rows = _messaging.send_repair_get_row_diff(msg_addr(remote_node),
                 _repair_meta_id, {}, bool(needs_all_rows_t::yes)).get0();
         if (!rows.empty()) {
             apply_rows_on_master_in_thread(std::move(rows), remote_node, update_working_row_buf::yes, update_peer_row_hash_sets::yes, node_idx);
@@ -1911,7 +1911,7 @@ public:
                         stats().tx_row_bytes += row_bytes;
                         stats().rpc_call_nr++;
                         return to_repair_rows_on_wire(std::move(row_diff)).then([this, remote_node] (repair_rows_on_wire rows)  {
-                            return _messaging.local().send_repair_put_row_diff(msg_addr(remote_node), _repair_meta_id, std::move(rows));
+                            return _messaging.send_repair_put_row_diff(msg_addr(remote_node), _repair_meta_id, std::move(rows));
                         });
                     });
                 });
