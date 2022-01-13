@@ -190,6 +190,21 @@ static std::vector<expr::expression> extract_partition_range(
             // Partition key columns are not legal in tuples, so ignore tuples.
         }
 
+        void operator()(const subscript& sub) {
+            const column_value& cval = get_subscripted_column(sub.val);
+
+            with_current_binary_operator(*this, [&] (const binary_operator& b) {
+                if (cval.col->is_partition_key() && (b.op == oper_t::EQ || b.op == oper_t::IN)) {
+                    const auto found = single_column.find(cval.col);
+                    if (found == single_column.end()) {
+                        single_column[cval.col] = b;
+                    } else {
+                        found->second = make_conjunction(std::move(found->second), b);
+                    }
+                }
+            });
+        }
+
         void operator()(const constant&) {}
 
         void operator()(const unresolved_identifier&) {
