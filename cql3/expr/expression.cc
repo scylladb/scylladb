@@ -1548,6 +1548,13 @@ std::vector<expression> extract_single_column_restrictions_for_column(const expr
             }
         }
 
+        void operator()(const subscript& s) {
+            const column_value& cv = get_subscripted_column(s);
+            if (*cv.col == column && current_binary_operator != nullptr) {
+                restrictions.emplace_back(*current_binary_operator);
+            }
+        }
+
         void operator()(const token&) {}
         void operator()(const unresolved_identifier&) {}
         void operator()(const column_mutation_attribute&) {}
