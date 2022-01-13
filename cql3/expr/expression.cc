@@ -1352,6 +1352,12 @@ bool recurse_until(const expression& e, const noncopyable_function<bool (const e
                 }
                 return false;
             },
+            [&] (const subscript& sub) {
+                if (recurse_until(sub.val, predicate_fun)) {
+                    return true;
+                }
+                return recurse_until(sub.sub, predicate_fun);
+            },
             [&] (const column_mutation_attribute& a) {
                 return recurse_until(a.column, predicate_fun);
             },
