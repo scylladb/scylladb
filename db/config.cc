@@ -842,6 +842,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , strict_allow_filtering(this, "strict_allow_filtering", liveness::LiveUpdate, value_status::Used, strict_allow_filtering_default(), "Match Cassandra in requiring ALLOW FILTERING on slow queries. Can be true, false, or warn. When false, Scylla accepts some slow queries even without ALLOW FILTERING that Cassandra rejects. Warn is same as false, but with warning.")
     , reversed_reads_auto_bypass_cache(this, "reversed_reads_auto_bypass_cache", liveness::LiveUpdate, value_status::Used, false,
             "Bypass in-memory data cache (the row cache) when performing reversed queries.")
+    , enable_optimized_reversed_reads(this, "enable_optimized_reversed_reads", liveness::LiveUpdate, value_status::Used, true,
+            "Use a new optimized algorithm for performing reversed reads.")
     , alternator_port(this, "alternator_port", value_status::Used, 0, "Alternator API port")
     , alternator_https_port(this, "alternator_https_port", value_status::Used, 0, "Alternator API HTTPS port")
     , alternator_address(this, "alternator_address", value_status::Used, "0.0.0.0", "Alternator API listening address")
