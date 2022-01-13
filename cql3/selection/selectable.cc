@@ -255,6 +255,9 @@ selectable_processes_selection(const expr::expression& raw_selectable) {
         [&] (const expr::binary_operator& conj) -> bool {
             on_internal_error(slogger, "no way to express 'SELECT a binop b' in the grammar yet");
         },
+        [] (const expr::subscript&) -> bool {
+            on_internal_error(slogger, "no way to express 'SELECT a[b]' in the grammar yet");
+        },
         [&] (const expr::column_value& column) -> bool {
             // There is no path that reaches here, but expr::column_value and column_identifier are logically the same,
             // so bridge them.
