@@ -65,6 +65,7 @@ using allow_local_index = bool_class<allow_local_index_tag>;
 struct binary_operator;
 struct conjunction;
 struct column_value;
+struct subscript;
 struct token;
 struct unresolved_identifier;
 struct column_mutation_attribute;
@@ -84,6 +85,7 @@ concept ExpressionElement
         = std::same_as<T, conjunction>
         || std::same_as<T, binary_operator>
         || std::same_as<T, column_value>
+        || std::same_as<T, subscript>
         || std::same_as<T, token>
         || std::same_as<T, unresolved_identifier>
         || std::same_as<T, column_mutation_attribute>
@@ -104,6 +106,7 @@ concept invocable_on_expression
         = std::invocable<Func, conjunction>
         && std::invocable<Func, binary_operator>
         && std::invocable<Func, column_value>
+        && std::invocable<Func, subscript>
         && std::invocable<Func, token>
         && std::invocable<Func, unresolved_identifier>
         && std::invocable<Func, column_mutation_attribute>
@@ -124,6 +127,7 @@ concept invocable_on_expression_ref
         = std::invocable<Func, conjunction&>
         && std::invocable<Func, binary_operator&>
         && std::invocable<Func, column_value&>
+        && std::invocable<Func, subscript&>
         && std::invocable<Func, token&>
         && std::invocable<Func, unresolved_identifier&>
         && std::invocable<Func, column_mutation_attribute&>
@@ -376,7 +380,7 @@ struct expression::impl final {
             conjunction, binary_operator, column_value, token, unresolved_identifier,
             column_mutation_attribute, function_call, cast, field_selection, null,
             bind_variable, untyped_constant, constant, tuple_constructor, collection_constructor,
-            usertype_constructor>;
+            usertype_constructor, subscript>;
     variant_type v;
     impl(variant_type v) : v(std::move(v)) {}
 };

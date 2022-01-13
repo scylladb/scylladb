@@ -148,10 +148,9 @@ using column_maybe_subscripted = std::variant<const column_value*, const subscri
 
 /// Converts an expression to column_maybe subscripted
 column_maybe_subscripted as_column_maybe_subscripted(const expression& e) {
-    // TODO(subscript): Uncomment once subscript is added to expression
-    // if (auto cval = as_if<subscript>(&e)) {
-    //     return cval;
-    // }
+    if (auto cval = as_if<subscript>(&e)) {
+        return cval;
+    }
 
     if (!is<column_value>(e)) {
         on_internal_error(expr_logger, format("as_column_maybe_subscripted: bad expression: {}", e));
@@ -1474,11 +1473,10 @@ expression search_and_replace(const expression& e,
                     return cv;
                 },
                 [&] (const subscript& s) -> expression {
-                    // TODO(subscript): Uncomment once subscript is added to expression
-                    // return subscript {
-                    //     .val = recurse(s.val),
-                    //     .sub = recurse(s.sub)
-                    // };
+                    return subscript {
+                        .val = recurse(s.val),
+                        .sub = recurse(s.sub)
+                    };
                     throw std::runtime_error("expr: search_and_replace - subscript not added to expression yet");
                 },
                 [&] (LeafExpression auto const& e) -> expression {
