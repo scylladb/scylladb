@@ -638,11 +638,6 @@ std::vector<mutation> migration_manager::prepare_new_keyspace_announcement(lw_sh
     return db::schema_tables::make_create_keyspace_mutations(ksm, api::new_timestamp());
 }
 
-future<> migration_manager::announce_new_column_family(schema_ptr cfm)
-{
-    return announce_new_column_family(std::move(cfm), api::new_timestamp());
-}
-
 future<std::vector<mutation>> migration_manager::prepare_new_column_family_announcement(schema_ptr cfm)
 {
     return prepare_new_column_family_announcement(std::move(cfm), api::new_timestamp());
@@ -659,10 +654,6 @@ future<std::vector<mutation>> migration_manager::include_keyspace(
     mutation m = co_await db::schema_tables::read_keyspace_mutation(_storage_proxy.container(), keyspace.name());
     mutations.push_back(std::move(m));
     co_return std::move(mutations);
-}
-
-future<> migration_manager::announce_new_column_family(schema_ptr cfm, api::timestamp_type timestamp) {
-    co_await announce(co_await prepare_new_column_family_announcement(std::move(cfm), timestamp));
 }
 
 future<std::vector<mutation>> migration_manager::prepare_new_column_family_announcement(schema_ptr cfm, api::timestamp_type timestamp) {
@@ -723,10 +714,6 @@ future<std::vector<mutation>> migration_manager::prepare_column_family_update_an
         co_return coroutine::make_exception(exceptions::configuration_exception(format("Cannot update non existing table '{}' in keyspace '{}'.",
                                                          cfm->cf_name(), cfm->ks_name())));
     }
-}
-
-future<> migration_manager::announce_column_family_update(schema_ptr cfm, bool from_thrift, std::optional<api::timestamp_type> ts_opt) {
-    co_return co_await announce(co_await prepare_column_family_update_announcement(std::move(cfm), from_thrift, {}, ts_opt));
 }
 
 future<std::vector<mutation>> migration_manager::do_prepare_new_type_announcement(user_type new_type) {
@@ -873,12 +860,6 @@ future<std::vector<mutation>> migration_manager::prepare_column_family_drop_anno
     }
 }
 
-future<> migration_manager::announce_column_family_drop(const sstring& ks_name,
-                                                        const sstring& cf_name,
-                                                        drop_views drop_views) {
-    co_return co_await announce(co_await prepare_column_family_drop_announcement(ks_name, cf_name, drop_views));
-}
-
 future<std::vector<mutation>> migration_manager::prepare_type_drop_announcement(user_type dropped_type) {
     auto& db = _storage_proxy.get_db().local();
     auto&& keyspace = db.find_keyspace(dropped_type->_keyspace);
@@ -904,10 +885,6 @@ future<std::vector<mutation>> migration_manager::prepare_new_view_announcement(v
     } catch (const replica::no_such_keyspace& e) {
         co_return coroutine::make_exception(exceptions::configuration_exception(format("Cannot add view '{}' to non existing keyspace '{}'.", view->cf_name(), view->ks_name())));
     }
-}
-
-future<> migration_manager::announce_new_view(view_ptr view) {
-    co_return co_await announce(co_await prepare_new_view_announcement(std::move(view)));
 }
 
 future<std::vector<mutation>> migration_manager::prepare_view_update_announcement(view_ptr view) {
@@ -975,21 +952,19 @@ future<> migration_manager::push_schema_mutation(const gms::inet_address& endpoi
 // Returns a future on the local application of the schema
 future<> migration_manager::announce(std::vector<mutation> schema) {
     if (_raft_gr.is_enabled()) {
+        assert(this_shard_id() == 0);
         auto schema_features = _feat.cluster_schema_features();
         auto adjusted_schema = db::schema_tables::adjust_schema_for_schema_features(schema, schema_features);
-        auto func = [&adjusted_schema] (migration_manager& mm) -> future<> {
-            raft::command cmd;
-            ser::serialize(cmd, std::vector<canonical_mutation>(adjusted_schema.begin(), adjusted_schema.end()));
-            // todo: add schema version into command, to apply
-            // only on condition the version is the same.
-            // qqq: what happens if there is a command in between?
-            // there is a new schema version, apply skipped, but
-            // we don't get a proper error.
-            co_return co_await mm._raft_gr.group0().add_entry(std::move(cmd), raft::wait_type::applied);
-            // TODO: return "retry" error if apply is a no-op - check
-            // new schema version
-        };
-        co_return co_await container().invoke_on(0, func);
+        raft::command cmd;
+        ser::serialize(cmd, std::vector<canonical_mutation>(adjusted_schema.begin(), adjusted_schema.end()));
+        // todo: add schema version into command, to apply
+        // only on condition the version is the same.
+        // qqq: what happens if there is a command in between?
+        // there is a new schema version, apply skipped, but
+        // we don't get a proper error.
+        co_return co_await _raft_gr.group0().add_entry(std::move(cmd), raft::wait_type::applied);
+        // TODO: return "retry" error if apply is a no-op - check
+        // new schema version
     } else {
         auto f = db::schema_tables::merge_schema(_storage_proxy.container(), _feat, schema);
 
@@ -1014,9 +989,8 @@ future<> migration_manager::announce(std::vector<mutation> schema) {
 
 future<> migration_manager::schema_read_barrier() {
     if (_raft_gr.is_enabled()) {
-        return container().invoke_on(0, [] (migration_manager& mm) {
-            return mm._raft_gr.group0().read_barrier();
-        });
+        assert(this_shard_id() == 0);
+        return _raft_gr.group0().read_barrier();
     }
     return make_ready_future();
 }

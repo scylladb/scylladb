@@ -153,13 +153,14 @@ SEASTAR_TEST_CASE(test_querying_with_limits) {
 static void test_database(void (*run_tests)(populate_fn_ex, bool)) {
     do_with_cql_env_thread([run_tests] (cql_test_env& e) {
         run_tests([&] (schema_ptr s, const std::vector<mutation>& partitions, gc_clock::time_point) -> mutation_source {
+            auto& mm = e.migration_manager().local();
             try {
                 e.local_db().find_column_family(s->ks_name(), s->cf_name());
-                e.migration_manager().local().announce_column_family_drop(s->ks_name(), s->cf_name()).get();
+                mm.announce(mm.prepare_column_family_drop_announcement(s->ks_name(), s->cf_name()).get()).get();
             } catch (const replica::no_such_column_family&) {
                 // expected
             }
-            e.migration_manager().local().announce_new_column_family(s).get();
+            mm.announce(mm.prepare_new_column_family_announcement(s).get()).get();
             replica::column_family& cf = e.local_db().find_column_family(s);
             for (auto&& m : partitions) {
                 e.local_db().apply(cf.schema(), freeze(m), tracing::trace_state_ptr(), db::commitlog::force_sync::no, db::no_timeout).get();

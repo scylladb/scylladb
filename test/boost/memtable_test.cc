@@ -720,7 +720,7 @@ SEASTAR_TEST_CASE(sstable_compaction_does_not_resurrect_data) {
             .with_column(to_bytes("id"), int32_type)
             .set_gc_grace_seconds(1)
             .build();
-        mm.announce_new_column_family(s).get();
+        mm.announce(mm.prepare_new_column_family_announcement(s).get()).get();
 
         replica::table& t = db.find_column_family(ks_name, table_name);
 
