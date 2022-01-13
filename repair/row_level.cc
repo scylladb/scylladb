@@ -841,15 +841,7 @@ public:
 
     static std::unordered_map<node_repair_meta_id, lw_shared_ptr<repair_meta>>& repair_meta_map();
 
-    static lw_shared_ptr<repair_meta> get_repair_meta(gms::inet_address from, uint32_t repair_meta_id) {
-        node_repair_meta_id id{from, repair_meta_id};
-        auto it = repair_meta_map().find(id);
-        if (it == repair_meta_map().end()) {
-            throw std::runtime_error(format("get_repair_meta: repair_meta_id {} for node {} does not exist", id.repair_meta_id, id.ip));
-        } else {
-            return it->second;
-        }
-    }
+    static lw_shared_ptr<repair_meta> get_repair_meta(gms::inet_address from, uint32_t repair_meta_id);
 
     static future<>
     insert_repair_meta(repair_service& repair,
@@ -862,123 +854,20 @@ public:
             uint64_t seed,
             shard_config master_node_shard_config,
             table_schema_version schema_version,
-            streaming::stream_reason reason) {
-        return repair.get_migration_manager().get_schema_for_write(schema_version, {from, src_cpu_id}, repair.get_messaging()).then([&repair,
-                from,
-                repair_meta_id,
-                range,
-                algo,
-                max_row_buf_size,
-                seed,
-                master_node_shard_config,
-                schema_version,
-                reason] (schema_ptr s) {
-            auto& db = repair.get_db();
-            auto& cf = db.local().find_column_family(s->id());
-          return db.local().obtain_reader_permit(cf, "repair-meta", db::no_timeout).then([s = std::move(s),
-                    &db,
-                    &cf,
-                    &repair,
-                    from,
-                    repair_meta_id,
-                    range,
-                    algo,
-                    max_row_buf_size,
-                    seed,
-                    master_node_shard_config,
-                    schema_version,
-                    reason] (reader_permit permit) mutable {
-            node_repair_meta_id id{from, repair_meta_id};
-            auto rm = make_lw_shared<repair_meta>(repair,
-                    cf,
-                    s,
-                    std::move(permit),
-                    range,
-                    algo,
-                    max_row_buf_size,
-                    seed,
-                    repair_meta::repair_master::no,
-                    repair_meta_id,
-                    reason,
-                    std::move(master_node_shard_config),
-                    inet_address_vector_replica_set{from});
-            rm->set_repair_state_for_local_node(repair_state::row_level_start_started);
-            bool insertion = repair_meta_map().emplace(id, rm).second;
-            if (!insertion) {
-                rlogger.warn("insert_repair_meta: repair_meta_id {} for node {} already exists, replace existing one", id.repair_meta_id, id.ip);
-                repair_meta_map()[id] = rm;
-                rm->set_repair_state_for_local_node(repair_state::row_level_start_finished);
-            } else {
-                rlogger.debug("insert_repair_meta: Inserted repair_meta_id {} for node {}", id.repair_meta_id, id.ip);
-            }
-          });
-        });
-    }
+            streaming::stream_reason reason);
 
     static future<>
     remove_repair_meta(const gms::inet_address& from,
             uint32_t repair_meta_id,
             sstring ks_name,
             sstring cf_name,
-            dht::token_range range) {
-        node_repair_meta_id id{from, repair_meta_id};
-        auto it = repair_meta_map().find(id);
-        if (it == repair_meta_map().end()) {
-            rlogger.warn("remove_repair_meta: repair_meta_id {} for node {} does not exist", id.repair_meta_id, id.ip);
-            return make_ready_future<>();
-        } else {
-            auto rm = it->second;
-            repair_meta_map().erase(it);
-            rlogger.debug("remove_repair_meta: Stop repair_meta_id {} for node {} started", id.repair_meta_id, id.ip);
-            return rm->stop().then([rm, id] {
-                rlogger.debug("remove_repair_meta: Stop repair_meta_id {} for node {} finished", id.repair_meta_id, id.ip);
-            });
-        }
-    }
+            dht::token_range range);
 
-    static future<>
-    remove_repair_meta(gms::inet_address from) {
-        rlogger.debug("Remove all repair_meta for single node {}", from);
-        auto repair_metas = make_lw_shared<utils::chunked_vector<lw_shared_ptr<repair_meta>>>();
-        for (auto it = repair_meta_map().begin(); it != repair_meta_map().end();) {
-            if (it->first.ip == from) {
-                repair_metas->push_back(it->second);
-                it = repair_meta_map().erase(it);
-            } else {
-                it++;
-            }
-        }
-        return parallel_for_each(*repair_metas, [repair_metas] (auto& rm) {
-            return rm->stop().then([&rm] {
-                rm = {};
-            });
-        }).then([repair_metas, from] {
-            rlogger.debug("Removed all repair_meta for single node {}", from);
-        });
-    }
+    static future<> remove_repair_meta(gms::inet_address from);
 
-    static future<>
-    remove_repair_meta() {
-        rlogger.debug("Remove all repair_meta for all nodes");
-        auto repair_metas = make_lw_shared<utils::chunked_vector<lw_shared_ptr<repair_meta>>>(
-                boost::copy_range<utils::chunked_vector<lw_shared_ptr<repair_meta>>>(repair_meta_map()
-                | boost::adaptors::map_values));
-        repair_meta_map().clear();
-        return parallel_for_each(*repair_metas, [repair_metas] (auto& rm) {
-            return rm->stop().then([&rm] {
-                rm = {};
-            });
-        }).then([repair_metas] {
-            rlogger.debug("Removed all repair_meta for all nodes");
-        });
-    }
+    static future<> remove_repair_meta();
 
-    static future<uint32_t> get_next_repair_meta_id() {
-        return smp::submit_to(0, [] {
-            static uint32_t next_id = 0;
-            return next_id++;
-        });
-    }
+    static future<uint32_t> get_next_repair_meta_id();
 
     void reset_peer_row_hash_sets() {
         if (_peer_row_hash_sets.size() != _nr_peer_nodes) {
@@ -3202,4 +3091,143 @@ future<> repair_service::load_history() {
         });
     }
     co_return;
+}
+
+lw_shared_ptr<repair_meta> repair_meta::get_repair_meta(gms::inet_address from, uint32_t repair_meta_id) {
+    node_repair_meta_id id{from, repair_meta_id};
+    auto it = repair_meta_map().find(id);
+    if (it == repair_meta_map().end()) {
+        throw std::runtime_error(format("get_repair_meta: repair_meta_id {} for node {} does not exist", id.repair_meta_id, id.ip));
+    } else {
+        return it->second;
+    }
+}
+
+future<>
+repair_meta::insert_repair_meta(repair_service& repair,
+        const gms::inet_address& from,
+        uint32_t src_cpu_id,
+        uint32_t repair_meta_id,
+        dht::token_range range,
+        row_level_diff_detect_algorithm algo,
+        uint64_t max_row_buf_size,
+        uint64_t seed,
+        shard_config master_node_shard_config,
+        table_schema_version schema_version,
+        streaming::stream_reason reason) {
+    return repair.get_migration_manager().get_schema_for_write(schema_version, {from, src_cpu_id}, repair.get_messaging()).then([&repair,
+            from,
+            repair_meta_id,
+            range,
+            algo,
+            max_row_buf_size,
+            seed,
+            master_node_shard_config,
+            schema_version,
+            reason] (schema_ptr s) {
+        auto& db = repair.get_db();
+        auto& cf = db.local().find_column_family(s->id());
+        return db.local().obtain_reader_permit(cf, "repair-meta", db::no_timeout).then([s = std::move(s),
+                &db,
+                &cf,
+                &repair,
+                from,
+                repair_meta_id,
+                range,
+                algo,
+                max_row_buf_size,
+                seed,
+                master_node_shard_config,
+                schema_version,
+                reason] (reader_permit permit) mutable {
+        node_repair_meta_id id{from, repair_meta_id};
+        auto rm = make_lw_shared<repair_meta>(repair,
+                cf,
+                s,
+                std::move(permit),
+                range,
+                algo,
+                max_row_buf_size,
+                seed,
+                repair_meta::repair_master::no,
+                repair_meta_id,
+                reason,
+                std::move(master_node_shard_config),
+                inet_address_vector_replica_set{from});
+        rm->set_repair_state_for_local_node(repair_state::row_level_start_started);
+        bool insertion = repair_meta_map().emplace(id, rm).second;
+        if (!insertion) {
+            rlogger.warn("insert_repair_meta: repair_meta_id {} for node {} already exists, replace existing one", id.repair_meta_id, id.ip);
+            repair_meta_map()[id] = rm;
+            rm->set_repair_state_for_local_node(repair_state::row_level_start_finished);
+        } else {
+            rlogger.debug("insert_repair_meta: Inserted repair_meta_id {} for node {}", id.repair_meta_id, id.ip);
+        }
+        });
+    });
+}
+
+future<>
+repair_meta::remove_repair_meta(const gms::inet_address& from,
+        uint32_t repair_meta_id,
+        sstring ks_name,
+        sstring cf_name,
+        dht::token_range range) {
+    node_repair_meta_id id{from, repair_meta_id};
+    auto it = repair_meta_map().find(id);
+    if (it == repair_meta_map().end()) {
+        rlogger.warn("remove_repair_meta: repair_meta_id {} for node {} does not exist", id.repair_meta_id, id.ip);
+        return make_ready_future<>();
+    } else {
+        auto rm = it->second;
+        repair_meta_map().erase(it);
+        rlogger.debug("remove_repair_meta: Stop repair_meta_id {} for node {} started", id.repair_meta_id, id.ip);
+        return rm->stop().then([rm, id] {
+            rlogger.debug("remove_repair_meta: Stop repair_meta_id {} for node {} finished", id.repair_meta_id, id.ip);
+        });
+    }
+}
+
+future<>
+repair_meta::remove_repair_meta(gms::inet_address from) {
+    rlogger.debug("Remove all repair_meta for single node {}", from);
+    auto repair_metas = make_lw_shared<utils::chunked_vector<lw_shared_ptr<repair_meta>>>();
+    for (auto it = repair_meta_map().begin(); it != repair_meta_map().end();) {
+        if (it->first.ip == from) {
+            repair_metas->push_back(it->second);
+            it = repair_meta_map().erase(it);
+        } else {
+            it++;
+        }
+    }
+    return parallel_for_each(*repair_metas, [repair_metas] (auto& rm) {
+        return rm->stop().then([&rm] {
+            rm = {};
+        });
+    }).then([repair_metas, from] {
+        rlogger.debug("Removed all repair_meta for single node {}", from);
+    });
+}
+
+future<>
+repair_meta::remove_repair_meta() {
+    rlogger.debug("Remove all repair_meta for all nodes");
+    auto repair_metas = make_lw_shared<utils::chunked_vector<lw_shared_ptr<repair_meta>>>(
+            boost::copy_range<utils::chunked_vector<lw_shared_ptr<repair_meta>>>(repair_meta_map()
+            | boost::adaptors::map_values));
+    repair_meta_map().clear();
+    return parallel_for_each(*repair_metas, [repair_metas] (auto& rm) {
+        return rm->stop().then([&rm] {
+            rm = {};
+        });
+    }).then([repair_metas] {
+        rlogger.debug("Removed all repair_meta for all nodes");
+    });
+}
+
+future<uint32_t> repair_meta::get_next_repair_meta_id() {
+    return smp::submit_to(0, [] {
+        static uint32_t next_id = 0;
+        return next_id++;
+    });
 }
