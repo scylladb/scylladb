@@ -834,23 +834,23 @@ future<> generation_service::check_and_repair_cdc_streams() {
                 latest, db_clock::now());
             should_regenerate = true;
         } else {
-          if (tmptr->sorted_tokens().size() != gen->entries().size()) {
-              // We probably have garbage streams from old generations
-              cdc_log.info("Generation size does not match the token ring, regenerating");
-              should_regenerate = true;
-          } else {
-            std::unordered_set<dht::token> gen_ends;
-            for (const auto& entry : gen->entries()) {
-                gen_ends.insert(entry.token_range_end);
-            }
-            for (const auto& metadata_token : tmptr->sorted_tokens()) {
-                if (!gen_ends.contains(metadata_token)) {
-                    cdc_log.warn("CDC generation {} missing token {}. Regenerating.", latest, metadata_token);
-                    should_regenerate = true;
-                    break;
+            if (tmptr->sorted_tokens().size() != gen->entries().size()) {
+                // We probably have garbage streams from old generations
+                cdc_log.info("Generation size does not match the token ring, regenerating");
+                should_regenerate = true;
+            } else {
+                std::unordered_set<dht::token> gen_ends;
+                for (const auto& entry : gen->entries()) {
+                    gen_ends.insert(entry.token_range_end);
+                }
+                for (const auto& metadata_token : tmptr->sorted_tokens()) {
+                    if (!gen_ends.contains(metadata_token)) {
+                        cdc_log.warn("CDC generation {} missing token {}. Regenerating.", latest, metadata_token);
+                        should_regenerate = true;
+                        break;
+                    }
                 }
             }
-          }
         }
     }
 
