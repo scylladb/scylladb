@@ -311,6 +311,21 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
             });
         }
 
+        void operator()(const subscript& sub) {
+            const column_value& cval = get_subscripted_column(sub.val);
+
+            with_current_binary_operator(*this, [&] (const binary_operator& b) {
+                if (cval.col->is_clustering_key()) {
+                    const auto found = single.find(cval.col);
+                    if (found == single.end()) {
+                        single[cval.col] = b;
+                    } else {
+                        found->second = make_conjunction(std::move(found->second), b);
+                    }
+                }
+            });
+        }
+
         void operator()(const token&) {
             // A token cannot be a clustering prefix restriction
         }
