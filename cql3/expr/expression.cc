@@ -1665,6 +1665,9 @@ constant evaluate(const expression& e, const query_options& options) {
         [](const column_value&) -> constant {
             on_internal_error(expr_logger, "Can't evaluate a column_value");
         },
+        [](const subscript&) -> constant {
+            on_internal_error(expr_logger, "Can't evaluate a subscript");
+        },
         [](const untyped_constant&) -> constant {
             on_internal_error(expr_logger, "Can't evaluate a untyped_constant ");
         },
