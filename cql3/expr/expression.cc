@@ -1473,6 +1473,14 @@ expression search_and_replace(const expression& e,
                     }
                     return cv;
                 },
+                [&] (const subscript& s) -> expression {
+                    // TODO(subscript): Uncomment once subscript is added to expression
+                    // return subscript {
+                    //     .val = recurse(s.val),
+                    //     .sub = recurse(s.sub)
+                    // };
+                    throw std::runtime_error("expr: search_and_replace - subscript not added to expression yet");
+                },
                 [&] (LeafExpression auto const& e) -> expression {
                     return e;
                 },
