@@ -106,19 +106,20 @@ class feature_enabler : public i_endpoint_state_change_subscriber {
     gossiper& _g;
 public:
     feature_enabler(gossiper& g) : _g(g) {}
-    void on_join(inet_address ep, endpoint_state state) override {
-        _g.maybe_enable_features().get();
+    future<> on_join(inet_address ep, endpoint_state state) override {
+        return _g.maybe_enable_features();
     }
-    void on_change(inet_address ep, application_state state, const versioned_value&) override {
+    future<> on_change(inet_address ep, application_state state, const versioned_value&) override {
         if (state == application_state::SUPPORTED_FEATURES) {
-            _g.maybe_enable_features().get();
+            return _g.maybe_enable_features();
         }
+        return make_ready_future();
     }
-    void before_change(inet_address, endpoint_state, application_state, const versioned_value&) override { }
-    void on_alive(inet_address, endpoint_state) override {}
-    void on_dead(inet_address, endpoint_state) override {}
-    void on_remove(inet_address) override {}
-    void on_restart(inet_address, endpoint_state) override {}
+    future<> before_change(inet_address, endpoint_state, application_state, const versioned_value&) override { return make_ready_future(); }
+    future<> on_alive(inet_address, endpoint_state) override { return make_ready_future(); }
+    future<> on_dead(inet_address, endpoint_state) override { return make_ready_future(); }
+    future<> on_remove(inet_address) override { return make_ready_future(); }
+    future<> on_restart(inet_address, endpoint_state) override { return make_ready_future(); }
 };
 
 gossiper::gossiper(abort_source& as, feature_service& features, const locator::shared_token_metadata& stm, netw::messaging_service& ms, db::config& cfg, gossip_config gcfg)
@@ -660,26 +661,25 @@ future<> gossiper::force_remove_endpoint(inet_address endpoint) {
     if (endpoint == get_broadcast_address()) {
         return make_exception_future<>(std::runtime_error(format("Can not force remove node {} itself", endpoint)));
     }
-    return container().invoke_on(0, [endpoint] (auto& gossiper) mutable {
-        return seastar::async([&gossiper, g = gossiper.shared_from_this(), endpoint] () mutable {
-            gossiper.remove_endpoint(endpoint);
-            gossiper.evict_from_membership(endpoint).get();
+    return container().invoke_on(0, [endpoint] (auto& gossiper) mutable -> future<> {
+        try {
+            co_await gossiper.remove_endpoint(endpoint);
+            co_await gossiper.evict_from_membership(endpoint);
             logger.info("Finished to force remove node {}", endpoint);
-        }).handle_exception([endpoint] (auto ep) {
-            logger.warn("Failed to force remove node {}: {}", endpoint, ep);
-        });
+        } catch (...) {
+            logger.warn("Failed to force remove node {}: {}", endpoint, std::current_exception());
+        }
     });
 }
 
-// Runs inside seastar::async context
-void gossiper::remove_endpoint(inet_address endpoint) {
+future<> gossiper::remove_endpoint(inet_address endpoint) {
     // do subscribers first so anything in the subscriber that depends on gossiper state won't get confused
     // We can not run on_remove callbacks here becasue on_remove in
     // storage_service might take the gossiper::timer_callback_lock
     (void)seastar::async([this, endpoint] {
         _subscribers.for_each([endpoint] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
-            subscriber->on_remove(endpoint);
-        });
+            return subscriber->on_remove(endpoint);
+        }).get();
     }).handle_exception([] (auto ep) {
         logger.warn("Fail to call on_remove callback: {}", ep);
     });
@@ -691,7 +691,7 @@ void gossiper::remove_endpoint(inet_address endpoint) {
     }
 
     _live_endpoints.resize(std::distance(_live_endpoints.begin(), std::remove(_live_endpoints.begin(), _live_endpoints.end(), endpoint)));
-    update_live_endpoints_version().get();
+    co_await update_live_endpoints_version();
     _unreachable_endpoints.erase(endpoint);
     _syn_handlers.erase(endpoint);
     _ack_handlers.erase(endpoint);
@@ -699,8 +699,7 @@ void gossiper::remove_endpoint(inet_address endpoint) {
     logger.debug("removing endpoint {}", endpoint);
 }
 
-// Runs inside seastar::async context
-void gossiper::do_status_check() {
+future<> gossiper::do_status_check() {
     logger.trace("Performing status check ...");
 
     auto now = this->now();
@@ -721,8 +720,8 @@ void gossiper::do_status_check() {
             && !_just_removed_endpoints.contains(endpoint)
             && ((now - ep_state.get_update_timestamp()) > fat_client_timeout)) {
             logger.info("FatClient {} has been silent for {}ms, removing from gossip", endpoint, fat_client_timeout.count());
-            remove_endpoint(endpoint); // will put it in _just_removed_endpoints to respect quarantine delay
-            evict_from_membership(endpoint).get(); // can get rid of the state immediately
+            co_await remove_endpoint(endpoint); // will put it in _just_removed_endpoints to respect quarantine delay
+            co_await evict_from_membership(endpoint); // can get rid of the state immediately
         }
 
         // check for dead state removal
@@ -730,7 +729,7 @@ void gossiper::do_status_check() {
         if (!is_alive && (now > expire_time)
              && (!get_token_metadata_ptr()->is_member(endpoint))) {
             logger.debug("time is expiring for endpoint : {} ({})", endpoint, expire_time.time_since_epoch().count());
-            evict_from_membership(endpoint).get();
+            co_await evict_from_membership(endpoint);
         }
     }
 
@@ -936,7 +935,7 @@ void gossiper::run() {
                     logger.trace("Faill to do_gossip_to_unreachable_member: {}", ep);
                 });
 
-                do_status_check();
+                do_status_check().get();
             }
 
             //
@@ -1580,10 +1579,10 @@ void gossiper::real_mark_alive(inet_address addr, endpoint_state& local_state) {
         logger.info("InetAddress {} is now UP, status = {}", addr, status);
     }
 
-    _subscribers.for_each([addr, state] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
-        subscriber->on_alive(addr, state);
+    _subscribers.for_each([addr, state] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) -> future<> {
+        co_await subscriber->on_alive(addr, state);
         logger.trace("Notified {}", fmt::ptr(subscriber.get()));
-    });
+    }).get();
 }
 
 // Runs inside seastar::async context
@@ -1595,10 +1594,10 @@ void gossiper::mark_dead(inet_address addr, endpoint_state& local_state) {
     update_live_endpoints_version().get();
     _unreachable_endpoints[addr] = now();
     logger.info("InetAddress {} is now DOWN, status = {}", addr, get_gossip_status(state));
-    _subscribers.for_each([addr, state] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
-        subscriber->on_dead(addr, state);
+    _subscribers.for_each([addr, state] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) -> future<> {
+        co_await subscriber->on_dead(addr, state);
         logger.trace("Notified {}", fmt::ptr(subscriber.get()));
-    });
+    }).get();
 }
 
 // Runs inside seastar::async context
@@ -1628,8 +1627,8 @@ void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& 
     if (eps_old) {
         // the node restarted: it is up to the subscriber to take whatever action is necessary
         _subscribers.for_each([ep, eps_old] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
-            subscriber->on_restart(ep, *eps_old);
-        });
+            return subscriber->on_restart(ep, *eps_old);
+        }).get();
     }
 
     auto& ep_state = endpoint_state_map.at(ep);
@@ -1643,8 +1642,8 @@ void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& 
     auto* eps_new = get_endpoint_state_for_endpoint_ptr(ep);
     if (eps_new) {
         _subscribers.for_each([ep, eps_new] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
-            subscriber->on_join(ep, *eps_new);
-        });
+            return subscriber->on_join(ep, *eps_new);
+        }).get();
     }
     // check this at the end so nodes will learn about the endpoint
     if (is_shutdown(ep)) {
@@ -1745,15 +1744,15 @@ void gossiper::apply_new_states(inet_address addr, endpoint_state& local_state, 
 // Runs inside seastar::async context
 void gossiper::do_before_change_notifications(inet_address addr, const endpoint_state& ep_state, const application_state& ap_state, const versioned_value& new_value) {
     _subscribers.for_each([addr, ep_state, ap_state, new_value] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
-        subscriber->before_change(addr, ep_state, ap_state, new_value);
-    });
+        return subscriber->before_change(addr, ep_state, ap_state, new_value);
+    }).get();
 }
 
 // Runs inside seastar::async context
 void gossiper::do_on_change_notifications(inet_address addr, const application_state& state, const versioned_value& value) {
     _subscribers.for_each([addr, state, value] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
-        subscriber->on_change(addr, state, value);
-    });
+        return subscriber->on_change(addr, state, value);
+    }).get();
 }
 
 void gossiper::request_all(gossip_digest& g_digest,
@@ -1843,38 +1842,38 @@ void gossiper::examine_gossiper(utils::chunked_vector<gossip_digest>& g_digest_l
 }
 
 future<> gossiper::start_gossiping(int generation_nbr, std::map<application_state, versioned_value> preload_local_states, gms::advertise_myself advertise) {
-    return container().invoke_on_all([advertise] (gossiper& g) {
+    co_await container().invoke_on_all([advertise] (gossiper& g) {
         if (!advertise) {
             g._advertise_myself = false;
         }
-    }).then([this, generation_nbr, preload_local_states] () mutable {
-        build_seeds_list();
-        if (_cfg.force_gossip_generation() > 0) {
-            generation_nbr = _cfg.force_gossip_generation();
-            logger.warn("Use the generation number provided by user: generation = {}", generation_nbr);
-        }
-        endpoint_state& local_state = endpoint_state_map[get_broadcast_address()];
-        local_state.set_heart_beat_state_and_update_timestamp(heart_beat_state(generation_nbr));
-        local_state.mark_alive();
-        for (auto& entry : preload_local_states) {
-            local_state.add_application_state(entry.first, entry.second);
-        }
+    });
 
-        auto generation = local_state.get_heart_beat_state().get_generation();
+    build_seeds_list();
+    if (_cfg.force_gossip_generation() > 0) {
+        generation_nbr = _cfg.force_gossip_generation();
+        logger.warn("Use the generation number provided by user: generation = {}", generation_nbr);
+    }
+    endpoint_state& local_state = endpoint_state_map[get_broadcast_address()];
+    local_state.set_heart_beat_state_and_update_timestamp(heart_beat_state(generation_nbr));
+    local_state.mark_alive();
+    for (auto& entry : preload_local_states) {
+        local_state.add_application_state(entry.first, entry.second);
+    }
 
-        return replicate(get_broadcast_address(), local_state).then([] {
-            //notify snitches that Gossiper is about to start
-            return locator::i_endpoint_snitch::get_local_snitch_ptr()->gossiper_starting();
-        }).then([this, generation] {
-            logger.trace("gossip started with generation {}", generation);
-            _enabled = true;
-            _nr_run = 0;
-            _scheduled_gossip_task.arm(INTERVAL);
-            return container().invoke_on_all([] (gms::gossiper& g) {
-                g._enabled = true;
-                g._failure_detector_loop_done = g.failure_detector_loop();
-            });
-        });
+    auto generation = local_state.get_heart_beat_state().get_generation();
+
+    co_await replicate(get_broadcast_address(), local_state);
+
+    //notify snitches that Gossiper is about to start
+    co_await locator::i_endpoint_snitch::get_local_snitch_ptr()->gossiper_starting();
+
+    logger.trace("gossip started with generation {}", generation);
+    _enabled = true;
+    _nr_run = 0;
+    _scheduled_gossip_task.arm(INTERVAL);
+    co_await container().invoke_on_all([] (gms::gossiper& g) {
+        g._enabled = true;
+        g._failure_detector_loop_done = g.failure_detector_loop();
     });
 }
 

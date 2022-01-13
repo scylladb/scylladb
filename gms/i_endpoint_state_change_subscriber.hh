@@ -63,17 +63,17 @@ public:
      * @param endpoint endpoint for which the state change occurred.
      * @param epState  state that actually changed for the above endpoint.
      */
-    virtual void on_join(inet_address endpoint, endpoint_state ep_state) = 0;
+    virtual future<> on_join(inet_address endpoint, endpoint_state ep_state) = 0;
 
-    virtual void before_change(inet_address endpoint, endpoint_state current_state, application_state new_statekey, const versioned_value& newvalue) = 0;
+    virtual future<> before_change(inet_address endpoint, endpoint_state current_state, application_state new_statekey, const versioned_value& newvalue) = 0;
 
-    virtual void on_change(inet_address endpoint, application_state state, const versioned_value& value) = 0;
+    virtual future<> on_change(inet_address endpoint, application_state state, const versioned_value& value) = 0;
 
-    virtual void on_alive(inet_address endpoint, endpoint_state state) = 0;
+    virtual future<> on_alive(inet_address endpoint, endpoint_state state) = 0;
 
-    virtual void on_dead(inet_address endpoint, endpoint_state state) = 0;
+    virtual future<> on_dead(inet_address endpoint, endpoint_state state) = 0;
 
-    virtual void on_remove(inet_address endpoint) = 0;
+    virtual future<> on_remove(inet_address endpoint) = 0;
 
     /**
      * Called whenever a node is restarted.
@@ -81,7 +81,7 @@ public:
      * previously marked down. It will have only if {@code state.isAlive() == false}
      * as {@code state} is from before the restarted node is marked up.
      */
-    virtual void on_restart(inet_address endpoint, endpoint_state state) = 0;
+    virtual future<> on_restart(inet_address endpoint, endpoint_state state) = 0;
 };
 
 } // namespace gms

@@ -231,7 +231,7 @@ future<std::optional<service_level_options>> service_level_controller::find_serv
 
 future<>  service_level_controller::notify_service_level_added(sstring name, service_level sl_data) {
     return seastar::async( [this, name, sl_data] {
-        _subscribers.for_each([name, sl_data] (qos_configuration_change_subscriber* subscriber) {
+        _subscribers.thread_for_each([name, sl_data] (qos_configuration_change_subscriber* subscriber) {
             try {
                 subscriber->on_before_service_level_add(sl_data.slo, {name}).get();
             } catch (...) {
@@ -249,7 +249,7 @@ future<> service_level_controller::notify_service_level_updated(sstring name, se
     if (sl_it != _service_levels_db.end()) {
         service_level_options slo_before = sl_it->second.slo;
         return seastar::async( [this,sl_it, name, slo_before, slo] {
-            _subscribers.for_each([name, slo_before, slo] (qos_configuration_change_subscriber* subscriber) {
+            _subscribers.thread_for_each([name, slo_before, slo] (qos_configuration_change_subscriber* subscriber) {
                 try {
                     subscriber->on_before_service_level_change(slo_before, slo, {name}).get();
                 } catch (...) {
@@ -267,7 +267,7 @@ future<> service_level_controller::notify_service_level_removed(sstring name) {
     if (sl_it != _service_levels_db.end()) {
         _service_levels_db.erase(sl_it);
         return seastar::async( [this, name] {
-            _subscribers.for_each([name] (qos_configuration_change_subscriber* subscriber) {
+            _subscribers.thread_for_each([name] (qos_configuration_change_subscriber* subscriber) {
                 try {
                     subscriber->on_after_service_level_remove({name}).get();
                 } catch (...) {

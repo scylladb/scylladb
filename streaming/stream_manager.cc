@@ -307,7 +307,7 @@ void stream_manager::fail_all_sessions() {
     }
 }
 
-void stream_manager::on_remove(inet_address endpoint) {
+future<> stream_manager::on_remove(inet_address endpoint) {
     if (has_peer(endpoint)) {
         sslog.info("stream_manager: Close all stream_session with peer = {} in on_remove", endpoint);
         //FIXME: discarded future.
@@ -317,9 +317,10 @@ void stream_manager::on_remove(inet_address endpoint) {
             sslog.warn("stream_manager: Fail to close sessions peer = {} in on_remove", endpoint);
         });
     }
+    return make_ready_future();
 }
 
-void stream_manager::on_restart(inet_address endpoint, endpoint_state ep_state) {
+future<> stream_manager::on_restart(inet_address endpoint, endpoint_state ep_state) {
     if (has_peer(endpoint)) {
         sslog.info("stream_manager: Close all stream_session with peer = {} in on_restart", endpoint);
         //FIXME: discarded future.
@@ -329,9 +330,10 @@ void stream_manager::on_restart(inet_address endpoint, endpoint_state ep_state) 
             sslog.warn("stream_manager: Fail to close sessions peer = {} in on_restart", endpoint);
         });
     }
+    return make_ready_future();
 }
 
-void stream_manager::on_dead(inet_address endpoint, endpoint_state ep_state) {
+future<> stream_manager::on_dead(inet_address endpoint, endpoint_state ep_state) {
     if (has_peer(endpoint)) {
         sslog.info("stream_manager: Close all stream_session with peer = {} in on_dead", endpoint);
         //FIXME: discarded future.
@@ -341,6 +343,7 @@ void stream_manager::on_dead(inet_address endpoint, endpoint_state ep_state) {
             sslog.warn("stream_manager: Fail to close sessions peer = {} in on_dead", endpoint);
         });
     }
+    return make_ready_future();
 }
 
 shared_ptr<stream_session> stream_manager::get_session(utils::UUID plan_id, gms::inet_address from, const char* verb, std::optional<utils::UUID> cf_id) {

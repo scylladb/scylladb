@@ -310,7 +310,7 @@ public:
     /**
      * Removes the endpoint from Gossip but retains endpoint state
      */
-    void remove_endpoint(inet_address endpoint);
+    future<> remove_endpoint(inet_address endpoint);
     future<> force_remove_endpoint(inet_address endpoint);
 private:
     /**
@@ -393,7 +393,7 @@ private:
     /* Sends a Gossip message to an unreachable member */
     future<> do_gossip_to_unreachable_member(gossip_digest_syn message);
 
-    void do_status_check();
+    future<> do_status_check();
 
 public:
     clk::time_point get_expire_time_for_endpoint(inet_address endpoint) const noexcept;

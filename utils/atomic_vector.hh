@@ -24,6 +24,7 @@
 #include <seastar/core/rwlock.hh>
 #include <seastar/util/defer.hh>
 #include <seastar/util/noncopyable_function.hh>
+#include <seastar/core/coroutine.hh>
 
 #include <vector>
 
@@ -50,7 +51,7 @@ public:
     // We would take callbacks that take a T&, but we had bugs in the
     // past with some of those callbacks holding that reference past a
     // preemption.
-    void for_each(seastar::noncopyable_function<void(T)> func) {
+    void thread_for_each(seastar::noncopyable_function<void(T)> func) {
         _vec_lock.for_read().lock().get();
         auto unlock = seastar::defer([this] {
             _vec_lock.for_read().unlock();
@@ -60,6 +61,21 @@ public:
         // reallocated.
         for (size_t i = 0, n = _vec.size(); i < n; ++i) {
             func(_vec[i]);
+        }
+    }
+
+    // The callback function must not call remove.
+    //
+    // We would take callbacks that take a T&, but we had bugs in the
+    // past with some of those callbacks holding that reference past a
+    // preemption.
+    seastar::future<> for_each(seastar::noncopyable_function<seastar::future<>(T)> func) {
+        auto holder = co_await _vec_lock.hold_read_lock();
+        // We grab a lock in remove(), but not in add(), so we
+        // iterate using indexes to guard against the vector being
+        // reallocated.
+        for (size_t i = 0, n = _vec.size(); i < n; ++i) {
+            co_await func(_vec[i]);
         }
     }
 };

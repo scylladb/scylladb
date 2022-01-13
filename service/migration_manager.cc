@@ -392,7 +392,7 @@ bool migration_manager::should_pull_schema_from(const gms::inet_address& endpoin
 future<> migration_notifier::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm) {
     return seastar::async([this, ksm] {
         const auto& name = ksm->name();
-        _listeners.for_each([&name] (migration_listener* listener) {
+        _listeners.thread_for_each([&name] (migration_listener* listener) {
             try {
                 listener->on_create_keyspace(name);
             } catch (...) {
@@ -406,7 +406,7 @@ future<> migration_notifier::create_column_family(const schema_ptr& cfm) {
     return seastar::async([this, cfm] {
         const auto& ks_name = cfm->ks_name();
         const auto& cf_name = cfm->cf_name();
-        _listeners.for_each([&ks_name, &cf_name] (migration_listener* listener) {
+        _listeners.thread_for_each([&ks_name, &cf_name] (migration_listener* listener) {
             try {
                 listener->on_create_column_family(ks_name, cf_name);
             } catch (...) {
@@ -420,7 +420,7 @@ future<> migration_notifier::create_user_type(const user_type& type) {
     return seastar::async([this, type] {
         const auto& ks_name = type->_keyspace;
         const auto& type_name = type->get_name_as_string();
-        _listeners.for_each([&ks_name, &type_name] (migration_listener* listener) {
+        _listeners.thread_for_each([&ks_name, &type_name] (migration_listener* listener) {
             try {
                 listener->on_create_user_type(ks_name, type_name);
             } catch (...) {
@@ -434,7 +434,7 @@ future<> migration_notifier::create_view(const view_ptr& view) {
     return seastar::async([this, view] {
         const auto& ks_name = view->ks_name();
         const auto& view_name = view->cf_name();
-        _listeners.for_each([&ks_name, &view_name] (migration_listener* listener) {
+        _listeners.thread_for_each([&ks_name, &view_name] (migration_listener* listener) {
             try {
                 listener->on_create_view(ks_name, view_name);
             } catch (...) {
@@ -461,7 +461,7 @@ public void notifyCreateAggregate(UDAggregate udf)
 future<> migration_notifier::update_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm) {
     return seastar::async([this, ksm] {
         const auto& name = ksm->name();
-        _listeners.for_each([&name] (migration_listener* listener) {
+        _listeners.thread_for_each([&name] (migration_listener* listener) {
             try {
                 listener->on_update_keyspace(name);
             } catch (...) {
@@ -475,7 +475,7 @@ future<> migration_notifier::update_column_family(const schema_ptr& cfm, bool co
     return seastar::async([this, cfm, columns_changed] {
         const auto& ks_name = cfm->ks_name();
         const auto& cf_name = cfm->cf_name();
-        _listeners.for_each([&ks_name, &cf_name, columns_changed] (migration_listener* listener) {
+        _listeners.thread_for_each([&ks_name, &cf_name, columns_changed] (migration_listener* listener) {
             try {
                 listener->on_update_column_family(ks_name, cf_name, columns_changed);
             } catch (...) {
@@ -489,7 +489,7 @@ future<> migration_notifier::update_user_type(const user_type& type) {
     return seastar::async([this, type] {
         const auto& ks_name = type->_keyspace;
         const auto& type_name = type->get_name_as_string();
-        _listeners.for_each([&ks_name, &type_name] (migration_listener* listener) {
+        _listeners.thread_for_each([&ks_name, &type_name] (migration_listener* listener) {
             try {
                 listener->on_update_user_type(ks_name, type_name);
             } catch (...) {
@@ -503,7 +503,7 @@ future<> migration_notifier::update_view(const view_ptr& view, bool columns_chan
     return seastar::async([this, view, columns_changed] {
         const auto& ks_name = view->ks_name();
         const auto& view_name = view->cf_name();
-        _listeners.for_each([&ks_name, &view_name, columns_changed] (migration_listener* listener) {
+        _listeners.thread_for_each([&ks_name, &view_name, columns_changed] (migration_listener* listener) {
             try {
                 listener->on_update_view(ks_name, view_name, columns_changed);
             } catch (...) {
@@ -529,7 +529,7 @@ public void notifyUpdateAggregate(UDAggregate udf)
 
 future<> migration_notifier::drop_keyspace(const sstring& ks_name) {
     return seastar::async([this, ks_name] {
-        _listeners.for_each([&ks_name] (migration_listener* listener) {
+        _listeners.thread_for_each([&ks_name] (migration_listener* listener) {
             try {
                 listener->on_drop_keyspace(ks_name);
             } catch (...) {
@@ -543,7 +543,7 @@ future<> migration_notifier::drop_column_family(const schema_ptr& cfm) {
     return seastar::async([this, cfm] {
         const auto& cf_name = cfm->cf_name();
         const auto& ks_name = cfm->ks_name();
-        _listeners.for_each([&ks_name, &cf_name] (migration_listener* listener) {
+        _listeners.thread_for_each([&ks_name, &cf_name] (migration_listener* listener) {
             try {
                 listener->on_drop_column_family(ks_name, cf_name);
             } catch (...) {
@@ -557,7 +557,7 @@ future<> migration_notifier::drop_user_type(const user_type& type) {
     return seastar::async([this, type] {
         auto&& ks_name = type->_keyspace;
         auto&& type_name = type->get_name_as_string();
-        _listeners.for_each([&ks_name, &type_name] (migration_listener* listener) {
+        _listeners.thread_for_each([&ks_name, &type_name] (migration_listener* listener) {
             try {
                 listener->on_drop_user_type(ks_name, type_name);
             } catch (...) {
@@ -571,7 +571,7 @@ future<> migration_notifier::drop_view(const view_ptr& view) {
     return seastar::async([this, view] {
         auto&& ks_name = view->ks_name();
         auto&& view_name = view->cf_name();
-        _listeners.for_each([&ks_name, &view_name] (migration_listener* listener) {
+        _listeners.thread_for_each([&ks_name, &view_name] (migration_listener* listener) {
             try {
                 listener->on_drop_view(ks_name, view_name);
             } catch (...) {
@@ -583,7 +583,7 @@ future<> migration_notifier::drop_view(const view_ptr& view) {
 
 void migration_notifier::before_create_column_family(const schema& schema,
         std::vector<mutation>& mutations, api::timestamp_type timestamp) {
-    _listeners.for_each([&mutations, &schema, timestamp] (migration_listener* listener) {
+    _listeners.thread_for_each([&mutations, &schema, timestamp] (migration_listener* listener) {
         // allow exceptions. so a listener can effectively kill a create-table
         listener->on_before_create_column_family(schema, mutations, timestamp);
     });
@@ -591,7 +591,7 @@ void migration_notifier::before_create_column_family(const schema& schema,
 
 void migration_notifier::before_update_column_family(const schema& new_schema,
         const schema& old_schema, std::vector<mutation>& mutations, api::timestamp_type ts) {
-    _listeners.for_each([&mutations, &new_schema, &old_schema, ts] (migration_listener* listener) {
+    _listeners.thread_for_each([&mutations, &new_schema, &old_schema, ts] (migration_listener* listener) {
         // allow exceptions. so a listener can effectively kill an update-column
         listener->on_before_update_column_family(new_schema, old_schema, mutations, ts);
     });
@@ -599,7 +599,7 @@ void migration_notifier::before_update_column_family(const schema& new_schema,
 
 void migration_notifier::before_drop_column_family(const schema& schema,
         std::vector<mutation>& mutations, api::timestamp_type ts) {
-    _listeners.for_each([&mutations, &schema, ts] (migration_listener* listener) {
+    _listeners.thread_for_each([&mutations, &schema, ts] (migration_listener* listener) {
         // allow exceptions. so a listener can effectively kill a drop-column
         listener->on_before_drop_column_family(schema, mutations, ts);
     });
@@ -1215,25 +1215,28 @@ future<column_mapping> get_column_mapping(utils::UUID table_id, table_schema_ver
     return db::schema_tables::get_column_mapping(table_id, v);
 }
 
-void migration_manager::on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) {
+future<> migration_manager::on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) {
     schedule_schema_pull(endpoint, ep_state);
+    return make_ready_future();
 }
 
-void migration_manager::on_change(gms::inet_address endpoint, gms::application_state state, const gms::versioned_value& value) {
+future<> migration_manager::on_change(gms::inet_address endpoint, gms::application_state state, const gms::versioned_value& value) {
     if (state == gms::application_state::SCHEMA) {
         auto* ep_state = _gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
         if (!ep_state || _gossiper.is_dead_state(*ep_state)) {
             mlogger.debug("Ignoring state change for dead or unknown endpoint: {}", endpoint);
-            return;
+            return make_ready_future();
         }
         if (_storage_proxy.get_token_metadata_ptr()->is_member(endpoint)) {
             schedule_schema_pull(endpoint, *ep_state);
         }
     }
+    return make_ready_future();
 }
 
-void migration_manager::on_alive(gms::inet_address endpoint, gms::endpoint_state state) {
+future<> migration_manager::on_alive(gms::inet_address endpoint, gms::endpoint_state state) {
     schedule_schema_pull(endpoint, state);
+    return make_ready_future();
 }
 
 }
