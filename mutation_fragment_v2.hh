@@ -53,8 +53,11 @@ public:
         : _pos(pos)
         , _tomb(tomb)
     { }
-    const position_in_partition& position() const {
+    const position_in_partition& position() const & {
         return _pos;
+    }
+    position_in_partition position() && {
+        return std::move(_pos);
     }
     void set_position(position_in_partition pos) {
         _pos = std::move(pos);
