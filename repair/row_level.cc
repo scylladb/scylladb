@@ -980,16 +980,6 @@ public:
         });
     }
 
-    // Must run inside a seastar thread
-    static repair_hash_set
-    get_set_diff(const repair_hash_set& x, const repair_hash_set& y) {
-        repair_hash_set set_diff;
-        // Note std::set_difference needs x and y are sorted.
-        std::copy_if(x.begin(), x.end(), std::inserter(set_diff, set_diff.end()),
-                [&y] (auto& item) { thread::maybe_yield(); return !y.contains(item); });
-        return set_diff;
-    }
-
     void reset_peer_row_hash_sets() {
         if (_peer_row_hash_sets.size() != _nr_peer_nodes) {
             _peer_row_hash_sets.resize(_nr_peer_nodes);
@@ -2013,6 +2003,16 @@ public:
     }
 };
 
+// Must run inside a seastar thread
+static repair_hash_set
+get_set_diff(const repair_hash_set& x, const repair_hash_set& y) {
+    repair_hash_set set_diff;
+    // Note std::set_difference needs x and y are sorted.
+    std::copy_if(x.begin(), x.end(), std::inserter(set_diff, set_diff.end()),
+            [&y] (auto& item) { thread::maybe_yield(); return !y.contains(item); });
+    return set_diff;
+}
+
 // The repair_metas created passively, i.e., local node is the repair follower.
 static thread_local std::unordered_map<node_repair_meta_id, lw_shared_ptr<repair_meta>> _repair_metas;
 std::unordered_map<node_repair_meta_id, lw_shared_ptr<repair_meta>>& repair_meta::repair_meta_map() {
@@ -2793,7 +2793,7 @@ private:
             // sequentially because the rows from repair follower 1 to
             // repair master might reduce the amount of missing data
             // between repair master and repair follower 2.
-            repair_hash_set set_diff = repair_meta::get_set_diff(master.peer_row_hash_sets(node_idx), master.working_row_hashes().get0());
+            repair_hash_set set_diff = get_set_diff(master.peer_row_hash_sets(node_idx), master.working_row_hashes().get0());
             // Request missing sets from peer node
             rlogger.debug("Before get_row_diff to node {}, local={}, peer={}, set_diff={}",
                     node, master.working_row_hashes().get0().size(), master.peer_row_hash_sets(node_idx).size(), set_diff.size());
@@ -2825,7 +2825,7 @@ private:
         auto sz = _all_live_peer_nodes.size();
         std::vector<repair_hash_set> set_diffs(sz);
         for (size_t idx : boost::irange(size_t(0), sz)) {
-            set_diffs[idx] = repair_meta::get_set_diff(local_row_hash_sets, master.peer_row_hash_sets(idx));
+            set_diffs[idx] = get_set_diff(local_row_hash_sets, master.peer_row_hash_sets(idx));
         }
         parallel_for_each(boost::irange(size_t(0), sz), [&, this] (size_t idx) {
             auto& ns = master.all_nodes()[idx + 1];
