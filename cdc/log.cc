@@ -1492,6 +1492,11 @@ public:
         }
 
         auto process_cell = [&, this] (const column_definition& cdef) {
+            // If table uses compact storage it may contain a column of type empty
+            // and we need to ignore such a field because it is not present in CDC log.
+            if (cdef.type->get_kind() == abstract_type::kind::empty) {
+                return;
+            }
             if (auto current = get_col_from_row_state(row_state, cdef)) {
                 _builder->set_value(image_ck, cdef, *current);
             } else if (op == operation::pre_image) {
