@@ -105,35 +105,35 @@ future<> service::client_state::has_all_keyspaces_access(
     co_return co_await ensure_has_permission({p, r});
 }
 
-future<> service::client_state::has_keyspace_access(const replica::database& db, const sstring& ks,
+future<> service::client_state::has_keyspace_access(data_dictionary::database db, const sstring& ks,
                 auth::permission p) const {
     auth::resource r = auth::make_data_resource(ks);
     co_return co_await has_access(db, ks, {p, r});
 }
 
-future<> service::client_state::has_column_family_access(const replica::database& db, const sstring& ks,
+future<> service::client_state::has_column_family_access(data_dictionary::database db, const sstring& ks,
                 const sstring& cf, auth::permission p, auth::command_desc::type t) const {
     // NOTICE: callers of this function tend to assume that this error will be thrown
     // synchronously and will be intercepted in a try-catch block. Thus, this function can only
     // be translated to a coroutine after all such callers are inspected and amended first.
     validation::validate_column_family(db, ks, cf);
 
-    return do_with(ks, auth::make_data_resource(ks, cf), [this, p, t, &db](const auto& ks, const auto& r) {
+    return do_with(ks, auth::make_data_resource(ks, cf), [this, p, t, db](const auto& ks, const auto& r) {
         return has_access(db, ks, {p, r, t});
     });
 }
 
-future<> service::client_state::has_schema_access(const replica::database& db, const schema& s, auth::permission p) const {
+future<> service::client_state::has_schema_access(data_dictionary::database db, const schema& s, auth::permission p) const {
     auth::resource r = auth::make_data_resource(s.ks_name(), s.cf_name());
     co_return co_await has_access(db, s.ks_name(), {p, r});
 }
 
-future<> service::client_state::has_schema_access(const replica::database& db, const sstring& ks_name, const sstring& cf_name, auth::permission p) const {
+future<> service::client_state::has_schema_access(data_dictionary::database db, const sstring& ks_name, const sstring& cf_name, auth::permission p) const {
     auth::resource r = auth::make_data_resource(ks_name, cf_name);
     co_return co_await has_access(db, ks_name, {p, r});
 }
 
-future<> service::client_state::has_access(const replica::database& db, const sstring& ks, auth::command_desc cmd) const {
+future<> service::client_state::has_access(data_dictionary::database db, const sstring& ks, auth::command_desc cmd) const {
     if (ks.empty()) {
         return make_exception_future<>(exceptions::invalid_request_exception("You have not set a keyspace for this session"));
     }
@@ -196,7 +196,7 @@ future<> service::client_state::has_access(const replica::database& db, const ss
         const auto resource_view = auth::data_resource_view(cmd.resource);
         if (resource_view.table()) {
             if (cmd.permission == auth::permission::DROP) {
-                if (cdc::is_log_for_some_table(db, ks, *resource_view.table())) {
+                if (cdc::is_log_for_some_table(db.real_database(), ks, *resource_view.table())) {
                     return make_exception_future<>(exceptions::unauthorized_exception(
                             format("Cannot {} cdc log table {}", auth::permissions::to_string(cmd.permission), cmd.resource)));
                 }

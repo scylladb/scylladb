@@ -127,10 +127,10 @@ gc_clock::duration modification_statement::get_time_to_live(const query_options&
 
 future<> modification_statement::check_access(query_processor& qp, const service::client_state& state) const {
     const data_dictionary::database db = qp.db();
-    auto f = state.has_column_family_access(db.real_database(), keyspace(), column_family(), auth::permission::MODIFY);
+    auto f = state.has_column_family_access(db, keyspace(), column_family(), auth::permission::MODIFY);
     if (has_conditions()) {
         f = f.then([this, &state, db] {
-           return state.has_column_family_access(db.real_database(), keyspace(), column_family(), auth::permission::SELECT);
+           return state.has_column_family_access(db, keyspace(), column_family(), auth::permission::SELECT);
         });
     }
     return f;
@@ -462,7 +462,7 @@ namespace raw {
 
 std::unique_ptr<prepared_statement>
 modification_statement::prepare(data_dictionary::database db, cql_stats& stats) {
-    schema_ptr schema = validation::validate_column_family(db.real_database(), keyspace(), column_family());
+    schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
     auto meta = get_prepare_context();
     auto statement = prepare(db, meta, stats);
     auto partition_key_bind_indices = meta.get_partition_key_bind_indexes(*schema);
@@ -471,7 +471,7 @@ modification_statement::prepare(data_dictionary::database db, cql_stats& stats) 
 
 ::shared_ptr<cql3::statements::modification_statement>
 modification_statement::prepare(data_dictionary::database db, prepare_context& ctx, cql_stats& stats) const {
-    schema_ptr schema = validation::validate_column_family(db.real_database(), keyspace(), column_family());
+    schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
 
     auto prepared_attributes = _attrs->prepare(db, keyspace(), column_family());
     prepared_attributes->fill_prepare_context(ctx);

@@ -79,7 +79,7 @@ create_index_statement::create_index_statement(cf_name name,
 
 future<>
 create_index_statement::check_access(query_processor& qp, const service::client_state& state) const {
-    return state.has_column_family_access(qp.proxy().local_db(), keyspace(), column_family(), auth::permission::ALTER);
+    return state.has_column_family_access(qp.db(), keyspace(), column_family(), auth::permission::ALTER);
 }
 
 void
@@ -94,7 +94,7 @@ create_index_statement::validate(query_processor& qp, const service::client_stat
 
 std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_executing(query_processor& qp) const {
     auto db = qp.db();
-    auto schema = validation::validate_column_family(db.real_database(), keyspace(), column_family());
+    auto schema = validation::validate_column_family(db, keyspace(), column_family());
 
     if (schema->is_counter()) {
         throw exceptions::invalid_request_exception("Secondary indexes are not supported on counter tables");

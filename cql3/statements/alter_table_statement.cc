@@ -77,7 +77,7 @@ alter_table_statement::alter_table_statement(cf_name name,
 
 future<> alter_table_statement::check_access(query_processor& qp, const service::client_state& state) const {
     using cdt = auth::command_desc::type;
-    return state.has_column_family_access(qp.proxy().local_db(), keyspace(), column_family(), auth::permission::ALTER,
+    return state.has_column_family_access(qp.db(), keyspace(), column_family(), auth::permission::ALTER,
                                           _type == type::opts ? cdt::ALTER_WITH_OPTS : cdt::OTHER);
 }
 
@@ -295,7 +295,7 @@ void alter_table_statement::drop_column(const schema& schema, data_dictionary::t
 }
 
 std::pair<schema_builder, std::vector<view_ptr>> alter_table_statement::prepare_schema_update(data_dictionary::database db) const {
-    auto s = validation::validate_column_family(db.real_database(), keyspace(), column_family());
+    auto s = validation::validate_column_family(db, keyspace(), column_family());
     if (s->is_view()) {
         throw exceptions::invalid_request_exception("Cannot use ALTER TABLE on Materialized View");
     }
