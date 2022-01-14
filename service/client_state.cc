@@ -105,10 +105,10 @@ future<> service::client_state::has_all_keyspaces_access(
     co_return co_await ensure_has_permission({p, r});
 }
 
-future<> service::client_state::has_keyspace_access(const replica::database& db, const sstring& ks,
+future<> service::client_state::has_keyspace_access(data_dictionary::database db, const sstring& ks,
                 auth::permission p) const {
     auth::resource r = auth::make_data_resource(ks);
-    co_return co_await has_access(db, ks, {p, r});
+    co_return co_await has_access(db.real_database(), ks, {p, r});
 }
 
 future<> service::client_state::has_column_family_access(const replica::database& db, const sstring& ks,

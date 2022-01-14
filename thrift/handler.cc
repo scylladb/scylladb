@@ -891,7 +891,7 @@ public:
             auto& t = *this;
             auto cf_def = def;
 
-            co_await t._query_state.get_client_state().has_keyspace_access(t._db.real_database(), cf_def.keyspace, auth::permission::CREATE);
+            co_await t._query_state.get_client_state().has_keyspace_access(t._db, cf_def.keyspace, auth::permission::CREATE);
 
             co_return co_await t.execute_schema_command([&cf_def] (service::migration_manager& mm, data_dictionary::database db) -> future<std::vector<mutation>> {
                 if (!db.has_keyspace(cf_def.keyspace)) {
@@ -948,7 +948,7 @@ public:
             auto& t = *this;
             auto keyspace = ks;
 
-            co_await t._query_state.get_client_state().has_keyspace_access(t._db.real_database(), keyspace, auth::permission::DROP);
+            co_await t._query_state.get_client_state().has_keyspace_access(t._db, keyspace, auth::permission::DROP);
 
             co_return co_await t.execute_schema_command([&keyspace] (service::migration_manager& mm, data_dictionary::database db) -> future<std::vector<mutation>> {
                 thrift_validation::validate_keyspace_not_system(keyspace);
@@ -968,7 +968,7 @@ public:
             auto ks_def = def;
             thrift_validation::validate_keyspace_not_system(ks_def.name);
 
-            co_await t._query_state.get_client_state().has_keyspace_access(t._db.real_database(), ks_def.name, auth::permission::ALTER);
+            co_await t._query_state.get_client_state().has_keyspace_access(t._db, ks_def.name, auth::permission::ALTER);
 
             co_return co_await t.execute_schema_command([&ks_def] (service::migration_manager& mm, data_dictionary::database db) -> future<std::vector<mutation>> {
                 if (db.has_keyspace(ks_def.name)) {
