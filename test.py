@@ -921,7 +921,11 @@ async def main():
 
     setup_signal_handlers(asyncio.get_event_loop(), signaled)
 
-    await run_all_tests(signaled, options)
+    try:
+        await run_all_tests(signaled, options)
+    except Exception as e:
+        print(palette.fail(e))
+        raise
 
     if signaled.is_set():
         return -signaled.signo
