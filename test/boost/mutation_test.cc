@@ -3257,3 +3257,181 @@ SEASTAR_THREAD_TEST_CASE(test_position_in_partition_reversal) {
     BOOST_REQUIRE(rev_cmp(p_i_p::for_static_row().reversed(),
                           p_i_p::for_static_row()) == 0);
 }
+
+SEASTAR_THREAD_TEST_CASE(test_compactor_range_tombstone_spanning_many_pages) {
+    simple_schema ss;
+    auto pk = ss.make_pkey();
+    auto s = ss.schema();
+
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+
+    auto permit = semaphore.make_permit();
+
+    const auto marker_ts = ss.new_timestamp();
+    const auto tomb_ts = ss.new_timestamp();
+    const auto row_ts = ss.new_timestamp();
+
+    auto make_frags = [&] {
+        std::deque<mutation_fragment_v2> frags;
+
+        frags.emplace_back(*s, permit, partition_start(pk, {}));
+
+        const auto& v_def = *s->get_column_definition(to_bytes("v"));
+
+        frags.emplace_back(*s, permit, range_tombstone_change(position_in_partition::before_key(ss.make_ckey(0)), tombstone{tomb_ts, {}}));
+
+        for (uint32_t ck = 0; ck < 10; ++ck) {
+            auto row = clustering_row(ss.make_ckey(ck));
+            row.cells().apply(v_def, atomic_cell::make_live(*v_def.type, row_ts, serialized("v")));
+            row.marker() = row_marker(marker_ts);
+            frags.emplace_back(mutation_fragment_v2(*s, permit, std::move(row)));
+        }
+
+        frags.emplace_back(*s, permit, range_tombstone_change(position_in_partition::after_key(ss.make_ckey(10)), tombstone{}));
+
+        frags.emplace_back(*s, permit, partition_end{});
+
+        return frags;
+    };
+
+    auto restore_state = [&] (flat_mutation_reader_v2& reader, detached_compaction_state&& state) {
+        if (auto rt_opt = std::get_if<std::optional<range_tombstone_change>>(&state.range_tombstones); rt_opt && *rt_opt) {
+            reader.unpop_mutation_fragment(mutation_fragment_v2(*s, permit, std::move(**rt_opt)));
+        }
+        if (state.static_row) {
+            reader.unpop_mutation_fragment(mutation_fragment_v2(*s, permit, std::move(*state.static_row)));
+        }
+        reader.unpop_mutation_fragment(mutation_fragment_v2(*s, permit, std::move(state.partition_start)));
+    };
+
+    const auto query_time = gc_clock::now();
+    const auto max_rows = std::numeric_limits<uint64_t>::max();
+    const auto max_partitions = std::numeric_limits<uint32_t>::max();
+
+    mutation ref_mut(s, pk);
+    {
+        auto reader = make_flat_mutation_reader_from_fragments(s, permit, make_frags());
+        auto close_reader = deferred_close(reader);
+        auto mut_opt = reader.consume(mutation_rebuilder_v2(s)).get();
+        BOOST_REQUIRE(mut_opt);
+        ref_mut = std::move(*mut_opt);
+        ref_mut.partition().compact_for_query(*s, pk, query_time, {query::clustering_range::make_open_ended_both_sides()}, true, false, max_rows);
+    }
+
+    struct consumer {
+        reader_permit permit;
+        mutation& mut;
+        const uint64_t row_limit;
+        uint64_t rows = 0;
+
+        void consume_new_partition(const dht::decorated_key& dk) {
+            BOOST_REQUIRE(mut.decorated_key().equal(*mut.schema(), dk));
+        }
+        void consume(const tombstone& t) {
+            BOOST_REQUIRE_EQUAL(t, mut.partition().partition_tombstone());
+        }
+        stop_iteration consume(static_row&& sr, tombstone, bool) {
+            mut.apply(mutation_fragment(*mut.schema(), permit, std::move(sr)));
+            return stop_iteration(++rows >= row_limit);
+        }
+        stop_iteration consume(clustering_row&& cr, row_tombstone t, bool is_alive) {
+            mut.apply(mutation_fragment(*mut.schema(), permit, std::move(cr)));
+            return stop_iteration(++rows >= row_limit);
+        }
+        stop_iteration consume(range_tombstone&& rt) {
+            mut.apply(mutation_fragment(*mut.schema(), permit, std::move(rt)));
+            return stop_iteration(++rows >= row_limit);
+        }
+        stop_iteration consume_end_of_partition() {
+            return stop_iteration::yes;
+        }
+        void consume_end_of_stream() {
+        }
+    };
+
+    testlog.info("non-paged");
+    {
+        mutation res_mut(s, pk);
+        auto c = compact_for_query<emit_only_live_rows::no, consumer>(*s, query_time, s->full_slice(), max_rows, max_partitions, consumer{permit, res_mut, max_rows});
+        auto reader = make_flat_mutation_reader_from_fragments(s, permit, make_frags());
+        auto close_reader = deferred_close(reader);
+
+        reader.consume(std::move(c)).get();
+
+        BOOST_REQUIRE_EQUAL(res_mut, ref_mut);
+    }
+
+    testlog.info("limited pages");
+    {
+        mutation res_mut(s, pk);
+        auto compaction_state = make_lw_shared<compact_mutation_state<emit_only_live_rows::no, compact_for_sstables::no>>(*s, query_time, s->full_slice(), 1, max_partitions);
+        auto reader = make_flat_mutation_reader_from_fragments(s, permit, make_frags());
+        auto close_reader = deferred_close(reader);
+
+        while (!reader.is_buffer_empty() || !reader.is_end_of_stream()) {
+            auto c = consumer{permit, res_mut, max_rows};
+            compaction_state->start_new_page(1, max_partitions, query_time, reader.peek().get()->position().region(), c);
+            reader.consume(compact_for_query<emit_only_live_rows::no, consumer>(compaction_state, std::move(c))).get();
+        }
+
+        BOOST_REQUIRE_EQUAL(res_mut, ref_mut);
+    }
+
+    testlog.info("short pages");
+    {
+        mutation res_mut(s, pk);
+        auto compaction_state = make_lw_shared<compact_mutation_state<emit_only_live_rows::no, compact_for_sstables::no>>(*s, query_time, s->full_slice(), max_rows, max_partitions);
+        auto reader = make_flat_mutation_reader_from_fragments(s, permit, make_frags());
+        auto close_reader = deferred_close(reader);
+
+        while (!reader.is_buffer_empty() || !reader.is_end_of_stream()) {
+            auto c = consumer{permit, res_mut, 2};
+            compaction_state->start_new_page(max_rows, max_partitions, query_time, reader.peek().get()->position().region(), c);
+            reader.consume(compact_for_query<emit_only_live_rows::no, consumer>(compaction_state, std::move(c))).get();
+        }
+
+        BOOST_REQUIRE_EQUAL(res_mut, ref_mut);
+    }
+
+    testlog.info("limited pages - detach state");
+    {
+        mutation res_mut(s, pk);
+        auto reader = make_flat_mutation_reader_from_fragments(s, permit, make_frags());
+        auto close_reader = deferred_close(reader);
+
+        std::optional<detached_compaction_state> detached_state;
+
+        while (!reader.is_buffer_empty() || !reader.is_end_of_stream()) {
+            if (detached_state) {
+                restore_state(reader, std::move(*detached_state));
+            }
+            auto compaction_state = make_lw_shared<compact_mutation_state<emit_only_live_rows::no, compact_for_sstables::no>>(*s, query_time, s->full_slice(), 1, max_partitions);
+            auto c = consumer{permit, res_mut, max_rows};
+            reader.consume(compact_for_query<emit_only_live_rows::no, consumer>(compaction_state, std::move(c))).get();
+            detached_state = std::move(*compaction_state).detach_state();
+        }
+
+        BOOST_REQUIRE_EQUAL(res_mut, ref_mut);
+    }
+
+    testlog.info("short pages - detach state");
+    {
+        mutation res_mut(s, pk);
+        auto reader = make_flat_mutation_reader_from_fragments(s, permit, make_frags());
+        auto close_reader = deferred_close(reader);
+
+        std::optional<detached_compaction_state> detached_state;
+
+        while (!reader.is_buffer_empty() || !reader.is_end_of_stream()) {
+            if (detached_state) {
+                restore_state(reader, std::move(*detached_state));
+            }
+            auto compaction_state = make_lw_shared<compact_mutation_state<emit_only_live_rows::no, compact_for_sstables::no>>(*s, query_time, s->full_slice(), max_rows, max_partitions);
+            auto c = consumer{permit, res_mut, 2};
+            reader.consume(compact_for_query<emit_only_live_rows::no, consumer>(compaction_state, std::move(c))).get();
+            detached_state = std::move(*compaction_state).detach_state();
+        }
+
+        BOOST_REQUIRE_EQUAL(res_mut, ref_mut);
+    }
+}

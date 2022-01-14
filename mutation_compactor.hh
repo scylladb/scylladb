@@ -161,6 +161,8 @@ class compact_mutation_state {
     bool _return_static_content_on_partition_with_no_rows{};
 
     std::optional<static_row> _last_static_row;
+    position_in_partition _last_clustering_pos;
+    tombstone _current_tombstone;
 
     std::unique_ptr<mutation_compactor_garbage_collector> _collector;
 
@@ -176,6 +178,9 @@ private:
             partition_is_not_empty_for_gc_consumer(gc_consumer);
             return gc_consumer.consume(std::move(rt));
         } else {
+            if (!sstable_compaction()) {
+                _last_clustering_pos = rt.position();
+            }
             partition_is_not_empty(consumer);
             return consumer.consume(std::move(rt));
         }
@@ -277,6 +282,7 @@ public:
         , _partition_row_limit(_slice.options.contains(query::partition_slice::option::distinct) ? 1 : slice.partition_row_limit())
         , _range_tombstones(s)
         , _last_dk({dht::token(), partition_key::make_empty()})
+        , _last_clustering_pos(position_in_partition::before_all_clustered_rows())
     {
         static_assert(!sstable_compaction(), "This constructor cannot be used for sstable compaction.");
     }
@@ -290,6 +296,7 @@ public:
         , _slice(s.full_slice())
         , _range_tombstones(s)
         , _last_dk({dht::token(), partition_key::make_empty()})
+        , _last_clustering_pos(position_in_partition::before_all_clustered_rows())
         , _collector(std::make_unique<mutation_compactor_garbage_collector>(_schema))
     {
         static_assert(sstable_compaction(), "This constructor can only be used for sstable compaction.");
@@ -314,6 +321,8 @@ public:
         _max_purgeable = api::missing_timestamp;
         _gc_before = std::nullopt;
         _last_static_row.reset();
+        _last_clustering_pos = position_in_partition::before_all_clustered_rows();
+        _current_tombstone = {};
     }
 
     template <typename Consumer, typename GCConsumer>
@@ -400,9 +409,16 @@ public:
             }
         }
 
-        if (only_live() && is_live) {
+        auto consume_row = [&] () mutable {
+            if (!sstable_compaction()) {
+                _last_clustering_pos = cr.position();
+            }
             partition_is_not_empty(consumer);
-            auto stop = consumer.consume(std::move(cr), t, true);
+            return consumer.consume(std::move(cr), t, is_live);
+        };
+
+        if (only_live() && is_live) {
+            auto stop = consume_row();
             if (++_rows_in_current_partition == _current_partition_limit) {
                 return stop_iteration::yes;
             }
@@ -410,8 +426,7 @@ public:
         } else if (!only_live()) {
             auto stop = stop_iteration::no;
             if (!cr.empty()) {
-                partition_is_not_empty(consumer);
-                stop = consumer.consume(std::move(cr), t, is_live);
+                stop = consume_row();
             }
             if (!sstable_compaction() && is_live && ++_rows_in_current_partition == _current_partition_limit) {
                 return stop_iteration::yes;
@@ -438,7 +453,7 @@ public:
             _rt_assembler.emplace();
         }
         if (auto rt_opt = _rt_assembler->consume(_schema, std::move(rtc))) {
-            do_consume(std::move(*rt_opt), consumer, gc_consumer);
+            return do_consume(std::move(*rt_opt), consumer, gc_consumer);
         }
         return stop_iteration::no;
     }
@@ -447,6 +462,11 @@ public:
     requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
     stop_iteration consume_end_of_partition(Consumer& consumer, GCConsumer& gc_consumer) {
         if (_rt_assembler) {
+            if (_current_tombstone = _rt_assembler->get_current_tombstone(); _current_tombstone) {
+                if (auto rt_opt = _rt_assembler->consume(_schema, range_tombstone_change(position_in_partition::after_key(_last_clustering_pos), tombstone{}))) {
+                    do_consume(std::move(*rt_opt), consumer, gc_consumer);
+                }
+            }
             _rt_assembler->on_end_of_stream();
         }
         if (!_empty_partition_in_gc_consumer) {
@@ -511,10 +531,17 @@ public:
         _query_time = query_time;
         _stats = {};
 
+        noop_compacted_fragments_consumer nc;
+
         if (next_fragment_region == partition_region::clustered && _last_static_row) {
             // Stopping here would cause an infinite loop so ignore return value.
-            noop_compacted_fragments_consumer nc;
             consume(*std::exchange(_last_static_row, {}), consumer, nc);
+        }
+        if (_current_tombstone) {
+            _rt_assembler.emplace();
+            if (auto rt_opt = _rt_assembler->consume(_schema, range_tombstone_change(position_in_partition_view::after_key(_last_clustering_pos), std::exchange(_current_tombstone, {})))) {
+                do_consume(std::move(*rt_opt), consumer, nc);
+            }
         }
     }
 
@@ -532,7 +559,11 @@ public:
     detached_compaction_state detach_state() && {
         partition_start ps(std::move(_last_dk), _range_tombstones.get_partition_tombstone());
         if (_rt_assembler) {
-            return {std::move(ps), std::move(_last_static_row), std::move(*_rt_assembler).get_range_tombstone_change()};
+            if (_current_tombstone) {
+                return {std::move(ps), std::move(_last_static_row), range_tombstone_change(position_in_partition_view::after_key(_last_clustering_pos), _current_tombstone)};
+            } else {
+                return {std::move(ps), std::move(_last_static_row), std::optional<range_tombstone_change>{}};
+            }
         }
         return {std::move(ps), std::move(_last_static_row), std::move(_range_tombstones).range_tombstones()};
     }
