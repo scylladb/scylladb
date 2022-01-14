@@ -352,7 +352,7 @@ public:
 
     future<> has_all_keyspaces_access(auth::permission) const;
     future<> has_keyspace_access(data_dictionary::database db, const sstring&, auth::permission) const;
-    future<> has_column_family_access(const replica::database& db, const sstring&, const sstring&, auth::permission,
+    future<> has_column_family_access(data_dictionary::database db, const sstring&, const sstring&, auth::permission,
                                       auth::command_desc::type = auth::command_desc::type::OTHER) const;
     future<> has_schema_access(const replica::database& db, const schema& s, auth::permission p) const;
     future<> has_schema_access(const replica::database& db, const sstring&, const sstring&, auth::permission p) const;

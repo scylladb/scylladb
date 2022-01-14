@@ -642,7 +642,7 @@ public:
                 throw make_exception<InvalidRequestException>("keyspace not set");
             }
 
-            return _query_state.get_client_state().has_column_family_access(_db.real_database(), current_keyspace(), cfname, auth::permission::MODIFY).then([this, cfname] {
+            return _query_state.get_client_state().has_column_family_access(_db, current_keyspace(), cfname, auth::permission::MODIFY).then([this, cfname] {
                 if (_db.find_schema(current_keyspace(), cfname)->is_view()) {
                     throw make_exception<InvalidRequestException>("Cannot truncate Materialized Views");
                 }
@@ -911,7 +911,7 @@ public:
         with_cob(std::move(cob), std::move(exn_cob), [this, cfm = column_family] () -> future<std::string> {
             auto& t = *this;
             auto column_family = cfm;
-            co_await t._query_state.get_client_state().has_column_family_access(t._db.real_database(), t.current_keyspace(), column_family, auth::permission::DROP);
+            co_await t._query_state.get_client_state().has_column_family_access(t._db, t.current_keyspace(), column_family, auth::permission::DROP);
 
             co_return co_await t.execute_schema_command(
                        [&column_family, &current_keyspace = t.current_keyspace()] (service::migration_manager& mm, data_dictionary::database db) -> future<std::vector<mutation>> {

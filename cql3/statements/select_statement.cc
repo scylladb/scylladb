@@ -184,7 +184,7 @@ future<> select_statement::check_access(query_processor& qp, const service::clie
         const data_dictionary::database db = qp.db();
         auto&& s = db.find_schema(keyspace(), column_family());
         auto& cf_name = s->is_view() ? s->view_info()->base_name() : column_family();
-        return state.has_column_family_access(db.real_database(), keyspace(), cf_name, auth::permission::SELECT);
+        return state.has_column_family_access(db, keyspace(), cf_name, auth::permission::SELECT);
     } catch (const data_dictionary::no_such_column_family& e) {
         // Will be validated afterwards.
         return make_ready_future<>();

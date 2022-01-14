@@ -92,7 +92,7 @@ create_view_statement::create_view_statement(
 }
 
 future<> create_view_statement::check_access(query_processor& qp, const service::client_state& state) const {
-    return state.has_column_family_access(qp.proxy().local_db(), keyspace(), _base_name.get_column_family(), auth::permission::ALTER);
+    return state.has_column_family_access(qp.db(), keyspace(), _base_name.get_column_family(), auth::permission::ALTER);
 }
 
 void create_view_statement::validate(query_processor& qp, const service::client_state& state) const {
