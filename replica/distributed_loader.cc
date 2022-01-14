@@ -256,14 +256,15 @@ highest_version_seen(sharded<sstables::sstable_directory>& dir, sstables::sstabl
 
 future<>
 distributed_loader::reshape(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstables::reshape_mode mode,
-        sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator) {
+        sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator,
+        std::function<bool (const sstables::shared_sstable&)> filter) {
 
     auto start = std::chrono::steady_clock::now();
-    return dir.map_reduce0([&dir, &db, ks_name = std::move(ks_name), table_name = std::move(table_name), creator = std::move(creator), mode] (sstables::sstable_directory& d) {
+    return dir.map_reduce0([&dir, &db, ks_name = std::move(ks_name), table_name = std::move(table_name), creator = std::move(creator), mode, filter] (sstables::sstable_directory& d) {
         auto& table = db.local().find_column_family(ks_name, table_name);
         auto& cm = table.get_compaction_manager();
         auto& iop = service::get_local_streaming_priority();
-        return d.reshape(cm, table, creator, iop, mode);
+        return d.reshape(cm, table, creator, iop, mode, filter);
     }, uint64_t(0), std::plus<uint64_t>()).then([start] (uint64_t total_size) {
         if (total_size > 0) {
             auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - start);
@@ -371,7 +372,7 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
                   global_table->get_sstables_manager().get_highest_supported_format(),
                   sstables::sstable::format_types::big,
                   &error_handler_gen_for_upload_dir);
-        }).get();
+        }, sstables::sstable_directory::default_sstable_filter()).get();
 
         const bool use_view_update_path = db::view::check_needs_view_update_path(sys_dist_ks.local(), *global_table, streaming::stream_reason::repair).get0();
 
@@ -526,14 +527,27 @@ future<> distributed_loader::populate_column_family(distributed<replica::databas
 
         // The node is offline at this point so we are very lenient with what we consider
         // offstrategy.
+        // SSTables created by repair may not conform to compaction strategy layout goal
+        // because data segregation is only performed by compaction
+        // Instead of reshaping them on boot, let's add them to maintenance set and allow
+        // off-strategy compaction to reshape them. This will allow node to become online
+        // ASAP. Given that SSTables with repair origin are disjoint, they can be efficiently
+        // read from.
+        auto eligible_for_reshape_on_boot = [] (const sstables::shared_sstable& sst) {
+            return sst->get_origin() != sstables::repair_origin;
+        };
+
         reshape(directory, db, sstables::reshape_mode::relaxed, ks, cf, [global_table, sstdir, sst_version] (shard_id shard) {
             auto gen = global_table->calculate_generation_for_new_table();
             return global_table->make_sstable(sstdir, gen, sst_version, sstables::sstable::format_types::big);
-        }).get();
+        }, eligible_for_reshape_on_boot).get();
 
-        directory.invoke_on_all([global_table] (sstables::sstable_directory& dir) {
-            return dir.do_for_each_sstable([&global_table] (sstables::shared_sstable sst) {
-                return global_table->add_sstable_and_update_cache(sst);
+        directory.invoke_on_all([global_table, &eligible_for_reshape_on_boot] (sstables::sstable_directory& dir) {
+            return dir.do_for_each_sstable([&global_table, &eligible_for_reshape_on_boot] (sstables::shared_sstable sst) {
+                auto requires_offstrategy = sstables::offstrategy(!eligible_for_reshape_on_boot(sst));
+                return global_table->add_sstable_and_update_cache(sst, requires_offstrategy);
+            }).then([&global_table] {
+                global_table->trigger_offstrategy_compaction();
             });
         }).get();
     });
