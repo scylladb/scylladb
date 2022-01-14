@@ -982,7 +982,7 @@ api::timestamp_type group0_guard::write_timestamp() const {
     return utils::UUID_gen::micros_timestamp(_impl->_new_group0_state_id);
 }
 
-future<> migration_manager::announce_with_raft(std::vector<mutation> schema, group0_guard guard) {
+future<> migration_manager::announce_with_raft(std::vector<mutation> schema, group0_guard guard, std::string_view description) {
     assert(this_shard_id() == 0);
     auto schema_features = _feat.cluster_schema_features();
     auto adjusted_schema = db::schema_tables::adjust_schema_for_schema_features(schema, schema_features);
@@ -992,7 +992,8 @@ future<> migration_manager::announce_with_raft(std::vector<mutation> schema, gro
             .mutations{adjusted_schema.begin(), adjusted_schema.end()},
         }},
 
-        .history_append{db::system_keyspace::make_group0_history_state_id_mutation(guard.new_group0_state_id())},
+        .history_append{db::system_keyspace::make_group0_history_state_id_mutation(
+                guard.new_group0_state_id(), description)},
 
         .prev_state_id{guard.observed_group0_state_id()},
         .new_state_id{guard.new_group0_state_id()},
@@ -1034,7 +1035,7 @@ future<> migration_manager::announce_without_raft(std::vector<mutation> schema) 
 }
 
 // Returns a future on the local application of the schema
-future<> migration_manager::announce(std::vector<mutation> schema, group0_guard guard) {
+future<> migration_manager::announce(std::vector<mutation> schema, group0_guard guard, std::string_view description) {
     if (_raft_gr.is_enabled()) {
         if (this_shard_id() != 0) {
             // This should not happen since all places which construct `group0_guard` also check that they are on shard 0.
@@ -1043,7 +1044,7 @@ future<> migration_manager::announce(std::vector<mutation> schema, group0_guard 
         }
 
         auto new_group0_state_id = guard.new_group0_state_id();
-        co_await announce_with_raft(std::move(schema), std::move(guard));
+        co_await announce_with_raft(std::move(schema), std::move(guard), std::move(description));
 
         if (!(co_await db::system_keyspace::group0_history_contains(new_group0_state_id))) {
             // The command was applied but the history table does not contain the new group 0 state ID.

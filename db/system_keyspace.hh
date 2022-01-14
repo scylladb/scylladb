@@ -422,7 +422,7 @@ public:
 
     // The mutation appends the given state ID to the group 0 history table, with the given description if non-empty.
     // The mutation's timestamp is extracted from the state ID.
-    static mutation make_group0_history_state_id_mutation(utils::UUID state_id, std::string_view description = "");
+    static mutation make_group0_history_state_id_mutation(utils::UUID state_id, std::string_view description);
 
     // Obtain the contents of the group 0 history table in mutation form.
     // Assumes that the history table exists, i.e. Raft experimental feature is enabled.

@@ -81,7 +81,8 @@ schema_altering_statement::execute0(query_processor& qp, service::query_state& s
     auto [ret, m] = co_await prepare_schema_mutations(qp, group0_guard.write_timestamp());
 
     if (!m.empty()) {
-        co_await mm.announce(std::move(m), std::move(group0_guard));
+        // TODO: more specific description
+        co_await mm.announce(std::move(m), std::move(group0_guard), "CQL DDL statement");
     }
 
     ce = std::move(ret);
