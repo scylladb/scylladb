@@ -185,16 +185,16 @@ concept LeafExpression
         || std::same_as<bind_variable, E> 
         || std::same_as<untyped_constant, E> 
         || std::same_as<constant, E>
+        || std::same_as<column_value, E>
         ;
 
-/// A column, optionally subscripted by a value (eg, c1 or c2['abc']).
+/// A column, usually encountered on the left side of a restriction.
+/// An expression like `mycol < 5` would be expressed as a binary_operator
+/// with column_value on the left hand side.
 struct column_value {
     const column_definition* col;
-    std::optional<expression> sub; ///< If present, this LHS is col[sub], otherwise just col.
-    /// For easy creation of vector<column_value> from vector<column_definition*>.
+
     column_value(const column_definition* col) : col(col) {}
-    /// The compiler doesn't auto-generate this due to the other constructor's existence.
-    column_value(const column_definition* col, expr::expression sub) : col(col), sub(std::move(sub)) {}
 };
 
 /// A subscripted value, eg list_colum[2], val[sub]

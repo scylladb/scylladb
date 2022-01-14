@@ -97,31 +97,7 @@ struct column_value_eval_bag {
 managed_bytes_opt get_value(const column_value& col, const column_value_eval_bag& bag) {
     auto cdef = col.col;
     const row_data_from_partition_slice& data = bag.row_data;
-    const query_options& options = bag.options;
-    if (col.sub) {
-        auto col_type = static_pointer_cast<const collection_type_impl>(cdef->type);
-        if (!col_type->is_map()) {
-            throw exceptions::invalid_request_exception(format("subscripting non-map column {}", cdef->name_as_text()));
-        }
-        int32_t index = data.sel.index_of(*cdef);
-        if (index == -1) {
-            throw std::runtime_error(
-                    format("Column definition {} does not match any column in the query selection",
-                    cdef->name_as_text()));
-        }
-        const auto deserialized = cdef->type->deserialize(managed_bytes_view(*data.other_columns[index]));
-        const auto& data_map = value_cast<map_type_impl::native_type>(deserialized);
-        const auto key = evaluate(*col.sub, options);
-        auto&& key_type = col_type->name_comparator();
-        const auto found = key.view().with_linearized([&] (bytes_view key_bv) {
-            using entry = std::pair<data_value, data_value>;
-            return std::find_if(data_map.cbegin(), data_map.cend(), [&] (const entry& element) {
-                return key_type->compare(element.first.serialize_nonnull(), key_bv) == 0;
-            });
-        });
-        return found == data_map.cend() ? std::nullopt : managed_bytes_opt(found->second.serialize_nonnull());
-    } else {
-        switch (cdef->kind) {
+    switch (cdef->kind) {
         case column_kind::partition_key:
             return managed_bytes(data.partition_key[cdef->id]);
         case column_kind::clustering_key:
@@ -139,7 +115,6 @@ managed_bytes_opt get_value(const column_value& col, const column_value_eval_bag
         }
         default:
             throw exceptions::unsupported_operation_exception("Unknown column kind");
-        }
     }
 }
 
@@ -214,16 +189,10 @@ const abstract_type* get_value_comparator(const column_definition* cdef) {
 }
 
 /// Type for comparing results of get_value().
-const abstract_type* get_value_comparator(const column_value& cv) {
-    return cv.sub ? static_pointer_cast<const collection_type_impl>(cv.col->type)->value_comparator().get()
-            : get_value_comparator(cv.col);
-}
-
-/// Type for comparing results of get_value().
 const abstract_type* get_value_comparator(const column_maybe_subscripted& col) {
     return std::visit(overloaded_functor {
         [](const column_value* cv) {
-            return get_value_comparator(*cv);
+            return get_value_comparator(cv->col);
         },
         [](const subscript* s) {
             const column_value& cv = get_subscripted_column(*s);
@@ -378,9 +347,6 @@ bool contains(const data_value& collection, const raw_value_view& value) {
 
 /// True iff a column is a collection containing value.
 bool contains(const column_value& col, const raw_value_view& value, const column_value_eval_bag& bag) {
-    if (col.sub) {
-        throw exceptions::unsupported_operation_exception("CONTAINS lhs is subscripted");
-    }
     const auto collection = get_value(col, bag);
     if (collection) {
         return contains(col.col->type->deserialize(managed_bytes_view(*collection)), value);
@@ -391,9 +357,6 @@ bool contains(const column_value& col, const raw_value_view& value, const column
 
 /// True iff a column is a map containing \p key.
 bool contains_key(const column_value& col, cql3::raw_value_view key, const column_value_eval_bag& bag) {
-    if (col.sub) {
-        throw exceptions::unsupported_operation_exception("CONTAINS KEY lhs is subscripted");
-    }
     if (!key) {
         return true; // Compatible with old code, which skips null terms in key comparisons.
     }
@@ -1104,9 +1067,6 @@ bool has_supporting_index(
 
 std::ostream& operator<<(std::ostream& os, const column_value& cv) {
     os << cv.col->name_as_text();
-    if (cv.sub) {
-        os << '[' << *cv.sub << ']';
-    }
     return os;
 }
 
@@ -1345,12 +1305,6 @@ bool recurse_until(const expression& e, const noncopyable_function<bool (const e
                 }
                 return false;
             },
-            [&] (const column_value& cv) {
-                if (cv.sub.has_value()) {
-                    return recurse_until(*cv.sub, predicate_fun);
-                }
-                return false;
-            },
             [&] (const subscript& sub) {
                 if (recurse_until(sub.val, predicate_fun)) {
                     return true;
@@ -1465,12 +1419,6 @@ expression search_and_replace(const expression& e,
                 },
                 [&] (const field_selection& fs) -> expression {
                     return field_selection{recurse(fs.structure), fs.field};
-                },
-                [&] (const column_value& cv) -> expression {
-                    if (cv.sub.has_value()) {
-                        return column_value(cv.col, recurse(*cv.sub));
-                    }
-                    return cv;
                 },
                 [&] (const subscript& s) -> expression {
                     return subscript {
@@ -2235,11 +2183,7 @@ void fill_prepare_context(expression& e, prepare_context& ctx) {
         [&](field_selection& fs) {
             fill_prepare_context(fs.structure, ctx);
         },
-        [&](column_value& cv) {
-            if (cv.sub.has_value()) {
-                fill_prepare_context(*cv.sub, ctx);
-            }
-        },
+        [](column_value& cv) {},
         [&](subscript& s) {
             fill_prepare_context(s.val, ctx);
             fill_prepare_context(s.sub, ctx);
