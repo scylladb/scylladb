@@ -123,14 +123,14 @@ future<> service::client_state::has_column_family_access(data_dictionary::databa
     });
 }
 
-future<> service::client_state::has_schema_access(const replica::database& db, const schema& s, auth::permission p) const {
+future<> service::client_state::has_schema_access(data_dictionary::database db, const schema& s, auth::permission p) const {
     auth::resource r = auth::make_data_resource(s.ks_name(), s.cf_name());
-    co_return co_await has_access(db, s.ks_name(), {p, r});
+    co_return co_await has_access(db.real_database(), s.ks_name(), {p, r});
 }
 
-future<> service::client_state::has_schema_access(const replica::database& db, const sstring& ks_name, const sstring& cf_name, auth::permission p) const {
+future<> service::client_state::has_schema_access(data_dictionary::database db, const sstring& ks_name, const sstring& cf_name, auth::permission p) const {
     auth::resource r = auth::make_data_resource(ks_name, cf_name);
-    co_return co_await has_access(db, ks_name, {p, r});
+    co_return co_await has_access(db.real_database(), ks_name, {p, r});
 }
 
 future<> service::client_state::has_access(const replica::database& db, const sstring& ks, auth::command_desc cmd) const {
