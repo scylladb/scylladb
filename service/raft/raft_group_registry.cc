@@ -23,7 +23,7 @@
 #include "service/raft/raft_gossip_failure_detector.hh"
 #include "message/messaging_service.hh"
 #include "serializer_impl.hh"
-
+#include "idl/raft.dist.hh"
 
 #include <seastar/core/coroutine.hh>
 
@@ -53,84 +53,84 @@ void raft_group_registry::init_rpc_verbs() {
         });
     };
 
-    _ms.register_raft_send_snapshot([handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
+    ser::raft_rpc_verbs::register_raft_send_snapshot(&_ms, [handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
             raft::group_id gid, raft::server_id from, raft::server_id dst, raft::install_snapshot snp) mutable {
         return handle_raft_rpc(cinfo, gid, from, dst, [from, snp = std::move(snp)] (raft_rpc& rpc) mutable {
             return rpc.apply_snapshot(std::move(from), std::move(snp));
         });
     });
 
-    _ms.register_raft_append_entries([handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
+    ser::raft_rpc_verbs::register_raft_append_entries(&_ms, [handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
            raft::group_id gid, raft::server_id from, raft::server_id dst, raft::append_request append_request) mutable {
         return handle_raft_rpc(cinfo, gid, from, dst, [from, append_request = std::move(append_request)] (raft_rpc& rpc) mutable {
             rpc.append_entries(std::move(from), std::move(append_request));
-            return make_ready_future<>();
+            return netw::messaging_service::no_wait();
         });
     });
 
-    _ms.register_raft_append_entries_reply([handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
+    ser::raft_rpc_verbs::register_raft_append_entries_reply(&_ms, [handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
             raft::group_id gid, raft::server_id from, raft::server_id dst, raft::append_reply reply) mutable {
         return handle_raft_rpc(cinfo, gid, from, dst, [from, reply = std::move(reply)] (raft_rpc& rpc) mutable {
             rpc.append_entries_reply(std::move(from), std::move(reply));
-            return make_ready_future<>();
+            return netw::messaging_service::no_wait();
         });
     });
 
-    _ms.register_raft_vote_request([handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
+    ser::raft_rpc_verbs::register_raft_vote_request(&_ms, [handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
             raft::group_id gid, raft::server_id from, raft::server_id dst, raft::vote_request vote_request) mutable {
         return handle_raft_rpc(cinfo, gid, from, dst, [from, vote_request] (raft_rpc& rpc) mutable {
             rpc.request_vote(std::move(from), std::move(vote_request));
-            return make_ready_future<>();
+            return netw::messaging_service::no_wait();
         });
     });
 
-    _ms.register_raft_vote_reply([handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
+    ser::raft_rpc_verbs::register_raft_vote_reply(&_ms, [handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
             raft::group_id gid, raft::server_id from, raft::server_id dst, raft::vote_reply vote_reply) mutable {
         return handle_raft_rpc(cinfo, gid, from, dst, [from, vote_reply] (raft_rpc& rpc) mutable {
             rpc.request_vote_reply(std::move(from), std::move(vote_reply));
-            return make_ready_future<>();
+            return netw::messaging_service::no_wait();
         });
     });
 
-    _ms.register_raft_timeout_now([handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
+    ser::raft_rpc_verbs::register_raft_timeout_now(&_ms, [handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
             raft::group_id gid, raft::server_id from, raft::server_id dst, raft::timeout_now timeout_now) mutable {
         return handle_raft_rpc(cinfo, gid, from, dst, [from, timeout_now] (raft_rpc& rpc) mutable {
             rpc.timeout_now_request(std::move(from), std::move(timeout_now));
-            return make_ready_future<>();
+            return netw::messaging_service::no_wait();
         });
     });
 
-    _ms.register_raft_read_quorum([handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
+    ser::raft_rpc_verbs::register_raft_read_quorum(&_ms, [handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
             raft::group_id gid, raft::server_id from, raft::server_id dst, raft::read_quorum read_quorum) mutable {
         return handle_raft_rpc(cinfo, gid, from, dst, [from, read_quorum] (raft_rpc& rpc) mutable {
             rpc.read_quorum_request(std::move(from), std::move(read_quorum));
-            return make_ready_future<>();
+            return netw::messaging_service::no_wait();
         });
     });
 
-    _ms.register_raft_read_quorum_reply([handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
+    ser::raft_rpc_verbs::register_raft_read_quorum_reply(&_ms, [handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
             raft::group_id gid, raft::server_id from, raft::server_id dst, raft::read_quorum_reply read_quorum_reply) mutable {
         return handle_raft_rpc(cinfo, gid, from, dst, [from, read_quorum_reply] (raft_rpc& rpc) mutable {
             rpc.read_quorum_reply(std::move(from), std::move(read_quorum_reply));
-            return make_ready_future<>();
+            return netw::messaging_service::no_wait();
         });
     });
 
-    _ms.register_raft_execute_read_barrier_on_leader([handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
+    ser::raft_rpc_verbs::register_raft_execute_read_barrier_on_leader(&_ms, [handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
             raft::group_id gid, raft::server_id from, raft::server_id dst) mutable {
         return handle_raft_rpc(cinfo, gid, from, dst, [from] (raft_rpc& rpc) mutable {
             return rpc.execute_read_barrier(from);
         });
     });
 
-    _ms.register_raft_add_entry([handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
+    ser::raft_rpc_verbs::register_raft_add_entry(&_ms, [handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
             raft::group_id gid, raft::server_id from, raft::server_id dst, raft::command cmd) mutable {
         return handle_raft_rpc(cinfo, gid, from, dst, [from, cmd = std::move(cmd)] (raft_rpc& rpc) mutable {
             return rpc.execute_add_entry(from, std::move(cmd));
         });
     });
 
-    _ms.register_raft_modify_config([handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
+    ser::raft_rpc_verbs::register_raft_modify_config(&_ms, [handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
             raft::group_id gid, raft::server_id from, raft::server_id dst,
             std::vector<raft::server_address> add, std::vector<raft::server_id> del) mutable {
         return handle_raft_rpc(cinfo, gid, from, dst,
@@ -143,17 +143,17 @@ void raft_group_registry::init_rpc_verbs() {
 
 future<> raft_group_registry::uninit_rpc_verbs() {
     return when_all_succeed(
-        _ms.unregister_raft_send_snapshot(),
-        _ms.unregister_raft_append_entries(),
-        _ms.unregister_raft_append_entries_reply(),
-        _ms.unregister_raft_vote_request(),
-        _ms.unregister_raft_vote_reply(),
-        _ms.unregister_raft_timeout_now(),
-        _ms.unregister_raft_read_quorum(),
-        _ms.unregister_raft_read_quorum_reply(),
-        _ms.unregister_raft_execute_read_barrier_on_leader(),
-        _ms.unregister_raft_add_entry(),
-        _ms.unregister_raft_modify_config()
+        ser::raft_rpc_verbs::unregister_raft_send_snapshot(&_ms),
+        ser::raft_rpc_verbs::unregister_raft_append_entries(&_ms),
+        ser::raft_rpc_verbs::unregister_raft_append_entries_reply(&_ms),
+        ser::raft_rpc_verbs::unregister_raft_vote_request(&_ms),
+        ser::raft_rpc_verbs::unregister_raft_vote_reply(&_ms),
+        ser::raft_rpc_verbs::unregister_raft_timeout_now(&_ms),
+        ser::raft_rpc_verbs::unregister_raft_read_quorum(&_ms),
+        ser::raft_rpc_verbs::unregister_raft_read_quorum_reply(&_ms),
+        ser::raft_rpc_verbs::unregister_raft_execute_read_barrier_on_leader(&_ms),
+        ser::raft_rpc_verbs::unregister_raft_add_entry(&_ms),
+        ser::raft_rpc_verbs::unregister_raft_modify_config(&_ms)
     ).discard_result();
 }
 

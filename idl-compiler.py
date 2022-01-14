@@ -821,8 +821,7 @@ struct serializer<{name}> {{
 }};
 """)
 
-    if name in types_with_const_appearances:
-        fprintln(hout, f"""
+    fprintln(hout, f"""
 template <{template_param}>
 struct serializer<const {name}> : public serializer<{name}>
 {{}};

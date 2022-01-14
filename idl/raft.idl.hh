@@ -21,122 +21,96 @@
 
 namespace raft {
 
-namespace internal {
-
-template<typename Tag>
-struct tagged_id {
-    utils::UUID id;
-};
-
-template<typename Tag>
-struct tagged_uint64 {
-    uint64_t get_value();
-};
-
-} // namespace internal
-
-struct server_id_tag stub {};
-struct snapshot_id_tag stub {};
-struct index_tag stub {};
-struct term_tag stub {};
-
-struct server_address {
-    raft::internal::tagged_id<raft::server_id_tag> id;
-    bool can_vote;
-    bytes info;
-};
-
-struct configuration {
-    std::unordered_set<raft::server_address> current;
-    std::unordered_set<raft::server_address> previous;
-};
-
 struct snapshot_descriptor {
-    raft::internal::tagged_uint64<raft::index_tag> idx;
-    raft::internal::tagged_uint64<raft::term_tag> term;
+    raft::index_t idx;
+    raft::term_t term;
     raft::configuration config;
-    raft::internal::tagged_id<raft::snapshot_id_tag> id;
+    raft::snapshot_id id;
 };
 
 struct vote_request {
-    raft::internal::tagged_uint64<raft::term_tag> current_term;
-    raft::internal::tagged_uint64<raft::index_tag> last_log_idx;
-    raft::internal::tagged_uint64<raft::term_tag> last_log_term;
+    raft::term_t current_term;
+    raft::index_t last_log_idx;
+    raft::term_t last_log_term;
     bool is_prevote;
     bool force;
 };
 
 struct vote_reply {
-    raft::internal::tagged_uint64<raft::term_tag> current_term;
+    raft::term_t current_term;
     bool vote_granted;
     bool is_prevote;
 };
 
 struct install_snapshot {
-    raft::internal::tagged_uint64<raft::term_tag> current_term;
+    raft::term_t current_term;
     raft::snapshot_descriptor snp;
 };
 
 struct snapshot_reply {
-    raft::internal::tagged_uint64<raft::term_tag> current_term;
+    raft::term_t current_term;
     bool success;
 };
 
 struct append_reply {
     struct rejected {
-        raft::internal::tagged_uint64<raft::index_tag> non_matching_idx;
-        raft::internal::tagged_uint64<raft::index_tag> last_idx;
+        raft::index_t non_matching_idx;
+        raft::index_t last_idx;
     };
     struct accepted {
-        raft::internal::tagged_uint64<raft::index_tag> last_new_idx;
+        raft::index_t last_new_idx;
     };
-    raft::internal::tagged_uint64<raft::term_tag> current_term;
-    raft::internal::tagged_uint64<raft::index_tag> commit_idx;
+    raft::term_t current_term;
+    raft::index_t commit_idx;
     std::variant<raft::append_reply::rejected, raft::append_reply::accepted> result;
 };
 
-struct log_entry {
-    struct dummy {};
-
-    raft::internal::tagged_uint64<raft::term_tag> term;
-    raft::internal::tagged_uint64<raft::index_tag> idx;
-    std::variant<bytes_ostream, raft::configuration, raft::log_entry::dummy> data;
-};
-
 struct append_request {
-    raft::internal::tagged_uint64<raft::term_tag> current_term;
-    raft::internal::tagged_uint64<raft::index_tag> prev_log_idx;
-    raft::internal::tagged_uint64<raft::term_tag> prev_log_term;
-    raft::internal::tagged_uint64<raft::index_tag> leader_commit_idx;
+    raft::term_t current_term;
+    raft::index_t prev_log_idx;
+    raft::term_t prev_log_term;
+    raft::index_t leader_commit_idx;
     std::vector<lw_shared_ptr<const raft::log_entry>> entries;
 };
 
 struct timeout_now {
-    raft::internal::tagged_uint64<raft::term_tag> current_term;
+    raft::term_t current_term;
 };
 
 struct read_quorum {
-    raft::internal::tagged_uint64<raft::term_tag> current_term;
-    raft::internal::tagged_uint64<raft::index_tag> leader_commit_idx;
-    raft::internal::tagged_uint64<raft::read_id_tag> id;
+    raft::term_t current_term;
+    raft::index_t leader_commit_idx;
+    raft::read_id id;
 };
 
 struct read_quorum_reply {
-    raft::internal::tagged_uint64<raft::term_tag> current_term;
-    raft::internal::tagged_uint64<raft::index_tag> commit_idx;
-    raft::internal::tagged_uint64<raft::read_id_tag> id;
+    raft::term_t current_term;
+    raft::index_t commit_idx;
+    raft::read_id id;
 };
 
 struct not_a_leader {
-    raft::internal::tagged_id<raft::server_id_tag> leader;
+    raft::server_id leader;
 };
 
 struct commit_status_unknown {
 };
 
 struct entry_id {
-    raft::internal::tagged_uint64<raft::term_tag> term;
-    raft::internal::tagged_uint64<raft::index_tag> idx;
+    raft::term_t term;
+    raft::index_t idx;
 };
+
+verb [[with_client_info, with_timeout]] raft_send_snapshot (raft::group_id, raft::server_id from_id, raft::server_id dst_id, raft::install_snapshot) -> raft::snapshot_reply;
+verb [[with_client_info, with_timeout, one_way]] raft_append_entries (raft::group_id, raft::server_id from_id, raft::server_id dst_id, raft::append_request);
+verb [[with_client_info, with_timeout, one_way]] raft_append_entries_reply (raft::group_id, raft::server_id from_id, raft::server_id dst_id, raft::append_reply);
+verb [[with_client_info, with_timeout, one_way]] raft_vote_request (raft::group_id, raft::server_id from_id, raft::server_id dst_id, raft::vote_request);
+verb [[with_client_info, with_timeout, one_way]] raft_vote_reply (raft::group_id, raft::server_id from_id, raft::server_id dst_id, raft::vote_reply);
+verb [[with_client_info, with_timeout, one_way]] raft_timeout_now (raft::group_id, raft::server_id from_id, raft::server_id dst_id, raft::timeout_now);
+verb [[with_client_info, with_timeout, one_way]] raft_read_quorum (raft::group_id, raft::server_id from_id, raft::server_id dst_id, raft::read_quorum);
+verb [[with_client_info, with_timeout, one_way]] raft_read_quorum_reply (raft::group_id, raft::server_id from_id, raft::server_id dst_id, raft::read_quorum_reply);
+verb [[with_client_info, with_timeout]] raft_execute_read_barrier_on_leader (raft::group_id, raft::server_id from_id, raft::server_id dst_id) -> raft::read_barrier_reply;
+verb [[with_client_info, with_timeout]] raft_add_entry (raft::group_id, raft::server_id from_id, raft::server_id dst_id, raft::command cmd) -> raft::add_entry_reply;
+verb [[with_client_info, with_timeout]] raft_modify_config (raft::group_id gid, raft::server_id from_id, raft::server_id dst_id, std::vector<raft::server_address> add, std::vector<raft::server_id> del) -> raft::add_entry_reply;
 
 } // namespace raft

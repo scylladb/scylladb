@@ -25,9 +25,9 @@
 #include "utils/UUID.hh"
 
 #include "serializer.hh"
-#include "idl/raft.dist.hh"
+#include "idl/raft_storage.dist.hh"
 #include "serializer_impl.hh"
-#include "idl/raft.dist.impl.hh"
+#include "idl/raft_storage.dist.impl.hh"
 
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/modification_statement.hh"
