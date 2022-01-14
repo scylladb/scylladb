@@ -28,7 +28,7 @@
 
 #include "utils/hash.hh"
 #include "schema_fwd.hh"
-#include "flat_mutation_reader.hh"
+#include "flat_mutation_reader_v2.hh"
 #include "mutation_reader.hh"
 #include "utils/top_k.hh"
 #include "schema_registry.hh"
@@ -54,8 +54,8 @@ public:
     // This allows the listener to install on-the-fly processing for the mutation stream.
     //
     // The schema_ptr passed is the one which corresponds to the reader, not the current schema of the table.
-    virtual flat_mutation_reader on_read(const schema_ptr& s, const dht::partition_range& range,
-            const query::partition_slice& slice, flat_mutation_reader&& rd) {
+    virtual flat_mutation_reader_v2 on_read(const schema_ptr& s, const dht::partition_range& range,
+            const query::partition_slice& slice, flat_mutation_reader_v2&& rd) {
         return std::move(rd);
     }
 };
@@ -67,8 +67,8 @@ public:
     void install(data_listener* listener);
     void uninstall(data_listener* listener);
 
-    flat_mutation_reader on_read(const schema_ptr& s, const dht::partition_range& range,
-            const query::partition_slice& slice, flat_mutation_reader&& rd);
+    flat_mutation_reader_v2 on_read(const schema_ptr& s, const dht::partition_range& range,
+            const query::partition_slice& slice, flat_mutation_reader_v2&& rd);
     void on_write(const schema_ptr& s, const frozen_mutation& m);
 
     bool exists(data_listener* listener) const;
@@ -144,8 +144,8 @@ public:
     toppartitions_data_listener(replica::database& db, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters, std::unordered_set<sstring> keyspace_filters);
     ~toppartitions_data_listener();
 
-    virtual flat_mutation_reader on_read(const schema_ptr& s, const dht::partition_range& range,
-            const query::partition_slice& slice, flat_mutation_reader&& rd) override;
+    virtual flat_mutation_reader_v2 on_read(const schema_ptr& s, const dht::partition_range& range,
+            const query::partition_slice& slice, flat_mutation_reader_v2&& rd) override;
 
     virtual void on_write(const schema_ptr& s, const frozen_mutation& m) override;
 

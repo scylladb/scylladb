@@ -202,20 +202,12 @@ table::make_reader_v2(schema_ptr s,
 
     auto rd = make_combined_reader(s, permit, std::move(readers), fwd, fwd_mr);
 
-    flat_mutation_reader_opt rd_v1;
     if (_config.data_listeners && !_config.data_listeners->empty()) {
-        rd_v1 = _config.data_listeners->on_read(s, range, slice, downgrade_to_v1(std::move(rd)));
+        rd = _config.data_listeners->on_read(s, range, slice, std::move(rd));
     }
 
     if (unreversed_slice) [[unlikely]] {
-        if (!rd_v1) {
-            rd_v1 = downgrade_to_v1(std::move(rd));
-        }
-        rd_v1 = make_reversing_reader(std::move(*rd_v1), permit.max_result_size(), std::move(unreversed_slice));
-    }
-
-    if (rd_v1) {
-        return upgrade_to_v2(std::move(*rd_v1));
+        return upgrade_to_v2(make_reversing_reader(downgrade_to_v1(std::move(rd)), permit.max_result_size(), std::move(unreversed_slice)));
     }
 
     return rd;

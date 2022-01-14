@@ -43,8 +43,8 @@ bool data_listeners::exists(data_listener* listener) const {
     return _listeners.contains(listener);
 }
 
-flat_mutation_reader data_listeners::on_read(const schema_ptr& s, const dht::partition_range& range,
-        const query::partition_slice& slice, flat_mutation_reader&& rd) {
+flat_mutation_reader_v2 data_listeners::on_read(const schema_ptr& s, const dht::partition_range& range,
+        const query::partition_slice& slice, flat_mutation_reader_v2&& rd) {
     for (auto&& li : _listeners) {
         rd = li->on_read(s, range, slice, std::move(rd));
     }
@@ -79,19 +79,19 @@ future<> toppartitions_data_listener::stop() {
     return make_ready_future<>();
 }
 
-flat_mutation_reader toppartitions_data_listener::on_read(const schema_ptr& s, const dht::partition_range& range,
-        const query::partition_slice& slice, flat_mutation_reader&& rd) {
+flat_mutation_reader_v2 toppartitions_data_listener::on_read(const schema_ptr& s, const dht::partition_range& range,
+        const query::partition_slice& slice, flat_mutation_reader_v2&& rd) {
     bool include_all = _table_filters.empty() && _keyspace_filters.empty();
 
     if (include_all || _keyspace_filters.contains(s->ks_name()) || _table_filters.contains({s->ks_name(), s->cf_name()})) {
         dblog.trace("toppartitions_data_listener::on_read: {}.{}", s->ks_name(), s->cf_name());
-        return downgrade_to_v1(make_filtering_reader(upgrade_to_v2(std::move(rd)), [zis = this->weak_from_this(), &range, &slice, s = std::move(s)] (const dht::decorated_key& dk) {
+        return make_filtering_reader(std::move(rd), [zis = this->weak_from_this(), &range, &slice, s = std::move(s)] (const dht::decorated_key& dk) {
             // The data query may be executing after the toppartitions_data_listener object has been removed, so check
             if (zis) {
                 zis->_top_k_read.append(toppartitions_item_key{s, dk});
             }
             return true;
-        }));
+        });
     }
 
     return std::move(rd);

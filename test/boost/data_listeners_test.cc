@@ -38,14 +38,14 @@ class table_listener : public db::data_listener {
 public:
     table_listener(sstring cf_name) : _cf_name(cf_name) {}
 
-    virtual flat_mutation_reader on_read(const schema_ptr& s, const dht::partition_range& range,
-            const query::partition_slice& slice, flat_mutation_reader&& rd) override {
+    virtual flat_mutation_reader_v2 on_read(const schema_ptr& s, const dht::partition_range& range,
+            const query::partition_slice& slice, flat_mutation_reader_v2&& rd) override {
         if (s->cf_name() == _cf_name) {
-            return downgrade_to_v1(make_filtering_reader(upgrade_to_v2(std::move(rd)), [this, &range, &slice, s = std::move(s)] (const dht::decorated_key& dk) {
+            return make_filtering_reader(std::move(rd), [this, &range, &slice, s = std::move(s)] (const dht::decorated_key& dk) {
                 testlog.info("listener {}: read {}", fmt::ptr(this), dk);
                 ++read;
                 return true;
-            }));
+            });
         }
         return std::move(rd);
     }
