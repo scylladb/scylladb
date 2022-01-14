@@ -55,6 +55,7 @@
 
 #include <boost/range/algorithm/remove_if.hpp>
 #include <boost/range/algorithm.hpp>
+#include "utils/error_injection.hh"
 
 namespace replica {
 
@@ -572,6 +573,11 @@ table::seal_active_memtable(flush_permit&& permit) {
         tlogger.debug("Memtable is empty");
         return _flush_barrier.advance_and_await();
     }
+
+    utils::get_local_injector().inject("table_seal_active_memtable_pre_flush", []() {
+        throw std::bad_alloc();
+    });
+
     _memtables->add_memtable();
     _stats.memtable_switch_count++;
     // This will set evictable occupancy of the old memtable region to zero, so that

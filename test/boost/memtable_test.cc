@@ -39,9 +39,12 @@
 #include "test/lib/flat_mutation_reader_assertions.hh"
 #include "flat_mutation_reader.hh"
 #include "test/lib/data_model.hh"
+#include "test/lib/eventually.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/log.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
+#include "test/lib/simple_schema.hh"
+#include "utils/error_injection.hh"
 
 static api::timestamp_type next_timestamp() {
     static thread_local api::timestamp_type next_timestamp = 1;
@@ -771,3 +774,53 @@ SEASTAR_TEST_CASE(sstable_compaction_does_not_resurrect_data) {
             });
     }, db_config);
 }
+
+SEASTAR_TEST_CASE(failed_flush_prevents_writes) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    std::cerr << "Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n";
+    return make_ready_future<>();
+#else
+    return do_with_cql_env_thread([](cql_test_env& env) {
+        replica::database& db = env.local_db();
+        service::migration_manager& mm = env.migration_manager().local();
+
+        simple_schema ss;
+        schema_ptr s = ss.schema();
+        mm.announce(mm.prepare_new_column_family_announcement(s, api::new_timestamp()).get()).get();
+
+        replica::table& t = db.find_column_family("ks", "cf");
+        memtable& m = t.active_memtable();
+        dirty_memory_manager& dmm = m.get_dirty_memory_manager();
+
+        // Insert something so that we have data in memtable to flush
+        // it has to be somewhat large, as automatic flushing picks the
+        // largest memtable to flush
+        mutation mt = {s, ss.make_pkey(make_local_key(s))};
+        for (uint32_t i = 0; i < 1000; ++i) {
+            ss.add_row(mt, ss.make_ckey(i), format("{}", i));
+        }
+        t.apply(mt);
+
+        utils::get_local_injector().enable("table_seal_active_memtable_pre_flush");
+
+        // Trigger flush
+        dmm.notify_soft_pressure();
+
+        BOOST_ASSERT(eventually_true([&db]() { return db.cf_stats()->failed_memtables_flushes_count != 0; }));
+
+        // The flush failed, make sure there is still data in memtable.
+        BOOST_ASSERT(!t.active_memtable().empty());
+        utils::get_local_injector().disable("table_seal_active_memtable_pre_flush");
+
+        // Release pressure, so that we can trigger flush again
+        dmm.notify_soft_relief();
+
+        // Trigger pressure, the error above is no longer being injected, so flush
+        // should be triggerred and succeed
+        dmm.notify_soft_pressure();
+
+        BOOST_ASSERT(eventually_true([&t]() { return t.active_memtable().empty(); }));
+    });
+#endif
+}
+

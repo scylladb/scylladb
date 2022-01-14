@@ -1424,6 +1424,9 @@ public:
     db::commitlog* commitlog() const {
         return _commitlog.get();
     }
+    replica::cf_stats* cf_stats() {
+        return &_cf_stats;
+    }
 
     seastar::scheduling_group get_statement_scheduling_group() const { return _dbcfg.statement_scheduling_group; }
     seastar::scheduling_group get_streaming_scheduling_group() const { return _dbcfg.streaming_scheduling_group; }
