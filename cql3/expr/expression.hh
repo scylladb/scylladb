@@ -199,6 +199,15 @@ struct subscript {
     expression sub;
 };
 
+/// Gets the subscripted column_value out of the subscript.
+/// Only columns can be subscripted in CQL, so we can expect that the subscripted expression is a column_value.
+const column_value& get_subscripted_column(const subscript&);
+
+/// Gets the column_definition* out of expression that can be a column_value or subscript
+/// Only columns can be subscripted in CQL, so we can expect that the subscripted expression is a column_value.
+const column_value& get_subscripted_column(const expression&);
+
+
 /// Represents token function on LHS of an operator relation.  No need to list column definitions
 /// here -- token takes exactly the partition key as its argument.
 struct token {};

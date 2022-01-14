@@ -640,6 +640,27 @@ static constexpr bool inclusive = true, exclusive = false;
 
 } // anonymous namespace
 
+const column_value& get_subscripted_column(const subscript& sub) {
+    if (!is<column_value>(sub.val)) {
+        on_internal_error(expr_logger,
+            fmt::format("Only columns can be subscripted using the [] operator, got {}", sub.val));
+    }
+    return as<column_value>(sub.val);
+}
+
+const column_value& get_subscripted_column(const expression& e) {
+    return visit(overloaded_functor {
+        [](const column_value& cval) -> const column_value& { return cval; },
+        [](const subscript& sub) -> const column_value& {
+            return get_subscripted_column(sub);
+        },
+        [&](const auto&) -> const column_value& {
+            on_internal_error(expr_logger,
+                fmt::format("get_subscripted_column called on bad expression variant: {}", e));
+        }
+    }, e);
+}
+
 expression make_conjunction(expression a, expression b) {
     auto children = explode_conjunction(std::move(a));
     boost::copy(explode_conjunction(std::move(b)), back_inserter(children));
