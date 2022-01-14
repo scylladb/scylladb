@@ -6,7 +6,6 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-from abc import ABC, abstractmethod
 import argparse
 import asyncio
 import colorama
@@ -25,11 +24,16 @@ import signal
 import subprocess
 import sys
 import time
+import uuid
 import xml.etree.ElementTree as ET
 import yaml
 
+from abc import ABC, abstractmethod
 from scripts import coverage
 from test.pylib.artifact_registry import ArtifactRegistry
+from test.pylib.pool import Pool
+from test.pylib.host_registry import HostRegistry
+from test.pylib.scylla_server import ScyllaServer
 
 output_is_a_tty = sys.stdout.isatty()
 
@@ -69,6 +73,7 @@ class TestSuite(ABC):
     # All existing test suites, one suite per path/mode.
     suites = dict()
     artifacts = ArtifactRegistry()
+    hosts = HostRegistry()
     _next_id = 0
 
     def __init__(self, path, cfg, options, mode):
@@ -293,6 +298,70 @@ class CqlTestSuite(TestSuite):
         return "*_test.cql"
 
 
+class PythonTestSuite(TestSuite):
+    """A collection of Python pytests against a single Scylla instance"""
+
+    def __init__(self, path, cfg, options, mode):
+        super().__init__(path, cfg, options, mode)
+        self.scylla_exe = os.path.join("build", self.mode, "scylla")
+        if self.mode == "coverage":
+            self.scylla_env = coverage.env(self.scylla_exe, distinct_id=self.name)
+        else:
+            self.scylla_env = dict()
+        self.scylla_env['SCYLLA'] = self.scylla_exe
+
+        topology = self.cfg.get("topology", {"class": "simple", "replication_factor": 1})
+
+        self.create_cluster = self.topology_for_class(topology["class"], topology)
+
+        self.clusters = Pool(cfg.get("pool_size", 2), self.create_cluster)
+
+    def create_server(self, cluster_name, seed):
+        server = ScyllaServer(
+            exe=self.scylla_exe,
+            vardir=self.options.tmpdir,
+            host_registry=self.hosts,
+            cluster_name=cluster_name,
+            seed=seed,
+            cmdline_options=self.cfg.get("extra_scylla_cmdline_options", []))
+
+        # Suite artifacts are removed when
+        # the entire suite ends successfully.
+        self.artifacts.add_suite_artifact(self, server.stop_artifact)
+        if not self.options.save_log_on_success:
+            # If a test fails, we might want to keep the data dir.
+            self.artifacts.add_suite_artifact(self, server.uninstall_artifact)
+        self.artifacts.add_exit_artifact(server.stop_artifact)
+        return server
+
+    def topology_for_class(self, class_name, cfg):
+
+        if class_name.lower() == "simple":
+            replicas = int(cfg["replication_factor"])
+
+            async def start_simple():
+                cluster = []
+                cluster_name = str(uuid.uuid1())
+                for i in range(replicas):
+                    seed = cluster[-1].host if cluster else None
+                    server = self.create_server(cluster_name, seed)
+                    cluster.append(server)
+                    await server.install_and_start()
+                return cluster
+
+            return start_simple
+        else:
+            raise RuntimeError("Unsupported topology name")
+
+    async def add_test(self, shortname):
+        test = PythonTest(self.next_id, shortname, self)
+        self.tests.append(test)
+
+    @property
+    def pattern(self):
+        return "test_*.py"
+
+
 class RunTestSuite(TestSuite):
     """TestSuite for test directory with a 'run' script """
 
@@ -504,6 +573,35 @@ class RunTest(Test):
     async def run(self, options):
         # This test can and should be killed gently, with SIGTERM, not with SIGKILL
         self.success = await run_test(self, options, gentle_kill=True, env=self.suite.scylla_env)
+        logging.info("Test #%d %s", self.id, "succeeded" if self.success else "failed ")
+        return self
+
+
+class PythonTest(Test):
+    """Run a pytest collection of cases against a standalone Scylla"""
+
+    def __init__(self, test_no, shortname, suite):
+        super().__init__(test_no, shortname, suite)
+        self.path = "pytest"
+        self.xmlout = os.path.join(self.suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
+        self.args = ["-o", "junit_family=xunit2",
+                     "--junit-xml={}".format(self.xmlout),
+                     os.path.join(suite.path, shortname + ".py")]
+
+    def print_summary(self):
+        print("Output of {} {}:".format(self.path, " ".join(self.args)))
+        print(read_log(self.log_filename))
+        if self.server_log:
+            print("Server log of the first server:")
+            print(self.server_log)
+
+    async def run(self, options):
+        async with self.suite.clusters.instance() as cluster:
+            self.args.insert(0, "--host={}".format(cluster[0].host))
+            cluster[0].take_log_savepoint()
+            self.success = await run_test(self, options)
+            if not self.success:
+                self.server_log = cluster[0].read_log()
         logging.info("Test #%d %s", self.id, "succeeded" if self.success else "failed ")
         return self
 
@@ -799,6 +897,7 @@ async def run_all_tests(signaled, options):
             console.print_progress(result)
     console.print_start_blurb()
     try:
+        TestSuite.artifacts.add_exit_artifact(TestSuite.hosts.cleanup)
         for test in TestSuite.tests():
             # +1 for 'signaled' event
             if len(pending) > options.jobs:
