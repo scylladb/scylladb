@@ -1387,7 +1387,7 @@ void select_statement::maybe_jsonize_select_clause(data_dictionary::database db,
 }
 
 std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::database db, cql_stats& stats, bool for_view) {
-    schema_ptr schema = validation::validate_column_family(db.real_database(), keyspace(), column_family());
+    schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
     prepare_context& ctx = get_prepare_context();
 
     maybe_jsonize_select_clause(db, schema);

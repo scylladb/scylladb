@@ -177,7 +177,7 @@ view_ptr create_view_statement::prepare_view(data_dictionary::database db) const
                 _base_name.get_keyspace(), keyspace()));
     }
 
-    schema_ptr schema = validation::validate_column_family(db.real_database(), _base_name.get_keyspace(), _base_name.get_column_family());
+    schema_ptr schema = validation::validate_column_family(db, _base_name.get_keyspace(), _base_name.get_column_family());
 
     if (schema->is_counter()) {
         throw exceptions::invalid_request_exception(format("Materialized views are not supported on counter tables"));

@@ -295,7 +295,7 @@ void alter_table_statement::drop_column(const schema& schema, data_dictionary::t
 }
 
 std::pair<schema_builder, std::vector<view_ptr>> alter_table_statement::prepare_schema_update(data_dictionary::database db) const {
-    auto s = validation::validate_column_family(db.real_database(), keyspace(), column_family());
+    auto s = validation::validate_column_family(db, keyspace(), column_family());
     if (s->is_view()) {
         throw exceptions::invalid_request_exception("Cannot use ALTER TABLE on Materialized View");
     }
