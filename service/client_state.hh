@@ -358,7 +358,7 @@ public:
     future<> has_schema_access(data_dictionary::database db, const sstring&, const sstring&, auth::permission p) const;
 
 private:
-    future<> has_access(const replica::database& db, const sstring& keyspace, auth::command_desc) const;
+    future<> has_access(data_dictionary::database db, const sstring& keyspace, auth::command_desc) const;
 
 public:
     future<bool> check_has_permission(auth::command_desc) const;
