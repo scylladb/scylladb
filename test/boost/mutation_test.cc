@@ -2291,7 +2291,7 @@ void run_compaction_data_stream_split_test(const schema& schema, reader_permit p
         mut.partition().compact_for_compaction(schema, never_gc, mut.decorated_key(), query_time);
     }
 
-    auto reader = make_flat_mutation_reader_from_mutations(schema.shared_from_this(), std::move(permit), mutations);
+    auto reader = make_flat_mutation_reader_from_mutations_v2(schema.shared_from_this(), std::move(permit), mutations);
     auto close_reader = deferred_close(reader);
     auto get_max_purgeable = [] (const dht::decorated_key&) {
         return api::max_timestamp;

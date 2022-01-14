@@ -3359,14 +3359,14 @@ SEASTAR_TEST_CASE(purged_tombstone_consumer_sstable_test) {
             for (auto&& sst : all) {
                 compacting->insert(std::move(sst));
             }
-            auto reader = downgrade_to_v1(compacting->make_range_sstable_reader(s,
+            auto reader = compacting->make_range_sstable_reader(s,
                 env.make_reader_permit(),
                 query::full_partition_range,
                 s->full_slice(),
                 service::get_local_compaction_priority(),
                 nullptr,
                 ::streamed_mutation::forwarding::no,
-                ::mutation_reader::forwarding::no));
+                ::mutation_reader::forwarding::no);
 
             auto r = std::move(reader);
             auto close_r = deferred_close(r);
