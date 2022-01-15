@@ -31,7 +31,7 @@ using '-o PATH' option.
 END
 )
 
-while [[ $# -gt 0 ]]; do
+while [ $# -gt 0 ]; do
 	opt="$1"
 	case $opt in
 		-h|--help)
