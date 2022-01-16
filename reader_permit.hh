@@ -161,6 +161,8 @@ public:
 
     reader_resources base_resources() const;
 
+    void release_base_resources() noexcept;
+
     sstring description() const;
 
     db::timeout_clock::time_point timeout() const noexcept;
