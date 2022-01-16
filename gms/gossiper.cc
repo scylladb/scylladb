@@ -544,7 +544,7 @@ void gossiper::do_apply_state_locally(gms::inet_address node, const endpoint_sta
             if (listener_notification) {
                 logger.trace("Updating heartbeat state generation to {} from {} for {}", remote_generation, local_generation, node);
                 // major state change will handle the update by inserting the remote state directly
-                this->handle_major_state_change(node, remote_state);
+                this->handle_major_state_change(node, remote_state).get();
             } else {
                 logger.debug("Applying remote_state for node {} (remote generation > local generation)", node);
                 endpoint_state_map[node] = remote_state;
@@ -582,7 +582,7 @@ void gossiper::do_apply_state_locally(gms::inet_address node, const endpoint_sta
         }
     } else {
         if (listener_notification) {
-            this->handle_major_state_change(node, remote_state);
+            this->handle_major_state_change(node, remote_state).get();
         } else {
             logger.debug("Applying remote_state for node {} (new node)", node);
             endpoint_state_map[node] = remote_state;
@@ -1243,7 +1243,7 @@ future<> gossiper::assassinate_endpoint(sstring address) {
             std::unordered_set<dht::token> tokens_set(tokens.begin(), tokens.end());
             auto expire_time = gossiper.compute_expire_time();
             ep_state.add_application_state(application_state::STATUS, versioned_value::left(tokens_set, expire_time.time_since_epoch().count()));
-            gossiper.handle_major_state_change(endpoint, ep_state);
+            gossiper.handle_major_state_change(endpoint, ep_state).get();
             sleep_abortable(INTERVAL * 4, gossiper._abort_source).get();
             logger.warn("Finished assassinating {}", endpoint);
         });
@@ -1565,8 +1565,7 @@ future<> gossiper::mark_dead(inet_address addr, endpoint_state& local_state) {
     });
 }
 
-// Runs inside seastar::async context
-void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& eps) {
+future<> gossiper::handle_major_state_change(inet_address ep, const endpoint_state& eps) {
     auto eps_old = get_endpoint_state_for_endpoint(ep);
     if (!is_dead_state(eps) && !is_in_shadow_round()) {
         if (endpoint_state_map.contains(ep))  {
@@ -1577,7 +1576,7 @@ void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& 
     }
     logger.trace("Adding endpoint state for {}, status = {}", ep, get_gossip_status(eps));
     endpoint_state_map[ep] = eps;
-    replicate(ep, eps).get();
+    co_await replicate(ep, eps);
 
     if (is_in_shadow_round()) {
         // In shadow round, we only interested in the peer's endpoint_state,
@@ -1586,14 +1585,14 @@ void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& 
         // procedure with EchoMessage gossip message. We will do them during
         // normal gossip runs anyway.
         logger.debug("In shadow round addr={}, eps={}", ep, eps);
-        return;
+        co_return;
     }
 
     if (eps_old) {
         // the node restarted: it is up to the subscriber to take whatever action is necessary
-        _subscribers.for_each([ep, eps_old] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
+        co_await _subscribers.for_each([ep, eps_old] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
             return subscriber->on_restart(ep, *eps_old);
-        }).get();
+        });
     }
 
     auto& ep_state = endpoint_state_map.at(ep);
@@ -1601,18 +1600,18 @@ void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& 
         mark_alive(ep, ep_state);
     } else {
         logger.debug("Not marking {} alive due to dead state {}", ep, get_gossip_status(eps));
-        mark_dead(ep, ep_state).get();
+        co_await mark_dead(ep, ep_state);
     }
 
     auto* eps_new = get_endpoint_state_for_endpoint_ptr(ep);
     if (eps_new) {
-        _subscribers.for_each([ep, eps_new] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
+        co_await _subscribers.for_each([ep, eps_new] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
             return subscriber->on_join(ep, *eps_new);
-        }).get();
+        });
     }
     // check this at the end so nodes will learn about the endpoint
     if (is_shutdown(ep)) {
-        mark_as_shutdown(ep).get();
+        co_await mark_as_shutdown(ep);
     }
 }
 

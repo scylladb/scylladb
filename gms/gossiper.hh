@@ -411,7 +411,7 @@ private:
      * @param ep      endpoint
      * @param ep_state EndpointState for the endpoint
      */
-    void handle_major_state_change(inet_address ep, const endpoint_state& eps);
+    future<> handle_major_state_change(inet_address ep, const endpoint_state& eps);
 
 public:
     bool is_alive(inet_address ep) const;
