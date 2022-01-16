@@ -405,7 +405,8 @@ class RpcVerbParam(ASTBase):
     If the [[unique_ptr]] attribute is specified then handler function signature for an RPC verb will contain this
     argument as an `foreign_ptr<unique_ptr<>>`
     If the [[lw_shared_ptr]] attribute is specified then handler function signature for an RPC verb will contain this
-    argument as an `foreign_ptr<lw_shared_ptr<>>`"""
+    argument as an `foreign_ptr<lw_shared_ptr<>>`
+    If the [[ref]] attribute is specified the send function signature will contain this type as const reference"""
     def __init__(self, type, name, attributes=Attributes()):
         self.type = type
         self.name = name

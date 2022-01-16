@@ -143,7 +143,7 @@ automatically generate boilerplate code for message handlers registration and me
 `netw::messaging_service` class. Declaration syntax:
 
 ```
-verb id [[attributes...]](optional) (parameters...) (-> return-type)(optional) ;(optional)
+verb id [[attributes...]](optional) (parameters...) (-> return-type...)(optional) ;(optional)
 ```
 
 There should be a corresponding upper-cased enumerator `ID` inside the `netw::messaging_verb` enum for a verb with name
@@ -154,7 +154,8 @@ The parameters of the verb declarations will also act as parameters for the hand
 functions. In case `[[with_timeout]]` attribute is set, the argument list is extended with a `time_point` argument at the
 beginning of the parameter list to specify an RPC timeout when sending or handling the message.
 
-The return value type is calculated as `future<return_type>` and is used as return type for message handler and `send`
+The return value type is calculated as `future<return_type>` if on only one type is present and
+`future<rpc::tuple<type1, type2, ...>>` if there are more then one. It is used as return type for message handler and `send`
 function. If the `-> return type` clause is omitted, the return type is assumed to be `future<>`. If `[[one_way]]`
 attribute is specified, handler function return type is fixed to `future<rpc::no_wait_type>`, and the return type
 clause should not be used, otherwise an exception will be thrown during  IDL generation process.
@@ -186,8 +187,15 @@ struct my_mod_rpc_verbs {
 ```
 
 Each parameter can optionally have a name, otherwise a placeholder name of form `_N` will be used, where `N` is the
-index within the RPC verb parameters list. Also, each argument can be annotated with `[[version id]]` attribute, which
-will cause it to be accepted as a `rpc::optional<>` in the handler function signature.
+index within the RPC verb parameters list. Also, each argument and return type can be annotated with `[[version id]]`
+attribute, which will cause it to be accepted as a `rpc::optional<>` in the handler function signature or returned by send()
+function respectively,
+
+If a parameter is annotated with [[ref]] attribute send function will receive it as a const reference, but a handler
+will still receive it by value.
+
+Return type value can be also annotated with `[[unique_ptr]]` or `[[lw_shared_ptr]]` attributes. If the attribute is present
+handler function's return value will have the type as `foreign_ptr<unique_ptr<>>` and `foreign_ptr<lw_shared_ptr<>>` respectively.
 
 ## IDL example
 Forward slashes comments are ignored until the end of the line.
