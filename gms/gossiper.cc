@@ -1678,7 +1678,7 @@ void gossiper::apply_new_states(inet_address addr, endpoint_state& local_state, 
     // Listeners should decide which failures are non-fatal and swallow them.
     auto run_listeners = seastar::defer([&] () noexcept {
         for (auto&& key : changed) {
-            do_on_change_notifications(addr, key, remote_map.at(key));
+            do_on_change_notifications(addr, key, remote_map.at(key)).get();
         }
     });
 
@@ -1717,11 +1717,10 @@ future<> gossiper::do_before_change_notifications(inet_address addr, const endpo
     });
 }
 
-// Runs inside seastar::async context
-void gossiper::do_on_change_notifications(inet_address addr, const application_state& state, const versioned_value& value) {
-    _subscribers.for_each([addr, state, value] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
+future<> gossiper::do_on_change_notifications(inet_address addr, const application_state& state, const versioned_value& value) {
+    co_await _subscribers.for_each([addr, state, value] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
         return subscriber->on_change(addr, state, value);
-    }).get();
+    });
 }
 
 void gossiper::request_all(gossip_digest& g_digest,
@@ -2079,7 +2078,7 @@ future<> gossiper::add_local_application_state(std::list<std::pair<application_s
                 // ensured the whole set of values are monotonically versioned and
                 // applied to endpoint state.
                 gossiper.replicate(ep_addr, state, value).get();
-                gossiper.do_on_change_notifications(ep_addr, state, value);
+                gossiper.do_on_change_notifications(ep_addr, state, value).get();
             }
         }).handle_exception([] (auto ep) {
             logger.warn("Fail to apply application_state: {}", ep);

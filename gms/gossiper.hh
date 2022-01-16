@@ -433,7 +433,7 @@ private:
     future<> do_before_change_notifications(inet_address addr, const endpoint_state& ep_state, const application_state& ap_state, const versioned_value& new_value);
 
     // notify that an application state has changed
-    void do_on_change_notifications(inet_address addr, const application_state& state, const versioned_value& value);
+    future<> do_on_change_notifications(inet_address addr, const application_state& state, const versioned_value& value);
     /* Request all the state for the endpoint in the g_digest */
 
     void request_all(gossip_digest& g_digest, utils::chunked_vector<gossip_digest>& delta_gossip_digest_list, int remote_generation);
