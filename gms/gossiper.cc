@@ -1056,7 +1056,7 @@ void gossiper::convict(inet_address endpoint) {
     if (is_shutdown(endpoint)) {
         mark_as_shutdown(endpoint);
     } else {
-        mark_dead(endpoint, *state);
+        mark_dead(endpoint, *state).get();
     }
 }
 
@@ -1557,19 +1557,18 @@ void gossiper::real_mark_alive(inet_address addr, endpoint_state& local_state) {
     }).get();
 }
 
-// Runs inside seastar::async context
-void gossiper::mark_dead(inet_address addr, endpoint_state& local_state) {
+future<> gossiper::mark_dead(inet_address addr, endpoint_state& local_state) {
     logger.trace("marking as down {}", addr);
     local_state.mark_dead();
     endpoint_state state = local_state;
     _live_endpoints.resize(std::distance(_live_endpoints.begin(), std::remove(_live_endpoints.begin(), _live_endpoints.end(), addr)));
-    update_live_endpoints_version().get();
+    co_await update_live_endpoints_version();
     _unreachable_endpoints[addr] = now();
     logger.info("InetAddress {} is now DOWN, status = {}", addr, get_gossip_status(state));
-    _subscribers.for_each([addr, state] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) -> future<> {
+    co_await _subscribers.for_each([addr, state] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) -> future<> {
         co_await subscriber->on_dead(addr, state);
         logger.trace("Notified {}", fmt::ptr(subscriber.get()));
-    }).get();
+    });
 }
 
 // Runs inside seastar::async context
@@ -1608,7 +1607,7 @@ void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& 
         mark_alive(ep, ep_state);
     } else {
         logger.debug("Not marking {} alive due to dead state {}", ep, get_gossip_status(eps));
-        mark_dead(ep, ep_state);
+        mark_dead(ep, ep_state).get();
     }
 
     auto* eps_new = get_endpoint_state_for_endpoint_ptr(ep);
@@ -2265,7 +2264,7 @@ void gossiper::mark_as_shutdown(const inet_address& endpoint) {
         ep_state.add_application_state(application_state::STATUS, versioned_value::shutdown(true));
         ep_state.get_heart_beat_state().force_highest_possible_version_unsafe();
         replicate(endpoint, ep_state).get();
-        mark_dead(endpoint, ep_state);
+        mark_dead(endpoint, ep_state).get();
         convict(endpoint);
     }
 }
