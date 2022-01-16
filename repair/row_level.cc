@@ -407,6 +407,10 @@ public:
                     {},
                     mutation_reader::forwarding::no);
         } else {
+            // We can't have two permits with count resource for 1 repair.
+            // So we release the one on _permit so the only one is the one the
+            // shard reader will obtain.
+            _permit.release_base_resources();
             _reader = make_multishard_streaming_reader(db, _schema, _permit, [this] {
                 auto shard_range = _sharder.next();
                 if (shard_range) {
