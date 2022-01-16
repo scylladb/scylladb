@@ -2036,8 +2036,6 @@ future<> db::commitlog::segment_manager::recalculate_footprint() {
 future<> db::commitlog::segment_manager::do_pending_deletes() {
     auto ftc = std::exchange(_files_to_close, {});
     auto ftd = std::exchange(_files_to_delete, {});
-    auto i = ftc.begin();
-    auto e = ftc.end();
     co_await parallel_for_each(ftc, std::mem_fn(&file::close));
     co_await delete_segments(boost::copy_range<std::vector<sstring>>(ftd | boost::adaptors::map_keys));
 }
