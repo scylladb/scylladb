@@ -173,7 +173,7 @@ public:
     // stop_iteration::yes -> consume(partition_end) - skip remaining partition content
     virtual future<stop_iteration> consume(clustering_row&&) = 0;
     // stop_iteration::yes -> consume(partition_end) - skip remaining partition content
-    virtual future<stop_iteration> consume(range_tombstone&&) = 0;
+    virtual future<stop_iteration> consume(range_tombstone_change&&) = 0;
     // stop_iteration::yes -> on_end_of_sstable() - skip remaining partitions in sstable
     virtual future<stop_iteration> consume(partition_end&&) = 0;
     // stop_iteration::yes -> full stop - skip remaining sstables
@@ -192,7 +192,7 @@ public:
     consumer_wrapper(sstable_consumer& consumer, filter_type filter)
         : _consumer(consumer), _filter(std::move(filter)) {
     }
-    future<stop_iteration> operator()(mutation_fragment&& mf) {
+    future<stop_iteration> operator()(mutation_fragment_v2&& mf) {
         sst_log.trace("consume {}", mf.mutation_fragment_kind());
         if (mf.is_partition_start() && _filter && !_filter(mf.as_partition_start().key())) {
             return make_ready_future<stop_iteration>(stop_iteration::yes);
@@ -233,8 +233,8 @@ public:
         std::cout << clustering_row::printer(*_schema, cr) << std::endl;
         return make_ready_future<stop_iteration>(stop_iteration::no);
     }
-    virtual future<stop_iteration> consume(range_tombstone&& rt) override {
-        std::cout << rt << std::endl;
+    virtual future<stop_iteration> consume(range_tombstone_change&& rtc) override {
+        std::cout << rtc << std::endl;
         return make_ready_future<stop_iteration>(stop_iteration::no);
     }
     virtual future<stop_iteration> consume(partition_end&& pe) override {
@@ -403,8 +403,8 @@ public:
         collect_clustering_row(cr);
         return make_ready_future<stop_iteration>(stop_iteration::no);
     }
-    virtual future<stop_iteration> consume(range_tombstone&& rt) override {
-        collect_timestamp(rt.tomb.timestamp);
+    virtual future<stop_iteration> consume(range_tombstone_change&& rtc) override {
+        collect_timestamp(rtc.tombstone().timestamp);
         return make_ready_future<stop_iteration>(stop_iteration::no);
     }
     virtual future<stop_iteration> consume(partition_end&& pe) override {
@@ -475,7 +475,7 @@ public:
     virtual future<stop_iteration> consume(clustering_row&& cr) override {
         return make_ready_future<stop_iteration>(stop_iteration::no);
     }
-    virtual future<stop_iteration> consume(range_tombstone&& rt) override {
+    virtual future<stop_iteration> consume(range_tombstone_change&& rtc) override {
         return make_ready_future<stop_iteration>(stop_iteration::no);
     }
     virtual future<stop_iteration> consume(partition_end&& pe) override {
@@ -489,7 +489,7 @@ public:
     }
 };
 
-stop_iteration consume_reader(flat_mutation_reader rd, sstable_consumer& consumer, sstables::sstable* sst, const partition_set& partitions, bool no_skips) {
+stop_iteration consume_reader(flat_mutation_reader_v2 rd, sstable_consumer& consumer, sstables::sstable* sst, const partition_set& partitions, bool no_skips) {
     auto close_rd = deferred_close(rd);
     if (consumer.on_new_sstable(sst).get() == stop_iteration::yes) {
         return consumer.on_end_of_sstable().get();
@@ -521,7 +521,7 @@ stop_iteration consume_reader(flat_mutation_reader rd, sstable_consumer& consume
         }
         if (skip_partition) {
             if (no_skips) {
-                mutation_fragment_opt mfopt;
+                mutation_fragment_v2_opt mfopt;
                 while ((mfopt = rd().get()) && !mfopt->is_end_of_partition());
             } else {
                 rd.next_partition().get();
@@ -532,7 +532,7 @@ stop_iteration consume_reader(flat_mutation_reader rd, sstable_consumer& consume
 }
 
 void consume_sstables(schema_ptr schema, reader_permit permit, std::vector<sstables::shared_sstable> sstables, bool merge, bool no_skips,
-        std::function<stop_iteration(flat_mutation_reader&, sstables::sstable*)> reader_consumer) {
+        std::function<stop_iteration(flat_mutation_reader_v2&, sstables::sstable*)> reader_consumer) {
     sst_log.trace("consume_sstables(): {} sstables, merge={}, no_skips={}", sstables.size(), merge, no_skips);
     if (merge) {
         std::vector<flat_mutation_reader_v2> readers;
@@ -544,14 +544,14 @@ void consume_sstables(schema_ptr schema, reader_permit permit, std::vector<sstab
                 readers.emplace_back(sst->make_reader(schema, permit, query::full_partition_range, schema->full_slice()));
             }
         }
-        auto rd = downgrade_to_v1(make_combined_reader(schema, permit, std::move(readers)));
+        auto rd = make_combined_reader(schema, permit, std::move(readers));
 
         reader_consumer(rd, nullptr);
     } else {
         for (const auto& sst : sstables) {
             auto rd = no_skips
-                ? sst->make_crawling_reader_v1(schema, permit)
-                : sst->make_reader_v1(schema, permit, query::full_partition_range, schema->full_slice());
+                ? sst->make_crawling_reader(schema, permit)
+                : sst->make_reader(schema, permit, query::full_partition_range, schema->full_slice());
 
             if (reader_consumer(rd, sst.get()) == stop_iteration::yes) {
                 break;
@@ -604,7 +604,7 @@ void validate_operation(schema_ptr schema, reader_permit permit, const std::vect
         sst_log.warn("partition-filter is not supported for validate, ignoring");
     }
     sstables::compaction_data info;
-    consume_sstables(schema, permit, sstables, opts.merge, true, [&info] (flat_mutation_reader& rd, sstables::sstable* sst) {
+    consume_sstables(schema, permit, sstables, opts.merge, true, [&info] (flat_mutation_reader_v2& rd, sstables::sstable* sst) {
         if (sst) {
             sst_log.info("validating {}", sst->get_filename());
         }
@@ -1087,7 +1087,7 @@ void sstable_consumer_operation(schema_ptr schema, reader_permit permit, const s
         const partition_set& partitions, const options& opts, const operation_specific_options& op_opts) {
     auto consumer = std::make_unique<SstableConsumer>(schema, permit, op_opts);
     consumer->on_start_of_stream().get();
-    consume_sstables(schema, permit, sstables, opts.merge, opts.no_skips || partitions.empty(), [&, &consumer = *consumer] (flat_mutation_reader& rd, sstables::sstable* sst) {
+    consume_sstables(schema, permit, sstables, opts.merge, opts.no_skips || partitions.empty(), [&, &consumer = *consumer] (flat_mutation_reader_v2& rd, sstables::sstable* sst) {
         return consume_reader(std::move(rd), consumer, sst, partitions, opts.no_skips);
     });
     consumer->on_end_of_stream().get();

@@ -21,7 +21,7 @@
 
 #pragma once
 
-#include "mutation_fragment.hh"
+#include "mutation_fragment_v2.hh"
 
 enum class mutation_fragment_stream_validation_level {
     partition_region, // fragment kind
@@ -38,7 +38,7 @@ enum class mutation_fragment_stream_validation_level {
 /// stream.
 class mutation_fragment_stream_validator {
     const ::schema& _schema;
-    mutation_fragment::kind _prev_kind;
+    mutation_fragment_v2::kind _prev_kind;
     position_in_partition _prev_pos;
     dht::decorated_key _prev_partition_key;
 public:
@@ -55,6 +55,7 @@ public:
     /// Advances the previous fragment kind, but only if the validation passes.
     ///
     /// \returns true if the fragment kind is valid.
+    bool operator()(mutation_fragment_v2::kind kind);
     bool operator()(mutation_fragment::kind kind);
 
     /// Validates the monotonicity of the mutation fragment kind and position.
@@ -67,6 +68,7 @@ public:
     /// if the validation passes.
     ///
     /// \returns true if the mutation fragment kind is valid.
+    bool operator()(mutation_fragment_v2::kind kind, position_in_partition_view pos);
     bool operator()(mutation_fragment::kind kind, position_in_partition_view pos);
 
     /// Validates the monotonicity of the mutation fragment.
@@ -75,6 +77,7 @@ public:
     /// See said overload for more details.
     ///
     /// \returns true if the mutation fragment kind is valid.
+    bool operator()(const mutation_fragment_v2& mf);
     bool operator()(const mutation_fragment& mf);
 
     /// Validates the monotonicity of the token.
@@ -114,6 +117,7 @@ public:
     /// can be used by users that can correct such invalid streams and wish to
     /// continue validating it.
     void reset(const mutation_fragment&);
+    void reset(const mutation_fragment_v2&);
 
     /// Validate that the stream was properly closed.
     ///
@@ -122,7 +126,7 @@ public:
     bool on_end_of_stream();
 
     /// The previous valid fragment kind.
-    mutation_fragment::kind previous_mutation_fragment_kind() const {
+    mutation_fragment_v2::kind previous_mutation_fragment_kind() const {
         return _prev_kind;
     }
     /// The previous valid position.
@@ -170,8 +174,10 @@ public:
     mutation_fragment_stream_validating_filter(sstring_view name, const schema& s, mutation_fragment_stream_validation_level level);
 
     bool operator()(const dht::decorated_key& dk);
+    bool operator()(mutation_fragment_v2::kind kind, position_in_partition_view pos);
     bool operator()(mutation_fragment::kind kind, position_in_partition_view pos);
     /// Equivalent to `operator()(mf.kind(), mf.position())`
+    bool operator()(const mutation_fragment_v2& mv);
     bool operator()(const mutation_fragment& mv);
     /// Equivalent to `operator()(partition_end{})`
     bool on_end_of_partition();

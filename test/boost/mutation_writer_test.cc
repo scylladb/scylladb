@@ -27,6 +27,7 @@
 #include <seastar/util/closeable.hh>
 
 #include "mutation_fragment.hh"
+#include "mutation_rebuilder.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "flat_mutation_reader.hh"
 #include "mutation_writer/multishard_writer.hh"
@@ -477,22 +478,26 @@ SEASTAR_THREAD_TEST_CASE(test_partition_based_splitting_mutation_writer) {
     std::vector<std::vector<mutation>> output_mutations;
     size_t next_index = 0;
 
-    auto consumer = [&] (flat_mutation_reader rd) {
+    auto consumer = [&] (flat_mutation_reader_v2 rd) {
         const auto index = next_index++;
         output_mutations.emplace_back();
         BOOST_REQUIRE_EQUAL(output_mutations.size(), next_index);
 
         return async([&, index, rd = std::move(rd)] () mutable {
             auto close_rd = deferred_close(rd);
+            mutation_rebuilder_v2 mut_builder(rd.schema());
             mutation_fragment_stream_validating_filter validator("test", *rd.schema(), mutation_fragment_stream_validation_level::clustering_key);
             while (auto mf_opt = rd().get()) {
                 if (mf_opt->is_partition_start()) {
                     const auto& key = mf_opt->as_partition_start().key();
                     validator(key);
-                    output_mutations[index].emplace_back(rd.schema(), key);
                 }
                 validator(*mf_opt);
-                output_mutations[index].back().apply(*mf_opt);
+                if (mf_opt->is_end_of_partition()) {
+                    output_mutations[index].emplace_back(*std::move(mut_builder).consume_end_of_stream());
+                } else {
+                    std::move(*mf_opt).consume(mut_builder);
+                }
             }
             validator.on_end_of_stream();
         });
@@ -518,7 +523,7 @@ SEASTAR_THREAD_TEST_CASE(test_partition_based_splitting_mutation_writer) {
     for (const size_t max_memory : {1'000, 10'000, 1'000'000, 10'000'000, 100'000'000}) {
         testlog.info("Segregating with in-memory method (max_memory={})", max_memory);
         mutation_writer::segregate_by_partition(
-                make_flat_mutation_reader_from_mutations(random_schema.schema(), semaphore.make_permit(), shuffled_input_mutations),
+                make_flat_mutation_reader_from_mutations_v2(random_schema.schema(), semaphore.make_permit(), shuffled_input_mutations),
                 mutation_writer::segregate_config{default_priority_class(), max_memory},
                 consumer).get();
         testlog.info("Done segregating with in-memory method (max_memory={}): input segregated into {} buckets", max_memory, output_mutations.size());

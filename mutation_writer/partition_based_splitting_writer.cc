@@ -141,6 +141,12 @@ future<> segregate_by_partition(flat_mutation_reader producer, segregate_config 
   }
 }
 
+future<> segregate_by_partition(flat_mutation_reader_v2 producer, segregate_config cfg, reader_consumer_v2 consumer) {
+    return segregate_by_partition(downgrade_to_v1(std::move(producer)), cfg, [consumer = std::move(consumer)] (flat_mutation_reader reader) {
+        return consumer(upgrade_to_v2(std::move(reader)));
+    });
+}
+
 
 
 } // namespace mutation_writer
