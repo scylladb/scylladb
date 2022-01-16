@@ -596,12 +596,11 @@ future<> gossiper::do_apply_state_locally(gms::inet_address node, const endpoint
     }
 }
 
-// Runs inside seastar::async context
-void gossiper::apply_state_locally_without_listener_notification(std::unordered_map<inet_address, endpoint_state> map) {
+future<> gossiper::apply_state_locally_without_listener_notification(std::unordered_map<inet_address, endpoint_state> map) {
     for (auto& x : map) {
         const inet_address& node = x.first;
         const endpoint_state& remote_state = x.second;
-        do_apply_state_locally(node, remote_state, false).get();
+        co_await do_apply_state_locally(node, remote_state, false);
     }
 }
 
@@ -1893,7 +1892,7 @@ future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes) 
                 });
             }).get();
             for (auto& response : responses) {
-                apply_state_locally_without_listener_notification(response.endpoint_state_map);
+                apply_state_locally_without_listener_notification(response.endpoint_state_map).get();
             }
             if (!nodes_talked.empty()) {
                 break;
