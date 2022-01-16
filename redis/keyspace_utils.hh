@@ -36,6 +36,10 @@ namespace gms {
 class gossiper;
 }
 
+namespace data_dictionary {
+class database;
+}
+
 namespace redis {
 
 static constexpr auto DATA_COLUMN_NAME = "data";
@@ -45,6 +49,6 @@ static constexpr auto HASHes          = "HASHes";
 static constexpr auto SETs            = "SETs";
 static constexpr auto ZSETs           = "ZSETs";
 
-seastar::future<> maybe_create_keyspace(seastar::sharded<service::storage_proxy>& proxy, seastar::sharded<service::migration_manager>& mm, db::config& cfg, seastar::sharded<gms::gossiper>& g);
+seastar::future<> maybe_create_keyspace(seastar::sharded<service::storage_proxy>& proxy, data_dictionary::database db, seastar::sharded<service::migration_manager>& mm, db::config& cfg, seastar::sharded<gms::gossiper>& g);
 
 }
