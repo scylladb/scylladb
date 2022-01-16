@@ -39,6 +39,7 @@
 #include <boost/algorithm/string/classification.hpp>
 #include "utils/generation-number.hh"
 #include "locator/token_metadata.hh"
+#include "utils/exceptions.hh"
 
 namespace gms {
 
@@ -562,7 +563,7 @@ void gossiper::do_apply_state_locally(gms::inet_address node, const endpoint_sta
                 int remote_max_version = this->get_max_endpoint_state_version(remote_state);
                 if (remote_max_version > local_max_version) {
                     // apply states, but do not notify since there is no major change
-                    this->apply_new_states(node, local_state, remote_state);
+                    this->apply_new_states(node, local_state, remote_state).get();
                 } else {
                     logger.trace("Ignoring remote version {} <= {} for {}", remote_max_version, local_max_version, node);
                 }
@@ -1650,8 +1651,7 @@ bool gossiper::is_silent_shutdown_state(const endpoint_state& ep_state) const{
     return false;
 }
 
-// Runs inside seastar::async context
-void gossiper::apply_new_states(inet_address addr, endpoint_state& local_state, const endpoint_state& remote_state) {
+future<> gossiper::apply_new_states(inet_address addr, endpoint_state& local_state, const endpoint_state& remote_state) {
     // don't assert here, since if the node restarts the version will go back to zero
     //int oldVersion = local_state.get_heart_beat_state().get_heart_beat_version();
 
@@ -1664,43 +1664,46 @@ void gossiper::apply_new_states(inet_address addr, endpoint_state& local_state, 
     utils::chunked_vector<application_state> changed;
     auto&& remote_map = remote_state.get_application_state_map();
 
-    // Exceptions thrown from listeners will result in abort because that could leave the node in a bad
-    // state indefinitely. Unless the value changes again, we wouldn't retry notifications.
-    // Some values are set only once, so listeners would never be re-run.
-    // Listeners should decide which failures are non-fatal and swallow them.
-    auto run_listeners = seastar::defer([&] () noexcept {
-        for (auto&& key : changed) {
-            do_on_change_notifications(addr, key, remote_map.at(key)).get();
+    std::exception_ptr ep;
+    try {
+        // we need to make two loops here, one to apply, then another to notify,
+        // this way all states in an update are present and current when the notifications are received
+        for (const auto& remote_entry : remote_map) {
+            const auto& remote_key = remote_entry.first;
+            const auto& remote_value = remote_entry.second;
+            auto remote_gen = remote_state.get_heart_beat_state().get_generation();
+            auto local_gen = local_state.get_heart_beat_state().get_generation();
+            if(remote_gen != local_gen) {
+                auto err = format("Remote generation {:d} != local generation {:d}", remote_gen, local_gen);
+                logger.warn("{}", err);
+                throw std::runtime_error(err);
+            }
+
+            const versioned_value* local_val = local_state.get_application_state_ptr(remote_key);
+            if (!local_val || remote_value.version > local_val->version) {
+                changed.push_back(remote_key);
+                local_state.add_application_state(remote_key, remote_value);
+            }
         }
-    });
+    } catch (...) {
+        ep = std::current_exception();
+    }
 
     // We must replicate endpoint states before listeners run.
     // Exceptions during replication will cause abort because node's state
     // would be inconsistent across shards. Changes listeners depend on state
     // being replicated to all shards.
-    auto replicate_changes = seastar::defer([&] () noexcept {
-        replicate(addr, remote_map, changed).get();
-    });
+    co_await replicate(addr, remote_map, changed);
 
-    // we need to make two loops here, one to apply, then another to notify,
-    // this way all states in an update are present and current when the notifications are received
-    for (const auto& remote_entry : remote_map) {
-        const auto& remote_key = remote_entry.first;
-        const auto& remote_value = remote_entry.second;
-        auto remote_gen = remote_state.get_heart_beat_state().get_generation();
-        auto local_gen = local_state.get_heart_beat_state().get_generation();
-        if(remote_gen != local_gen) {
-            auto err = format("Remote generation {:d} != local generation {:d}", remote_gen, local_gen);
-            logger.warn("{}", err);
-            throw std::runtime_error(err);
-        }
-
-        const versioned_value* local_val = local_state.get_application_state_ptr(remote_key);
-        if (!local_val || remote_value.version > local_val->version) {
-            changed.push_back(remote_key);
-            local_state.add_application_state(remote_key, remote_value);
-        }
+    // Exceptions thrown from listeners will result in abort because that could leave the node in a bad
+    // state indefinitely. Unless the value changes again, we wouldn't retry notifications.
+    // Some values are set only once, so listeners would never be re-run.
+    // Listeners should decide which failures are non-fatal and swallow them.
+    for (auto&& key : changed) {
+        co_await do_on_change_notifications(addr, key, remote_map.at(key));
     }
+
+    maybe_rethrow_exception(std::move(ep));
 }
 
 future<> gossiper::do_before_change_notifications(inet_address addr, const endpoint_state& ep_state, const application_state& ap_state, const versioned_value& new_value) {

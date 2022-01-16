@@ -441,7 +441,7 @@ private:
     void do_apply_state_locally(gms::inet_address node, const endpoint_state& remote_state, bool listener_notification);
     void apply_state_locally_without_listener_notification(std::unordered_map<inet_address, endpoint_state> map);
 
-    void apply_new_states(inet_address addr, endpoint_state& local_state, const endpoint_state& remote_state);
+    future<> apply_new_states(inet_address addr, endpoint_state& local_state, const endpoint_state& remote_state);
 
     // notify that a local application state is going to change (doesn't get triggered for remote changes)
     future<> do_before_change_notifications(inet_address addr, const endpoint_state& ep_state, const application_state& ap_state, const versioned_value& new_value);
