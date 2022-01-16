@@ -401,7 +401,7 @@ private:
 
     void mark_alive(inet_address addr, endpoint_state& local_state);
 
-    void real_mark_alive(inet_address addr, endpoint_state& local_state);
+    future<> real_mark_alive(inet_address addr, endpoint_state& local_state);
 
     future<> mark_dead(inet_address addr, endpoint_state& local_state);
 

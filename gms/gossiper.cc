@@ -1503,7 +1503,7 @@ void gossiper::mark_alive(inet_address addr, endpoint_state& local_state) {
             } else {
                 endpoint_state& state = *es;
                 logger.debug("Mark Node {} alive after EchoMessage", addr);
-                real_mark_alive(addr, state);
+                real_mark_alive(addr, state).get();
             }
         });
     }).finally([this, addr] {
@@ -1513,15 +1513,14 @@ void gossiper::mark_alive(inet_address addr, endpoint_state& local_state) {
     });
 }
 
-// Runs inside seastar::async context
-void gossiper::real_mark_alive(inet_address addr, endpoint_state& local_state) {
+future<> gossiper::real_mark_alive(inet_address addr, endpoint_state& local_state) {
     logger.trace("marking as alive {}", addr);
 
     // Do not mark a node with status shutdown as UP.
     auto status = sstring(get_gossip_status(local_state));
     if (status == sstring(versioned_value::SHUTDOWN)) {
         logger.warn("Skip marking node {} with status = {} as UP", addr, status);
-        return;
+        co_return;
     }
 
     local_state.mark_alive();
@@ -1534,13 +1533,13 @@ void gossiper::real_mark_alive(inet_address addr, endpoint_state& local_state) {
     auto it_ = std::find(_live_endpoints.begin(), _live_endpoints.end(), addr);
     bool was_live = it_ != _live_endpoints.end();
     if (was_live) {
-        return;
+        co_return;
     }
 
     // Make a copy for endpoint_state because the code below can yield
     endpoint_state state = local_state;
     _live_endpoints.push_back(addr);
-    update_live_endpoints_version().get();
+    co_await update_live_endpoints_version();
     if (_endpoints_to_talk_with.empty()) {
         _endpoints_to_talk_with.push_back({addr});
     } else {
@@ -1551,10 +1550,10 @@ void gossiper::real_mark_alive(inet_address addr, endpoint_state& local_state) {
         logger.info("InetAddress {} is now UP, status = {}", addr, status);
     }
 
-    _subscribers.for_each([addr, state] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) -> future<> {
+    co_await _subscribers.for_each([addr, state] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) -> future<> {
         co_await subscriber->on_alive(addr, state);
         logger.trace("Notified {}", fmt::ptr(subscriber.get()));
-    }).get();
+    });
 }
 
 future<> gossiper::mark_dead(inet_address addr, endpoint_state& local_state) {
