@@ -1470,7 +1470,6 @@ void gossiper::update_timestamp_for_nodes(const std::map<inet_address, endpoint_
     }
 }
 
-// Runs inside seastar::async context
 void gossiper::mark_alive(inet_address addr, endpoint_state& local_state) {
     // if (MessagingService.instance().getVersion(addr) < MessagingService.VERSION_20) {
     //     real_mark_alive(addr, local_state);
