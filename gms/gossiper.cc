@@ -1711,11 +1711,10 @@ void gossiper::apply_new_states(inet_address addr, endpoint_state& local_state, 
     }
 }
 
-// Runs inside seastar::async context
-void gossiper::do_before_change_notifications(inet_address addr, const endpoint_state& ep_state, const application_state& ap_state, const versioned_value& new_value) {
-    _subscribers.for_each([addr, ep_state, ap_state, new_value] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
+future<> gossiper::do_before_change_notifications(inet_address addr, const endpoint_state& ep_state, const application_state& ap_state, const versioned_value& new_value) {
+    co_await _subscribers.for_each([addr, ep_state, ap_state, new_value] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
         return subscriber->before_change(addr, ep_state, ap_state, new_value);
-    }).get();
+    });
 }
 
 // Runs inside seastar::async context
@@ -2054,7 +2053,7 @@ future<> gossiper::add_local_application_state(std::list<std::pair<application_s
                 auto& value = p.second;
                 // Fire "before change" notifications:
                 // Not explicit, but apparently we allow this to defer (inside out implicit seastar::async)
-                gossiper.do_before_change_notifications(ep_addr, ep_state_before, state, value);
+                gossiper.do_before_change_notifications(ep_addr, ep_state_before, state, value).get();
             }
 
             es = gossiper.get_endpoint_state_for_endpoint_ptr(ep_addr);
