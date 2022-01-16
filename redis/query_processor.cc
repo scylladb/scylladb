@@ -18,7 +18,7 @@ namespace redis {
 
 distributed<query_processor> _the_query_processor;
 
-query_processor::query_processor(service::storage_proxy& proxy, distributed<replica::database>& db)
+query_processor::query_processor(service::storage_proxy& proxy, data_dictionary::database db)
         : _proxy(proxy)
         , _db(db)
 {

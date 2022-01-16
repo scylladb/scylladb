@@ -13,6 +13,7 @@
 #include "seastar/core/sharded.hh"
 
 #include "protocol_server.hh"
+#include "data_dictionary/data_dictionary.hh"
 
 namespace db {
 class config;
@@ -39,10 +40,6 @@ namespace gms {
 class gossiper;
 }
 
-namespace replica {
-class database;
-}
-
 namespace redis {
 
 // As defined in: https://redis.io/topics/protocol
@@ -57,6 +54,7 @@ class controller : public protocol_server {
     seastar::sharded<redis::query_processor> _query_processor;
     seastar::shared_ptr<seastar::sharded<redis_transport::redis_server>> _server;
     seastar::sharded<service::storage_proxy>& _proxy;
+    data_dictionary::database _db;
     seastar::sharded<auth::service>& _auth_service;
     seastar::sharded<service::migration_manager>& _mm;
     db::config& _cfg;
