@@ -53,6 +53,7 @@
 #include "types/list.hh"
 #include "types/user.hh"
 #include "concrete_types.hh"
+#include "validation.hh"
 
 namespace cql3 {
 
@@ -249,6 +250,7 @@ insert_prepared_json_statement::build_partition_keys(const query_options& option
         exploded.emplace_back(json_value->second);
     }
     auto pkey = partition_key::from_optional_exploded(*s, std::move(exploded));
+    validation::validate_cql_key(*s, pkey);
     auto k = query::range<query::ring_position>::make_singular(dht::decorate_key(*s, std::move(pkey)));
     ranges.emplace_back(std::move(k));
     return ranges;
