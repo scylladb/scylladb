@@ -64,8 +64,9 @@ def test_insert_null_key(cql, table1):
     with pytest.raises(InvalidRequest, match='null value'):
         cql.execute(stmt, [None, s])
 
+# Tests handling of "key_column in ?" where ? is bound to null.
+# Reproduces issue #8265.
 def test_primary_key_in_null(cql, table1):
-    '''Tests handling of "key_column in ?" where ? is bound to null.'''
     with pytest.raises(InvalidRequest, match='null value'):
         cql.execute(cql.prepare(f"SELECT p FROM {table1} WHERE p IN ?"), [None])
     with pytest.raises(InvalidRequest, match='null value'):
@@ -80,3 +81,98 @@ def test_regular_column_in_null(scylla_only, cql, table1):
     cql.execute(f"INSERT INTO {table1} (p,c) VALUES ('p', 'c')")
     with pytest.raises(InvalidRequest, match='null value'):
         cql.execute(cql.prepare(f"SELECT v FROM {table1} WHERE v IN ? ALLOW FILTERING"), [None])
+
+# Though nonsensical, this operation is allowed by Cassandra.  Ensure we allow it, too.
+def test_delete_impossible_clustering_range(cql, table1):
+    cql.execute(f"DELETE FROM {table1} WHERE p='p' and c<'a' and c>'a'")
+
+@pytest.mark.xfail(reason="issue #7852")
+def test_delete_null_key(cql, table1):
+    with pytest.raises(InvalidRequest, match='null value'):
+        cql.execute(f"DELETE FROM {table1} WHERE p=null")
+    with pytest.raises(InvalidRequest, match='null value'):
+        cql.execute(cql.prepare(f"DELETE FROM {table1} WHERE p=?"), [None])
+    with pytest.raises(InvalidRequest, match='null value'):
+        cql.execute(f"DELETE FROM {table1} WHERE p='p' AND c=null")
+    with pytest.raises(InvalidRequest, match='null value'):
+        cql.execute(cql.prepare(f"DELETE FROM {table1} WHERE p='p' AND c=?"), [None])
+
+# Test what SELECT does with the restriction "WHERE v=NULL".
+# In SQL, "WHERE v=NULL" doesn't match anything - because nothing is equal
+# to null - not even null. SQL also provides a more useful restriction
+# "WHERE v IS NULL" which matches all rows where v is unset.
+# Scylla and Cassandra do *not* support the "IS NULL" syntax yet (they do
+# have "IS NOT NULL" but only in a definition of a materialized view),
+# so it is commonly requested that "WHERE v=NULL" should do what "IS NULL"
+# is supposed to do - see issues #4776 and #8489 for Scylla and
+# CASSANDRA-10715 for Cassandra, where this feature was requested.
+# Nevertheless, in Scylla we decided to follow SQL: "WHERE v=NULL" should
+# matche nothing, not even rows where v is unset. This is what the following
+# test verifies.
+# This test fails on Cassandra (hence cassandra_bug) because Cassandra
+# refuses the "WHERE v=NULL" relation, rather than matching nothing.
+# We consider this a mistake, and not something we want to emulate in Scylla.
+def test_filtering_eq_null(cassandra_bug, cql, table1):
+    p = random_string()
+    cql.execute(f"INSERT INTO {table1} (p,c,v) VALUES ('{p}', '1', 'hello')")
+    cql.execute(f"INSERT INTO {table1} (p,c,v) VALUES ('{p}', '2', '')")
+    cql.execute(f"INSERT INTO {table1} (p,c) VALUES ('{p}', '3')")
+    # As explained above, none of the above-inserted rows should match -
+    # not even the one with an unset v:
+    assert list(cql.execute(f"SELECT c FROM {table1} WHERE p='{p}' AND v=NULL ALLOW FILTERING")) == []
+
+# In test_insert_null_key() above we verified that a null value is not
+# allowed as a key column - neither as a partition key nor clustering key.
+# An *empty string*, in contrast, is NOT a null. So ideally should have been
+# allowed as a key. However, for undocumented reasons (having to do with how
+# partition keys are serialized in sstables), an empty string is NOT allowed
+# as a partition key. It is allowed as a clustering key, though. In the
+# following test we confirm those things.
+# See issue #9352.
+def test_insert_empty_string_key(cql, table1):
+    s = random_string()
+    # An empty-string clustering *is* allowed:
+    cql.execute(f"INSERT INTO {table1} (p,c,v) VALUES ('{s}', '', 'cat')")
+    assert list(cql.execute(f"SELECT v FROM {table1} WHERE p='{s}' AND c=''")) == [('cat',)]
+    # But an empty-string partition key is *not* allowed, with a specific
+    # error that a "Key may not be empty":
+    with pytest.raises(InvalidRequest, match='Key may not be empty'):
+        cql.execute(f"INSERT INTO {table1} (p,c,v) VALUES ('', '{s}', 'dog')")
+
+# test_update_empty_string_key() is the same as test_insert_empty_string_key()
+# just uses an UPDATE instead of INSERT. It turns out that exactly the cases
+# which are allowed by INSERT are also allowed by UPDATE.
+def test_update_empty_string_key(cql, table1):
+    s = random_string()
+    # An empty-string clustering *is* allowed:
+    cql.execute(f"UPDATE {table1} SET v = 'cat' WHERE p='{s}' AND c=''")
+    assert list(cql.execute(f"SELECT v FROM {table1} WHERE p='{s}' AND c=''")) == [('cat',)]
+    # But an empty-string partition key is *not* allowed, with a specific
+    # error that a "Key may not be empty":
+    with pytest.raises(InvalidRequest, match='Key may not be empty'):
+        cql.execute(f"UPDATE {table1} SET v = 'dog' WHERE p='' AND c='{s}'")
+
+# ... and same for DELETE
+def test_delete_empty_string_key(cql, table1):
+    s = random_string()
+    # An empty-string clustering *is* allowed:
+    cql.execute(f"DELETE FROM {table1} WHERE p='{s}' AND c=''")
+    # But an empty-string partition key is *not* allowed, with a specific
+    # error that a "Key may not be empty":
+    with pytest.raises(InvalidRequest, match='Key may not be empty'):
+        cql.execute(f"DELETE FROM {table1} WHERE p='' AND c='{s}'")
+
+# Another test like test_insert_empty_string_key() just using an INSERT JSON
+# instead of a regular INSERT. Because INSERT JSON takes a different code path
+# from regular INSERT, we need the emptiness test in yet another place.
+# Reproduces issue #9853 (the empty-string partition key was allowed, and
+# actually inserted into the table.)
+def test_insert_json_empty_string_key(cql, table1):
+    s = random_string()
+    # An empty-string clustering *is* allowed:
+    cql.execute("""INSERT INTO %s JSON '{"p": "%s", "c": "", "v": "cat"}'""" % (table1, s))
+    assert list(cql.execute(f"SELECT v FROM {table1} WHERE p='{s}' AND c=''")) == [('cat',)]
+    # But an empty-string partition key is *not* allowed, with a specific
+    # error that a "Key may not be empty":
+    with pytest.raises(InvalidRequest, match='Key may not be empty'):
+        cql.execute("""INSERT INTO %s JSON '{"p": "", "c": "%s", "v": "cat"}'""" % (table1, s))
