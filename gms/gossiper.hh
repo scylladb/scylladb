@@ -260,7 +260,7 @@ public:
     /**
      * @param endpoint end point that is convicted.
      */
-    void convict(inet_address endpoint);
+    future<> convict(inet_address endpoint);
 
     /**
      * Return either: the greatest heartbeat or application state
@@ -554,7 +554,7 @@ public:
     bool is_normal_ring_member(const inet_address& endpoint) const;
     bool is_cql_ready(const inet_address& endpoint) const;
     bool is_silent_shutdown_state(const endpoint_state& ep_state) const;
-    void mark_as_shutdown(const inet_address& endpoint);
+    future<> mark_as_shutdown(const inet_address& endpoint);
     void force_newer_generation();
 public:
     std::string_view get_gossip_status(const endpoint_state& ep_state) const noexcept;

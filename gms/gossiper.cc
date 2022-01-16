@@ -425,7 +425,7 @@ future<> gossiper::handle_shutdown_msg(inet_address from, std::optional<int64_t>
                 return;
             }
         }
-        this->mark_as_shutdown(from);
+        this->mark_as_shutdown(from).get();
     });
 }
 
@@ -755,7 +755,7 @@ future<> gossiper::failure_detector_loop_for_node(gms::inet_address node, int64_
             logger.info("failure_detector_loop: Mark node {} as DOWN", node);
             co_await container().invoke_on(0, [node] (gms::gossiper& g) {
                 return seastar::async([node, &g] {
-                    g.convict(node);
+                    g.convict(node).get();
                 });
             });
             co_return;
@@ -814,7 +814,7 @@ future<> gossiper::failure_detector_loop() {
                             nodes, _live_endpoints, nodes_down);
                     co_await seastar::async([this, &nodes_down] {
                         for (const auto& node : nodes_down) {
-                            convict(node);
+                            convict(node).get();
                         }
                     });
                 }
@@ -1046,17 +1046,15 @@ int64_t gossiper::get_endpoint_downtime(inet_address ep) const noexcept {
 // Depends on
 // - on_dead callbacks
 // It is called from failure_detector
-//
-// Runs inside seastar::async context
-void gossiper::convict(inet_address endpoint) {
+future<> gossiper::convict(inet_address endpoint) {
     auto* state = get_endpoint_state_for_endpoint_ptr(endpoint);
     if (!state || !state->is_alive()) {
-        return;
+        co_return;
     }
     if (is_shutdown(endpoint)) {
-        mark_as_shutdown(endpoint);
+        co_await mark_as_shutdown(endpoint);
     } else {
-        mark_dead(endpoint, *state).get();
+        co_await mark_dead(endpoint, *state);
     }
 }
 
@@ -1615,7 +1613,7 @@ void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& 
     }
     // check this at the end so nodes will learn about the endpoint
     if (is_shutdown(ep)) {
-        mark_as_shutdown(ep);
+        mark_as_shutdown(ep).get();
     }
 }
 
@@ -2251,16 +2249,15 @@ sstring gossiper::get_application_state_value(inet_address endpoint, application
  * This method is used to mark a node as shutdown; that is it gracefully exited on its own and told us about it
  * @param endpoint endpoint that has shut itself down
  */
-// Runs inside seastar::async context
-void gossiper::mark_as_shutdown(const inet_address& endpoint) {
+future<> gossiper::mark_as_shutdown(const inet_address& endpoint) {
     auto es = get_endpoint_state_for_endpoint_ptr(endpoint);
     if (es) {
         auto& ep_state = *es;
         ep_state.add_application_state(application_state::STATUS, versioned_value::shutdown(true));
         ep_state.get_heart_beat_state().force_highest_possible_version_unsafe();
-        replicate(endpoint, ep_state).get();
-        mark_dead(endpoint, ep_state).get();
-        convict(endpoint);
+        co_await replicate(endpoint, ep_state);
+        co_await mark_dead(endpoint, ep_state);
+        co_await convict(endpoint);
     }
 }
 
