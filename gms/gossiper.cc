@@ -404,29 +404,28 @@ future<> gossiper::handle_echo_msg(gms::inet_address from, std::optional<int64_t
 future<> gossiper::handle_shutdown_msg(inet_address from, std::optional<int64_t> generation_number_opt) {
     if (!is_enabled()) {
         logger.debug("Ignoring shutdown message from {} because gossip is disabled", from);
-        return make_ready_future<>();
+        co_return;
     }
-    return seastar::async([this, from, generation_number_opt] {
-        auto permit = this->lock_endpoint(from).get0();
-        if (generation_number_opt) {
-            auto es = this->get_endpoint_state_for_endpoint_ptr(from);
-            if (es) {
-                int local_generation = es->get_heart_beat_state().get_generation();
-                logger.info("Got shutdown message from {}, received_generation={}, local_generation={}",
+
+    auto permit = co_await this->lock_endpoint(from);
+    if (generation_number_opt) {
+        auto es = this->get_endpoint_state_for_endpoint_ptr(from);
+        if (es) {
+            int local_generation = es->get_heart_beat_state().get_generation();
+            logger.info("Got shutdown message from {}, received_generation={}, local_generation={}",
+                    from, generation_number_opt.value(), local_generation);
+            if (local_generation != generation_number_opt.value()) {
+                logger.warn("Ignoring shutdown message from {} because generation number does not match, received_generation={}, local_generation={}",
                         from, generation_number_opt.value(), local_generation);
-                if (local_generation != generation_number_opt.value()) {
-                    logger.warn("Ignoring shutdown message from {} because generation number does not match, received_generation={}, local_generation={}",
-                            from, generation_number_opt.value(), local_generation);
-                    return;
-                }
-            } else {
-                logger.warn("Ignoring shutdown message from {} because generation number does not match, received_generation={}, local_generation=not found",
-                        from, generation_number_opt.value());
-                return;
+                co_return;
             }
+        } else {
+            logger.warn("Ignoring shutdown message from {} because generation number does not match, received_generation={}, local_generation=not found",
+                    from, generation_number_opt.value());
+            co_return;
         }
-        this->mark_as_shutdown(from).get();
-    });
+    }
+    co_await this->mark_as_shutdown(from);
 }
 
 future<gossip_get_endpoint_states_response>
