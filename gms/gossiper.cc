@@ -1493,19 +1493,18 @@ void gossiper::mark_alive(inet_address addr, endpoint_state& local_state) {
     // Do it in the background.
     (void)_messaging.send_gossip_echo(id, generation, std::chrono::milliseconds(15000)).then([this, addr] {
         logger.trace("Got EchoMessage Reply");
-        return seastar::async([this, addr] {
-            // After sending echo message, the Node might not be in the
-            // endpoint_state_map anymore, use the reference of local_state
-            // might cause user-after-free
-            auto es = get_endpoint_state_for_endpoint_ptr(addr);
-            if (!es) {
-                logger.info("Node {} is not in endpoint_state_map anymore", addr);
-            } else {
-                endpoint_state& state = *es;
-                logger.debug("Mark Node {} alive after EchoMessage", addr);
-                real_mark_alive(addr, state).get();
-            }
-        });
+        // After sending echo message, the Node might not be in the
+        // endpoint_state_map anymore, use the reference of local_state
+        // might cause user-after-free
+        auto es = get_endpoint_state_for_endpoint_ptr(addr);
+        if (!es) {
+            logger.info("Node {} is not in endpoint_state_map anymore", addr);
+        } else {
+            endpoint_state& state = *es;
+            logger.debug("Mark Node {} alive after EchoMessage", addr);
+            return real_mark_alive(addr, state);
+        }
+        return make_ready_future();
     }).finally([this, addr] {
         _pending_mark_alive_endpoints.erase(addr);
     }).handle_exception([addr] (auto ep) {
