@@ -63,8 +63,9 @@ def test_insert_null_key(cql, table1):
     with pytest.raises(InvalidRequest, match='null value'):
         cql.execute(stmt, [None, s])
 
+# Tests handling of "key_column in ?" where ? is bound to null.
+# Reproduces issue #8265.
 def test_primary_key_in_null(cql, table1):
-    '''Tests handling of "key_column in ?" where ? is bound to null.'''
     with pytest.raises(InvalidRequest, match='null value'):
         cql.execute(cql.prepare(f"SELECT p FROM {table1} WHERE p IN ?"), [None])
     with pytest.raises(InvalidRequest, match='null value'):
@@ -159,6 +160,20 @@ def test_delete_empty_string_key(cql, table1):
     with pytest.raises(InvalidRequest, match='Key may not be empty'):
         cql.execute(f"DELETE FROM {table1} WHERE p='' AND c='{s}'")
 
+# Another test like test_insert_empty_string_key() just using an INSERT JSON
+# instead of a regular INSERT. Because INSERT JSON takes a different code path
+# from regular INSERT, we need the emptiness test in yet another place.
+# Reproduces issue #9853 (the empty-string partition key was allowed, and
+# actually inserted into the table.)
+def test_insert_json_empty_string_key(cql, table1):
+    s = random_string()
+    # An empty-string clustering *is* allowed:
+    cql.execute("""INSERT INTO %s JSON '{"p": "%s", "c": "", "v": "cat"}'""" % (table1, s))
+    assert list(cql.execute(f"SELECT v FROM {table1} WHERE p='{s}' AND c=''")) == [('cat',)]
+    # But an empty-string partition key is *not* allowed, with a specific
+    # error that a "Key may not be empty":
+    with pytest.raises(InvalidRequest, match='Key may not be empty'):
+        cql.execute("""INSERT INTO %s JSON '{"p": "", "c": "%s", "v": "cat"}'""" % (table1, s))
 
 # Although an empty string is not allowed as a partition key (as tested
 # above by test_empty_string_key()), it turns out that in a *compound*
