@@ -80,6 +80,8 @@ bool is_timeout_exception(std::exception_ptr e) {
         return true;
     } catch (seastar::timed_out_error& unused) {
         return true;
+    } catch (const std::nested_exception& e) {
+        return is_timeout_exception(e.nested_ptr());
     } catch (...) {
     }
     return false;

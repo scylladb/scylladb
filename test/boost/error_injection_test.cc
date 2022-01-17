@@ -22,6 +22,7 @@
 #include "test/lib/cql_test_env.hh"
 #include <seastar/core/manual_clock.hh>
 #include <seastar/testing/test_case.hh>
+#include <seastar/rpc/rpc_types.hh>
 #include "utils/error_injection.hh"
 #include "db/timeout_clock.hh"
 #include "test/lib/cql_assertions.hh"
@@ -181,6 +182,27 @@ SEASTAR_TEST_CASE(test_error_exceptions) {
     auto exc = std::make_exception_ptr(utils::injected_error("test"));
     BOOST_TEST(!is_timeout_exception(exc));
 
+    return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_is_timeout_exception) {
+    for (auto ep : {
+        std::make_exception_ptr(seastar::rpc::timeout_error()),
+        std::make_exception_ptr(seastar::semaphore_timed_out()),
+        std::make_exception_ptr(seastar::timed_out_error()),
+    })
+    {
+         BOOST_TEST(is_timeout_exception(ep));
+         try {
+             std::rethrow_exception(ep);
+         } catch (...) {
+             try {
+                 std::throw_with_nested(std::runtime_error("Hello"));
+             } catch (...) {
+                BOOST_TEST(is_timeout_exception(std::current_exception()));
+             }
+         }
+    }
     return make_ready_future<>();
 }
 
