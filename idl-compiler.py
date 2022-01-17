@@ -623,12 +623,6 @@ def template_type_parse_action(tokens):
     return TemplateType(name=tokens['template_name'], template_parameters=tokens["template_parameters"].asList())
 
 
-# Will be used after parsing is complete to determine which local types
-# have usages with `const` specifiers: depending on that we should generate
-# a serializer specialization for `const` type too.
-types_with_const_appearances = set()
-
-
 def type_parse_action(tokens):
     if len(tokens) == 1:
         return tokens[0]
@@ -637,7 +631,6 @@ def type_parse_action(tokens):
     # NOTE: template types cannot have `const` modifier at the moment,
     # this wouldn't parse.
     tokens[1].is_const = True
-    types_with_const_appearances.add(tokens[1].name)
     return tokens[1]
 
 
