@@ -172,11 +172,18 @@ namespace tools {
 int scylla_types_main(int argc, char** argv) {
     namespace bpo = boost::program_options;
 
+    const action_handler* found_ah = nullptr;
+    if (std::strcmp(argv[1], "--help") != 0 && std::strcmp(argv[1], "-h") != 0) {
+        found_ah = &tools::utils::get_selected_operation(argc, argv, action_handlers, "action");
+    }
+
     app_template::seastar_options app_cfg;
     app_cfg.name = "scylla-types";
 
     auto description_template =
 R"(scylla-types - a command-line tool to examine values belonging to scylla types.
+
+Usage: scylla types {{action}} [--option1] [--option2] ... {{hex_value1}} [{{hex_value2}}] ...
 
 Allows examining raw values obtained from e.g. sstables, logs or coredumps and
 executing various actions on them. Values should be provided in hex form,
@@ -193,13 +200,13 @@ a required number of arguments. The supported actions are:
 {}
 
 Examples:
-$ scylla-types --print -t Int32Type b34b62d4
+$ scylla types print -t Int32Type b34b62d4
 -1286905132
 
-$ scylla-types --compare -t 'ReversedType(TimeUUIDType)' b34b62d46a8d11ea0000005000237906 d00819896f6b11ea00000000001c571b
+$ scylla types compare -t 'ReversedType(TimeUUIDType)' b34b62d46a8d11ea0000005000237906 d00819896f6b11ea00000000001c571b
 b34b62d4-6a8d-11ea-0000-005000237906 > d0081989-6f6b-11ea-0000-0000001c571b
 
-$ scylla-types --print --prefix-compound -t TimeUUIDType -t Int32Type 0010d00819896f6b11ea00000000001c571b000400000010
+$ scylla types print --prefix-compound -t TimeUUIDType -t Int32Type 0010d00819896f6b11ea00000000001c571b000400000010
 (d0081989-6f6b-11ea-0000-0000001c571b, 16)
 )";
     app_cfg.description = format(description_template, boost::algorithm::join(action_handlers | boost::adaptors::transformed(
@@ -208,10 +215,6 @@ $ scylla-types --print --prefix-compound -t TimeUUIDType -t Int32Type 0010d00819
     tools::utils::configure_tool_mode(app_cfg);
 
     app_template app(std::move(app_cfg));
-
-    for (const auto& ah : action_handlers) {
-        app.add_options()(ah.name().c_str(), ah.description().c_str());
-    }
 
     app.add_options()
         ("type,t", bpo::value<std::vector<sstring>>(), "the type of the values, all values must be of the same type;"
@@ -225,9 +228,8 @@ $ scylla-types --print --prefix-compound -t TimeUUIDType -t Int32Type 0010d00819
         {"value", bpo::value<std::vector<sstring>>(), "value(s) to process, can also be provided as positional arguments", -1}
     });
 
-    //FIXME: this exposes all core options, which we are not interested in.
-    return app.run(argc, argv, [&app] {
-        const action_handler& handler = tools::utils::get_selected_operation(app.configuration(), action_handlers, "action");
+    return app.run(argc, argv, [&app, found_ah] {
+        const action_handler& handler = *found_ah;
 
         if (!app.configuration().contains("type")) {
             throw std::invalid_argument("error: missing required option '--type'");

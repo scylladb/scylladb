@@ -70,7 +70,7 @@ using partition_set = std::unordered_set<dht::decorated_key, decorated_key_hash,
 template <typename T>
 using partition_map = std::unordered_map<dht::decorated_key, T, decorated_key_hash, decorated_key_equal>;
 
-partition_set get_partitions(schema_ptr schema, bpo::variables_map& app_config) {
+partition_set get_partitions(schema_ptr schema, const bpo::variables_map& app_config) {
     partition_set partitions(app_config.count("partition"), {}, decorated_key_equal(*schema));
     auto pk_type = schema->partition_key_type();
 
@@ -201,13 +201,11 @@ public:
     }
 };
 
-using operation_specific_options = std::unordered_map<sstring, sstring>;
-
 class dumping_consumer : public sstable_consumer {
     schema_ptr _schema;
 
 public:
-    explicit dumping_consumer(schema_ptr s, reader_permit, const operation_specific_options&) : _schema(std::move(s)) {
+    explicit dumping_consumer(schema_ptr s, reader_permit, const bpo::variables_map&) : _schema(std::move(s)) {
     }
     virtual future<> on_start_of_stream() override {
         std::cout << "{stream_start}" << std::endl;
@@ -251,32 +249,6 @@ public:
     }
 };
 
-// Result can be plotted with the following example script:
-//
-//     import datetime
-//     import json
-//     import matplotlib.pyplot as plt
-//
-//     with open('histogram.json', 'r') as f:
-//         data = json.load(f)
-//
-//     x = data['buckets']
-//     y = data['counts']
-//
-//     max_y = max(y)
-//
-//     x = [datetime.date.fromtimestamp(i / 1000000).strftime('%Y.%m') for i in x]
-//     y = [i / max_y for i in y]
-//
-//     fig, ax = plt.subplots()
-//
-//     ax.set_xlabel('Timestamp')
-//     ax.set_ylabel('Normalized cell count')
-//     ax.set_title('Histogram of data write-time')
-//     ax.bar(x, y)
-//
-//     plt.show()
-//
 class writetime_histogram_collecting_consumer : public sstable_consumer {
 private:
     enum class bucket {
@@ -365,8 +337,10 @@ private:
     }
 
 public:
-    explicit writetime_histogram_collecting_consumer(schema_ptr s, reader_permit, const operation_specific_options& op_opts) : _schema(std::move(s)) {
-        for (const auto& [key, value] : op_opts) {
+    explicit writetime_histogram_collecting_consumer(schema_ptr s, reader_permit, const bpo::variables_map& vm) : _schema(std::move(s)) {
+        auto it = vm.find("bucket");
+        if (it != vm.end()) {
+            auto value = it->second.as<std::string>();
             if (value == "years") {
                 _bucket = bucket::years;
             } else if (value == "months") {
@@ -457,7 +431,7 @@ class custom_consumer : public sstable_consumer {
     schema_ptr _schema;
     reader_permit _permit;
 public:
-    explicit custom_consumer(schema_ptr s, reader_permit p, const operation_specific_options&)
+    explicit custom_consumer(schema_ptr s, reader_permit p, const bpo::variables_map&)
         : _schema(std::move(s)), _permit(std::move(p))
     { }
     virtual future<> on_start_of_stream() override {
@@ -560,51 +534,37 @@ void consume_sstables(schema_ptr schema, reader_permit permit, std::vector<sstab
     }
 }
 
-struct options {
-    bool merge = false;
-    bool no_skips = false;
-};
-
-using operation_func = void(*)(schema_ptr, reader_permit, const std::vector<sstables::shared_sstable>&, const partition_set&, const options&,
-        const operation_specific_options&);
+using operation_func = void(*)(schema_ptr, reader_permit, const std::vector<sstables::shared_sstable>&, const bpo::variables_map&);
 
 class operation {
-public:
-    struct option {
-        sstring name;
-        sstring description;
-    };
-private:
     std::string _name;
+    std::string _summary;
     std::string _description;
-    std::vector<option> _available_options;
+    std::vector<std::string> _available_options;
     operation_func _func;
 
 public:
-    operation(std::string name, std::string description, operation_func func)
-        : _name(std::move(name)), _description(std::move(description)), _func(func) {
+    operation(std::string name, std::string summary, std::string description, operation_func func)
+        : _name(std::move(name)), _summary(std::move(summary)), _description(std::move(description)), _func(func) {
     }
-    operation(std::string name, std::string description, std::vector<option> available_options, operation_func func)
-        : _name(std::move(name)), _description(std::move(description)), _available_options(std::move(available_options)), _func(func) {
+    operation(std::string name, std::string summary, std::string description, std::vector<std::string> available_options, operation_func func)
+        : _name(std::move(name)), _summary(std::move(summary)), _description(std::move(description)), _available_options(std::move(available_options)), _func(func) {
     }
 
     const std::string& name() const { return _name; }
+    const std::string& summary() const { return _summary; }
     const std::string& description() const { return _description; }
-    const std::vector<option>& available_options() const { return _available_options; }
+    const std::vector<std::string>& available_options() const { return _available_options; }
 
-    void operator()(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
-            const partition_set& partitions, const options& opts, const operation_specific_options& op_opts) const {
-        _func(std::move(schema), std::move(permit), sstables, partitions, opts, op_opts);
+    void operator()(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map& vm) const {
+        _func(std::move(schema), std::move(permit), sstables, vm);
     }
 };
 
-void validate_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const partition_set& partitions,
-        const options& opts, const operation_specific_options& op_opts) {
-    if (!partitions.empty()) {
-        sst_log.warn("partition-filter is not supported for validate, ignoring");
-    }
+void validate_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map& vm) {
+    const auto merge = vm.count("merge");
     sstables::compaction_data info;
-    consume_sstables(schema, permit, sstables, opts.merge, true, [&info] (flat_mutation_reader_v2& rd, sstables::sstable* sst) {
+    consume_sstables(schema, permit, sstables, merge, true, [&info] (flat_mutation_reader_v2& rd, sstables::sstable* sst) {
         if (sst) {
             sst_log.info("validating {}", sst->get_filename());
         }
@@ -614,22 +574,7 @@ void validate_operation(schema_ptr schema, reader_permit permit, const std::vect
     });
 }
 
-void check_flags_unusable_for_component_dump(const char* dump_name, const partition_set& partitions, const options& opts) {
-    if (!partitions.empty()) {
-        sst_log.warn("partition-filter is not supported for dump-{}, ignoring", dump_name);
-    }
-    if (opts.merge) {
-        sst_log.warn("--merge not supported for dump-{}, ignoring", dump_name);
-    }
-    if (opts.no_skips) {
-        sst_log.warn("--no-skips not supported for dump-{}, ignoring", dump_name);
-    }
-}
-
-void dump_index_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const partition_set& partitions,
-        const options& opts, const operation_specific_options& op_opts) {
-    check_flags_unusable_for_component_dump("index", partitions, opts);
-
+void dump_index_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map&) {
     std::cout << "{stream_start}" << std::endl;
     for (auto& sst : sstables) {
         sstables::index_reader idx_reader(sst, permit, default_priority_class(), {}, sstables::use_caching::yes);
@@ -655,9 +600,7 @@ sstring disk_string_to_string(const sstables::disk_string<Integer>& ds) {
     return sstring(ds.value.begin(), ds.value.end());
 }
 
-void dump_compression_info_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const partition_set& partitions,
-        const options& opts, const operation_specific_options& op_opts) {
-    check_flags_unusable_for_component_dump("compression-info", partitions, opts);
+void dump_compression_info_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map&) {
     fmt::print("{{stream_start}}\n");
 
     for (auto& sst : sstables) {
@@ -688,10 +631,7 @@ void dump_compression_info_operation(schema_ptr schema, reader_permit permit, co
     fmt::print("{{stream_end}}\n");
 }
 
-void dump_summary_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const partition_set& partitions,
-        const options& opts, const operation_specific_options& op_opts) {
-    check_flags_unusable_for_component_dump("summary", partitions, opts);
-
+void dump_summary_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map&) {
     const auto composite_to_hex = [] (bytes_view bv) {
         auto cv = composite_view(bv, true);
         auto key = partition_key::from_exploded_view(cv.explode());
@@ -920,10 +860,7 @@ void dump_serialization_header(sstables::sstable_version_types version, const ss
     });
 }
 
-void dump_statistics_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const partition_set& partitions,
-        const options& opts, const operation_specific_options& op_opts) {
-    check_flags_unusable_for_component_dump("statistics", partitions, opts);
-
+void dump_statistics_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map&) {
     auto to_string = [] (sstables::metadata_type t) {
         switch (t) {
             case sstables::metadata_type::Validation: return "validation";
@@ -1062,10 +999,7 @@ struct scylla_metadata_visitor : public boost::static_visitor<> {
     scylla_metadata_visitor() = default;
 };
 
-void dump_scylla_metadata_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const partition_set& partitions,
-        const options& opts, const operation_specific_options& op_opts) {
-    check_flags_unusable_for_component_dump("scylla_metadata", partitions, opts);
-
+void dump_scylla_metadata_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map&) {
     fmt::print("{{stream_start}}\n");
     for (auto& sst : sstables) {
         fmt::print("{{sstable_scylla_metadata_start: {}}}\n", sst->get_filename());
@@ -1083,29 +1017,241 @@ void dump_scylla_metadata_operation(schema_ptr schema, reader_permit permit, con
 }
 
 template <typename SstableConsumer>
-void sstable_consumer_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
-        const partition_set& partitions, const options& opts, const operation_specific_options& op_opts) {
-    auto consumer = std::make_unique<SstableConsumer>(schema, permit, op_opts);
+void sstable_consumer_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map& vm) {
+    const auto merge = vm.count("merge");
+    const auto no_skips = vm.count("no-skips");
+    const auto partitions = get_partitions(schema, vm);
+    auto consumer = std::make_unique<SstableConsumer>(schema, permit, vm);
     consumer->on_start_of_stream().get();
-    consume_sstables(schema, permit, sstables, opts.merge, opts.no_skips || partitions.empty(), [&, &consumer = *consumer] (flat_mutation_reader_v2& rd, sstables::sstable* sst) {
-        return consume_reader(std::move(rd), consumer, sst, partitions, opts.no_skips);
+    consume_sstables(schema, permit, sstables, merge, no_skips || partitions.empty(), [&, &consumer = *consumer] (flat_mutation_reader_v2& rd, sstables::sstable* sst) {
+        return consume_reader(std::move(rd), consumer, sst, partitions, no_skips);
     });
     consumer->on_end_of_stream().get();
 }
 
+class basic_option {
+public:
+    const char* name;
+    const char* description;
+
+public:
+    basic_option(const char* name, const char* description) : name(name), description(description) { }
+
+    virtual void add_option(bpo::options_description& opts) const = 0;
+};
+
+template <typename T = std::monostate>
+class typed_option : public basic_option {
+    std::optional<T> _default_value;
+
+    virtual void add_option(bpo::options_description& opts) const override {
+        if (_default_value) {
+            opts.add_options()(name, bpo::value<T>()->default_value(*_default_value), description);
+        } else {
+            opts.add_options()(name, bpo::value<T>(), description);
+        }
+    }
+
+public:
+    typed_option(const char* name, const char* description) : basic_option(name, description) { }
+    typed_option(const char* name, T default_value, const char* description) : basic_option(name, description), _default_value(std::move(default_value)) { }
+};
+
+template <>
+class typed_option<std::monostate> : public basic_option {
+    virtual void add_option(bpo::options_description& opts) const override {
+        opts.add_options()(name, description);
+    }
+public:
+    typed_option(const char* name, const char* description) : basic_option(name, description) { }
+};
+
+class option {
+    shared_ptr<basic_option> _opt; // need copy to support convenient range declaration of std::vector<option>
+
+public:
+    template <typename T>
+    option(typed_option<T> opt) : _opt(make_shared<typed_option<T>>(std::move(opt))) { }
+
+    const char* name() const { return _opt->name; }
+    const char* description() const { return _opt->description; }
+    void add_option(bpo::options_description& opts) const { _opt->add_option(opts); }
+};
+
+const std::vector<option> all_options {
+    typed_option<std::vector<sstring>>("partition", "partition(s) to filter for, partitions are expected to be in the hex format"),
+    typed_option<sstring>("partitions-file", "file containing partition(s) to filter for, partitions are expected to be in the hex format"),
+    typed_option<>("merge", "merge all sstables into a single mutation fragment stream (use a combining reader over all sstable readers)"),
+    typed_option<>("no-skips", "don't use skips to skip to next partition when the partition filter rejects one, this is slower but works with corrupt index"),
+    typed_option<std::string>("bucket", "months", "the unit of time to use as bucket, one of (years, months, weeks, days, hours)"),
+};
+
 const std::vector<operation> operations{
-    {"dump", "Dump content of sstable(s).", sstable_consumer_operation<dumping_consumer>},
-    {"dump-index", "Dump content of sstable index(es).", dump_index_operation},
-    {"dump-compression-info", "Dump content of sstable compression info(s).", dump_compression_info_operation},
-    {"dump-summary", "Dump content of sstable summary(es).", dump_summary_operation},
-    {"dump-statistics", "Dump content of sstable statistics(s).", dump_statistics_operation},
-    {"dump-scylla-metadata", "Dump content of sstable scylla metadata(s).", dump_scylla_metadata_operation},
+/* dump-data */
+    {"dump-data",
+            "Dump content of sstable(s)",
+R"(
+Dump the content of the data component. This component contains the data-proper
+of the sstable. This might produce a huge amount of output. In general the
+human-readable output will be larger than the binary file.
+For more information about the sstable components and the format itself, visit
+https://docs.scylladb.com/architecture/sstable/.
+
+It is possible to filter the data to print via the --partitions or
+--partitions-file options. Both expect partition key values in the hexdump
+format.
+)",
+            {"partition", "partitions-file", "merge", "no-skips"},
+            sstable_consumer_operation<dumping_consumer>},
+/* dump-index */
+    {"dump-index",
+            "Dump content of sstable index(es)",
+R"(
+Dump the content of the index component. Contains the partition-index of the data
+component. This is effectively a list of all the partitions in the sstable, with
+their starting position in the data component and optionally a promoted index,
+which contains a sampled index of the clustering rows in the partition.
+Positions (both that of partition and that of rows) is valid for uncompressed
+data.
+For more information about the sstable components and the format itself, visit
+https://docs.scylladb.com/architecture/sstable/.
+)",
+            dump_index_operation},
+/* dump-compression-info */
+    {"dump-compression-info",
+            "Dump content of sstable compression info(s)",
+R"(
+Dump the content of the compression-info component. Contains compression
+parameters and maps positions into the uncompressed data to that into compressed
+data. Note that compression happens over chunks with configurable size, so to
+get data at a position in the middle of a compressed chunk, the entire chunk has
+to be decompressed.
+For more information about the sstable components and the format itself, visit
+https://docs.scylladb.com/architecture/sstable/.
+)",
+            dump_compression_info_operation},
+/* dump-summary */
+    {"dump-summary",
+            "Dump content of sstable summary(es)",
+R"(
+Dump the content of the summary component. The summary is a sampled index of the
+content of the index-component. An index of the index. Sampling rate is chosen
+such that this file is small enough to be kept in memory even for very large
+sstables.
+For more information about the sstable components and the format itself, visit
+https://docs.scylladb.com/architecture/sstable/.
+)",
+            dump_summary_operation},
+/* dump-statistics */
+    {"dump-statistics",
+            "Dump content of sstable statistics(s)",
+R"(
+Dump the content of the statistics component. Contains various metadata about the
+data component. In the sstable 3 format, this component is critical for parsing
+the data component.
+For more information about the sstable components and the format itself, visit
+https://docs.scylladb.com/architecture/sstable/.
+)",
+            dump_statistics_operation},
+/* dump-scylla-metadata */
+    {"dump-scylla-metadata",
+            "Dump content of sstable scylla metadata(s)",
+R"(
+Dump the content of the scylla-metadata component. Contains scylla-specific
+metadata about the data component. This component won't be present in sstables
+produced by Apache Cassandra.
+For more information about the sstable components and the format itself, visit
+https://docs.scylladb.com/architecture/sstable/.
+)",
+            dump_scylla_metadata_operation},
+/* writetime-histogram */
     {"writetime-histogram",
-            "Generate a histogram (bucket=month) of all the timestamps (writetime), written to histogram.json.",
-            {{"bucket", "the unit of time to use as bucket, one of (years, months, weeks, days, hours)"}},
+            "Generate a histogram of all the timestamps (writetime)",
+R"(
+Crawl over all timestamps in the data component and add them to a histogram. The
+bucket size by default is a month, tunable with the --bucket option.
+The timestamp of all objects that have one are added to the histogram:
+* cells (atomic and collection cells)
+* tombstones (partition-tombstone, range-tombstone, row-tombstone,
+  shadowable-tombstone, cell-tombstone, collection-tombstone, cell-tombstone)
+* row-marker
+
+This allows determining when the data was written, provided the writer of the
+data didn't mangle with the timestamps.
+This produces a json file `histogram.json` whose content can be plotted with the
+following example python script:
+
+     import datetime
+     import json
+     import matplotlib.pyplot as plt # requires the matplotlib python package
+
+     with open('histogram.json', 'r') as f:
+         data = json.load(f)
+
+     x = data['buckets']
+     y = data['counts']
+
+     max_y = max(y)
+
+     x = [datetime.date.fromtimestamp(i / 1000000).strftime('%Y.%m') for i in x]
+     y = [i / max_y for i in y]
+
+     fig, ax = plt.subplots()
+
+     ax.set_xlabel('Timestamp')
+     ax.set_ylabel('Normalized cell count')
+     ax.set_title('Histogram of data write-time')
+     ax.bar(x, y)
+
+     plt.show()
+)",
+            {"bucket"},
             sstable_consumer_operation<writetime_histogram_collecting_consumer>},
-    {"custom", "Hackable custom operation for expert users, until scripting support is implemented.", sstable_consumer_operation<custom_consumer>},
-    {"validate", "Validate sstable(s) with the mutation fragment stream validator, same as scrub in validate mode.", validate_operation},
+/* custom */
+    {"custom",
+            "Hackable custom operation for expert users, until scripting support is implemented",
+R"(
+Poor man's scripting support. Aimed at developers as it requires editing C++
+source code and re-building the binary. Will be replaced by proper scripting
+support soon (don't quote me on that).
+)",
+            sstable_consumer_operation<custom_consumer>},
+/* validate */
+    {"validate",
+            "Validate the sstable(s), same as scrub in validate mode",
+R"(
+On a conceptual level, the data in sstables is represented by objects called
+mutation fragments. We have the following kinds of fragments:
+* partition-start (1)
+* static-row (0-1)
+* clustering-row (0-N)
+* range-tombstone/range-tombstone-change (0-N)
+* partition-end (1)
+
+Data from the sstable is parsed into these fragments. We use these fragments to
+stream data because it allows us to represent as little as part of a partition
+or as many as the entire content of an sstable.
+
+This operation validates data on the mutation-fragment level. Any parsing errors
+will also be detected, but after successful parsing the validation will happen
+on the fragment level. The following things are validated:
+* Partitions are ordered in strictly monotonic ascending order [1].
+* Fragments are correctly ordered. Fragments must follow the order defined in the
+  listing above also respecting the occurrence numbers within a partition. Note
+  that clustering rows and range tombstone [change] fragments can be intermingled.
+* Clustering elements are ordered according in a strictly increasing clustering
+  order as defined by the schema. Range tombstones (but not range tombstone
+  changes) are allowed to have weakly monotonically increasing positions.
+* The stream ends with a partition-end fragment.
+
+[1] Although partitions are said to be unordered, this is only true w.r.t. the
+data type of the key components. Partitions are ordered according to their tokens
+(hashes), so partitions are unordered in the sense that a hash-table is
+unordered: they have a random order as perceived by they user but they have a
+well defined internal order.
+)",
+            {"merge"},
+            validate_operation},
 };
 
 } // anonymous namespace
@@ -1113,106 +1259,107 @@ const std::vector<operation> operations{
 namespace tools {
 
 int scylla_sstable_main(int argc, char** argv) {
+    const operation* found_op = nullptr;
+    if (std::strcmp(argv[1], "--help") != 0 && std::strcmp(argv[1], "-h") != 0) {
+        found_op = &tools::utils::get_selected_operation(argc, argv, operations, "operation");
+    }
+
     app_template::seastar_options app_cfg;
     app_cfg.name = app_name;
 
     const auto description_template =
 R"(scylla-sstable - a multifunctional command-line tool to examine the content of sstables.
 
+Usage: scylla sstable {{operation}} [--option1] [--option2] ... {{sstable_path1}} [{{sstable_path2}}] ...
+
 Allows examining the contents of sstables with various built-in tools
 (operations). The sstables to-be-examined are passed as positional
 command line arguments. Sstables will be processed by the selected
-operation one-by-one (can be changed with --merge). Any number of
-sstables can be passed but mind the open file limits. Pass the full path
-to the data component of the sstables (*-Data.db). For now it is
-required that the sstable is found at a valid data path:
-
-    /path/to/datadir/{{keyspace_name}}/{{table_name}}-{{table_id}}/
-
+operation one-by-one. Any number of sstables can be passed but mind the
+open file limits. Always pass the path to the data component of the
+sstables (*-Data.db) even if you want to examine another component.
 The schema to read the sstables is read from a schema.cql file. This
-should contain the keyspace and table definitions, as well as any UDTs
-used.
-Filtering the sstable()s to process only certain partition(s) is
-supported via the --partition and --partitions-file command line flags.
-Partition keys are expected to be in the hexdump format used by scylla
-(hex representation of the raw buffer).
+should contain the keyspace and table definitions, any UDTs used and
+dropped columns in the form of relevant CQL statements. The keyspace
+definition is allowed to be missing, in which case one will be
+auto-generated. Dropped columns should be present in the form of insert
+statements into the system_schema.dropped_columns table.
+Example scylla.cql:
+
+    CREATE KEYSPACE ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
+
+    CREATE TYPE ks.type1 (f1 int, f2 text);
+
+    CREATE TABLE ks.cf (pk int PRIMARY KEY, v frozen<type1>);
+
+    INSERT
+    INTO system_schema.dropped_columns (keyspace_name, table_name, column_name, dropped_time, type)
+    VALUES ('ks', 'cf', 'v2', 1631011979170675, 'int');
+
+In general you should be able to use the output of `DESCRIBE TABLE` or
+the relevant parts of `DESCRIBE KEYSPACE` of `cqlsh` as well as the
+`schema.cql` produced by snapshots.
+
 Operations write their output to stdout, or file(s). The tool logs to
 stderr, with a logger called {}.
 
 The supported operations are:
 {}
 
+For more details on an operation, run: scylla sstable {{operation}} --help
+
 Examples:
 
 # dump the content of the sstable
-$ scylla-sstable --dump /path/to/md-123456-big-Data.db
+$ scylla sstable dump-data /path/to/md-123456-big-Data.db
 
 # dump the content of the two sstable(s) as a unified stream
-$ scylla-sstable --dump --merge /path/to/md-123456-big-Data.db /path/to/md-123457-big-Data.db
+$ scylla sstable dump-data --merge /path/to/md-123456-big-Data.db /path/to/md-123457-big-Data.db
 
 # generate a joint histogram for the specified partition
-$ scylla-sstable --writetime-histogram --partition={{myhexpartitionkey}} /path/to/md-123456-big-Data.db
+$ scylla sstable writetime-histogram --partition={{myhexpartitionkey}} /path/to/md-123456-big-Data.db
 
 # validate the specified sstables
-$ scylla-sstable --validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-Data.db
+$ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-Data.db
 )";
-    app_cfg.description = format(description_template, app_name, boost::algorithm::join(operations | boost::adaptors::transformed([] (const auto& op) {
-        if (op.available_options().empty()) {
-            return format("* {}: {}", op.name(), op.description());
-        }
-        const auto opt_list = boost::algorithm::join(op.available_options() | boost::adaptors::transformed(
-                        [] (const auto& opt) { return fmt::format("    - {}: {}", opt.name, opt.description); }), "\n");
-        return format("* {}: {}\n  Options:\n{}", op.name(), op.description(), opt_list);
-    }), "\n"));
+
+    if (found_op) {
+        app_cfg.description = format("{}\n\n{}\n", found_op->summary(), found_op->description());
+    } else  {
+        app_cfg.description = format(description_template, app_name, boost::algorithm::join(operations | boost::adaptors::transformed([] (const auto& op) {
+            return format("* {}: {}", op.name(), op.summary());
+        }), "\n"));
+    }
 
     tools::utils::configure_tool_mode(app_cfg, sst_log.name());
 
     app_template app(std::move(app_cfg));
 
-    for (const auto& op : operations) {
-        app.add_options()(op.name().c_str(), op.description().c_str());
-    }
-
     app.add_options()
         ("schema-file", bpo::value<sstring>()->default_value("schema.cql"), "file containing the schema description")
-        ("partition", bpo::value<std::vector<sstring>>(), "partition(s) to filter for, partitions are expected to be in the hex format")
-        ("partitions-file", bpo::value<sstring>(), "file containing partition(s) to filter for, partitions are expected to be in the hex format")
-        ("merge", "merge all sstables into a single mutation fragment stream (use a combining reader over all sstable readers)")
-        ("no-skips", "don't use skips to skip to next partition when the partition filter rejects one, this is slower but works with corrupt index")
-        ("operation-option", bpo::value<program_options::string_map>()->default_value({}),
-                 "Map of operation-option names to values. The format is \"OPTION0=VALUE0[:OPTION1=VALUE1:...]\". "
-                 "Valid options are listed in the operation descriptions."
-                 "This option can be specified multiple times.")
         ;
 
     app.add_positional_options({
         {"sstables", bpo::value<std::vector<sstring>>(), "sstable(s) to process, can also be provided as positional arguments", -1},
     });
 
-    //FIXME: this exposes all core options, which we are not interested in.
-    //FIXME: make WARN the default log level
-    return app.run(argc, argv, [&app] {
-        return async([&app] {
+    if (found_op) {
+        bpo::options_description op_desc(found_op->name());
+        for (const auto& opt_name : found_op->available_options()) {
+            auto it = std::find_if(all_options.begin(), all_options.end(), [&] (const option& opt) { return opt.name() == opt_name; });
+            assert(it != all_options.end());
+            it->add_option(op_desc);
+        }
+        if (!found_op->available_options().empty()) {
+            app.get_options_description().add(op_desc);
+        }
+    }
+
+    return app.run(argc, argv, [&app, found_op] {
+        return async([&app, found_op] {
             auto& app_config = app.configuration();
 
-            const auto& operation = tools::utils::get_selected_operation(app.configuration(), operations, "operation");
-
-            options opts;
-            opts.merge = app_config.count("merge");
-            opts.no_skips = app_config.count("no-skips");
-
-            const auto operation_opts_raw = app_config["operation-option"].as<program_options::string_map>();
-            const auto operation_opts = operation_specific_options(operation_opts_raw.begin(), operation_opts_raw.end());
-
-            for (const auto& [key, _] : operation_opts) {
-                auto it = std::find_if(operation.available_options().begin(), operation.available_options().end(), [&name = key] (const operation::option& opt) {
-                    return opt.name == name;
-                });
-                if (it == operation.available_options().end()) {
-                    sst_log.error("error: operation {} doesn't have option {}", operation.name(), key);
-                    return 2;
-                }
-            }
+            const auto& operation = *found_op;
 
             schema_ptr schema;
             try {
@@ -1221,8 +1368,6 @@ $ scylla-sstable --validate /path/to/md-123456-big-Data.db /path/to/md-123457-bi
                 std::cerr << "error: could not load schema file '" << app_config["schema-file"].as<sstring>() << "': " << std::current_exception() << std::endl;
                 return 1;
             }
-
-            const auto partitions = get_partitions(schema, app_config);
 
             db::config dbcfg;
             gms::feature_service feature_service(gms::feature_config_from_db_config(dbcfg));
@@ -1241,7 +1386,7 @@ $ scylla-sstable --validate /path/to/md-123456-big-Data.db /path/to/md-123457-bi
 
             const auto permit = rcs_sem.make_tracking_only_permit(schema.get(), app_name, db::no_timeout);
 
-            operation(schema, permit, sstables, partitions, opts, operation_opts);
+            operation(schema, permit, sstables, app_config);
 
             return 0;
         });
