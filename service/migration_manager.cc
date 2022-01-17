@@ -978,7 +978,7 @@ future<> migration_manager::announce(std::vector<mutation> schema) {
                     _messaging.get_raw_version(endpoint) == netw::messaging_service::current_version;
             });
             co_await parallel_for_each(live_members.begin(), live_members.end(),
-                std::bind(std::mem_fn(&migration_manager::push_schema_mutation), this, _1, schema));
+                std::bind(std::mem_fn(&migration_manager::push_schema_mutation), this, std::placeholders::_1, schema));
         } catch (...) {
             mlogger.error("failed to announce migration to all nodes: {}", std::current_exception());
         }
