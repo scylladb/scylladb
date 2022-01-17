@@ -177,7 +177,11 @@ public:
     token_metadata& operator=(token_metadata&&) noexcept;
     ~token_metadata();
     const std::vector<token>& sorted_tokens() const;
+    // Update token->endpoint mappings for a given \c endpoint.
+    // \c tokens are all the tokens that are now owned by \c endpoint.
     future<> update_normal_tokens(std::unordered_set<token> tokens, inet_address endpoint);
+    // Batch update token->endpoint mappings for the given endpoints.
+    // The \c endpoint_tokens map contains the set of tokens currently owned by each respective endpoint.
     future<> update_normal_tokens(const std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens);
     const token& first_token(const token& start) const;
     size_t first_token_index(const token& start) const;

@@ -442,7 +442,7 @@ future<> token_metadata_impl::update_normal_tokens(const std::unordered_map<inet
     bool should_sort_tokens = false;
     for (auto&& i : endpoint_tokens) {
         inet_address endpoint = i.first;
-        const auto& tokens = i.second;
+        auto tokens = i.second;
 
         if (tokens.empty()) {
             auto msg = format("tokens is empty in update_normal_tokens");
@@ -450,15 +450,28 @@ future<> token_metadata_impl::update_normal_tokens(const std::unordered_map<inet
             throw std::runtime_error(msg);
         }
 
+        // Phase 1: erase all tokens previously owned by the endpoint.
         for(auto it = _token_to_endpoint_map.begin(), ite = _token_to_endpoint_map.end(); it != ite;) {
             co_await coroutine::maybe_yield();
             if(it->second == endpoint) {
-                it = _token_to_endpoint_map.erase(it);
-            } else {
-                ++it;
+                auto tokit = tokens.find(it->first);
+                if (tokit == tokens.end()) {
+                    // token no longer owned by endpoint
+                    it = _token_to_endpoint_map.erase(it);
+                    continue;
+                }
+                // token ownership did not change,
+                // no further update needed for it.
+                tokens.erase(tokit);
             }
+            ++it;
         }
 
+        // Phase 2:
+        // a. Add the endpoint to _topology if needed.
+        // b. update pending _bootstrap_tokens and _leaving_endpoints
+        // c. update _token_to_endpoint_map with the new endpoint->token mappings
+        //    - set `should_sort_tokens` if new tokens were added
         _topology.add_endpoint(endpoint);
         remove_by_value(_bootstrap_tokens, endpoint);
         _leaving_endpoints.erase(endpoint);
@@ -475,6 +488,8 @@ future<> token_metadata_impl::update_normal_tokens(const std::unordered_map<inet
         }
     }
 
+    // New tokens were added to _token_to_endpoint_map
+    // so re-sort all tokens.
     if (should_sort_tokens) {
         sort_tokens();
     }
