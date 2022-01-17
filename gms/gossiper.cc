@@ -1148,29 +1148,27 @@ future<> gossiper::replicate(inet_address ep, application_state key, const versi
 }
 
 future<> gossiper::advertise_removing(inet_address endpoint, utils::UUID host_id, utils::UUID local_host_id) {
-    return seastar::async([this, g = this->shared_from_this(), endpoint, host_id, local_host_id] {
-        auto& state = get_endpoint_state(endpoint);
-        // remember this node's generation
-        int generation = state.get_heart_beat_state().get_generation();
-        logger.info("Removing host: {}", host_id);
-        auto ring_delay = std::chrono::milliseconds(_cfg.ring_delay_ms());
-        logger.info("Sleeping for {}ms to ensure {} does not change", ring_delay.count(), endpoint);
-        sleep_abortable(ring_delay, _abort_source).get();
-        // make sure it did not change
-        auto& eps = get_endpoint_state(endpoint);
-        if (eps.get_heart_beat_state().get_generation() != generation) {
-            throw std::runtime_error(format("Endpoint {} generation changed while trying to remove it", endpoint));
-        }
+    auto& state = get_endpoint_state(endpoint);
+    // remember this node's generation
+    int generation = state.get_heart_beat_state().get_generation();
+    logger.info("Removing host: {}", host_id);
+    auto ring_delay = std::chrono::milliseconds(_cfg.ring_delay_ms());
+    logger.info("Sleeping for {}ms to ensure {} does not change", ring_delay.count(), endpoint);
+    co_await sleep_abortable(ring_delay, _abort_source);
+    // make sure it did not change
+    auto& eps = get_endpoint_state(endpoint);
+    if (eps.get_heart_beat_state().get_generation() != generation) {
+        throw std::runtime_error(format("Endpoint {} generation changed while trying to remove it", endpoint));
+    }
 
-        // update the other node's generation to mimic it as if it had changed it itself
-        logger.info("Advertising removal for {}", endpoint);
-        eps.update_timestamp(); // make sure we don't evict it too soon
-        eps.get_heart_beat_state().force_newer_generation_unsafe();
-        eps.add_application_state(application_state::STATUS, versioned_value::removing_nonlocal(host_id));
-        eps.add_application_state(application_state::REMOVAL_COORDINATOR, versioned_value::removal_coordinator(local_host_id));
-        endpoint_state_map[endpoint] = eps;
-        replicate(endpoint, eps).get();
-    });
+    // update the other node's generation to mimic it as if it had changed it itself
+    logger.info("Advertising removal for {}", endpoint);
+    eps.update_timestamp(); // make sure we don't evict it too soon
+    eps.get_heart_beat_state().force_newer_generation_unsafe();
+    eps.add_application_state(application_state::STATUS, versioned_value::removing_nonlocal(host_id));
+    eps.add_application_state(application_state::REMOVAL_COORDINATOR, versioned_value::removal_coordinator(local_host_id));
+    endpoint_state_map[endpoint] = eps;
+    co_await replicate(endpoint, eps);
 }
 
 future<> gossiper::advertise_token_removed(inet_address endpoint, utils::UUID host_id) {
