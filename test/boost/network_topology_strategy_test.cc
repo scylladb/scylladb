@@ -208,14 +208,16 @@ void simple_test() {
         { 10.0, inet_address("192.102.40.1") },
         { 11.0, inet_address("192.102.40.2") }
     };
-    // Initialize the token_metadata
-  stm.mutate_token_metadata([&ring_points] (token_metadata& tm) -> future<> {
-    for (unsigned i = 0; i < ring_points.size(); i++) {
-        co_await tm.update_normal_token(
-            {dht::token::kind::key, d2t(ring_points[i].point / ring_points.size())},
-            ring_points[i].host);
+
+    std::unordered_map<inet_address, std::unordered_set<token>> endpoint_tokens;
+    for (const auto& [ring_point, endpoint] : ring_points) {
+        endpoint_tokens[endpoint].insert({dht::token::kind::key, d2t(ring_point / ring_points.size())});
     }
-  }).get();
+
+    // Initialize the token_metadata
+    stm.mutate_token_metadata([&endpoint_tokens] (token_metadata& tm) {
+        return tm.update_normal_tokens(endpoint_tokens);
+    }).get();
 
     /////////////////////////////////////
     // Create the replication strategy
@@ -607,13 +609,22 @@ SEASTAR_THREAD_TEST_CASE(testCalculateEndpoints) {
         (void)snitch.stop();
         snitch = generate_snitch(datacenters, nodes);
 
-      stm.mutate_token_metadata([&nodes] (token_metadata& tm) -> future<> {
+        std::unordered_set<dht::token> random_tokens;
+        while (random_tokens.size() < nodes.size() * VNODES) {
+            random_tokens.insert(dht::token::get_random_token());
+        }
+        std::unordered_map<inet_address, std::unordered_set<token>> endpoint_tokens;
+        auto next_token_it = random_tokens.begin();
         for (auto& node : nodes) {
             for (size_t i = 0; i < VNODES; ++i) {
-                co_await tm.update_normal_token(dht::token::get_random_token(), node);
+                endpoint_tokens[node].insert(*next_token_it);
+                next_token_it++;
             }
         }
-      }).get();
+        
+        stm.mutate_token_metadata([&endpoint_tokens] (token_metadata& tm) {
+            return tm.update_normal_tokens(endpoint_tokens);
+        }).get();
         test_equivalence(stm, snitch, datacenters);
     }
 }

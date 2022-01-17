@@ -90,7 +90,6 @@ public:
     token_metadata_impl(const token_metadata_impl&) = default;
     token_metadata_impl(token_metadata_impl&&) noexcept = default;
     const std::vector<token>& sorted_tokens() const;
-    future<> update_normal_token(token token, inet_address endpoint);
     future<> update_normal_tokens(std::unordered_set<token> tokens, inet_address endpoint);
     future<> update_normal_tokens(const std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens);
     const token& first_token(const token& start) const;
@@ -425,13 +424,6 @@ std::vector<token> token_metadata_impl::get_tokens(const inet_address& addr) con
     }
     std::sort(res.begin(), res.end());
     return res;
-}
-/**
- * Update token map with a single token/endpoint pair in normal state.
- */
-future<> token_metadata_impl::update_normal_token(token t, inet_address endpoint)
-{
-    return update_normal_tokens(std::unordered_set<token>({t}), endpoint);
 }
 
 future<> token_metadata_impl::update_normal_tokens(std::unordered_set<token> tokens, inet_address endpoint) {
@@ -991,11 +983,6 @@ token_metadata& token_metadata::token_metadata::operator=(token_metadata&&) noex
 const std::vector<token>&
 token_metadata::sorted_tokens() const {
     return _impl->sorted_tokens();
-}
-
-future<>
-token_metadata::update_normal_token(token token, inet_address endpoint) {
-    return _impl->update_normal_token(token, endpoint);
 }
 
 future<>
