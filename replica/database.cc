@@ -1824,13 +1824,11 @@ Future database::update_write_metrics(Future&& f) {
     return f.then_wrapped([this, s = _stats] (auto f) {
         if (f.failed()) {
             ++s->total_writes_failed;
-            try {
-                f.get();
-            } catch (const timed_out_error&) {
+            auto ep = f.get_exception();
+            if (is_timeout_exception(ep)) {
                 ++s->total_writes_timedout;
-                throw;
             }
-            assert(0 && "should not reach");
+            return futurize<Future>::make_exception_future(std::move(ep));
         }
         ++s->total_writes;
         return f;

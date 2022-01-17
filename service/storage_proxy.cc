@@ -4999,14 +4999,10 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
                     });
                 }).handle_exception([reply_to, shard, &p, &errors] (std::exception_ptr eptr) {
                     seastar::log_level l = seastar::log_level::warn;
-                    try {
-                        std::rethrow_exception(eptr);
-                    } catch (timed_out_error&) {
+                    if (is_timeout_exception(eptr)) {
                         // ignore timeouts so that logs are not flooded.
                         // database total_writes_timedout counter was incremented.
                         l = seastar::log_level::debug;
-                    } catch (...) {
-                        // ignore
                     }
                     slogger.log(l, "Failed to apply mutation from {}#{}: {}", reply_to, shard, eptr);
                     errors++;
