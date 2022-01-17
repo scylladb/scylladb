@@ -396,6 +396,14 @@ write(sstable_version_types v, file_writer& out, const utils::chunked_vector<Mem
     }
 }
 
+template <typename Contents>
+inline void write(sstable_version_types v, file_writer& out, const std::optional<Contents>& opt) {
+    write(v, out, bool(opt));
+    if (bool(opt)) {
+        write(v, out, *opt);
+    }
+}
+
 template <typename Size, typename Members>
 inline void write(sstable_version_types v, file_writer& out, const disk_array<Size, Members>& arr) {
     Size len = 0;
