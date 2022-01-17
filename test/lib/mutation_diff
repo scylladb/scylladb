@@ -3,7 +3,7 @@
 # Converts assertion failure text involving two mutations to a diff.
 #
 
-cmd="colordiff -u"
+cmd="colordiff -au"
 sed_cmd="sed -E"
 
 while getopts ":d:" opt; do
