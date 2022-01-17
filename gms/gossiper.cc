@@ -753,9 +753,7 @@ future<> gossiper::failure_detector_loop_for_node(gms::inet_address node, int64_
         if (diff > max_duration) {
             logger.info("failure_detector_loop: Mark node {} as DOWN", node);
             co_await container().invoke_on(0, [node] (gms::gossiper& g) {
-                return seastar::async([node, &g] {
-                    g.convict(node).get();
-                });
+                return g.convict(node);
             });
             co_return;
         }
@@ -811,11 +809,9 @@ future<> gossiper::failure_detector_loop() {
                 if (!nodes_down.empty()) {
                     logger.debug("failure_detector_loop: previous_live_nodes={}, current_live_nodes={}, nodes_down={}",
                             nodes, _live_endpoints, nodes_down);
-                    co_await seastar::async([this, &nodes_down] {
-                        for (const auto& node : nodes_down) {
-                            convict(node).get();
-                        }
-                    });
+                    for (const auto& node : nodes_down) {
+                        co_await convict(node);
+                    }
                 }
                 // Make sure _live_endpoints do not change when nodes_down are being convicted above. This guarantees no down nodes will miss the convict.
                 logger.debug("failure_detector_loop: previous_live_nodes={}, current_live_nodes={}, nodes_down={}, version_before={}, version_after={}",
