@@ -4185,6 +4185,7 @@ SEASTAR_TEST_CASE(twcs_reshape_with_disjoint_set_test) {
         std::map <sstring, sstring> opts = {
                 {time_window_compaction_strategy_options::COMPACTION_WINDOW_UNIT_KEY, "HOURS"},
                 {time_window_compaction_strategy_options::COMPACTION_WINDOW_SIZE_KEY, "8"},
+                {"min_sstable_size", "1"},
         };
         builder.set_compaction_strategy_options(std::move(opts));
         auto s = builder.build();
@@ -4284,6 +4285,51 @@ SEASTAR_TEST_CASE(twcs_reshape_with_disjoint_set_test) {
             }
 
             BOOST_REQUIRE_EQUAL(cs.get_reshaping_job(sstables, s, default_priority_class(), reshape_mode::strict).sstables.size(), uint64_t(s->max_compaction_threshold()));
+        }
+
+        {
+            // create set of 64 files which size is either small or big. as STCS reshape logic reused by TWCS favor compaction of smaller files
+            // first, verify that only 32 small (similar-sized) files are returned
+
+            std::vector<mutation> mutations_for_small_files;
+            mutations_for_small_files.push_back(make_row(0, std::chrono::hours(1)));
+
+            std::vector<mutation> mutations_for_big_files;
+            for (auto i = 0; i < tokens.size(); i++) {
+                mutations_for_big_files.push_back(make_row(i, std::chrono::hours(1)));
+            }
+
+            std::unordered_set<int64_t> generations_for_small_files;
+
+            std::vector<sstables::shared_sstable> sstables;
+            sstables.reserve(64);
+
+            for (unsigned i = 0; i < 64; i++) {
+                sstables::shared_sstable sst;
+                //
+                // intermix big and small files, to make sure STCS logic is really applied to favor similar-sized reshape jobs.
+                //
+                if (i % 2 == 0) {
+                    sst = make_sstable_containing(sst_gen, mutations_for_small_files);
+                    generations_for_small_files.insert(sst->generation());
+                } else {
+                    sst = make_sstable_containing(sst_gen, mutations_for_big_files);
+                }
+                sstables.push_back(std::move(sst));
+            }
+
+            auto check_mode_correctness = [&] (reshape_mode mode) {
+                auto ret = cs.get_reshaping_job(sstables, s, default_priority_class(), mode);
+                BOOST_REQUIRE_EQUAL(ret.sstables.size(), uint64_t(s->max_compaction_threshold()));
+                // fail if any file doesn't belong to set of small files
+                bool has_big_sized_files = boost::algorithm::any_of(ret.sstables, [&] (const sstables::shared_sstable& sst) {
+                    return !generations_for_small_files.contains(sst->generation());
+                });
+                BOOST_REQUIRE(!has_big_sized_files);
+            };
+
+            check_mode_correctness(reshape_mode::strict);
+            check_mode_correctness(reshape_mode::relaxed);
         }
     });
 }

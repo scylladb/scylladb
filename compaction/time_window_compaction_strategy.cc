@@ -208,12 +208,12 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
                 std::copy(ssts.begin(), ssts.end(), std::back_inserter(single_window));
                 continue;
             }
-            auto end_it = ssts.end();
-            if (need_trimming(ssts)) {
-                end_it = ssts.begin() + max_sstables;
+            // reuse STCS reshape logic which will only compact similar-sized files, to increase overall efficiency
+            // when reshaping time buckets containing a huge amount of files
+            auto desc = size_tiered_compaction_strategy(_stcs_options).get_reshaping_job(std::move(ssts), schema, iop, mode);
+            if (!desc.sstables.empty()) {
+                return desc;
             }
-            std::copy(ssts.begin(), end_it, std::back_inserter(single_window));
-            break;
         }
     }
     if (!single_window.empty()) {
