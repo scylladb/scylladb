@@ -151,17 +151,17 @@ schema_ptr zsets_schema(sstring ks_name) {
     return builder.build(schema_builder::compact_storage::yes);
 }
 
-future<> create_keyspace_if_not_exists_impl(seastar::sharded<service::migration_manager>& mm, db::config& config, int default_replication_factor) {
+future<> create_keyspace_if_not_exists_impl(seastar::sharded<service::storage_proxy>& proxy, seastar::sharded<service::migration_manager>& mm, db::config& config, int default_replication_factor) {
     assert(this_shard_id() == 0);
     auto keyspace_replication_strategy_options = config.redis_keyspace_replication_strategy_options();
     if (!keyspace_replication_strategy_options.contains("class")) {
         keyspace_replication_strategy_options["class"] = "SimpleStrategy";
         keyspace_replication_strategy_options["replication_factor"] = fmt::format("{}", default_replication_factor);
     }
-    auto keyspace_gen = [&mm, &config, keyspace_replication_strategy_options = std::move(keyspace_replication_strategy_options)]  (sstring name) -> future<> {
+    auto keyspace_gen = [&proxy, &mm, &config, keyspace_replication_strategy_options = std::move(keyspace_replication_strategy_options)]  (sstring name) -> future<> {
         auto& mml = mm.local();
-        auto& proxy = service::get_local_storage_proxy();
-        if (proxy.get_db().local().has_keyspace(name)) {
+        auto& proxyl = proxy.local();
+        if (proxyl.get_db().local().has_keyspace(name)) {
             co_return;
         }
         auto attrs = make_shared<cql3::statements::ks_prop_defs>();
@@ -172,13 +172,13 @@ future<> create_keyspace_if_not_exists_impl(seastar::sharded<service::migration_
         }
         attrs->add_property(cql3::statements::ks_prop_defs::KW_REPLICATION, replication_properties); 
         attrs->validate();
-        const auto& tm = *proxy.get_token_metadata_ptr();
+        const auto& tm = *proxyl.get_token_metadata_ptr();
         co_return co_await mml.announce(mml.prepare_new_keyspace_announcement(attrs->as_ks_metadata(name, tm)));
     };
-    auto table_gen = [&mm] (sstring ks_name, sstring cf_name, schema_ptr schema) -> future<> {
+    auto table_gen = [&proxy, &mm] (sstring ks_name, sstring cf_name, schema_ptr schema) -> future<> {
         auto& mml= mm.local();
-        auto& proxy = service::get_local_storage_proxy();
-        if (proxy.get_db().local().has_schema(ks_name, cf_name)) {
+        auto& proxyl = proxy.local();
+        if (proxyl.get_db().local().has_schema(ks_name, cf_name)) {
             co_return;
         }
         logger.info("Create keyspace: {}, table: {} for redis.", ks_name, cf_name);
@@ -202,14 +202,14 @@ future<> create_keyspace_if_not_exists_impl(seastar::sharded<service::migration_
     });
 }
 
-future<> maybe_create_keyspace(seastar::sharded<service::migration_manager>& mm, db::config& config, sharded<gms::gossiper>& gossiper) {
-    return gms::get_up_endpoint_count(gossiper.local()).then([&mm, &config] (auto live_endpoint_count) {
+future<> maybe_create_keyspace(seastar::sharded<service::storage_proxy>& proxy, seastar::sharded<service::migration_manager>& mm, db::config& config, sharded<gms::gossiper>& gossiper) {
+    return gms::get_up_endpoint_count(gossiper.local()).then([&proxy, &mm, &config] (auto live_endpoint_count) {
         int replication_factor = 3;
         if (live_endpoint_count < replication_factor) {
             replication_factor = 1;
             logger.warn("Creating keyspace for redis with unsafe, live endpoint nodes count: {}.", live_endpoint_count);
         }
-        return create_keyspace_if_not_exists_impl(mm, config, replication_factor);
+        return create_keyspace_if_not_exists_impl(proxy, mm, config, replication_factor);
     });
 }
 

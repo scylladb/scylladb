@@ -26,6 +26,7 @@
 
 namespace service {
 class migration_manager;
+class storage_proxy;
 }
 namespace db {
 class config;
@@ -44,6 +45,6 @@ static constexpr auto HASHes          = "HASHes";
 static constexpr auto SETs            = "SETs";
 static constexpr auto ZSETs           = "ZSETs";
 
-seastar::future<> maybe_create_keyspace(seastar::sharded<service::migration_manager>& mm, db::config& cfg, seastar::sharded<gms::gossiper>& g);
+seastar::future<> maybe_create_keyspace(seastar::sharded<service::storage_proxy>& proxy, seastar::sharded<service::migration_manager>& mm, db::config& cfg, seastar::sharded<gms::gossiper>& g);
 
 }
