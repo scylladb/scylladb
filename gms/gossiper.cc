@@ -1172,19 +1172,17 @@ future<> gossiper::advertise_removing(inet_address endpoint, utils::UUID host_id
 }
 
 future<> gossiper::advertise_token_removed(inet_address endpoint, utils::UUID host_id) {
-    return seastar::async([this, g = this->shared_from_this(), endpoint, host_id] {
-        auto& eps = get_endpoint_state(endpoint);
-        eps.update_timestamp(); // make sure we don't evict it too soon
-        eps.get_heart_beat_state().force_newer_generation_unsafe();
-        auto expire_time = compute_expire_time();
-        eps.add_application_state(application_state::STATUS, versioned_value::removed_nonlocal(host_id, expire_time.time_since_epoch().count()));
-        logger.info("Completing removal of {}", endpoint);
-        add_expire_time_for_endpoint(endpoint, expire_time);
-        endpoint_state_map[endpoint] = eps;
-        replicate(endpoint, eps).get();
-        // ensure at least one gossip round occurs before returning
-        sleep_abortable(INTERVAL * 2, _abort_source).get();
-    });
+    auto& eps = get_endpoint_state(endpoint);
+    eps.update_timestamp(); // make sure we don't evict it too soon
+    eps.get_heart_beat_state().force_newer_generation_unsafe();
+    auto expire_time = compute_expire_time();
+    eps.add_application_state(application_state::STATUS, versioned_value::removed_nonlocal(host_id, expire_time.time_since_epoch().count()));
+    logger.info("Completing removal of {}", endpoint);
+    add_expire_time_for_endpoint(endpoint, expire_time);
+    endpoint_state_map[endpoint] = eps;
+    co_await replicate(endpoint, eps);
+    // ensure at least one gossip round occurs before returning
+    co_await sleep_abortable(INTERVAL * 2, _abort_source);
 }
 
 future<> gossiper::unsafe_assassinate_endpoint(sstring address) {
