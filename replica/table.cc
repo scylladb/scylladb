@@ -1473,14 +1473,16 @@ future<> table::snapshot(database& db, sstring name, bool skip_flush) {
                                 tlogger.error("Failed writing schema file in snapshot in {} with exception {}", jsondir, ptr);
                                 return make_ready_future<>();
                             }).finally([&jsondir, snapshot] () mutable {
-                                return seal_snapshot(jsondir).then([snapshot] {
+                                return seal_snapshot(jsondir).handle_exception([&jsondir] (std::exception_ptr ex) {
+                                    tlogger.error("Failed to seal snapshot in {}: {}. Ignored.", jsondir, ex);
+                                }).then([snapshot] {
                                     snapshot->manifest_write.signal(smp::count);
                                     return make_ready_future<>();
                                 });
                             });
                         });
                     }
-                    return my_work.then([snapshot] {
+                    return my_work.finally([snapshot] {
                         return snapshot->manifest_write.wait(1);
                     }).then([snapshot] {});
                 });
