@@ -2288,42 +2288,40 @@ future<> gossiper::wait_for_gossip(std::chrono::milliseconds initial_delay, std:
 
     if (force_after && *force_after == 0) {
         logger.warn("Skipped to wait for gossip to settle by user request since skip_wait_for_gossip_to_settle is set zero. Do not use this in production!");
-        return make_ready_future<>();
+        co_return;
     }
 
-    return seastar::async([this, initial_delay, force_after] {
-        int32_t total_polls = 0;
-        int32_t num_okay = 0;
-        int32_t ep_size = endpoint_state_map.size();
+    int32_t total_polls = 0;
+    int32_t num_okay = 0;
+    int32_t ep_size = endpoint_state_map.size();
 
-        auto delay = initial_delay;
+    auto delay = initial_delay;
 
-        sleep_abortable(GOSSIP_SETTLE_MIN_WAIT_MS, _abort_source).get();
-        while (num_okay < GOSSIP_SETTLE_POLL_SUCCESSES_REQUIRED) {
-            sleep_abortable(delay, _abort_source).get();
-            delay = GOSSIP_SETTLE_POLL_INTERVAL_MS;
+    co_await sleep_abortable(GOSSIP_SETTLE_MIN_WAIT_MS, _abort_source);
+    while (num_okay < GOSSIP_SETTLE_POLL_SUCCESSES_REQUIRED) {
+        co_await sleep_abortable(delay, _abort_source);
+        delay = GOSSIP_SETTLE_POLL_INTERVAL_MS;
 
-            int32_t current_size = endpoint_state_map.size();
-            total_polls++;
-            if (current_size == ep_size && _msg_processing == 0) {
-                logger.debug("Gossip looks settled");
-                num_okay++;
-            } else {
-                logger.info("Gossip not settled after {} polls.", total_polls);
-                num_okay = 0;
-            }
-            ep_size = current_size;
-            if (force_after && *force_after > 0 && total_polls > *force_after) {
-                logger.warn("Gossip not settled but startup forced by skip_wait_for_gossip_to_settle. Gossp total polls: {}", total_polls);
-                break;
-            }
-        }
-        if (total_polls > GOSSIP_SETTLE_POLL_SUCCESSES_REQUIRED) {
-            logger.info("Gossip settled after {} extra polls; proceeding", total_polls - GOSSIP_SETTLE_POLL_SUCCESSES_REQUIRED);
+        int32_t current_size = endpoint_state_map.size();
+        total_polls++;
+        if (current_size == ep_size && _msg_processing == 0) {
+            logger.debug("Gossip looks settled");
+            num_okay++;
         } else {
-            logger.info("No gossip backlog; proceeding");
+            logger.info("Gossip not settled after {} polls.", total_polls);
+            num_okay = 0;
         }
-    });
+        ep_size = current_size;
+        if (force_after && *force_after > 0 && total_polls > *force_after) {
+            logger.warn("Gossip not settled but startup forced by skip_wait_for_gossip_to_settle. Gossp total polls: {}", total_polls);
+            break;
+        }
+    }
+    if (total_polls > GOSSIP_SETTLE_POLL_SUCCESSES_REQUIRED) {
+        logger.info("Gossip settled after {} extra polls; proceeding", total_polls - GOSSIP_SETTLE_POLL_SUCCESSES_REQUIRED);
+    } else {
+        logger.info("No gossip backlog; proceeding");
+    }
 }
 
 future<> gossiper::wait_for_gossip_to_settle() {
