@@ -31,6 +31,8 @@ from contextlib import contextmanager
 from cassandra.protocol import SyntaxException, InvalidRequest
 from cassandra.util import SortedSet, OrderedMapSerializedKey
 
+import nodetool
+
 # A utility function for creating a new temporary table with a given schema.
 # Because Scylla becomes slower when a huge number of uniquely-named tables
 # are created and deleted (see https://github.com/scylladb/scylla/issues/7620)
@@ -213,16 +215,9 @@ def assert_all_rows(cql, table, *expected):
 def assert_column_names(result, *expected):
     assert result.one()._fields == expected
 
-# FIXME: implement flush() using ../nodetool.py.
-# For now, flush() does nothing... The tests will
-# work and test CQL, but not test for flush-specific bugs which apparently
-# some specific tests were written to check (e.g., testCollectionFlush).
-# I'm worried, though, that some tests (e.g., in collections_test.py)
-# needelessly stuck flush() in the middle of tests, and implementing flush()
-# will make them slower with no real benefit.
 def flush(cql, table):
-    # FIXME! Currently this doesn't flush at all!
-    print("NOTE: flush() stubbed, and doesn't really flush")
+    nodetool.flush(cql, table)
+
 def compact(cql, table):
     # FIXME! Currently this doesn't compact at all!
     print("NOTE: compact() stubbed, and doesn't really compact")
