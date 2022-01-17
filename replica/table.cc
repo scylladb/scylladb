@@ -1449,27 +1449,33 @@ future<> table::snapshot(database& db, sstring name, bool skip_flush) {
                         snapshot->files.insert(std::move(sst));
                     }
 
+                    tlogger.debug("snapshot {}: signal requests", jsondir);
                     snapshot->requests.signal(1);
                     auto my_work = make_ready_future<>();
                     if (requester == this_shard_id()) {
+                        tlogger.debug("snapshot {}: waiting for all shards", jsondir);
                         my_work = snapshot->requests.wait(smp::count).then([&jsondir,
                                                                             &db, snapshot, this] {
                             // this_shard_id() here == requester == this_shard_id() before submit_to() above,
                             // so the db reference is still local
+                            tlogger.debug("snapshot {}: writing schema.cql", jsondir);
                             return write_schema_as_cql(db, jsondir).handle_exception([&jsondir](std::exception_ptr ptr) {
                                 tlogger.error("Failed writing schema file in snapshot in {} with exception {}", jsondir, ptr);
                                 return make_ready_future<>();
                             }).finally([&jsondir, snapshot] () mutable {
+                                tlogger.debug("snapshot {}: seal_snapshot", jsondir);
                                 return seal_snapshot(jsondir).handle_exception([&jsondir] (std::exception_ptr ex) {
                                     tlogger.error("Failed to seal snapshot in {}: {}. Ignored.", jsondir, ex);
-                                }).then([snapshot] {
+                                }).then([snapshot, &jsondir] {
+                                    tlogger.debug("snapshot {}: done", jsondir);
                                     snapshot->manifest_write.signal(smp::count);
                                     return make_ready_future<>();
                                 });
                             });
                         });
                     }
-                    return my_work.finally([snapshot] {
+                    return my_work.finally([snapshot, &jsondir, requester] {
+                        tlogger.debug("snapshot {}: waiting for manifest on behalf of shard {}", jsondir, requester);
                         return snapshot->manifest_write.wait(1);
                     }).then([snapshot] {});
                 });
