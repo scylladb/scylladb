@@ -971,7 +971,7 @@ public:
             co_await t._query_state.get_client_state().has_keyspace_access(t._db, ks_def.name, auth::permission::ALTER);
 
             co_return co_await t.execute_schema_command([&ks_def] (service::migration_manager& mm, data_dictionary::database db) -> future<std::vector<mutation>> {
-                if (db.has_keyspace(ks_def.name)) {
+                if (!db.has_keyspace(ks_def.name)) {
                     throw NotFoundException();
                 }
                 if (!ks_def.cf_defs.empty()) {
