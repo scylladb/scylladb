@@ -274,6 +274,9 @@ inline void write(sstable_version_types v, file_writer& out, double d) {
     out.write(reinterpret_cast<const char*>(&tmp), sizeof(unsigned long));
 }
 
+inline void write(sstable_version_types v, file_writer& out, const utils::UUID& uuid) {
+    out.write(uuid.serialize());
+}
 
 template <typename W>
 requires Writer<W>

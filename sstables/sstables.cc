@@ -263,10 +263,6 @@ future<> parse(const schema&, sstable_version_types, random_access_reader& in, u
     });
 }
 
-inline void write(sstable_version_types v, file_writer& out, const utils::UUID& uuid) {
-    out.write(uuid.serialize());
-}
-
 // For all types that take a size, we provide a template that takes the type
 // alone, and another, separate one, that takes a size parameter as well, of
 // type Size. This is because although most of the time the size and the data
