@@ -612,25 +612,21 @@ future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state> ma
     boost::partition(endpoints, node_is_seed);
     logger.debug("apply_state_locally_endpoints={}", endpoints);
 
-    return do_with(std::move(endpoints), std::move(map), [this] (auto&& endpoints, auto&& map) {
-        return parallel_for_each(endpoints, [this, &map] (auto&& ep) -> future<> {
-            if (ep == this->get_broadcast_address() && !this->is_in_shadow_round()) {
-                return make_ready_future<>();
-            }
-            if (_just_removed_endpoints.contains(ep)) {
-                logger.trace("Ignoring gossip for {} because it is quarantined", ep);
-                return make_ready_future<>();
-            }
-          return seastar::with_semaphore(_apply_state_locally_semaphore, 1, [this, &ep, &map] () mutable {
-            return seastar::async([this, &ep, &map] () mutable {
-                do_apply_state_locally(ep, map[ep], true).get();
-            });
-          });
+    co_await parallel_for_each(endpoints, [this, &map] (auto&& ep) -> future<> {
+        if (ep == this->get_broadcast_address() && !this->is_in_shadow_round()) {
+            return make_ready_future<>();
+        }
+        if (_just_removed_endpoints.contains(ep)) {
+            logger.trace("Ignoring gossip for {} because it is quarantined", ep);
+            return make_ready_future<>();
+        }
+        return seastar::with_semaphore(_apply_state_locally_semaphore, 1, [this, &ep, &map] () mutable {
+            return do_apply_state_locally(ep, map[ep], true);
         });
-    }).then([start] {
-            logger.debug("apply_state_locally() took {} ms", std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - start).count());
     });
+
+    logger.debug("apply_state_locally() took {} ms", std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start).count());
 }
 
 future<> gossiper::force_remove_endpoint(inet_address endpoint) {
