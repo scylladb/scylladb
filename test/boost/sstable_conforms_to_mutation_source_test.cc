@@ -134,7 +134,7 @@ SEASTAR_TEST_CASE(test_sstable_conforms_to_mutation_source_md_large) {
 }
 
 // This assert makes sure we don't miss writable vertions
-static_assert(writable_sstable_versions.size() == 2);
+static_assert(writable_sstable_versions.size() == 3);
 
 // `keys` may contain repetitions.
 // The generated position ranges are non-empty. The start of each range in the vector is greater than the end of the previous range.

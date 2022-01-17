@@ -843,6 +843,7 @@ void dump_stats_metadata(sstables::sstable_version_types version, const sstables
         else if (field == &metadata.rows_count) { return "rows_count"; }
         else if (field == &metadata.commitlog_lower_bound) { return "commitlog_lower_bound"; }
         else if (field == &metadata.commitlog_intervals) { return "commitlog_intervals"; }
+        else if (field == &metadata.originating_host_id) { return "originating_host_id"; }
         else { throw std::invalid_argument("invalid field offset"); }
     });
 }

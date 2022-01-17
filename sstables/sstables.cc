@@ -159,6 +159,7 @@ std::unordered_map<sstable::version_types, sstring, enum_hash<sstable::version_t
     { sstable::version_types::la , "la" },
     { sstable::version_types::mc , "mc" },
     { sstable::version_types::md , "md" },
+    { sstable::version_types::me , "me" },
 };
 
 std::unordered_map<sstable::format_types, sstring, enum_hash<sstable::format_types>> sstable::_format_string = {
@@ -1841,6 +1842,7 @@ sstring sstable::component_basename(const sstring& ks, const sstring& cf, versio
         return v + "-" + g + "-" + f + "-" + component;
     case sstable::version_types::mc:
     case sstable::version_types::md:
+    case sstable::version_types::me:
         return v + "-" + g + "-" + f + "-" + component;
     }
     assert(0 && "invalid version");
@@ -2176,7 +2178,7 @@ sstable::make_crawling_reader_v1(
 }
 
 static entry_descriptor make_entry_descriptor(sstring sstdir, sstring fname, sstring* const provided_ks, sstring* const provided_cf) {
-    static std::regex la_mx("(la|m[cd])-(\\d+)-(\\w+)-(.*)");
+    static std::regex la_mx("(la|m[cde])-(\\d+)-(\\w+)-(.*)");
     static std::regex ka("(\\w+)-(\\w+)-ka-(\\d+)-(.*)");
 
     static std::regex dir(format(".*/([^/]*)/([^/]+)-[\\da-fA-F]+(?:/({}|{}|{}|{})(?:/[^/]+)?)?/?",
