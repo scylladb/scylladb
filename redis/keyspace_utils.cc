@@ -27,6 +27,7 @@
 #include <seastar/core/print.hh>
 #include "db/config.hh"
 #include "data_dictionary/keyspace_metadata.hh"
+#include <boost/algorithm/cxx11/all_of.hpp>
 
 using namespace seastar;
 
@@ -172,19 +173,40 @@ future<> create_keyspace_if_not_exists_impl(seastar::sharded<service::storage_pr
         co_return co_await mml.announce(co_await mml.prepare_new_column_family_announcement(schema));
     };
 
+    struct table {
+        const char* name;
+        std::function<schema_ptr(sstring)> schema;
+    };
+
+    static std::array tables{table{redis::STRINGs, strings_schema},
+                             table{redis::LISTs, lists_schema},
+                             table{redis::SETs, sets_schema},
+                             table{redis::HASHes, hashes_schema},
+                             table{redis::ZSETs, zsets_schema}};
+
+    bool schema_ok = boost::algorithm::all_of(boost::irange<unsigned>(0, config.redis_database_count()) |
+                                              boost::adaptors::transformed([] (unsigned i) { return fmt::format("REDIS_{}", i); }),
+                                              [&] (auto ks_name) {
+        auto check = [&] (table t) {
+            return db.has_schema(ks_name, t.name);
+        };
+        return db.has_keyspace(ks_name) && boost::algorithm::all_of(tables, check);
+    });
+
+    if (schema_ok) {
+        logger.info("Redis schema is already up-to-date");
+        co_return; // if schema is created already do nothing
+    }
+
     co_await mm.local().schema_read_barrier();
 
     // create default databases for redis.
     co_return co_await parallel_for_each(boost::irange<unsigned>(0, config.redis_database_count()), [keyspace_gen = std::move(keyspace_gen), table_gen = std::move(table_gen)] (auto c) {
         auto ks_name = fmt::format("REDIS_{}", c);
         return keyspace_gen(ks_name).then([ks_name, table_gen] {
-            return when_all_succeed(
-                table_gen(ks_name, redis::STRINGs, strings_schema(ks_name)),
-                table_gen(ks_name, redis::LISTs, lists_schema(ks_name)),
-                table_gen(ks_name, redis::SETs, sets_schema(ks_name)),
-                table_gen(ks_name, redis::HASHes, hashes_schema(ks_name)),
-                table_gen(ks_name, redis::ZSETs, zsets_schema(ks_name))
-            ).discard_result();
+            return parallel_for_each(tables, [ks_name, table_gen] (table t) {
+                return table_gen(ks_name, t.name, t.schema(ks_name));
+            }).discard_result();
         });
     });
 }
