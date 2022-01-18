@@ -119,8 +119,8 @@ class index_consume_entry_context : public data_consumer::continuous_data_consum
     using continuous_data_consumer = data_consumer::continuous_data_consumer<index_consume_entry_context<IndexConsumer>>;
     using read_status = typename continuous_data_consumer::read_status;
 private:
+    const sstable& _sst;
     IndexConsumer& _consumer;
-    sstring _file_name;
     file _index_file;
     uint64_t _entry_offset;
 
@@ -162,7 +162,6 @@ private:
     std::optional<deletion_time> _deletion_time;
 
     trust_promoted_index _trust_pi;
-    const schema& _s;
     std::optional<column_values_fixed_lengths> _ck_values_fixed_lengths;
     tracing::trace_state_ptr _trace_state;
 
@@ -171,7 +170,10 @@ private:
 public:
     void verify_end_state() const {
         if (this->_remain > 0) {
-            throw std::runtime_error("index_consume_entry_context - no more data but parsing is incomplete");
+            throw malformed_sstable_exception(fmt::format("index_consume_entry_context (state={}): parsing ended but there is unconsumed data", _state), _sst.filename(component_type::Index));
+        }
+        if (_state != state::KEY_SIZE && _state != state::START) {
+            throw malformed_sstable_exception(fmt::format("index_consume_entry_context (state={}): cannot finish parsing current entry, no more data", _state), _sst.filename(component_type::Index));
         }
     }
 
@@ -194,7 +196,7 @@ public:
         switch (_state) {
         // START comes first, to make the handling of the 0-quantity case simpler
         case state::START:
-            sstlog.trace("{}: pos {} state {}", fmt::ptr(this), current_pos(), state::START);
+            sstlog.trace("{}: pos {} state {} - data.size()={}", fmt::ptr(this), current_pos(), state::START, data.size());
             _state = state::KEY_SIZE;
             break;
         case state::KEY_SIZE:
@@ -205,7 +207,7 @@ public:
                 break;
             }
         case state::KEY_BYTES:
-            sstlog.trace("{}: pos {} state {}", fmt::ptr(this), current_pos(), state::KEY_BYTES);
+            sstlog.trace("{}: pos {} state {} - size={}", fmt::ptr(this), current_pos(), state::KEY_BYTES, this->_u16);
             if (this->read_bytes_contiguous(data, this->_u16, _key) != continuous_data_consumer::read_status::ready) {
                 _state = state::POSITION;
                 break;
@@ -302,12 +304,12 @@ public:
         return proceed::yes;
     }
 
-    index_consume_entry_context(reader_permit permit, IndexConsumer& consumer, trust_promoted_index trust_pi, const schema& s,
+    index_consume_entry_context(const sstable& sst, reader_permit permit, IndexConsumer& consumer, trust_promoted_index trust_pi,
             file index_file, file_input_stream_options options, uint64_t start,
             uint64_t maxlen, std::optional<column_values_fixed_lengths> ck_values_fixed_lengths, tracing::trace_state_ptr trace_state = {})
         : continuous_data_consumer(std::move(permit), make_file_input_stream(index_file, start, maxlen, options), start, maxlen)
-        , _consumer(consumer), _index_file(index_file)
-        , _entry_offset(start), _trust_pi(trust_pi), _s(s), _ck_values_fixed_lengths(std::move(ck_values_fixed_lengths))
+        , _sst(sst), _consumer(consumer), _index_file(index_file)
+        , _entry_offset(start), _trust_pi(trust_pi), _ck_values_fixed_lengths(std::move(ck_values_fixed_lengths))
         , _trace_state(std::move(trace_state))
     {}
 };
@@ -460,8 +462,8 @@ class index_reader {
         reader(shared_sstable sst, reader_permit permit, const io_priority_class& pc, tracing::trace_state_ptr trace_state, uint64_t begin, uint64_t end, uint64_t quantity,
                use_caching caching)
             : _consumer(sst->manager().get_cache_tracker().region(), sst->get_schema(), quantity)
-            , _context(permit, _consumer,
-                       trust_promoted_index(sst->has_correct_promoted_index_entries()), *sst->_schema,
+            , _context(*sst, permit, _consumer,
+                       trust_promoted_index(sst->has_correct_promoted_index_entries()),
                        make_tracked_index_file(*sst, permit, trace_state, caching),
                        get_file_input_stream_options(sst, pc), begin, end - begin,
                        (sst->get_version() >= sstable_version_types::mc
