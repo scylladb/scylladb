@@ -464,6 +464,27 @@ sstring maybe_quote(const sstring& identifier) {
     return result;
 }
 
+sstring quote(const sstring& identifier) {
+    // quote empty string
+    if (identifier.empty()) {
+        return "\"\"";
+    }
+    size_t num_quotes = 0;
+    for (char c : identifier) {
+        num_quotes += (c == '"');
+    }
+    if (num_quotes == 0) {
+        return make_sstring("\"", identifier, "\"");
+    }
+    static const std::regex double_quote_re("\"");
+    std::string result;
+    result.reserve(2 + identifier.size() + num_quotes);
+    result.push_back('"');
+    std::regex_replace(std::back_inserter(result), identifier.begin(), identifier.end(), double_quote_re, "\"\"");
+    result.push_back('"');
+    return result;
+}
+
 }
 
 }

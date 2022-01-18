@@ -83,6 +83,17 @@ std::unique_ptr<cql3::statements::raw::select_statement> build_select_statement(
 /// lowercase and not (yet) a keyword.
 sstring maybe_quote(const sstring& s);
 
+/// quote() takes an identifier - the name of a column, table or keyspace -
+/// and transforms it to a string which can be safely used in CQL commands.
+/// Quoting involves wrapping the name in double-quotes ("). A double-quote
+/// character itself is quoted by doubling it.
+/// Quoting is necessary when the identifier contains non-alpha-numeric
+/// characters, when it contains uppercase letters (which will be folded to
+/// lowercase if not quoted), or when the identifier is one of many CQL
+/// keywords. But it's allowed - and easier - to just unconditionally
+/// quote the identifier name in CQL, so that is what this function does does.
+sstring quote(const sstring& s);
+
 // Check whether timestamp is not too far in the future as this probably
 // indicates its incorrectness (for example using other units than microseconds).
 void validate_timestamp(const query_options& options, const std::unique_ptr<attributes>& attrs);
