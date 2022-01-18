@@ -85,3 +85,37 @@ def test_mv_empty_string_partition_key(cql, test_keyspace):
             # because Cassandra forbids an empty partition key on select
             with pytest.raises(InvalidRequest, match='Key may not be empty'):
                 cql.execute(f"SELECT * FROM {mv} WHERE v=''")
+
+# Reproducer for issue #9450 - when a view's key column name is a (quoted)
+# keyword, writes used to fail because they generated internally broken CQL
+# with the column name not quoted.
+def test_mv_quoted_column_names(cql, test_keyspace):
+    for colname in ['"dog"', '"Dog"', 'DOG', '"to"', 'int']:
+        with new_test_table(cql, test_keyspace, f'p int primary key, {colname} int') as table:
+            with new_materialized_view(cql, table, '*', f'{colname}, p', f'{colname} is not null and p is not null') as mv:
+                cql.execute(f'INSERT INTO {table} (p, {colname}) values (1, 2)')
+                # Validate that not only the write didn't fail, it actually
+                # write the right thing to the view. NOTE: on a single-node
+                # Scylla, view update is synchronous so we can just read and
+                # don't need to wait or retry.
+                assert list(cql.execute(f'SELECT * from {mv}')) == [(2, 1)]
+
+# Same as test_mv_quoted_column_names above (reproducing issue #9450), just
+# check *view building* - i.e., pre-existing data in the base table that
+# needs to be copied to the view. The view building cannot return an error
+# to the user, but can fail to write the desired data into the view.
+def test_mv_quoted_column_names_build(cql, test_keyspace):
+    for colname in ['"dog"', '"Dog"', 'DOG', '"to"', 'int']:
+        with new_test_table(cql, test_keyspace, f'p int primary key, {colname} int') as table:
+            cql.execute(f'INSERT INTO {table} (p, {colname}) values (1, 2)')
+            with new_materialized_view(cql, table, '*', f'{colname}, p', f'{colname} is not null and p is not null') as mv:
+                # When Scylla's view builder fails as it did in issue #9450,
+                # there is no way to tell this state apart from a view build
+                # that simply hasn't completed (besides looking at the logs,
+                # which we don't). This means, unfortunately, that a failure
+                # of this test is slow - it needs to wait for a timeout.
+                start_time = time.time()
+                while time.time() < start_time + 30:
+                    if list(cql.execute(f'SELECT * from {mv}')) == [(2, 1)]:
+                        break
+                assert list(cql.execute(f'SELECT * from {mv}')) == [(2, 1)]
