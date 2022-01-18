@@ -102,6 +102,8 @@ private:
     // See `group0_guard::impl` for explanation of the purpose of these locks.
     semaphore _group0_read_apply_mutex;
     semaphore _group0_operation_mutex;
+
+    gc_clock::duration _group0_history_gc_duration;
 public:
     migration_manager(migration_notifier&, gms::feature_service&, netw::messaging_service& ms, service::storage_proxy&, gms::gossiper& gossiper, service::raft_group_registry& raft_gr);
 

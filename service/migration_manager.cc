@@ -58,6 +58,7 @@ migration_manager::migration_manager(migration_notifier& notifier, gms::feature_
         _notifier(notifier), _feat(feat), _messaging(ms), _storage_proxy(storage_proxy), _gossiper(gossiper), _raft_gr(raft_gr)
         , _schema_push([this] { return passive_announce(); })
         , _group0_read_apply_mutex{1}, _group0_operation_mutex{1}
+        , _group0_history_gc_duration{std::chrono::duration_cast<gc_clock::duration>(std::chrono::weeks{1})}
 {
 }
 
@@ -993,7 +994,7 @@ future<> migration_manager::announce_with_raft(std::vector<mutation> schema, gro
         }},
 
         .history_append{db::system_keyspace::make_group0_history_state_id_mutation(
-                guard.new_group0_state_id(), description)},
+                guard.new_group0_state_id(), _group0_history_gc_duration, description)},
 
         .prev_state_id{guard.observed_group0_state_id()},
         .new_state_id{guard.new_group0_state_id()},
