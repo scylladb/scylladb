@@ -99,7 +99,7 @@ public:
      */
     virtual inet_address_vector_replica_set get_sorted_list_by_proximity(
         inet_address address,
-        inet_address_vector_replica_set& unsorted_address) = 0;
+        const inet_address_vector_replica_set& unsorted_address) = 0;
 
     /**
      * This method will sort the <tt>List</tt> by proximity to the given
@@ -435,7 +435,7 @@ public:
 
     virtual inet_address_vector_replica_set get_sorted_list_by_proximity(
         inet_address address,
-        inet_address_vector_replica_set& unsorted_address) override;
+        const inet_address_vector_replica_set& unsorted_address) override;
 
     virtual void sort_by_proximity(
         inet_address address, inet_address_vector_replica_set& addresses) override;
