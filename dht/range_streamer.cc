@@ -36,6 +36,8 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/core/sleep.hh>
 #include "dht/range_streamer.hh"
 #include "utils/fb_utilities.hh"
@@ -108,8 +110,7 @@ range_streamer::get_range_fetch_map(const std::unordered_map<dht::token_range, s
     return range_fetch_map_map;
 }
 
-// Must be called from a seastar thread
-std::unordered_map<dht::token_range, std::vector<inet_address>>
+future<std::unordered_map<dht::token_range, std::vector<inet_address>>>
 range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, dht::token_range_vector desired_ranges) {
     logger.debug("{} ks={}", __func__, keyspace_name);
 
@@ -125,9 +126,7 @@ range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, dh
     for (auto& desired_range : desired_ranges) {
         auto found = false;
         for (auto& x : range_addresses) {
-            if (need_preempt()) {
-                seastar::thread::yield();
-            }
+            co_await coroutine::maybe_yield();
             const range<token>& src_range = x.first;
             if (src_range.contains(desired_range, dht::tri_compare)) {
                 inet_address_vector_replica_set& addresses = x.second;
@@ -144,11 +143,10 @@ range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, dh
         }
     }
 
-    return range_sources;
+    co_return range_sources;
 }
 
-// Must be called from a seastar thread
-std::unordered_map<dht::token_range, std::vector<inet_address>>
+future<std::unordered_map<dht::token_range, std::vector<inet_address>>>
 range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_name, dht::token_range_vector desired_ranges, gms::gossiper& gossiper) {
     logger.debug("{} ks={}", __func__, keyspace_name);
     assert (_tokens.empty() == false);
@@ -158,13 +156,13 @@ range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_n
     auto erm = ks.get_effective_replication_map();
 
     //Active ranges
-    auto metadata_clone = get_token_metadata().clone_only_token_map().get0();
-    auto range_addresses = strat.get_range_addresses(metadata_clone).get0();
+    auto metadata_clone = co_await get_token_metadata().clone_only_token_map();
+    auto range_addresses = co_await strat.get_range_addresses(metadata_clone);
 
     //Pending ranges
-    metadata_clone.update_normal_tokens(_tokens, _address).get();
-    auto pending_range_addresses  = strat.get_range_addresses(metadata_clone).get0();
-    metadata_clone.clear_gently().get();
+    co_await metadata_clone.update_normal_tokens(_tokens, _address);
+    auto pending_range_addresses  = co_await strat.get_range_addresses(metadata_clone);
+    co_await metadata_clone.clear_gently();
 
     //Collects the source that will have its range moved to the new node
     std::unordered_map<dht::token_range, std::vector<inet_address>> range_sources;
@@ -173,10 +171,8 @@ range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_n
 
     for (auto& desired_range : desired_ranges) {
         for (auto& x : range_addresses) {
+            co_await coroutine::maybe_yield();
             const range<token>& src_range = x.first;
-            if (need_preempt()) {
-                seastar::thread::yield();
-            }
             if (src_range.contains(desired_range, dht::tri_compare)) {
                 std::vector<inet_address> old_endpoints(x.second.begin(), x.second.end());
                 auto it = pending_range_addresses.find(desired_range);
@@ -215,7 +211,7 @@ range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_n
         }
     }
 
-    return range_sources;
+    co_return range_sources;
 }
 
 bool range_streamer::use_strict_sources_for_ranges(const sstring& keyspace_name) {
@@ -253,14 +249,13 @@ void range_streamer::add_rx_ranges(const sstring& keyspace_name, std::unordered_
 
 // TODO: This is the legacy range_streamer interface, it is add_rx_ranges which adds rx ranges.
 future<> range_streamer::add_ranges(const sstring& keyspace_name, dht::token_range_vector ranges, gms::gossiper& gossiper) {
-  return seastar::async([this, keyspace_name, ranges= std::move(ranges), &gossiper] () mutable {
     if (_nr_tx_added) {
         throw std::runtime_error("Mixed sending and receiving is not supported");
     }
     _nr_rx_added++;
-    auto ranges_for_keyspace = use_strict_sources_for_ranges(keyspace_name)
+    auto ranges_for_keyspace = co_await (use_strict_sources_for_ranges(keyspace_name)
         ? get_all_ranges_with_strict_sources_for(keyspace_name, ranges, gossiper)
-        : get_all_ranges_with_sources_for(keyspace_name, ranges);
+        : get_all_ranges_with_sources_for(keyspace_name, ranges));
 
     if (logger.is_enabled(logging::log_level::debug)) {
         for (auto& x : ranges_for_keyspace) {
@@ -276,7 +271,6 @@ future<> range_streamer::add_ranges(const sstring& keyspace_name, dht::token_ran
         }
     }
     _to_stream.emplace(keyspace_name, std::move(range_fetch_map));
-  });
 }
 
 future<> range_streamer::stream_async() {
