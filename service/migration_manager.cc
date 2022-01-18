@@ -1322,4 +1322,8 @@ future<> migration_manager::on_alive(gms::inet_address endpoint, gms::endpoint_s
     return make_ready_future();
 }
 
+void migration_manager::set_group0_history_gc_duration(gc_clock::duration d) {
+    _group0_history_gc_duration = d;
+}
+
 }
