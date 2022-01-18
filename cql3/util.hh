@@ -87,6 +87,13 @@ std::unique_ptr<cql3::statements::raw::select_statement> build_select_statement(
 /// forbids non-alpha-numeric characters in identifier names.
 /// Quoting involves wrapping the string in double-quotes ("). A double-quote
 /// character itself is quoted by doubling it.
+/// maybe_quote() also quotes reserved CQL keywords (e.g., "to", "where")
+/// but doesn't quote *unreserved* keywords (like ttl, int or as).
+/// Note that this means that if new reserved keywords are added to the
+/// parser, a saved output of maybe_quote() may no longer be parsable by
+/// parser. To avoid this forward-compatibility issue, use quote() instead
+/// of maybe_quote() - to unconditionally quote an identifier even if it is
+/// lowercase and not (yet) a keyword.
 sstring maybe_quote(const sstring& s);
 
 // Check whether timestamp is not too far in the future as this probably

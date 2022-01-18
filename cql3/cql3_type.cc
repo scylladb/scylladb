@@ -25,6 +25,7 @@
 
 #include "cql3_type.hh"
 #include "cql3/util.hh"
+#include "exceptions/exceptions.hh"
 #include "ut_name.hh"
 #include "database.hh"
 #include "user_types_metadata.hh"
@@ -448,7 +449,20 @@ sstring maybe_quote(const sstring& identifier) {
     }
 
     if (!need_quotes) {
-        return identifier;
+        // A seemingly valid identifier matching [a-z][a-z0-9_]* may still
+        // need quoting if it is a CQL keyword, e.g., "to" (see issue #9450).
+        // While our parser Cql.g has different production rules for different
+        // types of identifiers (column names, table names, etc.), all of
+        // these behave identically for alphanumeric strings: they exclude
+        // many keywords but allow keywords listed as "unreserved keywords".
+        // So we can use any of them, for example cident.
+        try {
+            cql3::util::do_with_parser(identifier, std::mem_fn(&cql3_parser::CqlParser::cident));
+            return identifier;
+        } catch(exceptions::syntax_exception&) {
+            // This alphanumeric string is not a valid identifier, so fall
+            // through to have it quoted:
+        }
     }
     if (num_quotes == 0) {
         return make_sstring("\"", identifier, "\"");

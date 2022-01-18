@@ -32,7 +32,7 @@
 #include "cql3/util.hh"
 
 //
-// Test basic CQL string quoting
+// Test basic CQL identifier quoting
 //
 BOOST_AUTO_TEST_CASE(maybe_quote) {
     std::string s(65536, 'x');
@@ -67,6 +67,16 @@ BOOST_AUTO_TEST_CASE(maybe_quote) {
     BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("\"\""), "\"\"\"\"\"\"");
     BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("\"hell0\""), "\"\"\"hell0\"\"\"");
     BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("hello \"my\" world"), "\"hello \"\"my\"\" world\"");
+
+    // Reproducer for issue #9450. Reserved keywords like "to" or "where"
+    // need quoting, but unreserved keywords like "ttl", "int" or "as",
+    // do not.
+    BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("to"), "\"to\"");
+    BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("where"), "\"where\"");
+    BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("ttl"), "ttl");
+    BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("int"), "int");
+    BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("as"), "as");
+    BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("ttl hi"), "\"ttl hi\"");
 }
 
 //
