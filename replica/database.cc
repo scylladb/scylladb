@@ -2338,6 +2338,9 @@ public:
     virtual const locator::abstract_replication_strategy& get_replication_strategy(data_dictionary::keyspace ks) const override {
         return unwrap(ks).get_replication_strategy();
     }
+    virtual bool is_internal(data_dictionary::keyspace ks) const override {
+        return is_internal_keyspace(unwrap(ks).metadata()->name());
+    }
     virtual sstring get_available_index_name(data_dictionary::database db, std::string_view ks_name, std::string_view table_name,
             std::optional<sstring> index_name_root) const override {
         return unwrap(db).get_available_index_name(sstring(ks_name), sstring(table_name), index_name_root);

@@ -56,6 +56,11 @@ keyspace::user_types() const {
     return metadata()->user_types();
 }
 
+bool
+keyspace::is_internal() const {
+    return _ops->is_internal(*this);
+}
+
 const locator::abstract_replication_strategy&
 keyspace::get_replication_strategy() const {
     return _ops->get_replication_strategy(*this);

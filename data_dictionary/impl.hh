@@ -37,6 +37,7 @@ public:
     virtual const secondary_index::secondary_index_manager& get_index_manager(table t) const = 0;
     virtual schema_ptr get_table_schema(table t) const = 0;
     virtual lw_shared_ptr<keyspace_metadata> get_keyspace_metadata(keyspace ks) const = 0;
+    virtual bool is_internal(keyspace ks) const = 0;
     virtual const locator::abstract_replication_strategy& get_replication_strategy(keyspace ks) const = 0;
     virtual const std::vector<view_ptr>& get_table_views(table t) const = 0;
     virtual sstring get_available_index_name(database db, std::string_view ks_name, std::string_view table_name,
