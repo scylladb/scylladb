@@ -1327,4 +1327,12 @@ void migration_manager::set_group0_history_gc_duration(gc_clock::duration d) {
     _group0_history_gc_duration = d;
 }
 
+void migration_manager::set_concurrent_ddl_retries(size_t n) {
+    _concurrent_ddl_retries = n;
+}
+
+semaphore& migration_manager::group0_operation_mutex() {
+    return _group0_operation_mutex;
+}
+
 }
