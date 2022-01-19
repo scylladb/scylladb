@@ -1508,7 +1508,9 @@ future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot
                 auto snapshot_name = de.name;
                 all_snapshots.emplace(snapshot_name, snapshot_details());
                 return lister::scan_dir(snapshots_dir / fs::path(snapshot_name),  { directory_entry_type::regular }, [this, datadir, &all_snapshots, snapshot_name] (fs::path snapshot_dir, directory_entry de) {
-                    return io_check(file_size, (snapshot_dir / de.name).native()).then([this, datadir, &all_snapshots, snapshot_name, snapshot_dir, name = de.name] (auto size) {
+                    return io_check(file_stat, (snapshot_dir / de.name).native(), follow_symlink::no).then([this, datadir, &all_snapshots, snapshot_name, snapshot_dir, name = de.name] (stat_data sd) {
+                        auto size = sd.allocated_size;
+
                         // The manifest is the only file expected to be in this directory not belonging to the SSTable.
                         // For it, we account the total size, but zero it for the true size calculation.
                         //

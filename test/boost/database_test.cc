@@ -34,6 +34,7 @@
 #include "db/data_listeners.hh"
 #include "multishard_mutation_query.hh"
 #include "transport/messages/result_message.hh"
+#include "db/snapshot-ctl.hh"
 
 using namespace std::chrono_literals;
 
@@ -516,6 +517,91 @@ SEASTAR_TEST_CASE(clear_nonexistent_snapshot) {
     });
 }
 
+SEASTAR_TEST_CASE(test_snapshot_ctl_details) {
+    return do_with_some_data([] (cql_test_env& e) {
+        sharded<db::snapshot_ctl> sc;
+        sc.start(std::ref(e.db())).get();
+        auto stop_sc = deferred_stop(sc);
+
+        auto& cf = e.local_db().find_column_family("ks", "cf");
+        take_snapshot(e).get();
+
+        auto details = cf.get_snapshot_details().get0();
+        BOOST_REQUIRE_EQUAL(details.size(), 1);
+
+        auto sd = details["test"];
+        BOOST_REQUIRE_EQUAL(sd.live, 0);
+        BOOST_REQUIRE_GT(sd.total, 0);
+
+        auto sc_details = sc.local().get_snapshot_details().get0();
+        BOOST_REQUIRE_EQUAL(sc_details.size(), 1);
+
+        auto sc_sd_vec = sc_details["test"];
+        BOOST_REQUIRE_EQUAL(sc_sd_vec.size(), 1);
+        const auto &sc_sd = sc_sd_vec[0];
+        BOOST_REQUIRE_EQUAL(sc_sd.ks, "ks");
+        BOOST_REQUIRE_EQUAL(sc_sd.cf, "cf");
+        BOOST_REQUIRE_EQUAL(sc_sd.live, sd.live);
+        BOOST_REQUIRE_EQUAL(sc_sd.total, sd.total);
+
+        lister::scan_dir(fs::path(cf.dir()), { directory_entry_type::regular }, [] (fs::path parent_dir, directory_entry de) {
+            fs::remove(parent_dir / de.name);
+            return make_ready_future<>();
+        }).get();
+
+        auto sd_post_deletion = cf.get_snapshot_details().get0().at("test");
+
+        BOOST_REQUIRE_EQUAL(sd_post_deletion.total, sd_post_deletion.live);
+        BOOST_REQUIRE_EQUAL(sd.total, sd_post_deletion.live);
+
+        sc_details = sc.local().get_snapshot_details().get0();
+        auto sc_sd_post_deletion_vec = sc_details["test"];
+        BOOST_REQUIRE_EQUAL(sc_sd_post_deletion_vec.size(), 1);
+        const auto &sc_sd_post_deletion = sc_sd_post_deletion_vec[0];
+        BOOST_REQUIRE_EQUAL(sc_sd_post_deletion.ks, "ks");
+        BOOST_REQUIRE_EQUAL(sc_sd_post_deletion.cf, "cf");
+        BOOST_REQUIRE_EQUAL(sc_sd_post_deletion.live, sd_post_deletion.live);
+        BOOST_REQUIRE_EQUAL(sc_sd_post_deletion.total, sd_post_deletion.total);
+
+        return make_ready_future<>();
+    });
+}
+
+SEASTAR_TEST_CASE(test_snapshot_ctl_true_snapshots_size) {
+    return do_with_some_data([] (cql_test_env& e) {
+        sharded<db::snapshot_ctl> sc;
+        sc.start(std::ref(e.db())).get();
+        auto stop_sc = deferred_stop(sc);
+
+        auto& cf = e.local_db().find_column_family("ks", "cf");
+        take_snapshot(e).get();
+
+        auto details = cf.get_snapshot_details().get0();
+        BOOST_REQUIRE_EQUAL(details.size(), 1);
+
+        auto sd = details["test"];
+        BOOST_REQUIRE_EQUAL(sd.live, 0);
+        BOOST_REQUIRE_GT(sd.total, 0);
+
+        auto sc_live_size = sc.local().true_snapshots_size().get0();
+        BOOST_REQUIRE_EQUAL(sc_live_size, sd.live);
+
+        lister::scan_dir(fs::path(cf.dir()), { directory_entry_type::regular }, [] (fs::path parent_dir, directory_entry de) {
+            fs::remove(parent_dir / de.name);
+            return make_ready_future<>();
+        }).get();
+
+        auto sd_post_deletion = cf.get_snapshot_details().get0().at("test");
+
+        BOOST_REQUIRE_EQUAL(sd_post_deletion.total, sd_post_deletion.live);
+        BOOST_REQUIRE_EQUAL(sd.total, sd_post_deletion.live);
+
+        sc_live_size = sc.local().true_snapshots_size().get0();
+        BOOST_REQUIRE_EQUAL(sc_live_size, sd_post_deletion.live);
+
+        return make_ready_future<>();
+    });
+}
 
 // toppartitions_query caused a lw_shared_ptr to cross shards when moving results, #5104
 SEASTAR_TEST_CASE(toppartitions_cross_shard_schema_ptr) {
