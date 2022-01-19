@@ -90,6 +90,11 @@ database::get_keyspaces() const {
     return _ops->get_keyspaces(*this);
 }
 
+std::vector<table>
+database::get_tables() const {
+    return _ops->get_tables(*this);
+}
+
 std::optional<table>
 database::try_find_table(std::string_view ks, std::string_view table) const {
     return _ops->try_find_table(*this, ks, table);

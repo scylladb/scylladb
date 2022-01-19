@@ -116,6 +116,7 @@ public:
     std::optional<keyspace> try_find_keyspace(std::string_view name) const;
     bool has_keyspace(std::string_view name) const;  // throws no_keyspace
     std::vector<keyspace> get_keyspaces() const;
+    std::vector<table> get_tables() const;
     table find_table(std::string_view ks, std::string_view table) const;  // throws no_such_column_family
     table find_column_family(utils::UUID uuid) const;  // throws no_such_column_family
     schema_ptr find_schema(std::string_view ks, std::string_view table) const;  // throws no_such_column_family

@@ -2309,6 +2309,15 @@ public:
         }
         return ret;
     }
+    virtual std::vector<data_dictionary::table> get_tables(data_dictionary::database db) const override {
+        std::vector<data_dictionary::table> ret;
+        auto&& tables = unwrap(db).get_column_families();
+        ret.reserve(tables.size());
+        for (auto&& [uuid, cf] : tables) {
+            ret.push_back(wrap(*cf));
+        }
+        return ret;
+    }
     virtual std::optional<data_dictionary::table> try_find_table(data_dictionary::database db, std::string_view ks, std::string_view table) const override {
         try {
             return wrap(unwrap(db).find_column_family(ks, table));

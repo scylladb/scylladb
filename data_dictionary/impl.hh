@@ -32,6 +32,7 @@ public:
     virtual ~impl();
     virtual std::optional<keyspace> try_find_keyspace(database db, std::string_view name) const = 0;
     virtual std::vector<keyspace> get_keyspaces(database db) const = 0;
+    virtual std::vector<table> get_tables(database db) const = 0;
     virtual std::optional<table> try_find_table(database db, std::string_view ks, std::string_view tab) const = 0;
     virtual std::optional<table> try_find_table(database db, utils::UUID id) const = 0;
     virtual const secondary_index::secondary_index_manager& get_index_manager(table t) const = 0;
