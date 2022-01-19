@@ -43,6 +43,7 @@
 #include "service/pager/query_pagers.hh"
 #include "gms/feature_service.hh"
 #include "sstables/types.hh"
+#include "mutation.hh"
 #include "types.hh"
 #include "types/map.hh"
 #include "utils/rjson.hh"
@@ -74,7 +75,7 @@ static const sstring TTL_TAG_KEY("system:ttl_attribute");
 
 future<executor::request_return_type> executor::update_time_to_live(client_state& client_state, service_permit permit, rjson::value request) {
     _stats.api_operations.update_time_to_live++;
-    if (!_proxy.get_db().local().features().cluster_supports_alternator_ttl()) {
+    if (!_proxy.data_dictionary().features().cluster_supports_alternator_ttl()) {
         co_return api_error::unknown_operation("UpdateTimeToLive not yet supported. Experimental support is available if the 'alternator-ttl' experimental feature is enabled on all nodes.");
     }
 
@@ -128,7 +129,7 @@ future<executor::request_return_type> executor::update_time_to_live(client_state
 
 future<executor::request_return_type> executor::describe_time_to_live(client_state& client_state, service_permit permit, rjson::value request) {
     _stats.api_operations.describe_time_to_live++;
-    if (!_proxy.get_db().local().features().cluster_supports_alternator_ttl()) {
+    if (!_proxy.data_dictionary().features().cluster_supports_alternator_ttl()) {
         co_return api_error::unknown_operation("DescribeTimeToLive not yet supported. Experimental support is available if the 'alternator_ttl' experimental feature is enabled on all nodes.");
     }
     schema_ptr schema = get_table(_proxy, request);
@@ -178,7 +179,7 @@ future<executor::request_return_type> executor::describe_time_to_live(client_sta
 // like user deletions, will also appear on the CDC log and therefore
 // Alternator Streams if enabled (FIXME: explain how we mark the
 // deletion different from user deletes. We don't do it yet.).
-expiration_service::expiration_service(replica::database& db, service::storage_proxy& proxy)
+expiration_service::expiration_service(data_dictionary::database db, service::storage_proxy& proxy)
         : _db(db)
         , _proxy(proxy)
 {
@@ -642,7 +643,7 @@ static future<> scan_table_ranges(
 // reboot.
 static future<bool> scan_table(
     service::storage_proxy& proxy,
-    replica::database& db,
+    data_dictionary::database db,
     schema_ptr s,
     abort_source& abort_source,
     named_semaphore& page_sem)
@@ -694,7 +695,7 @@ static future<bool> scan_table(
     // FIXME: consider if we should ask the scan without caching?
     // can we use cache but not fill it?
     scan_ranges_context scan_ctx{s, proxy, std::move(column_name), std::move(member)};
-    token_ranges_owned_by_this_shard<primary> my_ranges(db, s);
+    token_ranges_owned_by_this_shard<primary> my_ranges(db.real_database(), s);
     while (std::optional<dht::partition_range> range = my_ranges.next_partition_range()) {
         // Note that because of issue #9167 we need to run a separate
         // query on each partition range, and can't pass several of
@@ -714,7 +715,7 @@ static future<bool> scan_table(
     // by tasking another node to take over scanning of the dead node's primary
     // ranges. What we do here is that this node will also check expiration
     // on its *secondary* ranges - but only those whose primary owner is down.
-    token_ranges_owned_by_this_shard<secondary> my_secondary_ranges(db, s);
+    token_ranges_owned_by_this_shard<secondary> my_secondary_ranges(db.real_database(), s);
     while (std::optional<dht::partition_range> range = my_secondary_ranges.next_partition_range()) {
         dht::partition_range_vector partition_ranges;
         partition_ranges.push_back(std::move(*range));
@@ -731,12 +732,12 @@ future<> expiration_service::run() {
     // also need to notice when a new table is added, a table is
     // deleted or when ttl is enabled or disabled for a table!
     for (;;) {
-        // _db.get_column_families() may change under our feet during a
+        // _db.tables() may change under our feet during a
         // long-living loop, so we must keep our own copy of the list of
         // schemas.
         std::vector<schema_ptr> schemas;
-        for (const auto& cf : _db.get_column_families()) {
-            schemas.push_back(cf.second->schema());
+        for (auto cf : _db.get_tables()) {
+            schemas.push_back(cf.schema());
         }
         for (schema_ptr s : schemas) {
             co_await coroutine::maybe_yield();

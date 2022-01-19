@@ -34,7 +34,6 @@
 #include "service/storage_proxy.hh"
 #include "alternator/executor.hh"
 #include "cql3/selection/selection.hh"
-#include "replica/database.hh"
 #include "query-result-set.hh"
 #include "cql3/result_set.hh"
 #include <seastar/core/coroutine.hh>
@@ -137,7 +136,7 @@ std::string get_signature(std::string_view access_key_id, std::string_view secre
 }
 
 future<std::string> get_key_from_roles(service::storage_proxy& proxy, std::string username) {
-    schema_ptr schema = proxy.get_db().local().find_schema("system_auth", "roles");
+    schema_ptr schema = proxy.data_dictionary().find_schema("system_auth", "roles");
     partition_key pk = partition_key::from_single_value(*schema, utf8_type->decompose(username));
     dht::partition_range_vector partition_ranges{dht::partition_range(dht::decorate_key(*schema, pk))};
     std::vector<query::clustering_range> bounds{query::clustering_range::make_open_ended_both_sides()};

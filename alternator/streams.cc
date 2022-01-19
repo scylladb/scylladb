@@ -28,7 +28,6 @@
 
 #include "utils/base64.hh"
 #include "log.hh"
-#include "replica/database.hh"
 #include "db/config.hh"
 
 #include "cdc/log.hh"
@@ -155,8 +154,8 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
     auto limit = rjson::get_opt<int>(request, "Limit").value_or(std::numeric_limits<int>::max());
     auto streams_start = rjson::get_opt<stream_arn>(request, "ExclusiveStartStreamArn");
     auto table = find_table(_proxy, request);
-    auto& db = _proxy.get_db().local();
-    auto& cfs = db.get_column_families();
+    auto db = _proxy.data_dictionary();
+    auto cfs = db.get_tables();
     auto i = cfs.begin();
     auto e = cfs.end();
 
@@ -169,10 +168,10 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
     // between queries may or may not miss info. But that should be rare,
     // and we can probably expect this to be a single call.
     if (streams_start) {
-        i = std::find_if(i, e, [&](const std::pair<utils::UUID, lw_shared_ptr<replica::column_family>>& p) {
-            return p.first == streams_start 
-                && cdc::get_base_table(db, *p.second->schema())
-                && is_alternator_keyspace(p.second->schema()->ks_name())
+        i = std::find_if(i, e, [&](data_dictionary::table t) {
+            return t.schema()->id() == streams_start 
+                && cdc::get_base_table(db.real_database(), *t.schema())
+                && is_alternator_keyspace(t.schema()->ks_name())
                 ;
         });
         if (i != e) {
@@ -186,7 +185,7 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
     std::optional<stream_arn> last;
 
     for (;limit > 0 && i != e; ++i) {
-        auto s = i->second->schema();
+        auto s = i->schema();
         auto& ks_name = s->ks_name();
         auto& cf_name = s->cf_name();
 
@@ -196,14 +195,14 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
         if (table && ks_name != table->ks_name()) {
             continue;
         }
-        if (cdc::is_log_for_some_table(db, ks_name, cf_name)) {
-            if (table && table != cdc::get_base_table(db, *s)) {
+        if (cdc::is_log_for_some_table(db.real_database(), ks_name, cf_name)) {
+            if (table && table != cdc::get_base_table(db.real_database(), *s)) {
                 continue;
             }
 
             rjson::value new_entry = rjson::empty_object();
 
-            last = i->first;
+            last = i->schema()->id();
             rjson::add(new_entry, "StreamArn", *last);
             rjson::add(new_entry, "StreamLabel", rjson::from_string(stream_label(*s)));
             rjson::add(new_entry, "TableName", rjson::from_string(cdc::base_name(table_name(*s))));
@@ -424,7 +423,7 @@ using namespace std::string_literals;
  * This will be a partial overlap, but it is the best we can do.
  */
 
-static std::chrono::seconds confidence_interval(const replica::database& db) {
+static std::chrono::seconds confidence_interval(data_dictionary::database db) {
     return std::chrono::seconds(db.get_config().alternator_streams_time_window_s());
 }
 
@@ -442,12 +441,12 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
     auto stream_arn = rjson::get<alternator::stream_arn>(request, "StreamArn");
 
     schema_ptr schema, bs;
-    auto& db = _proxy.get_db().local();
+    auto db = _proxy.data_dictionary();
 
     try {
-        auto& cf = db.find_column_family(stream_arn);
+        auto cf = db.find_column_family(stream_arn);
         schema = cf.schema();
-        bs = cdc::get_base_table(_proxy.get_db().local(), *schema);
+        bs = cdc::get_base_table(db.real_database(), *schema);
     } catch (...) {        
     }
  
@@ -726,18 +725,18 @@ future<executor::request_return_type> executor::get_shard_iterator(client_state&
     }
 
     auto stream_arn = rjson::get<alternator::stream_arn>(request, "StreamArn");
-    auto& db = _proxy.get_db().local();
+    auto db = _proxy.data_dictionary();
     
     schema_ptr schema = nullptr;
     std::optional<shard_id> sid;
 
     try {
-        auto& cf = db.find_column_family(stream_arn);
+        auto cf = db.find_column_family(stream_arn);
         schema = cf.schema();
         sid = rjson::get<shard_id>(request, "ShardId");
     } catch (...) {
     }
-    if (!schema || !cdc::get_base_table(db, *schema) || !is_alternator_keyspace(schema->ks_name())) {
+    if (!schema || !cdc::get_base_table(db.real_database(), *schema) || !is_alternator_keyspace(schema->ks_name())) {
         throw api_error::resource_not_found("Invalid StreamArn");
     }
     if (!sid) {
@@ -814,12 +813,12 @@ future<executor::request_return_type> executor::get_records(client_state& client
         throw api_error::validation("Limit must be 1 or more");
     }
 
-    auto& db = _proxy.get_db().local();
+    auto db = _proxy.data_dictionary();
     schema_ptr schema, base;
     try {
-        auto& log_table = db.find_column_family(iter.table);
+        auto log_table = db.find_column_family(iter.table);
         schema = log_table.schema();
-        base = cdc::get_base_table(db, *schema);
+        base = cdc::get_base_table(db.real_database(), *schema);
     } catch (...) {        
     }
 
@@ -1057,7 +1056,7 @@ void executor::add_stream_options(const rjson::value& stream_specification, sche
     }
 
     if (stream_enabled->GetBool()) {
-        auto& db = sp.get_db().local();
+        auto db = sp.data_dictionary();
 
         if (!db.features().cluster_supports_cdc()) {
             throw api_error::validation("StreamSpecification: streams (CDC) feature not enabled in cluster.");
@@ -1097,8 +1096,8 @@ void executor::add_stream_options(const rjson::value& stream_specification, sche
 void executor::supplement_table_stream_info(rjson::value& descr, const schema& schema, service::storage_proxy& sp) {
     auto& opts = schema.cdc_options();
     if (opts.enabled()) {
-        auto& db = sp.get_db().local();
-        auto& cf = db.find_column_family(schema.ks_name(), cdc::log_name(schema.cf_name()));
+        auto db = sp.data_dictionary();
+        auto cf = db.find_table(schema.ks_name(), cdc::log_name(schema.cf_name()));
         stream_arn arn(cf.schema()->id());
         rjson::add(descr, "LatestStreamArn", arn);
         rjson::add(descr, "LatestStreamLabel", rjson::from_string(stream_label(*cf.schema())));

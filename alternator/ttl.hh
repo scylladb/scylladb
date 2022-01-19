@@ -40,7 +40,7 @@ namespace alternator {
 // items in all tables with per-item expiration enabled. Currently, this means
 // Alternator tables with TTL configured via a UpdateTimeToLeave request.
 class expiration_service final : public seastar::peering_sharded_service<expiration_service> {
-    replica::database& _db;
+    data_dictionary::database _db;
     service::storage_proxy& _proxy;
     // _end is set by start(), and resolves when the the background service
     // started by it ends. To ask the background service to end, _abort_source
@@ -54,7 +54,7 @@ public:
     // sharded_service<expiration_service>::start() creates this object on
     // all shards, so calls this constructor on each shard. Later, the
     // additional start() function should be invoked on all shards.
-    expiration_service(replica::database&, service::storage_proxy&);
+    expiration_service(data_dictionary::database, service::storage_proxy&);
     future<> start();
     future<> run();
     // sharded_service<expiration_service>::stop() calls the following stop()

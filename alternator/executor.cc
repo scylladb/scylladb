@@ -27,9 +27,9 @@
 #include "alternator/executor.hh"
 #include "log.hh"
 #include "schema_builder.hh"
+#include "data_dictionary/keyspace_metadata.hh"
 #include "exceptions/exceptions.hh"
 #include "timestamp.hh"
-#include "replica/database.hh"
 #include "types/map.hh"
 #include "schema.hh"
 #include "query-request.hh"
@@ -222,8 +222,8 @@ schema_ptr executor::find_table(service::storage_proxy& proxy, const rjson::valu
         return nullptr;
     }
     try {
-        return proxy.get_db().local().find_schema(sstring(executor::KEYSPACE_NAME_PREFIX) + sstring(*table_name), *table_name);
-    } catch(replica::no_such_column_family&) {
+        return proxy.data_dictionary().find_schema(sstring(executor::KEYSPACE_NAME_PREFIX) + sstring(*table_name), *table_name);
+    } catch(data_dictionary::no_such_column_family&) {
         throw api_error::resource_not_found(
                 format("Requested resource not found: Table: {} not found", *table_name));
     }
@@ -239,7 +239,7 @@ schema_ptr get_table(service::storage_proxy& proxy, const rjson::value& request)
     return schema;
 }
 
-static std::tuple<bool, std::string_view, std::string_view> try_get_internal_table(std::string_view table_name) {
+static std::tuple<bool, std::string_view, std::string_view> try_get_internal_table(data_dictionary::database db, std::string_view table_name) {
     size_t it = table_name.find(executor::INTERNAL_TABLE_PREFIX);
     if (it != 0) {
         return {false, "", ""};
@@ -252,7 +252,8 @@ static std::tuple<bool, std::string_view, std::string_view> try_get_internal_tab
     std::string_view ks_name = table_name.substr(0, delim);
     table_name.remove_prefix(ks_name.size() + 1);
     // Only internal keyspaces can be accessed to avoid leakage
-    if (!is_internal_keyspace(ks_name)) {
+    auto ks = db.try_find_keyspace(ks_name);
+    if (!ks || !ks->is_internal()) {
         return {false, "", ""};
     }
     return {true, ks_name, table_name};
@@ -268,11 +269,11 @@ get_table_or_view(service::storage_proxy& proxy, const rjson::value& request) {
     table_or_view_type type = table_or_view_type::base;
     std::string table_name = get_table_name(request);
 
-    auto [is_internal_table, internal_ks_name, internal_table_name] = try_get_internal_table(table_name);
+    auto [is_internal_table, internal_ks_name, internal_table_name] = try_get_internal_table(proxy.data_dictionary(), table_name);
     if (is_internal_table) {
         try {
-            return { proxy.get_db().local().find_schema(sstring(internal_ks_name), sstring(internal_table_name)), type };
-        } catch (replica::no_such_column_family&) {
+            return { proxy.data_dictionary().find_schema(sstring(internal_ks_name), sstring(internal_table_name)), type };
+        } catch (data_dictionary::no_such_column_family&) {
             throw api_error::resource_not_found(
                 format("Requested resource not found: Internal table: {}.{} not found", internal_ks_name, internal_table_name));
         }
@@ -291,20 +292,20 @@ get_table_or_view(service::storage_proxy& proxy, const rjson::value& request) {
                     format("Non-string IndexName '{}'", index_name->GetString()));
         }
         // If no tables for global indexes were found, the index may be local
-        if (!proxy.get_db().local().has_schema(keyspace_name, table_name)) {
+        if (!proxy.data_dictionary().has_schema(keyspace_name, table_name)) {
             type = table_or_view_type::lsi;
             table_name = lsi_name(orig_table_name, index_name->GetString());
         }
     }
 
     try {
-        return { proxy.get_db().local().find_schema(keyspace_name, table_name), type };
-    } catch(replica::no_such_column_family&) {
+        return { proxy.data_dictionary().find_schema(keyspace_name, table_name), type };
+    } catch(data_dictionary::no_such_column_family&) {
         if (index_name) {
             // DynamoDB returns a different error depending on whether the
             // base table doesn't exist (ResourceNotFoundException) or it
             // does exist but the index does not (ValidationException).
-            if (proxy.get_db().local().has_schema(keyspace_name, orig_table_name)) {
+            if (proxy.data_dictionary().has_schema(keyspace_name, orig_table_name)) {
                 throw api_error::validation(
                     format("Requested resource not found: Index '{}' for table '{}'", index_name->GetString(), orig_table_name));
             } else {
@@ -448,7 +449,7 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
     // Add base table's KeySchema and collect types for AttributeDefinitions:
     describe_key_schema(table_description, *schema, key_attribute_types);
 
-    replica::table& t = _proxy.get_db().local().find_column_family(schema);
+    data_dictionary::table t = _proxy.data_dictionary().find_column_family(schema);
     if (!t.views().empty()) {
         rjson::value gsi_array = rjson::empty_array();
         rjson::value lsi_array = rjson::empty_array();
@@ -508,7 +509,7 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
     co_await _mm.container().invoke_on(0, [&] (service::migration_manager& mm) -> future<> {
         co_await mm.schema_read_barrier();
 
-        if (!p.local().get_db().local().has_schema(keyspace_name, table_name)) {
+        if (!p.local().data_dictionary().has_schema(keyspace_name, table_name)) {
             throw api_error::resource_not_found(format("Requested resource not found: Table: {} not found", table_name));
         }
 
@@ -627,8 +628,8 @@ static schema_ptr get_table_from_arn(service::storage_proxy& proxy, std::string_
         size_t table_start = arn.find_last_of('/');
         std::string_view table_name = arn.substr(table_start + 1);
         // FIXME: remove sstring creation once find_schema gains a view-based interface
-        return proxy.get_db().local().find_schema(sstring(keyspace_name), sstring(table_name));
-    } catch (const replica::no_such_column_family& e) {
+        return proxy.data_dictionary().find_schema(sstring(keyspace_name), sstring(table_name));
+    } catch (const data_dictionary::no_such_column_family& e) {
         throw api_error::access_denied("Incorrect resource identifier");
     } catch (const std::out_of_range& e) {
         throw api_error::access_denied("Incorrect resource identifier");
@@ -1770,8 +1771,8 @@ static schema_ptr get_table_from_batch_request(const service::storage_proxy& pro
     sstring table_name = batch_request->name.GetString(); // JSON keys are always strings
     validate_table_name(table_name);
     try {
-        return proxy.get_db().local().find_schema(sstring(executor::KEYSPACE_NAME_PREFIX) + table_name, table_name);
-    } catch(replica::no_such_column_family&) {
+        return proxy.data_dictionary().find_schema(sstring(executor::KEYSPACE_NAME_PREFIX) + table_name, table_name);
+    } catch(data_dictionary::no_such_column_family&) {
         throw api_error::resource_not_found(format("Requested resource not found: Table: {} not found", table_name));
     }
 }
@@ -1909,7 +1910,7 @@ static future<> do_batch_write(service::storage_proxy& proxy,
                     return do_with(cs.get(), [&proxy, mb = std::move(mb), dk = std::move(dk), ks = std::move(ks), cf = std::move(cf),
                                               trace_state = tracing::trace_state_ptr(gt)]
                                               (service::client_state& client_state) mutable {
-                        auto schema = proxy.get_db().local().find_schema(ks, cf);
+                        auto schema = proxy.data_dictionary().find_schema(ks, cf);
                         //FIXME: A corresponding FIXME can be found in transport/server.cc when a message must be bounced
                         // to another shard - once it is solved, this place can use a similar solution. Instead of passing
                         // empty_service_permit() to the background operation, the current permit's lifetime should be prolonged,
@@ -4109,13 +4110,13 @@ future<executor::request_return_type> executor::list_tables(client_state& client
         return make_ready_future<request_return_type>(api_error::validation("Limit must be greater than 0 and no greater than 100"));
     }
 
-    auto table_names = _proxy.get_db().local().get_column_families()
-            | boost::adaptors::map_values
-            | boost::adaptors::filtered([] (const lw_shared_ptr<replica::table>& t) {
-                        return t->schema()->ks_name().find(KEYSPACE_NAME_PREFIX) == 0 && !t->schema()->is_view();
+    auto tables = _proxy.data_dictionary().get_tables(); // hold on to temporary, table_names isn't a container, it's a view
+    auto table_names = tables
+            | boost::adaptors::filtered([] (data_dictionary::table t) {
+                        return t.schema()->ks_name().find(KEYSPACE_NAME_PREFIX) == 0 && !t.schema()->is_view();
                     })
-            | boost::adaptors::transformed([] (const lw_shared_ptr<replica::table>& t) {
-                        return t->schema()->cf_name();
+            | boost::adaptors::transformed([] (data_dictionary::table t) {
+                        return t.schema()->cf_name();
                     });
 
     rjson::value response = rjson::empty_object();
