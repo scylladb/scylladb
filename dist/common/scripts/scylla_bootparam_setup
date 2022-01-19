@@ -8,52 +8,14 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 import os
-import re
 import sys
 import argparse
-from scylla_util import *
-from subprocess import run
+
+# keep this script just for compatibility.
 
 if __name__ == '__main__':
-    if os.getuid() > 0:
-        print('Requires root permission.')
-        sys.exit(1)
     parser = argparse.ArgumentParser(description='Optimize boot parameter settings for Scylla.')
     parser.add_argument('--ami', action='store_true', default=False,
                         help='setup AMI instance')
     args = parser.parse_args()
-
-    if not args.ami:
-        sys.exit(0)
-    if not os.path.exists('/etc/default/grub') and not os.path.exists('/boot/grub/menu.lst'):
-        print('Unsupported bootloader')
-        sys.exit(1)
-
-    if os.path.exists('/etc/default/grub'):
-        cfg = sysconfig_parser('/etc/default/grub')
-        for k in ['GRUB_CMDLINE_LINUX', 'GRUB_CMDLINE_LINUX_DEFAULT']:
-            if cfg.has_option(k):
-                grub_key = k
-                break
-        if not grub_key:
-            print('GRUB_CMDLINE_LINUX does not found in /etc/default/grub')
-            sys.exit(1)
-
-        cmdline_linux = cfg.get(grub_key)
-        if len(re.findall(r'.*clocksource', cmdline_linux)) == 0:
-            cmdline_linux += ' clocksource=tsc tsc=reliable'
-            cfg.set(grub_key, cmdline_linux)
-            cfg.commit()
-            if is_debian_variant():
-                run('update-grub', shell=True, check=True)
-            else:
-                run('grub2-mkconfig -o /boot/grub2/grub.cfg', shell=True, check=True)
-
-#    if is_ec2() and os.path.exists('/boot/grub/menu.lst'):
-    if os.path.exists('/boot/grub/menu.lst'):
-        with open('/boot/grub/menu.lst') as f:
-            cur = f.read()
-        if len(re.findall(r'^\s*kernel.*clocksource', cur, flags=re.MULTILINE)) == 0:
-            new = re.sub(r'(^\s*kernel.*)', r'\1 clocksource=tsc tsc=reliable ', cur, flags=re.MULTILINE)
-            with open('/boot/grub/menu.lst', 'w') as f:
-                f.write(new)
+    sys.exit(0)
