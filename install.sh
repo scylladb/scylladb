@@ -398,7 +398,7 @@ if $supervisor; then
     install -m755 dist/common/supervisor/* -Dt "$rprefix"/supervisor
 fi
 
-SBINFILES=$(cd dist/common/scripts/; ls scylla_*setup node_health_check scylla_ec2_check scylla_kernel_check)
+SBINFILES=$(cd dist/common/scripts/; ls scylla_*setup node_health_check scylla_kernel_check)
 SBINFILES+=" $(cd seastar/scripts; ls seastar-cpu-map.sh)"
 
 cat << EOS > "$rprefix"/scripts/scylla_product.py

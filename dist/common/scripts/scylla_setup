@@ -281,7 +281,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     if not interactive:
-        if not args.no_sysconfig_setup or (is_ec2() and not args.no_ec2_check):
+        if not args.no_sysconfig_setup:
             if args.nic:
                 if not is_valid_nic(args.nic):
                     print('NIC {} doesn\'t exist.'.format(args.nic))
@@ -304,7 +304,6 @@ if __name__ == '__main__':
     enable_service = not args.no_enable_service
     if is_redhat_variant():
         selinux_setup = not args.no_selinux_setup
-    bootparam_setup = not args.no_bootparam_setup
     ntp_setup = not args.no_ntp_setup
     raid_setup = not args.no_raid_setup
     raid_level_5 = args.raid_level_5
@@ -328,14 +327,6 @@ if __name__ == '__main__':
 
     def interactive_ask_service(msg1, msg2, default = None):
         return when_interactive_ask_service(interactive, msg1, msg2, default)
-
-    if is_ec2():
-        ec2_check = interactive_ask_service('Do you want to run Amazon EC2 configuration check?', 'Yes - runs a script to verify that this instance is optimized for running Scylla. No - skips the configuration check.', ec2_check)
-        args.no_ec2_check = not ec2_check
-        if ec2_check:
-            if interactive:
-                args.nic = interactive_choose_nic()
-            run('{}/scylla_ec2_check --nic {}'.format(scriptsdir(), args.nic), shell=True, check=True)
 
     if not is_nonroot():
         kernel_check = interactive_ask_service('Do you want to run check your kernel version?', 'Yes - runs a  script to verify that the kernel for this instance qualifies to run Scylla. No - skips the kernel check.', kernel_check)
@@ -402,12 +393,6 @@ if __name__ == '__main__':
                 res = run_setup_script('SELinux', 'scylla_selinux_setup')
                 if res != 0:
                     selinux_reboot_required=True
-
-        if args.ami:
-            bootparam_setup = interactive_ask_service('Do you want set clock source as bootloader option?', 'Yes - set clock source at boot time. No - skips this step.', bootparam_setup)
-            args.no_bootparam_setup = not bootparam_setup
-            if bootparam_setup:
-                run_setup_script('boot parameter', 'scylla_bootparam_setup --ami')
 
         ntp_setup = interactive_ask_service('Do you want to setup Network Time Protocol(NTP) to auto-synchronize the current time on the node?', 'Yes - enables time-synchronization. This keeps the correct time on the node. No - skips this step.', ntp_setup)
         args.no_ntp_setup = not ntp_setup
