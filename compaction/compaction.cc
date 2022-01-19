@@ -1128,9 +1128,9 @@ private:
 
 public:
     cleanup_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata, compaction_type_options::cleanup opts)
-        : cleanup_compaction(table_s, std::move(descriptor), cdata, opts.owned_ranges) {}
+        : cleanup_compaction(table_s, std::move(descriptor), cdata, std::move(opts.owned_ranges)) {}
     cleanup_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata, compaction_type_options::upgrade opts)
-        : cleanup_compaction(table_s, std::move(descriptor), cdata, opts.owned_ranges) {}
+        : cleanup_compaction(table_s, std::move(descriptor), cdata, std::move(opts.owned_ranges)) {}
 
     flat_mutation_reader_v2 make_sstable_reader() const override {
         return make_filtering_reader(regular_compaction::make_sstable_reader(), make_partition_filter());
