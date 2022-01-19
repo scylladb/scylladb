@@ -1,4 +1,4 @@
-Single-node functional tests for Scylla's CQL features.
+# Single-node functional tests for Scylla's CQL features.
 
 These tests use the Python CQL library and the pytest frameworks.
 By using an actual CQL library for the tests, they can be run against *any*
@@ -8,7 +8,7 @@ Cassandra in most features.
 
 To run all tests against an already-running local installation of Scylla
 or Cassandra on localhost, just run `pytest`. The "--host" and "--port"
-can be used to give a different location for the running Scylla or Cassanra.
+can be used to give a different location for the running Scylla or Cassandra.
 The "--ssl" option can be used to use an encrypted (TLSv1.2) connection.
 
 More conveniently, we have two scripts - "run" and "run-cassandra" - which
@@ -37,8 +37,14 @@ to control which tests to run:
   once, and also counts for you how many of the runs failed.
   For `pytest` to support the `--count` option, you need to install a
   pytest extension: `pip install pytest-repeat`
+* Additional useful pytest options, especially useful for debugging tests:
+  * -v: show the names of each individual test running instead of just dots.
+  * -s: show the full output of running tests (by default, pytest captures the test's output and only displays it if a test fails)
 
-Additional useful pytest options, especially useful for debugging tests:
+### How to run from PyCharm IDE
+* Create pytest config
+* Under `target` select `Module name`
+ * filename - to run all tests in the file (`test_keyspace`) 
+ * filename.testname - to run specific test (`test_keyspace.test_concurrent_create_and_drop_keyspace`) 
+* Add additional params under `Additional Arguments`
 
-* -v: show the names of each individual test running instead of just dots.
-* -s: show the full output of running tests (by default, pytest captures the test's output and only displays it if a test fails)
