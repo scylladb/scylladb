@@ -1391,7 +1391,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 // start this outside the Alternator if().
                 if (cfg->check_experimental(db::experimental_features_t::ALTERNATOR_TTL)) {
                     supervisor::notify("starting the expiration service");
-                    es.start(std::ref(db), std::ref(proxy)).get();
+                    es.start(seastar::sharded_parameter([] (const replica::database& db) { return db.as_data_dictionary(); }, std::ref(db)),
+                             std::ref(proxy)).get();
                     stop_expiration_service = defer_verbose_shutdown("expiration service", [&es] {
                         es.stop().get();
                     });

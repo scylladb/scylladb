@@ -2294,6 +2294,15 @@ public:
         }
         return ret;
     }
+    virtual std::vector<data_dictionary::table> get_tables(data_dictionary::database db) const override {
+        std::vector<data_dictionary::table> ret;
+        auto&& tables = unwrap(db).get_column_families();
+        ret.reserve(tables.size());
+        for (auto&& [uuid, cf] : tables) {
+            ret.push_back(wrap(*cf));
+        }
+        return ret;
+    }
     virtual std::optional<data_dictionary::table> try_find_table(data_dictionary::database db, std::string_view ks, std::string_view table) const override {
         try {
             return wrap(unwrap(db).find_column_family(ks, table));
@@ -2322,6 +2331,9 @@ public:
     }
     virtual const locator::abstract_replication_strategy& get_replication_strategy(data_dictionary::keyspace ks) const override {
         return unwrap(ks).get_replication_strategy();
+    }
+    virtual bool is_internal(data_dictionary::keyspace ks) const override {
+        return is_internal_keyspace(unwrap(ks).metadata()->name());
     }
     virtual sstring get_available_index_name(data_dictionary::database db, std::string_view ks_name, std::string_view table_name,
             std::optional<sstring> index_name_root) const override {

@@ -43,6 +43,11 @@ keyspace::user_types() const {
     return metadata()->user_types();
 }
 
+bool
+keyspace::is_internal() const {
+    return _ops->is_internal(*this);
+}
+
 const locator::abstract_replication_strategy&
 keyspace::get_replication_strategy() const {
     return _ops->get_replication_strategy(*this);
@@ -70,6 +75,11 @@ database::find_keyspace(std::string_view name) const {
 std::vector<keyspace>
 database::get_keyspaces() const {
     return _ops->get_keyspaces(*this);
+}
+
+std::vector<table>
+database::get_tables() const {
+    return _ops->get_tables(*this);
 }
 
 std::optional<table>
