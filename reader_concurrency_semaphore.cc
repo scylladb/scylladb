@@ -236,6 +236,10 @@ public:
     }
 
     void release_base_resources() noexcept {
+        if (_base_resources_consumed) {
+            _resources -= _base_resources;
+            _base_resources_consumed = false;
+        }
         _semaphore.signal(std::exchange(_base_resources, {}));
     }
 
