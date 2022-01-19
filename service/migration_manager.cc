@@ -59,6 +59,7 @@ migration_manager::migration_manager(migration_notifier& notifier, gms::feature_
         , _schema_push([this] { return passive_announce(); })
         , _group0_read_apply_mutex{1}, _group0_operation_mutex{1}
         , _group0_history_gc_duration{std::chrono::duration_cast<gc_clock::duration>(std::chrono::weeks{1})}
+        , _concurrent_ddl_retries{10}
 {
 }
 

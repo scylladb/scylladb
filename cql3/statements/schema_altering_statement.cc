@@ -25,6 +25,8 @@ namespace cql3 {
 
 namespace statements {
 
+static logging::logger mylogger("schema_altering_statement");
+
 schema_altering_statement::schema_altering_statement(timeout_config_selector timeout_selector)
     : cf_statement(cf_name())
     , cql_statement_no_metadata(timeout_selector)
@@ -76,16 +78,29 @@ schema_altering_statement::execute0(query_processor& qp, service::query_state& s
                     std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls()));
     }
 
-    auto group0_guard = co_await mm.start_group0_operation();
+    auto retries = mm.get_concurrent_ddl_retries();
+    while (true) {
+        try {
+            auto group0_guard = co_await mm.start_group0_operation();
 
-    auto [ret, m] = co_await prepare_schema_mutations(qp, group0_guard.write_timestamp());
+            auto [ret, m] = co_await prepare_schema_mutations(qp, group0_guard.write_timestamp());
 
-    if (!m.empty()) {
-        // TODO: more specific description
-        co_await mm.announce(std::move(m), std::move(group0_guard), "CQL DDL statement");
+            if (!m.empty()) {
+                auto description = format("CQL DDL statement: \"{}\"", raw_cql_statement);
+                co_await mm.announce(std::move(m), std::move(group0_guard), description);
+            }
+
+            ce = std::move(ret);
+        } catch (const service::group0_concurrent_modification&) {
+            mylogger.warn("Failed to execute DDL statement \"{}\" due to concurrent group 0 modification.{}.",
+                    raw_cql_statement, retries ? " Retrying" : " Number of retries exceeded, giving up");
+            if (retries--) {
+                continue;
+            }
+            throw;
+        }
+        break;
     }
-
-    ce = std::move(ret);
 
     // If an IF [NOT] EXISTS clause was used, this may not result in an actual schema change.  To avoid doing
     // extra work in the drivers to handle schema changes, we return an empty message in this case. (CASSANDRA-7600)

@@ -104,6 +104,8 @@ private:
     semaphore _group0_operation_mutex;
 
     gc_clock::duration _group0_history_gc_duration;
+
+    size_t _concurrent_ddl_retries;
 public:
     migration_manager(migration_notifier&, gms::feature_service&, netw::messaging_service& ms, service::storage_proxy&, gms::gossiper& gossiper, service::raft_group_registry& raft_gr);
 
@@ -203,6 +205,10 @@ public:
     bool have_schema_agreement();
 
     void init_messaging_service();
+
+    // Maximum number of retries one should attempt when trying to perform
+    // a DDL statement and getting `group0_concurrent_modification` exception.
+    size_t get_concurrent_ddl_retries() const { return _concurrent_ddl_retries; }
 private:
     future<> uninit_messaging_service();
 
