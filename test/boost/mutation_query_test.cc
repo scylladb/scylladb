@@ -58,7 +58,7 @@ mutation_source make_source(std::vector<mutation> mutations) {
                 assert(m.schema() == s);
             }
         }
-        return make_flat_mutation_reader_from_mutations(s, std::move(permit), mutations, slice, fwd);
+        return make_flat_mutation_reader_from_mutations_v2(s, std::move(permit), mutations, slice, fwd);
     });
 }
 

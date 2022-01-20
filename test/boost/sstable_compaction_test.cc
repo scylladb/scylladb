@@ -3260,7 +3260,7 @@ SEASTAR_TEST_CASE(partial_sstable_run_filtered_out_test) {
 
         sstable_writer_config sst_cfg = env.manager().configure_writer();
         sst_cfg.run_identifier = partial_sstable_run_identifier;
-        auto partial_sstable_run_sst = make_sstable_easy(env, tmp.path(), make_flat_mutation_reader_from_mutations(s, env.make_reader_permit(), { std::move(mut) }), sst_cfg);
+        auto partial_sstable_run_sst = make_sstable_easy(env, tmp.path(), downgrade_to_v1(make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), { std::move(mut) })), sst_cfg);
 
         column_family_test(cf).add_sstable(partial_sstable_run_sst);
         column_family_test::update_sstables_known_generation(*cf, partial_sstable_run_sst->generation());

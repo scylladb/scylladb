@@ -103,7 +103,7 @@ SEASTAR_TEST_CASE(test_mutation_merger_conforms_to_mutation_source) {
                 for (int i = 0; i < n; ++i) {
                     muts.push_back(mutation(m.schema(), m.decorated_key()));
                 }
-                auto rd = make_flat_mutation_reader_from_mutations(s, semaphore.make_permit(), {m});
+                auto rd = downgrade_to_v1(make_flat_mutation_reader_from_mutations_v2(s, semaphore.make_permit(), {m}));
                 auto close_rd = deferred_close(rd);
                 rd.consume(fragment_scatterer{muts}).get();
                 for (int i = 0; i < n; ++i) {
@@ -394,7 +394,7 @@ SEASTAR_TEST_CASE(test_schema_upgrader_is_equivalent_with_mutation_upgrade) {
             if (m1.schema()->version() != m2.schema()->version()) {
                 // upgrade m1 to m2's schema
 
-                auto reader = transform(make_flat_mutation_reader_from_mutations(m1.schema(), semaphore.make_permit(), {m1}), schema_upgrader(m2.schema()));
+                auto reader = transform(downgrade_to_v1(make_flat_mutation_reader_from_mutations_v2(m1.schema(), semaphore.make_permit(), {m1})), schema_upgrader(m2.schema()));
                 auto close_reader = deferred_close(reader);
                 auto from_upgrader = read_mutation_from_flat_mutation_reader(reader).get0();
 
