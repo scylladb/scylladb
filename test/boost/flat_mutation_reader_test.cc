@@ -183,6 +183,21 @@ SEASTAR_TEST_CASE(test_flat_mutation_reader_consume_two_partitions) {
     });
 }
 
+static future<uint64_t> count_fragments_in_partition(flat_mutation_reader r) {
+    uint64_t nr = 0;
+    for (auto mf_opt = co_await r(); mf_opt; mf_opt = co_await r()) {
+        mf_opt->visit(overloaded_functor{
+            [&] (const partition_start&) {},
+            [&] (const partition_end&) {},
+            [&] (const static_row&) { ++nr; },
+            [&] (const clustering_row&) { ++nr; },
+            [&] (const range_tombstone&) { ++nr; }
+        });
+    }
+    co_await r.close();
+    co_return nr;
+}
+
 SEASTAR_TEST_CASE(test_fragmenting_and_freezing) {
     return seastar::async([] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
@@ -211,9 +226,7 @@ SEASTAR_TEST_CASE(test_fragmenting_and_freezing) {
             }, 1).get0();
 
             auto&& rows = m.partition().non_dummy_rows();
-            auto expected_fragments = std::distance(rows.begin(), rows.end())
-                                      + m.partition().row_tombstones().size()
-                                      + !m.partition().static_row().empty();
+            auto expected_fragments = count_fragments_in_partition(make_flat_mutation_reader_from_mutations(m.schema(), semaphore.make_permit(), { mutation(m) })).get();
             BOOST_REQUIRE_EQUAL(fms.size(), std::max(expected_fragments, size_t(1)));
             BOOST_REQUIRE(expected_fragments < 2 || *fragmented);
 
