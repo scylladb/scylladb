@@ -13,6 +13,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/future.hh>
+#include <seastar/core/lowres_clock.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <boost/multiprecision/cpp_int.hpp>
 
@@ -44,6 +45,7 @@
 #include "alternator/controller.hh"
 #include "alternator/serialization.hh"
 #include "dht/sharder.hh"
+#include "db/config.hh"
 
 #include "ttl.hh"
 
@@ -606,7 +608,7 @@ static future<> scan_table_ranges(
     }
 }
 
-// scan_table() scans data in one table "owned" by this shard, looking for
+// scan_table() scans, in one table, data "owned" by this shard, looking for
 // expired items and deleting them.
 // We consider each node to "own" its primary token ranges, i.e., the tokens
 // that this node is their first replica in the ring. Inside the node, each
@@ -634,6 +636,7 @@ static future<bool> scan_table(
 {
     // Check if an expiration-time attribute is enabled for this table.
     // If not, just return false immediately.
+    // FIXME: the setting of the TTL may change in the middle of a long scan!
     std::optional<std::string> attribute_name = find_tag(*s, TTL_TAG_KEY);
     if (!attribute_name) {
         co_return false;
@@ -716,6 +719,7 @@ future<> expiration_service::run() {
     // also need to notice when a new table is added, a table is
     // deleted or when ttl is enabled or disabled for a table!
     for (;;) {
+        auto start = lowres_clock::now();
         // _db.tables() may change under our feet during a
         // long-living loop, so we must keep our own copy of the list of
         // schemas.
@@ -748,10 +752,20 @@ future<> expiration_service::run() {
                 }
             }
         }
-        // FIXME: replace this silly 1-second sleep by something smarter.
-        try {
-            co_await seastar::sleep_abortable(std::chrono::seconds(1), _abort_source);
-        } catch(seastar::sleep_aborted&) {}
+        // The TTL scanner runs above once over all tables, at full steam.
+        // After completing such a scan, we sleep until it's time start
+        // another scan. TODO: If the scan went too fast, we can slow it down
+        // in the next iteration by reducing the scanner's scheduling-group
+        // share (if using a separate scheduling group), or introduce
+        // finer-grain sleeps into the scanning code.
+        std::chrono::seconds scan_duration(std::chrono::duration_cast<std::chrono::seconds>(lowres_clock::now() - start));
+        std::chrono::seconds period(_db.get_config().alternator_ttl_period_in_seconds());
+        if (scan_duration < period) {
+            try {
+                tlogger.info("sleeping {} seconds until next period", (period - scan_duration).count());
+                co_await seastar::sleep_abortable(period - scan_duration, _abort_source);
+            } catch(seastar::sleep_aborted&) {}
+        }
     }
 }
 

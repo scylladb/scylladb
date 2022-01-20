@@ -860,6 +860,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , alternator_streams_time_window_s(this, "alternator_streams_time_window_s", value_status::Used, 10, "CDC query confidence window for alternator streams")
     , alternator_timeout_in_ms(this, "alternator_timeout_in_ms", value_status::Used, 10000,
         "The server-side timeout for completing Alternator API requests.")
+    , alternator_ttl_period_in_seconds(this, "alternator_ttl_period_in_seconds", value_status::Used,
+        60*60*24,
+        "The default period for Alternator's expiration scan. Alternator attempts to scan every table within that period.")
     , abort_on_ebadf(this, "abort_on_ebadf", value_status::Used, true, "Abort the server on incorrect file descriptor access. Throws exception when disabled.")
     , redis_port(this, "redis_port", value_status::Used, 0, "Port on which the REDIS transport listens for clients.")
     , redis_ssl_port(this, "redis_ssl_port", value_status::Used, 0, "Port on which the REDIS TLS native transport listens for clients.")

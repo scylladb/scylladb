@@ -346,6 +346,7 @@ public:
     named_value<sstring> alternator_write_isolation;
     named_value<uint32_t> alternator_streams_time_window_s;
     named_value<uint32_t> alternator_timeout_in_ms;
+    named_value<uint32_t> alternator_ttl_period_in_seconds;
 
     named_value<bool> abort_on_ebadf;
 
