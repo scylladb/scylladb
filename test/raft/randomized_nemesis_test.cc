@@ -543,30 +543,30 @@ public:
     };
 
     virtual future<raft::snapshot_reply> send_snapshot(raft::server_id dst, const raft::install_snapshot& ins, seastar::abort_source&) override {
-        auto it = _snapshots.find(ins.snp.id);
-        if (it == _snapshots.end()) {
-            throw snapshot_not_found{ .id = ins.snp.id };
-        }
+        co_return co_await with_gate([&] () -> future<raft::snapshot_reply> {
+            auto it = _snapshots.find(ins.snp.id);
+            if (it == _snapshots.end()) {
+                throw snapshot_not_found{ .id = ins.snp.id };
+            }
 
-        auto id = _counter++;
-        promise<raft::snapshot_reply> p;
-        auto f = p.get_future();
-        _reply_promises.emplace(id, std::move(p));
-        auto guard = defer([this, id] { _reply_promises.erase(id); });
+            auto id = _counter++;
+            promise<raft::snapshot_reply> p;
+            auto f = p.get_future();
+            _reply_promises.emplace(id, std::move(p));
+            auto guard = defer([this, id] { _reply_promises.erase(id); });
 
-        _send(dst, snapshot_message{
-            .ins = ins,
-            .snapshot_payload = it->second,
-            .reply_id = id
-        });
+            _send(dst, snapshot_message{
+                .ins = ins,
+                .snapshot_payload = it->second,
+                .reply_id = id
+            });
 
-        // The message receival function on the other side, when it receives the snapshot message,
-        // will apply the snapshot and send `id` back to us in the snapshot reply message (see `receive`,
-        // `snapshot_message` case). When we receive the reply, we shall find `id` in `_reply_promises`
-        // and push the reply through the promise, which will resolve `f` (see `receive`, `snapshot_reply_message`
-        // case).
+            // The message receival function on the other side, when it receives the snapshot message,
+            // will apply the snapshot and send `id` back to us in the snapshot reply message (see `receive`,
+            // `snapshot_message` case). When we receive the reply, we shall find `id` in `_reply_promises`
+            // and push the reply through the promise, which will resolve `f` (see `receive`, `snapshot_reply_message`
+            // case).
 
-        co_return co_await with_gate([&, guard = std::move(guard), f = std::move(f)] () mutable -> future<raft::snapshot_reply> {
             // TODO configurable
             static const raft::logical_clock::duration send_snapshot_timeout = 20_t;
 
@@ -583,17 +583,18 @@ public:
     }
 
     virtual future<raft::add_entry_reply> send_add_entry(raft::server_id dst, const raft::command& cmd) override {
-        auto id = _counter++;
-        promise<raft::add_entry_reply> p;
-        auto f = p.get_future();
-        _reply_promises.emplace(id, std::move(p));
-        auto guard = defer([this, id] { _reply_promises.erase(id); });
+        co_return co_await with_gate([&] () -> future<raft::add_entry_reply> {
+            auto id = _counter++;
+            promise<raft::add_entry_reply> p;
+            auto f = p.get_future();
+            _reply_promises.emplace(id, std::move(p));
+            auto guard = defer([this, id] { _reply_promises.erase(id); });
 
-        _send(dst, add_entry_message{
-            .cmd = cmd,
-            .reply_id = id
-        });
-        co_return co_await with_gate([&, guard = std::move(guard), f = std::move(f)] () mutable -> future<raft::add_entry_reply> {
+            _send(dst, add_entry_message{
+                .cmd = cmd,
+                .reply_id = id
+            });
+
             static const raft::logical_clock::duration send_add_entry_timeout = 20_t;
 
             try {
@@ -605,20 +606,21 @@ public:
         });
     }
     virtual future<raft::add_entry_reply> send_modify_config(raft::server_id dst,
-        const std::vector<raft::server_address>& add,
-        const std::vector<raft::server_id>& del) override {
-        auto id = _counter++;
-        promise<raft::add_entry_reply> p;
-        auto f = p.get_future();
-        _reply_promises.emplace(id, std::move(p));
-        auto guard = defer([this, id] { _reply_promises.erase(id); });
+                const std::vector<raft::server_address>& add,
+                const std::vector<raft::server_id>& del) override {
+        co_return co_await with_gate([&] () -> future<raft::add_entry_reply> {
+            auto id = _counter++;
+            promise<raft::add_entry_reply> p;
+            auto f = p.get_future();
+            _reply_promises.emplace(id, std::move(p));
+            auto guard = defer([this, id] { _reply_promises.erase(id); });
 
-        _send(dst, modify_config_message{
-            .add = add,
-            .del = del,
-            .reply_id = id
-        });
-        co_return co_await with_gate([&, guard = std::move(guard), f = std::move(f)] () mutable -> future<raft::add_entry_reply> {
+            _send(dst, modify_config_message{
+                .add = add,
+                .del = del,
+                .reply_id = id
+            });
+
             static const raft::logical_clock::duration send_modify_config_timeout = 200_t;
 
             try {
@@ -630,17 +632,17 @@ public:
         });
     }
     virtual future<raft::read_barrier_reply> execute_read_barrier_on_leader(raft::server_id dst) override {
-        auto id = _counter++;
-        promise<raft::read_barrier_reply> p;
-        auto f = p.get_future();
-        _reply_promises.emplace(id, std::move(p));
-        auto guard = defer([this, id] { _reply_promises.erase(id); });
+        co_return co_await with_gate([&] () -> future<raft::read_barrier_reply> {
+            auto id = _counter++;
+            promise<raft::read_barrier_reply> p;
+            auto f = p.get_future();
+            _reply_promises.emplace(id, std::move(p));
+            auto guard = defer([this, id] { _reply_promises.erase(id); });
 
-        _send(dst, execute_barrier_on_leader {
-            .reply_id = id
-        });
+            _send(dst, execute_barrier_on_leader {
+                .reply_id = id
+            });
 
-        co_return co_await with_gate([&, guard = std::move(guard), f = std::move(f)] () mutable -> future<raft::read_barrier_reply> {
             // TODO configurable
             static const raft::logical_clock::duration execute_read_barrier_on_leader_timeout = 20_t;
 
