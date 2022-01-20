@@ -120,6 +120,13 @@ class forward_service : public seastar::peering_sharded_service<forward_service>
     distributed<replica::database>& _db;
     const locator::shared_token_metadata& _shared_token_metadata;
 
+    struct stats {
+        uint64_t requests_dispatched_to_other_nodes = 0;
+        uint64_t requests_dispatched_to_own_shards = 0;
+        uint64_t requests_executed = 0;
+    } _stats;
+    seastar::metrics::metric_groups _metrics;
+
 public:
     forward_service(netw::messaging_service& ms, service::storage_proxy& p, distributed<replica::database> &db,
         const locator::shared_token_metadata& stm)
@@ -127,6 +134,7 @@ public:
         , _proxy(p)
         , _db(db)
         , _shared_token_metadata(stm) {
+        register_metrics();
         init_messaging_service();
     }
 
@@ -144,6 +152,7 @@ private:
 
     locator::token_metadata_ptr get_token_metadata_ptr() const noexcept;
 
+    void register_metrics();
     void init_messaging_service();
     future<> uninit_messaging_service();
 };

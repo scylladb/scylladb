@@ -172,6 +172,8 @@ future<query::forward_result> forward_service::dispatch_to_shards(
     query::forward_request req,
     std::optional<tracing::trace_info> tr_info
 ) {
+    _stats.requests_dispatched_to_own_shards += 1;
+
     auto result = co_await container().map_reduce0(
         [req, tr_info] (auto& fs) {
             return fs.execute_on_this_shard(req, tr_info);
@@ -202,6 +204,7 @@ future<query::forward_result> forward_service::execute_on_this_shard(
     }
 
     tracing::trace(tr_state, "Executing forward_request");
+    _stats.requests_executed += 1;
 
     schema_ptr schema = local_schema_registry().get(req.cmd.schema_version);
 
@@ -332,6 +335,8 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
                 if (utils::fb_utilities::is_me(addr.addr)) {
                     return dispatch_to_shards(req_with_modified_pr, tr_info);
                 } else {
+                    _stats.requests_dispatched_to_other_nodes += 1;
+
                     return ser::forward_request_rpc_verbs::send_forward_request(
                         &_messaging, addr, req_with_modified_pr, tr_info
                     );
@@ -361,6 +366,18 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
     flogger.debug("merged result is {}", result_printer);
 
     co_return *result;
+}
+
+void forward_service::register_metrics() {
+    namespace sm = seastar::metrics;
+    _metrics.add_group("forward_service", {
+        sm::make_total_operations("requests_dispatched_to_other_nodes", _stats.requests_dispatched_to_other_nodes,
+             sm::description("how many forward requests were dispatched to other nodes"), {}),
+        sm::make_total_operations("requests_dispatched_to_own_shards", _stats.requests_dispatched_to_own_shards,
+             sm::description("how many forward requests were dispatched to local shards"), {}),
+        sm::make_total_operations("requests_executed", _stats.requests_executed,
+             sm::description("how many forward requests were executed"), {}),
+    });
 }
 
 } // namespace service
