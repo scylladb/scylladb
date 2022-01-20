@@ -14,10 +14,11 @@
 #pragma once
 
 #include <seastar/core/sstring.hh>
-#include "replica/database_fwd.hh"
 #include "schema_fwd.hh"
 
 using namespace seastar;
+
+class partition_key_view;
 
 namespace data_dictionary {
 class database;

@@ -12,7 +12,9 @@
  */
 
 #include "validation.hh"
-#include "replica/database.hh"
+#include "schema.hh"
+#include "keys.hh"
+#include "data_dictionary/data_dictionary.hh"
 #include "exceptions/exceptions.hh"
 
 namespace validation {
