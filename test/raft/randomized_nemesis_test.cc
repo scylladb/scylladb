@@ -921,11 +921,6 @@ public:
 // with its planned delivery time. The queue uses a logical clock to decide when to deliver messages.
 // It delives all messages whose associated times are smaller than the ``current time'', the latter
 // determined by the number of `tick()` calls.
-//
-// Note: the actual delivery happens through a function that is passed in the `network` constructor.
-// The function may return `false` (for whatever reason) denoting that it failed to deliver the message.
-// In this case network will backup this message and retry the delivery on every later `tick` until
-// it succeeds.
 template <typename Payload>
 class network {
 public:
