@@ -19,6 +19,27 @@ def test_snapshots_table(scylla_only, cql, test_keyspace):
         assert res[0][1] == tbl
         assert res[0][2] == 'my_tag'
 
+def test_clients(scylla_only, cql):
+    columns = ', '.join([
+        'address',
+        'port',
+        'client_type',
+        'connection_stage',
+        'driver_name',
+        'driver_version',
+        'hostname',
+        'protocol_version',
+        'shard_id',
+        'ssl_cipher_suite',
+        'ssl_enabled',
+        'ssl_protocol',
+        'username',
+    ])
+    cls = list(cql.execute(f"SELECT {columns} FROM system.clients"))
+    for cl in cls:
+        assert(cl[0] == '127.0.0.1')
+        assert(cl[2] == 'cql')
+
 # We only want to check that the table exists with the listed columns, to assert
 # backwards compatibility.
 def _check_exists(cql, table_name, columns):
