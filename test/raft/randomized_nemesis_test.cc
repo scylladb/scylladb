@@ -1698,14 +1698,12 @@ SEASTAR_TEST_CASE(basic_test) {
     co_await with_env_and_ticker<ExReg>(cfg, [&timer] (environment<ExReg>& env, ticker& t) -> future<> {
         using output_t = typename ExReg::output_t;
 
-        t.start({
-            {1, [&] {
-                env.tick_network();
-                timer.tick();
-            }},
-            {10, [&] {
+        t.start([&] (uint64_t tick) {
+            env.tick_network();
+            timer.tick();
+            if (tick % 10 == 0) {
                 env.tick_servers();
-            }}
+            }
         }, 10'000);
 
         auto leader_id = co_await env.new_server(true);
@@ -1770,16 +1768,13 @@ SEASTAR_TEST_CASE(snapshot_uses_correct_term_test) {
         .fd_convict_threshold = 10_t,
     };
     co_await with_env_and_ticker<ExReg>(cfg, [&timer] (environment<ExReg>& env, ticker& t) -> future<> {
-        t.start({
-            {1, [&] {
-                env.tick_network();
-                timer.tick();
-            }},
-            {10, [&] {
+        t.start([&] (uint64_t tick) {
+            env.tick_network();
+            timer.tick();
+            if (tick % 10 == 0) {
                 env.tick_servers();
-            }}
+            }
         }, 10'000);
-
 
         auto id1 = co_await env.new_server(true,
                 raft::server::configuration{
@@ -1852,16 +1847,13 @@ SEASTAR_TEST_CASE(snapshotting_preserves_config_test) {
         .fd_convict_threshold = 10_t,
     };
     co_await with_env_and_ticker<ExReg>(cfg, [&timer] (environment<ExReg>& env, ticker& t) -> future<> {
-        t.start({
-            {1, [&] {
-                env.tick_network();
-                timer.tick();
-            }},
-            {10, [&] {
+        t.start([&] (uint64_t tick) {
+            env.tick_network();
+            timer.tick();
+            if (tick % 10 == 0) {
                 env.tick_servers();
-            }}
+            }
         }, 10'000);
-
 
         auto id1 = co_await env.new_server(true,
                 raft::server::configuration{
@@ -2433,14 +2425,12 @@ SEASTAR_TEST_CASE(basic_generator_test) {
         .fd_convict_threshold = 50_t,
     };
     co_await with_env_and_ticker<AppendReg>(cfg, [&cfg, &timer, seed, random_engine] (environment<AppendReg>& env, ticker& t) -> future<> {
-        t.start({
-            {1, [&] {
-                env.tick_network();
-                timer.tick();
-            }},
-            {10, [&] {
+        t.start([&] (uint64_t tick) {
+            env.tick_network();
+            timer.tick();
+            if (tick % 10 == 0) {
                 env.tick_servers();
-            }}
+            }
         }, 200'000);
 
         raft::server::configuration srv_cfg{
