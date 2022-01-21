@@ -6,11 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include "connection_notifier.hh"
-#include "cql3/constants.hh"
-#include "replica/database.hh"
-#include "service/storage_proxy.hh"
-
+#include "client_data.hh"
 #include <stdexcept>
 
 sstring to_string(client_type ct) {
@@ -24,9 +20,9 @@ sstring to_string(client_type ct) {
 
 sstring to_string(client_connection_stage ccs) {
     switch (ccs) {
-        case client_connection_stage::established: return connection_stage_literal<client_connection_stage::established>;
-        case client_connection_stage::authenticating: return connection_stage_literal<client_connection_stage::authenticating>;
-        case client_connection_stage::ready: return connection_stage_literal<client_connection_stage::ready>;
+        case client_connection_stage::established: return "ESTABLISHED";
+        case client_connection_stage::authenticating: return "AUTHENTICATING";
+        case client_connection_stage::ready: return "READY";
     }
     throw std::runtime_error("Invalid client_connection_stage");
 }

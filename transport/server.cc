@@ -42,8 +42,8 @@
 #include "service/query_state.hh"
 #include "service/client_state.hh"
 #include "exceptions/exceptions.hh"
-#include "connection_notifier.hh"
-
+#include "client_data.hh"
+#include "cql3/query_processor.hh"
 #include "auth/authenticator.hh"
 
 #include <cassert>

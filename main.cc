@@ -54,6 +54,7 @@
 #include "message/messaging_service.hh"
 #include "db/sstables-format-selector.hh"
 #include "db/snapshot-ctl.hh"
+#include "cql3/query_processor.hh"
 #include <seastar/net/dns.hh>
 #include <seastar/core/io_queue.hh>
 #include <seastar/core/abort_on_ebadf.hh>
@@ -66,7 +67,6 @@
 #include "replica/distributed_loader.hh"
 #include "sstables_loader.hh"
 #include "cql3/cql_config.hh"
-#include "connection_notifier.hh"
 #include "transport/controller.hh"
 #include "thrift/controller.hh"
 #include "service/memory_limiter.hh"

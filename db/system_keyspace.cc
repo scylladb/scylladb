@@ -67,6 +67,7 @@
 #include "serializer_impl.hh"
 #include "idl/frozen_mutation.dist.impl.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
+#include "client_data.hh"
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 

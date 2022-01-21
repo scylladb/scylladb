@@ -7,8 +7,6 @@
  */
 #pragma once
 
-#include "db/query_context.hh"
-
 #include <seastar/net/inet_address.hh>
 #include <seastar/core/sstring.hh>
 #include "seastarx.hh"
@@ -30,11 +28,6 @@ enum class client_connection_stage {
 };
 
 sstring to_string(client_connection_stage ct);
-
-template <client_connection_stage ccs> constexpr const char* connection_stage_literal = "";
-template <> inline constexpr const char* connection_stage_literal<client_connection_stage::established> = "ESTABLISHED";
-template <> inline constexpr const char* connection_stage_literal<client_connection_stage::authenticating> = "AUTHENTICATING";
-template <> inline constexpr const char* connection_stage_literal<client_connection_stage::ready> = "READY";
 
 // Representation of a row in `system.clients'. std::optionals are for nullable cells.
 struct client_data {

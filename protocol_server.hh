@@ -11,7 +11,7 @@
 #include "seastarx.hh"
 #include <seastar/core/future.hh>
 #include <vector>
-#include "connection_notifier.hh"
+#include "client_data.hh"
 #include "utils/chunked_vector.hh"
 
 struct client_data;
