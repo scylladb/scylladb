@@ -1326,20 +1326,30 @@ public:
         _network.tick();
     }
 
-    // TODO: adjustable/randomizable ticking ratios
-    void tick_servers() {
-        for (auto& [_, r] : _routes) {
-            if (r._server) {
-                r._server->tick();
-            }
-
+    template <std::invocable<raft_server<M>*, failure_detector&> F>
+    void for_each_server(F&& f) {
+        for (auto& [_, r]: _routes) {
             assert(r._fd);
-            r._fd->tick();
+            f(r._server.get(), *r._fd);
         }
+    }
 
+    // Call this periodically so `abort()` can finish for 'crashed' servers.
+    void tick_crashing_servers() {
         for (auto& srv: _crashing_servers) {
             srv->tick();
         }
+    }
+
+    void tick_servers() {
+        for_each_server([] (raft_server<M>* srv, failure_detector& fd) {
+            if (srv) {
+                srv->tick();
+            }
+            fd.tick();
+        });
+
+        tick_crashing_servers();
     }
 
     // A 'node' is a container for a Raft server, its storage ('persistence') and failure detector.
@@ -2424,13 +2434,20 @@ SEASTAR_TEST_CASE(basic_generator_test) {
         .network_delay{0, 6},
         .fd_convict_threshold = 50_t,
     };
-    co_await with_env_and_ticker<AppendReg>(cfg, [&cfg, &timer, seed, random_engine] (environment<AppendReg>& env, ticker& t) -> future<> {
-        t.start([&] (uint64_t tick) {
+    co_await with_env_and_ticker<AppendReg>(cfg, [&] (environment<AppendReg>& env, ticker& t) -> future<> {
+        t.start([&, dist = std::uniform_int_distribution<size_t>(0, 9)] (uint64_t tick) mutable {
             env.tick_network();
             timer.tick();
-            if (tick % 10 == 0) {
-                env.tick_servers();
-            }
+            env.for_each_server([&] (raft_server<AppendReg>* srv, failure_detector& fd) {
+                // Tick each server with probability 1/10.
+                // Thus each server is ticked, on average, once every 10 timer/network ticks.
+                // On the other hand, we now have servers running at different speeds.
+                if (srv && dist(random_engine) == 0) {
+                    srv->tick();
+                    fd.tick();
+                }
+            });
+            env.tick_crashing_servers();
         }, 200'000);
 
         raft::server::configuration srv_cfg{
