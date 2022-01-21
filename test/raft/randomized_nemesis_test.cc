@@ -965,18 +965,18 @@ private:
     raft::logical_clock _clock;
 
     // How long does it take to deliver a message?
-    // TODO: use a random distribution or let the user change this dynamically
-    raft::logical_clock::duration _delivery_delay;
+    std::uniform_int_distribution<raft::logical_clock::rep> _delivery_delay;
+    std::mt19937 _rnd;
 
 public:
-    network(raft::logical_clock::duration delivery_delay, deliver_t f)
-        : _deliver(std::move(f)), _delivery_delay(delivery_delay) {}
+    network(std::uniform_int_distribution<raft::logical_clock::rep> delivery_delay, std::mt19937 rnd, deliver_t f)
+        : _deliver(std::move(f)), _delivery_delay(std::move(delivery_delay)), _rnd(std::move(rnd)) {}
 
     void send(raft::server_id src, raft::server_id dst, Payload payload) {
         // Predict the delivery time in advance.
         // Our prediction may be wrong if a grudge exists at this expected moment of delivery.
         // Messages may also be reordered.
-        auto delivery_time = _clock.now() + _delivery_delay;
+        auto delivery_time = _clock.now() + raft::logical_clock::duration{_delivery_delay(_rnd)};
 
         _events.push_back(event{delivery_time, message{src, dst, make_lw_shared<Payload>(std::move(payload))}});
         std::push_heap(_events.begin(), _events.end(), cmp);
@@ -1231,7 +1231,8 @@ static raft::server_id to_raft_id(size_t id) {
 }
 
 struct environment_config {
-    raft::logical_clock::duration network_delay;
+    std::mt19937 rnd;
+    std::uniform_int_distribution<raft::logical_clock::rep> network_delay;
     raft::logical_clock::duration fd_convict_threshold;
 };
 
@@ -1298,7 +1299,8 @@ class environment : public seastar::weakly_referencable<environment<M>> {
 
 public:
     environment(environment_config cfg)
-            : _fd_convict_threshold(cfg.fd_convict_threshold), _network(cfg.network_delay,
+            : _fd_convict_threshold(cfg.fd_convict_threshold)
+            , _network(std::move(cfg.network_delay), std::move(cfg.rnd),
         [this] (raft::server_id src, raft::server_id dst, const message_t& m) {
             auto& n = _routes.at(dst);
             assert(n._persistence);
@@ -1689,7 +1691,8 @@ struct wait_for_leader {
 SEASTAR_TEST_CASE(basic_test) {
     logical_timer timer;
     environment_config cfg {
-        .network_delay = 5_t,
+        .rnd{0},
+        .network_delay{5, 5},
         .fd_convict_threshold = 50_t,
     };
     co_await with_env_and_ticker<ExReg>(cfg, [&timer] (environment<ExReg>& env, ticker& t) -> future<> {
@@ -1762,7 +1765,8 @@ SEASTAR_TEST_CASE(basic_test) {
 SEASTAR_TEST_CASE(snapshot_uses_correct_term_test) {
     logical_timer timer;
     environment_config cfg {
-        .network_delay = 1_t,
+        .rnd{0},
+        .network_delay{1, 1},
         .fd_convict_threshold = 10_t,
     };
     co_await with_env_and_ticker<ExReg>(cfg, [&timer] (environment<ExReg>& env, ticker& t) -> future<> {
@@ -1843,7 +1847,8 @@ SEASTAR_TEST_CASE(snapshot_uses_correct_term_test) {
 SEASTAR_TEST_CASE(snapshotting_preserves_config_test) {
     logical_timer timer;
     environment_config cfg {
-        .network_delay = 1_t,
+        .rnd{0},
+        .network_delay{1, 1},
         .fd_convict_threshold = 10_t,
     };
     co_await with_env_and_ticker<ExReg>(cfg, [&timer] (environment<ExReg>& env, ticker& t) -> future<> {
@@ -2418,12 +2423,16 @@ SEASTAR_TEST_CASE(basic_generator_test) {
 
     static_assert(operation::Invocable<op_type>);
 
+    auto seed = tests::random::get_int<int32_t>();
+    std::mt19937 random_engine{seed};
+
     logical_timer timer;
     environment_config cfg {
-        .network_delay = 3_t,
+        .rnd{random_engine},
+        .network_delay{0, 6},
         .fd_convict_threshold = 50_t,
     };
-    co_await with_env_and_ticker<AppendReg>(cfg, [&cfg, &timer] (environment<AppendReg>& env, ticker& t) -> future<> {
+    co_await with_env_and_ticker<AppendReg>(cfg, [&cfg, &timer, seed, random_engine] (environment<AppendReg>& env, ticker& t) -> future<> {
         t.start({
             {1, [&] {
                 env.tick_network();
@@ -2434,8 +2443,6 @@ SEASTAR_TEST_CASE(basic_generator_test) {
             }}
         }, 200'000);
 
-        auto seed = tests::random::get_int<int32_t>();
-        std::mt19937 random_engine{seed};
         raft::server::configuration srv_cfg{
             .enable_forwarding = false, //std::bernoulli_distribution{0.5}(random_engine)
         };
