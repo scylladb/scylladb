@@ -28,12 +28,13 @@ if '--raft' in sys.argv:
 
 pid = run.run_with_temporary_dir(cmd)
 ip = run.pid_to_ip(pid)
+wd = run.pid_to_dir(pid)
 
 run.wait_for_services(pid, [
     lambda: run.check_rest_api(ip),
     lambda: check_cql(ip)
 ])
-success = run.run_pytest(sys.path[0], ['--host', ip] + sys.argv[1:])
+success = run.run_pytest(sys.path[0], ['--host', ip, '--workdir', wd, '--scylla-path', run.scylla] + sys.argv[1:])
 
 run.summary = 'Scylla tests pass' if success else 'Scylla tests failure'
 

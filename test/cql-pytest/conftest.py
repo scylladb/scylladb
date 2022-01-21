@@ -28,6 +28,10 @@ def pytest_addoption(parser):
         help='CQL server port to connect to')
     parser.addoption('--ssl', action='store_true',
         help='Connect to CQL via an encrypted TLSv1.2 connection')
+    parser.addoption('--scylla-path', action='store', default='',
+        help='Path to the scylla excutable the tests are running against')
+    parser.addoption('--workdir', action='store', default='',
+        help='Path to the workdir of the scylla instance the tests are running against')
 
 # "cql" fixture: set up client object for communicating with the CQL API.
 # The host/port combination of the server are determined by the --host and
