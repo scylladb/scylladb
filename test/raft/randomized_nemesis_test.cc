@@ -2450,9 +2450,27 @@ SEASTAR_TEST_CASE(basic_generator_test) {
             env.tick_crashing_servers();
         }, 200'000);
 
-        raft::server::configuration srv_cfg{
-            .enable_forwarding = false, //std::bernoulli_distribution{0.5}(random_engine)
-        };
+        std::bernoulli_distribution bdist{0.5};
+        bool forwarding = false; //bdist(random_engine) TODO
+
+        // With probability 1/2, run the servers with a configuration which causes frequent snapshotting.
+        // Note: with the default configuration we won't observe any snapshots at all, since the default
+        // threshold is 1024 log commands and we perform only 500 ops.
+        bool frequent_snapshotting = bdist(random_engine);
+
+        // TODO: randomize the snapshot thresholds between different servers for more chaos.
+        auto srv_cfg = frequent_snapshotting
+            ? raft::server::configuration {
+                .snapshot_threshold{10},
+                .snapshot_trailing{5},
+                .max_log_size{20},
+                .enable_forwarding{forwarding},
+            }
+            : raft::server::configuration {
+                .enable_forwarding{forwarding},
+            };
+
+        tlogger.info("basic_generator_test: frequent snapshotting: {}", frequent_snapshotting);
 
         auto leader_id = co_await env.new_server(true, srv_cfg);
 
