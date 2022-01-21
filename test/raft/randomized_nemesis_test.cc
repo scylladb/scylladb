@@ -1460,14 +1460,16 @@ public:
         auto srv = std::exchange(n._server, nullptr);
         _crashing_servers.insert(srv.get());
 
-        _crash_fiber = _crash_fiber.then([this, srv_ = std::move(srv)] () mutable -> future<> {
-            auto srv = std::move(srv_);
+        auto f = std::bind_front([] (environment<M>& self, std::unique_ptr<raft_server<M>> srv) -> future<> {
             tlogger.trace("crash fiber: aborting {}", srv->id());
             co_await srv->abort();
             tlogger.trace("crash fiber: finished aborting {}", srv->id());
-            _crashing_servers.erase(srv.get());
+            self._crashing_servers.erase(srv.get());
             // abort() ensures there are no in-progress calls on the server, so we can destroy it.
-        });
+        }, std::ref(*this), std::move(srv));
+
+        // Cannot do `.then(std::move(f))`, because that would try to use `f()`, which is ill-formed (seastar#1005).
+        _crash_fiber = _crash_fiber.then([f = std::move(f)] () mutable { return std::move(f)(); });
     }
 
     bool is_leader(raft::server_id id) {
