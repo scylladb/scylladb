@@ -106,14 +106,19 @@ std::vector<schema_ptr> do_load_schemas(std::string_view schema_str) {
         throw std::runtime_error(format("tools:do_load_schemas(): failed to parse CQL statements: {}", std::current_exception()));
     }
     for (auto& raw_statement : raw_statements) {
-        auto prepared_statement = raw_statement->prepare(db.as_data_dictionary(), cql_stats);
+        auto cf_statement = dynamic_cast<cql3::statements::raw::cf_statement*>(raw_statement.get());
+        if (!cf_statement) {
+            continue; // we don't support any non-cf statements here
+        }
+        auto& ks = find_or_create_keyspace(cf_statement->keyspace());
+        auto prepared_statement = cf_statement->prepare(db.as_data_dictionary(), cql_stats);
         auto* statement = prepared_statement->statement.get();
 
         if (auto p = dynamic_cast<cql3::statements::create_keyspace_statement*>(statement)) {
             db.create_keyspace(p->get_keyspace_metadata(*token_metadata.local().get()), erm_factory.local()).get();
         } else if (auto p = dynamic_cast<cql3::statements::create_type_statement*>(statement)) {
             auto type = p->create_type(db.as_data_dictionary());
-            find_or_create_keyspace(p->keyspace()).add_user_type(std::move(type));
+            ks.add_user_type(std::move(type));
         } else if (auto p = dynamic_cast<cql3::statements::create_table_statement*>(statement)) {
             schemas.push_back(p->get_cf_meta_data(db.as_data_dictionary()));
         } else if (auto p = dynamic_cast<cql3::statements::update_statement*>(statement)) {
