@@ -454,7 +454,7 @@ future<> server_impl::add_entry(command command, wait_type type) {
                     // retry and forward it.
                     return execute_add_entry(leader, command);
                 } else {
-                    logger.trace("[{}] forwarding the entry to {}", leader, id());
+                    logger.trace("[{}] forwarding the entry to {}", id(), leader);
                     return _rpc->send_add_entry(leader, command);
                 }
             }();
