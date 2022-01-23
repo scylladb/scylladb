@@ -1372,7 +1372,6 @@ future<> system_keyspace::setup(distributed<replica::database>& db,
     const db::config& cfg = db.local().get_config();
     co_await setup_version(ms, cfg);
     co_await update_schema_version(db.local().get_version());
-    co_await init_local_cache();
     co_await build_dc_rack_info();
     co_await build_bootstrap_info();
     co_await check_health(cfg.cluster_name());
