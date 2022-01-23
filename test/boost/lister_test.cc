@@ -46,8 +46,8 @@ static future<> touch_file(fs::path filename, open_flags flags = open_flags::wo 
     co_await f.close();
 }
 
-static future<size_t> generate_random_content(tmpdir& tmp, std::unordered_set<std::string>& file_names, std::unordered_set<std::string>& dir_names, size_t max_count = 1000) {
-    size_t count = tests::random::get_int<size_t>(0, max_count);
+static future<size_t> generate_random_content(tmpdir& tmp, std::unordered_set<std::string>& file_names, std::unordered_set<std::string>& dir_names, size_t min_count = 1, size_t max_count = 1000) {
+    size_t count = tests::random::get_int<size_t>(min_count, max_count);
     for (size_t i = 0; i < count; i++) {
         auto name = tests::random::get_sstring(tests::random::get_int(1, 8));
         if (tests::random::get_bool()) {
@@ -76,7 +76,8 @@ SEASTAR_TEST_CASE(test_lister_abort) {
     std::unordered_set<std::string> file_names;
     std::unordered_set<std::string> dir_names;
 
-    auto count = co_await generate_random_content(tmp, file_names, dir_names, tests::random::get_int(100, 1000));
+    auto count = co_await generate_random_content(tmp, file_names, dir_names, 1, tests::random::get_int(100, 1000));
+    assert(count > 0);
     BOOST_TEST_MESSAGE(fmt::format("Generated {} dir entries", count));
 
     size_t initial = tests::random::get_int<size_t>(1, count);
