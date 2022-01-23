@@ -4175,6 +4175,8 @@ SEASTAR_TEST_CASE(twcs_reshape_with_disjoint_set_test) {
                 {"min_sstable_size", "1"},
         };
         builder.set_compaction_strategy_options(std::move(opts));
+        size_t min_threshold = tests::random::get_int(4, 8);
+        builder.set_min_compaction_threshold(min_threshold);
         auto s = builder.build();
         auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::time_window, s->compaction_strategy_options());
 
@@ -4204,7 +4206,7 @@ SEASTAR_TEST_CASE(twcs_reshape_with_disjoint_set_test) {
 
         auto tokens = token_generation_for_shard(disjoint_sstable_count, this_shard_id(), test_db_config.murmur3_partitioner_ignore_msb_bits(), smp::count);
 
-        auto make_row = [&](unsigned token_idx, std::chrono::hours step) {
+        auto make_row = [&](unsigned token_idx, auto step) {
             static thread_local int32_t value = 1;
             auto key_str = tokens[token_idx].first;
             auto key = partition_key::from_exploded(*s, {to_bytes(key_str)});
@@ -4245,7 +4247,9 @@ SEASTAR_TEST_CASE(twcs_reshape_with_disjoint_set_test) {
                 sstables.push_back(std::move(sst));
             }
 
-            BOOST_REQUIRE_EQUAL(cs.get_reshaping_job(sstables, s, default_priority_class(), reshape_mode::strict).sstables.size(), disjoint_sstable_count);
+            auto reshaping_count = cs.get_reshaping_job(sstables, s, default_priority_class(), reshape_mode::strict).sstables.size();
+            BOOST_REQUIRE_GE(reshaping_count, disjoint_sstable_count - min_threshold + 1);
+            BOOST_REQUIRE_LE(reshaping_count, disjoint_sstable_count);
         }
 
         {
@@ -4254,7 +4258,10 @@ SEASTAR_TEST_CASE(twcs_reshape_with_disjoint_set_test) {
             std::vector<sstables::shared_sstable> sstables;
             sstables.reserve(disjoint_sstable_count);
             for (auto i = 0; i < disjoint_sstable_count; i++) {
-                auto sst = make_sstable_containing(sst_gen, {make_row(i, std::chrono::hours(24*i + 1)), make_row(i, std::chrono::hours(24*i + 2))});
+                auto sst = make_sstable_containing(sst_gen, {make_row(i, std::chrono::hours(24*i))});
+                sstables.push_back(std::move(sst));
+                i++;
+                sst = make_sstable_containing(sst_gen, {make_row(i, std::chrono::hours(24*i + 1))});
                 sstables.push_back(std::move(sst));
             }
 
