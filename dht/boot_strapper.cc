@@ -58,7 +58,7 @@ future<> boot_strapper::bootstrap(streaming::stream_reason reason, gms::gossiper
     }
 }
 
-std::unordered_set<token> boot_strapper::get_bootstrap_tokens(const token_metadata_ptr tmptr, replica::database& db) {
+std::unordered_set<token> boot_strapper::get_bootstrap_tokens(const token_metadata_ptr tmptr, replica::database& db, dht::check_token_endpoint check) {
     auto initial_tokens = db.get_initial_tokens();
     // if user specified tokens, use those
     if (initial_tokens.size() > 0) {
@@ -66,12 +66,12 @@ std::unordered_set<token> boot_strapper::get_bootstrap_tokens(const token_metada
         std::unordered_set<token> tokens;
         for (auto& token_string : initial_tokens) {
             auto token = dht::token::from_sstring(token_string);
-            if (tmptr->get_endpoint(token)) {
+            if (check && tmptr->get_endpoint(token)) {
                 throw std::runtime_error(format("Bootstrapping to existing token {} is not allowed (decommission/removenode the old node first).", token_string));
             }
             tokens.insert(token);
         }
-        blogger.debug("Get manually specified bootstrap_tokens={}", tokens);
+        blogger.info("Get manually specified bootstrap_tokens={}", tokens);
         return tokens;
     }
 
@@ -85,7 +85,7 @@ std::unordered_set<token> boot_strapper::get_bootstrap_tokens(const token_metada
     }
 
     auto tokens = get_random_tokens(std::move(tmptr), num_tokens);
-    blogger.debug("Get random bootstrap_tokens={}", tokens);
+    blogger.info("Get random bootstrap_tokens={}", tokens);
     return tokens;
 }
 

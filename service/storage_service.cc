@@ -427,12 +427,10 @@ void storage_service::join_token_ring(int delay) {
                 if (!_bootstrap_tokens.empty()) {
                     slogger.info("Using previously saved tokens = {}", _bootstrap_tokens);
                 } else {
-                    _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(tmptr, _db.local());
-                    slogger.info("Using newly generated tokens = {}", _bootstrap_tokens);
+                    _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(tmptr, _db.local(), dht::check_token_endpoint::yes);
                 }
             } else {
-                _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(tmptr, _db.local());
-                slogger.info("Using newly generated tokens = {}", _bootstrap_tokens);
+                _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(tmptr, _db.local(), dht::check_token_endpoint::yes);
             }
         } else {
             auto replace_addr = _db.local().get_replace_address();
@@ -466,26 +464,12 @@ void storage_service::join_token_ring(int delay) {
         bootstrap(); // blocks until finished
     } else {
         maybe_start_sys_dist_ks();
-        size_t num_tokens = _db.local().get_config().num_tokens();
         _bootstrap_tokens = db::system_keyspace::get_saved_tokens().get0();
         if (_bootstrap_tokens.empty()) {
-            auto initial_tokens = _db.local().get_initial_tokens();
-            if (initial_tokens.size() < 1) {
-                _bootstrap_tokens = boot_strapper::get_random_tokens(get_token_metadata_ptr(), num_tokens);
-                if (num_tokens == 1) {
-                    slogger.warn("Generated random token {}. Random tokens will result in an unbalanced ring; see http://wiki.apache.org/cassandra/Operations", _bootstrap_tokens);
-                } else {
-                    slogger.info("Generated random tokens. tokens are {}", _bootstrap_tokens);
-                }
-            } else {
-                for (auto token_string : initial_tokens) {
-                    auto token = dht::token::from_sstring(token_string);
-                    _bootstrap_tokens.insert(token);
-                }
-                slogger.info("Saved tokens not found. Using configuration value: {}", _bootstrap_tokens);
-            }
+            _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(get_token_metadata_ptr(), _db.local(), dht::check_token_endpoint::no);
             db::system_keyspace::update_tokens(_bootstrap_tokens).get();
         } else {
+            size_t num_tokens = _db.local().get_config().num_tokens();
             if (_bootstrap_tokens.size() != num_tokens) {
                 throw std::runtime_error(format("Cannot change the number of tokens from {:d} to {:d}", _bootstrap_tokens.size(), num_tokens));
             } else {
