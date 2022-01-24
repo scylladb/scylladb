@@ -221,8 +221,8 @@ void storage_service::prepare_to_join(
         }
         _bootstrap_tokens = prepare_replacement_info(initial_contact_nodes, loaded_peer_features).get0();
         auto replace_address = _db.local().get_replace_address();
-        replacing_a_node_with_same_ip = replace_address && *replace_address == get_broadcast_address();
-        replacing_a_node_with_diff_ip = replace_address && *replace_address != get_broadcast_address();
+        replacing_a_node_with_same_ip = *replace_address == get_broadcast_address();
+        replacing_a_node_with_diff_ip = *replace_address != get_broadcast_address();
 
         slogger.info("Replacing a node with {} IP address, my address={}, node being replaced={}",
             get_broadcast_address() == *replace_address ? "the same" : "a different",
@@ -436,7 +436,7 @@ void storage_service::join_token_ring(int delay) {
             }
         } else {
             auto replace_addr = _db.local().get_replace_address();
-            if (replace_addr && *replace_addr != get_broadcast_address()) {
+            if (*replace_addr != get_broadcast_address()) {
                 // Sleep additionally to make sure that the server actually is not alive
                 // and giving it more time to gossip if alive.
                 sleep_abortable(service::load_broadcaster::BROADCAST_INTERVAL, _abort_source).get();
@@ -662,11 +662,9 @@ void storage_service::bootstrap() {
         set_mode(mode::JOINING, fmt::format("Wait until local node knows tokens of peer nodes"), true);
         _gossiper.wait_for_range_setup().get();
         auto replace_addr = _db.local().get_replace_address();
-        if (replace_addr) {
-            slogger.debug("Removing replaced endpoint {} from system.peers", *replace_addr);
-            db::system_keyspace::remove_endpoint(*replace_addr).get();
-            _group0->leave_group0(replace_addr).get();
-        }
+        slogger.debug("Removing replaced endpoint {} from system.peers", *replace_addr);
+        db::system_keyspace::remove_endpoint(*replace_addr).get();
+        _group0->leave_group0(replace_addr).get();
     }
 
     _db.invoke_on_all([this] (replica::database& db) {
