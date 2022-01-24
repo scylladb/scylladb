@@ -1265,6 +1265,7 @@ future<> db::commitlog::segment_manager::replenish_reserve() {
             // segment (because colocation stuff etc), so always allow a new
             // file if needed. That and performance stuff...
             auto s = co_await allocate_segment();
+            assert(s);
             auto ret = _reserve_segments.push(std::move(s));
             if (!ret) {
                 clogger.error("Segment reserve is full! Ignoring and trying to continue, but shouldn't happen");
@@ -1635,6 +1636,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
     }
 
     auto s = co_await _reserve_segments.pop_eventually();
+    assert(s);
     _segments.push_back(s);
     _segments.back()->reset_sync_time();
     co_return s;
@@ -1659,6 +1661,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
         try {
             gate::holder g(_gate);
             auto s = co_await with_timeout(timeout, new_segment());
+            assert(s);
             p.set_value();
         } catch (...) {
             p.set_exception(std::current_exception());
