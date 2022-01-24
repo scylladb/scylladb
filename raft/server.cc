@@ -60,11 +60,11 @@ public:
     future<add_entry_reply> execute_add_entry(server_id from, command cmd) override;
     future<add_entry_reply> execute_modify_config(server_id from,
         std::vector<server_address> add, std::vector<server_id> del) override;
+    future<snapshot_reply> apply_snapshot(server_id from, install_snapshot snp) override;
 
 
     // server interface
     future<> add_entry(command command, wait_type type) override;
-    future<snapshot_reply> apply_snapshot(server_id from, install_snapshot snp) override;
     future<> set_configuration(server_address_set c_new) override;
     raft::configuration get_configuration() const override;
     future<> start() override;
@@ -1079,12 +1079,25 @@ future<> server_impl::abort() {
     _aborted = true;
     logger.trace("[{}]: abort() called", _id);
     _fsm->stop();
-    _apply_entries.abort(std::make_exception_ptr(stop_apply_fiber()));
 
     // IO and applier fibers may update waiters and start new snapshot
-    // transfers, so abort() them first
-    co_await seastar::when_all_succeed(std::move(_io_status), std::move(_applier_status),
-                        _rpc->abort(), _state_machine->abort(), _persistence->abort()).discard_result();
+    // transfers, so abort them first
+    _apply_entries.abort(std::make_exception_ptr(stop_apply_fiber()));
+    co_await seastar::when_all_succeed(std::move(_io_status), std::move(_applier_status)).discard_result();
+
+    // Start RPC abort before aborting snapshot applications.
+    // After calling `_rpc->abort()` no new applications should be started (see `rpc::abort()` comment).
+    auto abort_rpc = _rpc->abort();
+    auto abort_sm = _state_machine->abort();
+    auto abort_persistence = _persistence->abort();
+
+    // Abort snapshot applications before waiting for `abort_rpc`,
+    // since the RPC implementation may wait for snapshot applications to finish.
+    for (auto&& [_, f] : _snapshot_application_done) {
+        f.set_exception(std::runtime_error("Snapshot application aborted"));
+    }
+
+    co_await seastar::when_all_succeed(std::move(abort_rpc), std::move(abort_sm), std::move(abort_persistence)).discard_result();
 
     for (auto& ac: _awaited_commits) {
         ac.second.done.set_exception(stopped_error());
@@ -1109,10 +1122,6 @@ future<> server_impl::abort() {
         i.second.set_exception(stopped_error());
     }
     _awaited_indexes.clear();
-
-    for (auto&& [_, f] : _snapshot_application_done) {
-        f.set_exception(std::runtime_error("Snapshot application aborted"));
-    }
 
     abort_snapshot_transfers();
 

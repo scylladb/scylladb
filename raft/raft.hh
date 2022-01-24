@@ -540,6 +540,9 @@ public:
     // aborted and waiting for all the rest to complete any
     // unfinished send operation may return an error after this
     // function is called.
+    //
+    // The implementation must ensure that `_client->apply_snapshot(...)` is not called
+    // after `abort()` is called (even before `abort()` future resolves).
     virtual future<> abort() = 0;
 private:
     friend rpc_server;
