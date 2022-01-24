@@ -366,7 +366,6 @@ void storage_service::join_token_ring(int delay) {
     //
     // We attempted to replace this with a schema-presence check, but you need a meaningful sleep
     // to get schema info from gossip which defeats the purpose.  See CASSANDRA-4427 for the gory details.
-    std::unordered_set<inet_address> current;
     if (should_bootstrap()) {
         bool resume_bootstrap = db::system_keyspace::bootstrap_in_progress();
         if (resume_bootstrap) {
@@ -451,7 +450,6 @@ void storage_service::join_token_ring(int delay) {
                         if (eps && eps->get_update_timestamp() > gms::gossiper::clk::now() - std::chrono::milliseconds(delay)) {
                             throw std::runtime_error("Cannot replace a live node...");
                         }
-                        current.insert(*existing);
                     } else {
                         throw std::runtime_error(format("Cannot replace token {} which does not exist!", token));
                     }
