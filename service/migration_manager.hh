@@ -31,7 +31,9 @@
 
 class canonical_mutation;
 class frozen_mutation;
-namespace cql3 { namespace functions { class user_function; class user_aggregate; }}
+namespace cql3 {
+namespace functions { class user_function; class user_aggregate; }
+}
 namespace netw { class messaging_service; }
 
 namespace gms {
@@ -48,6 +50,34 @@ class storage_proxy;
 
 template<typename M>
 concept MergeableMutation = std::is_same<M, canonical_mutation>::value || std::is_same<M, frozen_mutation>::value;
+
+// Obtaining this object means that all previously finished operations on group 0 are visible on this node.
+// It is also required in order to perform group 0 changes (through `announce`).
+// See `group0_guard::impl` for more detailed explanations.
+class group0_guard {
+    friend class migration_manager;
+    struct impl;
+    std::unique_ptr<impl> _impl;
+
+    group0_guard(std::unique_ptr<impl>);
+
+public:
+    ~group0_guard();
+    group0_guard(group0_guard&&) noexcept;
+
+    utils::UUID observed_group0_state_id() const;
+    utils::UUID new_group0_state_id() const;
+
+    // Use this timestamp when creating group 0 mutations.
+    api::timestamp_type write_timestamp() const;
+};
+
+class group0_concurrent_modification : public std::runtime_error {
+public:
+    group0_concurrent_modification()
+        : std::runtime_error("Failed to apply group 0 change due to concurrent modification")
+    {}
+};
 
 class migration_manager : public seastar::async_sharded_service<migration_manager>,
                             public gms::i_endpoint_state_change_subscriber,
@@ -67,6 +97,11 @@ private:
     service::raft_group_registry& _raft_gr;
     serialized_action _schema_push;
     utils::UUID _schema_version_to_publish;
+
+    friend class group0_state_machine;
+    // See `group0_guard::impl` for explanation of the purpose of these locks.
+    semaphore _group0_read_apply_mutex;
+    semaphore _group0_operation_mutex;
 public:
     migration_manager(migration_notifier&, gms::feature_service&, netw::messaging_service& ms, service::storage_proxy&, gms::gossiper& gossiper, service::raft_group_registry& raft_gr);
 
@@ -101,57 +136,59 @@ public:
     bool should_pull_schema_from(const gms::inet_address& endpoint);
     bool has_compatible_schema_tables_version(const gms::inet_address& endpoint);
 
-    std::vector<mutation> prepare_keyspace_update_announcement(lw_shared_ptr<keyspace_metadata> ksm);
+    std::vector<mutation> prepare_keyspace_update_announcement(lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type);
 
-    std::vector<mutation> prepare_new_keyspace_announcement(lw_shared_ptr<keyspace_metadata> ksm);
+    std::vector<mutation> prepare_new_keyspace_announcement(lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type);
 
 
     // The timestamp parameter can be used to ensure that all nodes update their internal tables' schemas
     // with identical timestamps, which can prevent an undeeded schema exchange
-    future<std::vector<mutation>> prepare_column_family_update_announcement(schema_ptr cfm, bool from_thrift, std::vector<view_ptr> view_updates, std::optional<api::timestamp_type> ts_opt);
-
-    future<std::vector<mutation>> prepare_new_column_family_announcement(schema_ptr cfm);
+    future<std::vector<mutation>> prepare_column_family_update_announcement(schema_ptr cfm, bool from_thrift, std::vector<view_ptr> view_updates, api::timestamp_type ts);
 
     future<std::vector<mutation>> prepare_new_column_family_announcement(schema_ptr cfm, api::timestamp_type timestamp);
 
-    future<std::vector<mutation>> prepare_new_type_announcement(user_type new_type);
+    future<std::vector<mutation>> prepare_new_type_announcement(user_type new_type, api::timestamp_type);
 
-    future<std::vector<mutation>> prepare_new_function_announcement(shared_ptr<cql3::functions::user_function> func);
+    future<std::vector<mutation>> prepare_new_function_announcement(shared_ptr<cql3::functions::user_function> func, api::timestamp_type);
 
-    future<std::vector<mutation>> prepare_new_aggregate_announcement(shared_ptr<cql3::functions::user_aggregate> aggregate);
+    future<std::vector<mutation>> prepare_new_aggregate_announcement(shared_ptr<cql3::functions::user_aggregate> aggregate, api::timestamp_type);
 
-    future<std::vector<mutation>> prepare_function_drop_announcement(shared_ptr<cql3::functions::user_function> func);
+    future<std::vector<mutation>> prepare_function_drop_announcement(shared_ptr<cql3::functions::user_function> func, api::timestamp_type);
 
-    future<std::vector<mutation>> prepare_aggregate_drop_announcement(shared_ptr<cql3::functions::user_aggregate> aggregate);
+    future<std::vector<mutation>> prepare_aggregate_drop_announcement(shared_ptr<cql3::functions::user_aggregate> aggregate, api::timestamp_type);
 
-    future<std::vector<mutation>> prepare_update_type_announcement(user_type updated_type);
+    future<std::vector<mutation>> prepare_update_type_announcement(user_type updated_type, api::timestamp_type);
 
-    std::vector<mutation> prepare_keyspace_drop_announcement(const sstring& ks_name);
+    std::vector<mutation> prepare_keyspace_drop_announcement(const sstring& ks_name, api::timestamp_type);
 
     class drop_views_tag;
     using drop_views = bool_class<drop_views_tag>;
-    future<std::vector<mutation>> prepare_column_family_drop_announcement(const sstring& ks_name, const sstring& cf_name, drop_views drop_views = drop_views::no);
+    future<std::vector<mutation>> prepare_column_family_drop_announcement(const sstring& ks_name, const sstring& cf_name, api::timestamp_type, drop_views drop_views = drop_views::no);
 
-    future<std::vector<mutation>> prepare_type_drop_announcement(user_type dropped_type);
+    future<std::vector<mutation>> prepare_type_drop_announcement(user_type dropped_type, api::timestamp_type);
 
-    future<std::vector<mutation>> prepare_new_view_announcement(view_ptr view);
+    future<std::vector<mutation>> prepare_new_view_announcement(view_ptr view, api::timestamp_type);
 
-    future<std::vector<mutation>> prepare_view_update_announcement(view_ptr view);
+    future<std::vector<mutation>> prepare_view_update_announcement(view_ptr view, api::timestamp_type);
 
-    future<std::vector<mutation>> prepare_view_drop_announcement(const sstring& ks_name, const sstring& cf_name);
+    future<std::vector<mutation>> prepare_view_drop_announcement(const sstring& ks_name, const sstring& cf_name, api::timestamp_type);
 
-    // the function need to be called if a user wants to access most up-to-date schema state
-    future<> schema_read_barrier();
+    // The function needs to be called if the user wants to read most up-to-date group 0 state (including schema state)
+    // (the function ensures that all previously finished group0 operations are visible on this node) or to write it.
+    //
+    // Call this *before* reading group 0 state (e.g. when performing a schema change, call this before validation).
+    // Use `group0_guard::write_timestamp()` when creating mutations which modify group 0 (e.g. schema tables mutations).
+    //
+    // Call ONLY on shard 0.
+    // Requires a quorum of nodes to be available in order to finish.
+    future<group0_guard> start_group0_operation();
 
     // used to check if raft is enabled on the cluster
     bool is_raft_enabled() { return _raft_gr.is_enabled(); }
 
-    /**
-     * actively announce a new version to active hosts via rpc
-     * @param schema The schema mutation to be applied
-     */
-    // Returns a future on the local application of the schema
-    future<> announce(std::vector<mutation> schema);
+    // Apply a group 0 change.
+    // The future resolves after the change is applied locally.
+    future<> announce(std::vector<mutation> schema, group0_guard, std::string_view description = "");
 
     void passive_announce(utils::UUID version);
 
@@ -167,12 +204,8 @@ public:
 private:
     future<> uninit_messaging_service();
 
-    future<> include_keyspace_and_announce(
-            const keyspace_metadata& keyspace, std::vector<mutation> mutations);
-
     future<std::vector<mutation>> include_keyspace(const keyspace_metadata& keyspace, std::vector<mutation> mutations);
-    future<std::vector<mutation>> do_prepare_new_type_announcement(user_type new_type);
-    future<> do_announce_new_type(user_type new_type);
+    future<std::vector<mutation>> do_prepare_new_type_announcement(user_type new_type, api::timestamp_type);
 
     future<> push_schema_mutation(const gms::inet_address& endpoint, const std::vector<mutation>& schema);
 
@@ -181,6 +214,9 @@ private:
     void schedule_schema_pull(const gms::inet_address& endpoint, const gms::endpoint_state& state);
 
     future<> maybe_schedule_schema_pull(const utils::UUID& their_version, const gms::inet_address& endpoint);
+
+    future<> announce_with_raft(std::vector<mutation> schema, group0_guard, std::string_view description);
+    future<> announce_without_raft(std::vector<mutation> schema);
 
 public:
     future<> maybe_sync(const schema_ptr& s, netw::msg_addr endpoint);

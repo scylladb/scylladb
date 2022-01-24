@@ -143,12 +143,16 @@ static void test_database(void (*run_tests)(populate_fn_ex, bool)) {
         run_tests([&] (schema_ptr s, const std::vector<mutation>& partitions, gc_clock::time_point) -> mutation_source {
             auto& mm = e.migration_manager().local();
             try {
+                auto group0_guard = mm.start_group0_operation().get();
+                auto ts = group0_guard.write_timestamp();
                 e.local_db().find_column_family(s->ks_name(), s->cf_name());
-                mm.announce(mm.prepare_column_family_drop_announcement(s->ks_name(), s->cf_name()).get()).get();
+                mm.announce(mm.prepare_column_family_drop_announcement(s->ks_name(), s->cf_name(), ts).get(), std::move(group0_guard)).get();
             } catch (const replica::no_such_column_family&) {
                 // expected
             }
-            mm.announce(mm.prepare_new_column_family_announcement(s).get()).get();
+            auto group0_guard = mm.start_group0_operation().get();
+            auto ts = group0_guard.write_timestamp();
+            mm.announce(mm.prepare_new_column_family_announcement(s, ts).get(), std::move(group0_guard)).get();
             replica::column_family& cf = e.local_db().find_column_family(s);
             for (auto&& m : partitions) {
                 e.local_db().apply(cf.schema(), freeze(m), tracing::trace_state_ptr(), db::commitlog::force_sync::no, db::no_timeout).get();

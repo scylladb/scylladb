@@ -710,7 +710,9 @@ SEASTAR_TEST_CASE(sstable_compaction_does_not_resurrect_data) {
             .with_column(to_bytes("id"), int32_type)
             .set_gc_grace_seconds(1)
             .build();
-        mm.announce(mm.prepare_new_column_family_announcement(s).get()).get();
+        auto group0_guard = mm.start_group0_operation().get();
+        auto ts = group0_guard.write_timestamp();
+        mm.announce(mm.prepare_new_column_family_announcement(s, ts).get(), std::move(group0_guard)).get();
 
         replica::table& t = db.find_column_family(ks_name, table_name);
 
@@ -773,7 +775,9 @@ SEASTAR_TEST_CASE(failed_flush_prevents_writes) {
 
         simple_schema ss;
         schema_ptr s = ss.schema();
-        mm.announce(mm.prepare_new_column_family_announcement(s, api::new_timestamp()).get()).get();
+        auto group0_guard = mm.start_group0_operation().get();
+        auto ts = group0_guard.write_timestamp();
+        mm.announce(mm.prepare_new_column_family_announcement(s, ts).get(), std::move(group0_guard)).get();
 
         replica::table& t = db.find_column_family("ks", "cf");
         memtable& m = t.active_memtable();

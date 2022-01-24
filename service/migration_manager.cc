@@ -17,6 +17,7 @@
 #include "schema_registry.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
+#include "service/raft/group0_state_machine.hh"
 
 #include "service/migration_listener.hh"
 #include "message/messaging_service.hh"
@@ -28,7 +29,7 @@
 #include "replica/database.hh"
 #include "db/schema_tables.hh"
 #include "types/user.hh"
-#include "db/schema_tables.hh"
+#include "db/system_keyspace.hh"
 #include "cql3/functions/user_aggregate.hh"
 
 #include "serialization_visitors.hh"
@@ -38,6 +39,10 @@
 #include "serializer_impl.hh"
 #include "idl/frozen_schema.dist.impl.hh"
 #include "idl/uuid.dist.impl.hh"
+#include "idl/raft_storage.dist.hh"
+#include "idl/raft_storage.dist.impl.hh"
+#include "idl/group0_state_machine.dist.hh"
+#include "idl/group0_state_machine.dist.impl.hh"
 
 
 namespace service {
@@ -52,6 +57,7 @@ static future<schema_ptr> get_schema_definition(table_schema_version v, netw::me
 migration_manager::migration_manager(migration_notifier& notifier, gms::feature_service& feat, netw::messaging_service& ms, service::storage_proxy& storage_proxy, gms::gossiper& gossiper, service::raft_group_registry& raft_gr) :
         _notifier(notifier), _feat(feat), _messaging(ms), _storage_proxy(storage_proxy), _gossiper(gossiper), _raft_gr(raft_gr)
         , _schema_push([this] { return passive_announce(); })
+        , _group0_read_apply_mutex{1}, _group0_operation_mutex{1}
 {
 }
 
@@ -122,24 +128,31 @@ void migration_manager::init_messaging_service()
         });
         return netw::messaging_service::no_wait();
     });
-    _messaging.register_migration_request([this] (const rpc::client_info& cinfo, rpc::optional<netw::schema_pull_options> options) {
-        using frozen_mutations = std::vector<frozen_mutation>;
-        using canonical_mutations = std::vector<canonical_mutation>;
+    _messaging.register_migration_request(std::bind_front(
+            [] (migration_manager& self, const rpc::client_info& cinfo, rpc::optional<netw::schema_pull_options> options)
+                -> future<rpc::tuple<std::vector<frozen_mutation>, std::vector<canonical_mutation>>> {
         const auto cm_retval_supported = options && options->remote_supports_canonical_mutation_retval;
 
-        auto features = _feat.cluster_schema_features();
-        auto& proxy = _storage_proxy.container();
-        return db::schema_tables::convert_schema_to_mutations(proxy, features).then([&proxy, cm_retval_supported] (std::vector<canonical_mutation>&& cm) {
-            const auto& db = proxy.local().get_db().local();
-            if (cm_retval_supported) {
-                return make_ready_future<rpc::tuple<frozen_mutations, canonical_mutations>>(rpc::tuple(frozen_mutations{}, std::move(cm)));
+        auto features = self._feat.cluster_schema_features();
+        auto& proxy = self._storage_proxy.container();
+        auto cm = co_await db::schema_tables::convert_schema_to_mutations(proxy, features);
+        if (self._raft_gr.is_enabled() && options->group0_snapshot_transfer) {
+            // if `group0_snapshot_transfer` is `true`, the sender must also understand canonical mutations
+            // (`group0_snapshot_transfer` was added more recently).
+            if (!cm_retval_supported) {
+                on_internal_error(mlogger,
+                    "migration request handler: group0 snapshot transfer requested, but canonical mutations not supported");
             }
-            auto fm = boost::copy_range<std::vector<frozen_mutation>>(cm | boost::adaptors::transformed([&db] (const canonical_mutation& cm) {
-                return cm.to_mutation(db.find_column_family(cm.column_family_id()).schema());
-            }));
-            return make_ready_future<rpc::tuple<frozen_mutations, canonical_mutations>>(rpc::tuple(std::move(fm), std::move(cm)));
-        });
-    });
+            cm.emplace_back(co_await db::system_keyspace::get_group0_history(proxy));
+        }
+        if (cm_retval_supported) {
+            co_return rpc::tuple(std::vector<frozen_mutation>{}, std::move(cm));
+        }
+        auto fm = boost::copy_range<std::vector<frozen_mutation>>(cm | boost::adaptors::transformed([&db = proxy.local().get_db().local()] (const canonical_mutation& cm) {
+            return cm.to_mutation(db.find_column_family(cm.column_family_id()).schema());
+        }));
+        co_return rpc::tuple(std::move(fm), std::move(cm));
+    }, std::ref(*this)));
     _messaging.register_schema_check([this] {
         return make_ready_future<utils::UUID>(_storage_proxy.get_db().local().get_version());
     });
@@ -592,32 +605,22 @@ public void notifyDropAggregate(UDAggregate udf)
 }
 #endif
 
-std::vector<mutation> migration_manager::prepare_keyspace_update_announcement(lw_shared_ptr<keyspace_metadata> ksm) {
+std::vector<mutation> migration_manager::prepare_keyspace_update_announcement(lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type ts) {
     auto& proxy = _storage_proxy;
     auto& db = proxy.get_db().local();
 
     db.validate_keyspace_update(*ksm);
     mlogger.info("Update Keyspace: {}", ksm);
-    return db::schema_tables::make_create_keyspace_mutations(ksm, api::new_timestamp());
+    return db::schema_tables::make_create_keyspace_mutations(ksm, ts);
 }
 
-std::vector<mutation> migration_manager::prepare_new_keyspace_announcement(lw_shared_ptr<keyspace_metadata> ksm) {
+std::vector<mutation> migration_manager::prepare_new_keyspace_announcement(lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type timestamp) {
     auto& proxy = _storage_proxy;
     auto& db = proxy.get_db().local();
 
     db.validate_new_keyspace(*ksm);
     mlogger.info("Create new Keyspace: {}", ksm);
-    return db::schema_tables::make_create_keyspace_mutations(ksm, api::new_timestamp());
-}
-
-future<std::vector<mutation>> migration_manager::prepare_new_column_family_announcement(schema_ptr cfm)
-{
-    return prepare_new_column_family_announcement(std::move(cfm), api::new_timestamp());
-}
-
-future<> migration_manager::include_keyspace_and_announce(
-        const keyspace_metadata& keyspace, std::vector<mutation> mutations) {
-    co_return co_await announce(co_await include_keyspace(keyspace, std::move(mutations)));
+    return db::schema_tables::make_create_keyspace_mutations(ksm, timestamp);
 }
 
 future<std::vector<mutation>> migration_manager::include_keyspace(
@@ -657,13 +660,12 @@ future<std::vector<mutation>> migration_manager::prepare_new_column_family_annou
     }
 }
 
-future<std::vector<mutation>> migration_manager::prepare_column_family_update_announcement(schema_ptr cfm, bool from_thrift, std::vector<view_ptr> view_updates, std::optional<api::timestamp_type> ts_opt) {
+future<std::vector<mutation>> migration_manager::prepare_column_family_update_announcement(schema_ptr cfm, bool from_thrift, std::vector<view_ptr> view_updates, api::timestamp_type ts) {
     warn(unimplemented::cause::VALIDATION);
 #if 0
     cfm.validate();
 #endif
     try {
-        auto ts = ts_opt.value_or(api::new_timestamp());
         auto& db = _storage_proxy.get_db().local();
         auto&& old_schema = db.find_column_family(cfm->ks_name(), cfm->cf_name()).schema(); // FIXME: Should we lookup by id?
 #if 0
@@ -680,7 +682,9 @@ future<std::vector<mutation>> migration_manager::prepare_column_family_update_an
             std::move(view_mutations.begin(), view_mutations.end(), std::back_inserter(mutations));
             co_await coroutine::maybe_yield();
         }
-        get_notifier().before_update_column_family(*cfm, *old_schema, mutations, ts);
+        co_await seastar::async([&] {
+            get_notifier().before_update_column_family(*cfm, *old_schema, mutations, ts);
+        });
         co_return co_await include_keyspace(*keyspace, std::move(mutations));
     } catch (const replica::no_such_column_family& e) {
         co_return coroutine::make_exception(exceptions::configuration_exception(format("Cannot update non existing table '{}' in keyspace '{}'.",
@@ -688,102 +692,63 @@ future<std::vector<mutation>> migration_manager::prepare_column_family_update_an
     }
 }
 
-future<std::vector<mutation>> migration_manager::do_prepare_new_type_announcement(user_type new_type) {
+future<std::vector<mutation>> migration_manager::do_prepare_new_type_announcement(user_type new_type, api::timestamp_type ts) {
     auto& db = _storage_proxy.get_db().local();
     auto&& keyspace = db.find_keyspace(new_type->_keyspace);
-    auto mutations = db::schema_tables::make_create_type_mutations(keyspace.metadata(), new_type, api::new_timestamp());
+    auto mutations = db::schema_tables::make_create_type_mutations(keyspace.metadata(), new_type, ts);
     return include_keyspace(*keyspace.metadata(), std::move(mutations));
 }
 
-future<std::vector<mutation>> migration_manager::prepare_new_type_announcement(user_type new_type) {
+future<std::vector<mutation>> migration_manager::prepare_new_type_announcement(user_type new_type, api::timestamp_type ts) {
     mlogger.info("Prepare Create new User Type: {}", new_type->get_name_as_string());
-    return do_prepare_new_type_announcement(std::move(new_type));
+    return do_prepare_new_type_announcement(std::move(new_type), ts);
 }
 
-future<std::vector<mutation>> migration_manager::prepare_update_type_announcement(user_type updated_type) {
+future<std::vector<mutation>> migration_manager::prepare_update_type_announcement(user_type updated_type, api::timestamp_type ts) {
     mlogger.info("Prepare Update User Type: {}", updated_type->get_name_as_string());
-    return do_prepare_new_type_announcement(updated_type);
+    return do_prepare_new_type_announcement(updated_type, ts);
 }
 
-future<std::vector<mutation>> migration_manager::prepare_new_function_announcement(shared_ptr<cql3::functions::user_function> func) {
+future<std::vector<mutation>> migration_manager::prepare_new_function_announcement(shared_ptr<cql3::functions::user_function> func, api::timestamp_type ts) {
     auto& db = _storage_proxy.get_db().local();
     auto&& keyspace = db.find_keyspace(func->name().keyspace);
-    auto mutations = db::schema_tables::make_create_function_mutations(func, api::new_timestamp());
+    auto mutations = db::schema_tables::make_create_function_mutations(func, ts);
     return include_keyspace(*keyspace.metadata(), std::move(mutations));
 }
 
-future<std::vector<mutation>> migration_manager::prepare_function_drop_announcement(shared_ptr<cql3::functions::user_function> func) {
+future<std::vector<mutation>> migration_manager::prepare_function_drop_announcement(shared_ptr<cql3::functions::user_function> func, api::timestamp_type ts) {
     auto& db = _storage_proxy.get_db().local();
     auto&& keyspace = db.find_keyspace(func->name().keyspace);
-    auto mutations = db::schema_tables::make_drop_function_mutations(func, api::new_timestamp());
+    auto mutations = db::schema_tables::make_drop_function_mutations(func, ts);
     return include_keyspace(*keyspace.metadata(), std::move(mutations));
 }
 
-future<std::vector<mutation>> migration_manager::prepare_new_aggregate_announcement(shared_ptr<cql3::functions::user_aggregate> aggregate) {
+future<std::vector<mutation>> migration_manager::prepare_new_aggregate_announcement(shared_ptr<cql3::functions::user_aggregate> aggregate, api::timestamp_type ts) {
     auto& db = _storage_proxy.get_db().local();
     auto&& keyspace = db.find_keyspace(aggregate->name().keyspace);
-    auto mutations = db::schema_tables::make_create_aggregate_mutations(aggregate, api::new_timestamp());
+    auto mutations = db::schema_tables::make_create_aggregate_mutations(aggregate, ts);
     return include_keyspace(*keyspace.metadata(), std::move(mutations));
 }
 
-future<std::vector<mutation>> migration_manager::prepare_aggregate_drop_announcement(shared_ptr<cql3::functions::user_aggregate> aggregate) {
+future<std::vector<mutation>> migration_manager::prepare_aggregate_drop_announcement(shared_ptr<cql3::functions::user_aggregate> aggregate, api::timestamp_type ts) {
     auto& db = _storage_proxy.get_db().local();
     auto&& keyspace = db.find_keyspace(aggregate->name().keyspace);
-    auto mutations = db::schema_tables::make_drop_aggregate_mutations(aggregate, api::new_timestamp());
+    auto mutations = db::schema_tables::make_drop_aggregate_mutations(aggregate, ts);
     return include_keyspace(*keyspace.metadata(), std::move(mutations));
 }
 
-#if 0
-public static void announceKeyspaceUpdate(KSMetaData ksm) throws ConfigurationException
-{
-    announceKeyspaceUpdate(ksm, false);
-}
-
-public static void announceKeyspaceUpdate(KSMetaData ksm, boolean announceLocally) throws ConfigurationException
-{
-    ksm.validate();
-
-    KSMetaData oldKsm = Schema.instance.getKSMetaData(ksm.name);
-    if (oldKsm == null)
-        throw new ConfigurationException(String.format("Cannot update non existing keyspace '%s'.", ksm.name));
-
-    mlogger.info(String.format("Update Keyspace '%s' From %s To %s", ksm.name, oldKsm, ksm));
-    announce(LegacySchemaTables.makeCreateKeyspaceMutation(ksm, FBUtilities.timestampMicros()), announceLocally);
-}
-
-public static void announceColumnFamilyUpdate(CFMetaData cfm, boolean fromThrift) throws ConfigurationException
-{
-    announceColumnFamilyUpdate(cfm, fromThrift, false);
-}
-
-public static void announceColumnFamilyUpdate(CFMetaData cfm, boolean fromThrift, boolean announceLocally) throws ConfigurationException
-{
-    cfm.validate();
-
-    CFMetaData oldCfm = Schema.instance.getCFMetaData(cfm.ksName, cfm.cfName);
-    if (oldCfm == null)
-        throw new ConfigurationException(String.format("Cannot update non existing table '%s' in keyspace '%s'.", cfm.cfName, cfm.ksName));
-    KSMetaData ksm = Schema.instance.getKSMetaData(cfm.ksName);
-
-    oldCfm.validateCompatility(cfm);
-
-    mlogger.info(String.format("Update table '%s/%s' From %s To %s", cfm.ksName, cfm.cfName, oldCfm, cfm));
-    announce(LegacySchemaTables.makeUpdateTableMutation(ksm, oldCfm, cfm, FBUtilities.timestampMicros(), fromThrift), announceLocally);
-}
-#endif
-
-std::vector<mutation> migration_manager::prepare_keyspace_drop_announcement(const sstring& ks_name) {
+std::vector<mutation> migration_manager::prepare_keyspace_drop_announcement(const sstring& ks_name, api::timestamp_type ts) {
     auto& db = _storage_proxy.get_db().local();
     if (!db.has_keyspace(ks_name)) {
         throw exceptions::configuration_exception(format("Cannot drop non existing keyspace '{}'.", ks_name));
     }
     auto& keyspace = db.find_keyspace(ks_name);
     mlogger.info("Drop Keyspace '{}'", ks_name);
-    return db::schema_tables::make_drop_keyspace_mutations(keyspace.metadata(), api::new_timestamp());
+    return db::schema_tables::make_drop_keyspace_mutations(keyspace.metadata(), ts);
 }
 
 future<std::vector<mutation>> migration_manager::prepare_column_family_drop_announcement(const sstring& ks_name,
-                    const sstring& cf_name, drop_views drop_views) {
+                    const sstring& cf_name, api::timestamp_type ts, drop_views drop_views) {
     try {
         auto& db = _storage_proxy.get_db().local();
         auto& old_cfm = db.find_column_family(ks_name, cf_name);
@@ -809,15 +774,14 @@ future<std::vector<mutation>> migration_manager::prepare_column_family_drop_anno
         std::vector<mutation> drop_si_mutations;
         if (!schema->all_indices().empty()) {
             auto builder = schema_builder(schema).without_indexes();
-            drop_si_mutations = db::schema_tables::make_update_table_mutations(db, keyspace, schema, builder.build(), api::new_timestamp(), false);
+            drop_si_mutations = db::schema_tables::make_update_table_mutations(db, keyspace, schema, builder.build(), ts, false);
         }
-        auto ts = api::new_timestamp();
         auto mutations = db::schema_tables::make_drop_table_mutations(keyspace, schema, ts);
         mutations.insert(mutations.end(), std::make_move_iterator(drop_si_mutations.begin()), std::make_move_iterator(drop_si_mutations.end()));
         for (auto& v : views) {
             if (!old_cfm.get_index_manager().is_index(v)) {
                 mlogger.info("Drop view '{}.{}' of table '{}'", v->ks_name(), v->cf_name(), schema->cf_name());
-                auto m = db::schema_tables::make_drop_view_mutations(keyspace, v, api::new_timestamp());
+                auto m = db::schema_tables::make_drop_view_mutations(keyspace, v, ts);
                 mutations.insert(mutations.end(), std::make_move_iterator(m.begin()), std::make_move_iterator(m.end()));
             }
         }
@@ -832,16 +796,16 @@ future<std::vector<mutation>> migration_manager::prepare_column_family_drop_anno
     }
 }
 
-future<std::vector<mutation>> migration_manager::prepare_type_drop_announcement(user_type dropped_type) {
+future<std::vector<mutation>> migration_manager::prepare_type_drop_announcement(user_type dropped_type, api::timestamp_type ts) {
     auto& db = _storage_proxy.get_db().local();
     auto&& keyspace = db.find_keyspace(dropped_type->_keyspace);
     mlogger.info("Drop User Type: {}", dropped_type->get_name_as_string());
     auto mutations =
-            db::schema_tables::make_drop_type_mutations(keyspace.metadata(), dropped_type, api::new_timestamp());
+            db::schema_tables::make_drop_type_mutations(keyspace.metadata(), dropped_type, ts);
     return include_keyspace(*keyspace.metadata(), std::move(mutations));
 }
 
-future<std::vector<mutation>> migration_manager::prepare_new_view_announcement(view_ptr view) {
+future<std::vector<mutation>> migration_manager::prepare_new_view_announcement(view_ptr view, api::timestamp_type ts) {
 #if 0
     view.metadata.validate();
 #endif
@@ -852,14 +816,14 @@ future<std::vector<mutation>> migration_manager::prepare_new_view_announcement(v
             throw exceptions::already_exists_exception(view->ks_name(), view->cf_name());
         }
         mlogger.info("Create new view: {}", view);
-        auto mutations = db::schema_tables::make_create_view_mutations(keyspace, std::move(view), api::new_timestamp());
+        auto mutations = db::schema_tables::make_create_view_mutations(keyspace, std::move(view), ts);
         co_return co_await include_keyspace(*keyspace, std::move(mutations));
     } catch (const replica::no_such_keyspace& e) {
         co_return coroutine::make_exception(exceptions::configuration_exception(format("Cannot add view '{}' to non existing keyspace '{}'.", view->cf_name(), view->ks_name())));
     }
 }
 
-future<std::vector<mutation>> migration_manager::prepare_view_update_announcement(view_ptr view) {
+future<std::vector<mutation>> migration_manager::prepare_view_update_announcement(view_ptr view, api::timestamp_type ts) {
 #if 0
     view.metadata.validate();
 #endif
@@ -874,7 +838,7 @@ future<std::vector<mutation>> migration_manager::prepare_view_update_announcemen
         oldCfm.validateCompatility(cfm);
 #endif
         mlogger.info("Update view '{}.{}' From {} To {}", view->ks_name(), view->cf_name(), *old_view, *view);
-        auto mutations = db::schema_tables::make_update_view_mutations(keyspace, view_ptr(old_view), std::move(view), api::new_timestamp(), true);
+        auto mutations = db::schema_tables::make_update_view_mutations(keyspace, view_ptr(old_view), std::move(view), ts, true);
         co_return co_await include_keyspace(*keyspace, std::move(mutations));
     } catch (const std::out_of_range& e) {
         co_return coroutine::make_exception(exceptions::configuration_exception(format("Cannot update non existing materialized view '{}' in keyspace '{}'.",
@@ -882,7 +846,7 @@ future<std::vector<mutation>> migration_manager::prepare_view_update_announcemen
     }
 }
 
-future<std::vector<mutation>> migration_manager::prepare_view_drop_announcement(const sstring& ks_name, const sstring& cf_name) {
+future<std::vector<mutation>> migration_manager::prepare_view_drop_announcement(const sstring& ks_name, const sstring& cf_name, api::timestamp_type ts) {
     auto& db = _storage_proxy.get_db().local();
     try {
         auto& view = db.find_column_family(ks_name, cf_name).schema();
@@ -894,22 +858,13 @@ future<std::vector<mutation>> migration_manager::prepare_view_drop_announcement(
         }
         auto keyspace = db.find_keyspace(ks_name).metadata();
         mlogger.info("Drop view '{}.{}'", view->ks_name(), view->cf_name());
-        auto mutations = db::schema_tables::make_drop_view_mutations(keyspace, view_ptr(std::move(view)), api::new_timestamp());
+        auto mutations = db::schema_tables::make_drop_view_mutations(keyspace, view_ptr(std::move(view)), ts);
         return include_keyspace(*keyspace, std::move(mutations));
     } catch (const replica::no_such_column_family& e) {
         throw exceptions::configuration_exception(format("Cannot drop non existing materialized view '{}' in keyspace '{}'.",
                                                          cf_name, ks_name));
     }
 }
-
-#if 0
-public static void announceAggregateDrop(UDAggregate udf, boolean announceLocally)
-{
-    mlogger.info(String.format("Drop aggregate function overload '%s' args '%s'", udf.name(), udf.argTypes()));
-    KSMetaData ksm = Schema.instance.getKSMetaData(udf.name().keyspace);
-    announce(LegacySchemaTables.makeDropAggregateMutation(ksm, udf, FBUtilities.timestampMicros()), announceLocally);
-}
-#endif
 
 future<> migration_manager::push_schema_mutation(const gms::inet_address& endpoint, const std::vector<mutation>& schema)
 {
@@ -921,50 +876,231 @@ future<> migration_manager::push_schema_mutation(const gms::inet_address& endpoi
     return _messaging.send_definitions_update(id, std::move(fm), std::move(cm));
 }
 
-// Returns a future on the local application of the schema
-future<> migration_manager::announce(std::vector<mutation> schema) {
-    if (_raft_gr.is_enabled()) {
-        assert(this_shard_id() == 0);
-        auto schema_features = _feat.cluster_schema_features();
-        auto adjusted_schema = db::schema_tables::adjust_schema_for_schema_features(schema, schema_features);
-        raft::command cmd;
-        ser::serialize(cmd, std::vector<canonical_mutation>(adjusted_schema.begin(), adjusted_schema.end()));
-        // todo: add schema version into command, to apply
-        // only on condition the version is the same.
-        // qqq: what happens if there is a command in between?
-        // there is a new schema version, apply skipped, but
-        // we don't get a proper error.
-        co_return co_await _raft_gr.group0().add_entry(std::move(cmd), raft::wait_type::applied);
-        // TODO: return "retry" error if apply is a no-op - check
-        // new schema version
-    } else {
-        auto f = db::schema_tables::merge_schema(_storage_proxy.container(), _feat, schema);
+/* *** Linearizing group 0 operations ***
+ *
+ * Group 0 changes (e.g. schema changes) are performed through Raft commands, which are executing in the same order
+ * on every node, according to the order they appear in the Raft log
+ * (executing a command happens in `group0_state_machine::apply`).
+ * The commands contain mutations which modify tables that store group 0 state.
+ *
+ * However, constructing these mutations often requires reading the current state and validating the change against it.
+ * This happens outside the code which applies the commands in order and may race with it. At the moment of applying
+ * a command, the mutations stored within may be 'invalid' because a different command managed to be concurrently applied,
+ * changing the state.
+ *
+ * For example, consider the sequence of commands:
+ *
+ * C1, C2, C3.
+ *
+ * Suppose that mutations inside C2 were constructed on a node which already applied C1. Thus, when applying C2,
+ * the state of group 0 is the same as when the change was validated and its mutations were constructed.
+ *
+ * On the other hand, suppose that mutations inside C3 were also constructed on a node which applied C1, but didn't
+ * apply C2 yet. This could easily happen e.g. when C2 and C3 were constructed concurrently on two different nodes.
+ * Thus, when applying C3, the state of group 0 is different than it was when validating the change and constructing
+ * its mutations: the state consists of the changes from C1 and C2, but when C3 was created, it used the state consisting
+ * of changes from C1 (but not C2). Thus the mutations in C3 are not valid and we must not apply them.
+ *
+ * To protect ourselves from applying such 'obsolete' changes, we detect such commands during `group0_state_machine:apply`
+ * and skip their mutations.
+ *
+ * For this, group 0 state was extended with a 'history table' (system.group0_history), which stores a sequence of
+ * 'group 0 state IDs' (which are timeuuids). Each group 0 command also holds a unique state ID; if the command is successful,
+ * the ID is appended to the history table. Each command also stores a 'previous state ID'; the change described by the command
+ * is only applied when this 'previous state ID' is equal to the last state ID in the history table. If it's different,
+ * we skip the change.
+ *
+ * To perform a group 0 change the user must first read the last state ID from the history table. This happens by obtaining
+ * a `group0_guard` through `migration_manager::start_group0_operation`; the observed last state ID is stored in
+ * `_observed_group0_state_id`. `start_group0_operation` also generates a new state ID for this change and stores it in
+ * `_new_group0_state_id`. We ensure that the new state ID is greater than the observed state ID (in timeuuid order).
+ *
+ * The user then reads group 0 state, validates the change against the observed state, and constructs the mutations
+ * which modify group 0 state. Finally, the user calls `announce`, passing the mutations and the guard.
+ *
+ * `announce` constructs a command for the group 0 state machine. The command stores the mutations and the state IDs.
+ *
+ * When the command is applied, we compare the stored observed state ID against the last state ID in the history table.
+ * If it's the same, that means no change happened in between - no other command managed to 'sneak in' between the moment
+ * the user started the operation and the moment the command was applied.
+ *
+ * The user must use `group0_guard::write_timestamp()` when constructing the mutations. The timestamp is extracted
+ * from the new state ID. This ensures that mutations applied by successful commands have monotonic timestamps.
+ * Indeed: the state IDs of successful commands are increasing (the previous state ID of a command that is successful
+ * is equal to the new state ID of the previous successful command, and we ensure that the new state ID of a command
+ * is greater than the previous state ID of this command).
+ *
+ * To perform a linearized group 0 read the user must also obtain a `group0_guard`. This ensures that all previously
+ * completed changes are visible on this node, as obtaining the guard requires performing a Raft read barrier.
+ *
+ * Furthermore, obtaining the guard ensures that we don't read partial state, since it holds a lock that is also taken
+ * during command application (`_read_apply_mutex_holder`). The lock is released just before sending the command to Raft.
+ * TODO: we may still read partial state if we crash in the middle of command application.
+ * See `group0_state_machine::apply` for a proposed fix.
+ *
+ * Obtaining the guard also ensures that there is no concurrent group 0 operation running on this node using another lock
+ * (`_operation_mutex_holder`); if we allowed multiple concurrent operations to run, some of them could fail
+ * due to the state ID protection. Concurrent operations may still run on different nodes. This lock is thus used
+ * for improving liveness of operations running on the same node by serializing them.
+ */
+struct group0_guard::impl {
+    semaphore_units<> _operation_mutex_holder;
+    semaphore_units<> _read_apply_mutex_holder;
 
-        try {
-            using namespace std::placeholders;
-            auto all_live = _gossiper.get_live_members();
-            auto live_members = all_live | boost::adaptors::filtered([this] (const gms::inet_address& endpoint) {
-                // only push schema to nodes with known and equal versions
-                return endpoint != utils::fb_utilities::get_broadcast_address() &&
-                    _messaging.knows_version(endpoint) &&
-                    _messaging.get_raw_version(endpoint) == netw::messaging_service::current_version;
-            });
-            co_await parallel_for_each(live_members.begin(), live_members.end(),
-                std::bind(std::mem_fn(&migration_manager::push_schema_mutation), this, std::placeholders::_1, schema));
-        } catch (...) {
-            mlogger.error("failed to announce migration to all nodes: {}", std::current_exception());
+    utils::UUID _observed_group0_state_id;
+    utils::UUID _new_group0_state_id;
+
+    impl(const impl&) = delete;
+    impl& operator=(const impl&) = delete;
+
+    impl(semaphore_units<> operation_mutex_holder, semaphore_units<> read_apply_mutex_holder, utils::UUID observed_group0_state_id, utils::UUID new_group0_state_id)
+        : _operation_mutex_holder(std::move(operation_mutex_holder)), _read_apply_mutex_holder(std::move(read_apply_mutex_holder)),
+          _observed_group0_state_id(observed_group0_state_id), _new_group0_state_id(new_group0_state_id)
+    {}
+
+    void release_read_apply_mutex() {
+        assert(_read_apply_mutex_holder.count() == 1);
+        _read_apply_mutex_holder.return_units(1);
+    }
+};
+
+group0_guard::group0_guard(std::unique_ptr<impl> p) : _impl(std::move(p)) {}
+
+group0_guard::~group0_guard() = default;
+
+group0_guard::group0_guard(group0_guard&&) noexcept = default;
+
+utils::UUID group0_guard::observed_group0_state_id() const {
+    return _impl->_observed_group0_state_id;
+}
+
+utils::UUID group0_guard::new_group0_state_id() const {
+    return _impl->_new_group0_state_id;
+}
+
+api::timestamp_type group0_guard::write_timestamp() const {
+    return utils::UUID_gen::micros_timestamp(_impl->_new_group0_state_id);
+}
+
+future<> migration_manager::announce_with_raft(std::vector<mutation> schema, group0_guard guard, std::string_view description) {
+    assert(this_shard_id() == 0);
+    auto schema_features = _feat.cluster_schema_features();
+    auto adjusted_schema = db::schema_tables::adjust_schema_for_schema_features(schema, schema_features);
+
+    group0_command group0_cmd {
+        .change{schema_change{
+            .mutations{adjusted_schema.begin(), adjusted_schema.end()},
+        }},
+
+        .history_append{db::system_keyspace::make_group0_history_state_id_mutation(
+                guard.new_group0_state_id(), description)},
+
+        .prev_state_id{guard.observed_group0_state_id()},
+        .new_state_id{guard.new_group0_state_id()},
+
+        .creator_addr{utils::fb_utilities::get_broadcast_address()},
+        .creator_id{_raft_gr.group0().id()},
+    };
+    raft::command cmd;
+    ser::serialize(cmd, group0_cmd);
+
+    // Release the read_apply mutex so `group0_state_machine::apply` can take it.
+    guard._impl->release_read_apply_mutex();
+
+    co_await _raft_gr.group0().add_entry(std::move(cmd), raft::wait_type::applied);
+
+    // dropping the guard releases `_group0_operation_mutex`, allowing other operations
+    // on this node to proceed
+}
+
+future<> migration_manager::announce_without_raft(std::vector<mutation> schema) {
+    auto f = db::schema_tables::merge_schema(_storage_proxy.container(), _feat, schema);
+
+    try {
+        using namespace std::placeholders;
+        auto all_live = _gossiper.get_live_members();
+        auto live_members = all_live | boost::adaptors::filtered([this] (const gms::inet_address& endpoint) {
+            // only push schema to nodes with known and equal versions
+            return endpoint != utils::fb_utilities::get_broadcast_address() &&
+                _messaging.knows_version(endpoint) &&
+                _messaging.get_raw_version(endpoint) == netw::messaging_service::current_version;
+        });
+        co_await parallel_for_each(live_members.begin(), live_members.end(),
+            std::bind(std::mem_fn(&migration_manager::push_schema_mutation), this, std::placeholders::_1, schema));
+    } catch (...) {
+        mlogger.error("failed to announce migration to all nodes: {}", std::current_exception());
+    }
+
+    co_return co_await std::move(f);
+}
+
+// Returns a future on the local application of the schema
+future<> migration_manager::announce(std::vector<mutation> schema, group0_guard guard, std::string_view description) {
+    if (_raft_gr.is_enabled()) {
+        if (this_shard_id() != 0) {
+            // This should not happen since all places which construct `group0_guard` also check that they are on shard 0.
+            // Note: `group0_guard::impl` is private to this module, making this easy to verify.
+            on_internal_error(mlogger, "announce: must run on shard 0");
         }
 
-        co_return co_await std::move(f);
+        auto new_group0_state_id = guard.new_group0_state_id();
+        co_await announce_with_raft(std::move(schema), std::move(guard), std::move(description));
+
+        if (!(co_await db::system_keyspace::group0_history_contains(new_group0_state_id))) {
+            // The command was applied but the history table does not contain the new group 0 state ID.
+            // This means `apply` skipped the change due to previous state ID mismatch.
+            throw group0_concurrent_modification{};
+        }
+    } else {
+        co_await announce_without_raft(std::move(schema));
     }
 }
 
-future<> migration_manager::schema_read_barrier() {
-    if (_raft_gr.is_enabled()) {
-        assert(this_shard_id() == 0);
-        return _raft_gr.group0().read_barrier();
+static utils::UUID generate_group0_state_id(utils::UUID prev_state_id) {
+    auto ts = api::new_timestamp();
+    if (prev_state_id != utils::UUID{}) {
+        auto lower_bound = utils::UUID_gen::micros_timestamp(prev_state_id);
+        if (ts <= lower_bound) {
+            ts = lower_bound + 1;
+        }
     }
-    return make_ready_future();
+    return utils::UUID_gen::get_random_time_UUID_from_micros(std::chrono::microseconds{ts});
+}
+
+future<group0_guard> migration_manager::start_group0_operation() {
+    if (_raft_gr.is_enabled()) {
+        if (this_shard_id() != 0) {
+            on_internal_error(mlogger, "start_group0_operation: must run on shard 0");
+        }
+
+        auto operation_holder = co_await get_units(_group0_operation_mutex, 1);
+        co_await _raft_gr.group0().read_barrier();
+
+        // Take `_group0_read_apply_mutex` *after* read barrier.
+        // Read barrier may wait for `group0_state_machine::apply` which also takes this mutex.
+        auto read_apply_holder = co_await get_units(_group0_read_apply_mutex, 1);
+
+        auto observed_group0_state_id = co_await db::system_keyspace::get_last_group0_state_id();
+        auto new_group0_state_id = generate_group0_state_id(observed_group0_state_id);
+
+        co_return group0_guard {
+            std::make_unique<group0_guard::impl>(
+                std::move(operation_holder),
+                std::move(read_apply_holder),
+                observed_group0_state_id,
+                new_group0_state_id
+            )
+        };
+    }
+
+    co_return group0_guard {
+        std::make_unique<group0_guard::impl>(
+            semaphore_units<>{},
+            semaphore_units<>{},
+            utils::UUID{},
+            generate_group0_state_id(utils::UUID{})
+        )
+    };
 }
 
 /**

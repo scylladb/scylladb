@@ -1001,7 +1001,7 @@ scylla_core = (['replica/database.cc',
                 'mutation_writer/feed_writers.cc',
                 'lang/lua.cc',
                 'lang/wasm.cc',
-                'service/raft/schema_raft_state_machine.cc',
+                'service/raft/group0_state_machine.cc',
                 'service/raft/raft_sys_table_storage.cc',
                 'serializer.cc',
                 'release.cc',
@@ -1113,6 +1113,7 @@ idls = ['idl/gossip_digest.idl.hh',
         'idl/group0.idl.hh',
         'idl/hinted_handoff.idl.hh',
         'idl/storage_proxy.idl.hh',
+        'idl/group0_state_machine.idl.hh',
         ]
 
 headers = find_headers('.', excluded_dirs=['idl', 'build', 'seastar', '.git'])

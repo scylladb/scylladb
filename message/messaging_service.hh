@@ -171,6 +171,11 @@ struct serializer {};
 
 struct schema_pull_options {
     bool remote_supports_canonical_mutation_retval = true;
+
+    // We (ab)use `MIGRATION_REQUEST` verb to transfer raft group 0 snapshots,
+    // which contain additional data (besides schema tables mutations).
+    // When used inside group 0 snapshot transfer, this is `true`.
+    bool group0_snapshot_transfer = false;
 };
 
 class messaging_service : public seastar::async_sharded_service<messaging_service>, public peering_sharded_service<messaging_service> {

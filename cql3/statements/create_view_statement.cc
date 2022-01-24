@@ -322,12 +322,12 @@ view_ptr create_view_statement::prepare_view(data_dictionary::database db) const
 }
 
 future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
-create_view_statement::prepare_schema_mutations(query_processor& qp) const {
+create_view_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
     std::vector<mutation> m;
     auto definition = prepare_view(qp.db());
     try {
-        m = co_await qp.get_migration_manager().prepare_new_view_announcement(std::move(definition));
+        m = co_await qp.get_migration_manager().prepare_new_view_announcement(std::move(definition), ts);
         using namespace cql_transport;
         ret = ::make_shared<event::schema_change>(
                 event::schema_change::change_type::CREATED,
