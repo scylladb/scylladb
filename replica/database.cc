@@ -20,9 +20,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/metrics.hh>
-#include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/erase.hpp>
-#include <boost/algorithm/string/classification.hpp>
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include "compaction/compaction.hh"
@@ -1398,18 +1396,6 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
     ++semaphore.get_stats().total_successful_reads;
     _stats->short_mutation_queries += bool(result.is_short_read());
     co_return std::tuple(std::move(result), hit_rate);
-}
-
-std::unordered_set<sstring> database::get_initial_tokens() {
-    std::unordered_set<sstring> tokens;
-    sstring tokens_string = get_config().initial_token();
-    try {
-        boost::split(tokens, tokens_string, boost::is_any_of(sstring(", ")));
-    } catch (...) {
-        throw std::runtime_error(format("Unable to parse initial_token={}", tokens_string));
-    }
-    tokens.erase("");
-    return tokens;
 }
 
 std::optional<gms::inet_address> database::get_replace_address() {

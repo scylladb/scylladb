@@ -8,6 +8,10 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
+#include <boost/algorithm/string/split.hpp>
+#include <boost/algorithm/string/erase.hpp>
+#include <boost/algorithm/string/classification.hpp>
+
 #include <seastar/core/coroutine.hh>
 
 #include "dht/boot_strapper.hh"
@@ -59,7 +63,15 @@ future<> boot_strapper::bootstrap(streaming::stream_reason reason, gms::gossiper
 }
 
 std::unordered_set<token> boot_strapper::get_bootstrap_tokens(const token_metadata_ptr tmptr, replica::database& db, dht::check_token_endpoint check) {
-    auto initial_tokens = db.get_initial_tokens();
+    std::unordered_set<sstring> initial_tokens;
+    sstring tokens_string = db.get_config().initial_token();
+    try {
+        boost::split(initial_tokens, tokens_string, boost::is_any_of(sstring(", ")));
+    } catch (...) {
+        throw std::runtime_error(format("Unable to parse initial_token={}", tokens_string));
+    }
+    initial_tokens.erase("");
+
     // if user specified tokens, use those
     if (initial_tokens.size() > 0) {
         blogger.debug("tokens manually specified as {}", initial_tokens);
