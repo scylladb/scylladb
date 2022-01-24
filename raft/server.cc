@@ -100,6 +100,10 @@ private:
     std::list<active_read> _reads;
     std::multimap<index_t, promise<>> _awaited_indexes;
 
+    // Set to true when abort() is called
+    bool _aborted = false;
+
+
     struct stop_apply_fiber{}; // exception to send when apply fiber is needs to be stopepd
     queue<std::variant<std::vector<log_entry_ptr>, snapshot_descriptor>> _apply_entries = queue<std::variant<std::vector<log_entry_ptr>, snapshot_descriptor>>(10);
 
@@ -340,6 +344,11 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type) {
             throw dropped_entry();
         }
     }
+
+    if (_aborted) {
+        throw stopped_error();
+    }
+
     auto& container = type == wait_type::committed ? _awaited_commits : _awaited_applies;
     logger.trace("[{}] waiting for entry {}.{}", id(), eid.term, eid.idx);
 
@@ -1067,6 +1076,7 @@ void server_impl::abort_snapshot_transfers() {
 }
 
 future<> server_impl::abort() {
+    _aborted = true;
     logger.trace("[{}]: abort() called", _id);
     _fsm->stop();
     _apply_entries.abort(std::make_exception_ptr(stop_apply_fiber()));
