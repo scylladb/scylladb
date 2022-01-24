@@ -427,10 +427,10 @@ void storage_service::join_token_ring(int delay) {
                 if (!_bootstrap_tokens.empty()) {
                     slogger.info("Using previously saved tokens = {}", _bootstrap_tokens);
                 } else {
-                    _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(tmptr, _db.local(), dht::check_token_endpoint::yes);
+                    _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(tmptr, _db.local().get_config(), dht::check_token_endpoint::yes);
                 }
             } else {
-                _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(tmptr, _db.local(), dht::check_token_endpoint::yes);
+                _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(tmptr, _db.local().get_config(), dht::check_token_endpoint::yes);
             }
         } else {
             auto replace_addr = _db.local().get_replace_address();
@@ -466,7 +466,7 @@ void storage_service::join_token_ring(int delay) {
         maybe_start_sys_dist_ks();
         _bootstrap_tokens = db::system_keyspace::get_saved_tokens().get0();
         if (_bootstrap_tokens.empty()) {
-            _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(get_token_metadata_ptr(), _db.local(), dht::check_token_endpoint::no);
+            _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(get_token_metadata_ptr(), _db.local().get_config(), dht::check_token_endpoint::no);
             db::system_keyspace::update_tokens(_bootstrap_tokens).get();
         } else {
             size_t num_tokens = _db.local().get_config().num_tokens();
