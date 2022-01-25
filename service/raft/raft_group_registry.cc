@@ -144,13 +144,16 @@ future<> raft_group_registry::uninit_rpc_verbs() {
     ).discard_result();
 }
 
-future<> raft_group_registry::stop_servers() {
-    std::vector<future<>> stop_futures;
-    stop_futures.reserve(_servers.size());
-    for (auto& entry : _servers) {
-        stop_futures.emplace_back(entry.second.server->abort());
+future<> raft_group_registry::stop_servers() noexcept {
+    gate g;
+    for (auto it = _servers.begin(); it != _servers.end(); it = _servers.erase(it)) {
+        auto abort_server = it->second.server->abort();
+        // discarded future is waited via g.close()
+        (void)std::move(abort_server).handle_exception([rsfg = std::move(it->second), gh = g.hold()] (std::exception_ptr ex) {
+            rslog.warn("Failed to abort raft group server {}: {}", rsfg.gid, ex);
+        });
     }
-    co_await when_all_succeed(stop_futures.begin(), stop_futures.end());
+    co_await g.close();
 }
 
 seastar::future<> raft_group_registry::start() {
