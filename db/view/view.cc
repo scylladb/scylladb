@@ -2168,20 +2168,27 @@ void view_updating_consumer::do_flush_buffer() {
     }
 
     _buffer_size = 0;
-    _m = nullptr;
+}
+
+void view_updating_consumer::flush_builder() {
+    _mut_builder->consume_end_of_partition();
+    if (auto mut_opt = _mut_builder->consume_end_of_stream()) {
+        _buffer.emplace_back(std::move(*mut_opt));
+    }
+    _mut_builder.reset();
 }
 
 void view_updating_consumer::maybe_flush_buffer_mid_partition() {
     if (_buffer_size >= buffer_size_hard_limit) {
-        auto m = mutation(_schema, _m->decorated_key(), mutation_partition(_schema));
+        flush_builder();
+        auto dk = _buffer.back().decorated_key();
         do_flush_buffer();
-        _buffer.emplace_back(std::move(m));
-        _m = &_buffer.back();
+        consume_new_partition(dk);
     }
 }
 
 view_updating_consumer::view_updating_consumer(schema_ptr schema, reader_permit permit, replica::table& table, std::vector<sstables::shared_sstable> excluded_sstables, const seastar::abort_source& as,
-        evictable_reader_handle& staging_reader_handle)
+        evictable_reader_handle_v2& staging_reader_handle)
     : view_updating_consumer(std::move(schema), std::move(permit), as, staging_reader_handle,
             [table = table.shared_from_this(), excluded_sstables = std::move(excluded_sstables)] (mutation m) mutable {
         auto s = m.schema();
