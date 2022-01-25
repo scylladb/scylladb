@@ -1963,6 +1963,17 @@ future<> db::commitlog::segment_manager::recalculate_footprint() {
         while (!_recycled_segments.empty()) {
             recycles.push_back(_recycled_segments.pop());
         }
+        // #9955 - must re-stock the queues before we do anything
+        // interruptable/continuation. Because both queues are
+        // used with push/pop eventually which _waits_ for signal
+        // but does _not_ verify that the condition is true once
+        // we return. So copy the objects and look at instead.
+        for (auto& filename : recycles) {
+            _recycled_segments.push(sstring(filename));
+        }
+        for (auto& s : reserves) {
+            _reserve_segments.push(sseg_ptr(s)); // you can have it back now.
+        }
 
         // first, guesstimate sizes
         uint64_t recycle_size = recycles.size() * max_size;
@@ -1988,13 +1999,6 @@ future<> db::commitlog::segment_manager::recalculate_footprint() {
         } catch (...) {
             clogger.error("Exception reading disk footprint ({}).", std::current_exception());
             actual_recycled_size = recycle_size; // best we got
-        }
-
-        for (auto&& filename : recycles) {
-            _recycled_segments.push(std::move(filename));
-        }
-        for (auto&& s : reserves) {
-            _reserve_segments.push(std::move(s)); // you can have it back now.
         }
 
         totals.total_size_on_disk += actual_recycled_size - recycle_size;
