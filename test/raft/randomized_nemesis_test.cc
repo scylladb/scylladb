@@ -144,6 +144,7 @@ public:
     future<raft::snapshot_id> take_snapshot() override {
         auto id = raft::snapshot_id::create_random_id();
         assert(_snapshots.emplace(id, _val).second);
+        tlogger.trace("{}: took snapshot id {} val {}", _id, id, _val);
         co_return id;
     }
 
@@ -154,6 +155,7 @@ public:
     future<> load_snapshot(raft::snapshot_id id) override {
         auto it = _snapshots.find(id);
         assert(it != _snapshots.end()); // dunno if the snapshot can actually be missing
+        tlogger.trace("{}: loading snapshot id {} prev val {} new val {}", _id, id, _val, it->second);
         _val = it->second;
         co_return;
     }
