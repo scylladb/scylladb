@@ -90,6 +90,8 @@ using snapshots_t = std::unordered_map<raft::snapshot_id, State>;
 // because it will share it with an implementation of `raft::persistence`.
 template <PureStateMachine M>
 class impure_state_machine : public raft::state_machine {
+    raft::server_id _id;
+
     typename M::state_t _val;
     snapshots_t<typename M::state_t>& _snapshots;
 
@@ -108,8 +110,8 @@ class impure_state_machine : public raft::state_machine {
     std::unordered_map<cmd_id_t, promise<typename M::output_t>> _output_channels;
 
 public:
-    impure_state_machine(snapshots_t<typename M::state_t>& snapshots)
-        : _val(M::init), _snapshots(snapshots) {}
+    impure_state_machine(raft::server_id id, snapshots_t<typename M::state_t>& snapshots)
+        : _id(id), _val(M::init), _snapshots(snapshots) {}
 
     future<> apply(std::vector<raft::command_cref> cmds) override {
         co_await with_gate(_gate, [this, cmds = std::move(cmds)] () mutable -> future<> {
@@ -1101,7 +1103,7 @@ public:
         using state_t = typename M::state_t;
 
         auto snapshots = std::make_unique<snapshots_t<state_t>>();
-        auto sm = std::make_unique<impure_state_machine<M>>(*snapshots);
+        auto sm = std::make_unique<impure_state_machine<M>>(id, *snapshots);
         auto rpc_ = std::make_unique<rpc<state_t>>(id, *snapshots, std::move(send_rpc));
         auto persistence_ = std::make_unique<persistence_proxy<state_t>>(*snapshots, std::move(persistence));
 
