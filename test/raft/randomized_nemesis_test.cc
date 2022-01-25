@@ -188,6 +188,10 @@ public:
             return f(cmd_id, std::move(fut)).finally([guard = std::move(guard)] {});
         });
     }
+
+    const typename M::state_t& state() const {
+        return _val;
+    }
 };
 
 // TODO: serializable concept?
@@ -1195,6 +1199,10 @@ public:
         return _id;
     }
 
+    const typename M::state_t& state() const {
+        return _sm.state();
+    }
+
     raft::configuration get_configuration() const {
         return _server->get_configuration();
     }
@@ -1330,11 +1338,11 @@ public:
         _network.tick();
     }
 
-    template <std::invocable<raft_server<M>*, failure_detector&> F>
+    template <std::invocable<raft::server_id, raft_server<M>*, failure_detector&> F>
     void for_each_server(F&& f) {
-        for (auto& [_, r]: _routes) {
+        for (auto& [id, r]: _routes) {
             assert(r._fd);
-            f(r._server.get(), *r._fd);
+            f(id, r._server.get(), *r._fd);
         }
     }
 
@@ -1346,7 +1354,7 @@ public:
     }
 
     void tick_servers() {
-        for_each_server([] (raft_server<M>* srv, failure_detector& fd) {
+        for_each_server([] (raft::server_id, raft_server<M>* srv, failure_detector& fd) {
             if (srv) {
                 srv->tick();
             }
@@ -2498,7 +2506,7 @@ SEASTAR_TEST_CASE(basic_generator_test) {
         t.start([&, dist = std::uniform_int_distribution<size_t>(0, 9)] (uint64_t tick) mutable {
             env.tick_network();
             timer.tick();
-            env.for_each_server([&] (raft_server<AppendReg>* srv, failure_detector& fd) {
+            env.for_each_server([&] (raft::server_id, raft_server<AppendReg>* srv, failure_detector& fd) {
                 // Tick each server with probability 1/10.
                 // Thus each server is ticked, on average, once every 10 timer/network ticks.
                 // On the other hand, we now have servers running at different speeds.
@@ -2707,6 +2715,14 @@ SEASTAR_TEST_CASE(basic_generator_test) {
             co_await interp.run();
         } catch (inconsistency& e) {
             tlogger.error("inconsistency: {}", e.what);
+            env.for_each_server([&] (raft::server_id id, raft_server<AppendReg>* srv, failure_detector&) {
+                if (srv) {
+                    tlogger.info("server {} state machine state: {}", id, srv->state());
+                } else {
+                    tlogger.info("node {} currently missing server", id);
+                }
+            });
+
             assert(false);
         }
 
