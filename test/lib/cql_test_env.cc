@@ -581,6 +581,7 @@ public:
 
             raft_gr.start(cfg->check_experimental(db::experimental_features_t::RAFT),
                 std::ref(ms), std::ref(gossiper)).get();
+            auto stop_raft_gr = deferred_stop(raft_gr);
             raft_gr.invoke_on_all(&service::raft_group_registry::start).get();
 
             stream_manager.start(std::ref(db), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(ms), std::ref(mm), std::ref(gms::get_gossiper())).get();
@@ -694,11 +695,13 @@ public:
             auto shutdown_db = defer([&db] {
                 db.invoke_on_all(&replica::database::shutdown).get();
             });
-            // XXX: stop_raft before stopping the database and
+            // XXX: drain_on_shutdown raft before stopping the database and
             // query processor. Group registry stop raft groups
             // when stopped, and until then the groups may use
             // the database and the query processor.
-            auto stop_raft = defer([&raft_gr] { raft_gr.stop().get(); });
+            auto drain_raft = defer([&raft_gr] {
+                raft_gr.invoke_on_all(&service::raft_group_registry::drain_on_shutdown).get();
+            });
 
             view_update_generator.start(std::ref(db)).get();
             view_update_generator.invoke_on_all(&db::view::view_update_generator::start).get();

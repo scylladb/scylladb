@@ -170,10 +170,12 @@ seastar::future<> raft_group_registry::stop() {
     if (!_is_enabled) {
         co_return;
     }
-    co_await when_all_succeed(
-        uninit_rpc_verbs(),
-        stop_servers()
-    ).discard_result();
+    co_await drain_on_shutdown();
+    co_await uninit_rpc_verbs();
+}
+
+seastar::future<> raft_group_registry::drain_on_shutdown() noexcept {
+    return stop_servers();
 }
 
 raft_server_for_group& raft_group_registry::server_for_group(raft::group_id gid) {

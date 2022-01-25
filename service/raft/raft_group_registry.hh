@@ -74,6 +74,10 @@ public:
     // Called by sharded<>::stop()
     seastar::future<> stop();
 
+    // Called by before stopping the database.
+    // May be called multiple times.
+    seastar::future<> drain_on_shutdown() noexcept;
+
     raft_rpc& get_rpc(raft::group_id gid);
 
     // Find server for group by group id. Throws exception if
