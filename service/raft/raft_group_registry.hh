@@ -49,8 +49,6 @@ class raft_group_registry : public seastar::peering_sharded_service<raft_group_r
 private:
     // True if the feature is enabled
     bool _is_enabled;
-    // Protect concurrent configuration changes from races/retries
-    seastar::gate _shutdown_gate;
     netw::messaging_service& _ms;
     // Raft servers along with the corresponding timers to tick each instance.
     // Currently ticking every 100ms.

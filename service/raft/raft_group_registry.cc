@@ -168,7 +168,6 @@ seastar::future<> raft_group_registry::stop() {
         co_return;
     }
     co_await when_all_succeed(
-        _shutdown_gate.close(),
         uninit_rpc_verbs(),
         stop_servers()
     ).discard_result();
