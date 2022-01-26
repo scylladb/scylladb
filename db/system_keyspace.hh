@@ -421,8 +421,14 @@ public:
     static future<bool> group0_history_contains(utils::UUID state_id);
 
     // The mutation appends the given state ID to the group 0 history table, with the given description if non-empty.
+    //
+    // If `gc_older_than` is provided, the mutation will also contain a tombstone that clears all entries whose
+    // timestamps (contained in the state IDs) are older than `timestamp(state_id) - gc_older_than`.
+    // The duration must be non-negative and smaller than `timestamp(state_id)`.
+    //
     // The mutation's timestamp is extracted from the state ID.
-    static mutation make_group0_history_state_id_mutation(utils::UUID state_id, std::string_view description);
+    static mutation make_group0_history_state_id_mutation(
+            utils::UUID state_id, std::optional<gc_clock::duration> gc_older_than, std::string_view description);
 
     // Obtain the contents of the group 0 history table in mutation form.
     // Assumes that the history table exists, i.e. Raft experimental feature is enabled.

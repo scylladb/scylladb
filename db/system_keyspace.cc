@@ -3048,7 +3048,8 @@ future<bool> system_keyspace::group0_history_contains(utils::UUID state_id) {
     co_return !rs->empty();
 }
 
-mutation system_keyspace::make_group0_history_state_id_mutation(utils::UUID state_id, std::string_view description) {
+mutation system_keyspace::make_group0_history_state_id_mutation(
+        utils::UUID state_id, std::optional<gc_clock::duration> gc_older_than, std::string_view description) {
     auto s = group0_history();
     mutation m(s, partition_key::from_singular(*s, GROUP0_HISTORY_KEY));
     auto& row = m.partition().clustered_row(*s, clustering_key::from_singular(*s, state_id));
@@ -3058,6 +3059,23 @@ mutation system_keyspace::make_group0_history_state_id_mutation(utils::UUID stat
         auto cdef = s->get_column_definition("description");
         assert(cdef);
         row.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, ts, cdef->type->decompose(description)));
+    }
+    if (gc_older_than) {
+        using namespace std::chrono;
+        assert(*gc_older_than >= gc_clock::duration{0});
+
+        auto ts_millis = duration_cast<milliseconds>(microseconds{ts});
+        auto gc_older_than_millis = duration_cast<milliseconds>(*gc_older_than);
+        assert(gc_older_than_millis < ts_millis);
+
+        auto tomb_upper_bound = utils::UUID_gen::min_time_UUID(ts_millis - gc_older_than_millis);
+        // We want to delete all entries with IDs smaller than `tomb_upper_bound`
+        // but the deleted range is of the form (x, +inf) since the schema is reversed.
+        auto range = query::clustering_range::make_starting_with({
+                clustering_key_prefix::from_single_value(*s, timeuuid_type->decompose(tomb_upper_bound)), false});
+        auto bv = bound_view::from_range(range);
+
+        m.partition().apply_delete(*s, range_tombstone{bv.first, bv.second, tombstone{ts, gc_clock::now()}});
     }
     return m;
 }
