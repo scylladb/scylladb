@@ -603,7 +603,9 @@ void fsm::append_entries(server_id from, append_request&& request) {
         last_new_idx = _log.maybe_append(std::move(request.entries));
     }
 
-    advance_commit_idx(request.leader_commit_idx);
+    // Do not advance commit index further than last_new_idx, or we could incorrectly
+    // mark outdated entries as committed (see #9965).
+    advance_commit_idx(std::min(request.leader_commit_idx, last_new_idx));
 
     send_to(from, append_reply{_current_term, _commit_idx, append_reply::accepted{last_new_idx}});
 }
