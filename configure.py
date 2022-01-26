@@ -2032,25 +2032,31 @@ with open(buildfile_tmp, 'w') as f:
             build $builddir/{mode}/iotune: copy $builddir/{mode}/seastar/apps/iotune/iotune
             ''').format(**locals()))
         include_scylla_and_iotune = f'$builddir/{mode}/scylla $builddir/{mode}/iotune' if not args.dist_only else ''
-        f.write('build $builddir/{mode}/dist/tar/{scylla_product}-{arch}-package.tar.gz: package {include_scylla_and_iotune} $builddir/SCYLLA-RELEASE-FILE $builddir/SCYLLA-VERSION-FILE $builddir/debian/debian $builddir/node_exporter | always\n'.format(**locals()))
+        f.write('build $builddir/{mode}/dist/tar/{scylla_product}-{arch}.tar.gz: package {include_scylla_and_iotune} $builddir/SCYLLA-RELEASE-FILE $builddir/SCYLLA-VERSION-FILE $builddir/debian/debian $builddir/node_exporter | always\n'.format(**locals()))
         f.write('  mode = {mode}\n'.format(**locals()))
-        f.write('build $builddir/{mode}/dist/tar/{scylla_product}-package.tar.gz: copy $builddir/{mode}/dist/tar/{scylla_product}-{arch}-package.tar.gz\n'.format(**locals()))
+        # The next three lines copy the generated reloc file to several files with different names for backward compatibility
+        f.write('build $builddir/{mode}/dist/tar/{scylla_product}.tar.gz: copy $builddir/{mode}/dist/tar/{scylla_product}-{arch}.tar.gz\n'.format(**locals()))
+        f.write('build $builddir/{mode}/dist/tar/{scylla_product}-package.tar.gz: copy $builddir/{mode}/dist/tar/{scylla_product}-{arch}.tar.gz\n'.format(**locals()))
+        f.write('build $builddir/{mode}/dist/tar/{scylla_product}-{arch}-package.tar.gz: copy $builddir/{mode}/dist/tar/{scylla_product}-{arch}.tar.gz\n'.format(**locals()))
         f.write('  mode = {mode}\n'.format(**locals()))
 
-        f.write(f'build $builddir/dist/{mode}/redhat: rpmbuild $builddir/{mode}/dist/tar/{scylla_product}-{arch}-package.tar.gz\n')
+        f.write(f'build $builddir/dist/{mode}/redhat: rpmbuild $builddir/{mode}/dist/tar/{scylla_product}-{arch}.tar.gz\n')
         f.write(f'  mode = {mode}\n')
-        f.write(f'build $builddir/dist/{mode}/debian: debbuild $builddir/{mode}/dist/tar/{scylla_product}-{arch}-package.tar.gz\n')
+        f.write(f'build $builddir/dist/{mode}/debian: debbuild $builddir/{mode}/dist/tar/{scylla_product}-{arch}.tar.gz\n')
         f.write(f'  mode = {mode}\n')
         f.write(f'build dist-server-{mode}: phony $builddir/dist/{mode}/redhat $builddir/dist/{mode}/debian dist-server-compat-{mode}\n')
-        f.write(f'build dist-server-compat-{mode}: phony $builddir/{mode}/dist/tar/{scylla_product}-package.tar.gz\n')
+        f.write(f'build dist-server-compat-{mode}: phony $builddir/{mode}/dist/tar/{scylla_product}.tar.gz\n')
         f.write(f'build dist-jmx-{mode}: phony $builddir/{mode}/dist/tar/{scylla_product}-jmx-package.tar.gz dist-jmx-rpm dist-jmx-deb\n')
         f.write(f'build dist-tools-{mode}: phony $builddir/{mode}/dist/tar/{scylla_product}-tools-package.tar.gz dist-tools-rpm dist-tools-deb\n')
         f.write(f'build dist-python3-{mode}: phony dist-python3-tar dist-python3-rpm dist-python3-deb dist-python3-compat\n')
-        f.write(f'build dist-unified-{mode}: phony $builddir/{mode}/dist/tar/{scylla_product}-unified-{arch}-package-{scylla_version}.{scylla_release}.tar.gz dist-unified-compat-{mode}\n')
-        f.write(f'build dist-unified-compat-{mode}: phony $builddir/{mode}/dist/tar/{scylla_product}-unified-package-{scylla_version}.{scylla_release}.tar.gz\n')
-        f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-unified-{arch}-package-{scylla_version}.{scylla_release}.tar.gz: unified $builddir/{mode}/dist/tar/{scylla_product}-{arch}-package.tar.gz $builddir/{mode}/dist/tar/{scylla_product}-python3-{arch}-package.tar.gz $builddir/{mode}/dist/tar/{scylla_product}-jmx-package.tar.gz $builddir/{mode}/dist/tar/{scylla_product}-tools-package.tar.gz | always\n')
+        f.write(f'build dist-unified-{mode}: phony $builddir/{mode}/dist/tar/{scylla_product}-unified-{scylla_version}-{scylla_release}-{arch}.tar.gz dist-unified-compat-{mode}\n')
+        f.write(f'build dist-unified-compat-{mode}: phony $builddir/{mode}/dist/tar/{scylla_product}-unified-{scylla_version}-{scylla_release}.tar.gz\n')
+        f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-unified-{scylla_version}-{scylla_release}-{arch}.tar.gz: unified $builddir/{mode}/dist/tar/{scylla_product}-{arch}.tar.gz $builddir/{mode}/dist/tar/{scylla_product}-python3-{arch}.tar.gz $builddir/{mode}/dist/tar/{scylla_product}-jmx-package.tar.gz $builddir/{mode}/dist/tar/{scylla_product}-tools-package.tar.gz | always\n')
         f.write(f'  mode = {mode}\n')
-        f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-unified-package-{scylla_version}.{scylla_release}.tar.gz: copy $builddir/{mode}/dist/tar/{scylla_product}-unified-{arch}-package-{scylla_version}.{scylla_release}.tar.gz\n')
+        # The next three lines copy the generated unified file to several files with different names for backward compatibility
+        f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-unified-{scylla_version}-{scylla_release}.tar.gz: copy $builddir/{mode}/dist/tar/{scylla_product}-unified-{scylla_version}-{scylla_release}-{arch}.tar.gz\n')
+        f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-unified-{arch}-package-{scylla_version}-{scylla_release}.tar.gz: copy $builddir/{mode}/dist/tar/{scylla_product}-unified-{scylla_version}-{scylla_release}-{arch}.tar.gz\n')
+        f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-unified-package-{scylla_version}-{scylla_release}.tar.gz: copy $builddir/{mode}/dist/tar/{scylla_product}-unified-{scylla_version}-{scylla_release}-{arch}.tar.gz\n')
         f.write('rule libdeflate.{mode}\n'.format(**locals()))
         f.write('  command = make -C libdeflate BUILD_DIR=../$builddir/{mode}/libdeflate/ CFLAGS="{libdeflate_cflags}" CC={args.cc} ../$builddir/{mode}/libdeflate//libdeflate.a\n'.format(**locals()))
         f.write('build $builddir/{mode}/libdeflate/libdeflate.a: libdeflate.{mode}\n'.format(**locals()))
@@ -2076,14 +2082,14 @@ with open(buildfile_tmp, 'w') as f:
     )
 
     f.write(textwrap.dedent(f'''\
-        build dist-unified-tar: phony {' '.join([f'$builddir/{mode}/dist/tar/{scylla_product}-unified-{arch}-package-{scylla_version}.{scylla_release}.tar.gz' for mode in default_modes])}
-        build dist-unified-compat: phony {' '.join([f'$builddir/{mode}/dist/tar/{scylla_product}-unified-package-{scylla_version}.{scylla_release}.tar.gz' for mode in default_modes])}
+        build dist-unified-tar: phony {' '.join([f'$builddir/{mode}/dist/tar/{scylla_product}-unified-{scylla_version}-{scylla_release}-{arch}.tar.gz' for mode in default_modes])}
+        build dist-unified-compat: phony {' '.join([f'$builddir/{mode}/dist/tar/{scylla_product}-unified-{scylla_version}-{scylla_release}.tar.gz' for mode in default_modes])}
         build dist-unified: phony dist-unified-tar dist-unified-compat
 
         build dist-server-deb: phony {' '.join(['$builddir/dist/{mode}/debian'.format(mode=mode) for mode in build_modes])}
         build dist-server-rpm: phony {' '.join(['$builddir/dist/{mode}/redhat'.format(mode=mode) for mode in build_modes])}
-        build dist-server-tar: phony {' '.join(['$builddir/{mode}/dist/tar/{scylla_product}-{arch}-package.tar.gz'.format(mode=mode, scylla_product=scylla_product, arch=arch) for mode in default_modes])}
-        build dist-server-compat: phony {' '.join(['$builddir/{mode}/dist/tar/{scylla_product}-package.tar.gz'.format(mode=mode, scylla_product=scylla_product, arch=arch) for mode in default_modes])}
+        build dist-server-tar: phony {' '.join(['$builddir/{mode}/dist/tar/{scylla_product}-{arch}.tar.gz'.format(mode=mode, scylla_product=scylla_product, arch=arch) for mode in default_modes])}
+        build dist-server-compat: phony {' '.join(['$builddir/{mode}/dist/tar/{scylla_product}.tar.gz'.format(mode=mode, scylla_product=scylla_product, arch=arch) for mode in default_modes])}
         build dist-server: phony dist-server-tar dist-server-compat dist-server-rpm dist-server-deb
 
         rule build-submodule-reloc
@@ -2115,17 +2121,17 @@ with open(buildfile_tmp, 'w') as f:
         build dist-tools-tar: phony {' '.join(['$builddir/{mode}/dist/tar/{scylla_product}-tools-package.tar.gz'.format(mode=mode, scylla_product=scylla_product) for mode in default_modes])}
         build dist-tools: phony dist-tools-tar dist-tools-rpm dist-tools-deb
 
-        build tools/python3/build/{scylla_product}-python3-{arch}-package.tar.gz: build-submodule-reloc
+        build tools/python3/build/{scylla_product}-python3-{arch}.tar.gz: build-submodule-reloc
           reloc_dir = tools/python3
           args = --packages "{python3_dependencies}" --pip-packages "{pip_dependencies}"
-        build dist-python3-rpm: build-submodule-rpm tools/python3/build/{scylla_product}-python3-{arch}-package.tar.gz
+        build dist-python3-rpm: build-submodule-rpm tools/python3/build/{scylla_product}-python3-{arch}.tar.gz
           dir = tools/python3
-          artifact = $builddir/{scylla_product}-python3-{arch}-package.tar.gz
-        build dist-python3-deb: build-submodule-deb tools/python3/build/{scylla_product}-python3-{arch}-package.tar.gz
+          artifact = $builddir/{scylla_product}-python3-{arch}.tar.gz
+        build dist-python3-deb: build-submodule-deb tools/python3/build/{scylla_product}-python3-{arch}.tar.gz
           dir = tools/python3
-          artifact = $builddir/{scylla_product}-python3-{arch}-package.tar.gz
-        build dist-python3-tar: phony {' '.join(['$builddir/{mode}/dist/tar/{scylla_product}-python3-{arch}-package.tar.gz'.format(mode=mode, scylla_product=scylla_product, arch=arch) for mode in default_modes])}
-        build dist-python3-compat: phony {' '.join(['$builddir/{mode}/dist/tar/{scylla_product}-python3-package.tar.gz'.format(mode=mode, scylla_product=scylla_product, arch=arch) for mode in default_modes])}
+          artifact = $builddir/{scylla_product}-python3-{arch}.tar.gz
+        build dist-python3-tar: phony {' '.join(['$builddir/{mode}/dist/tar/{scylla_product}-python3-{arch}.tar.gz'.format(mode=mode, scylla_product=scylla_product, arch=arch) for mode in default_modes])}
+        build dist-python3-compat: phony {' '.join(['$builddir/{mode}/dist/tar/{scylla_product}-python3.tar.gz'.format(mode=mode, scylla_product=scylla_product, arch=arch) for mode in default_modes])}
         build dist-python3: phony dist-python3-tar dist-python3-compat dist-python3-rpm dist-python3-deb
         build dist-deb: phony dist-server-deb dist-python3-deb dist-jmx-deb dist-tools-deb
         build dist-rpm: phony dist-server-rpm dist-python3-rpm dist-jmx-rpm dist-tools-rpm
@@ -2142,8 +2148,11 @@ with open(buildfile_tmp, 'w') as f:
         '''))
     for mode in build_modes:
         f.write(textwrap.dedent(f'''\
-        build $builddir/{mode}/dist/tar/{scylla_product}-python3-{arch}-package.tar.gz: copy tools/python3/build/{scylla_product}-python3-{arch}-package.tar.gz
-        build $builddir/{mode}/dist/tar/{scylla_product}-python3-package.tar.gz: copy $builddir/{mode}/dist/tar/{scylla_product}-python3-{arch}-package.tar.gz
+        build $builddir/{mode}/dist/tar/{scylla_product}-python3-{arch}.tar.gz: copy tools/python3/build/{scylla_product}-python3-{arch}.tar.gz
+        # The next three lines copy the generated python file to several files with different names for backward compatibility
+        build $builddir/{mode}/dist/tar/{scylla_product}-python3.tar.gz: copy $builddir/{mode}/dist/tar/{scylla_product}-python3-{arch}.tar.gz
+        build $builddir/{mode}/dist/tar/{scylla_product}-python3-package.tar.gz: copy $builddir/{mode}/dist/tar/{scylla_product}-python3-{arch}.tar.gz
+        build $builddir/{mode}/dist/tar/{scylla_product}-python3-{arch}-package.tar.gz: copy $builddir/{mode}/dist/tar/{scylla_product}-python3-{arch}.tar.gz
         build $builddir/{mode}/dist/tar/{scylla_product}-tools-package.tar.gz: copy tools/java/build/{scylla_product}-tools-package.tar.gz
         build $builddir/{mode}/dist/tar/{scylla_product}-jmx-package.tar.gz: copy tools/jmx/build/{scylla_product}-jmx-package.tar.gz
 

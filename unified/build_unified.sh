@@ -10,7 +10,7 @@
 print_usage() {
     echo "build_unified.sh --mode <mode>"
     echo "  --mode specify mode (default: release)"
-    echo "  --unified-pkg specify package path (default: build/release/scylla-unified-package.tar.gz)"
+    echo "  --unified-pkg specify package path (default: build/release/scylla-unified-$(arch).tar.gz)"
     exit 1
 }
 
@@ -22,7 +22,7 @@ fi
 PRODUCT=`cat build/SCYLLA-PRODUCT-FILE`
 
 MODE="release"
-UNIFIED_PKG="build/release/$PRODUCT-unified-$(arch)-package.tar.gz"
+UNIFIED_PKG="build/release/$PRODUCT-unified-$(arch).tar.gz"
 while [ $# -gt 0 ]; do
     case "$1" in
         "--mode")
@@ -40,7 +40,7 @@ while [ $# -gt 0 ]; do
 done
 
 UNIFIED_PKG="$(realpath -s $UNIFIED_PKG)"
-PKGS="build/$MODE/dist/tar/$PRODUCT-$(arch)-package.tar.gz build/$MODE/dist/tar/$PRODUCT-python3-$(arch)-package.tar.gz build/$MODE/dist/tar/$PRODUCT-jmx-package.tar.gz build/$MODE/dist/tar/$PRODUCT-tools-package.tar.gz"
+PKGS="build/$MODE/dist/tar/$PRODUCT-$(arch).tar.gz build/$MODE/dist/tar/$PRODUCT-python3-$(arch).tar.gz build/$MODE/dist/tar/$PRODUCT-jmx-package.tar.gz build/$MODE/dist/tar/$PRODUCT-tools-package.tar.gz"
 
 rm -rf build/"$MODE"/unified/
 mkdir -p build/"$MODE"/unified/
@@ -50,9 +50,8 @@ for pkg in $PKGS; do
         echo "please build relocatable package before building unified package."
         exit 1
     fi
-    pkg="$(readlink -f $pkg)"
     tar -C build/"$MODE"/unified/ -xpf "$pkg"
-    dirname=$(basename "$pkg"| sed -e "s/-$(arch)-package.tar.gz//" -e "s/-package.tar.gz//")
+    dirname=$(basename "$pkg"| sed -e "s/-$(arch).tar.gz//" -e "s/-package.tar.gz//")
     dirname=${dirname/#$PRODUCT/scylla}
     if [ ! -d build/"$MODE"/unified/"$dirname" ]; then
         echo "Directory $dirname not found in $pkg, the pacakge may corrupted."
