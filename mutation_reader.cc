@@ -1919,6 +1919,17 @@ future<> evictable_reader_v2::fill_buffer() {
     _reader = co_await resume_or_create_reader();
 
     if (_reader_recreated) {
+        // Recreating the reader breaks snapshot isolation and creates all sorts
+        // of complications around the continuity of range tombstone changes,
+        // e.g. a range tombstone started by the previous reader object
+        // might not exist anymore with the new reader object.
+        // To avoid complications we reset the tombstone state on each reader
+        // recreation by emitting a null tombstone change, if we read at least
+        // one clustering fragment from the partition.
+        if (_next_position_in_partition.region() == partition_region::clustered
+                && _tri_cmp(_next_position_in_partition, position_in_partition::before_all_clustered_rows()) > 0) {
+            push_mutation_fragment(*_schema, _permit, range_tombstone_change{position_in_partition_view::before_key(_next_position_in_partition), {}});
+        }
         auto mf1 = co_await (*_reader)();
         auto mf2 = co_await (*_reader)();
         auto mf3 = co_await (*_reader)();
