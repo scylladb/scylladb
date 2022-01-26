@@ -49,12 +49,6 @@
 
 extern logging::logger rlogger;
 
-struct shard_config {
-    unsigned shard;
-    unsigned shard_count;
-    unsigned ignore_msb;
-};
-
 static bool inject_rpc_stream_error = false;
 
 enum class repair_state : uint16_t {
@@ -839,34 +833,6 @@ public:
         return ret;
     }
 
-    static std::unordered_map<node_repair_meta_id, repair_meta_ptr>& repair_meta_map();
-
-    static repair_meta_ptr get_repair_meta(gms::inet_address from, uint32_t repair_meta_id);
-
-    static future<>
-    insert_repair_meta(repair_service& repair,
-            const gms::inet_address& from,
-            uint32_t src_cpu_id,
-            uint32_t repair_meta_id,
-            dht::token_range range,
-            row_level_diff_detect_algorithm algo,
-            uint64_t max_row_buf_size,
-            uint64_t seed,
-            shard_config master_node_shard_config,
-            table_schema_version schema_version,
-            streaming::stream_reason reason);
-
-    static future<>
-    remove_repair_meta(const gms::inet_address& from,
-            uint32_t repair_meta_id,
-            sstring ks_name,
-            sstring cf_name,
-            dht::token_range range);
-
-    static future<> remove_repair_meta(gms::inet_address from);
-
-    static future<> remove_repair_meta();
-
     static future<uint32_t> get_next_repair_meta_id();
 
     void reset_peer_row_hash_sets() {
@@ -1545,7 +1511,7 @@ public:
             uint64_t seed, shard_config master_node_shard_config, table_schema_version schema_version, streaming::stream_reason reason) {
         rlogger.debug(">>> Started Row Level Repair (Follower): local={}, peers={}, repair_meta_id={}, keyspace={}, cf={}, schema_version={}, range={}, seed={}, max_row_buf_siz={}",
             utils::fb_utilities::get_broadcast_address(), from, repair_meta_id, ks_name, cf_name, schema_version, range, seed, max_row_buf_size);
-        return insert_repair_meta(repair, from, src_cpu_id, repair_meta_id, std::move(range), algo, max_row_buf_size, seed, std::move(master_node_shard_config), std::move(schema_version), reason).then([] {
+        return repair.insert_repair_meta(from, src_cpu_id, repair_meta_id, std::move(range), algo, max_row_buf_size, seed, std::move(master_node_shard_config), std::move(schema_version), reason).then([] {
             return repair_row_level_start_response{repair_row_level_start_status::ok};
         }).handle_exception_type([] (replica::no_such_column_family&) {
             return repair_row_level_start_response{repair_row_level_start_status::no_such_column_family};
@@ -1564,12 +1530,12 @@ public:
 
     // RPC handler
     static future<>
-    repair_row_level_stop_handler(gms::inet_address from, uint32_t repair_meta_id, sstring ks_name, sstring cf_name, dht::token_range range) {
+    repair_row_level_stop_handler(repair_service& rs, gms::inet_address from, uint32_t repair_meta_id, sstring ks_name, sstring cf_name, dht::token_range range) {
         rlogger.debug("<<< Finished Row Level Repair (Follower): local={}, peers={}, repair_meta_id={}, keyspace={}, cf={}, range={}",
             utils::fb_utilities::get_broadcast_address(), from, repair_meta_id, ks_name, cf_name, range);
-        auto rm = get_repair_meta(from, repair_meta_id);
+        auto rm = rs.get_repair_meta(from, repair_meta_id);
         rm->set_repair_state_for_local_node(repair_state::row_level_stop_started);
-        return remove_repair_meta(from, repair_meta_id, std::move(ks_name), std::move(cf_name), std::move(range)).then([rm] {
+        return rs.remove_repair_meta(from, repair_meta_id, std::move(ks_name), std::move(cf_name), std::move(range)).then([rm] {
             rm->set_repair_state_for_local_node(repair_state::row_level_stop_finished);
         });
     }
@@ -1585,8 +1551,8 @@ public:
 
 
     // RPC handler
-    static future<uint64_t> repair_get_estimated_partitions_handler(gms::inet_address from, uint32_t repair_meta_id) {
-        auto rm = get_repair_meta(from, repair_meta_id);
+    static future<uint64_t> repair_get_estimated_partitions_handler(repair_service& rs, gms::inet_address from, uint32_t repair_meta_id) {
+        auto rm = rs.get_repair_meta(from, repair_meta_id);
         rm->set_repair_state_for_local_node(repair_state::get_estimated_partitions_started);
         return rm->get_estimated_partitions().then([rm] (uint64_t partitions) {
             rm->set_repair_state_for_local_node(repair_state::get_estimated_partitions_finished);
@@ -1605,8 +1571,8 @@ public:
 
 
     // RPC handler
-    static future<> repair_set_estimated_partitions_handler(gms::inet_address from, uint32_t repair_meta_id, uint64_t estimated_partitions) {
-        auto rm = get_repair_meta(from, repair_meta_id);
+    static future<> repair_set_estimated_partitions_handler(repair_service& rs, gms::inet_address from, uint32_t repair_meta_id, uint64_t estimated_partitions) {
+        auto rm = rs.get_repair_meta(from, repair_meta_id);
         rm->set_repair_state_for_local_node(repair_state::set_estimated_partitions_started);
         return rm->set_estimated_partitions(estimated_partitions).then([rm] {
             rm->set_repair_state_for_local_node(repair_state::set_estimated_partitions_finished);
@@ -1903,6 +1869,7 @@ get_set_diff(const repair_hash_set& x, const repair_hash_set& y) {
 }
 
 static future<stop_iteration> repair_get_row_diff_with_rpc_stream_process_op(
+        sharded<repair_service>& repair,
         gms::inet_address from,
         uint32_t src_cpu_id,
         uint32_t repair_meta_id,
@@ -1923,8 +1890,8 @@ static future<stop_iteration> repair_get_row_diff_with_rpc_stream_process_op(
         bool needs_all_rows = hash_cmd.cmd == repair_stream_cmd::needs_all_rows;
         _metrics.rx_hashes_nr += current_set_diff.size();
         auto fp = make_foreign(std::make_unique<repair_hash_set>(std::move(current_set_diff)));
-        return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, needs_all_rows, fp = std::move(fp)] {
-            auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
+        return repair.invoke_on(src_cpu_id % smp::count, [from, repair_meta_id, needs_all_rows, fp = std::move(fp)] (repair_service& local_repair) {
+            auto rm = local_repair.get_repair_meta(from, repair_meta_id);
             rm->set_repair_state_for_local_node(repair_state::get_row_diff_with_rpc_stream_started);
             if (fp.get_owner_shard() == this_shard_id()) {
                 return rm->get_row_diff_handler(std::move(*fp), repair_meta::needs_all_rows_t(needs_all_rows)).then([rm] (repair_rows_on_wire rows) {
@@ -1959,6 +1926,7 @@ static future<stop_iteration> repair_get_row_diff_with_rpc_stream_process_op(
 }
 
 static future<stop_iteration> repair_put_row_diff_with_rpc_stream_process_op(
+        sharded<repair_service>& repair,
         gms::inet_address from,
         uint32_t src_cpu_id,
         uint32_t repair_meta_id,
@@ -1975,8 +1943,8 @@ static future<stop_iteration> repair_put_row_diff_with_rpc_stream_process_op(
     } else if (row.cmd == repair_stream_cmd::end_of_current_rows) {
         rlogger.trace("Got repair_rows_on_wire from peer={}, got end_of_current_rows", from);
         auto fp = make_foreign(std::make_unique<repair_rows_on_wire>(std::move(current_rows)));
-        return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, fp = std::move(fp)] () mutable {
-            auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
+        return repair.invoke_on(src_cpu_id % smp::count, [from, repair_meta_id, fp = std::move(fp)] (repair_service& local_repair) mutable {
+            auto rm = local_repair.get_repair_meta(from, repair_meta_id);
             rm->set_repair_state_for_local_node(repair_state::put_row_diff_with_rpc_stream_started);
             if (fp.get_owner_shard() == this_shard_id()) {
                 return rm->put_row_diff_handler(std::move(*fp), from).then([rm] {
@@ -2000,6 +1968,7 @@ static future<stop_iteration> repair_put_row_diff_with_rpc_stream_process_op(
 }
 
 static future<stop_iteration> repair_get_full_row_hashes_with_rpc_stream_process_op(
+        sharded<repair_service>& repair,
         gms::inet_address from,
         uint32_t src_cpu_id,
         uint32_t repair_meta_id,
@@ -2010,8 +1979,8 @@ static future<stop_iteration> repair_get_full_row_hashes_with_rpc_stream_process
     repair_stream_cmd status = std::get<0>(status_opt.value());
     rlogger.trace("Got register_repair_get_full_row_hashes_with_rpc_stream from peer={}, status={}", from, int(status));
     if (status == repair_stream_cmd::get_full_row_hashes) {
-        return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id] {
-            auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
+        return repair.invoke_on(src_cpu_id % smp::count, [from, repair_meta_id] (repair_service& local_repair) {
+            auto rm = local_repair.get_repair_meta(from, repair_meta_id);
             rm->set_repair_state_for_local_node(repair_state::get_full_row_hashes_started);
             return rm->get_full_row_hashes_handler().then([rm] (repair_hash_set hashes) {
                 rm->set_repair_state_for_local_node(repair_state::get_full_row_hashes_started);
@@ -2037,19 +2006,20 @@ static future<stop_iteration> repair_get_full_row_hashes_with_rpc_stream_process
 }
 
 static future<> repair_get_row_diff_with_rpc_stream_handler(
+        sharded<repair_service>& repair,
         gms::inet_address from,
         uint32_t src_cpu_id,
         uint32_t repair_meta_id,
         rpc::sink<repair_row_on_wire_with_cmd> sink,
         rpc::source<repair_hash_with_cmd> source) {
-    return do_with(false, repair_hash_set(), [from, src_cpu_id, repair_meta_id, sink, source] (bool& error, repair_hash_set& current_set_diff) mutable {
-        return repeat([from, src_cpu_id, repair_meta_id, sink, source, &error, &current_set_diff] () mutable {
-            return source().then([from, src_cpu_id, repair_meta_id, sink, source, &error, &current_set_diff] (std::optional<std::tuple<repair_hash_with_cmd>> hash_cmd_opt) mutable {
+    return do_with(false, repair_hash_set(), [&repair, from, src_cpu_id, repair_meta_id, sink, source] (bool& error, repair_hash_set& current_set_diff) mutable {
+        return repeat([&repair, from, src_cpu_id, repair_meta_id, sink, source, &error, &current_set_diff] () mutable {
+            return source().then([&repair, from, src_cpu_id, repair_meta_id, sink, source, &error, &current_set_diff] (std::optional<std::tuple<repair_hash_with_cmd>> hash_cmd_opt) mutable {
                 if (hash_cmd_opt) {
                     if (error) {
                         return make_ready_future<stop_iteration>(stop_iteration::no);
                     }
-                    return repair_get_row_diff_with_rpc_stream_process_op(from,
+                    return repair_get_row_diff_with_rpc_stream_process_op(repair, from,
                             src_cpu_id,
                             repair_meta_id,
                             sink,
@@ -2073,19 +2043,20 @@ static future<> repair_get_row_diff_with_rpc_stream_handler(
 }
 
 static future<> repair_put_row_diff_with_rpc_stream_handler(
+        sharded<repair_service>& repair,
         gms::inet_address from,
         uint32_t src_cpu_id,
         uint32_t repair_meta_id,
         rpc::sink<repair_stream_cmd> sink,
         rpc::source<repair_row_on_wire_with_cmd> source) {
-    return do_with(false, repair_rows_on_wire(), [from, src_cpu_id, repair_meta_id, sink, source] (bool& error, repair_rows_on_wire& current_rows) mutable {
-        return repeat([from, src_cpu_id, repair_meta_id, sink, source, &current_rows, &error] () mutable {
-            return source().then([from, src_cpu_id, repair_meta_id, sink, source, &current_rows, &error] (std::optional<std::tuple<repair_row_on_wire_with_cmd>> row_opt) mutable {
+    return do_with(false, repair_rows_on_wire(), [&repair, from, src_cpu_id, repair_meta_id, sink, source] (bool& error, repair_rows_on_wire& current_rows) mutable {
+        return repeat([&repair, from, src_cpu_id, repair_meta_id, sink, source, &current_rows, &error] () mutable {
+            return source().then([&repair, from, src_cpu_id, repair_meta_id, sink, source, &current_rows, &error] (std::optional<std::tuple<repair_row_on_wire_with_cmd>> row_opt) mutable {
                 if (row_opt) {
                     if (error) {
                         return make_ready_future<stop_iteration>(stop_iteration::no);
                     }
-                    return repair_put_row_diff_with_rpc_stream_process_op(from,
+                    return repair_put_row_diff_with_rpc_stream_process_op(repair, from,
                             src_cpu_id,
                             repair_meta_id,
                             sink,
@@ -2109,19 +2080,20 @@ static future<> repair_put_row_diff_with_rpc_stream_handler(
 }
 
 static future<> repair_get_full_row_hashes_with_rpc_stream_handler(
+        sharded<repair_service>& repair,
         gms::inet_address from,
         uint32_t src_cpu_id,
         uint32_t repair_meta_id,
         rpc::sink<repair_hash_with_cmd> sink,
         rpc::source<repair_stream_cmd> source) {
-    return repeat([from, src_cpu_id, repair_meta_id, sink, source] () mutable {
-        return do_with(false, [from, src_cpu_id, repair_meta_id, sink, source] (bool& error) mutable {
-            return source().then([from, src_cpu_id, repair_meta_id, sink, source, &error] (std::optional<std::tuple<repair_stream_cmd>> status_opt) mutable {
+    return repeat([&repair, from, src_cpu_id, repair_meta_id, sink, source] () mutable {
+        return do_with(false, [&repair, from, src_cpu_id, repair_meta_id, sink, source] (bool& error) mutable {
+            return source().then([&repair, from, src_cpu_id, repair_meta_id, sink, source, &error] (std::optional<std::tuple<repair_stream_cmd>> status_opt) mutable {
                 if (status_opt) {
                     if (error) {
                         return make_ready_future<stop_iteration>(stop_iteration::no);
                     }
-                    return repair_get_full_row_hashes_with_rpc_stream_process_op(from,
+                    return repair_get_full_row_hashes_with_rpc_stream_process_op(repair, from,
                             src_cpu_id,
                             repair_meta_id,
                             sink,
@@ -2206,44 +2178,44 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
 future<> repair_service::init_ms_handlers() {
     auto& ms = this->_messaging;
 
-    ms.register_repair_get_row_diff_with_rpc_stream([&ms] (const rpc::client_info& cinfo, uint64_t repair_meta_id, rpc::source<repair_hash_with_cmd> source) {
+    ms.register_repair_get_row_diff_with_rpc_stream([this, &ms] (const rpc::client_info& cinfo, uint64_t repair_meta_id, rpc::source<repair_hash_with_cmd> source) {
         auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         auto sink = ms.make_sink_for_repair_get_row_diff_with_rpc_stream(source);
         // Start a new fiber.
-        (void)repair_get_row_diff_with_rpc_stream_handler(from, src_cpu_id, repair_meta_id, sink, source).handle_exception(
+        (void)repair_get_row_diff_with_rpc_stream_handler(container(), from, src_cpu_id, repair_meta_id, sink, source).handle_exception(
                 [from, repair_meta_id, sink, source] (std::exception_ptr ep) {
             rlogger.warn("Failed to process get_row_diff_with_rpc_stream_handler from={}, repair_meta_id={}: {}", from, repair_meta_id, ep);
         });
         return make_ready_future<rpc::sink<repair_row_on_wire_with_cmd>>(sink);
     });
-    ms.register_repair_put_row_diff_with_rpc_stream([&ms] (const rpc::client_info& cinfo, uint64_t repair_meta_id, rpc::source<repair_row_on_wire_with_cmd> source) {
+    ms.register_repair_put_row_diff_with_rpc_stream([this, &ms] (const rpc::client_info& cinfo, uint64_t repair_meta_id, rpc::source<repair_row_on_wire_with_cmd> source) {
         auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         auto sink = ms.make_sink_for_repair_put_row_diff_with_rpc_stream(source);
         // Start a new fiber.
-        (void)repair_put_row_diff_with_rpc_stream_handler(from, src_cpu_id, repair_meta_id, sink, source).handle_exception(
+        (void)repair_put_row_diff_with_rpc_stream_handler(container(), from, src_cpu_id, repair_meta_id, sink, source).handle_exception(
                 [from, repair_meta_id, sink, source] (std::exception_ptr ep) {
             rlogger.warn("Failed to process put_row_diff_with_rpc_stream_handler from={}, repair_meta_id={}: {}", from, repair_meta_id, ep);
         });
         return make_ready_future<rpc::sink<repair_stream_cmd>>(sink);
     });
-    ms.register_repair_get_full_row_hashes_with_rpc_stream([&ms] (const rpc::client_info& cinfo, uint64_t repair_meta_id, rpc::source<repair_stream_cmd> source) {
+    ms.register_repair_get_full_row_hashes_with_rpc_stream([this, &ms] (const rpc::client_info& cinfo, uint64_t repair_meta_id, rpc::source<repair_stream_cmd> source) {
         auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         auto sink = ms.make_sink_for_repair_get_full_row_hashes_with_rpc_stream(source);
         // Start a new fiber.
-        (void)repair_get_full_row_hashes_with_rpc_stream_handler(from, src_cpu_id, repair_meta_id, sink, source).handle_exception(
+        (void)repair_get_full_row_hashes_with_rpc_stream_handler(container(), from, src_cpu_id, repair_meta_id, sink, source).handle_exception(
                 [from, repair_meta_id, sink, source] (std::exception_ptr ep) {
             rlogger.warn("Failed to process get_full_row_hashes_with_rpc_stream_handler from={}, repair_meta_id={}: {}", from, repair_meta_id, ep);
         });
         return make_ready_future<rpc::sink<repair_hash_with_cmd>>(sink);
     });
-    ms.register_repair_get_full_row_hashes([] (const rpc::client_info& cinfo, uint32_t repair_meta_id) {
+    ms.register_repair_get_full_row_hashes([this] (const rpc::client_info& cinfo, uint32_t repair_meta_id) {
         auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
-        return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id] {
-            auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
+        return container().invoke_on(src_cpu_id % smp::count, [from, repair_meta_id] (repair_service& local_repair) {
+            auto rm = local_repair.get_repair_meta(from, repair_meta_id);
             rm->set_repair_state_for_local_node(repair_state::get_full_row_hashes_started);
             return rm->get_full_row_hashes_handler().then([rm] (repair_hash_set hashes) {
                 rm->set_repair_state_for_local_node(repair_state::get_full_row_hashes_finished);
@@ -2252,13 +2224,13 @@ future<> repair_service::init_ms_handlers() {
             });
         }) ;
     });
-    ms.register_repair_get_combined_row_hash([] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
+    ms.register_repair_get_combined_row_hash([this] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
             std::optional<repair_sync_boundary> common_sync_boundary) {
         auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
-        return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id,
-                common_sync_boundary = std::move(common_sync_boundary)] () mutable {
-            auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
+        return container().invoke_on(src_cpu_id % smp::count, [from, repair_meta_id,
+                common_sync_boundary = std::move(common_sync_boundary)] (repair_service& local_repair) mutable {
+            auto rm = local_repair.get_repair_meta(from, repair_meta_id);
             _metrics.tx_hashes_nr++;
             rm->set_repair_state_for_local_node(repair_state::get_combined_row_hash_started);
             return rm->get_combined_row_hash_handler(std::move(common_sync_boundary)).then([rm] (get_combined_row_hash_response resp) {
@@ -2267,13 +2239,13 @@ future<> repair_service::init_ms_handlers() {
             });
         });
     });
-    ms.register_repair_get_sync_boundary([] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
+    ms.register_repair_get_sync_boundary([this] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
             std::optional<repair_sync_boundary> skipped_sync_boundary) {
         auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
-        return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id,
-                skipped_sync_boundary = std::move(skipped_sync_boundary)] () mutable {
-            auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
+        return container().invoke_on(src_cpu_id % smp::count, [from, repair_meta_id,
+                skipped_sync_boundary = std::move(skipped_sync_boundary)] (repair_service& local_repair) mutable {
+            auto rm = local_repair.get_repair_meta(from, repair_meta_id);
             rm->set_repair_state_for_local_node(repair_state::get_sync_boundary_started);
             return rm->get_sync_boundary_handler(std::move(skipped_sync_boundary)).then([rm] (get_sync_boundary_response resp) {
                 rm->set_repair_state_for_local_node(repair_state::get_sync_boundary_finished);
@@ -2281,14 +2253,14 @@ future<> repair_service::init_ms_handlers() {
             });
         });
     });
-    ms.register_repair_get_row_diff([] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
+    ms.register_repair_get_row_diff([this] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
             repair_hash_set set_diff, bool needs_all_rows) {
         auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         _metrics.rx_hashes_nr += set_diff.size();
         auto fp = make_foreign(std::make_unique<repair_hash_set>(std::move(set_diff)));
-        return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, fp = std::move(fp), needs_all_rows] () mutable {
-            auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
+        return container().invoke_on(src_cpu_id % smp::count, [from, repair_meta_id, fp = std::move(fp), needs_all_rows] (repair_service& local_repair) mutable {
+            auto rm = local_repair.get_repair_meta(from, repair_meta_id);
             rm->set_repair_state_for_local_node(repair_state::get_row_diff_started);
             if (fp.get_owner_shard() == this_shard_id()) {
                 return rm->get_row_diff_handler(std::move(*fp), repair_meta::needs_all_rows_t(needs_all_rows)).then([rm] (repair_rows_on_wire rows) {
@@ -2303,13 +2275,13 @@ future<> repair_service::init_ms_handlers() {
             }
         });
     });
-    ms.register_repair_put_row_diff([] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
+    ms.register_repair_put_row_diff([this] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
             repair_rows_on_wire row_diff) {
         auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         auto fp = make_foreign(std::make_unique<repair_rows_on_wire>(std::move(row_diff)));
-        return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, fp = std::move(fp)] () mutable {
-            auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
+        return container().invoke_on(src_cpu_id % smp::count, [from, repair_meta_id, fp = std::move(fp)] (repair_service& local_repair) mutable {
+            auto rm = local_repair.get_repair_meta(from, repair_meta_id);
             rm->set_repair_state_for_local_node(repair_state::put_row_diff_started);
             if (fp.get_owner_shard() == this_shard_id()) {
                 return rm->put_row_diff_handler(std::move(*fp), from).then([rm] {
@@ -2340,28 +2312,28 @@ future<> repair_service::init_ms_handlers() {
                     schema_version, r);
         });
     });
-    ms.register_repair_row_level_stop([] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
+    ms.register_repair_row_level_stop([this] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
             sstring ks_name, sstring cf_name, dht::token_range range) {
         auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
-        return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, ks_name, cf_name, range] () mutable {
-            return repair_meta::repair_row_level_stop_handler(from, repair_meta_id,
+        return container().invoke_on(src_cpu_id % smp::count, [from, repair_meta_id, ks_name, cf_name, range] (repair_service& local_repair) mutable {
+            return repair_meta::repair_row_level_stop_handler(local_repair, from, repair_meta_id,
                     std::move(ks_name), std::move(cf_name), std::move(range));
         });
     });
-    ms.register_repair_get_estimated_partitions([] (const rpc::client_info& cinfo, uint32_t repair_meta_id) {
+    ms.register_repair_get_estimated_partitions([this] (const rpc::client_info& cinfo, uint32_t repair_meta_id) {
         auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
-        return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id] () mutable {
-            return repair_meta::repair_get_estimated_partitions_handler(from, repair_meta_id);
+        return container().invoke_on(src_cpu_id % smp::count, [from, repair_meta_id] (repair_service& local_repair) mutable {
+            return repair_meta::repair_get_estimated_partitions_handler(local_repair, from, repair_meta_id);
         });
     });
-    ms.register_repair_set_estimated_partitions([] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
+    ms.register_repair_set_estimated_partitions([this] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
             uint64_t estimated_partitions) {
         auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
-        return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, estimated_partitions] () mutable {
-            return repair_meta::repair_set_estimated_partitions_handler(from, repair_meta_id, estimated_partitions);
+        return container().invoke_on(src_cpu_id % smp::count, [from, repair_meta_id, estimated_partitions] (repair_service& local_repair) mutable {
+            return repair_meta::repair_set_estimated_partitions_handler(local_repair, from, repair_meta_id, estimated_partitions);
         });
     });
     ms.register_repair_get_diff_algorithms([] (const rpc::client_info& cinfo) {
@@ -2909,12 +2881,6 @@ future<> repair_cf_range_row_level(repair_info& ri,
     });
 }
 
-future<> shutdown_all_row_level_repair() {
-    return smp::invoke_on_all([] {
-        return repair_meta::remove_repair_meta();
-    });
-}
-
 class row_level_repair_gossip_helper : public gms::i_endpoint_state_change_subscriber {
     repair_service& _repair_service;
 public:
@@ -2925,8 +2891,7 @@ public:
         rlogger.debug("Started to remove row level repair on all shards for node {}", node);
         try {
             co_await _repair_service.container().invoke_on_all([node] (repair_service& local_repair) {
-                // FIXME: local_repair.remove_repair_meta(node);
-                return repair_meta::remove_repair_meta(node);
+                return local_repair.remove_repair_meta(node);
             });
             rlogger.debug("Finished to remove row level repair on all shards for node {}", node);
         } catch(...) {
@@ -3093,7 +3058,7 @@ future<> repair_service::load_history() {
     co_return;
 }
 
-repair_meta_ptr repair_meta::get_repair_meta(gms::inet_address from, uint32_t repair_meta_id) {
+repair_meta_ptr repair_service::get_repair_meta(gms::inet_address from, uint32_t repair_meta_id) {
     node_repair_meta_id id{from, repair_meta_id};
     auto it = repair_meta_map().find(id);
     if (it == repair_meta_map().end()) {
@@ -3104,7 +3069,7 @@ repair_meta_ptr repair_meta::get_repair_meta(gms::inet_address from, uint32_t re
 }
 
 future<>
-repair_meta::insert_repair_meta(repair_service& repair,
+repair_service::insert_repair_meta(
         const gms::inet_address& from,
         uint32_t src_cpu_id,
         uint32_t repair_meta_id,
@@ -3115,7 +3080,7 @@ repair_meta::insert_repair_meta(repair_service& repair,
         shard_config master_node_shard_config,
         table_schema_version schema_version,
         streaming::stream_reason reason) {
-    return repair.get_migration_manager().get_schema_for_write(schema_version, {from, src_cpu_id}, repair.get_messaging()).then([&repair,
+    return get_migration_manager().get_schema_for_write(schema_version, {from, src_cpu_id}, get_messaging()).then([this,
             from,
             repair_meta_id,
             range,
@@ -3125,12 +3090,12 @@ repair_meta::insert_repair_meta(repair_service& repair,
             master_node_shard_config,
             schema_version,
             reason] (schema_ptr s) {
-        auto& db = repair.get_db();
+        auto& db = get_db();
         auto& cf = db.local().find_column_family(s->id());
         return db.local().obtain_reader_permit(cf, "repair-meta", db::no_timeout).then([s = std::move(s),
                 &db,
                 &cf,
-                &repair,
+                this,
                 from,
                 repair_meta_id,
                 range,
@@ -3141,7 +3106,7 @@ repair_meta::insert_repair_meta(repair_service& repair,
                 schema_version,
                 reason] (reader_permit permit) mutable {
         node_repair_meta_id id{from, repair_meta_id};
-        auto rm = make_shared<repair_meta>(repair,
+        auto rm = make_shared<repair_meta>(*this,
                 cf,
                 s,
                 std::move(permit),
@@ -3168,7 +3133,7 @@ repair_meta::insert_repair_meta(repair_service& repair,
 }
 
 future<>
-repair_meta::remove_repair_meta(const gms::inet_address& from,
+repair_service::remove_repair_meta(const gms::inet_address& from,
         uint32_t repair_meta_id,
         sstring ks_name,
         sstring cf_name,
@@ -3189,7 +3154,7 @@ repair_meta::remove_repair_meta(const gms::inet_address& from,
 }
 
 future<>
-repair_meta::remove_repair_meta(gms::inet_address from) {
+repair_service::remove_repair_meta(gms::inet_address from) {
     rlogger.debug("Remove all repair_meta for single node {}", from);
     auto repair_metas = make_lw_shared<utils::chunked_vector<repair_meta_ptr>>();
     for (auto it = repair_meta_map().begin(); it != repair_meta_map().end();) {
@@ -3210,7 +3175,7 @@ repair_meta::remove_repair_meta(gms::inet_address from) {
 }
 
 future<>
-repair_meta::remove_repair_meta() {
+repair_service::remove_repair_meta() {
     rlogger.debug("Remove all repair_meta for all nodes");
     auto repair_metas = make_lw_shared<utils::chunked_vector<repair_meta_ptr>>(
             boost::copy_range<utils::chunked_vector<repair_meta_ptr>>(repair_meta_map()

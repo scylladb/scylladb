@@ -35,6 +35,12 @@ class repair_meta;
 
 using repair_meta_ptr = shared_ptr<repair_meta>;
 
+struct shard_config {
+    unsigned shard;
+    unsigned shard_count;
+    unsigned ignore_msb;
+};
+
 class repair_history {
 public:
     // The key for the map is the table_id
@@ -190,6 +196,32 @@ public:
     std::unordered_map<node_repair_meta_id, repair_meta_ptr>& repair_meta_map() noexcept {
         return _repair_metas;
     }
+
+    repair_meta_ptr get_repair_meta(gms::inet_address from, uint32_t repair_meta_id);
+
+    future<>
+    insert_repair_meta(
+            const gms::inet_address& from,
+            uint32_t src_cpu_id,
+            uint32_t repair_meta_id,
+            dht::token_range range,
+            row_level_diff_detect_algorithm algo,
+            uint64_t max_row_buf_size,
+            uint64_t seed,
+            shard_config master_node_shard_config,
+            table_schema_version schema_version,
+            streaming::stream_reason reason);
+
+    future<>
+    remove_repair_meta(const gms::inet_address& from,
+            uint32_t repair_meta_id,
+            sstring ks_name,
+            sstring cf_name,
+            dht::token_range range);
+
+    future<> remove_repair_meta(gms::inet_address from);
+
+    future<> remove_repair_meta();
 };
 
 class repair_info;
@@ -197,5 +229,3 @@ class repair_info;
 future<> repair_cf_range_row_level(repair_info& ri,
         sstring cf_name, utils::UUID table_id, dht::token_range range,
         const std::vector<gms::inet_address>& all_peer_nodes);
-
-future<> shutdown_all_row_level_repair();
