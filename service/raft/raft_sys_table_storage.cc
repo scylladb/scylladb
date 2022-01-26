@@ -64,6 +64,27 @@ future<std::pair<raft::term_t, raft::server_id>> raft_sys_table_storage::load_te
     co_return std::pair(vote_term, vote);
 }
 
+future<> raft_sys_table_storage::store_commit_idx(raft::index_t idx) {
+    return execute_with_linearization_point([this, idx] {
+        static const auto store_cql = format("INSERT INTO system.{} (group_id, commit_idx) VALUES (?, ?)",
+            db::system_keyspace::RAFT);
+        return _qp.execute_internal(
+            store_cql,
+            {_group_id.id, int64_t(idx)}).discard_result();
+    });
+}
+
+future<raft::index_t> raft_sys_table_storage::load_commit_idx() {
+    static const auto load_cql = format("SELECT commit_idx FROM system.{} WHERE group_id = ? LIMIT 1", db::system_keyspace::RAFT);
+    ::shared_ptr<cql3::untyped_result_set> rs = co_await _qp.execute_internal(load_cql, {_group_id.id});
+    if (rs->empty()) {
+        co_return raft::index_t(0);
+    }
+    const auto& static_row = rs->one();
+    co_return raft::index_t(static_row.get_or<int64_t>("commit_idx", raft::index_t{}));
+}
+
+
 future<raft::log_entries> raft_sys_table_storage::load_log() {
     static const auto load_cql = format("SELECT term, \"index\", data FROM system.{} WHERE group_id = ?", db::system_keyspace::RAFT);
     ::shared_ptr<cql3::untyped_result_set> rs = co_await _qp.execute_internal(load_cql, {_group_id.id});

@@ -154,9 +154,8 @@ class fsm {
     // nil if none).
     server_id _voted_for;
     // Index of the highest log entry known to be committed.
-    // Currently not persisted.
     // Invariant: _commit_idx >= _log.get_snapshot().idx
-    index_t _commit_idx = index_t(0);
+    index_t _commit_idx;
     // Log entries; each entry contains a command for state machine,
     // and the term when the entry was received by the leader.
     log _log;
@@ -334,6 +333,9 @@ protected: // For testing
     }
 
 public:
+    explicit fsm(server_id id, term_t current_term, server_id voted_for, log log,
+            index_t commit_idx, failure_detector& failure_detector, fsm_config conf);
+
     explicit fsm(server_id id, term_t current_term, server_id voted_for, log log,
             failure_detector& failure_detector, fsm_config conf);
 

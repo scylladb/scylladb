@@ -56,6 +56,8 @@ public:
 
     future<> store_term_and_vote(raft::term_t term, raft::server_id vote) override;
     future<std::pair<raft::term_t, raft::server_id>> load_term_and_vote() override;
+    future<> store_commit_idx(raft::index_t) override;
+    future<raft::index_t> load_commit_idx() override;
     future<raft::log_entries> load_log() override;
     future<raft::snapshot_descriptor> load_snapshot_descriptor() override;
 

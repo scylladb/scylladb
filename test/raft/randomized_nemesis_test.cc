@@ -805,6 +805,14 @@ public:
         co_return _persistence->load_term_and_vote();
     }
 
+    virtual future<> store_commit_idx(raft::index_t) override {
+        co_return;
+    }
+
+    virtual future<raft::index_t> load_commit_idx() override {
+        co_return raft::index_t{0};
+    }
+
     // Stores not only the snapshot descriptor but also the corresponding snapshot.
     virtual future<> store_snapshot_descriptor(const raft::snapshot_descriptor& snap, size_t preserve_log_entries) override {
         auto it = _snapshots.find(snap.id);

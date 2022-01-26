@@ -204,6 +204,7 @@ schema_ptr system_keyspace::raft() {
             .with_column("vote", uuid_type, column_kind::static_column)
             // id of the most recent persisted snapshot
             .with_column("snapshot_id", uuid_type, column_kind::static_column)
+            .with_column("commit_idx", long_type, column_kind::static_column)
 
             .set_comment("Persisted RAFT log, votes and snapshot info")
             .with_version(generate_schema_version(id))
