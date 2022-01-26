@@ -31,6 +31,10 @@ namespace gms {
     class gossiper;
 }
 
+class repair_meta;
+
+using repair_meta_ptr = shared_ptr<repair_meta>;
+
 class repair_history {
 public:
     // The key for the map is the table_id
@@ -76,6 +80,7 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
     service::migration_manager& _mm;
     tracker _tracker;
     node_ops_metrics _node_ops_metrics;
+    std::unordered_map<node_repair_meta_id, repair_meta_ptr> _repair_metas;
 
     std::unordered_map<utils::UUID, repair_history> _finished_ranges_history;
 
@@ -181,6 +186,10 @@ public:
     future<> abort_all();
 
     future<> abort_repair_node_ops(utils::UUID ops_uuid);
+
+    std::unordered_map<node_repair_meta_id, repair_meta_ptr>& repair_meta_map() noexcept {
+        return _repair_metas;
+    }
 };
 
 class repair_info;

@@ -839,9 +839,9 @@ public:
         return ret;
     }
 
-    static std::unordered_map<node_repair_meta_id, lw_shared_ptr<repair_meta>>& repair_meta_map();
+    static std::unordered_map<node_repair_meta_id, repair_meta_ptr>& repair_meta_map();
 
-    static lw_shared_ptr<repair_meta> get_repair_meta(gms::inet_address from, uint32_t repair_meta_id);
+    static repair_meta_ptr get_repair_meta(gms::inet_address from, uint32_t repair_meta_id);
 
     static future<>
     insert_repair_meta(repair_service& repair,
@@ -1900,12 +1900,6 @@ get_set_diff(const repair_hash_set& x, const repair_hash_set& y) {
     std::copy_if(x.begin(), x.end(), std::inserter(set_diff, set_diff.end()),
             [&y] (auto& item) { thread::maybe_yield(); return !y.contains(item); });
     return set_diff;
-}
-
-// The repair_metas created passively, i.e., local node is the repair follower.
-static thread_local std::unordered_map<node_repair_meta_id, lw_shared_ptr<repair_meta>> _repair_metas;
-std::unordered_map<node_repair_meta_id, lw_shared_ptr<repair_meta>>& repair_meta::repair_meta_map() {
-    return _repair_metas;
 }
 
 static future<stop_iteration> repair_get_row_diff_with_rpc_stream_process_op(
@@ -3093,7 +3087,7 @@ future<> repair_service::load_history() {
     co_return;
 }
 
-lw_shared_ptr<repair_meta> repair_meta::get_repair_meta(gms::inet_address from, uint32_t repair_meta_id) {
+repair_meta_ptr repair_meta::get_repair_meta(gms::inet_address from, uint32_t repair_meta_id) {
     node_repair_meta_id id{from, repair_meta_id};
     auto it = repair_meta_map().find(id);
     if (it == repair_meta_map().end()) {
@@ -3141,7 +3135,7 @@ repair_meta::insert_repair_meta(repair_service& repair,
                 schema_version,
                 reason] (reader_permit permit) mutable {
         node_repair_meta_id id{from, repair_meta_id};
-        auto rm = make_lw_shared<repair_meta>(repair,
+        auto rm = make_shared<repair_meta>(repair,
                 cf,
                 s,
                 std::move(permit),
@@ -3191,7 +3185,7 @@ repair_meta::remove_repair_meta(const gms::inet_address& from,
 future<>
 repair_meta::remove_repair_meta(gms::inet_address from) {
     rlogger.debug("Remove all repair_meta for single node {}", from);
-    auto repair_metas = make_lw_shared<utils::chunked_vector<lw_shared_ptr<repair_meta>>>();
+    auto repair_metas = make_lw_shared<utils::chunked_vector<repair_meta_ptr>>();
     for (auto it = repair_meta_map().begin(); it != repair_meta_map().end();) {
         if (it->first.ip == from) {
             repair_metas->push_back(it->second);
@@ -3212,8 +3206,8 @@ repair_meta::remove_repair_meta(gms::inet_address from) {
 future<>
 repair_meta::remove_repair_meta() {
     rlogger.debug("Remove all repair_meta for all nodes");
-    auto repair_metas = make_lw_shared<utils::chunked_vector<lw_shared_ptr<repair_meta>>>(
-            boost::copy_range<utils::chunked_vector<lw_shared_ptr<repair_meta>>>(repair_meta_map()
+    auto repair_metas = make_lw_shared<utils::chunked_vector<repair_meta_ptr>>(
+            boost::copy_range<utils::chunked_vector<repair_meta_ptr>>(repair_meta_map()
             | boost::adaptors::map_values));
     repair_meta_map().clear();
     return parallel_for_each(*repair_metas, [repair_metas] (auto& rm) {
