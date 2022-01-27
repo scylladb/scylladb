@@ -67,7 +67,7 @@ private:
     cache_tracker& _cache_tracker;
 public:
     explicit sstables_manager(db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker&);
-    ~sstables_manager();
+    virtual ~sstables_manager();
 
     // Constructs a shared sstable
     shared_sstable make_sstable(schema_ptr schema,
@@ -79,7 +79,7 @@ public:
             io_error_handler_gen error_handler_gen = default_io_error_handler_gen(),
             size_t buffer_size = default_sstable_buffer_size);
 
-    sstable_writer_config configure_writer(sstring origin) const;
+    virtual sstable_writer_config configure_writer(sstring origin) const;
     const db::config& config() const { return _db_config; }
     cache_tracker& get_cache_tracker() { return _cache_tracker; }
 

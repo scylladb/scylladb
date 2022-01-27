@@ -23,7 +23,7 @@ namespace sstables {
 class test_env_sstables_manager : public sstables_manager {
     using sstables_manager::sstables_manager;
 public:
-    sstable_writer_config configure_writer(sstring origin = "test") const {
+    virtual sstable_writer_config configure_writer(sstring origin = "test") const override {
         return sstables_manager::configure_writer(std::move(origin));
     }
 };
