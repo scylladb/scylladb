@@ -772,13 +772,6 @@ future<> compaction_manager::perform_offstrategy(replica::table* t) {
     return task->compaction_done.get_future().finally([task] {});
 }
 
-void compaction_manager::submit_offstrategy(replica::table* t) {
-    // Run in background.
-    // This is safe since the compaction task is tracked
-    // by the compaction_manager until stop()
-    (void)perform_offstrategy(t);
-}
-
 future<> compaction_manager::rewrite_sstables(replica::table* t, sstables::compaction_type_options options, get_candidates_func get_func, can_purge_tombstones can_purge) {
     auto task = make_lw_shared<compaction_manager::task>(t, options.type(), get_compaction_state(t));
     _tasks.push_back(task);

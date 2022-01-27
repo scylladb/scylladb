@@ -239,7 +239,6 @@ public:
     void submit(replica::table* t);
 
     // Submit a table to be off-strategy compacted.
-    void submit_offstrategy(replica::table* t);
     future<> perform_offstrategy(replica::table* t);
 
     // Submit a table to be cleaned up and wait for its termination.
