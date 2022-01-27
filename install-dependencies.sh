@@ -76,6 +76,7 @@ fedora_packages=(
     python3-tabulate
     python3-boto3
     python3-pytest
+    python3-pytest-asyncio
     python3-redis
     dnf-utils
     pigz
