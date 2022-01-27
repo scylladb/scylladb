@@ -2916,10 +2916,16 @@ future<> shutdown_all_row_level_repair() {
 }
 
 class row_level_repair_gossip_helper : public gms::i_endpoint_state_change_subscriber {
+    repair_service& _repair_service;
+public:
+    row_level_repair_gossip_helper(repair_service& repair_service) noexcept
+        : _repair_service(repair_service)
+    {}
     future<> remove_row_level_repair(gms::inet_address node) {
         rlogger.debug("Started to remove row level repair on all shards for node {}", node);
         try {
-            co_await smp::invoke_on_all([node] {
+            co_await _repair_service.container().invoke_on_all([node] (repair_service& local_repair) {
+                // FIXME: local_repair.remove_repair_meta(node);
                 return repair_meta::remove_repair_meta(node);
             });
             rlogger.debug("Finished to remove row level repair on all shards for node {}", node);
@@ -2989,7 +2995,7 @@ repair_service::repair_service(distributed<gms::gossiper>& gossiper,
     , _memory_sem(max_repair_memory)
 {
     if (this_shard_id() == 0) {
-        _gossip_helper = make_shared<row_level_repair_gossip_helper>();
+        _gossip_helper = make_shared<row_level_repair_gossip_helper>(*this);
         _gossiper.local().register_(_gossip_helper);
     }
 }
