@@ -2248,6 +2248,7 @@ size_t tracker::impl::reclaim(size_t memory_to_release, is_preemptible preempt) 
 }
 
 size_t tracker::impl::reclaim_locked(size_t memory_to_release, is_preemptible preempt) {
+    llogger.debug("reclaim_locked({}, preempt={})", memory_to_release, int(bool(preempt)));
     // Reclamation steps:
     // 1. Try to release free segments from segment pool and emergency reserve.
     // 2. Compact used segments and/or evict data.
@@ -2256,23 +2257,28 @@ size_t tracker::impl::reclaim_locked(size_t memory_to_release, is_preemptible pr
     auto nr_released = shard_segment_pool.reclaim_segments(segments_to_release, preempt);
     size_t mem_released = nr_released * segment::size;
     if (mem_released >= memory_to_release) {
+        llogger.debug("reclaim_locked() = {}", memory_to_release);
         return memory_to_release;
     }
     if (preempt && need_preempt()) {
+        llogger.debug("reclaim_locked() = {}", mem_released);
         return mem_released;
     }
 
     auto compacted = compact_and_evict_locked(shard_segment_pool.current_emergency_reserve_goal(), memory_to_release - mem_released, preempt);
 
     if (compacted == 0) {
+        llogger.debug("reclaim_locked() = {}", mem_released);
         return mem_released;
     }
 
     // compact_and_evict_locked() will not return segments to the standard allocator,
     // so do it here:
     nr_released = shard_segment_pool.reclaim_segments(compacted / segment::size, preempt);
+    mem_released += nr_released * segment::size;
 
-    return mem_released + nr_released * segment::size;
+    llogger.debug("reclaim_locked() = {}", mem_released);
+    return mem_released;
 }
 
 size_t tracker::impl::compact_and_evict(size_t reserve_segments, size_t memory_to_release, is_preemptible preempt) {
@@ -2285,6 +2291,7 @@ size_t tracker::impl::compact_and_evict(size_t reserve_segments, size_t memory_t
 }
 
 size_t tracker::impl::compact_and_evict_locked(size_t reserve_segments, size_t memory_to_release, is_preemptible preempt) {
+    llogger.debug("compact_and_evict_locked({}, {}, {})", reserve_segments, memory_to_release, int(bool(preempt)));
     //
     // Algorithm outline.
     //
