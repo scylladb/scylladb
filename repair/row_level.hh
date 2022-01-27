@@ -87,6 +87,7 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
     tracker _tracker;
     node_ops_metrics _node_ops_metrics;
     std::unordered_map<node_repair_meta_id, repair_meta_ptr> _repair_metas;
+    uint32_t _next_repair_meta_id = 0;  // used only on shard 0
 
     std::unordered_map<utils::UUID, repair_history> _finished_ranges_history;
 
@@ -222,6 +223,8 @@ public:
     future<> remove_repair_meta(gms::inet_address from);
 
     future<> remove_repair_meta();
+
+    future<uint32_t> get_next_repair_meta_id();
 };
 
 class repair_info;

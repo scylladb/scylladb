@@ -833,8 +833,6 @@ public:
         return ret;
     }
 
-    static future<uint32_t> get_next_repair_meta_id();
-
     void reset_peer_row_hash_sets() {
         if (_peer_row_hash_sets.size() != _nr_peer_nodes) {
             _peer_row_hash_sets.resize(_nr_peer_nodes);
@@ -2746,7 +2744,7 @@ public:
         return seastar::async([this] {
             _ri.check_in_shutdown();
             _ri.check_in_abort();
-            auto repair_meta_id = repair_meta::get_next_repair_meta_id().get0();
+            auto repair_meta_id = _ri.rs.get_next_repair_meta_id().get0();
             auto algorithm = get_common_diff_detect_algorithm(_ri.messaging.local(), _all_live_peer_nodes);
             auto max_row_buf_size = get_max_row_buf_size(algorithm);
             auto master_node_shard_config = shard_config {
@@ -3190,9 +3188,8 @@ repair_service::remove_repair_meta() {
     });
 }
 
-future<uint32_t> repair_meta::get_next_repair_meta_id() {
-    return smp::submit_to(0, [] {
-        static uint32_t next_id = 0;
-        return next_id++;
+future<uint32_t> repair_service::get_next_repair_meta_id() {
+    return container().invoke_on(0, [] (repair_service& local_repair) {
+        return local_repair._next_repair_meta_id++;
     });
 }
