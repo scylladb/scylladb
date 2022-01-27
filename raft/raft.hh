@@ -587,6 +587,7 @@ public:
 
     // An endpoint on the leader to change configuration,
     // as requested by a remote follower.
+    // If the future resolves successfully, a dummy entry was committed after the configuration change.
     virtual future<add_entry_reply> execute_modify_config(server_id from,
         std::vector<server_address> add,
         std::vector<server_id> del) = 0;

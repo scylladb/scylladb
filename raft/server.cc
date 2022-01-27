@@ -489,10 +489,12 @@ future<add_entry_reply> server_impl::execute_modify_config(server_id from,
             cfg.erase(server_address{.id = to_remove});
         }
         co_await enter_joint_configuration(cfg);
-        // Wait for transition joint->non-joint outside on the
-        // client.
         const log_entry& e = _fsm->add_entry(log_entry::dummy());
-        co_return add_entry_reply{entry_id{.term = e.term, .idx = e.idx}};
+        auto eid = entry_id{.term = e.term, .idx = e.idx};
+        co_await wait_for_entry(eid, wait_type::committed);
+        // `modify_config` doesn't actually need the entry id for anything
+        // but we reuse the `add_entry` RPC verb which requires it.
+        co_return add_entry_reply{eid};
 
     } catch (raft::error& e) {
         if (is_uncertainty(e)) {
@@ -515,7 +517,7 @@ future<> server_impl::modify_config(std::vector<server_address> add, std::vector
         }
         auto reply = co_await execute_modify_config(leader, std::move(add), std::move(del));
         if (std::holds_alternative<raft::entry_id>(reply)) {
-            co_return co_await wait_for_entry(std::get<raft::entry_id>(reply), wait_type::committed);
+            co_return;
         }
         throw raft::not_a_leader{_fsm->current_leader()};
     }
@@ -535,7 +537,10 @@ future<> server_impl::modify_config(std::vector<server_address> add, std::vector
                 }
             }();
             if (std::holds_alternative<raft::entry_id>(reply)) {
-                co_return co_await wait_for_entry(std::get<raft::entry_id>(reply), wait_type::committed);
+                // Do not wait for the entry locally. The reply means that the leader committed it,
+                // and there is no reason to wait for our local commit index to match.
+                // See also #9981.
+                co_return;
             }
             leader = std::get<raft::not_a_leader>(reply).leader;
         }
