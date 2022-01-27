@@ -889,7 +889,12 @@ public:
     void start_compaction();
     void trigger_compaction();
     void try_trigger_compaction() noexcept;
+    // Triggers offstrategy compaction, if needed, in the background.
     void trigger_offstrategy_compaction();
+    // Performs offstrategy compaction, if needed, returning
+    // a future<bool> that is resolved when offstrategy_compaction completes.
+    // The future value is true iff offstrategy compaction was required.
+    future<bool> perform_offstrategy_compaction();
     future<> run_offstrategy_compaction(sstables::compaction_data& info);
     void set_compaction_strategy(sstables::compaction_strategy_type strategy);
     const sstables::compaction_strategy& get_compaction_strategy() const {

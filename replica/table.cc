@@ -1027,12 +1027,26 @@ void table::do_trigger_compaction() {
 }
 
 void table::trigger_offstrategy_compaction() {
+    // Run in background.
+    // This is safe since the the compaction task is tracked
+    // by the compaction_manager until stop()
+    (void)perform_offstrategy_compaction().then_wrapped([this] (future<bool> f) {
+        if (f.failed()) {
+            auto ex = f.get_exception();
+            tlogger.warn("Offstrategy compaction of {}.{} failed: {}, ignoring", schema()->ks_name(), schema()->cf_name(), ex);
+        }
+    });
+}
+
+future<bool> table::perform_offstrategy_compaction() {
     // If the user calls trigger_offstrategy_compaction() to trigger
     // off-strategy explicitly, cancel the timeout based automatic trigger.
     _off_strategy_trigger.cancel();
-    if (!_maintenance_sstables->all()->empty()) {
-        _compaction_manager.submit_offstrategy(this);
+    if (_maintenance_sstables->all()->empty()) {
+        co_return false;
     }
+    co_await _compaction_manager.perform_offstrategy(this);
+    co_return true;
 }
 
 future<> table::run_offstrategy_compaction(sstables::compaction_data& info) {
