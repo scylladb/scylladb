@@ -1068,6 +1068,47 @@ future<reconfigure_result_t> reconfigure(
     }
 }
 
+future<reconfigure_result_t> modify_config(
+        const std::vector<raft::server_id>& added,
+        std::vector<raft::server_id> deleted,
+        raft::logical_clock::time_point timeout,
+        logical_timer& timer,
+        raft::server& server) {
+    std::vector<raft::server_address> added_set;
+    for (auto id : added) {
+        added_set.push_back(raft::server_address { .id = id });
+    }
+
+    try {
+        co_await timer.with_timeout(timeout, [&server, added_set = std::move(added_set), deleted = std::move(deleted)] () mutable {
+            return server.modify_config(std::move(added_set), std::move(deleted));
+        }());
+        co_return std::monostate{};
+    } catch (raft::not_a_leader e) {
+        co_return e;
+    } catch (raft::dropped_entry e) {
+        co_return e;
+    } catch (raft::commit_status_unknown e) {
+        co_return e;
+    } catch (raft::conf_change_in_progress e) {
+        co_return e;
+    } catch (raft::stopped_error e) {
+        co_return e;
+    } catch (logical_timer::timed_out<void> e) {
+        (void)e.get_future().discard_result()
+            .handle_exception([] (std::exception_ptr eptr) {
+                try {
+                    std::rethrow_exception(eptr);
+                } catch (const raft::dropped_entry&) {
+                } catch (const raft::commit_status_unknown&) {
+                } catch (const raft::not_a_leader&) {
+                } catch (const raft::stopped_error&) {
+                }
+            });
+        co_return timed_out_error{};
+    }
+}
+
 // Contains a `raft::server` and other facilities needed for it and the underlying
 // modules (persistence, rpc, etc.) to run, and to communicate with the external environment.
 template <PureStateMachine M>
@@ -1185,6 +1226,21 @@ public:
         try {
             co_return co_await with_gate(_gate, [this, &ids, timeout, &timer] {
                 return ::reconfigure(ids, timeout, timer, *_server);
+            });
+        } catch (const gate_closed_exception&) {
+            co_return raft::stopped_error{};
+        }
+    }
+
+    future<reconfigure_result_t> modify_config(
+            const std::vector<raft::server_id>& added,
+            std::vector<raft::server_id> deleted,
+            raft::logical_clock::time_point timeout,
+            logical_timer& timer) {
+        assert(_started);
+        try {
+            co_return co_await with_gate(_gate, [this, &added, deleted = std::move(deleted), timeout, &timer] {
+                return ::modify_config(added, std::move(deleted), timeout, timer, *_server);
             });
         } catch (const gate_closed_exception&) {
             co_return raft::stopped_error{};
@@ -1544,6 +1600,32 @@ public:
 
         auto srv = n._server.get();
         auto res = co_await srv->reconfigure(ids, timeout, timer);
+
+        if (srv != n._server.get()) {
+            // The server stopped while the call was happening.
+            // As above, we simulate a 'remote' call by timing it out in this case.
+            co_await timer.sleep_until(timeout);
+            co_return timed_out_error{};
+        }
+        co_return res;
+    }
+
+    future<reconfigure_result_t> modify_config(
+            raft::server_id id,
+            const std::vector<raft::server_id>& added,
+            std::vector<raft::server_id> deleted,
+            raft::logical_clock::time_point timeout,
+            logical_timer& timer) {
+        auto& n = _routes.at(id);
+        if (!n._server) {
+            // A 'remote' caller doesn't know in general if the server is down or just slow to respond.
+            // Simulate this by timing out the call.
+            co_await timer.sleep_until(timeout);
+            co_return timed_out_error{};
+        }
+
+        auto srv = n._server.get();
+        auto res = co_await srv->modify_config(added, std::move(deleted), timeout, timer);
 
         if (srv != n._server.get()) {
             // The server stopped while the call was happening.
@@ -1917,6 +1999,42 @@ SEASTAR_TEST_CASE(snapshotting_preserves_config_test) {
         // With the bug this would timeout, the cluster is unable to elect a leader without the configuration.
         auto l = co_await wait_for_leader<ExReg>{}(env, {id1, id2}, timer, timer.now() + 1000_t);
         tlogger.trace("last leader: {}", l);
+    });
+}
+
+// Regression test for #9981.
+SEASTAR_TEST_CASE(removed_follower_with_forwarding_learns_about_removal) {
+    logical_timer timer;
+    environment_config cfg {
+        .rnd{0},
+        .network_delay{1, 1},
+        .fd_convict_threshold = 10_t,
+    };
+    co_await with_env_and_ticker<ExReg>(cfg, [&timer] (environment<ExReg>& env, ticker& t) -> future<> {
+        t.start([&] (uint64_t tick) {
+            env.tick_network();
+            timer.tick();
+            if (tick % 10 == 0) {
+                env.tick_servers();
+            }
+        }, 10'000);
+
+        raft::server::configuration cfg {
+            .enable_forwarding = true,
+        };
+
+        auto id1 = co_await env.new_server(true, cfg);
+        assert(co_await wait_for_leader<ExReg>{}(env, {id1}, timer, timer.now() + 1000_t) == id1);
+
+        auto id2 = co_await env.new_server(true, cfg);
+        assert(std::holds_alternative<std::monostate>(
+            co_await env.reconfigure(id1, {id1, id2}, timer.now() + 100_t, timer)));
+
+        // Server 2 forwards the entry that removes it to server 1.
+        // We want server 2 to eventually learn from server 1 that it was removed,
+        // so the call finishes (no timeout).
+        assert(std::holds_alternative<std::monostate>(
+            co_await env.modify_config(id2, {}, {id2}, timer.now() + 100_t, timer)));
     });
 }
 
