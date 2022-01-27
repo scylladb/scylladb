@@ -10,9 +10,11 @@
 # fixtures directly from test/pylib).
 #
 #
+import asyncio
 from cassandra.auth import PlainTextAuthProvider                         # type: ignore
 from cassandra.cluster import Cluster, ConsistencyLevel                  # type: ignore
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT     # type: ignore
+from cassandra.cluster import Session, ResponseFuture                    # type: ignore
 from cassandra.policies import RoundRobinPolicy                          # type: ignore
 from test.pylib.util import unique_name                                  # type: ignore
 import pytest
@@ -29,6 +31,47 @@ def pytest_addoption(parser):
                      help='CQL server port to connect to')
     parser.addoption('--ssl', action='store_true',
                      help='Connect to CQL via an encrypted TLSv1.2 connection')
+
+
+# Change default pytest-asyncio event_loop fixture scope to session to
+# allow async fixtures with scope larger than function. (e.g. keyspace fixture)
+# See https://github.com/pytest-dev/pytest-asyncio/issues/68
+@pytest.fixture(scope="session")
+def event_loop(request):
+    loop = asyncio.get_event_loop_policy().new_event_loop()
+    yield loop
+    loop.close()
+
+
+def _wrap_future(f: ResponseFuture) -> asyncio.Future:
+    """Wrap a cassandra Future into an asyncio.Future object.
+
+    Args:
+        f: future to wrap
+
+    Returns:
+        And asyncio.Future object which can be awaited.
+    """
+    loop = asyncio.get_event_loop()
+    aio_future = loop.create_future()
+
+    def on_result(result):
+        loop.call_soon_threadsafe(aio_future.set_result, result)
+
+    def on_error(exception, *_):
+        loop.call_soon_threadsafe(aio_future.set_exception, exception)
+
+    f.add_callback(on_result)
+    f.add_errback(on_error)
+    return aio_future
+
+
+def run_async(self, *args, **kwargs) -> asyncio.Future:
+    return _wrap_future(self.execute_async(*args, **kwargs))
+
+
+Session.run_async = run_async
+
 
 # "cql" fixture: set up client object for communicating with the CQL API.
 # The host/port combination of the server are determined by the --host and
