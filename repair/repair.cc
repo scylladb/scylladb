@@ -1189,9 +1189,7 @@ future<repair_status> repair_service::await_completion(int id, std::chrono::stea
 
 future<> repair_service::shutdown() {
     co_await repair_tracker().shutdown();
-    if (this_shard_id() == 0) {
-        co_await shutdown_all_row_level_repair();
-    }
+    co_await remove_repair_meta();
 }
 
 future<> repair_service::abort_all() {
