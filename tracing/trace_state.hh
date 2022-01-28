@@ -67,8 +67,9 @@ public:
 private:
     lw_shared_ptr<one_session_records> _records;
     // Used for calculation of time passed since the beginning of a tracing
-    // session till each tracing event.
+    // session till each tracing event. Secondary slow-query-logging sessions inherit `_start` from parents.
     elapsed_clock::time_point _start;
+    std::optional<uint64_t> _supplied_start_ts_us; // Parent's `_start`, as microseconds from POSIX epoch.
     std::chrono::microseconds _slow_query_threshold;
     trace_state_props_set _state_props;
     state _state = state::inactive;
@@ -134,6 +135,10 @@ public:
         init_session_records(info.type, std::chrono::seconds(info.slow_query_ttl_sec), info.session_id, info.parent_id);
         _slow_query_threshold = std::chrono::microseconds(info.slow_query_threshold_us);
 
+        if (info.state_props.contains<trace_state_props::log_slow_query>() && info.start_ts_us > 0u) {
+            _supplied_start_ts_us = info.start_ts_us;
+        }
+
         trace_state_logger.trace("{}: props {}, slow query threshold {}us, slow query ttl {}s", session_id(), _state_props.mask(), info.slow_query_threshold_us, info.slow_query_ttl_sec);
     }
 
@@ -177,6 +182,16 @@ public:
 
     trace_state_props_set raw_props() const {
         return _state_props;
+    }
+
+    /**
+     * @return the moment `begin()` was called, in microseconds from POSIX epoch.
+     */
+    uint64_t start_ts_us() const {
+        // `elapsed_clock` has undefined epoch, so we use the POSIX TS to expose times outside
+        const std::chrono::system_clock::time_point start_system_time_point = std::chrono::system_clock::now()
+                + (_start - elapsed_clock::now());
+        return std::chrono::duration_cast<std::chrono::microseconds>(start_system_time_point.time_since_epoch()).count();
     }
 
     /**
@@ -239,6 +254,13 @@ private:
      */
     void begin() {
         std::atomic_signal_fence(std::memory_order_seq_cst);
+        if (_supplied_start_ts_us) {
+            // Shorten `_slow_query_threshold` by the time spent since starting the parent span.
+            _slow_query_threshold -= std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::system_clock::now().time_since_epoch() - std::chrono::microseconds(*_supplied_start_ts_us));
+            // And do not let it be negative
+            _slow_query_threshold = std::max(std::chrono::microseconds::zero(), _slow_query_threshold);
+        }
         _start = elapsed_clock::now();
         std::atomic_signal_fence(std::memory_order_seq_cst);
         set_state(state::foreground);
@@ -697,7 +719,11 @@ inline std::optional<trace_info> make_trace_info(const trace_state_ptr& state) {
     // happens on a remote replica after a Client has received a response for
     // his/her query.
     if (state && !state->ignore_events() && (state->full_tracing() || (state->log_slow_query() && !state->is_in_state(trace_state::state::background)))) {
-        return trace_info{state->session_id(), state->type(), state->write_on_close(), state->raw_props(), state->slow_query_threshold_us(), state->slow_query_ttl_sec(), state->my_span_id()};
+        // When slow query logging is requested, secondary session will continue
+        // calculating time *since the start of the primary session*
+        const auto start_ts_us = state->log_slow_query() ? state->start_ts_us() : 0u;
+        return trace_info{state->session_id(), state->type(), state->write_on_close(), state->raw_props(),
+                state->slow_query_threshold_us(), state->slow_query_ttl_sec(), state->my_span_id(), start_ts_us};
     }
 
     return std::nullopt;

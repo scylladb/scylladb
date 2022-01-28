@@ -120,9 +120,10 @@ public:
     uint32_t slow_query_threshold_us; // in microseconds
     uint32_t slow_query_ttl_sec; // in seconds
     span_id parent_id;
+    uint64_t start_ts_us = 0u; // sentinel value (== "unset")
 
 public:
-    trace_info(utils::UUID sid, trace_type t, bool w_o_c, trace_state_props_set s_p, uint32_t slow_query_threshold, uint32_t slow_query_ttl, span_id p_id)
+    trace_info(utils::UUID sid, trace_type t, bool w_o_c, trace_state_props_set s_p, uint32_t slow_query_threshold, uint32_t slow_query_ttl, span_id p_id, uint64_t s_t_u)
         : session_id(std::move(sid))
         , type(t)
         , write_on_close(w_o_c)
@@ -130,6 +131,7 @@ public:
         , slow_query_threshold_us(slow_query_threshold)
         , slow_query_ttl_sec(slow_query_ttl)
         , parent_id(std::move(p_id))
+        , start_ts_us(s_t_u)
     {
         state_props.set_if<trace_state_props::write_on_close>(write_on_close);
     }
