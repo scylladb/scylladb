@@ -197,8 +197,7 @@ bool range_streamer::use_strict_sources_for_ranges(const sstring& keyspace_name)
     auto nr_nodes_in_ring = get_token_metadata().get_all_endpoints().size();
     bool everywhere_topology = ks.get_replication_strategy().get_type() == locator::replication_strategy_type::everywhere_topology;
     // Use strict when number of nodes in the ring is equal or more than RF
-    auto strict = !_db.local().is_replacing()
-           && _db.local().get_config().consistent_rangemovement()
+    auto strict = _db.local().get_config().consistent_rangemovement()
            && !_tokens.empty()
            && !everywhere_topology
            && nr_nodes_in_ring >= rf;
@@ -224,13 +223,13 @@ void range_streamer::add_rx_ranges(const sstring& keyspace_name, std::unordered_
 }
 
 // TODO: This is the legacy range_streamer interface, it is add_rx_ranges which adds rx ranges.
-future<> range_streamer::add_ranges(const sstring& keyspace_name, dht::token_range_vector ranges, gms::gossiper& gossiper) {
-  return seastar::async([this, keyspace_name, ranges= std::move(ranges), &gossiper] () mutable {
+future<> range_streamer::add_ranges(const sstring& keyspace_name, dht::token_range_vector ranges, gms::gossiper& gossiper, bool is_replacing) {
+  return seastar::async([this, keyspace_name, ranges= std::move(ranges), &gossiper, is_replacing] () mutable {
     if (_nr_tx_added) {
         throw std::runtime_error("Mixed sending and receiving is not supported");
     }
     _nr_rx_added++;
-    auto ranges_for_keyspace = use_strict_sources_for_ranges(keyspace_name)
+    auto ranges_for_keyspace = !is_replacing && use_strict_sources_for_ranges(keyspace_name)
         ? get_all_ranges_with_strict_sources_for(keyspace_name, ranges, gossiper)
         : get_all_ranges_with_sources_for(keyspace_name, ranges);
 
