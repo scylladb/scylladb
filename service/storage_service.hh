@@ -387,6 +387,8 @@ public:
 
 private:
     bool should_bootstrap();
+    std::optional<gms::inet_address> get_replace_address();
+    bool is_replacing();
     bool is_first_node();
     void prepare_to_join(
             std::unordered_set<gms::inet_address> initial_contact_nodes,

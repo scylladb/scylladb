@@ -1398,31 +1398,6 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
     co_return std::tuple(std::move(result), hit_rate);
 }
 
-std::optional<gms::inet_address> database::get_replace_address() {
-    auto& cfg = get_config();
-    sstring replace_address = cfg.replace_address();
-    sstring replace_address_first_boot = cfg.replace_address_first_boot();
-    try {
-        if (!replace_address.empty()) {
-            return gms::inet_address(replace_address);
-        } else if (!replace_address_first_boot.empty()) {
-            return gms::inet_address(replace_address_first_boot);
-        }
-        return std::nullopt;
-    } catch (...) {
-        return std::nullopt;
-    }
-}
-
-bool database::is_replacing() {
-    sstring replace_address_first_boot = get_config().replace_address_first_boot();
-    if (!replace_address_first_boot.empty() && db::system_keyspace::bootstrap_complete()) {
-        dblog.info("Replace address on first boot requested; this node is already bootstrapped");
-        return false;
-    }
-    return bool(get_replace_address());
-}
-
 namespace {
 
 enum class query_class {
