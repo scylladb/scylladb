@@ -123,6 +123,7 @@ public:
 private:
     const schema& _schema;
     sstring _name;
+    utils::UUID _host_id;
     // EH of 150 can track a max value of 1697806495183, i.e., > 1.5PB
     utils::estimated_histogram _estimated_partition_size{150};
     // EH of 114 can track a max value of 2395318855, i.e., > 2B cells
@@ -151,9 +152,10 @@ private:
 private:
     void convert(disk_array<uint32_t, disk_string<uint16_t>>&to, const std::optional<clustering_key_prefix>& from);
 public:
-    explicit metadata_collector(const schema& schema, sstring name)
+    explicit metadata_collector(const schema& schema, sstring name, const utils::UUID& host_id)
         : _schema(schema)
         , _name(name)
+        , _host_id(host_id)
     {
         if (!schema.clustering_key_size()) {
             // Empty min/max components represent the full range
@@ -247,6 +249,7 @@ public:
         m.has_legacy_counter_shards = _has_legacy_counter_shards;
         m.columns_count = _columns_count;
         m.rows_count = _rows_count;
+        m.originating_host_id = _host_id;
     }
 };
 
