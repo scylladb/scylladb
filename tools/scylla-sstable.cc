@@ -907,24 +907,32 @@ void validate_operation(schema_ptr schema, reader_permit permit, const std::vect
 }
 
 void dump_index_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map&) {
-    std::cout << "{stream_start}" << std::endl;
+    json_writer writer;
+    writer.StartStream();
     for (auto& sst : sstables) {
         sstables::index_reader idx_reader(sst, permit, default_priority_class(), {}, sstables::use_caching::yes);
         auto close_idx_reader = deferred_close(idx_reader);
 
-        std::cout << "{sstable_index_start: " << sst->get_filename() << "}\n";
+        writer.SstableKey(*sst);
+        writer.StartArray();
+
         while (!idx_reader.eof()) {
             idx_reader.read_partition_data().get();
             auto pos = idx_reader.get_data_file_position();
-
             auto pkey = idx_reader.get_partition_key();
-            fmt::print("{}: {} ({})\n", pos, pkey.with_schema(*schema), pkey);
+
+            writer.StartObject();
+            writer.Key("key");
+            writer.PartitionKey(*schema, pkey);
+            writer.Key("pos");
+            writer.Uint64(pos);
+            writer.EndObject();
 
             idx_reader.advance_to_next_partition().get();
         }
-        std::cout << "{sstable_index_end}" << std::endl;
+        writer.EndArray();
     }
-    std::cout << "{stream_end}" << std::endl;
+    writer.EndStream();
 }
 
 template <typename Integer>
@@ -1561,6 +1569,20 @@ Positions (both that of partition and that of rows) is valid for uncompressed
 data.
 For more information about the sstable components and the format itself, visit
 https://docs.scylladb.com/architecture/sstable/.
+
+The content is dumped in JSON, using the following schema:
+
+$ROOT := { "$sstable_path": $SSTABLE, ... }
+
+$SSTABLE := [$INDEX_ENTRY, ...]
+
+$INDEX_ENTRY := {
+    "key": {
+        "raw": String, // hexadecimal representation of the raw binary
+        "value": String
+    },
+    "pos": Uint64
+}
 )",
             dump_index_operation},
 /* dump-compression-info */
