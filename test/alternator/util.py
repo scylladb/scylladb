@@ -11,11 +11,15 @@ import time
 from contextlib import contextmanager
 from botocore.hooks import HierarchicalEmitter
 
+# Use a global random generator to avoid reusing the same seed by multiple
+# test cases, which was observed
+global_random = random.Random()
+
 def random_string(length=10, chars=string.ascii_uppercase + string.digits):
-    return ''.join(random.choice(chars) for x in range(length))
+    return ''.join(global_random.choice(chars) for x in range(length))
 
 def random_bytes(length=10):
-    return bytearray(random.getrandbits(8) for _ in range(length))
+    return bytearray(global_random.getrandbits(8) for _ in range(length))
 
 # Utility functions for scan and query into an array of items, reading
 # the full (possibly requiring multiple requests to read successive pages).
