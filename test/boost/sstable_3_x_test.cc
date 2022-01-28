@@ -40,6 +40,7 @@
 #include "sstables/mx/writer.hh"
 #include "test/lib/simple_schema.hh"
 #include "test/lib/exception_utils.hh"
+#include "db/config.hh"
 
 #include <boost/range/algorithm/sort.hpp>
 
@@ -5183,6 +5184,7 @@ static void test_sstable_write_large_row_f(schema_ptr s, reader_permit permit, m
 
     large_row_handler handler(threshold, std::numeric_limits<uint64_t>::max(), f);
     cache_tracker tracker;
+    test_db_config.host_id = ::utils::make_random_uuid();
     sstables_manager manager(handler, test_db_config, test_feature_service, tracker);
     auto stop_manager = defer([&] { manager.close().get(); });
     tmpdir dir;
@@ -5242,6 +5244,7 @@ static void test_sstable_log_too_many_rows_f(int rows, uint64_t threshold, bool 
 
     large_row_handler handler(std::numeric_limits<uint64_t>::max(), threshold, f);
     cache_tracker tracker;
+    test_db_config.host_id = ::utils::make_random_uuid();
     sstables_manager manager(handler, test_db_config, test_feature_service, tracker);
     auto close_manager = defer([&] { manager.close().get(); });
     tmpdir dir;

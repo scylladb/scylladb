@@ -967,7 +967,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             db::system_keyspace::minimal_setup(qp);
             db::system_keyspace::init_local_cache().get();
-            db::system_keyspace::load_local_host_id().get0();
+            cfg->host_id = db::system_keyspace::load_local_host_id().get0();
 
             db::sstables_format_selector sst_format_selector(gossiper.local(), feature_service, db);
 

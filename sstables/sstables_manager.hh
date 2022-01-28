@@ -86,6 +86,8 @@ public:
     void set_format(sstable_version_types format) noexcept { _format = format; }
     sstables::sstable::version_types get_highest_supported_format() const noexcept { return _format; }
 
+    const utils::UUID& get_local_host_id() const;
+
     // Wait until all sstables managed by this sstables_manager instance
     // (previously created by make_sstable()) have been disposed of:
     //   - if they were marked for deletion, the files are deleted

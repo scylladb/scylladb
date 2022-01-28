@@ -1373,6 +1373,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
             db::config dbcfg;
             gms::feature_service feature_service(gms::feature_config_from_db_config(dbcfg));
             cache_tracker tracker;
+            dbcfg.host_id = ::utils::make_random_uuid();
             sstables::sstables_manager sst_man(large_data_handler, dbcfg, feature_service, tracker);
             auto close_sst_man = deferred_close(sst_man);
 

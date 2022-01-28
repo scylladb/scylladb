@@ -474,6 +474,9 @@ public:
             cfg->ring_delay_ms.set(500);
             cfg->shutdown_announce_in_ms.set(0);
             cfg->broadcast_to_all_shards().get();
+            if (cfg->host_id == utils::UUID{}) {
+                cfg->host_id = utils::make_random_uuid();
+            }
             create_directories((data_dir_path + "/system").c_str());
             create_directories(cfg->commitlog_directory().c_str());
             create_directories(cfg->hints_directory().c_str());

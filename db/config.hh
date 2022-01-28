@@ -372,6 +372,8 @@ public:
 
     const db::extensions& extensions() const;
 
+    utils::UUID host_id;
+
     static const sstring default_tls_priority;
 private:
     template<typename T>
