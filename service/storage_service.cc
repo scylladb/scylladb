@@ -221,8 +221,8 @@ void storage_service::prepare_to_join(
         }
         _bootstrap_tokens = prepare_replacement_info(initial_contact_nodes, loaded_peer_features).get0();
         auto replace_address = _db.local().get_replace_address();
-        replacing_a_node_with_same_ip = replace_address && *replace_address == get_broadcast_address();
-        replacing_a_node_with_diff_ip = replace_address && *replace_address != get_broadcast_address();
+        replacing_a_node_with_same_ip = *replace_address == get_broadcast_address();
+        replacing_a_node_with_diff_ip = *replace_address != get_broadcast_address();
 
         slogger.info("Replacing a node with {} IP address, my address={}, node being replaced={}",
             get_broadcast_address() == *replace_address ? "the same" : "a different",
@@ -366,7 +366,6 @@ void storage_service::join_token_ring(int delay) {
     //
     // We attempted to replace this with a schema-presence check, but you need a meaningful sleep
     // to get schema info from gossip which defeats the purpose.  See CASSANDRA-4427 for the gory details.
-    std::unordered_set<inet_address> current;
     if (should_bootstrap()) {
         bool resume_bootstrap = db::system_keyspace::bootstrap_in_progress();
         if (resume_bootstrap) {
@@ -428,16 +427,14 @@ void storage_service::join_token_ring(int delay) {
                 if (!_bootstrap_tokens.empty()) {
                     slogger.info("Using previously saved tokens = {}", _bootstrap_tokens);
                 } else {
-                    _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(tmptr, _db.local());
-                    slogger.info("Using newly generated tokens = {}", _bootstrap_tokens);
+                    _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(tmptr, _db.local().get_config(), dht::check_token_endpoint::yes);
                 }
             } else {
-                _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(tmptr, _db.local());
-                slogger.info("Using newly generated tokens = {}", _bootstrap_tokens);
+                _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(tmptr, _db.local().get_config(), dht::check_token_endpoint::yes);
             }
         } else {
             auto replace_addr = _db.local().get_replace_address();
-            if (replace_addr && *replace_addr != get_broadcast_address()) {
+            if (*replace_addr != get_broadcast_address()) {
                 // Sleep additionally to make sure that the server actually is not alive
                 // and giving it more time to gossip if alive.
                 sleep_abortable(service::load_broadcaster::BROADCAST_INTERVAL, _abort_source).get();
@@ -451,7 +448,6 @@ void storage_service::join_token_ring(int delay) {
                         if (eps && eps->get_update_timestamp() > gms::gossiper::clk::now() - std::chrono::milliseconds(delay)) {
                             throw std::runtime_error("Cannot replace a live node...");
                         }
-                        current.insert(*existing);
                     } else {
                         throw std::runtime_error(format("Cannot replace token {} which does not exist!", token));
                     }
@@ -468,26 +464,12 @@ void storage_service::join_token_ring(int delay) {
         bootstrap(); // blocks until finished
     } else {
         maybe_start_sys_dist_ks();
-        size_t num_tokens = _db.local().get_config().num_tokens();
         _bootstrap_tokens = db::system_keyspace::get_saved_tokens().get0();
         if (_bootstrap_tokens.empty()) {
-            auto initial_tokens = _db.local().get_initial_tokens();
-            if (initial_tokens.size() < 1) {
-                _bootstrap_tokens = boot_strapper::get_random_tokens(get_token_metadata_ptr(), num_tokens);
-                if (num_tokens == 1) {
-                    slogger.warn("Generated random token {}. Random tokens will result in an unbalanced ring; see http://wiki.apache.org/cassandra/Operations", _bootstrap_tokens);
-                } else {
-                    slogger.info("Generated random tokens. tokens are {}", _bootstrap_tokens);
-                }
-            } else {
-                for (auto token_string : initial_tokens) {
-                    auto token = dht::token::from_sstring(token_string);
-                    _bootstrap_tokens.insert(token);
-                }
-                slogger.info("Saved tokens not found. Using configuration value: {}", _bootstrap_tokens);
-            }
+            _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(get_token_metadata_ptr(), _db.local().get_config(), dht::check_token_endpoint::no);
             db::system_keyspace::update_tokens(_bootstrap_tokens).get();
         } else {
+            size_t num_tokens = _db.local().get_config().num_tokens();
             if (_bootstrap_tokens.size() != num_tokens) {
                 throw std::runtime_error(format("Cannot change the number of tokens from {:d} to {:d}", _bootstrap_tokens.size(), num_tokens));
             } else {
@@ -664,11 +646,9 @@ void storage_service::bootstrap() {
         set_mode(mode::JOINING, fmt::format("Wait until local node knows tokens of peer nodes"), true);
         _gossiper.wait_for_range_setup().get();
         auto replace_addr = _db.local().get_replace_address();
-        if (replace_addr) {
-            slogger.debug("Removing replaced endpoint {} from system.peers", *replace_addr);
-            db::system_keyspace::remove_endpoint(*replace_addr).get();
-            _group0->leave_group0(replace_addr).get();
-        }
+        slogger.debug("Removing replaced endpoint {} from system.peers", *replace_addr);
+        db::system_keyspace::remove_endpoint(*replace_addr).get();
+        _group0->leave_group0(replace_addr).get();
     }
 
     _db.invoke_on_all([this] (replica::database& db) {

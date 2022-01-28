@@ -19,8 +19,11 @@
 
 namespace streaming { class stream_manager; }
 namespace gms { class gossiper; }
+namespace db { class config; }
 
 namespace dht {
+
+using check_token_endpoint = bool_class<struct check_token_endpoint_tag>;
 
 class boot_strapper {
     using inet_address = gms::inet_address;
@@ -52,7 +55,7 @@ public:
      * otherwise, if num_tokens == 1, pick a token to assume half the load of the most-loaded node.
      * else choose num_tokens tokens at random
      */
-    static std::unordered_set<token> get_bootstrap_tokens(const token_metadata_ptr tmptr, replica::database& db);
+    static std::unordered_set<token> get_bootstrap_tokens(const token_metadata_ptr tmptr, const db::config& cfg, check_token_endpoint check);
 
     static std::unordered_set<token> get_random_tokens(const token_metadata_ptr tmptr, size_t num_tokens);
 #if 0
