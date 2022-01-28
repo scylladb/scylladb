@@ -18,14 +18,14 @@
 
 namespace streaming {
 
-std::function<future<> (flat_mutation_reader)> make_streaming_consumer(sstring origin,
+std::function<future<> (flat_mutation_reader_v2)> make_streaming_consumer(sstring origin,
         sharded<replica::database>& db,
         sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<db::view::view_update_generator>& vug,
         uint64_t estimated_partitions,
         stream_reason reason,
         sstables::offstrategy offstrategy) {
-    return [&db, &sys_dist_ks, &vug, estimated_partitions, reason, offstrategy, origin = std::move(origin)] (flat_mutation_reader reader) -> future<> {
+    return [&db, &sys_dist_ks, &vug, estimated_partitions, reason, offstrategy, origin = std::move(origin)] (flat_mutation_reader_v2 reader) -> future<> {
         std::exception_ptr ex;
         try {
             auto cf = db.local().find_column_family(reader.schema()).shared_from_this();
@@ -73,7 +73,7 @@ std::function<future<> (flat_mutation_reader)> make_streaming_consumer(sstring o
                     return vug.local().register_staging_sstable(sst, std::move(cf));
                 });
             });
-            co_return co_await consumer(upgrade_to_v2(std::move(reader)));
+            co_return co_await consumer(std::move(reader));
         } catch (...) {
             ex = std::current_exception();
         }

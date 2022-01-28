@@ -128,7 +128,7 @@ void stream_manager::init_messaging_service_handler() {
             };
             //FIXME: discarded future.
             (void)mutation_writer::distribute_reader_and_consume_on_shards(s,
-                make_generating_reader(s, permit, std::move(get_next_mutation_fragment)),
+                upgrade_to_v2(make_generating_reader(s, permit, std::move(get_next_mutation_fragment))),
                 make_streaming_consumer("streaming", _db, _sys_dist_ks, _view_update_generator, estimated_partitions, reason, is_offstrategy_supported(reason)),
                 cf.stream_in_progress()
             ).then_wrapped([s, plan_id, from, sink, estimated_partitions] (future<uint64_t> f) mutable {
