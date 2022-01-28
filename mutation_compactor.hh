@@ -338,6 +338,12 @@ public:
          }
     }
 
+    template <typename Consumer>
+    requires CompactedFragmentsConsumer<Consumer>
+    void force_partition_not_empty(Consumer& consumer) {
+        partition_is_not_empty(consumer);
+    }
+
     template <typename Consumer, typename GCConsumer>
     requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
     stop_iteration consume(static_row&& sr, Consumer& consumer, GCConsumer& gc_consumer) {

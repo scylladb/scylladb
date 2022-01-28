@@ -2697,13 +2697,13 @@ SEASTAR_THREAD_TEST_CASE(test_compacting_reader_as_mutation_source) {
                     streamed_mutation::forwarding fwd_sm,
                     mutation_reader::forwarding fwd_mr) mutable {
                 auto source = mt->make_flat_reader(s, std::move(permit), range, slice, pc, std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr);
+                if (fwd_sm == streamed_mutation::forwarding::yes) {
+                    source = make_forwardable(std::move(source));
+                }
                 auto mr = make_compacting_reader(std::move(source), query_time,
-                        [] (const dht::decorated_key&) { return api::min_timestamp; });
+                        [] (const dht::decorated_key&) { return api::min_timestamp; }, fwd_sm);
                 if (single_fragment_buffer) {
                     mr.set_max_buffer_size(1);
-                }
-                if (fwd_sm == streamed_mutation::forwarding::yes) {
-                    return make_forwardable(std::move(mr));
                 }
                 return mr;
             });

@@ -3334,20 +3334,26 @@ private:
     }
     void consume_end_of_stream() {
     }
+    streamed_mutation::forwarding _fwd;
 
 public:
     compacting_reader(flat_mutation_reader source, gc_clock::time_point compaction_time,
-            std::function<api::timestamp_type(const dht::decorated_key&)> get_max_purgeable)
+            std::function<api::timestamp_type(const dht::decorated_key&)> get_max_purgeable,
+            streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no)
         : impl(source.schema(), source.permit())
         , _reader(std::move(source))
         , _compactor(*_schema, compaction_time, get_max_purgeable)
-        , _last_uncompacted_partition_start(dht::decorated_key(dht::minimum_token(), partition_key::make_empty()), tombstone{}) {
+        , _last_uncompacted_partition_start(dht::decorated_key(dht::minimum_token(), partition_key::make_empty()), tombstone{})
+        , _fwd(fwd) {
     }
     virtual future<> fill_buffer() override {
         return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this] {
             return _reader.fill_buffer().then([this] {
                 if (_reader.is_buffer_empty()) {
                     _end_of_stream = _reader.is_end_of_stream();
+                    if (_end_of_stream && _fwd) {
+                        maybe_push_partition_start();
+                    }
                 }
                 // It is important to not consume more than we actually need.
                 // Doing so leads to corner cases around `next_partition()`. The
@@ -3378,6 +3384,9 @@ public:
                         if (_last_uncompacted_partition_start.partition_tombstone()) {
                             _compactor.consume(_last_uncompacted_partition_start.partition_tombstone(), *this, _gc_consumer);
                         }
+                        if (_fwd) {
+                            _compactor.force_partition_not_empty(*this);
+                        }
                         break;
                     case mutation_fragment::kind::partition_end:
                         _compactor.consume_end_of_partition(*this, _gc_consumer);
@@ -3403,7 +3412,9 @@ public:
         return _reader.fast_forward_to(pr);
     }
     virtual future<> fast_forward_to(position_range pr) override {
-        return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
+        forward_buffer_to(pr.start());
+        _end_of_stream = false;
+        return _reader.fast_forward_to(std::move(pr));
     }
     virtual future<> close() noexcept override {
         return _reader.close();
@@ -3413,8 +3424,8 @@ public:
 } // anonymous namespace
 
 flat_mutation_reader make_compacting_reader(flat_mutation_reader source, gc_clock::time_point compaction_time,
-        std::function<api::timestamp_type(const dht::decorated_key&)> get_max_purgeable) {
-    return make_flat_mutation_reader<compacting_reader>(std::move(source), compaction_time, get_max_purgeable);
+        std::function<api::timestamp_type(const dht::decorated_key&)> get_max_purgeable, streamed_mutation::forwarding fwd) {
+    return make_flat_mutation_reader<compacting_reader>(std::move(source), compaction_time, get_max_purgeable, fwd);
 }
 
 position_reader_queue::~position_reader_queue() {}
