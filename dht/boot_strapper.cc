@@ -28,7 +28,7 @@ static logging::logger blogger("boot_strapper");
 
 namespace dht {
 
-future<> boot_strapper::bootstrap(streaming::stream_reason reason, gms::gossiper& gossiper) {
+future<> boot_strapper::bootstrap(streaming::stream_reason reason, gms::gossiper& gossiper, inet_address replace_address) {
     blogger.debug("Beginning bootstrap process: sorted_tokens={}", get_token_metadata().sorted_tokens());
     sstring description;
     if (reason == streaming::stream_reason::bootstrap) {
@@ -41,8 +41,8 @@ future<> boot_strapper::bootstrap(streaming::stream_reason reason, gms::gossiper
     try {
         auto streamer = make_lw_shared<range_streamer>(_db, _stream_manager, _token_metadata_ptr, _abort_source, _tokens, _address, description, reason);
         auto nodes_to_filter = gossiper.get_unreachable_members();
-        if (reason == streaming::stream_reason::replace && _db.local().get_replace_address()) {
-            nodes_to_filter.insert(_db.local().get_replace_address().value());
+        if (reason == streaming::stream_reason::replace) {
+            nodes_to_filter.insert(std::move(replace_address));
         }
         blogger.debug("nodes_to_filter={}", nodes_to_filter);
         streamer->add_source_filter(std::make_unique<range_streamer::failure_detector_source_filter>(nodes_to_filter));

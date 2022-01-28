@@ -2153,7 +2153,7 @@ void storage_service::run_replace_ops() {
         } else {
             slogger.info("replace[{}]: Using streaming based node ops to sync data", uuid);
             dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), _bootstrap_tokens, get_token_metadata_ptr());
-            bs.bootstrap(streaming::stream_reason::replace, _gossiper).get();
+            bs.bootstrap(streaming::stream_reason::replace, _gossiper, replace_address).get();
         }
 
 
