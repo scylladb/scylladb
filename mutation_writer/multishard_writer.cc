@@ -108,11 +108,11 @@ future<> multishard_writer::make_shard_writer(unsigned shard) {
     _queue_reader_handles[shard] = std::move(handle);
     return smp::submit_to(shard, [gs = global_schema_ptr(_s),
             consumer = _consumer,
-            reader = make_foreign(std::make_unique<flat_mutation_reader>(std::move(reader)))] () mutable {
+            reader = make_foreign(std::make_unique<flat_mutation_reader_v2>(upgrade_to_v2(std::move(reader))))] () mutable {
         auto s = gs.get();
         auto semaphore = std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{}, "shard_writer");
         auto permit = semaphore->make_tracking_only_permit(s.get(), "multishard-writer", db::no_timeout);
-        auto this_shard_reader = make_foreign_reader(s, std::move(permit), std::move(reader));
+        auto this_shard_reader = downgrade_to_v1(make_foreign_reader(s, std::move(permit), std::move(reader)));
         return make_foreign(std::make_unique<shard_writer>(gs.get(), std::move(semaphore), std::move(this_shard_reader), consumer));
     }).then([this, shard] (foreign_ptr<std::unique_ptr<shard_writer>> writer) {
         _shard_writers[shard] = std::move(writer);
