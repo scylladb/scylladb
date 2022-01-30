@@ -11,12 +11,11 @@
 # to reproduce bugs discovered by bigger Cassandra tests.
 #############################################################################
 
-from util import unique_name, new_test_table
+from util import unique_name, new_test_table, unique_key_int
 
 from cassandra.protocol import FunctionFailure, InvalidRequest
 
 import pytest
-import random
 import json
 from decimal import Decimal
 
@@ -38,11 +37,11 @@ def table1(cql, test_keyspace, type1):
 # error - FunctionFailure - and not some weird internal error.
 # Reproduces issue #7911.
 def test_failed_json_parsing_unprepared(cql, table1):
-    p = random.randint(1,1000000000)
+    p = unique_key_int()
     with pytest.raises(FunctionFailure):
         cql.execute(f"INSERT INTO {table1} (p, v) VALUES ({p}, fromJson('dog'))")
 def test_failed_json_parsing_prepared(cql, table1):
-    p = random.randint(1,1000000000)
+    p = unique_key_int()
     stmt = cql.prepare(f"INSERT INTO {table1} (p, v) VALUES (?, fromJson(?))")
     with pytest.raises(FunctionFailure):
         cql.execute(stmt, [p, 'dog'])
@@ -55,13 +54,13 @@ def test_failed_json_parsing_prepared(cql, table1):
 # a number of the wrong type
 # Reproduces issue #7911.
 def test_fromjson_wrong_type_unprepared(cql, table1):
-    p = random.randint(1,1000000000)
+    p = unique_key_int()
     with pytest.raises(FunctionFailure):
         cql.execute(f"INSERT INTO {table1} (p, v) VALUES ({p}, fromJson('\"dog\"'))")
     with pytest.raises(FunctionFailure):
         cql.execute(f"INSERT INTO {table1} (p, a) VALUES ({p}, fromJson('3'))")
 def test_fromjson_wrong_type_prepared(cql, table1):
-    p = random.randint(1,1000000000)
+    p = unique_key_int()
     stmt = cql.prepare(f"INSERT INTO {table1} (p, v) VALUES (?, fromJson(?))")
     with pytest.raises(FunctionFailure):
         cql.execute(stmt, [p, '"dog"'])
@@ -69,20 +68,20 @@ def test_fromjson_wrong_type_prepared(cql, table1):
     with pytest.raises(FunctionFailure):
         cql.execute(stmt, [p, '3'])
 def test_fromjson_bad_ascii_unprepared(cql, table1):
-    p = random.randint(1,1000000000)
+    p = unique_key_int()
     with pytest.raises(FunctionFailure):
         cql.execute(f"INSERT INTO {table1} (p, a) VALUES ({p}, fromJson('\"שלום\"'))")
 def test_fromjson_bad_ascii_prepared(cql, table1):
-    p = random.randint(1,1000000000)
+    p = unique_key_int()
     stmt = cql.prepare(f"INSERT INTO {table1} (p, a) VALUES (?, fromJson(?))")
     with pytest.raises(FunctionFailure):
         cql.execute(stmt, [p, '"שלום"'])
 def test_fromjson_nonint_unprepared(cql, table1):
-    p = random.randint(1,1000000000)
+    p = unique_key_int()
     with pytest.raises(FunctionFailure):
         cql.execute(f"INSERT INTO {table1} (p, v) VALUES ({p}, fromJson('1.2'))")
 def test_fromjson_nonint_prepared(cql, table1):
-    p = random.randint(1,1000000000)
+    p = unique_key_int()
     stmt = cql.prepare(f"INSERT INTO {table1} (p, v) VALUES (?, fromJson(?))")
     with pytest.raises(FunctionFailure):
         cql.execute(stmt, [p, '1.2'])
@@ -94,7 +93,7 @@ def test_fromjson_nonint_prepared(cql, table1):
 # Reproduces issue #7914
 @pytest.mark.xfail(reason="issue #7914")
 def test_fromjson_int_overflow_unprepared(cql, table1):
-    p = random.randint(1,1000000000)
+    p = unique_key_int()
     # The highest legal int is 2147483647 (2^31-1).2147483648 is not a legal
     # int, so trying to insert it should result in an error - not silent
     # wraparound to -2147483648 as happened in Scylla.
@@ -102,7 +101,7 @@ def test_fromjson_int_overflow_unprepared(cql, table1):
         cql.execute(f"INSERT INTO {table1} (p, v) VALUES ({p}, fromJson('2147483648'))")
 @pytest.mark.xfail(reason="issue #7914")
 def test_fromjson_int_overflow_prepared(cql, table1):
-    p = random.randint(1,1000000000)
+    p = unique_key_int()
     stmt = cql.prepare(f"INSERT INTO {table1} (p, v) VALUES (?, fromJson(?))")
     with pytest.raises(FunctionFailure):
         cql.execute(stmt, [p, '2147483648'])
@@ -116,22 +115,22 @@ def test_fromjson_int_overflow_prepared(cql, table1):
 # has (what we consider to be) a bug, it is marked with "cassandra_bug"
 # which causes it to xfail when testing against Cassandra.
 def test_fromjson_int_empty_string_unprepared(cql, table1, cassandra_bug):
-    p = random.randint(1,1000000000)
+    p = unique_key_int()
     with pytest.raises(FunctionFailure):
         cql.execute(f"INSERT INTO {table1} (p, v) VALUES ({p}, fromJson('\"\"'))")
 def test_fromjson_int_empty_string_prepared(cql, table1, cassandra_bug):
-    p = random.randint(1,1000000000)
+    p = unique_key_int()
     stmt = cql.prepare(f"INSERT INTO {table1} (p, v) VALUES (?, fromJson(?))")
     with pytest.raises(FunctionFailure):
         cql.execute(stmt, [p, '""'])
 @pytest.mark.xfail(reason="issue #7944")
 def test_fromjson_varint_empty_string_unprepared(cql, table1):
-    p = random.randint(1,1000000000)
+    p = unique_key_int()
     with pytest.raises(FunctionFailure):
         cql.execute(f"INSERT INTO {table1} (p, vi) VALUES ({p}, fromJson('\"\"'))")
 @pytest.mark.xfail(reason="issue #7944")
 def test_fromjson_varint_empty_string_prepared(cql, table1):
-    p = random.randint(1,1000000000)
+    p = unique_key_int()
     stmt = cql.prepare(f"INSERT INTO {table1} (p, vi) VALUES (?, fromJson(?))")
     with pytest.raises(FunctionFailure):
         cql.execute(stmt, [p, '""'])
@@ -142,14 +141,14 @@ def test_fromjson_varint_empty_string_prepared(cql, table1):
 # statements - which result in an InvalidRequest!
 # Reproduces #7915.
 def test_fromjson_boolean_string_unprepared(cql, table1):
-    p = random.randint(1,1000000000)
+    p = unique_key_int()
     with pytest.raises(InvalidRequest):
         cql.execute(f"INSERT INTO {table1} (p, b) VALUES ({p}, '\"true\"')")
     with pytest.raises(InvalidRequest):
         cql.execute(f"INSERT INTO {table1} (p, b) VALUES ({p}, '\"false\"')")
 @pytest.mark.xfail(reason="issue #7915")
 def test_fromjson_boolean_string_prepared(cql, table1):
-    p = random.randint(1,1000000000)
+    p = unique_key_int()
     stmt = cql.prepare(f"INSERT INTO {table1} (p, b) VALUES (?, fromJson(?))")
     cql.execute(stmt, [p, '"true"'])
     assert list(cql.execute(f"SELECT p, b from {table1} where p = {p}")) == [(p, True)]
@@ -160,7 +159,7 @@ def test_fromjson_boolean_string_prepared(cql, table1):
 # Reproduces issue #7912.
 @pytest.mark.xfail(reason="issue #7912")
 def test_fromjson_null_unprepared(cql, table1):
-    p = random.randint(1,1000000000)
+    p = unique_key_int()
     cql.execute(f"INSERT INTO {table1} (p, v) VALUES ({p}, fromJson(null))")
     assert list(cql.execute(f"SELECT p, v from {table1} where p = {p}")) == [(p, None)]
 
@@ -168,7 +167,7 @@ def test_fromjson_null_unprepared(cql, table1):
 # Reproduces issue #7912.
 @pytest.mark.xfail(reason="issue #7912")
 def test_fromjson_null_prepared(cql, table1):
-    p = random.randint(1,1000000000)
+    p = unique_key_int()
     stmt = cql.prepare(f"INSERT INTO {table1} (p, v) VALUES (?, fromJson(?))")
     cql.execute(stmt, [p, None])
     assert list(cql.execute(f"SELECT p, v from {table1} where p = {p}")) == [(p, None)]
@@ -178,12 +177,12 @@ def test_fromjson_null_prepared(cql, table1):
 # Reproduces #7949.
 @pytest.mark.xfail(reason="issue #7949")
 def test_fromjson_map_ascii_unprepared(cql, table1):
-    p = random.randint(1,1000000000)
+    p = unique_key_int()
     cql.execute("INSERT INTO " + table1 + " (p, mai) VALUES (" + str(p) + ", fromJson('{\"a\": 1, \"b\": 2}'))")
     assert list(cql.execute(f"SELECT p, mai from {table1} where p = {p}")) == [(p, {'a': 1, 'b': 2})]
 @pytest.mark.xfail(reason="issue #7949")
 def test_fromjson_map_ascii_prepared(cql, table1):
-    p = random.randint(1,1000000000)
+    p = unique_key_int()
     stmt = cql.prepare(f"INSERT INTO {table1} (p, mai) VALUES (?, fromJson(?))")
     cql.execute(stmt, [p, '{"a": 1, "b": 2}'])
     assert list(cql.execute(f"SELECT p, mai from {table1} where p = {p}")) == [(p, {'a': 1, 'b': 2})]
@@ -197,7 +196,7 @@ def test_fromjson_map_ascii_prepared(cql, table1):
 # Reproduces #7954.
 @pytest.mark.xfail(reason="issue #7954")
 def test_fromjson_null_constant(cql, table1):
-    p = random.randint(1,1000000000)
+    p = unique_key_int()
     # Check that a "null" JSON constant can be used to unset a column
     stmt = cql.prepare(f"INSERT INTO {table1} (p, v) VALUES (?, fromJson(?))")
     cql.execute(stmt, [p, '1'])
@@ -225,7 +224,7 @@ def test_fromjson_null_constant(cql, table1):
 # this.
 @pytest.mark.xfail(reason="issue #7972")
 def test_tojson_double(cql, table1):
-    p = random.randint(1,1000000000)
+    p = unique_key_int()
     stmt = cql.prepare(f"INSERT INTO {table1} (p, d) VALUES (?, ?)")
     cql.execute(stmt, [p, 123.456])
     assert list(cql.execute(f"SELECT d, toJson(d) from {table1} where p = {p}")) == [(123.456, "123.456")]
@@ -239,7 +238,7 @@ def test_tojson_double(cql, table1):
 # course, a string needs to be wrapped in quotes. (issue #7988
 @pytest.mark.xfail(reason="issue #7988")
 def test_tojson_time(cql, table1):
-    p = random.randint(1,1000000000)
+    p = unique_key_int()
     stmt = cql.prepare(f"INSERT INTO {table1} (p, t) VALUES (?, ?)")
     cql.execute(stmt, [p, 123])
     assert list(cql.execute(f"SELECT toJson(t) from {table1} where p = {p}")) == [('"00:00:00.000000123"',)]
@@ -271,7 +270,7 @@ class EquivalentJson:
 # We also have a smaller xfailing test below, test_tojson_decimal_high_mantissa2.
 @pytest.mark.skip(reason="issue #8002")
 def test_tojson_decimal_high_mantissa(cql, table1):
-    p = random.randint(1,1000000000)
+    p = unique_key_int()
     stmt = cql.prepare(f"INSERT INTO {table1} (p, dec) VALUES ({p}, ?)")
     high = '1e1000000000'
     cql.execute(stmt, [Decimal(high)])
@@ -283,7 +282,7 @@ def test_tojson_decimal_high_mantissa(cql, table1):
 # work at all, without testing it directly as above.
 @pytest.mark.xfail(reason="issue #8002")
 def test_tojson_decimal_high_mantissa2(cql, table1):
-    p = random.randint(1,1000000000)
+    p = unique_key_int()
     stmt = cql.prepare(f"INSERT INTO {table1} (p, dec) VALUES ({p}, ?)")
     # Although 1e1000 is higher than a normal double, it should be fine for
     # Scylla's "decimal" type:
@@ -297,7 +296,7 @@ def test_tojson_decimal_high_mantissa2(cql, table1):
 # in the same JSON strings as it does on Cassandra.
 @pytest.mark.xfail(reason="issue #8077")
 def test_select_json_function_call(cql, table1):
-    p = random.randint(1,1000000000)
+    p = unique_key_int()
     cql.execute(f"INSERT INTO {table1} (p, v) VALUES ({p}, 17) USING TIMESTAMP 1234")
     input_and_output = {
         'v':                       '{"v": 17}',
@@ -322,7 +321,7 @@ def test_select_json_function_call(cql, table1):
 # cassandra_tests/validation/entities/json_test.py::testInsertJsonSyntaxWithNonNativeMapKeys
 @pytest.mark.xfail(reason="issue #8087")
 def test_select_json_string_in_nonstring_map_key(cql, table1):
-    p = random.randint(1,1000000000)
+    p = unique_key_int()
     stmt = cql.prepare(f"INSERT INTO {table1} (p, tupmap) VALUES ({p}, ?)")
     cql.execute(stmt, [{('hello', 3): 7}])
     expected = '{"tupmap": {"[\\"hello\\", 3]": 7}}'
@@ -333,7 +332,7 @@ def test_select_json_string_in_nonstring_map_key(cql, table1):
 # to altering a UDT, and doesn't just happen for every null component of a
 # UDT or tuple.
 def test_select_json_null_component(cql, table1, type1):
-    p = random.randint(1,1000000000)
+    p = unique_key_int()
     stmt = cql.prepare(f"INSERT INTO {table1} (p, tup) VALUES ({p}, ?)")
     cql.execute(stmt, [('hello', None)])
     assert list(cql.execute(f"SELECT JSON tup from {table1} where p = {p}")) == [('{"tup": ["hello", null]}',)]

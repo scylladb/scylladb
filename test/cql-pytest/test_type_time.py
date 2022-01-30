@@ -6,10 +6,9 @@
 # Test involving the "time" column type.
 #############################################################################
 
-from util import unique_name
+from util import unique_name, unique_key_int
 
 import pytest
-import random
 
 from cassandra.util import Time
 
@@ -28,24 +27,24 @@ def table1(cql, test_keyspace):
 # Reproduces issue #7987
 @pytest.mark.xfail(reason="issue #7987")
 def test_type_time_from_int_unprepared(cql, table1):
-    p = random.randint(1,1000000000)
+    p = unique_key_int()
     cql.execute(f"INSERT INTO {table1} (p, t) VALUES ({p}, 123)")
     assert list(cql.execute(f"SELECT t from {table1} where p = {p}")) == [(Time(123),)]
 
 def test_type_time_from_int_prepared(cql, table1):
-    p = random.randint(1,1000000000)
+    p = unique_key_int()
     stmt = cql.prepare(f"INSERT INTO {table1} (p, t) VALUES (?, ?)")
     cql.execute(stmt, [p, 123])
     assert list(cql.execute(f"SELECT t from {table1} where p = {p}")) == [(Time(123),)]
 
 def test_type_time_from_string_unprepared(cql, table1):
-    p = random.randint(1,1000000000)
+    p = unique_key_int()
     for t in ["08:12:54", "08:12:54.123", "08:12:54.123456", "08:12:54.123456789"]:
         cql.execute(f"INSERT INTO {table1} (p, t) VALUES ({p}, '{t}')")
         assert list(cql.execute(f"SELECT t from {table1} where p = {p}")) == [(Time(t),)]
 
 def test_type_time_from_string_prepared(cql, table1):
-    p = random.randint(1,1000000000)
+    p = unique_key_int()
     stmt = cql.prepare(f"INSERT INTO {table1} (p, t) VALUES (?, ?)")
     for t in ["08:12:54", "08:12:54.123", "08:12:54.123456", "08:12:54.123456789"]:
         cql.execute(stmt, [p, t])

@@ -10,10 +10,9 @@
 #############################################################################
 
 import pytest
-import random
 import unicodedata
 from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException, ReadFailure
-from util import unique_name, random_string
+from util import unique_name, unique_key_string
 
 
 @pytest.fixture(scope="module")
@@ -42,7 +41,7 @@ def test_unicode_equivalence(cql, table1):
 
     insert = cql.prepare(f"INSERT INTO {table1} (k, c) VALUES (?, ?)")
     search = cql.prepare(f"SELECT k, c FROM {table1} WHERE k=? and c=?")
-    s = random_string()
+    s = unique_key_string()
     # Test that writing u1 as a *clustering key* and looking up u2 will not
     # work.
     cql.execute(insert, [s, u1])
@@ -68,7 +67,7 @@ def test_unicode_equivalence_like(scylla_only, cql, table1):
 
     insert = cql.prepare(f"INSERT INTO {table1} (k, c) VALUES (?, ?)")
     search = cql.prepare(f"SELECT k, c FROM {table1} WHERE k=? AND c LIKE ? ALLOW FILTERING")
-    s = random_string()
+    s = unique_key_string()
     # u1 does not match the pattern 'n%':
     cql.execute(insert, [s, u1])
     assert set(cql.execute(search, [s, 'n%'])) == set()

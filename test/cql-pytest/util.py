@@ -30,6 +30,22 @@ def unique_name():
     return unique_name_prefix + str(current_ms)
 unique_name.last_ms = 0
 
+# Functions for picking a unique key to use when multiple tests want to use
+# the same shared table and need to pick different keys so as not to collide.
+# Because different runs do not share the same table (unique_name() above
+# is used to pick the table name), the uniqueness of the keys we generate
+# here does not need to be global - we can just use a simple counter to
+# guarantee uniqueness.
+def unique_key_string():
+    unique_key_string.i += 1
+    return 's' + str(unique_key_string.i)
+unique_key_string.i = 0
+
+def unique_key_int():
+    unique_key_int.i += 1
+    return unique_key_int.i
+unique_key_int.i = 0
+
 # A utility function for creating a new temporary keyspace with given options.
 # It can be used in a "with", as:
 #   with new_test_keyspace(cql, '...') as keyspace:

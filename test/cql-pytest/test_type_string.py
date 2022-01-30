@@ -9,7 +9,7 @@
 #############################################################################
 
 import pytest
-from util import unique_name, random_string, random_bytes
+from util import unique_name, unique_key_string, random_string, random_bytes
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
@@ -36,7 +36,7 @@ def test_text_varchar_same(cql, table1):
 # null-terminated strings as in C, and may contain nulls inside.
 def test_null_char_in_string(cql, table1):
     for col in ['a', 't']:
-        p = random_string()
+        p = unique_key_string()
         v = random_string() + '\x00' + random_string()
         # sanity check: verify that Python actually put the null in the string...
         assert 0 in v.encode('utf-8')
@@ -45,7 +45,7 @@ def test_null_char_in_string(cql, table1):
         assert v == getattr(cql.execute(f"SELECT {col} FROM {table1} WHERE p='{p}'").one(), col)
  
 def test_null_char_in_blob(cql, table1):
-    p = random_string()
+    p = unique_key_string()
     v = random_bytes() + bytes([0]) + random_bytes()
     # sanity check: verify that Python actually put the null in the blob...
     assert 0 in v

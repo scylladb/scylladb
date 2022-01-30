@@ -10,10 +10,9 @@
 # aiming to reproduce bugs discovered by bigger Cassandra tests.
 #############################################################################
 
-from util import unique_name, new_test_table
+from util import unique_name, new_test_table, unique_key_int
 from cassandra.protocol import FunctionFailure, InvalidRequest
 import pytest
-import random
 
 @pytest.fixture(scope="session")
 def table1(cql, test_keyspace):
@@ -31,7 +30,7 @@ def table1(cql, test_keyspace):
 # and also forbid negative timestamps, we will need to remove this test -
 # but for now, while they are allowed, let's test that they are.
 def test_negative_timestamp(cql, table1):
-    p = random.randint(1,1000000000)
+    p = unique_key_int()
     write = cql.prepare(f"INSERT INTO {table1} (k, v) VALUES (?, ?) USING TIMESTAMP ?")
     read = cql.prepare(f"SELECT writetime(v) FROM {table1} where k = ?")
     # Note we need to order the loop in increasing timestamp if we want

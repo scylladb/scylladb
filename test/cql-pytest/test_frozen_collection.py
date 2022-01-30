@@ -11,9 +11,8 @@
 #############################################################################
 
 import pytest
-import random
 from cassandra.util import SortedSet, OrderedMapSerializedKey
-from util import unique_name, new_test_table
+from util import unique_name, new_test_table, unique_key_int
 
 
 # A test table with a (frozen) nested collection as its primary key.
@@ -35,7 +34,7 @@ def table1(cql, test_keyspace):
 # where a set is the key of a map. If we had just a frozen set, this issue
 # does not reproduce (see test_wrong_set_order() below).
 def test_wrong_set_order_in_nested(cql, table1):
-    k = random.randint(1,1000000000)
+    k = unique_key_int()
     # When inserting or selecting with a frozen<map<set<int>, int>> key
     # where the value is specified inline in CQL, the order of the set
     # does not matter, as expected:
@@ -79,7 +78,7 @@ def test_wrong_set_order_in_nested(cql, table1):
 # testNestedPartitionKeyUsage where we inserted set set as a Python frozenset()
 # which does not use any specific order.
 def test_wrong_set_order_in_nested_2(cql, table1):
-    k = random.randint(1,1000000000)
+    k = unique_key_int()
     insert = cql.prepare(f"INSERT INTO {table1} (k) VALUES (?)")
     # Insert map with frozen-set key in "wrong" order:
     cql.execute(insert, [{tuple([k+1, k, k+2]): 1}])
@@ -106,7 +105,7 @@ def table_fsi(cql, test_keyspace):
     yield table
     cql.execute("DROP TABLE " + table)
 def test_wrong_set_order(cql, table_fsi):
-    i = random.randint(1,1000000000)
+    i = unique_key_int()
     insert = cql.prepare(f"INSERT INTO {table_fsi} (k) VALUES (?)")
     lookup = cql.prepare(f"SELECT * FROM {table_fsi} WHERE k = ?")
     cql.execute(insert, [tuple([i+1, i, i+2])])

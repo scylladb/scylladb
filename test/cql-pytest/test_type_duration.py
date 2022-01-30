@@ -7,10 +7,9 @@
 # Test involving the "duration" column type.
 #############################################################################
 
-from util import unique_name
+from util import unique_name, unique_key_int
 
 import pytest
-import random
 
 from cassandra.util import Duration
 
@@ -49,7 +48,7 @@ def test_type_duration_human_readable_input_units(cql, table1):
         # An alias for "us" which should be supported, but wasn't (issue #8001)
         'µs': Duration(0, 0, 1000),
     }
-    p = random.randint(1,1000000000)
+    p = unique_key_int()
     for (unit, duration) in units.items():
         print(unit)
         cql.execute(f"INSERT INTO {table1} (p, d) VALUES ({p}, 1{unit})")

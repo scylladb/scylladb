@@ -9,7 +9,7 @@
 import pytest
 import re
 from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException, ReadFailure
-from util import unique_name, random_string, new_test_table
+from util import unique_name, unique_key_string, new_test_table
 
 
 @pytest.fixture(scope="module")
@@ -24,7 +24,7 @@ def table1(cql, test_keyspace):
 # the key.
 # See also issue #3665.
 def test_insert_missing_key(cql, table1):
-    s = random_string()
+    s = unique_key_string()
     # A clustering key is missing. Cassandra uses the message "Some clustering
     # keys are missing: c", and Scylla: "Missing mandatory PRIMARY KEY part c"
     with pytest.raises(InvalidRequest, match=re.compile('missing', re.IGNORECASE)):
@@ -36,7 +36,7 @@ def test_insert_missing_key(cql, table1):
 # A null key, like a missing one, is also not allowed.
 # This reproduces issue #7852.
 def test_insert_null_key(cql, table1):
-    s = random_string()
+    s = unique_key_string()
     with pytest.raises(InvalidRequest, match='null value'):
         cql.execute(f"INSERT INTO {table1} (p,c) VALUES ('{s}', null)")
     with pytest.raises(InvalidRequest, match='null value'):
@@ -98,7 +98,7 @@ def test_delete_null_key(cql, table1):
 # refuses the "WHERE v=NULL" relation, rather than matching nothing.
 # We consider this a mistake, and not something we want to emulate in Scylla.
 def test_filtering_eq_null(cassandra_bug, cql, table1):
-    p = random_string()
+    p = unique_key_string()
     cql.execute(f"INSERT INTO {table1} (p,c,v) VALUES ('{p}', '1', 'hello')")
     cql.execute(f"INSERT INTO {table1} (p,c,v) VALUES ('{p}', '2', '')")
     cql.execute(f"INSERT INTO {table1} (p,c) VALUES ('{p}', '3')")
@@ -115,7 +115,7 @@ def test_filtering_eq_null(cassandra_bug, cql, table1):
 # following test we confirm those things.
 # See issue #9352.
 def test_insert_empty_string_key(cql, table1):
-    s = random_string()
+    s = unique_key_string()
     # An empty-string clustering *is* allowed:
     cql.execute(f"INSERT INTO {table1} (p,c,v) VALUES ('{s}', '', 'cat')")
     assert list(cql.execute(f"SELECT v FROM {table1} WHERE p='{s}' AND c=''")) == [('cat',)]
@@ -128,7 +128,7 @@ def test_insert_empty_string_key(cql, table1):
 # just uses an UPDATE instead of INSERT. It turns out that exactly the cases
 # which are allowed by INSERT are also allowed by UPDATE.
 def test_update_empty_string_key(cql, table1):
-    s = random_string()
+    s = unique_key_string()
     # An empty-string clustering *is* allowed:
     cql.execute(f"UPDATE {table1} SET v = 'cat' WHERE p='{s}' AND c=''")
     assert list(cql.execute(f"SELECT v FROM {table1} WHERE p='{s}' AND c=''")) == [('cat',)]
@@ -139,7 +139,7 @@ def test_update_empty_string_key(cql, table1):
 
 # ... and same for DELETE
 def test_delete_empty_string_key(cql, table1):
-    s = random_string()
+    s = unique_key_string()
     # An empty-string clustering *is* allowed:
     cql.execute(f"DELETE FROM {table1} WHERE p='{s}' AND c=''")
     # But an empty-string partition key is *not* allowed, with a specific
@@ -153,7 +153,7 @@ def test_delete_empty_string_key(cql, table1):
 # Reproduces issue #9853 (the empty-string partition key was allowed, and
 # actually inserted into the table.)
 def test_insert_json_empty_string_key(cql, table1):
-    s = random_string()
+    s = unique_key_string()
     # An empty-string clustering *is* allowed:
     cql.execute("""INSERT INTO %s JSON '{"p": "%s", "c": "", "v": "cat"}'""" % (table1, s))
     assert list(cql.execute(f"SELECT v FROM {table1} WHERE p='{s}' AND c=''")) == [('cat',)]
@@ -171,7 +171,6 @@ def test_insert_json_empty_string_key(cql, table1):
 def test_empty_string_key2(cql, test_keyspace):
     schema = 'p1 text, p2 text, c text, v text, primary key ((p1, p2), c)'
     with new_test_table(cql, test_keyspace, schema) as table:
-        s = random_string()
         cql.execute(f"INSERT INTO {table} (p1,p2,c,v) VALUES ('', '', '', 'cat')")
         cql.execute(f"INSERT INTO {table} (p1,p2,c,v) VALUES ('x', 'y', 'z', 'dog')")
         assert list(cql.execute(f"SELECT v FROM {table} WHERE p1='' AND p2='' AND c=''")) == [('cat',)]

@@ -6,9 +6,8 @@
 # Various tests for Scylla's ttl feature - USING TTL and DEFAULT_TIME_TO_LIVE
 #############################################################################
 
-from util import new_test_table
+from util import new_test_table, unique_key_int
 import pytest
-import random
 import time
 
 # Fixture with a table with a default TTL set to 1, so new data would be
@@ -27,8 +26,8 @@ def table_ttl_100(cql, test_keyspace):
 # Basic test that data inserted *without* an explicit ttl into a table with
 # default TTL inherits this TTL, but an explicit TTL overrides it.
 def test_basic_default_ttl(cql, table_ttl_1):
-    p1 = random.randint(1,1000000000)
-    p2 = random.randint(1,1000000000)
+    p1 = unique_key_int()
+    p2 = unique_key_int()
     cql.execute(f'INSERT INTO {table_ttl_1} (p, v) VALUES ({p1}, 1) USING TTL 1000')
     cql.execute(f'INSERT INTO {table_ttl_1} (p, v) VALUES ({p2}, 1)')
     # p2 item should expire in *less* than one second (it will expire
@@ -48,7 +47,7 @@ def test_basic_default_ttl(cql, table_ttl_1):
 # the default TTL. Reproduces issue #9842.
 @pytest.mark.xfail(reason="Issue #9842")
 def test_default_ttl_0_override(cql, table_ttl_100):
-    p = random.randint(1,1000000000)
+    p = unique_key_int()
     cql.execute(f'INSERT INTO {table_ttl_100} (p, v) VALUES ({p}, 1) USING TTL 0')
     # We can immediately check that this item's TTL is "null", meaning it
     # will never expire. There's no need to have any sleeps.
