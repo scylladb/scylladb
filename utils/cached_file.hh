@@ -157,6 +157,7 @@ private:
     metrics& _metrics;
     lru& _lru;
     logalloc::region& _region;
+    logalloc::allocating_section _as;
 
     using cache_type = bplus::tree<page_idx_type, cached_page, page_idx_less_comparator, 12, bplus::key_search::linear>;
     cache_type _cache;
@@ -187,10 +188,15 @@ private:
             .then([this, idx] (temporary_buffer<char>&& buf) mutable {
                 cached_page::ptr_type first_page;
                 while (buf.size()) {
-                    auto this_buf = buf.share();
-                    this_buf.trim(std::min(page_size, buf.size()));
-                    buf.trim_front(this_buf.size());
-                    auto it_and_flag = _cache.emplace(idx, this, idx, std::move(this_buf));
+                    auto this_size = std::min(page_size, buf.size());
+                    // _cache.emplace() needs to run under allocating section even though it lives in the std space
+                    // because bplus::tree operations are not reentrant, so we need to prevent memory reclamation.
+                    auto it_and_flag = _as(_region, [&] {
+                        auto this_buf = buf.share();
+                        this_buf.trim(this_size);
+                        return _cache.emplace(idx, this, idx, std::move(this_buf));
+                    });
+                    buf.trim_front(this_size);
                     ++idx;
                     cached_page &cp = *it_and_flag.first;
                     if (it_and_flag.second) {

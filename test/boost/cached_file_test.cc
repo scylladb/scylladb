@@ -19,6 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <boost/range/irange.hpp>
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/core/iostream.hh>
@@ -49,6 +50,15 @@ static sstring read_to_string(cached_file::stream& s, size_t limit = std::numeri
     return b.substr(0, limit);
 }
 
+static void read_to_void(cached_file::stream& s, size_t limit = std::numeric_limits<size_t>::max()) {
+    while (auto buf = s.next().get0()) {
+        if (buf.size() >= limit) {
+            break;
+        }
+        limit -= buf.size();
+    }
+}
+
 static sstring read_to_string(file& f, size_t start, size_t len) {
     file_input_stream_options opt;
     auto in = make_file_input_stream(f, start, len, opt);
@@ -59,6 +69,12 @@ static sstring read_to_string(file& f, size_t start, size_t len) {
 static sstring read_to_string(cached_file& cf, size_t off, size_t limit = std::numeric_limits<size_t>::max()) {
     auto s = cf.read(off, default_priority_class(), std::nullopt);
     return read_to_string(s, limit);
+}
+
+[[gnu::unused]]
+static void read_to_void(cached_file& cf, size_t off, size_t limit = std::numeric_limits<size_t>::max()) {
+    auto s = cf.read(off, default_priority_class(), std::nullopt);
+    read_to_void(s, limit);
 }
 
 struct test_file {
@@ -254,6 +270,88 @@ SEASTAR_THREAD_TEST_CASE(test_eviction_via_lru) {
         }
     }
 }
+
+// A file which serves garbage but is very fast.
+class garbage_file_impl : public file_impl {
+private:
+    [[noreturn]] void unsupported() {
+        throw_with_backtrace<std::logic_error>("unsupported operation");
+    }
+public:
+    // unsupported
+    virtual future<size_t> write_dma(uint64_t pos, const void* buffer, size_t len, const io_priority_class& pc) override { unsupported(); }
+    virtual future<size_t> write_dma(uint64_t pos, std::vector<iovec> iov, const io_priority_class& pc) override { unsupported(); }
+    virtual future<> flush(void) override { unsupported(); }
+    virtual future<> truncate(uint64_t length) override { unsupported(); }
+    virtual future<> discard(uint64_t offset, uint64_t length) override { unsupported(); }
+    virtual future<> allocate(uint64_t position, uint64_t length) override { unsupported(); }
+    virtual subscription<directory_entry> list_directory(std::function<future<>(directory_entry)>) override { unsupported(); }
+    virtual future<struct stat> stat(void) override { unsupported(); }
+    virtual future<uint64_t> size(void) override { unsupported(); }
+    virtual std::unique_ptr<seastar::file_handle_impl> dup() override { unsupported(); }
+
+    virtual future<> close() override { return make_ready_future<>(); }
+
+    virtual future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t size, const io_priority_class& pc) override {
+        return make_ready_future<temporary_buffer<uint8_t>>(temporary_buffer<uint8_t>(size));
+    }
+
+    virtual future<size_t> read_dma(uint64_t pos, void* buffer, size_t len, const io_priority_class& pc) override {
+        unsupported(); // FIXME
+    }
+
+    virtual future<size_t> read_dma(uint64_t pos, std::vector<iovec> iov, const io_priority_class& pc) override {
+        unsupported(); // FIXME
+    }
+};
+
+#ifndef SEASTAR_DEFAULT_ALLOCATOR // Eviction works only with the seastar allocator
+SEASTAR_THREAD_TEST_CASE(test_stress_eviction) {
+    auto page_size = cached_file::page_size;
+    auto n_pages = 8'000'000 / page_size;
+    auto file_size = page_size * n_pages;
+    auto cached_size = 4'000'000;
+
+    cached_file::metrics metrics;
+    logalloc::region region;
+
+    auto f = file(make_shared<garbage_file_impl>());
+    cached_file cf(f, metrics, cf_lru, region, file_size);
+
+    region.make_evictable([&] {
+        testlog.trace("Evicting");
+        cf.invalidate_at_most_front(file_size / 2);
+        return cf_lru.evict();
+    });
+
+    for (int i = 0; i < (cached_size / page_size); ++i) {
+        read_to_string(cf, page_size * i, page_size);
+    }
+
+    testlog.debug("Saturating memory...");
+
+    // Disable background reclaiming which will prevent bugs from reproducing
+    // We want reclamation to happen synchronously with page cache population in read_to_void()
+    seastar::memory::set_min_free_pages(0);
+
+    // Saturate std memory
+    chunked_fifo<bytes> blobs;
+    auto rc = region.reclaim_counter();
+    while (region.reclaim_counter() == rc) {
+        blobs.emplace_back(bytes(bytes::initialized_later(), 1024));
+    }
+
+    testlog.debug("Memory: allocated={}, free={}", seastar::memory::stats().allocated_memory(), seastar::memory::stats().free_memory());
+    testlog.debug("Starting test...");
+
+    for (int j = 0; j < n_pages * 16; ++j) {
+        testlog.trace("Allocating");
+        auto stride = tests::random::get_int(1, 20);
+        auto page_idx = tests::random::get_int(n_pages - stride);
+        read_to_void(cf, page_idx * page_size, page_size * stride);
+    }
+}
+#endif
 
 SEASTAR_THREAD_TEST_CASE(test_invalidation) {
     auto page_size = cached_file::page_size;
