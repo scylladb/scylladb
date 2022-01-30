@@ -11,8 +11,14 @@ import time
 from contextlib import contextmanager
 from botocore.hooks import HierarchicalEmitter
 
-# Use a global random generator to avoid reusing the same seed by multiple
-# test cases, which was observed
+# The "pytest-randomly" pytest plugins modifies the default "random" to repeat
+# the same pseudo-random sequence (with the same seed) in each separate test.
+# But we currently rely on random_string() at al. to return unique keys that
+# can be used in different tests to create different items in the same table.
+# Until we stop relying on randomness for unique keys (see issue #9988), we
+# need to continue the same random sequence for all tests, so let's undo what
+# pytest-randomly does by explicitly sharing the same random sequence (which
+# we'll call here "global_random") for all tests.
 global_random = random.Random()
 
 def random_string(length=10, chars=string.ascii_uppercase + string.digits):
