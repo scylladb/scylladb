@@ -1322,6 +1322,10 @@ void shared_token_metadata::set(mutable_token_metadata_ptr tmptr) noexcept {
 future<> shared_token_metadata::mutate_token_metadata(seastar::noncopyable_function<future<> (token_metadata&)> func) {
     auto lk = co_await get_lock();
     auto tm = co_await _shared->clone_async();
+    // bump the token_metadata ring_version
+    // to invalidate cached token/replication mappings
+    // when the modified token_metadata is committed.
+    tm.invalidate_cached_rings();
     co_await func(tm);
     set(make_token_metadata_ptr(std::move(tm)));
 }
