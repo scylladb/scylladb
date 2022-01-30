@@ -30,6 +30,8 @@ import distro
 from pathlib import Path
 from scylla_util import *
 from subprocess import run
+import distro
+from pkg_resources import parse_version
 
 if __name__ == '__main__':
     if os.getuid() > 0:
@@ -115,11 +117,29 @@ if __name__ == '__main__':
         pkg_install('xfsprogs')
     if not shutil.which('mdadm'):
         pkg_install('mdadm')
-    if args.raid_level != '0':
-        try:
-            md_service = systemd_unit('mdmonitor.service')
-        except SystemdException:
-            md_service = systemd_unit('mdadm.service')
+    # XXX: Workaround for mdmonitor.service issue on CentOS8
+    if is_redhat_variant() and distro.version() == '8':
+        mdadm_rpm = run('rpm -q mdadm', shell=True, check=True, capture_output=True, encoding='utf-8').stdout.strip()
+        match = re.match(r'^mdadm-([0-9]+\.[0-9]+-[a-zA-Z0-9]+)\.', mdadm_rpm)
+        mdadm_version = match.group(1)
+        if parse_version('4.1-14') < parse_version(mdadm_version):
+            repo_data = '''
+[BaseOS_8_3_2011]
+name=CentOS8.3.2011 - Base
+baseurl=http://vault.centos.org/8.3.2011/BaseOS/$basearch/os/
+gpgcheck=1
+enabled=0
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial
+'''[1:-1]
+            with open('/etc/yum.repos.d/CentOS-Vault-8.3.repo', 'w') as f:
+                f.write(repo_data)
+            run('dnf downgrade --enablerepo=BaseOS_8_3_2011 -y mdadm', shell=True, check=True)
+            run('dnf install -y python3-dnf-plugin-versionlock', shell=True, check=True)
+            run('dnf versionlock add mdadm', shell=True, check=True)
+    try:
+        md_service = systemd_unit('mdmonitor.service')
+    except SystemdException:
+        md_service = systemd_unit('mdadm.service')
 
     print('Creating {type} for scylla using {nr_disk} disk(s): {disks}'.format(type='RAID0' if raid else 'XFS volume', nr_disk=len(disks), disks=args.disks))
     procs=[]
@@ -155,15 +175,13 @@ if __name__ == '__main__':
 
     uuid = run(f'blkid -s UUID -o value {fsdev}', shell=True, check=True, capture_output=True, encoding='utf-8').stdout.strip()
     after = 'local-fs.target'
-    wants = ''
-    if raid and args.raid_level != '0':
+    if raid:
         after += f' {md_service}'
-        wants = f'\nWants={md_service}'
     unit_data = f'''
 [Unit]
 Description=Scylla data directory
 Before=scylla-server.service
-After={after}{wants}
+After={after}
 
 [Mount]
 What=/dev/disk/by-uuid/{uuid}
@@ -186,9 +204,8 @@ WantedBy=multi-user.target
             f.write(f'RequiresMountsFor={mount_at}\n')
 
     systemd_unit.reload()
-    if args.raid_level != '0':
-        md_service.enable()
-        md_service.start()
+    md_service.enable()
+    md_service.start()
     mount = systemd_unit(mntunit_bn)
     mount.start()
     if args.enable_on_nextboot:
