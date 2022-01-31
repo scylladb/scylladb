@@ -9,7 +9,7 @@
 import pytest
 import random
 from botocore.exceptions import ClientError
-from util import random_string, full_scan, full_query, multiset
+from util import random_string, full_scan, full_query, multiset, scylla_inject_error
 
 # Test ensuring that items inserted by a batched statement can be properly extracted
 # via GetItem. Schema has both hash and sort keys.
@@ -373,3 +373,50 @@ def test_batch_get_item_large(test_table_sn):
         responses.extend(reply['Responses'][test_table_sn.name])
     assert multiset(responses) == multiset(
         [{'p': p, 'c': i, 'content': long_content} for i in range(count)])
+
+# Test for checking that returning partial results as UnprocessedKeys
+# is properly handled. This test relies on error injection available
+# only in Scylla compiled with appropriate flags (present in dev/debug/sanitize
+# modes) and is skipped otherwise.
+def test_batch_get_item_partial(scylla_only, dynamodb, test_table_sn):
+    p = random_string()
+    content = random_string()
+    count = 10
+    with test_table_sn.batch_writer() as batch:
+        for i in range(count):
+            batch.put_item(Item={
+                'p': p, 'c': i, 'content': content})
+    responses = []
+    to_read = { test_table_sn.name: {'Keys': [{'p': p, 'c': c} for c in range(count)], 'ConsistentRead': True } }
+    with scylla_inject_error(dynamodb, "alternator_batch_get_item", one_shot=True):
+        some_keys_were_unprocessed = False
+        while to_read:
+            reply = test_table_sn.meta.client.batch_get_item(RequestItems = to_read)
+            assert 'UnprocessedKeys' in reply
+            to_read = reply['UnprocessedKeys']
+            some_keys_were_unprocessed = some_keys_were_unprocessed or len(to_read) > 0
+            print("Left to read:", to_read)
+            assert 'Responses' in reply
+            assert test_table_sn.name in reply['Responses']
+            responses.extend(reply['Responses'][test_table_sn.name])
+        assert multiset(responses) == multiset(
+            [{'p': p, 'c': i, 'content': content} for i in range(count)])
+        assert some_keys_were_unprocessed
+
+# Test that if the batch read failure is total, i.e. all read requests
+# failed, it's reported as an error and not as a regular response with
+# UnprocessedKeys set to all given keys.
+def test_batch_get_item_full_failure(scylla_only, dynamodb, test_table_sn):
+    p = random_string()
+    content = random_string()
+    count = 10
+    with test_table_sn.batch_writer() as batch:
+        for i in range(count):
+            batch.put_item(Item={
+                'p': p, 'c': i, 'content': content})
+    responses = []
+    to_read = { test_table_sn.name: {'Keys': [{'p': p, 'c': c} for c in range(count)], 'ConsistentRead': True } }
+    # The error injection is permanent, so it will fire for each batch read.
+    with scylla_inject_error(dynamodb, "alternator_batch_get_item", one_shot=False):
+        with pytest.raises(ClientError, match="InternalServerError"):
+            reply = test_table_sn.meta.client.batch_get_item(RequestItems = to_read)
