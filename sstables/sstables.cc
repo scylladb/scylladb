@@ -1673,6 +1673,23 @@ future<> sstable::write_components(
     });
 }
 
+future<> sstable::write_components(
+        flat_mutation_reader_v2 mr,
+        uint64_t estimated_partitions,
+        schema_ptr schema,
+        const sstable_writer_config& cfg,
+        encoding_stats stats,
+        const io_priority_class& pc) {
+    assert_large_data_handler_is_running();
+    return seastar::async([this, mr = std::move(mr), estimated_partitions, schema = std::move(schema), cfg, stats, &pc] () mutable {
+        auto close_mr = deferred_close(mr);
+        auto wr = get_writer(*schema, estimated_partitions, cfg, stats, pc);
+        mr.consume_in_thread(std::move(wr));
+    }).finally([this] {
+        assert_large_data_handler_is_running();
+    });
+}
+
 future<> sstable::generate_summary(const io_priority_class& pc) {
     if (_components->summary) {
         co_return;
