@@ -108,8 +108,15 @@ feature_config feature_config_from_db_config(db::config& cfg, std::set<sstring> 
 
     fcfg._disabled_features = std::move(disabled);
 
-    if (!cfg.enable_sstables_md_format()) {
+    switch (sstables::from_string(cfg.sstable_format())) {
+    case sstables::sstable_version_types::ka:
+    case sstables::sstable_version_types::la:
+    case sstables::sstable_version_types::mc:
         fcfg._disabled_features.insert(sstring(gms::features::MD_SSTABLE));
+        [[fallthrough]];
+    case sstables::sstable_version_types::md:
+    case sstables::sstable_version_types::me:
+        break;
     }
     if (!cfg.enable_user_defined_functions()) {
         fcfg._disabled_features.insert(sstring(gms::features::UDF));

@@ -314,14 +314,7 @@ int main(int argc, char** argv) {
         db_cfg.enable_commitlog(false);
         db_cfg.virtual_dirty_soft_limit(1.0);
 
-        auto sstable_format_name = app.configuration()["sstable-format"].as<std::string>();
-        if (sstable_format_name == "md") {
-            db_cfg.enable_sstables_md_format(true);
-        } else if (sstable_format_name == "mc") {
-            db_cfg.enable_sstables_md_format(false);
-        } else {
-            throw std::runtime_error(format("Unsupported sstable format: {}", sstable_format_name));
-        }
+        db_cfg.sstable_format(app.configuration()["sstable-format"].as<std::string>());
 
         do_with_cql_env([] (cql_test_env& env) {
             return with_scheduling_group(env.local_db().get_statement_scheduling_group(), [&] {

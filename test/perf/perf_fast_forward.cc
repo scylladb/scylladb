@@ -1946,14 +1946,7 @@ int main(int argc, char** argv) {
         db_cfg.data_file_directories({datadir}, db::config::config_source::CommandLine);
         db_cfg.virtual_dirty_soft_limit(1.0); // prevent background memtable flushes.
 
-        auto sstable_format_name = app.configuration()["sstable-format"].as<std::string>();
-        if (sstable_format_name == "md") {
-            db_cfg.enable_sstables_md_format(true);
-        } else if (sstable_format_name == "mc") {
-            db_cfg.enable_sstables_md_format(false);
-        } else {
-            throw std::runtime_error(format("Unsupported sstable format: {}", sstable_format_name));
-        }
+        db_cfg.sstable_format(app.configuration()["sstable-format"].as<std::string>());
 
         test_case_duration = app.configuration()["test-case-duration"].as<double>();
 

@@ -604,7 +604,7 @@ public:
             dbcfg.memtable_scheduling_group = scheduling_groups.memtable_scheduling_group;
             dbcfg.memtable_to_cache_scheduling_group = scheduling_groups.memtable_to_cache_scheduling_group;
             dbcfg.gossip_scheduling_group = scheduling_groups.gossip_scheduling_group;
-            dbcfg.sstables_format = cfg->enable_sstables_md_format() ? sstables::sstable_version_types::md : sstables::sstable_version_types::mc;
+            dbcfg.sstables_format = sstables::from_string(cfg->sstable_format());
 
             db.start(std::ref(*cfg), dbcfg, std::ref(mm_notif), std::ref(feature_service), std::ref(token_metadata), std::ref(abort_sources), std::ref(sst_dir_semaphore), utils::cross_shard_barrier()).get();
             auto stop_db = defer([&db] {
