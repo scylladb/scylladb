@@ -54,10 +54,10 @@ stop_iteration sstable_writer::consume(clustering_row&& cr) {
     return _impl->consume(std::move(cr));
 }
 
-stop_iteration sstable_writer::consume(range_tombstone&& rt) {
-    _impl->_validator(mutation_fragment::kind::range_tombstone, rt.position());
+stop_iteration sstable_writer::consume(range_tombstone_change&& rtc) {
+    _impl->_validator(mutation_fragment_v2::kind::range_tombstone_change, rtc.position());
     _impl->_sst.get_stats().on_range_tombstone_write();
-    return _impl->consume(std::move(rt));
+    return _impl->consume(std::move(rtc));
 }
 
 stop_iteration sstable_writer::consume_end_of_partition() {

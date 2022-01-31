@@ -42,7 +42,7 @@ struct sstable_writer::writer_impl {
     virtual void consume(tombstone t) = 0;
     virtual stop_iteration consume(static_row&& sr) = 0;
     virtual stop_iteration consume(clustering_row&& cr) = 0;
-    virtual stop_iteration consume(range_tombstone&& rt) = 0;
+    virtual stop_iteration consume(range_tombstone_change&& rtc) = 0;
     virtual stop_iteration consume_end_of_partition() = 0;
     virtual void consume_end_of_stream() = 0;
     virtual ~writer_impl() {}

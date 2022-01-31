@@ -3324,7 +3324,7 @@ SEASTAR_TEST_CASE(purged_tombstone_consumer_sstable_test) {
             void consume(tombstone t) { _writer.consume(t); }
             stop_iteration consume(static_row&& sr, tombstone, bool) { return _writer.consume(std::move(sr)); }
             stop_iteration consume(clustering_row&& cr, row_tombstone tomb, bool) { return _writer.consume(std::move(cr)); }
-            stop_iteration consume(range_tombstone&& rt) { return _writer.consume(std::move(rt)); }
+            stop_iteration consume(range_tombstone_change&& rtc) { return _writer.consume(std::move(rtc)); }
 
             stop_iteration consume_end_of_partition() { return _writer.consume_end_of_partition(); }
             void consume_end_of_stream() { _writer.consume_end_of_stream(); _sst->open_data().get0(); }
@@ -3352,7 +3352,7 @@ SEASTAR_TEST_CASE(purged_tombstone_consumer_sstable_test) {
             gc_before = gc_now - s->gc_grace_seconds();
             auto gc_grace_seconds = s->gc_grace_seconds();
 
-            auto cfc = compact_for_compaction<compacting_sstable_writer_test, compacting_sstable_writer_test>(
+            auto cfc = compact_for_compaction_v2<compacting_sstable_writer_test, compacting_sstable_writer_test>(
                 *s, gc_now, max_purgeable_func, std::move(cr), std::move(purged_cr));
 
             auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, s->compaction_strategy_options());

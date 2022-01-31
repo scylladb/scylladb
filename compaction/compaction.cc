@@ -316,9 +316,9 @@ public:
     stop_iteration consume(clustering_row&& cr) {
         return consume(std::move(cr), row_tombstone{}, bool{});
     }
-    stop_iteration consume(range_tombstone&& rt) {
+    stop_iteration consume(range_tombstone_change&& rtc) {
         maybe_abort_compaction();
-        return _compaction_writer->writer.consume(std::move(rt));
+        return _compaction_writer->writer.consume(std::move(rtc));
     }
 
     stop_iteration consume_end_of_partition();
@@ -669,7 +669,7 @@ private:
     // to be compacted together.
     future<> consume_without_gc_writer(gc_clock::time_point compaction_time) {
         auto consumer = make_interposer_consumer([this] (flat_mutation_reader_v2 reader) mutable {
-            return seastar::async([this, reader = downgrade_to_v1(std::move(reader))] () mutable {
+            return seastar::async([this, reader = std::move(reader)] () mutable {
                 auto close_reader = deferred_close(reader);
                 auto cfc = compacted_fragments_writer(get_compacted_fragments_writer());
                 reader.consume_in_thread(std::move(cfc));
@@ -692,7 +692,7 @@ private:
                 auto close_reader = deferred_close(reader);
 
                 if (enable_garbage_collected_sstable_writer()) {
-                    using compact_mutations = compact_for_compaction<compacted_fragments_writer, compacted_fragments_writer>;
+                    using compact_mutations = compact_for_compaction_v2<compacted_fragments_writer, compacted_fragments_writer>;
                     auto cfc = compact_mutations(*schema(), now,
                         max_purgeable_func(),
                         get_compacted_fragments_writer(),
@@ -701,7 +701,7 @@ private:
                     reader.consume_in_thread(std::move(cfc));
                     return;
                 }
-                using compact_mutations = compact_for_compaction<compacted_fragments_writer, noop_compacted_fragments_consumer>;
+                using compact_mutations = compact_for_compaction_v2<compacted_fragments_writer, noop_compacted_fragments_consumer>;
                 auto cfc = compact_mutations(*schema(), now,
                     max_purgeable_func(),
                     get_compacted_fragments_writer(),

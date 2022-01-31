@@ -2859,13 +2859,13 @@ SEASTAR_TEST_CASE(test_missing_partition_end_fragment) {
         for (const auto version : writable_sstable_versions) {
             testlog.info("version={}", sstables::to_string(version));
 
-            std::deque<mutation_fragment> frags;
-            frags.push_back(mutation_fragment(*s, env.make_reader_permit(), partition_start(pkeys[0], tombstone())));
-            frags.push_back(mutation_fragment(*s, env.make_reader_permit(), clustering_row(ss.make_ckey(0))));
+            std::deque<mutation_fragment_v2> frags;
+            frags.push_back(mutation_fragment_v2(*s, env.make_reader_permit(), partition_start(pkeys[0], tombstone())));
+            frags.push_back(mutation_fragment_v2(*s, env.make_reader_permit(), clustering_row(ss.make_ckey(0))));
             // partition_end is missing
-            frags.push_back(mutation_fragment(*s, env.make_reader_permit(), partition_start(pkeys[1], tombstone())));
-            frags.push_back(mutation_fragment(*s, env.make_reader_permit(), clustering_row(ss.make_ckey(0))));
-            frags.push_back(mutation_fragment(*s, env.make_reader_permit(), partition_end()));
+            frags.push_back(mutation_fragment_v2(*s, env.make_reader_permit(), partition_start(pkeys[1], tombstone())));
+            frags.push_back(mutation_fragment_v2(*s, env.make_reader_permit(), clustering_row(ss.make_ckey(0))));
+            frags.push_back(mutation_fragment_v2(*s, env.make_reader_permit(), partition_end()));
 
             auto mr = make_flat_mutation_reader_from_fragments(s, env.make_reader_permit(), std::move(frags));
             auto close_mr = deferred_close(mr);
