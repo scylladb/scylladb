@@ -316,7 +316,7 @@ public:
     virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state) override {
         tracing::trace(tr_state, "Executing a learn locally");
-        return paxos::paxos_state::learn(get_local_storage_proxy(), _schema, *_proposal, timeout, tr_state);
+        return paxos::paxos_state::learn(sp, _schema, *_proposal, timeout, tr_state);
     }
     virtual future<> apply_remotely(storage_proxy& sp, gms::inet_address ep, inet_address_vector_replica_set&& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
@@ -940,10 +940,10 @@ future<paxos::prepare_summary> paxos_response_handler::prepare_ballot(utils::UUI
                 // To generate less network traffic, only the closest replica (first one in the list of participants)
                 // sends query result content while other replicas send digests needed to check consistency.
                 bool only_digest = peer != _live_endpoints[0];
-                auto da = digest_algorithm(get_local_storage_proxy());
+                auto da = digest_algorithm(*_proxy);
                 if (fbu::is_me(peer)) {
                     tracing::trace(tr_state, "prepare_ballot: prepare {} locally", ballot);
-                    response = co_await paxos::paxos_state::prepare(get_local_storage_proxy(), tr_state, _schema, *_cmd, _key.key(), ballot, only_digest, da, _timeout);
+                    response = co_await paxos::paxos_state::prepare(*_proxy, tr_state, _schema, *_cmd, _key.key(), ballot, only_digest, da, _timeout);
                 } else {
                     tracing::trace(tr_state, "prepare_ballot: sending prepare {} to {}", ballot, peer);
                     response = co_await ser::storage_proxy_rpc_verbs::send_paxos_prepare(&_proxy->_messaging, netw::msg_addr(peer), _timeout, *_cmd, _key.key(), ballot, only_digest, da,
@@ -1104,7 +1104,7 @@ future<bool> paxos_response_handler::accept_proposal(lw_shared_ptr<paxos::propos
             try {
                 if (fbu::is_me(peer)) {
                     tracing::trace(tr_state, "accept_proposal: accept {} locally", *proposal);
-                    accepted = co_await paxos::paxos_state::accept(get_local_storage_proxy(), tr_state, _schema, proposal->update.decorated_key(*_schema).token(), *proposal, _timeout);
+                    accepted = co_await paxos::paxos_state::accept(*_proxy, tr_state, _schema, proposal->update.decorated_key(*_schema).token(), *proposal, _timeout);
                 } else {
                     tracing::trace(tr_state, "accept_proposal: send accept {} to {}", *proposal, peer);
                     accepted = co_await ser::storage_proxy_rpc_verbs::send_paxos_accept(&_proxy->_messaging, netw::msg_addr(peer), _timeout, *proposal, tracing::make_trace_info(tr_state));
