@@ -59,6 +59,7 @@ migration_manager::migration_manager(migration_notifier& notifier, gms::feature_
         , _schema_push([this] { return passive_announce(); })
         , _group0_read_apply_mutex{1}, _group0_operation_mutex{1}
         , _group0_history_gc_duration{std::chrono::duration_cast<gc_clock::duration>(std::chrono::weeks{1})}
+        , _concurrent_ddl_retries{10}
 {
 }
 
@@ -1324,6 +1325,14 @@ future<> migration_manager::on_alive(gms::inet_address endpoint, gms::endpoint_s
 
 void migration_manager::set_group0_history_gc_duration(gc_clock::duration d) {
     _group0_history_gc_duration = d;
+}
+
+void migration_manager::set_concurrent_ddl_retries(size_t n) {
+    _concurrent_ddl_retries = n;
+}
+
+semaphore& migration_manager::group0_operation_mutex() {
+    return _group0_operation_mutex;
 }
 
 }
