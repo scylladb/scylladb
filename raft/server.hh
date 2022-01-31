@@ -50,6 +50,11 @@ public:
     // May fail because of an internal error or because leader changed and an entry was either
     // replaced by the new leader or the server lost track of it. The former will result in
     // dropped_entry exception the later in commit_status_unknown.
+    //
+    // If forwarding is enabled and this is a follower, and the returned future resolves without exception,
+    // this means that the entry is committed/applied locally (depending on the wait type).
+    // Applied locally means the local state machine replica applied this command;
+    // committed locally means simply that the commit index is beyond this entry's index.
     virtual future<> add_entry(command command, wait_type type) = 0;
 
     // Set a new cluster configuration. If the configuration is
@@ -78,8 +83,8 @@ public:
 
     // A simplified wrapper around set_configuration() which adds
     // and deletes servers. Unlike set_configuration(),
-    // works on a follower as well as on a leader (forwards the
-    // request to the current leader). If the added servers are
+    // works on a follower (if forwarding is enabled) as well as on a leader
+    // (forwards the request to the current leader). If the added servers are
     // already part of the configuration, or deleted are not
     // present, does nothing. The implementation forwards the
     // list of added or removed servers to the leader, where they
@@ -88,6 +93,12 @@ public:
     // the log limiter semaphore.
     // This makes it possible to retry this command without
     // adverse effects to the configuration.
+    //
+    // If forwarding is enabled and this is a follower, and the returned future resolves without exception,
+    // this means that a dummy entry appended after non-joint configuration entry was committed by the leader.
+    // The local commit index is not necessarily up-to-date yet and the state of the local state machine
+    // replica may still come from before the configuration entry.
+    // (exception: if no server was actually added or removed, then nothing gets committed and the leader responds immediately).
     virtual future<> modify_config(std::vector<server_address> add,
         std::vector<server_id> del) = 0;
 
