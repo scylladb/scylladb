@@ -49,6 +49,7 @@
 #include "service/storage_proxy.hh"
 #include "gms/gossiper.hh"
 #include "schema_registry.hh"
+#include "utils/error_injection.hh"
 
 logging::logger elogger("alternator-executor");
 
@@ -3130,6 +3131,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
             future<std::tuple<std::string, std::optional<rjson::value>>> f = _proxy.query(rs.schema, std::move(command), std::move(partition_ranges), rs.cl,
                     service::storage_proxy::coordinator_query_options(executor::default_timeout(), permit, client_state, trace_state)).then(
                     [schema = rs.schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = rs.attrs_to_get] (service::storage_proxy::coordinator_query_result qr) mutable {
+                utils::get_local_injector().inject("alternator_batch_get_item", [] { throw std::runtime_error("batch_get_item injection"); });
                 std::optional<rjson::value> json = describe_single_item(schema, partition_slice, *selection, *qr.query_result, *attrs_to_get);
                 return make_ready_future<std::tuple<std::string, std::optional<rjson::value>>>(
                         std::make_tuple(schema->cf_name(), std::move(json)));
