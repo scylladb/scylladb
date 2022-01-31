@@ -44,6 +44,7 @@ constexpr std::string_view features::MC_SSTABLE = "MC_SSTABLE_FORMAT";
 // Up-to-date features
 constexpr std::string_view features::UDF = "UDF";
 constexpr std::string_view features::MD_SSTABLE = "MD_SSTABLE_FORMAT";
+constexpr std::string_view features::ME_SSTABLE = "ME_SSTABLE_FORMAT";
 constexpr std::string_view features::VIEW_VIRTUAL_COLUMNS = "VIEW_VIRTUAL_COLUMNS";
 constexpr std::string_view features::DIGEST_INSENSITIVE_TO_EXPIRY = "DIGEST_INSENSITIVE_TO_EXPIRY";
 constexpr std::string_view features::COMPUTED_COLUMNS = "COMPUTED_COLUMNS";
@@ -74,6 +75,7 @@ feature_config::feature_config() {
 feature_service::feature_service(feature_config cfg) : _config(cfg)
         , _udf_feature(*this, features::UDF)
         , _md_sstable_feature(*this, features::MD_SSTABLE)
+        , _me_sstable_feature(*this, features::ME_SSTABLE)
         , _view_virtual_columns(*this, features::VIEW_VIRTUAL_COLUMNS)
         , _digest_insensitive_to_expiry(*this, features::DIGEST_INSENSITIVE_TO_EXPIRY)
         , _computed_columns(*this, features::COMPUTED_COLUMNS)
@@ -115,9 +117,12 @@ feature_config feature_config_from_db_config(db::config& cfg, std::set<sstring> 
         fcfg._disabled_features.insert(sstring(gms::features::MD_SSTABLE));
         [[fallthrough]];
     case sstables::sstable_version_types::md:
+        fcfg._disabled_features.insert(sstring(gms::features::ME_SSTABLE));
+        [[fallthrough]];
     case sstables::sstable_version_types::me:
         break;
     }
+
     if (!cfg.enable_user_defined_functions()) {
         fcfg._disabled_features.insert(sstring(gms::features::UDF));
     } else {
@@ -213,6 +218,7 @@ std::set<std::string_view> feature_service::known_feature_set() {
         gms::features::PER_TABLE_CACHING,
         gms::features::LWT,
         gms::features::MD_SSTABLE,
+        gms::features::ME_SSTABLE,
         gms::features::UDF,
         gms::features::CDC,
         gms::features::DIGEST_FOR_NULL_VALUES,
@@ -316,6 +322,7 @@ void feature_service::enable(const std::set<std::string_view>& list) {
     for (gms::feature& f : {
         std::ref(_udf_feature),
         std::ref(_md_sstable_feature),
+        std::ref(_me_sstable_feature),
         std::ref(_view_virtual_columns),
         std::ref(_digest_insensitive_to_expiry),
         std::ref(_computed_columns),
