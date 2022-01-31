@@ -1723,10 +1723,31 @@ future<mutation> database::apply_counter_update(schema_ptr s, const frozen_mutat
   }));
 }
 
+// #9919 etc. The initiative to wrap exceptions here
+// causes a bunch of problems with (implicit) call sites
+// catching timed_out_error (not checking is_timeout_exception).
+// Fixing the call sites is a good idea, but it is also hard
+// to verify. This workaround should ensure we take the
+// correct code paths in all cases, until we can clean things up
+// proper.
+class wrapped_timed_out_error : public timed_out_error {
+private:
+    sstring _msg;
+public:
+    wrapped_timed_out_error(sstring msg) noexcept
+        : _msg(std::move(msg))
+    {}
+    const char* what() const noexcept override {
+        return _msg.c_str();
+    }
+};
+
+// see above (#9919)
+template<typename T>
 static void throw_commitlog_add_error(schema_ptr s, const frozen_mutation& m) {
     // it is tempting to do a full pretty print here, but the mutation is likely
     // humungous if we got an error, so just tell us where and pk...
-    std::throw_with_nested(std::runtime_error(format("Could not write mutation {}:{} ({}) to commitlog"
+    std::throw_with_nested(T(format("Could not write mutation {}:{} ({}) to commitlog"
         , s->ks_name(), s->cf_name()
         , m.key()
     )));
@@ -1739,8 +1760,11 @@ future<> database::apply_with_commitlog(column_family& cf, const mutation& m, db
         try {
             commitlog_entry_writer cew(m.schema(), fm, db::commitlog::force_sync::no);
             h = co_await cf.commitlog()->add_entry(m.schema()->id(), cew, timeout);
+        } catch (timed_out_error&) {
+            // see above (#9919)
+            throw_commitlog_add_error<wrapped_timed_out_error>(cf.schema(), fm);
         } catch (...) {
-            throw_commitlog_add_error(cf.schema(), fm);
+            throw_commitlog_add_error<std::runtime_error>(cf.schema(), fm);
         }
     }
     try {
@@ -1780,8 +1804,11 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::tra
         try {
             commitlog_entry_writer cew(s, m, sync);
             h = co_await cf.commitlog()->add_entry(uuid, cew, timeout);
+        } catch (timed_out_error&) {
+            // see above (#9919)
+            throw_commitlog_add_error<wrapped_timed_out_error>(cf.schema(), m);
         } catch (...) {
-            throw_commitlog_add_error(s, m);
+            throw_commitlog_add_error<std::runtime_error>(s, m);
         }
     }
     try {
