@@ -30,15 +30,24 @@ if __name__ == '__main__':
                         help='specify swapfile directory', default='/')
     parser.add_argument('--swap-size', type=int,
                         help='specify swapfile size in GB')
+    parser.add_argument('--swap-size-bytes', type=int,
+                        help='specify swapfile size in bytes')
     args = parser.parse_args()
 
     if swap_exists():
         print('swap already configured, exiting setup')
         sys.exit(1)
 
+    if args.swap_size and args.swap_size_bytes:
+        print("Cannot specify both --swap-size and --swap-size-bytes")
+        sys.exit(1)
+
     diskfree = psutil.disk_usage(args.swap_directory).free
-    if args.swap_size:
-        swapsize = GB(args.swap_size)
+    if args.swap_size or args.swap_size_bytes:
+        if args.swap_size:
+            swapsize = GB(args.swap_size)
+        else:
+            swapsize = args.swap_size_bytes
         if swapsize > diskfree:
             print('swap directory {} does not have enough disk space. {}GB space required.'.format(args.swap_directory, to_GB(swapsize)))
             sys.exit(1)
