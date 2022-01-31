@@ -997,6 +997,8 @@ future<> migration_manager::announce_with_raft(std::vector<mutation> schema, gro
         .history_append{db::system_keyspace::make_group0_history_state_id_mutation(
                 guard.new_group0_state_id(), _group0_history_gc_duration, description)},
 
+        // IMPORTANT: the retry mechanism below assumes that `prev_state_id` is engaged (not nullopt).
+        // Here it is: the return type of `guard.observerd_group0_state_id()` is `utils::UUID`.
         .prev_state_id{guard.observed_group0_state_id()},
         .new_state_id{guard.new_group0_state_id()},
 
@@ -1009,7 +1011,30 @@ future<> migration_manager::announce_with_raft(std::vector<mutation> schema, gro
     // Release the read_apply mutex so `group0_state_machine::apply` can take it.
     guard._impl->release_read_apply_mutex();
 
-    co_await _raft_gr.group0().add_entry(std::move(cmd), raft::wait_type::applied);
+    bool retry;
+    do {
+        retry = false;
+        try {
+            co_await _raft_gr.group0().add_entry(cmd, raft::wait_type::applied);
+        } catch (const raft::dropped_entry& e) {
+            mlogger.warn("`announce_with_raft`: `add_entry` returned \"{}\". Retrying the command (prev_state_id: {}, new_state_id: {})",
+                    e, group0_cmd.prev_state_id, group0_cmd.new_state_id);
+            retry = true;
+        } catch (const raft::commit_status_unknown& e) {
+            mlogger.warn("`announce_with_raft`: `add_entry` returned \"{}\". Retrying the command (prev_state_id: {}, new_state_id: {})",
+                    e, group0_cmd.prev_state_id, group0_cmd.new_state_id);
+            retry = true;
+        } catch (const raft::not_a_leader& e) {
+            // This should not happen since follower-to-leader entry forwarding is enabled in group 0.
+            // Just fail the operation by propagating the error.
+            mlogger.error("`announce_with_raft`: unexpected `not_a_leader` error: \"{}\". Please file an issue.", e);
+            throw;
+        }
+
+        // Thanks to the `prev_state_id` check in `group0_state_machine::apply`, the command is idempotent.
+        // It's safe to retry it, even if it means it will be applied multiple times; only the first time
+        // can have an effect.
+    } while (retry);
 
     // dropping the guard releases `_group0_operation_mutex`, allowing other operations
     // on this node to proceed
