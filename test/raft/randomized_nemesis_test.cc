@@ -90,6 +90,8 @@ using snapshots_t = std::unordered_map<raft::snapshot_id, State>;
 // because it will share it with an implementation of `raft::persistence`.
 template <PureStateMachine M>
 class impure_state_machine : public raft::state_machine {
+    raft::server_id _id;
+
     typename M::state_t _val;
     snapshots_t<typename M::state_t>& _snapshots;
 
@@ -108,8 +110,8 @@ class impure_state_machine : public raft::state_machine {
     std::unordered_map<cmd_id_t, promise<typename M::output_t>> _output_channels;
 
 public:
-    impure_state_machine(snapshots_t<typename M::state_t>& snapshots)
-        : _val(M::init), _snapshots(snapshots) {}
+    impure_state_machine(raft::server_id id, snapshots_t<typename M::state_t>& snapshots)
+        : _id(id), _val(M::init), _snapshots(snapshots) {}
 
     future<> apply(std::vector<raft::command_cref> cmds) override {
         co_await with_gate(_gate, [this, cmds = std::move(cmds)] () mutable -> future<> {
@@ -142,6 +144,7 @@ public:
     future<raft::snapshot_id> take_snapshot() override {
         auto id = raft::snapshot_id::create_random_id();
         assert(_snapshots.emplace(id, _val).second);
+        tlogger.trace("{}: took snapshot id {} val {}", _id, id, _val);
         co_return id;
     }
 
@@ -152,6 +155,7 @@ public:
     future<> load_snapshot(raft::snapshot_id id) override {
         auto it = _snapshots.find(id);
         assert(it != _snapshots.end()); // dunno if the snapshot can actually be missing
+        tlogger.trace("{}: loading snapshot id {} prev val {} new val {}", _id, id, _val, it->second);
         _val = it->second;
         co_return;
     }
@@ -183,6 +187,10 @@ public:
             });
             return f(cmd_id, std::move(fut)).finally([guard = std::move(guard)] {});
         });
+    }
+
+    const typename M::state_t& state() const {
+        return _val;
     }
 };
 
@@ -369,6 +377,15 @@ private:
     size_t _add_entry_executions = 0;
     size_t _modify_config_executions = 0;
 
+    template <typename F>
+    auto with_gate(F&& f) -> decltype(f()) {
+        try {
+            co_return co_await seastar::with_gate(_gate, std::forward<F>(f));
+        } catch (const gate_closed_exception&) {
+            co_return coroutine::make_exception(raft::stopped_error{});
+        }
+    }
+
 public:
     rpc(raft::server_id id, snapshots_t<State>& snaps, send_message_t send)
         : _id(id), _snapshots(snaps), _send(std::move(send)) {
@@ -534,31 +551,30 @@ public:
     };
 
     virtual future<raft::snapshot_reply> send_snapshot(raft::server_id dst, const raft::install_snapshot& ins, seastar::abort_source&) override {
-        auto it = _snapshots.find(ins.snp.id);
-        if (it == _snapshots.end()) {
-            throw snapshot_not_found{ .id = ins.snp.id };
-        }
+        co_return co_await with_gate([&] () -> future<raft::snapshot_reply> {
+            auto it = _snapshots.find(ins.snp.id);
+            if (it == _snapshots.end()) {
+                throw snapshot_not_found{ .id = ins.snp.id };
+            }
 
-        auto id = _counter++;
-        promise<raft::snapshot_reply> p;
-        auto f = p.get_future();
-        _reply_promises.emplace(id, std::move(p));
-        auto guard = defer([this, id] { _reply_promises.erase(id); });
+            auto id = _counter++;
+            promise<raft::snapshot_reply> p;
+            auto f = p.get_future();
+            _reply_promises.emplace(id, std::move(p));
+            auto guard = defer([this, id] { _reply_promises.erase(id); });
 
-        _send(dst, snapshot_message{
-            .ins = ins,
-            .snapshot_payload = it->second,
-            .reply_id = id
-        });
+            _send(dst, snapshot_message{
+                .ins = ins,
+                .snapshot_payload = it->second,
+                .reply_id = id
+            });
 
-        // The message receival function on the other side, when it receives the snapshot message,
-        // will apply the snapshot and send `id` back to us in the snapshot reply message (see `receive`,
-        // `snapshot_message` case). When we receive the reply, we shall find `id` in `_reply_promises`
-        // and push the reply through the promise, which will resolve `f` (see `receive`, `snapshot_reply_message`
-        // case).
+            // The message receival function on the other side, when it receives the snapshot message,
+            // will apply the snapshot and send `id` back to us in the snapshot reply message (see `receive`,
+            // `snapshot_message` case). When we receive the reply, we shall find `id` in `_reply_promises`
+            // and push the reply through the promise, which will resolve `f` (see `receive`, `snapshot_reply_message`
+            // case).
 
-        co_return co_await with_gate(_gate,
-                [&, guard = std::move(guard), f = std::move(f)] () mutable -> future<raft::snapshot_reply> {
             // TODO configurable
             static const raft::logical_clock::duration send_snapshot_timeout = 20_t;
 
@@ -575,18 +591,18 @@ public:
     }
 
     virtual future<raft::add_entry_reply> send_add_entry(raft::server_id dst, const raft::command& cmd) override {
-        auto id = _counter++;
-        promise<raft::add_entry_reply> p;
-        auto f = p.get_future();
-        _reply_promises.emplace(id, std::move(p));
-        auto guard = defer([this, id] { _reply_promises.erase(id); });
+        co_return co_await with_gate([&] () -> future<raft::add_entry_reply> {
+            auto id = _counter++;
+            promise<raft::add_entry_reply> p;
+            auto f = p.get_future();
+            _reply_promises.emplace(id, std::move(p));
+            auto guard = defer([this, id] { _reply_promises.erase(id); });
 
-        _send(dst, add_entry_message{
-            .cmd = cmd,
-            .reply_id = id
-        });
-        co_return co_await with_gate(_gate,
-                [&, guard = std::move(guard), f = std::move(f)] () mutable -> future<raft::add_entry_reply> {
+            _send(dst, add_entry_message{
+                .cmd = cmd,
+                .reply_id = id
+            });
+
             static const raft::logical_clock::duration send_add_entry_timeout = 20_t;
 
             try {
@@ -598,21 +614,21 @@ public:
         });
     }
     virtual future<raft::add_entry_reply> send_modify_config(raft::server_id dst,
-        const std::vector<raft::server_address>& add,
-        const std::vector<raft::server_id>& del) override {
-        auto id = _counter++;
-        promise<raft::add_entry_reply> p;
-        auto f = p.get_future();
-        _reply_promises.emplace(id, std::move(p));
-        auto guard = defer([this, id] { _reply_promises.erase(id); });
+                const std::vector<raft::server_address>& add,
+                const std::vector<raft::server_id>& del) override {
+        co_return co_await with_gate([&] () -> future<raft::add_entry_reply> {
+            auto id = _counter++;
+            promise<raft::add_entry_reply> p;
+            auto f = p.get_future();
+            _reply_promises.emplace(id, std::move(p));
+            auto guard = defer([this, id] { _reply_promises.erase(id); });
 
-        _send(dst, modify_config_message{
-            .add = add,
-            .del = del,
-            .reply_id = id
-        });
-        co_return co_await with_gate(_gate,
-                [&, guard = std::move(guard), f = std::move(f)] () mutable -> future<raft::add_entry_reply> {
+            _send(dst, modify_config_message{
+                .add = add,
+                .del = del,
+                .reply_id = id
+            });
+
             static const raft::logical_clock::duration send_modify_config_timeout = 200_t;
 
             try {
@@ -624,18 +640,17 @@ public:
         });
     }
     virtual future<raft::read_barrier_reply> execute_read_barrier_on_leader(raft::server_id dst) override {
-        auto id = _counter++;
-        promise<raft::read_barrier_reply> p;
-        auto f = p.get_future();
-        _reply_promises.emplace(id, std::move(p));
-        auto guard = defer([this, id] { _reply_promises.erase(id); });
+        co_return co_await with_gate([&] () -> future<raft::read_barrier_reply> {
+            auto id = _counter++;
+            promise<raft::read_barrier_reply> p;
+            auto f = p.get_future();
+            _reply_promises.emplace(id, std::move(p));
+            auto guard = defer([this, id] { _reply_promises.erase(id); });
 
-        _send(dst, execute_barrier_on_leader {
-            .reply_id = id
-        });
+            _send(dst, execute_barrier_on_leader {
+                .reply_id = id
+            });
 
-        co_return co_await with_gate(_gate,
-                [&, guard = std::move(guard), f = std::move(f)] () mutable -> future<raft::read_barrier_reply> {
             // TODO configurable
             static const raft::logical_clock::duration execute_read_barrier_on_leader_timeout = 20_t;
 
@@ -929,11 +944,6 @@ public:
 // with its planned delivery time. The queue uses a logical clock to decide when to deliver messages.
 // It delives all messages whose associated times are smaller than the ``current time'', the latter
 // determined by the number of `tick()` calls.
-//
-// Note: the actual delivery happens through a function that is passed in the `network` constructor.
-// The function may return `false` (for whatever reason) denoting that it failed to deliver the message.
-// In this case network will backup this message and retry the delivery on every later `tick` until
-// it succeeds.
 template <typename Payload>
 class network {
 public:
@@ -971,18 +981,18 @@ private:
     raft::logical_clock _clock;
 
     // How long does it take to deliver a message?
-    // TODO: use a random distribution or let the user change this dynamically
-    raft::logical_clock::duration _delivery_delay;
+    std::uniform_int_distribution<raft::logical_clock::rep> _delivery_delay;
+    std::mt19937 _rnd;
 
 public:
-    network(raft::logical_clock::duration delivery_delay, deliver_t f)
-        : _deliver(std::move(f)), _delivery_delay(delivery_delay) {}
+    network(std::uniform_int_distribution<raft::logical_clock::rep> delivery_delay, std::mt19937 rnd, deliver_t f)
+        : _deliver(std::move(f)), _delivery_delay(std::move(delivery_delay)), _rnd(std::move(rnd)) {}
 
     void send(raft::server_id src, raft::server_id dst, Payload payload) {
         // Predict the delivery time in advance.
         // Our prediction may be wrong if a grudge exists at this expected moment of delivery.
         // Messages may also be reordered.
-        auto delivery_time = _clock.now() + _delivery_delay;
+        auto delivery_time = _clock.now() + raft::logical_clock::duration{_delivery_delay(_rnd)};
 
         _events.push_back(event{delivery_time, message{src, dst, make_lw_shared<Payload>(std::move(payload))}});
         std::push_heap(_events.begin(), _events.end(), cmp);
@@ -1107,7 +1117,7 @@ public:
         using state_t = typename M::state_t;
 
         auto snapshots = std::make_unique<snapshots_t<state_t>>();
-        auto sm = std::make_unique<impure_state_machine<M>>(*snapshots);
+        auto sm = std::make_unique<impure_state_machine<M>>(id, *snapshots);
         auto rpc_ = std::make_unique<rpc<state_t>>(id, *snapshots, std::move(send_rpc));
         auto persistence_ = std::make_unique<persistence_proxy<state_t>>(*snapshots, std::move(persistence));
 
@@ -1197,6 +1207,10 @@ public:
         return _id;
     }
 
+    const typename M::state_t& state() const {
+        return _sm.state();
+    }
+
     raft::configuration get_configuration() const {
         return _server->get_configuration();
     }
@@ -1237,7 +1251,8 @@ static raft::server_id to_raft_id(size_t id) {
 }
 
 struct environment_config {
-    raft::logical_clock::duration network_delay;
+    std::mt19937 rnd;
+    std::uniform_int_distribution<raft::logical_clock::rep> network_delay;
     raft::logical_clock::duration fd_convict_threshold;
 };
 
@@ -1304,7 +1319,8 @@ class environment : public seastar::weakly_referencable<environment<M>> {
 
 public:
     environment(environment_config cfg)
-            : _fd_convict_threshold(cfg.fd_convict_threshold), _network(cfg.network_delay,
+            : _fd_convict_threshold(cfg.fd_convict_threshold)
+            , _network(std::move(cfg.network_delay), std::move(cfg.rnd),
         [this] (raft::server_id src, raft::server_id dst, const message_t& m) {
             auto& n = _routes.at(dst);
             assert(n._persistence);
@@ -1330,20 +1346,30 @@ public:
         _network.tick();
     }
 
-    // TODO: adjustable/randomizable ticking ratios
-    void tick_servers() {
-        for (auto& [_, r] : _routes) {
-            if (r._server) {
-                r._server->tick();
-            }
-
+    template <std::invocable<raft::server_id, raft_server<M>*, failure_detector&> F>
+    void for_each_server(F&& f) {
+        for (auto& [id, r]: _routes) {
             assert(r._fd);
-            r._fd->tick();
+            f(id, r._server.get(), *r._fd);
         }
+    }
 
+    // Call this periodically so `abort()` can finish for 'crashed' servers.
+    void tick_crashing_servers() {
         for (auto& srv: _crashing_servers) {
             srv->tick();
         }
+    }
+
+    void tick_servers() {
+        for_each_server([] (raft::server_id, raft_server<M>* srv, failure_detector& fd) {
+            if (srv) {
+                srv->tick();
+            }
+            fd.tick();
+        });
+
+        tick_crashing_servers();
     }
 
     // A 'node' is a container for a Raft server, its storage ('persistence') and failure detector.
@@ -1466,14 +1492,16 @@ public:
         auto srv = std::exchange(n._server, nullptr);
         _crashing_servers.insert(srv.get());
 
-        _crash_fiber = _crash_fiber.then([this, srv_ = std::move(srv)] () mutable -> future<> {
-            auto srv = std::move(srv_);
+        auto f = std::bind_front([] (environment<M>& self, std::unique_ptr<raft_server<M>> srv) -> future<> {
             tlogger.trace("crash fiber: aborting {}", srv->id());
             co_await srv->abort();
             tlogger.trace("crash fiber: finished aborting {}", srv->id());
-            _crashing_servers.erase(srv.get());
+            self._crashing_servers.erase(srv.get());
             // abort() ensures there are no in-progress calls on the server, so we can destroy it.
-        });
+        }, std::ref(*this), std::move(srv));
+
+        // Cannot do `.then(std::move(f))`, because that would try to use `f()`, which is ill-formed (seastar#1005).
+        _crash_fiber = _crash_fiber.then([f = std::move(f)] () mutable { return std::move(f)(); });
     }
 
     bool is_leader(raft::server_id id) {
@@ -1693,20 +1721,19 @@ struct wait_for_leader {
 SEASTAR_TEST_CASE(basic_test) {
     logical_timer timer;
     environment_config cfg {
-        .network_delay = 5_t,
+        .rnd{0},
+        .network_delay{5, 5},
         .fd_convict_threshold = 50_t,
     };
     co_await with_env_and_ticker<ExReg>(cfg, [&timer] (environment<ExReg>& env, ticker& t) -> future<> {
         using output_t = typename ExReg::output_t;
 
-        t.start({
-            {1, [&] {
-                env.tick_network();
-                timer.tick();
-            }},
-            {10, [&] {
+        t.start([&] (uint64_t tick) {
+            env.tick_network();
+            timer.tick();
+            if (tick % 10 == 0) {
                 env.tick_servers();
-            }}
+            }
         }, 10'000);
 
         auto leader_id = co_await env.new_server(true);
@@ -1766,20 +1793,18 @@ SEASTAR_TEST_CASE(basic_test) {
 SEASTAR_TEST_CASE(snapshot_uses_correct_term_test) {
     logical_timer timer;
     environment_config cfg {
-        .network_delay = 1_t,
+        .rnd{0},
+        .network_delay{1, 1},
         .fd_convict_threshold = 10_t,
     };
     co_await with_env_and_ticker<ExReg>(cfg, [&timer] (environment<ExReg>& env, ticker& t) -> future<> {
-        t.start({
-            {1, [&] {
-                env.tick_network();
-                timer.tick();
-            }},
-            {10, [&] {
+        t.start([&] (uint64_t tick) {
+            env.tick_network();
+            timer.tick();
+            if (tick % 10 == 0) {
                 env.tick_servers();
-            }}
+            }
         }, 10'000);
-
 
         auto id1 = co_await env.new_server(true,
                 raft::server::configuration{
@@ -1847,20 +1872,18 @@ SEASTAR_TEST_CASE(snapshot_uses_correct_term_test) {
 SEASTAR_TEST_CASE(snapshotting_preserves_config_test) {
     logical_timer timer;
     environment_config cfg {
-        .network_delay = 1_t,
+        .rnd{0},
+        .network_delay{1, 1},
         .fd_convict_threshold = 10_t,
     };
     co_await with_env_and_ticker<ExReg>(cfg, [&timer] (environment<ExReg>& env, ticker& t) -> future<> {
-        t.start({
-            {1, [&] {
-                env.tick_network();
-                timer.tick();
-            }},
-            {10, [&] {
+        t.start([&] (uint64_t tick) {
+            env.tick_network();
+            timer.tick();
+            if (tick % 10 == 0) {
                 env.tick_servers();
-            }}
+            }
         }, 10'000);
-
 
         auto id1 = co_await env.new_server(true,
                 raft::server::configuration{
@@ -2276,7 +2299,12 @@ public:
         return _end == 0;
     }
 
-    std::pair<append_seq, elem_t> pop() {
+    size_t size() const {
+        assert(_end <= _seq->size());
+        return _end;
+    }
+
+    std::pair<append_seq, elem_t> pop() const {
         assert(_seq);
         assert(_end <= _seq->size());
         assert(0 < _end);
@@ -2287,7 +2315,7 @@ public:
     friend std::ostream& operator<<(std::ostream& os, const append_seq& s) {
         // TODO: don't copy the elements
         std::vector<elem_t> v{s._seq->begin(), s._seq->begin() + s._end};
-        return os << format("v {} _end {}", v, s._end);
+        return os << format("seq({} _end {})", v, s._end);
     }
 
 private:
@@ -2326,7 +2354,10 @@ namespace ser {
     };
 }
 
-// TODO: do some useful logging in case of consistency violation
+struct inconsistency {
+    std::string what;
+};
+
 struct append_reg_model {
     using elem_t = typename append_seq::elem_t;
 
@@ -2334,6 +2365,10 @@ struct append_reg_model {
         elem_t elem;
         elem_t digest;
     };
+
+    friend std::ostream& operator<<(std::ostream& os, const entry& e) {
+        return os << e.elem;
+    }
 
     std::vector<entry> seq{{0, 0}};
     std::unordered_map<elem_t, size_t> index{{0, 0}};
@@ -2351,7 +2386,12 @@ struct append_reg_model {
         assert(!returned.contains(x));
         assert(x != 0);
         assert(!prev.empty());
-        completion(x, std::move(prev));
+        try {
+            completion(x, prev);
+        } catch (inconsistency& e) {
+            e.what += format("\nwhen completing elem: {}\nprev: {}\nmodel: {}", x, prev, seq);
+            throw;
+        }
         returned.insert(x);
     }
 
@@ -2381,8 +2421,28 @@ private:
             assert(0 < idx);
             assert(idx < seq.size());
 
-            assert(prev_x == seq[idx - 1].elem);
-            assert(prev.digest() == seq[idx - 1].digest);
+            if (prev_x != seq[idx - 1].elem) {
+                throw inconsistency{format(
+                    "elem {} completed again (existing at idx {}), but prev elem does not match existing model"
+                    "\nprev elem: {}\nmodel prev elem: {}\nprev: {} model up to idx: {}",
+                    x, idx, prev_x, seq[idx - 1].elem, prev, std::vector<entry>{seq.begin(), seq.begin()+idx})};
+            }
+
+            if (prev.digest() != seq[idx - 1].digest) {
+                auto err = format(
+                    "elem {} completed again (existing at idx {}), but prev does not match existing model"
+                    "\n prev: {}\nmodel up to idx: {}",
+                    x, idx, prev, std::vector<entry>{seq.begin(), seq.begin()+idx});
+
+                auto min_len = std::min(prev.size(), idx);
+                for (size_t i = 0; i < min_len; ++i) {
+                    if (prev[i] != seq[i].elem) {
+                        err += format("\nmismatch at idx {} prev {} model {}", i, prev[i], seq[i].elem);
+                    }
+                }
+
+                throw inconsistency{std::move(err)};
+            }
 
             return;
         }
@@ -2393,8 +2453,27 @@ private:
 
         // Check that the existing tail matches our tail.
         assert(!seq.empty());
-        assert(prev_x == seq.back().elem);
-        assert(prev.digest() == seq.back().digest);
+        if (prev_x != seq.back().elem) {
+            throw inconsistency{format(
+                "new completion (elem: {}) but prev elem does not match existing model"
+                "\nprev elem: {}\nmodel prev elem: {}\nprev: {}\n model: {}",
+                x, prev_x, seq.back().elem, prev, seq)};
+        }
+        if (prev.digest() != seq.back().digest) {
+            auto err = format(
+                "new completion (elem: {}) but prev does not match existing model"
+                "\nprev: {}\n model: {}",
+                x, prev, seq);
+
+            auto min_len = std::min(prev.size(), seq.size());
+            for (size_t i = 0; i < min_len; ++i) {
+                if (prev[i] != seq[i].elem) {
+                    err += format("\nmismatch at idx {} prev {} model {}", i, prev[i], seq[i].elem);
+                }
+            }
+
+            throw inconsistency{std::move(err)};
+        }
 
         // All previous elements were completed, so the new element belongs at the end.
         index.emplace(x, seq.size());
@@ -2411,12 +2490,6 @@ std::ostream& operator<<(std::ostream& os, const AppendReg::ret& r) {
     return os << format("ret{{{}, {}}}", r.x, r.prev);
 }
 
-namespace raft {
-std::ostream& operator<<(std::ostream& os, const raft::server_address& a) {
-    return os << a.id;
-}
-}
-
 SEASTAR_TEST_CASE(basic_generator_test) {
     using op_type = operation::invocable<operation::either_of<
             raft_call<AppendReg>,
@@ -2428,27 +2501,52 @@ SEASTAR_TEST_CASE(basic_generator_test) {
 
     static_assert(operation::Invocable<op_type>);
 
+    auto seed = tests::random::get_int<int32_t>();
+    std::mt19937 random_engine{seed};
+
     logical_timer timer;
     environment_config cfg {
-        .network_delay = 3_t,
+        .rnd{random_engine},
+        .network_delay{0, 6},
         .fd_convict_threshold = 50_t,
     };
-    co_await with_env_and_ticker<AppendReg>(cfg, [&cfg, &timer] (environment<AppendReg>& env, ticker& t) -> future<> {
-        t.start({
-            {1, [&] {
-                env.tick_network();
-                timer.tick();
-            }},
-            {10, [&] {
-                env.tick_servers();
-            }}
+    co_await with_env_and_ticker<AppendReg>(cfg, [&] (environment<AppendReg>& env, ticker& t) -> future<> {
+        t.start([&, dist = std::uniform_int_distribution<size_t>(0, 9)] (uint64_t tick) mutable {
+            env.tick_network();
+            timer.tick();
+            env.for_each_server([&] (raft::server_id, raft_server<AppendReg>* srv, failure_detector& fd) {
+                // Tick each server with probability 1/10.
+                // Thus each server is ticked, on average, once every 10 timer/network ticks.
+                // On the other hand, we now have servers running at different speeds.
+                if (srv && dist(random_engine) == 0) {
+                    srv->tick();
+                    fd.tick();
+                }
+            });
+            env.tick_crashing_servers();
         }, 200'000);
 
-        auto seed = tests::random::get_int<int32_t>();
-        std::mt19937 random_engine{seed};
-        raft::server::configuration srv_cfg{
-            .enable_forwarding = false, //std::bernoulli_distribution{0.5}(random_engine)
-        };
+        std::bernoulli_distribution bdist{0.5};
+        bool forwarding = false; //bdist(random_engine) TODO
+
+        // With probability 1/2, run the servers with a configuration which causes frequent snapshotting.
+        // Note: with the default configuration we won't observe any snapshots at all, since the default
+        // threshold is 1024 log commands and we perform only 500 ops.
+        bool frequent_snapshotting = bdist(random_engine);
+
+        // TODO: randomize the snapshot thresholds between different servers for more chaos.
+        auto srv_cfg = frequent_snapshotting
+            ? raft::server::configuration {
+                .snapshot_threshold{10},
+                .snapshot_trailing{5},
+                .max_log_size{20},
+                .enable_forwarding{forwarding},
+            }
+            : raft::server::configuration {
+                .enable_forwarding{forwarding},
+            };
+
+        tlogger.info("basic_generator_test: frequent snapshotting: {}", frequent_snapshotting);
 
         auto leader_id = co_await env.new_server(true, srv_cfg);
 
@@ -2621,7 +2719,20 @@ SEASTAR_TEST_CASE(basic_generator_test) {
         interpreter<op_type, decltype(gen), consistency_checker> interp{
             std::move(gen), std::move(threads), 1_t, std::move(init_state), timer,
             consistency_checker{}};
-        co_await interp.run();
+        try {
+            co_await interp.run();
+        } catch (inconsistency& e) {
+            tlogger.error("inconsistency: {}", e.what);
+            env.for_each_server([&] (raft::server_id id, raft_server<AppendReg>* srv, failure_detector&) {
+                if (srv) {
+                    tlogger.info("server {} state machine state: {}", id, srv->state());
+                } else {
+                    tlogger.info("node {} currently missing server", id);
+                }
+            });
+
+            assert(false);
+        }
 
         tlogger.debug("Finished generator run, time: {}", timer.now());
 

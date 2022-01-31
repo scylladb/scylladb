@@ -14,23 +14,10 @@
 
 using namespace seastar;
 
-// Given a set of functions and associated positive natural numbers,
-// calls the functions with periods defined by their corresponding numbers,
-// yielding in between.
-//
-// Define a "tick" to be a (possibly empty) set of calls to some of the given functions
-// followed by a yield. The ticker executes a sequence of ticks. Given {n, f}, where n
-// is a number and f is a function, f will be called each nth tick.
-//
-// For example, suppose the ticker was started with the set {{2, f}, {4, g}, {4, h}}.
-// Then the functions called in each tick are:
-// tick 1: f, g, h tick 2: none, tick 3: f, tick 4: none, tick 5: f, g, h tick 2: none, and so on.
-//
-// The order of calls within a single tick is unspecified.
-//
+// Calls the given function as fast as the Seastar reactor allows and yields between each call.
+// The function is passed an incrementing integer (incremented by one for each call, starting at 0).
 // The number of ticks can be limited. We crash if the ticker reaches the limit before it's `abort()`ed.
-//
-// Call `start` to provide the distribution and start the ticking.
+// Call `start()` to start the ticking.
 class ticker {
     bool _stop = false;
     std::optional<future<>> _ticker;
@@ -45,12 +32,11 @@ public:
         assert(!_ticker);
     }
 
-    using on_tick_t = noncopyable_function<void()>;
+    using on_tick_t = noncopyable_function<void(uint64_t)>;
 
-    template <size_t N>
-    void start(std::pair<size_t, on_tick_t> (&&tick_funs)[N], uint64_t limit = std::numeric_limits<uint64_t>::max()) {
+    void start(on_tick_t fun, uint64_t limit = std::numeric_limits<uint64_t>::max()) {
         assert(!_ticker);
-        _ticker = tick(std::move(tick_funs), limit);
+        _ticker = tick(std::move(fun), limit);
     }
 
     future<> abort() {
@@ -61,22 +47,14 @@ public:
     }
 
 private:
-    template <size_t N>
-    future<> tick(std::pair<size_t, on_tick_t> (&&tick_funs)[N], uint64_t limit) {
-        static_assert(N > 0);
-
-        auto funs = std::to_array(std::move(tick_funs));
+    future<> tick(on_tick_t fun, uint64_t limit) {
         for (uint64_t tick = 0; tick < limit; ++tick) {
             if (_stop) {
                 _logger.info("ticker: finishing after {} ticks", tick);
                 co_return;
             }
 
-            for (auto& [n, f] : funs) {
-                if (tick % n == 0) {
-                    f();
-                }
-            }
+            fun(tick);
 
             co_await seastar::yield();
         }

@@ -183,6 +183,9 @@ future<raft::read_barrier_reply> raft_rpc::execute_read_barrier(raft::server_id 
 
 future<raft::snapshot_reply> raft_rpc::apply_snapshot(raft::server_id from, raft::install_snapshot snp) {
     co_await _sm.transfer_snapshot(_address_map.get_inet_address(from), snp.snp);
+    if (_shutdown_gate.is_closed()) {
+        throw raft::stopped_error{};
+    }
     co_return co_await _client->apply_snapshot(from, std::move(snp));
 }
 

@@ -375,7 +375,7 @@ RAFT_TEST_CASE(rpc_configuration_truncate_restore_from_snp, (test_case{
                 .log = { raft::log_entry{raft::term_t(1), raft::index_t(1),
                         config{.curr = {node_id{0},node_id{1},node_id{2},node_id{3}},
                                .prev = {node_id{0},node_id{1},node_id{2}}}}},
-                .snapshot = {.config  = address_set({node_id{0},node_id{1},node_id{2}})
+                .snapshot = {.config  = raft::configuration{address_set({node_id{0},node_id{1},node_id{2}})}
                 }
             }},
             // A should see {A, B, C, D} as RPC config since
@@ -472,7 +472,7 @@ RAFT_TEST_CASE(rpc_configuration_truncate_restore_from_log, (test_case{
                         },
                 },
                 // all nodes in snapshot config {A, B, C, D} (original)
-                .snapshot = {.config  = address_set({node_id{0},node_id{1},node_id{2},node_id{3}})
+                .snapshot = {.config  = raft::configuration{address_set({node_id{0},node_id{1},node_id{2},node_id{3}})}
                 }
             }},
 
@@ -522,7 +522,7 @@ RAFT_TEST_CASE(rpc_configuration_truncate_restore_from_log, (test_case{
                         },
                 },
                 // all nodes in snapshot config {A, B, C, D} (original)
-                .snapshot = {.config  = address_set({node_id{0},node_id{1},node_id{2},node_id{3}})
+                .snapshot = {.config  = raft::configuration{address_set({node_id{0},node_id{1},node_id{2},node_id{3}})}
                 }
             }},
 

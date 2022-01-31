@@ -76,9 +76,9 @@ const log_entry& fsm::add_entry(T command) {
             // start another membership change once a majority of
             // the old cluster has moved to operating under the
             // rules of C_new.
-            logger.trace("A{}configuration change at index {} is not yet committed (commit_idx: {})",
-                _log.get_configuration().is_joint() ? " joint " : " ",
-                _log.last_conf_idx(), _commit_idx);
+            logger.trace("[{}] A{}configuration change at index {} is not yet committed (config {}) (commit_idx: {})",
+                _my_id, _log.get_configuration().is_joint() ? " joint " : " ",
+                _log.last_conf_idx(), _log.get_configuration(), _commit_idx);
             throw conf_change_in_progress();
         }
         // 4.3. Arbitrary configuration changes using joint consensus
@@ -91,6 +91,8 @@ const log_entry& fsm::add_entry(T command) {
         configuration tmp(_log.get_configuration());
         tmp.enter_joint(command.current);
         command = std::move(tmp);
+
+        logger.trace("[{}] appending joint config entry at {}: {}", _my_id, _log.next_idx().get_value(), command);
     }
 
     _log.emplace_back(seastar::make_lw_shared<log_entry>({_current_term, _log.next_idx(), std::move(command)}));
@@ -421,7 +423,7 @@ void fsm::maybe_commit() {
     _sm_events.signal();
 
     if (committed_conf_change) {
-        logger.trace("maybe_commit[{}]: committed conf change at idx {}", _my_id, _log.last_conf_idx());
+        logger.trace("maybe_commit[{}]: committed conf change at idx {} (config: {})", _my_id, _log.last_conf_idx(), _log.get_configuration());
         if (_log.get_configuration().is_joint()) {
             // 4.3. Arbitrary configuration changes using joint consensus
             //
@@ -429,6 +431,7 @@ void fsm::maybe_commit() {
             // system then transitions to the new configuration.
             configuration cfg(_log.get_configuration());
             cfg.leave_joint();
+            logger.trace("[{}] appending non-joint config entry at {}: {}", _my_id, _log.next_idx().get_value(), cfg);
             _log.emplace_back(seastar::make_lw_shared<log_entry>({_current_term, _log.next_idx(), std::move(cfg)}));
             leader_state().tracker.set_configuration(_log.get_configuration(), _log.last_idx());
             // Leaving joint configuration may commit more entries
@@ -610,7 +613,9 @@ void fsm::append_entries(server_id from, append_request&& request) {
         last_new_idx = _log.maybe_append(std::move(request.entries));
     }
 
-    advance_commit_idx(request.leader_commit_idx);
+    // Do not advance commit index further than last_new_idx, or we could incorrectly
+    // mark outdated entries as committed (see #9965).
+    advance_commit_idx(std::min(request.leader_commit_idx, last_new_idx));
 
     send_to(from, append_reply{_current_term, _commit_idx, append_reply::accepted{last_new_idx}});
 }
