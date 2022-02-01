@@ -2458,6 +2458,10 @@ class db_config_table final : public streaming_virtual_table {
         auto name = rs.row(0).get<sstring>("name");
         auto value = rs.row(0).get<sstring>("value");
 
+        if (!_cfg.enable_cql_config_updates()) {
+            return virtual_table::apply(fm); // will return back exceptional future
+        }
+
         if (!name) {
             return make_exception_future<>(virtual_table_update_exception("option name is required"));
         }
