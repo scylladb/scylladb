@@ -26,9 +26,9 @@ public:
     using runtime_error::runtime_error;
 };
 
-parsed::update_expression parse_update_expression(std::string query);
-std::vector<parsed::path> parse_projection_expression(std::string query);
-parsed::condition_expression parse_condition_expression(std::string query);
+parsed::update_expression parse_update_expression(std::string_view query);
+std::vector<parsed::path> parse_projection_expression(std::string_view query);
+parsed::condition_expression parse_condition_expression(std::string_view query);
 
 void resolve_update_expression(parsed::update_expression& ue,
         const rjson::value* expression_attribute_names,
