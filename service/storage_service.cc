@@ -1917,6 +1917,10 @@ future<> storage_service::decommission() {
                 throw;
             }
 
+            slogger.info("DECOMMISSIONING: leaving Raft group 0");
+            ss._group0->leave_group0().get();
+            slogger.info("DECOMMISSIONING: left Raft group 0");
+
             ss.stop_transport().get();
             slogger.info("DECOMMISSIONING: stopped transport");
 
@@ -1925,8 +1929,6 @@ future<> storage_service::decommission() {
             }).get();
             slogger.info("DECOMMISSIONING: stop batchlog_manager done");
 
-            // Leave Raft group 0
-            ss._group0->leave_group0().get();
             // StageManager.shutdownNow();
             db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::DECOMMISSIONED).get();
             slogger.info("DECOMMISSIONING: set_bootstrap_state done");
