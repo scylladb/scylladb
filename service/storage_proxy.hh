@@ -254,7 +254,7 @@ private:
     seastar::metrics::metric_groups _metrics;
     uint64_t _background_write_throttle_threahsold;
     inheriting_concrete_execution_stage<
-            future<>,
+            future<result<>>,
             storage_proxy*,
             std::vector<mutation>,
             db::consistency_level,
@@ -396,7 +396,7 @@ private:
 
     gms::inet_address find_leader_for_counter_update(const mutation& m, db::consistency_level cl);
 
-    future<> do_mutate(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, bool, lw_shared_ptr<cdc::operation_result_tracker> cdc_tracker);
+    future<result<>> do_mutate(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, bool, lw_shared_ptr<cdc::operation_result_tracker> cdc_tracker);
 
     future<> send_to_endpoint(
             std::unique_ptr<mutation_holder> m,
@@ -503,6 +503,13 @@ public:
     * @param tr_state trace state handle
     */
     future<> mutate(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, bool raw_counters = false);
+
+    /**
+    * See mutate. Does the same, but returns some exceptions
+    * through the result<>, which allows for efficient inspection
+    * of the exception on the exception handling path.
+    */
+    future<result<>> mutate_result(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, bool raw_counters = false);
 
     paxos_participants
     get_paxos_participants(const sstring& ks_name, const dht::token& token, db::consistency_level consistency_for_paxos);
