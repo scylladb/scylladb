@@ -2130,14 +2130,14 @@ future<result<>> storage_proxy::mutate_begin(unique_response_handler_vector ids,
 
 // this function should be called with a future that holds result of mutation attempt (usually
 // future returned by mutate_begin()). The future should be ready when function is called.
-future<> storage_proxy::mutate_end(future<> mutate_result, utils::latency_counter lc, write_stats& stats, tracing::trace_state_ptr trace_state) {
+future<> storage_proxy::mutate_end(future<result<>> mutate_result, utils::latency_counter lc, write_stats& stats, tracing::trace_state_ptr trace_state) {
     assert(mutate_result.available());
     stats.write.mark(lc.stop().latency());
     if (lc.is_start()) {
         stats.estimated_write.add(lc.latency());
     }
     try {
-        mutate_result.get();
+        mutate_result.get().value(); // .value() throws the error, if there is any
         tracing::trace(trace_state, "Mutation successfully completed");
         return make_ready_future<>();
     } catch (replica::no_such_keyspace& ex) {
@@ -2382,7 +2382,7 @@ storage_proxy::mutate_internal(Range mutations, db::consistency_level cl, bool c
         register_cdc_operation_result_tracker(ids, tracker);
         return mutate_begin(std::move(ids), cl, tr_state, timeout_opt).then(utils::result_into_future<result<>>);
     }).then_wrapped([this, p = shared_from_this(), lc, tr_state] (future<> f) mutable {
-        return p->mutate_end(std::move(f), lc, get_stats(), std::move(tr_state));
+        return p->mutate_end(utils::then_ok_result<result<>>(std::move(f)), lc, get_stats(), std::move(tr_state));
     });
 }
 
@@ -2506,7 +2506,7 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
       }
     };
     auto cleanup = [p = shared_from_this(), lc, tr_state] (future<> f) mutable {
-        return p->mutate_end(std::move(f), lc, p->get_stats(), std::move(tr_state));
+        return p->mutate_end(utils::then_ok_result<result<>>(std::move(f)), lc, p->get_stats(), std::move(tr_state));
     };
 
     if (_cdc && _cdc->needs_cdc_augmentation(mutations)) {
@@ -2599,7 +2599,7 @@ future<> storage_proxy::send_to_endpoint(
     }).then([this, cl, tr_state = std::move(tr_state), timeout = std::move(timeout)] (unique_response_handler_vector ids) mutable {
         return mutate_begin(std::move(ids), cl, std::move(tr_state), std::move(timeout)).then(utils::result_into_future<result<>>);
     }).then_wrapped([p = shared_from_this(), lc, &stats] (future<>&& f) {
-        return p->mutate_end(std::move(f), lc, stats, nullptr);
+        return p->mutate_end(utils::then_ok_result<result<>>(std::move(f)), lc, stats, nullptr);
     });
 }
 
