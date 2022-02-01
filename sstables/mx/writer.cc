@@ -935,7 +935,8 @@ void writer::drain_tombstones(std::optional<position_in_partition_view> pos) {
     while (auto mfo = get_next_rt()) {
         range_tombstone rt {std::move(mfo)->as_range_tombstone()};
 
-        _collector.update_min_max_components(rt);
+        _collector.update_min_max_components(rt.position());
+        _collector.update_min_max_components(rt.end_position());
 
         bool need_write_start = true;
         if (_end_open_marker) {
@@ -1022,7 +1023,8 @@ void writer::consume(tombstone t) {
     _tombstone_written = true;
 
     if (t) {
-        _collector.update_min_max_components(clustering_key_prefix::make_empty(_schema));
+        _collector.update_min_max_components(position_in_partition_view::before_all_clustered_rows());
+        _collector.update_min_max_components(position_in_partition_view::after_all_clustered_rows());
     }
 }
 
@@ -1336,7 +1338,7 @@ void writer::write_clustered(const clustering_row& clustered_row, uint64_t prev_
     flush_tmp_bufs();
 
     // Collect statistics
-    _collector.update_min_max_components(clustered_row.key());
+    _collector.update_min_max_components(clustered_row.position());
     collect_row_stats(_data_writer->offset() - current_pos, &clustered_row.key());
 }
 

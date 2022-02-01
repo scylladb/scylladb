@@ -19,10 +19,9 @@
 #include "hyperloglog.hh"
 #include "db/commitlog/replay_position.hh"
 #include "clustering_bounds_comparator.hh"
+#include "position_in_partition.hh"
 
 #include <algorithm>
-
-class range_tombstone;
 
 namespace sstables {
 
@@ -136,8 +135,8 @@ private:
     double _compression_ratio = NO_COMPRESSION_RATIO;
     utils::streaming_histogram _estimated_tombstone_drop_time{TOMBSTONE_HISTOGRAM_BIN_SIZE};
     int _sstable_level = 0;
-    std::optional<clustering_key_prefix> _min_clustering_key;
-    std::optional<clustering_key_prefix> _max_clustering_key;
+    std::optional<position_in_partition> _min_clustering_pos;
+    std::optional<position_in_partition> _max_clustering_pos;
     bool _has_legacy_counter_shards = false;
     uint64_t _columns_count = 0;
     uint64_t _rows_count = 0;
@@ -150,7 +149,7 @@ private:
      */
     hll::HyperLogLog _cardinality = hyperloglog(13, 25);
 private:
-    void convert(disk_array<uint32_t, disk_string<uint16_t>>&to, const std::optional<clustering_key_prefix>& from);
+    void convert(disk_array<uint32_t, disk_string<uint16_t>>&to, const std::optional<position_in_partition>& from);
 public:
     explicit metadata_collector(const schema& schema, sstring name, const utils::UUID& host_id)
         : _schema(schema)
@@ -158,9 +157,8 @@ public:
         , _host_id(host_id)
     {
         if (!schema.clustering_key_size()) {
-            // Empty min/max components represent the full range
-            // And so they will never be narrowed down.
-            update_min_max_components(clustering_key_prefix::make_empty(_schema));
+            _min_clustering_pos.emplace(position_in_partition_view::before_all_clustered_rows());
+            _max_clustering_pos.emplace(position_in_partition_view::after_all_clustered_rows());
         }
     }
 
@@ -209,9 +207,8 @@ public:
         _has_legacy_counter_shards = _has_legacy_counter_shards || has_legacy_counter_shards;
     }
 
-    void update_min_max_components(const clustering_key_prefix& key);
-
-    void update_min_max_components(const range_tombstone& rt);
+    // pos must be in the clustered region
+    void update_min_max_components(position_in_partition_view pos);
 
     void update(column_stats&& stats) {
         _timestamp_tracker.update(stats.timestamp_tracker);
@@ -244,8 +241,8 @@ public:
         m.estimated_tombstone_drop_time = std::move(_estimated_tombstone_drop_time);
         m.sstable_level = _sstable_level;
         m.repaired_at = _repaired_at;
-        convert(m.min_column_names, _min_clustering_key);
-        convert(m.max_column_names, _max_clustering_key);
+        convert(m.min_column_names, _min_clustering_pos);
+        convert(m.max_column_names, _max_clustering_pos);
         m.has_legacy_counter_shards = _has_legacy_counter_shards;
         m.columns_count = _columns_count;
         m.rows_count = _rows_count;
