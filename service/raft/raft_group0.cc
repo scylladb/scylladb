@@ -299,7 +299,12 @@ future<group0_peer_exchange> raft_group0::peer_exchange(discovery::peer_list pee
             co_return group0_peer_exchange{std::monostate{}};
         } else if constexpr (std::is_same_v<T, discovery>) {
             // Use discovery to produce a response
-            co_return group0_peer_exchange{d.request(std::move(peers))};
+            if (auto response = d.request(std::move(peers))) {
+                co_return group0_peer_exchange{std::move(*response)};
+            }
+            // We just became a leader.
+            // Eventually we'll answer with group0_info.
+            co_return group0_peer_exchange{std::monostate{}};
         } else if constexpr (std::is_same_v<T, raft::group_id>) {
             // Even if in follower state, return own address: the
             // incoming RPC will then be bounced to the leader.

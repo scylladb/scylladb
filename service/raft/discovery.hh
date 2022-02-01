@@ -86,10 +86,10 @@ public:
     discovery(raft::server_address self, const peer_list& seeds);
 
     // To be used on the receiving peer to generate a reply
-    // while the discovery protocol is in progress. Always
-    // returns a peer list, even if this node is a leader,
-    // since leader state must be persisted first.
-    peer_list request(const peer_list& peers);
+    // while the discovery protocol is in progress.
+    // Until the node becomes a leader, returns the list of known peers.
+    // When (if) the node becomes a leader, returns std::nullopt.
+    std::optional<peer_list> request(const peer_list& peers);
 
     // Submit a reply from one of the peers to this discovery
     // state machine. If this node is a leader, resposne is

@@ -34,7 +34,9 @@ run_discovery_impl(discovery_network& network) {
                     continue;
                 }
                 discovery& to = *(it->second);
-                from.response(m.first, to.request(m.second));
+                if (auto peer_list = to.request(m.second)) {
+                    from.response(m.first, std::move(*peer_list));
+                }
             }
         }
     }

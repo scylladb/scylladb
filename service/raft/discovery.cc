@@ -93,8 +93,11 @@ void discovery::maybe_become_leader() {
     }
 }
 
-discovery::peer_list discovery::request(const peer_list& peers) {
+std::optional<discovery::peer_list> discovery::request(const peer_list& peers) {
     step(peers);
+    if (_is_leader) {
+        return std::nullopt;
+    }
     return _peer_list;
 }
 
