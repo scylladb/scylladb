@@ -501,6 +501,7 @@ scylla_tests = set([
     'test/boost/schema_loader_test',
     'test/boost/lister_test',
     'test/boost/group0_test',
+    'test/boost/exception_container_test',
     'test/manual/ec2_snitch_test',
     'test/manual/enormous_table_scan_test',
     'test/manual/gce_snitch_test',
