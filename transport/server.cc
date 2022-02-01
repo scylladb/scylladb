@@ -409,7 +409,7 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
 
         auto wrap_in_foreign = [] (future<std::unique_ptr<cql_server::response>> f) {
             return f.then([] (std::unique_ptr<cql_server::response> p) {
-                return make_ready_future<foreign_ptr<std::unique_ptr<cql_server::response>>>(make_foreign(std::move(p)));
+                return make_ready_future<result_with_foreign_response_ptr>(make_foreign(std::move(p)));
             });
         };
         auto in = request_reader(std::move(fbuf), *linearization_buffer_ptr);
@@ -424,13 +424,13 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
         case cql_binary_opcode::REGISTER:      return wrap_in_foreign(process_register(stream, std::move(in), client_state, trace_state));
         default:                               throw exceptions::protocol_exception(format("Unknown opcode {:d}", int(cqlop)));
         }
-    }).then_wrapped([this, cqlop, stream, &client_state, linearization_buffer = std::move(linearization_buffer), trace_state] (future<foreign_ptr<std::unique_ptr<cql_server::response>>> f) -> foreign_ptr<std::unique_ptr<cql_server::response>> {
+    }).then_wrapped([this, cqlop, stream, &client_state, linearization_buffer = std::move(linearization_buffer), trace_state] (future<result_with_foreign_response_ptr> f) -> foreign_ptr<std::unique_ptr<cql_server::response>> {
         auto stop_trace = defer([&] {
             tracing::stop_foreground(trace_state);
         });
         --_server._stats.requests_serving;
         try {
-            foreign_ptr<std::unique_ptr<cql_server::response>> response = f.get0();
+            foreign_ptr<std::unique_ptr<cql_server::response>> response = f.get0().value(); // TODO: This throws, handle it without throwing
 
             auto res_op = response->opcode();
 
@@ -852,7 +852,7 @@ make_result(int16_t stream, messages::result_message& msg, const tracing::trace_
         cql_protocol_version_type version, bool skip_metadata = false);
 
 template<typename Process>
-future<foreign_ptr<std::unique_ptr<cql_server::response>>>
+future<cql_server::result_with_foreign_response_ptr>
 cql_server::connection::process_on_shard(::shared_ptr<messages::result_message::bounce_to_shard> bounce_msg, uint16_t stream, fragmented_temporary_buffer::istream is,
         service::client_state& cs, service_permit permit, tracing::trace_state_ptr trace_state, Process process_fn) {
     return _server.container().invoke_on(*bounce_msg->move_to_shard(), _server._config.bounce_request_smp_service_group,
@@ -869,22 +869,22 @@ cql_server::connection::process_on_shard(::shared_ptr<messages::result_message::
             return process_fn(client_state, server._query_processor, in, stream, _version, _cql_serialization_format,
                     /* FIXME */empty_service_permit(), std::move(trace_state), false, std::move(cached_vals)).then([] (auto msg) {
                 // result here has to be foreign ptr
-                return std::get<coordinator_result<foreign_ptr<std::unique_ptr<cql_server::response>>>>(std::move(msg)).value();
+                return std::get<cql_server::result_with_foreign_response_ptr>(std::move(msg));
             });
         });
     });
 }
 
 using process_fn_return_type = std::variant<
-    coordinator_result<foreign_ptr<std::unique_ptr<cql_server::response>>>,
+    cql_server::result_with_foreign_response_ptr,
     ::shared_ptr<messages::result_message::bounce_to_shard>>;
 
-static inline coordinator_result<foreign_ptr<std::unique_ptr<cql_server::response>>> convert_error_message_to_coordinator_result(messages::result_message* msg) {
+static inline cql_server::result_with_foreign_response_ptr convert_error_message_to_coordinator_result(messages::result_message* msg) {
     return std::move(*dynamic_cast<messages::result_message::exception*>(msg)).get_exception();
 }
 
 template<typename Process>
-future<foreign_ptr<std::unique_ptr<cql_server::response>>>
+future<cql_server::result_with_foreign_response_ptr>
 cql_server::connection::process(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit,
         tracing::trace_state_ptr trace_state, Process process_fn) {
     fragmented_temporary_buffer::istream is = in.get_stream();
@@ -897,8 +897,8 @@ cql_server::connection::process(uint16_t stream, request_reader in, service::cli
         if (bounce_msg) {
             return process_on_shard(*bounce_msg, stream, is, client_state, std::move(permit), trace_state, process_fn);
         }
-        auto ptr = std::get<coordinator_result<foreign_ptr<std::unique_ptr<cql_server::response>>>>(std::move(msg)).value();
-        return make_ready_future<foreign_ptr<std::unique_ptr<cql_server::response>>>(std::move(ptr));
+        auto ptr = std::get<cql_server::result_with_foreign_response_ptr>(std::move(msg));
+        return make_ready_future<cql_server::result_with_foreign_response_ptr>(std::move(ptr));
     });
 }
 
@@ -938,7 +938,7 @@ process_query_internal(service::client_state& client_state, distributed<cql3::qu
     });
 }
 
-future<foreign_ptr<std::unique_ptr<cql_server::response>>>
+future<cql_server::result_with_foreign_response_ptr>
 cql_server::connection::process_query(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit, tracing::trace_state_ptr trace_state) {
     ++_server._stats.query_requests;
     return process(stream, in, client_state, std::move(permit), std::move(trace_state), process_query_internal);
@@ -1052,7 +1052,7 @@ process_execute_internal(service::client_state& client_state, distributed<cql3::
     });
 }
 
-future<foreign_ptr<std::unique_ptr<cql_server::response>>> cql_server::connection::process_execute(uint16_t stream, request_reader in,
+future<cql_server::result_with_foreign_response_ptr> cql_server::connection::process_execute(uint16_t stream, request_reader in,
         service::client_state& client_state, service_permit permit, tracing::trace_state_ptr trace_state) {
     ++_server._stats.execute_requests;
     return process(stream, in, client_state, std::move(permit), std::move(trace_state), process_execute_internal);
@@ -1177,7 +1177,7 @@ process_batch_internal(service::client_state& client_state, distributed<cql3::qu
     });
 }
 
-future<foreign_ptr<std::unique_ptr<cql_server::response>>>
+future<cql_server::result_with_foreign_response_ptr>
 cql_server::connection::process_batch(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit,
         tracing::trace_state_ptr trace_state) {
     ++_server._stats.batch_requests;
