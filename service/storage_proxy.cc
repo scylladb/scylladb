@@ -2391,9 +2391,9 @@ storage_proxy::mutate_internal(Range mutations, db::consistency_level cl, bool c
     return mutate_prepare(mutations, cl, type, tr_state, std::move(permit)).then([this, cl, timeout_opt, tracker = std::move(cdc_tracker),
             tr_state] (storage_proxy::unique_response_handler_vector ids) mutable {
         register_cdc_operation_result_tracker(ids, tracker);
-        return mutate_begin(std::move(ids), cl, tr_state, timeout_opt).then(utils::result_into_future<result<>>);
-    }).then_wrapped([this, p = shared_from_this(), lc, tr_state] (future<> f) mutable {
-        return p->mutate_end(utils::then_ok_result<result<>>(std::move(f)), lc, get_stats(), std::move(tr_state)).then(utils::result_into_future<result<>>);
+        return mutate_begin(std::move(ids), cl, tr_state, timeout_opt);
+    }).then_wrapped([this, p = shared_from_this(), lc, tr_state] (future<result<>> f) mutable {
+        return p->mutate_end(std::move(f), lc, get_stats(), std::move(tr_state)).then(utils::result_into_future<result<>>);
     });
 }
 
@@ -2470,16 +2470,16 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
                 tracing::set_batchlog_endpoints(_trace_state, _batchlog_endpoints);
         }
 
-        future<> send_batchlog_mutation(mutation m, db::consistency_level cl = db::consistency_level::ONE) {
+        future<result<>> send_batchlog_mutation(mutation m, db::consistency_level cl = db::consistency_level::ONE) {
             return _p.mutate_prepare<>(std::array<mutation, 1>{std::move(m)}, cl, db::write_type::BATCH_LOG, _permit, [this] (const mutation& m, db::consistency_level cl, db::write_type type, service_permit permit) {
                 auto& ks = _p._db.local().find_keyspace(m.schema()->ks_name());
                 return _p.create_write_response_handler(ks, cl, type, std::make_unique<shared_mutation>(m), _batchlog_endpoints, {}, {}, _trace_state, _stats, std::move(permit));
             }).then([this, cl] (unique_response_handler_vector ids) {
                 _p.register_cdc_operation_result_tracker(ids, _cdc_tracker);
-                return _p.mutate_begin(std::move(ids), cl, _trace_state, _timeout).then(utils::result_into_future<result<>>);
+                return _p.mutate_begin(std::move(ids), cl, _trace_state, _timeout);
             });
         }
-        future<> sync_write_to_batchlog() {
+        future<result<>> sync_write_to_batchlog() {
             auto m = _p.get_batchlog_mutation_for(_mutations, _batch_uuid, netw::messaging_service::current_version, db_clock::now());
             tracing::trace(_trace_state, "Sending a batchlog write mutation");
             return send_batchlog_mutation(std::move(m));
@@ -2493,18 +2493,27 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
             m.partition().apply_delete(*schema, clustering_key_prefix::make_empty(), tombstone(now, gc_clock::now()));
 
             tracing::trace(_trace_state, "Sending a batchlog remove mutation");
-            return send_batchlog_mutation(std::move(m), db::consistency_level::ANY).handle_exception([] (std::exception_ptr eptr) {
-                slogger.error("Failed to remove mutations from batchlog: {}", eptr);
+            return send_batchlog_mutation(std::move(m), db::consistency_level::ANY).then_wrapped([] (future<result<>> f) {
+                auto print_exception = [] (const auto& ex) {
+                    slogger.error("Failed to remove mutations from batchlog: {}", ex);
+                };
+                if (f.failed()) {
+                    print_exception(f.get_exception());
+                } else if (result<> res = f.get(); !res) {
+                    print_exception(res.assume_error());
+                }
             });
         };
 
-        future<> run() {
+        future<result<>> run() {
             return _p.mutate_prepare(_mutations, _cl, db::write_type::BATCH, _trace_state, _permit).then([this] (unique_response_handler_vector ids) {
-                return sync_write_to_batchlog().then([this, ids = std::move(ids)] () mutable {
+                return sync_write_to_batchlog().then(utils::result_wrap([this, ids = std::move(ids)] () mutable {
                     tracing::trace(_trace_state, "Sending batch mutations");
                     _p.register_cdc_operation_result_tracker(ids, _cdc_tracker);
-                    return _p.mutate_begin(std::move(ids), _cl, _trace_state, _timeout).then(utils::result_into_future<result<>>);
-                }).then(std::bind(&context::async_remove_from_batchlog, this));
+                    return _p.mutate_begin(std::move(ids), _cl, _trace_state, _timeout);
+                })).then(utils::result_wrap([this] {
+                    return utils::then_ok_result<result<>>(async_remove_from_batchlog());
+                }));
             });
         }
     };
@@ -2516,8 +2525,8 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
           return make_exception_future<lw_shared_ptr<context>>(std::current_exception());
       }
     };
-    auto cleanup = [p = shared_from_this(), lc, tr_state] (future<> f) mutable {
-        return p->mutate_end(utils::then_ok_result<result<>>(std::move(f)), lc, p->get_stats(), std::move(tr_state)).then(utils::result_into_future<result<>>);
+    auto cleanup = [p = shared_from_this(), lc, tr_state] (future<result<>> f) mutable {
+        return p->mutate_end(std::move(f), lc, p->get_stats(), std::move(tr_state)).then(utils::result_into_future<result<>>);
     };
 
     if (_cdc && _cdc->needs_cdc_augmentation(mutations)) {
@@ -2608,9 +2617,9 @@ future<> storage_proxy::send_to_endpoint(
             stats,
             std::move(permit));
     }).then([this, cl, tr_state = std::move(tr_state), timeout = std::move(timeout)] (unique_response_handler_vector ids) mutable {
-        return mutate_begin(std::move(ids), cl, std::move(tr_state), std::move(timeout)).then(utils::result_into_future<result<>>);
-    }).then_wrapped([p = shared_from_this(), lc, &stats] (future<>&& f) {
-        return p->mutate_end(utils::then_ok_result<result<>>(std::move(f)), lc, stats, nullptr).then(utils::result_into_future<result<>>);
+        return mutate_begin(std::move(ids), cl, std::move(tr_state), std::move(timeout));
+    }).then_wrapped([p = shared_from_this(), lc, &stats] (future<result<>> f) {
+        return p->mutate_end(std::move(f), lc, stats, nullptr).then(utils::result_into_future<result<>>);
     });
 }
 
