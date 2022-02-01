@@ -2432,7 +2432,12 @@ storage_proxy::mutate_with_triggers(std::vector<mutation> mutations, db::consist
  */
 future<>
 storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit) {
+    return mutate_atomically_result(std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit))
+            .then(utils::result_into_future<result<>>);
+}
 
+future<result<>>
+storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit) {
     utils::latency_counter lc;
     lc.start();
 
@@ -2538,7 +2543,7 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
       }
     };
     auto cleanup = [p = shared_from_this(), lc, tr_state] (future<result<>> f) mutable {
-        return p->mutate_end(std::move(f), lc, p->get_stats(), std::move(tr_state)).then(utils::result_into_future<result<>>);
+        return p->mutate_end(std::move(f), lc, p->get_stats(), std::move(tr_state));
     };
 
     if (_cdc && _cdc->needs_cdc_augmentation(mutations)) {

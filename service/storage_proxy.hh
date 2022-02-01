@@ -532,6 +532,13 @@ public:
     */
     future<> mutate_atomically(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit);
 
+    /**
+    * See mutate_atomically. Does the same, but returns some exceptions
+    * through the result<>, which allows for efficient inspection
+    * of the exception on the exception handling path.
+    */
+    future<result<>> mutate_atomically_result(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit);
+
     future<> send_hint_to_all_replicas(frozen_mutation_and_schema fm_a_s);
 
     // Send a mutation to one specific remote target.
