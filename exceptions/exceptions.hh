@@ -19,6 +19,9 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/print.hh>
 #include "bytes.hh"
+#include <boost/outcome/result.hpp>
+#include "utils/exception_container.hh"
+#include "utils/result.hh"
 
 namespace exceptions {
 
@@ -330,5 +333,28 @@ public:
         , args(std::move(args_))
     { }
 };
+
+// Allows to pass a coordinator exception as a value. With coordinator_result,
+// it is possible to handle exceptions and inspect their type/value without
+// resorting to costly rethrows. On the other hand, using them is more
+// cumbersome than just using exceptions and exception futures.
+//
+// Not all exceptions are passed in this way, therefore the container
+// does not allow all types of coordinator exceptions. On the other hand,
+// an exception being listed here does not mean it is _always_ passed
+// in an exception_container - it can be thrown in a regular fashion
+// as well.
+//
+// It is advised to use this mechanism mainly for exceptions which can
+// happen frequently, e.g. signalling timeouts, overloads or rate limits.
+using coordinator_exception_container = utils::exception_container<
+    mutation_write_timeout_exception
+>;
+
+template<typename T = void>
+using coordinator_result = bo::result<T,
+    coordinator_exception_container,
+    utils::exception_container_throw_policy
+>;
 
 }
