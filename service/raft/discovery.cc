@@ -107,7 +107,7 @@ void discovery::response(raft::server_address from, const peer_list& peers) {
     step(peers);
 }
 
-discovery::output discovery::get_output() {
+discovery::output discovery::tick() {
     if (_is_leader) {
         return i_am_leader{};
     } else if (!_requests.empty()) {

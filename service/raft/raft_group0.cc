@@ -116,7 +116,7 @@ raft_group0::discover_group0(raft::server_address my_addr) {
     // creates a group and shares its group 0 id and peer address
     // with us.
     while (true) {
-        auto tracker = make_lw_shared<struct tracker>(std::get<discovery>(_group0).get_output());
+        auto tracker = make_lw_shared<struct tracker>(std::get<discovery>(_group0).tick());
         if (std::holds_alternative<discovery::i_am_leader>(tracker->output)) {
             co_return group0_info{
                 // Time-based ordering for groups identifiers may be

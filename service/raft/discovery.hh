@@ -41,7 +41,7 @@ public:
     struct i_am_leader {};
     struct pause {};
     using request_list = std::vector<std::pair<raft::server_address, peer_list>>;
-    // @sa discovery::get_output()
+    // @sa discovery::tick()
     using output = std::variant<i_am_leader, pause, request_list>;
 private:
     raft::server_address _self;
@@ -102,7 +102,7 @@ public:
     // a leader, and then a list of messages for all peers which
     // can be used to find the leader. If this node is a leader,
     // returns leader{}.
-    discovery::output get_output();
+    discovery::output tick();
 
     // A helper for testing.
     bool is_leader() { return _is_leader; }
