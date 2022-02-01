@@ -58,6 +58,9 @@
 #include "utils/bit_cast.hh"
 #include "db/config.hh"
 
+template<typename T = void>
+using coordinator_result = exceptions::coordinator_result<T>;
+
 namespace cql_transport {
 
 static logging::logger clogger("cql_server");
@@ -866,15 +869,19 @@ cql_server::connection::process_on_shard(::shared_ptr<messages::result_message::
             return process_fn(client_state, server._query_processor, in, stream, _version, _cql_serialization_format,
                     /* FIXME */empty_service_permit(), std::move(trace_state), false, std::move(cached_vals)).then([] (auto msg) {
                 // result here has to be foreign ptr
-                return std::get<foreign_ptr<std::unique_ptr<cql_server::response>>>(std::move(msg));
+                return std::get<coordinator_result<foreign_ptr<std::unique_ptr<cql_server::response>>>>(std::move(msg)).value();
             });
         });
     });
 }
 
 using process_fn_return_type = std::variant<
-    foreign_ptr<std::unique_ptr<cql_server::response>>,
+    coordinator_result<foreign_ptr<std::unique_ptr<cql_server::response>>>,
     ::shared_ptr<messages::result_message::bounce_to_shard>>;
+
+static inline coordinator_result<foreign_ptr<std::unique_ptr<cql_server::response>>> convert_error_message_to_coordinator_result(messages::result_message* msg) {
+    return std::move(*dynamic_cast<messages::result_message::exception*>(msg)).get_exception();
+}
 
 template<typename Process>
 future<foreign_ptr<std::unique_ptr<cql_server::response>>>
@@ -890,7 +897,8 @@ cql_server::connection::process(uint16_t stream, request_reader in, service::cli
         if (bounce_msg) {
             return process_on_shard(*bounce_msg, stream, is, client_state, std::move(permit), trace_state, process_fn);
         }
-        return make_ready_future<foreign_ptr<std::unique_ptr<cql_server::response>>>(std::get<foreign_ptr<std::unique_ptr<cql_server::response>>>(std::move(msg)));
+        auto ptr = std::get<coordinator_result<foreign_ptr<std::unique_ptr<cql_server::response>>>>(std::move(msg)).value();
+        return make_ready_future<foreign_ptr<std::unique_ptr<cql_server::response>>>(std::move(ptr));
     });
 }
 
@@ -918,9 +926,11 @@ process_query_internal(service::client_state& client_state, distributed<cql3::qu
         tracing::begin(trace_state, "Execute CQL3 query", client_state.get_client_address());
     }
 
-    return qp.local().execute_direct(query, query_state, options).then([q_state = std::move(q_state), stream, skip_metadata, version] (auto msg) {
+    return qp.local().execute_direct_without_checking_exception_message(query, query_state, options).then([q_state = std::move(q_state), stream, skip_metadata, version] (auto msg) {
         if (msg->move_to_shard()) {
             return process_fn_return_type(dynamic_pointer_cast<messages::result_message::bounce_to_shard>(msg));
+        } else if (msg->is_exception()) {
+            return process_fn_return_type(convert_error_message_to_coordinator_result(msg.get()));
         } else {
             tracing::trace(q_state->query_state.get_trace_state(), "Done processing - preparing a result");
             return process_fn_return_type(make_foreign(make_result(stream, *msg, q_state->query_state.get_trace_state(), version, skip_metadata)));
@@ -1029,10 +1039,12 @@ process_execute_internal(service::client_state& client_state, distributed<cql3::
     }
 
     tracing::trace(trace_state, "Processing a statement");
-    return qp.local().execute_prepared(std::move(prepared), std::move(cache_key), query_state, options, needs_authorization)
+    return qp.local().execute_prepared_without_checking_exception_message(std::move(prepared), std::move(cache_key), query_state, options, needs_authorization)
             .then([trace_state = query_state.get_trace_state(), skip_metadata, q_state = std::move(q_state), stream, version] (auto msg) {
         if (msg->move_to_shard()) {
             return process_fn_return_type(dynamic_pointer_cast<messages::result_message::bounce_to_shard>(msg));
+        } else if (msg->is_exception()) {
+            return process_fn_return_type(convert_error_message_to_coordinator_result(msg.get()));
         } else {
             tracing::trace(q_state->query_state.get_trace_state(), "Done processing - preparing a result");
             return process_fn_return_type(make_foreign(make_result(stream, *msg, q_state->query_state.get_trace_state(), version, skip_metadata)));
@@ -1152,10 +1164,12 @@ process_batch_internal(service::client_state& client_state, distributed<cql3::qu
     }
 
     auto batch = ::make_shared<cql3::statements::batch_statement>(cql3::statements::batch_statement::type(type), std::move(modifications), cql3::attributes::none(), qp.local().get_cql_stats());
-    return qp.local().execute_batch(batch, query_state, options, std::move(pending_authorization_entries))
+    return qp.local().execute_batch_without_checking_exception_message(batch, query_state, options, std::move(pending_authorization_entries))
             .then([stream, batch, q_state = std::move(q_state), trace_state = query_state.get_trace_state(), version] (auto msg) {
         if (msg->move_to_shard()) {
             return process_fn_return_type(dynamic_pointer_cast<messages::result_message::bounce_to_shard>(msg));
+        } else if (msg->is_exception()) {
+            return process_fn_return_type(convert_error_message_to_coordinator_result(msg.get()));
         } else {
             tracing::trace(q_state->query_state.get_trace_state(), "Done processing - preparing a result");
             return process_fn_return_type(make_foreign(make_result(stream, *msg, trace_state, version)));
