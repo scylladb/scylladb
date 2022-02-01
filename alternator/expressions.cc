@@ -29,7 +29,7 @@
 namespace alternator {
 
 template <typename Func, typename Result = std::result_of_t<Func(expressionsParser&)>>
-Result do_with_parser(std::string input, Func&& f) {
+Result do_with_parser(std::string_view input, Func&& f) {
     expressionsLexer::InputStreamType input_stream{
         reinterpret_cast<const ANTLR_UINT8*>(input.data()),
         ANTLR_ENC_UTF8,
@@ -44,7 +44,7 @@ Result do_with_parser(std::string input, Func&& f) {
 }
 
 parsed::update_expression
-parse_update_expression(std::string query) {
+parse_update_expression(std::string_view query) {
     try {
         return do_with_parser(query,  std::mem_fn(&expressionsParser::update_expression));
     } catch (...) {
@@ -53,7 +53,7 @@ parse_update_expression(std::string query) {
 }
 
 std::vector<parsed::path>
-parse_projection_expression(std::string query) {
+parse_projection_expression(std::string_view query) {
     try {
         return do_with_parser(query,  std::mem_fn(&expressionsParser::projection_expression));
     } catch (...) {
@@ -62,7 +62,7 @@ parse_projection_expression(std::string query) {
 }
 
 parsed::condition_expression
-parse_condition_expression(std::string query) {
+parse_condition_expression(std::string_view query) {
     try {
         return do_with_parser(query,  std::mem_fn(&expressionsParser::condition_expression));
     } catch (...) {

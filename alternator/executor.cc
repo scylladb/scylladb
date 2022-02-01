@@ -1565,7 +1565,7 @@ static parsed::condition_expression get_parsed_condition_expression(rjson::value
         throw api_error::validation("ConditionExpression must not be empty");
     }
     try {
-        return parse_condition_expression(condition_expression->GetString());
+        return parse_condition_expression(rjson::to_string_view(*condition_expression));
     } catch(expressions_syntax_error& e) {
         throw api_error::validation(e.what());
     }
@@ -2179,7 +2179,7 @@ static attrs_to_get calculate_attrs_to_get(const rjson::value& req, std::unorder
         const rjson::value* expression_attribute_names = rjson::find(req, "ExpressionAttributeNames");
         std::vector<parsed::path> paths_to_get;
         try {
-            paths_to_get = parse_projection_expression(projection_expression.GetString());
+            paths_to_get = parse_projection_expression(rjson::to_string_view(projection_expression));
         } catch(expressions_syntax_error& e) {
             throw api_error::validation(e.what());
         }
@@ -2360,7 +2360,7 @@ update_item_operation::update_item_operation(service::storage_proxy& proxy, rjso
             throw api_error::validation("UpdateExpression must be a string");
         }
         try {
-            parsed::update_expression expr = parse_update_expression(update_expression->GetString());
+            parsed::update_expression expr = parse_update_expression(rjson::to_string_view(*update_expression));
             resolve_update_expression(expr,
                     expression_attribute_names, expression_attribute_values,
                     used_attribute_names, used_attribute_values);
@@ -3265,9 +3265,7 @@ filter::filter(const rjson::value& request, request_type rt,
             throw api_error::validation("Cannot use both old-style and new-style parameters in same request: FilterExpression and AttributesToGet");
         }
         try {
-            // FIXME: make parse_condition_expression take string_view, get
-            // rid of the silly conversion to std::string.
-            auto parsed = parse_condition_expression(std::string(rjson::to_string_view(*expression)));
+            auto parsed = parse_condition_expression(rjson::to_string_view(*expression));
             const rjson::value* expression_attribute_names = rjson::find(request, "ExpressionAttributeNames");
             const rjson::value* expression_attribute_values = rjson::find(request, "ExpressionAttributeValues");
             resolve_condition_expression(parsed,
@@ -3871,7 +3869,7 @@ calculate_bounds_condition_expression(schema_ptr schema,
     // sort-key range.
     parsed::condition_expression p;
     try {
-        p = parse_condition_expression(std::string(rjson::to_string_view(expression)));
+        p = parse_condition_expression(rjson::to_string_view(expression));
     } catch(expressions_syntax_error& e) {
         throw api_error::validation(e.what());
     }
