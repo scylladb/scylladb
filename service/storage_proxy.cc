@@ -888,7 +888,8 @@ paxos_response_handler::begin_and_repair_paxos(client_state& cs, unsigned& conte
             // create_write_response_handler is overloaded for paxos::proposal and will
             // create cas_mutation holder, which consequently will ensure paxos::learn is
             // used.
-            auto f = _proxy->mutate_internal(std::move(m), db::consistency_level::ANY, false, tr_state, _permit, _timeout);
+            auto f = _proxy->mutate_internal(std::move(m), db::consistency_level::ANY, false, tr_state, _permit, _timeout)
+                    .then(utils::result_into_future<result<>>);
 
             // TODO: provided commits did not invalidate the prepare we just did above (which they
             // didn't), we could just wait for all the missing most recent commits to
@@ -1238,14 +1239,16 @@ future<> paxos_response_handler::learn_decision(lw_shared_ptr<paxos::proposal> d
                 if (mutations.empty()) {
                     return make_ready_future<>();
                 }
-                return _proxy->mutate_internal(std::move(mutations), _cl_for_learn, false, tr_state, _permit, _timeout, std::move(tracker));
+                return _proxy->mutate_internal(std::move(mutations), _cl_for_learn, false, tr_state, _permit, _timeout, std::move(tracker))
+                        .then(utils::result_into_future<result<>>);
             });
         }
     }
 
     // Path for the "base" mutations
     std::array<std::tuple<lw_shared_ptr<paxos::proposal>, schema_ptr, shared_ptr<paxos_response_handler>, dht::token>, 1> m{std::make_tuple(std::move(decision), _schema, shared_from_this(), _key.token())};
-    future<> f_lwt = _proxy->mutate_internal(std::move(m), _cl_for_learn, false, tr_state, _permit, _timeout);
+    future<> f_lwt = _proxy->mutate_internal(std::move(m), _cl_for_learn, false, tr_state, _permit, _timeout)
+            .then(utils::result_into_future<result<>>);
 
     return when_all_succeed(std::move(f_cdc), std::move(f_lwt)).discard_result();
 }
@@ -2354,13 +2357,15 @@ future<> storage_proxy::do_mutate(std::vector<mutation> mutations, db::consisten
     return seastar::when_all_succeed(
         mutate_counters(boost::make_iterator_range(mutations.begin(), mid), cl, tr_state, permit, timeout),
         mutate_internal(boost::make_iterator_range(mid, mutations.end()), cl, false, tr_state, permit, timeout, std::move(cdc_tracker))
+                .then(utils::result_into_future<result<>>)
     ).discard_result();
 }
 
 future<> storage_proxy::replicate_counter_from_leader(mutation m, db::consistency_level cl, tracing::trace_state_ptr tr_state,
                                                       clock_type::time_point timeout, service_permit permit) {
     // FIXME: do not send the mutation to itself, it has already been applied (it is not incorrect to do so, though)
-    return mutate_internal(std::array<mutation, 1>{std::move(m)}, cl, true, std::move(tr_state), std::move(permit), timeout);
+    return mutate_internal(std::array<mutation, 1>{std::move(m)}, cl, true, std::move(tr_state), std::move(permit), timeout)
+            .then(utils::result_into_future<result<>>);
 }
 
 /*
@@ -2369,11 +2374,11 @@ future<> storage_proxy::replicate_counter_from_leader(mutation m, db::consistenc
  * endpoints to send mutation to, the one for the late uses enpoints that are used as keys for the map.
  */
 template<typename Range>
-future<>
+future<result<>>
 storage_proxy::mutate_internal(Range mutations, db::consistency_level cl, bool counters, tracing::trace_state_ptr tr_state, service_permit permit,
                                std::optional<clock_type::time_point> timeout_opt, lw_shared_ptr<cdc::operation_result_tracker> cdc_tracker) {
     if (boost::empty(mutations)) {
-        return make_ready_future<>();
+        return make_ready_future<result<>>(bo::success());
     }
 
     slogger.trace("mutate cl={}", cl);
@@ -2393,7 +2398,7 @@ storage_proxy::mutate_internal(Range mutations, db::consistency_level cl, bool c
         register_cdc_operation_result_tracker(ids, tracker);
         return mutate_begin(std::move(ids), cl, tr_state, timeout_opt);
     }).then_wrapped([this, p = shared_from_this(), lc, tr_state] (future<result<>> f) mutable {
-        return p->mutate_end(std::move(f), lc, get_stats(), std::move(tr_state)).then(utils::result_into_future<result<>>);
+        return p->mutate_end(std::move(f), lc, get_stats(), std::move(tr_state));
     });
 }
 
@@ -2683,11 +2688,13 @@ future<> storage_proxy::send_hint_to_endpoint(frozen_mutation_and_schema fm_a_s,
 future<> storage_proxy::send_hint_to_all_replicas(frozen_mutation_and_schema fm_a_s) {
     if (!_features.cluster_supports_hinted_handoff_separate_connection()) {
         std::array<mutation, 1> ms{fm_a_s.fm.unfreeze(fm_a_s.s)};
-        return mutate_internal(std::move(ms), db::consistency_level::ALL, false, nullptr, empty_service_permit());
+        return mutate_internal(std::move(ms), db::consistency_level::ALL, false, nullptr, empty_service_permit())
+                .then(utils::result_into_future<result<>>);
     }
 
     std::array<hint_wrapper, 1> ms{hint_wrapper { fm_a_s.fm.unfreeze(fm_a_s.s) }};
-    return mutate_internal(std::move(ms), db::consistency_level::ALL, false, nullptr, empty_service_permit());
+    return mutate_internal(std::move(ms), db::consistency_level::ALL, false, nullptr, empty_service_permit())
+            .then(utils::result_into_future<result<>>);
 }
 
 /**
@@ -2824,7 +2831,8 @@ future<> storage_proxy::schedule_repair(std::unordered_map<dht::token, std::unor
     if (diffs.empty()) {
         return make_ready_future<>();
     }
-    return mutate_internal(diffs | boost::adaptors::map_values, cl, false, std::move(trace_state), std::move(permit));
+    return mutate_internal(diffs | boost::adaptors::map_values, cl, false, std::move(trace_state), std::move(permit))
+            .then(utils::result_into_future<result<>>);
 }
 
 class abstract_read_resolver {
