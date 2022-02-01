@@ -1415,10 +1415,10 @@ db::view::update_backlog storage_proxy::get_backlog_of(gms::inet_address ep) con
     return it->second.backlog;
 }
 
-future<> storage_proxy::response_wait(storage_proxy::response_id_type id, clock_type::time_point timeout) {
+future<result<>> storage_proxy::response_wait(storage_proxy::response_id_type id, clock_type::time_point timeout) {
     auto& handler = _response_handlers.find(id)->second;
     handler->expire_at(timeout);
-    return handler->wait().then(utils::result_into_future<result<>>);
+    return handler->wait();
 }
 
 ::shared_ptr<abstract_write_response_handler>& storage_proxy::get_write_response_handler(storage_proxy::response_id_type id) {
@@ -2093,9 +2093,9 @@ future<storage_proxy::unique_response_handler_vector> storage_proxy::mutate_prep
     });
 }
 
-future<> storage_proxy::mutate_begin(unique_response_handler_vector ids, db::consistency_level cl,
+future<result<>> storage_proxy::mutate_begin(unique_response_handler_vector ids, db::consistency_level cl,
                                      tracing::trace_state_ptr trace_state, std::optional<clock_type::time_point> timeout_opt) {
-    return parallel_for_each(ids, [this, cl, timeout_opt] (unique_response_handler& protected_response) {
+    return utils::result_parallel_for_each<result<>>(ids, [this, cl, timeout_opt] (unique_response_handler& protected_response) {
         auto response_id = protected_response.id;
         // This function, mutate_begin(), is called after a preemption point
         // so it's possible that other code besides our caller just ran. In
@@ -2112,7 +2112,7 @@ future<> storage_proxy::mutate_begin(unique_response_handler_vector ids, db::con
             // correctness (e.g., hints are written by timeout_cb(), not
             // because of an exception here).
             slogger.debug("unstarted write cancelled for id {}", response_id);
-            return make_ready_future<>();
+            return make_ready_future<result<>>(bo::success());
         }
         // it is better to send first and hint afterwards to reduce latency
         // but request may complete before hint_to_dead_endpoints() is called and
@@ -2380,7 +2380,7 @@ storage_proxy::mutate_internal(Range mutations, db::consistency_level cl, bool c
     return mutate_prepare(mutations, cl, type, tr_state, std::move(permit)).then([this, cl, timeout_opt, tracker = std::move(cdc_tracker),
             tr_state] (storage_proxy::unique_response_handler_vector ids) mutable {
         register_cdc_operation_result_tracker(ids, tracker);
-        return mutate_begin(std::move(ids), cl, tr_state, timeout_opt);
+        return mutate_begin(std::move(ids), cl, tr_state, timeout_opt).then(utils::result_into_future<result<>>);
     }).then_wrapped([this, p = shared_from_this(), lc, tr_state] (future<> f) mutable {
         return p->mutate_end(std::move(f), lc, get_stats(), std::move(tr_state));
     });
@@ -2465,7 +2465,7 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
                 return _p.create_write_response_handler(ks, cl, type, std::make_unique<shared_mutation>(m), _batchlog_endpoints, {}, {}, _trace_state, _stats, std::move(permit));
             }).then([this, cl] (unique_response_handler_vector ids) {
                 _p.register_cdc_operation_result_tracker(ids, _cdc_tracker);
-                return _p.mutate_begin(std::move(ids), cl, _trace_state, _timeout);
+                return _p.mutate_begin(std::move(ids), cl, _trace_state, _timeout).then(utils::result_into_future<result<>>);
             });
         }
         future<> sync_write_to_batchlog() {
@@ -2492,7 +2492,7 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
                 return sync_write_to_batchlog().then([this, ids = std::move(ids)] () mutable {
                     tracing::trace(_trace_state, "Sending batch mutations");
                     _p.register_cdc_operation_result_tracker(ids, _cdc_tracker);
-                    return _p.mutate_begin(std::move(ids), _cl, _trace_state, _timeout);
+                    return _p.mutate_begin(std::move(ids), _cl, _trace_state, _timeout).then(utils::result_into_future<result<>>);
                 }).then(std::bind(&context::async_remove_from_batchlog, this));
             });
         }
@@ -2597,7 +2597,7 @@ future<> storage_proxy::send_to_endpoint(
             stats,
             std::move(permit));
     }).then([this, cl, tr_state = std::move(tr_state), timeout = std::move(timeout)] (unique_response_handler_vector ids) mutable {
-        return mutate_begin(std::move(ids), cl, std::move(tr_state), std::move(timeout));
+        return mutate_begin(std::move(ids), cl, std::move(tr_state), std::move(timeout)).then(utils::result_into_future<result<>>);
     }).then_wrapped([p = shared_from_this(), lc, &stats] (future<>&& f) {
         return p->mutate_end(std::move(f), lc, stats, nullptr);
     });
