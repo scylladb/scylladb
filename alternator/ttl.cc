@@ -504,6 +504,8 @@ struct scan_ranges_context {
         selection = cql3::selection::selection::wildcard(s);
         query::partition_slice::option_set opts = selection->get_query_options();
         opts.set<query::partition_slice::option::allow_short_read>();
+        // It is important that the scan bypass cache to avoid polluting it:
+        opts.set<query::partition_slice::option::bypass_cache>();
         std::vector<query::clustering_range> ck_bounds{query::clustering_range::make_open_ended_both_sides()};
         auto partition_slice = query::partition_slice(std::move(ck_bounds), {}, std::move(regular_columns), opts);
         command = ::make_lw_shared<query::read_command>(s->id(), s->version(), partition_slice, proxy.get_max_result_size(partition_slice));
