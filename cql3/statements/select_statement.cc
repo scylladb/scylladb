@@ -1576,7 +1576,8 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
             && !restrictions->need_filtering()  // No filtering
             && group_by_cell_indices->empty()   // No GROUP BY
             // All potential intermediate coordinators must support forwarding
-            && db.features().cluster_supports_parallelized_aggregation();
+            && db.features().cluster_supports_parallelized_aggregation()
+            && db.get_config().enable_parallelized_aggregation();
     };
 
     if (restrictions->uses_secondary_indexing()) {
