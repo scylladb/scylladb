@@ -349,7 +349,7 @@ class abstract_write_response_handler : public seastar::enable_shared_from_this<
 protected:
     using error = storage_proxy::error;
     storage_proxy::response_id_type _id;
-    promise<> _ready; // available when cl is achieved
+    promise<result<>> _ready; // available when cl is achieved
     shared_ptr<storage_proxy> _proxy;
     tracing::trace_state_ptr _trace_state;
     db::consistency_level _cl;
@@ -399,7 +399,7 @@ public:
         --_stats.writes;
         if (_cl_achieved) {
             if (_throttled) {
-                _ready.set_value();
+                _ready.set_value(bo::success());
             } else {
                 _stats.background_writes--;
                 _proxy->_global_stats.background_write_bytes -= _mutation_holder->size();
@@ -407,7 +407,7 @@ public:
             }
         } else {
             if (_error == error::TIMEOUT) {
-                _ready.set_exception(mutation_write_timeout_exception(get_schema()->ks_name(), get_schema()->cf_name(), _cl, _cl_acks, _total_block_for, _type));
+                _ready.set_value(mutation_write_timeout_exception(get_schema()->ks_name(), get_schema()->cf_name(), _cl, _cl_acks, _total_block_for, _type));
             } else if (_error == error::FAILURE) {
                 if (!_message) {
                     _ready.set_exception(mutation_write_failure_exception(get_schema()->ks_name(), get_schema()->cf_name(), _cl, _cl_acks, _failed, _total_block_for, _type));
@@ -433,7 +433,7 @@ public:
         _stats.background_writes++;
         _proxy->_global_stats.background_write_bytes += _mutation_holder->size();
         _throttled = false;
-        _ready.set_value();
+        _ready.set_value(bo::success());
     }
     void signal(size_t nr = 1) {
         _cl_acks += nr;
@@ -587,7 +587,7 @@ public:
             }).handle_exception_type([] (const seastar::sleep_aborted& ignored) { });
         }
     }
-    future<> wait() {
+    future<result<>> wait() {
         return _ready.get_future();
     }
     const inet_address_vector_replica_set& get_targets() const {
@@ -1418,7 +1418,7 @@ db::view::update_backlog storage_proxy::get_backlog_of(gms::inet_address ep) con
 future<> storage_proxy::response_wait(storage_proxy::response_id_type id, clock_type::time_point timeout) {
     auto& handler = _response_handlers.find(id)->second;
     handler->expire_at(timeout);
-    return handler->wait();
+    return handler->wait().then(utils::result_into_future<result<>>);
 }
 
 ::shared_ptr<abstract_write_response_handler>& storage_proxy::get_write_response_handler(storage_proxy::response_id_type id) {
