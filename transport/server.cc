@@ -34,6 +34,7 @@
 #include <seastar/net/byteorder.hh>
 #include <seastar/util/lazy.hh>
 #include <seastar/core/execution_stage.hh>
+#include "utils/overloaded_functor.hh"
 
 #include "enum_set.hh"
 #include "service/query_state.hh"
@@ -429,9 +430,21 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
             tracing::stop_foreground(trace_state);
         });
         --_server._stats.requests_serving;
-        try {
-            foreign_ptr<std::unique_ptr<cql_server::response>> response = f.get0().value(); // TODO: This throws, handle it without throwing
 
+        auto exception_handler = overloaded_functor {
+            [&] (const exceptions::mutation_write_timeout_exception& ex) {
+                try { ++_server._stats.errors[ex.code()]; } catch(...) {}
+                return make_mutation_write_timeout_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.block_for, ex.type, trace_state);
+            }
+        };
+
+        try {
+            result_with_foreign_response_ptr res = f.get0();
+            if (!res) {
+                return res.assume_error().accept(exception_handler);
+            }
+
+            auto response = std::move(res).assume_value();
             auto res_op = response->opcode();
 
             // and modify state now that we've generated a response.
@@ -469,8 +482,7 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
             try { ++_server._stats.errors[ex.code()]; } catch(...) {}
             return make_read_failure_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.failures, ex.block_for, ex.data_present, trace_state);
         } catch (const exceptions::mutation_write_timeout_exception& ex) {
-            try { ++_server._stats.errors[ex.code()]; } catch(...) {}
-            return make_mutation_write_timeout_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.block_for, ex.type, trace_state);
+            return exception_handler(ex);
         } catch (const exceptions::mutation_write_failure_exception& ex) {
             try { ++_server._stats.errors[ex.code()]; } catch(...) {}
             return make_mutation_write_failure_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.failures, ex.block_for, ex.type, trace_state);
