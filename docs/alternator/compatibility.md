@@ -108,8 +108,21 @@ they should be easy to detect. Here is a list of these unimplemented features:
   are projected. This wastes some disk space when it is not needed.
   https://github.com/scylladb/scylla/issues/5036
 
-* DynamoDB's TTL (per-item expiration) feature is not supported. Note that
-  this is a different feature from Scylla's feature with the same name.
+* DynamoDB's TTL (item expiration) feature is supported, but in this release
+  still considered experimental and needs to be enabled explicitly with the
+  `--experimental-features=alternator-ttl` configuration option.
+  The experimental implementation is mostly complete, but not throughly
+  tested or optimized.
+  Like in DynamoDB, Alternator items which are set to expire at a certain
+  time will not disappear exactly at that time, but only after some delay.
+  DynamoDB guarantees that the expiration delay will be less than 48 hours
+  (though for small tables the delay is often much shorter). In Alternator,
+  the expiration delay is configurable - it defaults to 24 hours but can
+  be set with the `--alternator-ttl-period-in-seconds` configuration option.
+
+  One thing that this implementation is still missing is that expiration
+  events appear in the Streams API as normal deletions - without the
+  distinctive marker on deletions which are really expirations.
   https://github.com/scylladb/scylla/issues/5060
 
 * DynamoDB's new multi-item transaction feature (TransactWriteItems,
