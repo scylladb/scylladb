@@ -262,6 +262,7 @@ public:
     request_controller_type _request_controller;
     shared_promise<> _disk_deletions;
 
+    size_t _segment_allocation_generation = 0;
     std::optional<shared_future<with_clock<db::timeout_clock>>> _segment_allocating;
     std::unordered_map<sstring, descriptor> _files_to_delete;
     std::vector<file> _files_to_close;
@@ -1626,19 +1627,25 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
         // the old one has terminated with either result or exception.
         // Do all waiting through the shared_future
         if (!_segment_allocating) {
+            _segment_allocation_generation++;
             _segment_allocating.emplace(new_segment().discard_result());
         }
+        auto segment_allocation_generation = _segment_allocation_generation;
         try {
             co_await _segment_allocating->get_future(timeout);
             // once we've managed to get a result, any of us, the
             // shared_future should be released.
-            _segment_allocating = std::nullopt;
+            if (segment_allocation_generation == _segment_allocation_generation) {
+                _segment_allocating = std::nullopt;
+            }
         } catch (timed_out_error&) {
             throw; // not thrown by new_segment. Just no result yet.
         } catch (...) {            
             // once we've managed to get a result, any of us, the
             // shared_future should be released.
-            _segment_allocating = std::nullopt;
+            if (segment_allocation_generation == _segment_allocation_generation) {
+                _segment_allocating = std::nullopt;
+            }
             throw;
         }
     }
