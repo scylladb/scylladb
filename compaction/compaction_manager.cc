@@ -480,6 +480,8 @@ void compaction_manager::register_metrics() {
                        sm::description("Holds the number of compaction tasks waiting for an opportunity to run.")),
         sm::make_gauge("backlog", [this] { return _last_backlog; },
                        sm::description("Holds the sum of compaction backlog for all tables in the system.")),
+        sm::make_gauge("normalized_backlog", [this] { return _last_backlog / _available_memory; },
+                       sm::description("Holds the sum of normalized compaction backlog for all tables in the system. Backlog is normalized by dividing backlog by shard's available memory.")),
     });
 }
 
