@@ -121,12 +121,13 @@ class ScyllaSetup:
         if self._apiAddress is not None:
             args += ["--api-address %s" % self._apiAddress]
 
-        if self._alternatorPort is not None:
+        if self._alternatorAddress is not None:
             args += ["--alternator-address %s" % self._alternatorAddress]
+
+        if self._alternatorPort is not None:
             args += ["--alternator-port %s" % self._alternatorPort]
 
         if self._alternatorHttpsPort is not None:
-            args += ["--alternator-address %s" % self._alternatorAddress]
             args += ["--alternator-https-port %s" % self._alternatorHttpsPort]
 
         if self._alternatorWriteIsolation is not None:
