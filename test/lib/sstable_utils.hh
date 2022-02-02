@@ -198,6 +198,7 @@ public:
     // Used to create synthetic sstables for testing leveled compaction strategy.
     void set_values_for_leveled_strategy(uint64_t fake_data_size, uint32_t sstable_level, int64_t max_timestamp, sstring first_key, sstring last_key) {
         _sst->_data_file_size = fake_data_size;
+        _sst->_bytes_on_disk = fake_data_size;
         // Create a synthetic stats metadata
         stats_metadata stats = {};
         // leveled strategy sorts sstables by age using max_timestamp, let's set it to 0.
