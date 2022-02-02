@@ -1626,21 +1626,19 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
         // the old one has terminated with either result or exception.
         // Do all waiting through the shared_future
         if (!_segment_allocating) {
-            _segment_allocating.emplace(new_segment().discard_result());
+            auto f = new_segment();
+            // must check that we are not already done.
+            if (f.available()) {
+                f.get(); // maybe force exception
+                continue;
+            }
+            _segment_allocating.emplace(f.discard_result().finally([this] {
+                // clear the shared_future _before_ resolving its contents
+                // (i.e. with result of this finally)
+                _segment_allocating = std::nullopt;
+            }));
         }
-        try {
-            co_await _segment_allocating->get_future(timeout);
-            // once we've managed to get a result, any of us, the
-            // shared_future should be released.
-            _segment_allocating = std::nullopt;
-        } catch (timed_out_error&) {
-            throw; // not thrown by new_segment. Just no result yet.
-        } catch (...) {            
-            // once we've managed to get a result, any of us, the
-            // shared_future should be released.
-            _segment_allocating = std::nullopt;
-            throw;
-        }
+        co_await _segment_allocating->get_future(timeout);
     }
 }
 
