@@ -722,7 +722,7 @@ void compaction_manager::submit(replica::table* t) {
     });
 }
 
-void compaction_manager::submit_offstrategy(replica::table* t) {
+future<> compaction_manager::perform_offstrategy(replica::table* t) {
     auto task = make_lw_shared<compaction_manager::task>(t, sstables::compaction_type::Reshape, get_compaction_state(t));
     _tasks.push_back(task);
     _stats.pending_tasks++;
@@ -742,21 +742,21 @@ void compaction_manager::submit_offstrategy(replica::table* t) {
                 _stats.active_tasks++;
                 task->setup_new_compaction();
 
-                return t->run_offstrategy_compaction(task->compaction_data).then_wrapped([this, task] (future<> f) mutable {
+                return t->run_offstrategy_compaction(task->compaction_data).then_wrapped([this, task, schema = t->schema()] (future<> f) mutable {
                     _stats.active_tasks--;
                     task->finish_compaction();
                     try {
                         f.get();
                         _stats.completed_tasks++;
                     } catch (sstables::compaction_stopped_exception& e) {
-                        cmlog.info("off-strategy compaction: {}", e.what());
+                        cmlog.info("off-strategy compaction of {}.{} was stopped: {}", schema->ks_name(), schema->cf_name(), e.what());
                     } catch (sstables::compaction_aborted_exception& e) {
                         _stats.errors++;
-                        cmlog.error("off-strategy compaction: {}", e.what());
+                        cmlog.error("off-strategy compaction of {}.{} was aborted: {}", schema->ks_name(), schema->cf_name(), e.what());
                     } catch (...) {
                         _stats.errors++;
                         _stats.pending_tasks++;
-                        cmlog.error("off-strategy compaction failed due to {}, retrying...", std::current_exception());
+                        cmlog.error("off-strategy compaction of {}.{} failed due to {}, retrying...", schema->ks_name(), schema->cf_name(), std::current_exception());
                         return put_task_to_sleep(task).then([] {
                             return make_ready_future<stop_iteration>(stop_iteration::no);
                         });
@@ -769,6 +769,7 @@ void compaction_manager::submit_offstrategy(replica::table* t) {
         _tasks.remove(task);
         cmlog.debug("Offstrategy compaction task {} table={}: done", fmt::ptr(task.get()), fmt::ptr(task->compacting_table));
     });
+    return task->compaction_done.get_future().finally([task] {});
 }
 
 future<> compaction_manager::rewrite_sstables(replica::table* t, sstables::compaction_type_options options, get_candidates_func get_func, can_purge_tombstones can_purge) {
