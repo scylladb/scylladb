@@ -24,7 +24,6 @@
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/gate.hh>
 #include "utils/fb_utilities.hh"
-#include "utils/serialized_action.hh"
 #include "replica/database_fwd.hh"
 #include "db/schema_features.hh"
 #include "streaming/stream_state.hh"
