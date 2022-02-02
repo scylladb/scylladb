@@ -1137,8 +1137,10 @@ future<group0_guard> migration_manager::start_group0_operation() {
  * @param version The schema version to announce
  */
 void migration_manager::passive_announce(utils::UUID version) {
-    _schema_version_to_publish = std::move(version);
-    (void)_schema_push.trigger();
+    _schema_version_to_publish = version;
+    (void)_schema_push.trigger().handle_exception([version = std::move(version)] (std::exception_ptr ex) {
+        mlogger.warn("Passive announcing of version {} failed: {}. Ignored.", version);
+    });
 }
 
 future<> migration_manager::passive_announce() {
