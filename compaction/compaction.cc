@@ -675,7 +675,7 @@ private:
                 reader.consume_in_thread(std::move(cfc));
             });
         });
-        return consumer(upgrade_to_v2(make_compacting_reader(make_sstable_reader(), compaction_time, max_purgeable_func())));
+        return consumer(make_compacting_reader(make_sstable_reader(), compaction_time, max_purgeable_func()));
     }
 
     future<> consume() {

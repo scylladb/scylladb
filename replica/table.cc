@@ -663,18 +663,21 @@ table::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_
             co_return co_await write_memtable_to_sstable(downgrade_to_v1(std::move(reader)), *old, newtab, estimated_partitions, monitor, cfg, priority);
         });
 
-        auto flush_reader = old->make_flush_reader(
+        auto reader = old->make_flush_reader(
             old->schema(),
             compaction_concurrency_semaphore().make_tracking_only_permit(old->schema().get(), "try_flush_memtable_to_sstable()", db::no_timeout),
             service::get_local_memtable_flush_priority());
-        auto reader = (old->has_any_tombstones()
-                       ? make_compacting_reader(std::move(flush_reader), gc_clock::now(),
-                                                [] (const dht::decorated_key&) { return api::min_timestamp; })
-                       : downgrade_to_v1(std::move(flush_reader)));
+
+        if (old->has_any_tombstones()) {
+            reader = make_compacting_reader(
+                std::move(reader),
+                gc_clock::now(),
+                [] (const dht::decorated_key&) { return api::min_timestamp; });
+        }
 
         std::exception_ptr err;
         try {
-            mutation_fragment* fragment = co_await reader.peek();
+            auto* fragment = co_await reader.peek();
             if (!fragment) {
                 co_await reader.close();
                 _memtables->erase(old);
@@ -689,7 +692,7 @@ table::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_
             co_return stop_iteration(_async_gate.is_closed());
         }
 
-        auto f = consumer(upgrade_to_v2(std::move(reader)));
+        auto f = consumer(std::move(reader));
 
         // Switch back to default scheduling group for post-flush actions, to avoid them being staved by the memtable flush
         // controller. Cache update does not affect the input of the memtable cpu controller, so it can be subject to

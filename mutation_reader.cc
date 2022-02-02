@@ -2304,12 +2304,12 @@ std::pair<flat_mutation_reader_v2, queue_reader_handle_v2> make_queue_reader_v2(
 
 namespace {
 
-class compacting_reader : public flat_mutation_reader::impl {
-    friend class compact_mutation_state<emit_only_live_rows::no, compact_for_sstables::yes>;
+class compacting_reader : public flat_mutation_reader_v2::impl {
+    friend class compact_mutation_state<emit_only_live_rows::no, compact_for_sstables::yes, compactor_output_format::v2>;
 
 private:
     flat_mutation_reader_v2 _reader;
-    compact_mutation_state<emit_only_live_rows::no, compact_for_sstables::yes> _compactor;
+    compact_mutation_state<emit_only_live_rows::no, compact_for_sstables::yes, compactor_output_format::v2> _compactor;
     noop_compacted_fragments_consumer _gc_consumer;
 
     // Uncompacted stream
@@ -2323,7 +2323,7 @@ private:
 private:
     void maybe_push_partition_start() {
         if (_has_compacted_partition_start) {
-            push_mutation_fragment(mutation_fragment(*_schema, _permit, std::move(_last_uncompacted_partition_start)));
+            push_mutation_fragment(mutation_fragment_v2(*_schema, _permit, std::move(_last_uncompacted_partition_start)));
             _has_compacted_partition_start = false;
         }
     }
@@ -2349,23 +2349,28 @@ private:
     }
     stop_iteration consume(static_row&& sr, tombstone, bool) {
         maybe_push_partition_start();
-        push_mutation_fragment(mutation_fragment(*_schema, _permit, std::move(sr)));
+        push_mutation_fragment(mutation_fragment_v2(*_schema, _permit, std::move(sr)));
         return stop_iteration::no;
     }
     stop_iteration consume(clustering_row&& cr, row_tombstone, bool) {
         maybe_push_partition_start();
-        push_mutation_fragment(mutation_fragment(*_schema, _permit, std::move(cr)));
+        push_mutation_fragment(mutation_fragment_v2(*_schema, _permit, std::move(cr)));
         return stop_iteration::no;
     }
-    stop_iteration consume(range_tombstone&& rt) {
+    stop_iteration consume(range_tombstone_change&& rtc) {
+        // The compactor will close the active tombstone (if any) on partition
+        // end. We ignore this when we don't care about the partition-end.
+        if (_ignore_partition_end) {
+            return stop_iteration::no;
+        }
         maybe_push_partition_start();
-        push_mutation_fragment(mutation_fragment(*_schema, _permit, std::move(rt)));
+        push_mutation_fragment(mutation_fragment_v2(*_schema, _permit, std::move(rtc)));
         return stop_iteration::no;
     }
     stop_iteration consume_end_of_partition() {
         maybe_push_partition_start();
         if (!_ignore_partition_end) {
-            push_mutation_fragment(mutation_fragment(*_schema, _permit, partition_end{}));
+            push_mutation_fragment(mutation_fragment_v2(*_schema, _permit, partition_end{}));
         }
         return stop_iteration::no;
     }
@@ -2460,9 +2465,9 @@ public:
 
 } // anonymous namespace
 
-flat_mutation_reader make_compacting_reader(flat_mutation_reader_v2 source, gc_clock::time_point compaction_time,
+flat_mutation_reader_v2 make_compacting_reader(flat_mutation_reader_v2 source, gc_clock::time_point compaction_time,
         std::function<api::timestamp_type(const dht::decorated_key&)> get_max_purgeable, streamed_mutation::forwarding fwd) {
-    return make_flat_mutation_reader<compacting_reader>(std::move(source), compaction_time, get_max_purgeable, fwd);
+    return make_flat_mutation_reader_v2<compacting_reader>(std::move(source), compaction_time, get_max_purgeable, fwd);
 }
 
 position_reader_queue::~position_reader_queue() {}

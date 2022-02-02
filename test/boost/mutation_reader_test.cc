@@ -2694,7 +2694,7 @@ SEASTAR_THREAD_TEST_CASE(test_compacting_reader_next_partition) {
     simple_schema ss(simple_schema::with_static::no);
     const auto& schema = *ss.schema();
     tests::reader_concurrency_semaphore_wrapper semaphore;
-    std::deque<mutation_fragment> expected;
+    std::deque<mutation_fragment_v2> expected;
 
     auto mr = [&] () {
         auto permit = semaphore.make_permit();
