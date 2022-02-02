@@ -2093,7 +2093,7 @@ with open(buildfile_tmp, 'w') as f:
         rule build-submodule-deb
           command = cd $dir && ./reloc/build_deb.sh --reloc-pkg $artifact
 
-        build tools/jmx/build/{scylla_product}-jmx-package.tar.gz: build-submodule-reloc
+        build tools/jmx/build/{scylla_product}-jmx-package.tar.gz: build-submodule-reloc | build/SCYLLA-PRODUCT-FILE build/SCYLLA-VERSION-FILE build/SCYLLA-RELEASE-FILE
           reloc_dir = tools/jmx
         build dist-jmx-rpm: build-submodule-rpm tools/jmx/build/{scylla_product}-jmx-package.tar.gz
           dir = tools/jmx
@@ -2104,7 +2104,7 @@ with open(buildfile_tmp, 'w') as f:
         build dist-jmx-tar: phony {' '.join(['$builddir/{mode}/dist/tar/{scylla_product}-jmx-package.tar.gz'.format(mode=mode, scylla_product=scylla_product) for mode in default_modes])}
         build dist-jmx: phony dist-jmx-tar dist-jmx-rpm dist-jmx-deb
 
-        build tools/java/build/{scylla_product}-tools-package.tar.gz: build-submodule-reloc
+        build tools/java/build/{scylla_product}-tools-package.tar.gz: build-submodule-reloc | build/SCYLLA-PRODUCT-FILE build/SCYLLA-VERSION-FILE build/SCYLLA-RELEASE-FILE
           reloc_dir = tools/java
         build dist-tools-rpm: build-submodule-rpm tools/java/build/{scylla_product}-tools-package.tar.gz
           dir = tools/java
@@ -2115,7 +2115,7 @@ with open(buildfile_tmp, 'w') as f:
         build dist-tools-tar: phony {' '.join(['$builddir/{mode}/dist/tar/{scylla_product}-tools-package.tar.gz'.format(mode=mode, scylla_product=scylla_product) for mode in default_modes])}
         build dist-tools: phony dist-tools-tar dist-tools-rpm dist-tools-deb
 
-        build tools/python3/build/{scylla_product}-python3-{arch}-package.tar.gz: build-submodule-reloc
+        build tools/python3/build/{scylla_product}-python3-{arch}-package.tar.gz: build-submodule-reloc | build/SCYLLA-PRODUCT-FILE build/SCYLLA-VERSION-FILE build/SCYLLA-RELEASE-FILE
           reloc_dir = tools/python3
           args = --packages "{python3_dependencies}" --pip-packages "{pip_dependencies}"
         build dist-python3-rpm: build-submodule-rpm tools/python3/build/{scylla_product}-python3-{arch}-package.tar.gz
