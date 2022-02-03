@@ -29,7 +29,6 @@ discovery::discovery(raft::server_address self, const peer_list& seeds)
 }
 
 void discovery::step(const peer_list& peers) {
-
     if (_is_leader) {
         return;
     }
@@ -87,6 +86,17 @@ void discovery::maybe_become_leader() {
     if (_responded.size() < _peers.size()) {
         return;
     }
+
+    // Note: when we perform this check some peers may still have their Raft IDs
+    // undiscovered (we only know their server_infos: IP addresses etc.).
+    // Then their Raft IDs are set to raft::server_id{}, which contains UUID 0,
+    // which is the smallest UUID.
+    // That's fine - it means this check will not pass this time.
+    // The check can only pass when the Raft IDs of all peers are discovered.
+    //
+    // Note: it may happen we finish the algorithm before we discover all Raft IDs,
+    // if we obtain information about already existing group 0 from some peer.
+    // That's fine as well.
     auto min_id = std::min_element(_peer_list.begin(), _peer_list.end());
     if (min_id != _peer_list.end() && min_id->id == _self.id) {
         _is_leader = true;
@@ -107,7 +117,7 @@ void discovery::response(raft::server_address from, const peer_list& peers) {
     step(peers);
 }
 
-discovery::output discovery::tick() {
+discovery::tick_output discovery::tick() {
     if (_is_leader) {
         return i_am_leader{};
     } else if (!_requests.empty()) {

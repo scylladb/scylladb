@@ -18,6 +18,9 @@ namespace service {
 // its peers. Once the transitive closure of peers has been built,
 // select the peer with the smallest Raft Id to be the leader. To
 // be used during initial setup of Raft Group 0.
+//
+// This class is public for testing.
+// In production code, `persistent_discovery` should be used.
 class discovery {
 public:
     // During discovery, peers are identified based on their Internet
@@ -41,13 +44,16 @@ public:
     struct i_am_leader {};
     struct pause {};
     using request_list = std::vector<std::pair<raft::server_address, peer_list>>;
+
     // @sa discovery::tick()
-    using output = std::variant<i_am_leader, pause, request_list>;
+    using tick_output = std::variant<i_am_leader, pause, request_list>;
 private:
     raft::server_address _self;
     // Assigned if this server elects itself a leader.
     bool _is_leader = false;
-    // _seeds + all peers we've discovered, excludes _self
+    // _seeds + all peers we've discovered, excludes _self.
+    // The user of `discovery` must ensure that all _peers are persisted
+    // before externalizing any output (returned from `tick` or `request`).
     peer_set _peers;
     // A subset of _peers which have responded to our requests, excludes _self.
     peer_set _responded;
@@ -83,6 +89,18 @@ public:
     // common seed or seed connections forming a loop. A rule of
     // thumb is to use the same seed list everywhere.
     //
+    // - the set of discovered peers must survive restarts.
+    // When `discovery` is constructed again after a restart,
+    // `seeds` must contain at least all peers discovered until now,
+    // and `self` must be the same as before.
+    // Each time a new peer is discovered or its Raft ID is updated,
+    // it will become present in the set returned by `peers()`.
+    // The caller of `tick`/`request` must ensure that all peers
+    // discovered before this call are persisted before the output
+    // of this call is externalized (e.g. before a response to `request`
+    // is sent back to the requester, or before a new request is sent
+    // based on the output of `tick`).
+    //
     discovery(raft::server_address self, const peer_list& seeds);
 
     // To be used on the receiving peer to generate a reply
@@ -102,7 +120,11 @@ public:
     // a leader, and then a list of messages for all peers which
     // can be used to find the leader. If this node is a leader,
     // returns leader{}.
-    discovery::output tick();
+    tick_output tick();
+
+    // The set of peers discovered until now (including seeds, excluding self).
+    // Must be persisted before externalizing output (from `tick` or `request`).
+    const peer_set& peers() const { return _peers; }
 
     // A helper for testing.
     bool is_leader() { return _is_leader; }
