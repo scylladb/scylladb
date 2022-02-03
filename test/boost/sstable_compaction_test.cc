@@ -3263,7 +3263,7 @@ SEASTAR_TEST_CASE(partial_sstable_run_filtered_out_test) {
 
         sstable_writer_config sst_cfg = env.manager().configure_writer();
         sst_cfg.run_identifier = partial_sstable_run_identifier;
-        auto partial_sstable_run_sst = make_sstable_easy(env, tmp.path(), make_flat_mutation_reader_from_mutations(s, env.make_reader_permit(), { std::move(mut) }), sst_cfg);
+        auto partial_sstable_run_sst = make_sstable_easy(env, tmp.path(), make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), { std::move(mut) }), sst_cfg);
 
         column_family_test(cf).add_sstable(partial_sstable_run_sst);
         column_family_test::update_sstables_known_generation(*cf, partial_sstable_run_sst->generation());
@@ -3360,7 +3360,7 @@ SEASTAR_TEST_CASE(purged_tombstone_consumer_sstable_test) {
             for (auto&& sst : all) {
                 compacting->insert(std::move(sst));
             }
-            auto reader = compacting->make_range_sstable_reader(s,
+            auto r = compacting->make_range_sstable_reader(s,
                 env.make_reader_permit(),
                 query::full_partition_range,
                 s->full_slice(),
@@ -3369,7 +3369,6 @@ SEASTAR_TEST_CASE(purged_tombstone_consumer_sstable_test) {
                 ::streamed_mutation::forwarding::no,
                 ::mutation_reader::forwarding::no);
 
-            auto r = std::move(reader);
             auto close_r = deferred_close(r);
             r.consume_in_thread(std::move(cfc));
 
