@@ -2154,6 +2154,86 @@ static sstring get_snapshot_table_dir_prefix(const sstring& table_name) {
     return table_name + "-";
 }
 
+static sstring extract_cf_name(const sstring& directory_name) {
+    // cf directory is of the form: 'cf_name-uuid'
+    // since cf_name may contain '-' characters, look for the last occurance of '-'
+    // in the directory entry name
+    auto pos = directory_name.find_last_of('-');
+    if (pos == sstring::npos) {
+        on_internal_error(dblog, format("table directory entry name '{}' is invalid: no '-' separator found", directory_name));
+    }
+    return directory_name.substr(0, pos);
+}
+
+future<std::vector<database::snapshot_details_result>> database::get_snapshot_details() {
+    std::vector<sstring> data_dirs = _cfg.data_file_directories();
+    auto dirs_only_entries = lister::dir_entry_types{directory_entry_type::directory};
+    std::vector<database::snapshot_details_result> details;
+
+    for (auto& datadir : data_dirs) {
+        co_await lister::scan_dir(datadir, dirs_only_entries, [this, &dirs_only_entries, &details] (fs::path parent_dir, directory_entry de) -> future<> {
+            // KS directory
+            sstring ks_name = de.name;
+
+            co_return co_await lister::scan_dir(parent_dir / de.name, dirs_only_entries, [this, &dirs_only_entries, &details, ks_name = std::move(ks_name)] (fs::path parent_dir, directory_entry de) -> future<> {
+                // CF directory
+                auto cf_dir = parent_dir / de.name;
+
+                // Skip tables with no snapshots.
+                // Also, skips non-keyspace parent_dir (e.g. commitlog or view_hints directories)
+                // that may also be present under the data directory alongside keyspaces
+                if (!co_await file_exists((cf_dir / sstables::snapshots_dir).native())) {
+                    co_return;
+                }
+
+                sstring cf_name = extract_cf_name(de.name);
+                co_return co_await lister::scan_dir(cf_dir / sstables::snapshots_dir, dirs_only_entries, [this, &details, &ks_name, &cf_name, &cf_dir] (fs::path parent_dir, directory_entry de) -> future<> {
+                    database::snapshot_details_result snapshot_result = {
+                        .snapshot_name = de.name,
+                        .details = {0, 0, cf_name, ks_name}
+                    };
+
+                    co_await lister::scan_dir(parent_dir / de.name,  { directory_entry_type::regular }, [this, cf_dir, &snapshot_result] (fs::path snapshot_dir, directory_entry de) -> future<> {
+                        auto sd = co_await io_check(file_stat, (snapshot_dir / de.name).native(), follow_symlink::no);
+                        auto size = sd.allocated_size;
+
+                        // The manifest and schema.sql files are the only files expected to be in this directory not belonging to the SSTable.
+                        //
+                        // All the others should just generate an exception: there is something wrong, so don't blindly
+                        // add it to the size.
+                        if (de.name != "manifest.json" && de.name != "schema.cql") {
+                            snapshot_result.details.total += size;
+                        } else {
+                            size = 0;
+                        }
+
+                        try {
+                            // File exists in the main SSTable directory. Snapshots are not contributing to size
+                            auto psd = co_await io_check(file_stat, (cf_dir / de.name).native(), follow_symlink::no);
+                            // File in main SSTable directory must be hardlinked to the file in the snapshot dir with the same name.
+                            if (psd.device_id != sd.device_id || psd.inode_number != sd.inode_number) {
+                                dblog.warn("[{} device_id={} inode_number={} size={}] is not the same file as [{} device_id={} inode_number={} size={}]",
+                                        (cf_dir / de.name).native(), psd.device_id, psd.inode_number, psd.size,
+                                        (snapshot_dir / de.name).native(), sd.device_id, sd.inode_number, sd.size);
+                                snapshot_result.details.live += size;
+                            }
+                        } catch (std::system_error& e) {
+                            if (e.code() != std::error_code(ENOENT, std::system_category())) {
+                                throw;
+                            }
+                            snapshot_result.details.live += size;
+                        }
+                    });
+
+                    details.emplace_back(std::move(snapshot_result));
+                });
+            });
+        });
+    }
+
+    co_return details;
+}
+
 // For the filesystem operations, this code will assume that all keyspaces are visible in all shards
 // (as we have been doing for a lot of the other operations, like the snapshot itself).
 future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_names, const sstring& table_name) {

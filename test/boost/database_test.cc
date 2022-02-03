@@ -362,48 +362,59 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_pending_delete) {
 }
 
 // Snapshot tests and their helpers
-future<> do_with_some_data(std::function<future<> (cql_test_env& env)> func, lw_shared_ptr<tmpdir> tmpdir_for_data = {}) {
-    return seastar::async([func = std::move(func), tmpdir_for_data = std::move(tmpdir_for_data)] () mutable {
+future<> do_with_some_data(std::vector<sstring> cf_names, std::function<future<> (cql_test_env& env)> func, lw_shared_ptr<tmpdir> tmpdir_for_data = {}) {
+    return seastar::async([cf_names = std::move(cf_names), func = std::move(func), tmpdir_for_data = std::move(tmpdir_for_data)] () mutable {
         if (!tmpdir_for_data) {
             tmpdir_for_data = make_lw_shared<tmpdir>();
         }
         auto db_cfg_ptr = make_shared<db::config>();
         db_cfg_ptr->data_file_directories(std::vector<sstring>({ tmpdir_for_data->path().string() }));
-        do_with_cql_env_thread([func = std::move(func)] (cql_test_env& e) {
-            e.create_table([](std::string_view ks_name) {
-                return *schema_builder(ks_name, "cf")
-                        .with_column("p1", utf8_type, column_kind::partition_key)
-                        .with_column("c1", int32_type, column_kind::clustering_key)
-                        .with_column("c2", int32_type, column_kind::clustering_key)
-                        .with_column("r1", int32_type)
-                        .build();
-            }).get();
-            e.execute_cql("insert into cf (p1, c1, c2, r1) values ('key1', 1, 2, 3);").get();
-            e.execute_cql("insert into cf (p1, c1, c2, r1) values ('key1', 2, 2, 3);").get();
-            e.execute_cql("insert into cf (p1, c1, c2, r1) values ('key1', 3, 2, 3);").get();
-
-            e.execute_cql("insert into cf (p1, c1, c2, r1) values ('key2', 4, 5, 6);").get();
-            e.execute_cql("insert into cf (p1, c1, c2, r1) values ('key2', 5, 5, 6);").get();
-            e.execute_cql("insert into cf (p1, c1, c2, r1) values ('key2', 6, 5, 6);").get();
+        do_with_cql_env_thread([cf_names = std::move(cf_names), func = std::move(func)] (cql_test_env& e) {
+            for (const auto& cf_name : cf_names) {
+                e.create_table([&cf_name] (std::string_view ks_name) {
+                    return *schema_builder(ks_name, cf_name)
+                            .with_column("p1", utf8_type, column_kind::partition_key)
+                            .with_column("c1", int32_type, column_kind::clustering_key)
+                            .with_column("c2", int32_type, column_kind::clustering_key)
+                            .with_column("r1", int32_type)
+                            .build();
+                }).get();
+                e.execute_cql(fmt::format("insert into {} (p1, c1, c2, r1) values ('key1', 1, 2, 3);", cf_name)).get();
+                e.execute_cql(fmt::format("insert into {} (p1, c1, c2, r1) values ('key1', 2, 2, 3);", cf_name)).get();
+                e.execute_cql(fmt::format("insert into {} (p1, c1, c2, r1) values ('key1', 3, 2, 3);", cf_name)).get();
+                e.execute_cql(fmt::format("insert into {} (p1, c1, c2, r1) values ('key2', 4, 5, 6);", cf_name)).get();
+                e.execute_cql(fmt::format("insert into {} (p1, c1, c2, r1) values ('key2', 5, 5, 6);", cf_name)).get();
+                e.execute_cql(fmt::format("insert into {} (p1, c1, c2, r1) values ('key2', 6, 5, 6);", cf_name)).get();
+            }
 
             func(e).get();
         }, db_cfg_ptr).get();
     });
 }
 
-future<> take_snapshot(sharded<replica::database>& db, bool skip_flush = false) {
-    return db.invoke_on_all([skip_flush] (replica::database& db) {
-        auto& cf = db.find_column_family("ks", "cf");
-        return cf.snapshot(db, "test", skip_flush);
-    });
+future<> take_snapshot(sharded<replica::database>& db, bool skip_flush = false, sstring ks_name = "ks", sstring cf_name = "cf", sstring snapshot_name = "test") {
+    try {
+        co_await db.invoke_on_all([&ks_name, &cf_name, &snapshot_name, skip_flush] (replica::database& db) {
+            auto& cf = db.find_column_family(ks_name, cf_name);
+            return cf.snapshot(db, snapshot_name, skip_flush);
+        });
+    } catch (...) {
+        testlog.error("Could not take snapshot for {}.{} snapshot_name={} skip_flush={}: {}",
+                ks_name, cf_name, snapshot_name, skip_flush, std::current_exception());
+        throw;
+    }
 }
 
 future<> take_snapshot(cql_test_env& e, bool skip_flush = false) {
     return take_snapshot(e.db(), skip_flush);
 }
 
+future<> take_snapshot(cql_test_env& e, sstring ks_name, sstring cf_name, sstring snapshot_name = "test") {
+    return take_snapshot(e.db(), false /* skip_flush */, std::move(ks_name), std::move(cf_name), std::move(snapshot_name));
+}
+
 SEASTAR_TEST_CASE(snapshot_works) {
-    return do_with_some_data([] (cql_test_env& e) {
+    return do_with_some_data({"cf"}, [] (cql_test_env& e) {
         take_snapshot(e).get();
 
         std::set<sstring> expected = {
@@ -430,7 +441,7 @@ SEASTAR_TEST_CASE(snapshot_works) {
 }
 
 SEASTAR_TEST_CASE(snapshot_skip_flush_works) {
-    return do_with_some_data([] (cql_test_env& e) {
+    return do_with_some_data({"cf"}, [] (cql_test_env& e) {
         take_snapshot(e, true /* skip_flush */).get();
 
         std::set<sstring> expected = {
@@ -458,7 +469,7 @@ SEASTAR_TEST_CASE(snapshot_skip_flush_works) {
 }
 
 SEASTAR_TEST_CASE(snapshot_list_okay) {
-    return do_with_some_data([] (cql_test_env& e) {
+    return do_with_some_data({"cf"}, [] (cql_test_env& e) {
         auto& cf = e.local_db().find_column_family("ks", "cf");
         take_snapshot(e).get();
 
@@ -483,8 +494,46 @@ SEASTAR_TEST_CASE(snapshot_list_okay) {
     });
 }
 
+SEASTAR_TEST_CASE(snapshot_list_contains_dropped_tables) {
+    return do_with_some_data({"cf1", "cf2", "cf3", "cf4"}, [] (cql_test_env& e) {
+        e.execute_cql("DROP TABLE ks.cf1;").get();
+
+        auto details = e.local_db().get_snapshot_details().get0();
+        BOOST_REQUIRE_EQUAL(details.size(), 1);
+
+        const auto& sd = details.front().details;
+        BOOST_REQUIRE_GT(sd.live, 0);
+        BOOST_REQUIRE_EQUAL(sd.total, sd.live);
+
+        take_snapshot(e, "ks", "cf2", "test2").get();
+        take_snapshot(e, "ks", "cf3", "test3").get();
+
+        details = e.local_db().get_snapshot_details().get0();
+        BOOST_REQUIRE_EQUAL(details.size(), 3);
+
+        e.execute_cql("DROP TABLE ks.cf4;").get();
+
+        details = e.local_db().get_snapshot_details().get0();
+        BOOST_REQUIRE_EQUAL(details.size(), 4);
+
+        for (const auto& result : details) {
+            const auto& sd = result.details;
+
+            if (result.snapshot_name == "test2" || result.snapshot_name == "test3") {
+                BOOST_REQUIRE_EQUAL(sd.live, 0);
+                BOOST_REQUIRE_GT(sd.total, 0);
+            } else {
+                BOOST_REQUIRE_GT(sd.live, 0);
+                BOOST_REQUIRE_EQUAL(sd.total, sd.live);
+            }
+        }
+
+        return make_ready_future<>();
+    });
+}
+
 SEASTAR_TEST_CASE(snapshot_list_inexistent) {
-    return do_with_some_data([] (cql_test_env& e) {
+    return do_with_some_data({"cf"}, [] (cql_test_env& e) {
         auto& cf = e.local_db().find_column_family("ks", "cf");
         auto details = cf.get_snapshot_details().get0();
         BOOST_REQUIRE_EQUAL(details.size(), 0);
@@ -494,7 +543,7 @@ SEASTAR_TEST_CASE(snapshot_list_inexistent) {
 
 
 SEASTAR_TEST_CASE(clear_snapshot) {
-    return do_with_some_data([] (cql_test_env& e) {
+    return do_with_some_data({"cf"}, [] (cql_test_env& e) {
         take_snapshot(e).get();
         auto& cf = e.local_db().find_column_family("ks", "cf");
 
@@ -515,14 +564,14 @@ SEASTAR_TEST_CASE(clear_snapshot) {
 
 SEASTAR_TEST_CASE(clear_nonexistent_snapshot) {
     // no crashes, no exceptions
-    return do_with_some_data([] (cql_test_env& e) {
+    return do_with_some_data({"cf"}, [] (cql_test_env& e) {
         e.local_db().clear_snapshot("test", {"ks"}, "").get();
         return make_ready_future<>();
     });
 }
 
 SEASTAR_TEST_CASE(test_snapshot_ctl_details) {
-    return do_with_some_data([] (cql_test_env& e) {
+    return do_with_some_data({"cf"}, [] (cql_test_env& e) {
         sharded<db::snapshot_ctl> sc;
         sc.start(std::ref(e.db())).get();
         auto stop_sc = deferred_stop(sc);
@@ -572,7 +621,7 @@ SEASTAR_TEST_CASE(test_snapshot_ctl_details) {
 }
 
 SEASTAR_TEST_CASE(test_snapshot_ctl_true_snapshots_size) {
-    return do_with_some_data([] (cql_test_env& e) {
+    return do_with_some_data({"cf"}, [] (cql_test_env& e) {
         sharded<db::snapshot_ctl> sc;
         sc.start(std::ref(e.db())).get();
         auto stop_sc = deferred_stop(sc);
@@ -882,7 +931,7 @@ SEASTAR_TEST_CASE(populate_from_quarantine_works) {
 
     // populate tmpdir_for_data and
     // move a random sstable to quarantine
-    co_await do_with_some_data([] (cql_test_env& e) -> future<> {
+    co_await do_with_some_data({"cf"}, [] (cql_test_env& e) -> future<> {
         auto& db = e.db();
         co_await db.invoke_on_all([] (replica::database& db) {
             auto& cf = db.find_column_family("ks", "cf");
@@ -924,7 +973,7 @@ SEASTAR_TEST_CASE(populate_from_quarantine_works) {
 }
 
 SEASTAR_TEST_CASE(snapshot_with_quarantine_works) {
-    return do_with_some_data([] (cql_test_env& e) -> future<> {
+    return do_with_some_data({"cf"}, [] (cql_test_env& e) -> future<> {
         auto& db = e.db();
         co_await db.invoke_on_all([] (replica::database& db) {
             auto& cf = db.find_column_family("ks", "cf");
