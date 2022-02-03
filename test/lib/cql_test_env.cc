@@ -196,7 +196,9 @@ public:
         testlog.trace("{}(\"{}\")", __FUNCTION__, text);
         auto qs = make_query_state();
         auto qo = make_shared<cql3::query_options>(cql3::query_options::DEFAULT);
-        return local_qp().execute_direct(text, *qs, *qo).finally([qs, qo] {});
+        return local_qp().execute_direct_without_checking_exception_message(text, *qs, *qo).then([qs, qo] (auto msg) {
+            return cql_transport::messages::propagate_exception_as_future(std::move(msg));
+        });
     }
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(
@@ -206,7 +208,9 @@ public:
         testlog.trace("{}(\"{}\")", __FUNCTION__, text);
         auto qs = make_query_state();
         auto& lqo = *qo;
-        return local_qp().execute_direct(text, *qs, lqo).finally([qs, qo = std::move(qo)] {});
+        return local_qp().execute_direct_without_checking_exception_message(text, *qs, lqo).then([qs, qo = std::move(qo)] (auto msg) {
+            return cql_transport::messages::propagate_exception_as_future(std::move(msg));
+        });
     }
 
     virtual future<cql3::prepared_cache_key_type> prepare(sstring query) override {
@@ -249,8 +253,10 @@ public:
 
         auto qs = make_query_state();
         auto& lqo = *qo;
-        return local_qp().execute_prepared(std::move(prepared), std::move(id), *qs, lqo, true)
-            .finally([qs, qo = std::move(qo)] {});
+        return local_qp().execute_prepared_without_checking_exception_message(std::move(prepared), std::move(id), *qs, lqo, true)
+            .then([qs, qo = std::move(qo)] (auto msg) {
+                return cql_transport::messages::propagate_exception_as_future(std::move(msg));
+            });
     }
 
     virtual future<std::vector<mutation>> get_modification_mutations(const sstring& text) override {
@@ -822,7 +828,9 @@ public:
             local_qp().get_cql_stats());
         auto qs = make_query_state();
         auto& lqo = *qo;
-        return local_qp().execute_batch(batch, *qs, lqo, {}).finally([qs, batch, qo = std::move(qo)] {});
+        return local_qp().execute_batch_without_checking_exception_message(batch, *qs, lqo, {}).then([qs, batch, qo = std::move(qo)] (auto msg) {
+            return cql_transport::messages::propagate_exception_as_future(std::move(msg));
+        });
     }
 };
 
