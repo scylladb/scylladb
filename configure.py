@@ -824,6 +824,8 @@ scylla_core = (['replica/database.cc',
                 'service/priority_manager.cc',
                 'service/migration_manager.cc',
                 'service/storage_proxy.cc',
+                'query_ranges_to_vnodes.cc',
+                'service/forward_service.cc',
                 'service/paxos/proposal.cc',
                 'service/paxos/prepare_response.cc',
                 'service/paxos/paxos_state.cc',
@@ -1115,6 +1117,7 @@ idls = ['idl/gossip_digest.idl.hh',
         'idl/hinted_handoff.idl.hh',
         'idl/storage_proxy.idl.hh',
         'idl/group0_state_machine.idl.hh',
+        'idl/forward_request.idl.hh',
         ]
 
 headers = find_headers('.', excluded_dirs=['idl', 'build', 'seastar', '.git'])

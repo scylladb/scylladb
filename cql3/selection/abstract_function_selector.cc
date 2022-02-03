@@ -14,6 +14,7 @@
 #include "scalar_function_selector.hh"
 #include "to_string.hh"
 #include "cql3/selection/selector_factories.hh"
+#include "cql3/functions/abstract_function.hh"
 
 namespace cql3 {
 
@@ -69,6 +70,14 @@ abstract_function_selector::new_factory(shared_ptr<functions::function> fun, sha
 
         virtual bool is_aggregate_selector_factory() const override {
             return _fun->is_aggregate() || _factories->contains_only_aggregate_functions();
+        }
+
+        virtual bool is_count_selector_factory() const override {
+            auto p = dynamic_cast<functions::abstract_function*>(_fun.get());
+            if (!p) {
+                return false;
+            }
+            return p->name().name == "countRows";
         }
     };
 

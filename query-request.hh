@@ -19,6 +19,8 @@
 #include "utils/small_vector.hh"
 #include "query_class_config.hh"
 
+#include "bytes.hh"
+
 class position_in_partition_view;
 class partition_slice_builder;
 
@@ -359,4 +361,36 @@ public:
     friend std::ostream& operator<<(std::ostream& out, const read_command& r);
 };
 
+struct forward_request {
+    enum class reduction_type {
+        count,
+    };
+
+    // multiple reduction types are needed to support queries like:
+    // `SELECT min(x), max(x), avg(x) FROM tab`
+    std::vector<reduction_type> reduction_types;
+
+    query::read_command cmd;
+    dht::partition_range_vector pr;
+
+    db::consistency_level cl;
+    lowres_clock::time_point timeout;
+};
+
+std::ostream& operator<<(std::ostream& out, const forward_request& r);
+std::ostream& operator<<(std::ostream& out, const forward_request::reduction_type& r);
+
+struct forward_result {
+    // vector storing query result for each selected column
+    std::vector<bytes_opt> query_results;
+
+    void merge(const forward_result& other, const std::vector<forward_request::reduction_type>& types);
+
+    struct printer {
+        const std::vector<forward_request::reduction_type>& types;
+        const query::forward_result& res;
+    };
+};
+
+std::ostream& operator<<(std::ostream& out, const query::forward_result::printer&);
 }

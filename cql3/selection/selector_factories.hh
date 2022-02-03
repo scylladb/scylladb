@@ -101,6 +101,13 @@ public:
         return _number_of_aggregate_factories > 0;
     }
 
+    bool does_count() const {
+        if (_factories.size() != 1) {
+            return false;
+        }
+        return _factories[0]->is_count_selector_factory();
+    }
+
     /**
      * Checks if this <code>SelectorFactories</code> contains at least one factory for writetime selectors.
      *

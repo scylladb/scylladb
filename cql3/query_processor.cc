@@ -58,9 +58,10 @@ public:
     }
 };
 
-query_processor::query_processor(service::storage_proxy& proxy, data_dictionary::database db, service::migration_notifier& mn, service::migration_manager& mm, query_processor::memory_config mcfg, cql_config& cql_cfg)
+query_processor::query_processor(service::storage_proxy& proxy, service::forward_service& forwarder, data_dictionary::database db, service::migration_notifier& mn, service::migration_manager& mm, query_processor::memory_config mcfg, cql_config& cql_cfg)
         : _migration_subscriber{std::make_unique<migration_subscriber>(this)}
         , _proxy(proxy)
+        , _forwarder(forwarder)
         , _db(db)
         , _mnotifier(mn)
         , _mm(mm)
@@ -401,6 +402,11 @@ query_processor::query_processor(service::storage_proxy& proxy, data_dictionary:
                             "select_partition_range_scan_no_bypass_cache",
                             _cql_stats.select_partition_range_scan_no_bypass_cache,
                             sm::description("Counts the number of SELECT query executions requiring partition range scan without BYPASS CACHE option.")),
+
+                    sm::make_derive(
+                            "select_parallelized",
+                            _cql_stats.select_parallelized,
+                            sm::description("Counts the number of parallelized aggregation SELECT query executions.")),
 
                     sm::make_derive(
                             "authorized_prepared_statements_cache_evictions",

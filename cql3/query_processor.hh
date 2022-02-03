@@ -28,6 +28,7 @@
 #include "transport/messages/result_message.hh"
 #include "service/qos/service_level_controller.hh"
 #include "service/client_state.hh"
+#include "service/forward_service.hh"
 
 namespace service {
 class migration_manager;
@@ -91,6 +92,7 @@ public:
 private:
     std::unique_ptr<migration_subscriber> _migration_subscriber;
     service::storage_proxy& _proxy;
+    service::forward_service& _forwarder;
     data_dictionary::database _db;
     service::migration_notifier& _mnotifier;
     service::migration_manager& _mm;
@@ -129,7 +131,7 @@ public:
     static std::unique_ptr<statements::raw::parsed_statement> parse_statement(const std::string_view& query);
     static std::vector<std::unique_ptr<statements::raw::parsed_statement>> parse_statements(std::string_view queries);
 
-    query_processor(service::storage_proxy& proxy, data_dictionary::database db, service::migration_notifier& mn, service::migration_manager& mm, memory_config mcfg, cql_config& cql_cfg);
+    query_processor(service::storage_proxy& proxy, service::forward_service& forwarder, data_dictionary::database db, service::migration_notifier& mn, service::migration_manager& mm, memory_config mcfg, cql_config& cql_cfg);
 
     ~query_processor();
 
@@ -143,6 +145,10 @@ public:
 
     service::storage_proxy& proxy() {
         return _proxy;
+    }
+
+    service::forward_service& forwarder() {
+        return _forwarder;
     }
 
     const service::migration_manager& get_migration_manager() const noexcept { return _mm; }

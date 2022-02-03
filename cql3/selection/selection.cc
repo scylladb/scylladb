@@ -180,6 +180,11 @@ public:
     virtual bool is_aggregate() const override {
         return _factories->does_aggregation();
     }
+
+    virtual bool is_count() const override {
+        return _factories->does_count();
+    }
+
 protected:
     class selectors_with_processing : public selectors {
     private:
