@@ -2160,7 +2160,7 @@ class basic_compacted_fragments_consumer_base {
     api::timestamp_type _max_purgeable;
 
     std::vector<mutation> _mutations;
-    std::optional<mutation> _mutation;
+    mutation_rebuilder_v2 _mutation;
 
 private:
     bool can_gc(tombstone t) {
@@ -2221,27 +2221,25 @@ public:
         : _schema(schema)
         , _query_time(query_time)
         , _gc_before(saturating_subtract(query_time, _schema.gc_grace_seconds()))
-        , _get_max_purgeable(std::move(get_max_purgeable)) {
+        , _get_max_purgeable(std::move(get_max_purgeable))
+        , _mutation(_schema.shared_from_this()) {
     }
     void consume_new_partition(const dht::decorated_key& dk) {
         _max_purgeable = _get_max_purgeable(dk);
-        BOOST_REQUIRE(!_mutation);
-        _mutation.emplace(_schema.shared_from_this(), dk);
+        _mutation.consume_new_partition(dk);
     }
     void consume(tombstone t) {
         BOOST_REQUIRE(t);
         BOOST_REQUIRE_EQUAL(is_tombstone_purgeable(t), OnlyPurged);
 
-        BOOST_REQUIRE(_mutation);
-        _mutation->partition().apply(t);
+        _mutation.consume(t);
     }
     stop_iteration consume(static_row&& sr, tombstone tomb, bool is_live) {
         BOOST_REQUIRE(!OnlyPurged || !is_live);
 
         examine_row(column_kind::static_column, sr.cells(), row_tombstone(tomb));
 
-        BOOST_REQUIRE(_mutation);
-        _mutation->partition().static_row().apply(_schema, column_kind::static_column, std::move(sr.cells()));
+        _mutation.consume(std::move(sr));
 
         return stop_iteration::no;
     }
@@ -2256,30 +2254,30 @@ public:
         }
         examine_row(column_kind::regular_column, cr.cells(), tomb);
 
-        BOOST_REQUIRE(_mutation);
-        auto& dr = _mutation->partition().clustered_row(_schema, std::move(cr.key()));
-        dr.apply(_schema, std::move(cr).as_deletable_row());
+        _mutation.consume(std::move(cr));
 
         return stop_iteration::no;
     }
-    stop_iteration consume(range_tombstone&& rt) {
-        BOOST_REQUIRE_EQUAL(is_tombstone_purgeable(rt.tomb), OnlyPurged);
+    stop_iteration consume(range_tombstone_change&& rtc) {
+        if (OnlyPurged) {
+            BOOST_REQUIRE(is_tombstone_purgeable(rtc.tombstone()));
+        } else {
+            BOOST_REQUIRE(!rtc.tombstone() || !is_tombstone_purgeable(rtc.tombstone()));
+        }
 
-        BOOST_REQUIRE(_mutation);
-        _mutation->partition().apply_row_tombstone(_schema, std::move(rt));
+        _mutation.consume(std::move(rtc));
 
         return stop_iteration::no;
     }
     stop_iteration consume_end_of_partition() {
-        BOOST_REQUIRE(_mutation);
-        _mutations.emplace_back(std::move(*_mutation));
-        _mutation.reset();
+        _mutation.consume_end_of_partition();
+        auto mut_opt = _mutation.consume_end_of_stream();
+        BOOST_REQUIRE(mut_opt);
+        _mutations.emplace_back(std::move(*mut_opt));
 
         return stop_iteration::no;
     }
     std::vector<mutation> consume_end_of_stream() {
-        BOOST_REQUIRE(!_mutation);
-
         return _mutations;
     }
 };
@@ -2300,7 +2298,7 @@ void run_compaction_data_stream_split_test(const schema& schema, reader_permit p
         return api::max_timestamp;
     };
     auto gc_grace_seconds = schema.gc_grace_seconds();
-    auto consumer = compact_for_compaction<survived_compacted_fragments_consumer, purged_compacted_fragments_consumer>(
+    auto consumer = compact_for_compaction_v2<survived_compacted_fragments_consumer, purged_compacted_fragments_consumer>(
             schema,
             query_time,
             get_max_purgeable,
