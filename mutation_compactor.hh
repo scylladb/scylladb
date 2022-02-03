@@ -761,12 +761,6 @@ struct compact_for_query : compact_mutation<only_live, compact_for_sstables::no,
 template<emit_only_live_rows OnlyLive>
 using compact_for_query_state = compact_mutation_state<OnlyLive, compact_for_sstables::no>;
 
-template<typename Consumer, typename GCConsumer = noop_compacted_fragments_consumer>
-requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
-struct compact_for_compaction : compact_mutation<emit_only_live_rows::no, compact_for_sstables::yes, Consumer, GCConsumer> {
-    using compact_mutation<emit_only_live_rows::no, compact_for_sstables::yes, Consumer, GCConsumer>::compact_mutation;
-};
-
 template<emit_only_live_rows only_live, typename Consumer>
 requires CompactedFragmentsConsumerV2<Consumer>
 struct compact_for_query_v2 : compact_mutation_v2<only_live, compact_for_sstables::no, Consumer, noop_compacted_fragments_consumer> {
