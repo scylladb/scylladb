@@ -52,6 +52,9 @@ public:
     ::tombstone tombstone() const {
         return _tomb;
     }
+    void set_tombstone(::tombstone tomb) {
+        _tomb = tomb;
+    }
     size_t external_memory_usage(const schema& s) const {
         return _pos.external_memory_usage();
     }
