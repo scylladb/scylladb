@@ -210,14 +210,18 @@ class UnitTestSuite(TestSuite):
 class BoostTestSuite(UnitTestSuite):
     """TestSuite for boost unit tests"""
 
+    # A cache of individual test cases, for which we have called
+    # --list_content. Static to share across all modes.
+    _case_cache = dict()
+
     def __init__(self, path, cfg, options, mode):
         super().__init__(path, cfg, options, mode)
-        self._cases_cache = {'name': None, 'cases': []}
 
     def create_test(self, shortname, suite, args):
         options = suite.options
         if options.parallel_cases and (shortname not in self.no_parallel_cases):
-            if self._cases_cache['name'] != shortname:
+            fqname = os.path.join(self.mode, self.name, shortname)
+            if fqname not in self._case_cache:
                 exe = os.path.join("build", suite.mode, "test", suite.name, shortname)
                 cases = subprocess.run([exe, '--list_content'],
                                        stdout=subprocess.PIPE,
@@ -226,10 +230,9 @@ class BoostTestSuite(UnitTestSuite):
                                                 **{"ASAN_OPTIONS": "halt_on_error=0"}),
                                        check=True, universal_newlines=True).stderr
                 case_list = [case[:-1] for case in cases.splitlines() if case.endswith('*')]
-                self._cases_cache['name'] = shortname
-                self._cases_cache['cases'] = case_list
+                self._case_cache[fqname] = case_list
 
-            case_list = self._cases_cache['cases']
+            case_list = self._case_cache[fqname]
             if len(case_list) == 1:
                 test = BoostTest(self.next_id, shortname, suite, args, None)
                 self.tests.append(test)
@@ -737,6 +740,7 @@ def find_tests(options):
 
     logging.info("Found %d tests, repeat count is %d, starting %d concurrent jobs",
                  TestSuite.test_count(), options.repeat, options.jobs)
+    print("Found {} tests.".format(TestSuite.test_count()))
 
 
 async def run_all_tests(signaled, options):
