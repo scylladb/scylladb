@@ -974,53 +974,62 @@ void dump_compression_info_operation(schema_ptr schema, reader_permit permit, co
 }
 
 void dump_summary_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map&) {
-    const auto composite_to_hex = [] (bytes_view bv) {
-        auto cv = composite_view(bv, true);
-        auto key = partition_key::from_exploded_view(cv.explode());
-        return to_hex(key.representation());
-    };
+    json_writer writer;
+    writer.StartStream();
 
-    fmt::print("{{stream_start}}\n");
     for (auto& sst : sstables) {
         auto& summary = sst->get_summary();
 
-        fmt::print("{{sstable_summary_start: {}}}\n", sst->get_filename());
+        writer.SstableKey(*sst);
+        writer.StartObject();
 
-        fmt::print("{{header: min_index_interval: {}, size: {}, memory_size: {}, sampling_level: {}, size_at_full_sampling: {}}}\n",
-                summary.header.min_index_interval,
-                summary.header.size,
-                summary.header.memory_size,
-                summary.header.sampling_level,
-                summary.header.size_at_full_sampling);
+        writer.Key("header");
+        writer.StartObject();
+        writer.Key("min_index_interval");
+        writer.Uint64(summary.header.min_index_interval);
+        writer.Key("size");
+        writer.Uint64(summary.header.size);
+        writer.Key("memory_size");
+        writer.Uint64(summary.header.memory_size);
+        writer.Key("sampling_level");
+        writer.Uint64(summary.header.sampling_level);
+        writer.Key("size_at_full_sampling");
+        writer.Uint64(summary.header.size_at_full_sampling);
+        writer.EndObject();
 
-        fmt::print("{{positions:\n");
-        for (size_t i = 0; i < summary.positions.size(); ++i) {
-            fmt::print("[{}]: {}\n", i, summary.positions[i]);
+        writer.Key("positions");
+        writer.StartArray();
+        for (const auto& pos : summary.positions) {
+            writer.Uint64(pos);
         }
-        fmt::print("}}\n");
+        writer.EndArray();
 
-        fmt::print("{{entries:\n");
-        for (size_t i = 0; i < summary.entries.size(); ++i) {
-            const auto& e = summary.entries[i];
+        writer.Key("entries");
+        writer.StartArray();
+        for (const auto& e : summary.entries) {
+            writer.StartObject();
+
             auto pkey = e.get_key().to_partition_key(*schema);
-            fmt::print("[{}]: {{summary_entry: token: {}, key: {} ({}), position: {}}}\n",
-                    i,
-                    e.token,
-                    pkey.with_schema(*schema),
-                    pkey,
-                    e.position);
+            writer.Key("key");
+            writer.PartitionKey(*schema, pkey, e.token);
+            writer.Key("position");
+            writer.Uint64(e.position);
+
+            writer.EndObject();
         }
-        fmt::print("}}\n");
+        writer.EndArray();
 
         auto first_key = sstables::key_view(summary.first_key.value).to_partition_key(*schema);
-        fmt::print("{{first_key: {} ({})}}\n", first_key.with_schema(*schema), first_key);
+        writer.Key("first_key");
+        writer.PartitionKey(*schema, first_key);
 
         auto last_key = sstables::key_view(summary.last_key.value).to_partition_key(*schema);
-        fmt::print("{{last_key: {} ({})}}\n", last_key.with_schema(*schema), last_key);
+        writer.Key("last_key");
+        writer.PartitionKey(*schema, last_key);
 
-        fmt::print("{{sstable_summary_end}}\n");
+        writer.EndObject();
     }
-    fmt::print("{{stream_end}}\n");
+    writer.EndStream();
 }
 
 class text_dumper {
@@ -1625,6 +1634,40 @@ such that this file is small enough to be kept in memory even for very large
 sstables.
 For more information about the sstable components and the format itself, visit
 https://docs.scylladb.com/architecture/sstable/.
+
+The content is dumped in JSON, using the following schema:
+
+$ROOT := { "$sstable_path": $SSTABLE, ... }
+
+$SSTABLE := {
+    "header": {
+        "min_index_interval": Uint64,
+        "size": Uint64,
+        "memory_size": Uint64,
+        "sampling_level": Uint64,
+        "size_at_full_sampling": Uint64
+    },
+    "positions": [Uint64, ...],
+    "entries": [$SUMMARY_ENTRY, ...],
+    "first_key": $KEY,
+    "last_key": $KEY
+}
+
+$SUMMARY_ENTRY := {
+    "key": $DECORATED_KEY,
+    "position": Uint64
+}
+
+$DECORATED_KEY := {
+    "token": String,
+    "raw": String, // hexadecimal representation of the raw binary
+    "value": String
+}
+
+$KEY := {
+    "raw": String, // hexadecimal representation of the raw binary
+    "value": String
+}
 )",
             dump_summary_operation},
 /* dump-statistics */
