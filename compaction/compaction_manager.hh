@@ -152,6 +152,15 @@ private:
     // Submission is a NO-OP when there's nothing to do, so it's fine to call it regularly.
     timer<lowres_clock> _compaction_submission_timer = timer<lowres_clock>(compaction_submission_callback());
     static constexpr std::chrono::seconds periodic_compaction_submission_interval() { return std::chrono::seconds(3600); }
+
+    compaction_controller _compaction_controller;
+    compaction_backlog_manager _backlog_manager;
+    maintenance_scheduling_group _maintenance_sg;
+    size_t _available_memory;
+    optimized_optional<abort_source::subscription> _early_abort_subscription;
+
+    class strategy_control;
+    std::unique_ptr<strategy_control> _strategy_control;
 private:
     future<> task_stop(lw_shared_ptr<task> task, sstring reason);
     future<> stop_tasks(std::vector<lw_shared_ptr<task>> tasks, sstring reason);
@@ -195,21 +204,11 @@ private:
 
     future<> perform_sstable_scrub_validate_mode(replica::table* t);
 
-    compaction_controller _compaction_controller;
-    compaction_backlog_manager _backlog_manager;
-    maintenance_scheduling_group _maintenance_sg;
-    size_t _available_memory;
-
     using get_candidates_func = std::function<future<std::vector<sstables::shared_sstable>>()>;
     class can_purge_tombstones_tag;
     using can_purge_tombstones = bool_class<can_purge_tombstones_tag>;
 
     future<> rewrite_sstables(replica::table* t, sstables::compaction_type_options options, get_candidates_func, can_purge_tombstones can_purge = can_purge_tombstones::yes);
-
-    optimized_optional<abort_source::subscription> _early_abort_subscription;
-
-    class strategy_control;
-    std::unique_ptr<strategy_control> _strategy_control;
 public:
     compaction_manager(compaction_scheduling_group csg, maintenance_scheduling_group msg, size_t available_memory, abort_source& as);
     compaction_manager(compaction_scheduling_group csg, maintenance_scheduling_group msg, size_t available_memory, uint64_t shares, abort_source& as);
