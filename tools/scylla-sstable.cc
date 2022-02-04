@@ -941,34 +941,36 @@ sstring disk_string_to_string(const sstables::disk_string<Integer>& ds) {
 }
 
 void dump_compression_info_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map&) {
-    fmt::print("{{stream_start}}\n");
+    json_writer writer;
+    writer.StartStream();
 
     for (auto& sst : sstables) {
         const auto& compression = sst->get_compression();
 
-        fmt::print("{{sstable_compression_info_start: {}}}\n", sst->get_filename());
-        fmt::print("{{name: {}}}\n", disk_string_to_string(compression.name));
-        fmt::print("{{options:");
-        if (!compression.options.elements.empty()) {
-            auto it = compression.options.elements.begin();
-            const auto end = compression.options.elements.end();
-            fmt::print(" {}={}", disk_string_to_string(it->key), disk_string_to_string(it->value));
-            for (++it; it != end; ++it) {
-                fmt::print(", {}={}", disk_string_to_string(it->key), disk_string_to_string(it->value));
-            }
+        writer.SstableKey(*sst);
+        writer.StartObject();
+        writer.Key("name");
+        writer.String(disk_string_to_string(compression.name));
+        writer.Key("options");
+        writer.StartObject();
+        for (const auto& opt : compression.options.elements) {
+            writer.Key(disk_string_to_string(opt.key));
+            writer.String(disk_string_to_string(opt.value));
         }
-        fmt::print("}}\n");
-        fmt::print("{{chunk_len: {}}}\n", compression.chunk_len);
-        fmt::print("{{data_len: {}}}\n", compression.data_len);
-        fmt::print("{{offsets_start}}\n");
-        size_t i = 0;
+        writer.EndObject();
+        writer.Key("chunk_len");
+        writer.Uint(compression.chunk_len);
+        writer.Key("data_len");
+        writer.Uint64(compression.data_len);
+        writer.Key("offsets");
+        writer.StartArray();
         for (const auto& offset : compression.offsets) {
-            fmt::print("[{}]: {}\n", i++, offset);
+            writer.Uint64(offset);
         }
-        fmt::print("{{offsets_end}}\n");
-        fmt::print("{{sstable_compression_info_end}}\n");
+        writer.EndArray();
+        writer.EndObject();
     }
-    fmt::print("{{stream_end}}\n");
+    writer.EndStream();
 }
 
 void dump_summary_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map&) {
@@ -1596,6 +1598,21 @@ get data at a position in the middle of a compressed chunk, the entire chunk has
 to be decompressed.
 For more information about the sstable components and the format itself, visit
 https://docs.scylladb.com/architecture/sstable/.
+
+The content is dumped in JSON, using the following schema:
+
+$ROOT := { "$sstable_path": $SSTABLE, ... }
+
+$SSTABLE := {
+    "name": String,
+    "options": {
+        "$option_name": String,
+        ...
+    },
+    "chunk_len": Uint,
+    "data_len": Uint64,
+    "offsets": [Uint64, ...]
+}
 )",
             dump_compression_info_operation},
 /* dump-summary */
