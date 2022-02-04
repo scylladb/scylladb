@@ -33,8 +33,6 @@
 #include "cdc/cdc_extension.hh"
 #include <json/json.h>
 
-static std::ofstream std_cout;
-
 //
 // A helper class to serialize result set output to a formatted JSON
 //
@@ -129,7 +127,7 @@ void repl(seastar::app_template& app) {
             }
             // Handle multiline input and comments
             if (boost::regex_match(line.begin(), line.end(), comment_re)) {
-                std_cout << line << std::endl;
+                std::cout << line << std::endl;
                 continue;
             }
             stmt << line << std::endl;
@@ -141,7 +139,7 @@ void repl(seastar::app_template& app) {
                 stmt << line << std::endl;
             }
             // Print the statement
-            std_cout << stmt.str();
+            std::cout << stmt.str();
             Json::Value json;
 
             auto execute = [&json, &stmt, &e] () mutable {
@@ -166,7 +164,7 @@ void repl(seastar::app_template& app) {
                 json["status"] = "error";
                 json["message"] = fmt::format("{}", e);
             }
-            std_cout << json << std::endl;
+            std::cout << json << std::endl;
         }
     }, db_cfg).get0();
 }
@@ -179,15 +177,19 @@ void apply_configuration(const boost::program_options::variables_map& cfg) {
         static std::ifstream input(cfg["input"].as<std::string>());
         std::cin.rdbuf(input.rdbuf());
     }
-    static std::ofstream log(cfg["log"].as<std::string>());
-    // Seastar always logs to std::cout, hack this around
-    // by redirecting std::cout to a file and capturing
-    // the old std::cout in std_cout
-    auto save_filebuf = std::cout.rdbuf(log.rdbuf());
+    FILE *redirect_cerr = fopen(cfg["log"].as<std::string>().c_str(), "w");
+    if (redirect_cerr == NULL) {
+        throw std::system_error(errno, std::iostream_category(), "Failed to open the log file");
+    }
+    dup2(fileno(redirect_cerr), STDERR_FILENO);
+    fclose(redirect_cerr);
     if (cfg.contains("output")) {
-        std_cout.open(cfg["output"].as<std::string>());
-    } else  {
-        std_cout.std::ios::rdbuf(save_filebuf);
+        FILE *redirect_cout = fopen(cfg["output"].as<std::string>().c_str(), "w");
+        if (redirect_cout == NULL) {
+            throw std::system_error(errno, std::iostream_category(), "Failed to open the output file");
+        }
+        dup2(fileno(redirect_cout), STDOUT_FILENO);
+        fclose(redirect_cout);
     }
 }
 
