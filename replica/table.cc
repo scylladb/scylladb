@@ -662,11 +662,21 @@ table::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_
                 [] (const dht::decorated_key&) { return api::min_timestamp; });
         }
 
-        mutation_fragment* fragment = co_await reader.peek();
-        if (!fragment) {
+        std::exception_ptr err;
+        try {
+            mutation_fragment* fragment = co_await reader.peek();
+            if (!fragment) {
+                co_await reader.close();
+                _memtables->erase(old);
+                co_return stop_iteration::yes;
+            }
+        } catch (...) {
+            err = std::current_exception();
+        }
+        if (err) {
+            tlogger.error("failed to flush memtable for {}.{}: {}", old->schema()->ks_name(), old->schema()->cf_name(), err);
             co_await reader.close();
-            _memtables->erase(old);
-            co_return stop_iteration::yes;
+            co_return stop_iteration(_async_gate.is_closed());
         }
 
         auto f = consumer(upgrade_to_v2(std::move(reader)));
