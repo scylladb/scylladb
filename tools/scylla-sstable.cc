@@ -1287,12 +1287,12 @@ void dump_statistics_operation(schema_ptr schema, reader_permit permit, const st
 
 const char* to_string(sstables::scylla_metadata_type t) {
     switch (t) {
-        case sstables::scylla_metadata_type::Sharding: return "Sharding";
-        case sstables::scylla_metadata_type::Features: return "Features";
-        case sstables::scylla_metadata_type::ExtensionAttributes: return "ExtensionAttributes";
-        case sstables::scylla_metadata_type::RunIdentifier: return "RunIdentifier";
-        case sstables::scylla_metadata_type::LargeDataStats: return "LargeDataStats";
-        case sstables::scylla_metadata_type::SSTableOrigin: return "SSTableOrigin";
+        case sstables::scylla_metadata_type::Sharding: return "sharding";
+        case sstables::scylla_metadata_type::Features: return "features";
+        case sstables::scylla_metadata_type::ExtensionAttributes: return "extension_attributes";
+        case sstables::scylla_metadata_type::RunIdentifier: return "run_identifier";
+        case sstables::scylla_metadata_type::LargeDataStats: return "large_data_stats";
+        case sstables::scylla_metadata_type::SSTableOrigin: return "sstable_origin";
     }
     std::abort();
 }
@@ -1307,16 +1307,36 @@ const char* to_string(sstables::large_data_type t) {
     std::abort();
 }
 
-struct scylla_metadata_visitor : public boost::static_visitor<> {
+class scylla_metadata_visitor : public boost::static_visitor<> {
+    json_writer& _writer;
+
+public:
+    scylla_metadata_visitor(json_writer& writer) : _writer(writer) { }
+
     void operator()(const sstables::sharding_metadata& val) const {
-        fmt::print("\n");
+        _writer.StartArray();
         for (const auto& e : val.token_ranges.elements) {
-            fmt::print("{}{}, {}{}\n",
-                    e.left.exclusive ? "(" : "[",
-                    disk_string_to_string(e.left.token),
-                    e.right.exclusive ? ")" : "]",
-                    disk_string_to_string(e.right.token));
+            _writer.StartObject();
+
+            _writer.Key("left");
+            _writer.StartObject();
+            _writer.Key("exclusive");
+            _writer.Bool(e.left.exclusive);
+            _writer.Key("token");
+            _writer.String(disk_string_to_string(e.left.token));
+            _writer.EndObject();
+
+            _writer.Key("right");
+            _writer.StartObject();
+            _writer.Key("exclusive");
+            _writer.Bool(e.right.exclusive);
+            _writer.Key("token");
+            _writer.String(disk_string_to_string(e.right.token));
+            _writer.EndObject();
+
+            _writer.EndObject();
         }
+        _writer.EndArray();
     }
     void operator()(const sstables::sstable_enabled_features& val) const {
         std::pair<sstables::sstable_feature, const char*> all_features[] = {
@@ -1327,67 +1347,73 @@ struct scylla_metadata_visitor : public boost::static_visitor<> {
                 {sstables::sstable_feature::CorrectEmptyCounters, "CorrectEmptyCounters"},
                 {sstables::sstable_feature::CorrectUDTsInCollections, "CorrectUDTsInCollections"},
         };
-        fmt::print(" ({}): ", val.enabled_features);
-        bool first = true;
+        _writer.StartObject();
+        _writer.Key("mask");
+        _writer.Uint64(val.enabled_features);
+        _writer.Key("features");
+        _writer.StartArray();
         for (const auto& [mask, name] : all_features) {
             if (mask & val.enabled_features) {
-                if (first) {
-                    first = false;
-                } else {
-                    fmt::print(" |");
-                }
-                fmt::print(" {}", name);
+                _writer.String(name);
             }
         }
+        _writer.EndArray();
+        _writer.EndObject();
     }
     void operator()(const sstables::scylla_metadata::extension_attributes& val) const {
-        fmt::print("\n");
+        _writer.StartObject();
         for (const auto& [k, v] : val.map) {
-            fmt::print("{}: {}\n", disk_string_to_string(k), disk_string_to_string(v));
+            _writer.Key(disk_string_to_string(k));
+            _writer.String(disk_string_to_string(v));
         }
+        _writer.EndObject();
     }
     void operator()(const sstables::run_identifier& val) const {
-        fmt::print(" {}", val.id);
+        _writer.AsString(val.id);
     }
     void operator()(const sstables::scylla_metadata::large_data_stats& val) const {
-        fmt::print("\n");
+        _writer.StartObject();
         for (const auto& [k, v] : val.map) {
-            fmt::print("{}: {{max_value: {}, threshold: {}, above_threshold: {}}}\n",
-                    to_string(k),
-                    v.max_value,
-                    v.threshold,
-                    v.above_threshold);
+            _writer.Key(to_string(k));
+            _writer.StartObject();
+            _writer.Key("max_value");
+            _writer.Uint64(v.max_value);
+            _writer.Key("threshold");
+            _writer.Uint64(v.threshold);
+            _writer.Key("above_threshold");
+            _writer.Uint(v.above_threshold);
+            _writer.EndObject();
         }
+        _writer.EndObject();
     }
     void operator()(const sstables::scylla_metadata::sstable_origin& val) const {
-        fmt::print(" {}", disk_string_to_string(val));
+        _writer.String(disk_string_to_string(val));
     }
 
     template <sstables::scylla_metadata_type E, typename T>
     void operator()(const sstables::disk_tagged_union_member<sstables::scylla_metadata_type, E, T>& m) const {
-        fmt::print("{{{}:", to_string(E));
+        _writer.Key(to_string(E));
         (*this)(m.value);
-        fmt::print("}}\n");
     }
-
-    scylla_metadata_visitor() = default;
 };
 
 void dump_scylla_metadata_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map&) {
-    fmt::print("{{stream_start}}\n");
+    json_writer writer;
+    writer.StartStream();
     for (auto& sst : sstables) {
-        fmt::print("{{sstable_scylla_metadata_start: {}}}\n", sst->get_filename());
+        writer.SstableKey(*sst);
+        writer.StartObject();
         auto m = sst->get_scylla_metadata();
         if (!m) {
-            fmt::print("{{sstable_scylla_metadata_end}}\n");
+            writer.EndObject();
             continue;
         }
         for (const auto& [k, v] : m->data.data) {
-            boost::apply_visitor(scylla_metadata_visitor{}, v);
+            boost::apply_visitor(scylla_metadata_visitor(writer), v);
         }
-        fmt::print("{{sstable_scylla_metadata_end}}\n");
+        writer.EndObject();
     }
-    fmt::print("{{stream_end}}\n");
+    writer.EndStream();
 }
 
 template <typename SstableConsumer>
@@ -1784,6 +1810,41 @@ metadata about the data component. This component won't be present in sstables
 produced by Apache Cassandra.
 For more information about the sstable components and the format itself, visit
 https://docs.scylladb.com/architecture/sstable/.
+
+The content is dumped in JSON, using the following schema:
+
+$ROOT := { "$sstable_path": $SSTABLE, ... }
+
+$SSTABLE := {
+    "sharding": [$SHARDING_METADATA, ...],
+    "features": $FEATURES_METADATA,
+    "extension_attributes": { "$key": String, ...}
+    "run_identifier": String, // UUID
+    "large_data_stats": {"$key": $LARGE_DATA_STATS_METADATA, ...}
+    "sstable_origin": String
+}
+
+$SHARDING_METADATA := {
+    "left": {
+        "exclusive": Bool,
+        "token": String
+    },
+    "right": {
+        "exclusive": Bool,
+        "token": String
+    }
+}
+
+$FEATURES_METADATA := {
+    "mask": Uint64,
+    "features": [String, ...]
+}
+
+$LARGE_DATA_STATS_METADATA := {
+    "max_value": Uint64,
+    "threshold": Uint64,
+    "above_threshold": Uint
+}
 )",
             dump_scylla_metadata_operation},
 /* writetime-histogram */
