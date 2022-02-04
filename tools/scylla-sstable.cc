@@ -1032,26 +1032,29 @@ void dump_summary_operation(schema_ptr schema, reader_permit permit, const std::
     writer.EndStream();
 }
 
-class text_dumper {
+class json_dumper {
+    json_writer& _writer;
     sstables::sstable_version_types _version;
     std::function<std::string_view(const void* const)> _name_resolver;
 
 private:
-    template <typename Number>
-    requires std::is_arithmetic_v<Number>
-    void visit(Number& val) {
-        if constexpr (std::is_same_v<std::remove_cv_t<Number>, int8_t>) {
-            fmt::print(" {}", static_cast<signed int>(val));
-        } else if (std::is_same_v<std::remove_cv_t<Number>, uint8_t>) {
-            fmt::print(" {}", static_cast<unsigned int>(val));
+    void visit(int8_t val) { _writer.Int(val); }
+    void visit(uint8_t val) { _writer.Uint(val); }
+    void visit(int val) { _writer.Int(val); }
+    void visit(unsigned val) { _writer.Uint(val); }
+    void visit(int64_t val) { _writer.Int64(val); }
+    void visit(uint64_t val) { _writer.Uint64(val); }
+    void visit(double val) {
+        if (std::isnan(val)) {
+            _writer.String("NaN");
         } else {
-            fmt::print(" {}", val);
+            _writer.Double(val);
         }
     }
 
     template <typename Integer>
     void visit(const sstables::disk_string<Integer>& val) {
-        fmt::print(" {}", disk_string_to_string(val));
+        _writer.String(disk_string_to_string(val));
     }
 
     template <typename Contents>
@@ -1059,134 +1062,140 @@ private:
         if (bool(val)) {
             visit(*val);
         } else {
-            fmt::print(" <nullopt>");
+            _writer.Null();
         }
     }
 
     template <typename Integer, typename T>
     void visit(const sstables::disk_array<Integer, T>& val) {
-        fmt::print("\n");
-        for (size_t i = 0; i != val.elements.size(); ++i) {
-            fmt::print("[{}]: ", i);
-            visit(val.elements[i]);
-            fmt::print("\n");
+        _writer.StartArray();
+        for (const auto& elem : val.elements) {
+            visit(elem);
         }
+        _writer.EndArray();
     }
 
     void visit(const sstables::disk_string_vint_size& val) {
-        fmt::print(" {}", sstring(val.value.begin(), val.value.end()));
+        _writer.String(sstring(val.value.begin(), val.value.end()));
     }
 
     template <typename T>
     void visit(const sstables::disk_array_vint_size<T>& val) {
-        fmt::print("\n");
-        for (size_t i = 0; i != val.elements.size(); ++i) {
-            fmt::print("[{}]: ", i);
-            visit(val.elements[i]);
-            fmt::print("\n");
+        _writer.StartArray();
+        for (const auto& elem : val.elements) {
+            visit(elem);
         }
+        _writer.EndArray();
     }
 
     void visit(const utils::estimated_histogram& val) {
-        fmt::print("\n");
+        _writer.StartArray();
         for (size_t i = 0; i < val.buckets.size(); i++) {
-            auto offset = val.bucket_offsets[i == 0 ? 0 : i - 1];
-            auto bucket = val.buckets[i];
-            fmt::print("[{}]: offset: {}, value={}}}\n", i, offset, bucket);
+            _writer.StartObject();
+            _writer.Key("offset");
+            _writer.Int64(val.bucket_offsets[i == 0 ? 0 : i - 1]);
+            _writer.Key("value");
+            _writer.Int64(val.buckets[i]);
+            _writer.EndObject();
         }
+        _writer.EndArray();
     }
 
     void visit(const utils::streaming_histogram& val) {
-        fmt::print("\n");
+        _writer.StartObject();
         for (const auto& [k, v] : val.bin) {
-            fmt::print("[{}]: {}\n", k, v);
+            _writer.Key(format("{}", k));
+            _writer.Uint64(v);
         }
+        _writer.EndObject();
     }
 
     void visit(const db::replay_position& val) {
-        fmt::print(" id: {}, pos: {}", val.id, val.pos);
+        _writer.StartObject();
+        _writer.Key("id");
+        _writer.Uint64(val.id);
+        _writer.Key("pos");
+        _writer.Uint(val.pos);
+        _writer.EndObject();
     }
 
     void visit(const sstables::commitlog_interval& val) {
-        fmt::print(" {{start: ");
+        _writer.StartObject();
+        _writer.Key("start");
         visit(val.start);
-        fmt::print("}}");
-
-        fmt::print(" {{end: ");
+        _writer.Key("end");
         visit(val.end);
-        fmt::print("}}");
+        _writer.EndObject();
     }
 
     void visit(const utils::UUID& uuid) {
-        fmt::print(" {}", uuid.to_sstring());
+        _writer.String(uuid.to_sstring());
     }
 
     template <typename Integer>
     void visit(const sstables::vint<Integer>& val) {
-        fmt::print("{}", val.value);
+        visit(val.value);
     }
 
     void visit(const sstables::serialization_header::column_desc& val) {
-        text_dumper dumper(_version, [&val] (const void* const field) {
+        auto prev_name_resolver = std::exchange(_name_resolver, [&val] (const void* const field) {
             if (field == &val.name) { return "name"; }
             else if (field == &val.type_name) { return "type_name"; }
             else { throw std::invalid_argument("invalid field offset"); }
         });
-        const_cast<sstables::serialization_header::column_desc&>(val).describe_type(_version, std::ref(dumper));
+
+        const_cast<sstables::serialization_header::column_desc&>(val).describe_type(_version, std::ref(*this));
+
+        _name_resolver = std::move(prev_name_resolver);
     }
 
-    template <typename FieldType>
-    void visit_field(FieldType& field) {
-        const auto name = _name_resolver(&field);
-        fmt::print("{{{}:", name);
-        visit(field);
-        fmt::print("}}\n");
-    }
-
-    text_dumper(sstables::sstable_version_types version, std::function<std::string_view(const void* const)> name_resolver)
-        : _version(version), _name_resolver(std::move(name_resolver)) {
+    json_dumper(json_writer& writer, sstables::sstable_version_types version, std::function<std::string_view(const void* const)> name_resolver)
+        : _writer(writer), _version(version), _name_resolver(std::move(name_resolver)) {
     }
 
 public:
     template <typename Arg1>
     void operator()(Arg1& arg1) {
-        visit_field(arg1);
+        _writer.Key(_name_resolver(&arg1));
+        visit(arg1);
     }
 
     template <typename Arg1, typename... Arg>
     void operator()(Arg1& arg1, Arg&... arg) {
-        visit_field(arg1);
+        _writer.Key(_name_resolver(&arg1));
+        visit(arg1);
         (*this)(arg...);
     }
 
     template <typename T>
-    static void dump(sstables::sstable_version_types version, const T& obj, std::string_view name,
+    static void dump(json_writer& writer, sstables::sstable_version_types version, const T& obj, std::string_view name,
             std::function<std::string_view(const void* const)> name_resolver) {
-        text_dumper dumper(version, std::move(name_resolver));
-        fmt::print("{{{}_start}}\n", name);
+        json_dumper dumper(writer, version, std::move(name_resolver));
+        writer.Key(name);
+        writer.StartObject();
         const_cast<T&>(obj).describe_type(version, std::ref(dumper));
-        fmt::print("{{{}_end}}\n", name);
+        writer.EndObject();
     }
 };
 
-void dump_validation_metadata(sstables::sstable_version_types version, const sstables::validation_metadata& metadata) {
-    text_dumper::dump(version, metadata, "validation", [&metadata] (const void* const field) {
+void dump_validation_metadata(json_writer& writer, sstables::sstable_version_types version, const sstables::validation_metadata& metadata) {
+    json_dumper::dump(writer, version, metadata, "validation", [&metadata] (const void* const field) {
         if (field == &metadata.partitioner) { return "partitioner"; }
         else if (field == &metadata.filter_chance) { return "filter_chance"; }
         else { throw std::invalid_argument("invalid field offset"); }
     });
 }
 
-void dump_compaction_metadata(sstables::sstable_version_types version, const sstables::compaction_metadata& metadata) {
-    text_dumper::dump(version, metadata, "compaction", [&metadata] (const void* const field) {
+void dump_compaction_metadata(json_writer& writer, sstables::sstable_version_types version, const sstables::compaction_metadata& metadata) {
+    json_dumper::dump(writer, version, metadata, "compaction", [&metadata] (const void* const field) {
         if (field == &metadata.ancestors) { return "ancestors"; }
         else if (field == &metadata.cardinality) { return "cardinality"; }
         else { throw std::invalid_argument("invalid field offset"); }
     });
 }
 
-void dump_stats_metadata(sstables::sstable_version_types version, const sstables::stats_metadata& metadata) {
-    text_dumper::dump(version, metadata, "stats", [&metadata] (const void* const field) {
+void dump_stats_metadata(json_writer& writer, sstables::sstable_version_types version, const sstables::stats_metadata& metadata) {
+    json_dumper::dump(writer, version, metadata, "stats", [&metadata] (const void* const field) {
         if (field == &metadata.estimated_partition_size) { return "estimated_partition_size"; }
         else if (field == &metadata.estimated_cells_count) { return "estimated_cells_count"; }
         else if (field == &metadata.position) { return "position"; }
@@ -1212,8 +1221,8 @@ void dump_stats_metadata(sstables::sstable_version_types version, const sstables
     });
 }
 
-void dump_serialization_header(sstables::sstable_version_types version, const sstables::serialization_header& metadata) {
-    text_dumper::dump(version, metadata, "serialization_header", [&metadata] (const void* const field) {
+void dump_serialization_header(json_writer& writer, sstables::sstable_version_types version, const sstables::serialization_header& metadata) {
+    json_dumper::dump(writer, version, metadata, "serialization_header", [&metadata] (const void* const field) {
         if (field == &metadata.min_timestamp_base) { return "min_timestamp_base"; }
         else if (field == &metadata.min_local_deletion_time_base) { return "min_local_deletion_time_base"; }
         else if (field == &metadata.min_ttl_base) { return "min_ttl_base"; }
@@ -1236,44 +1245,44 @@ void dump_statistics_operation(schema_ptr schema, reader_permit permit, const st
         std::abort();
     };
 
-    fmt::print("{{stream_start}}\n");
+    json_writer writer;
+    writer.StartStream();
     for (auto& sst : sstables) {
         auto& statistics = sst->get_statistics();
 
-        fmt::print("{{sstable_statistics_start: {}}}\n", sst->get_filename());
-        fmt::print("{{offsets: ");
-        if (!statistics.offsets.elements.empty()) {
-            auto it = statistics.offsets.elements.begin();
-            const auto end = statistics.offsets.elements.end();
-            fmt::print("{}={}", to_string(it->first), it->second);
-            for (++it; it != end; ++it) {
-                fmt::print(", {}={}", to_string(it->first), it->second);
-            }
+        writer.SstableKey(*sst);
+        writer.StartObject();
+
+        writer.Key("offsets");
+        writer.StartObject();
+        for (const auto& [k, v] : statistics.offsets.elements) {
+            writer.Key(to_string(k));
+            writer.Uint(v);
         }
-        fmt::print("}}\n");
-        fmt::print("{{contents_start}}\n");
+        writer.EndObject();
+
         const auto version = sst->get_version();
         for (const auto& [type, _] : statistics.offsets.elements) {
             const auto& metadata_ptr = statistics.contents.at(type);
             switch (type) {
                 case sstables::metadata_type::Validation:
-                    dump_validation_metadata(version, *dynamic_cast<const sstables::validation_metadata*>(metadata_ptr.get()));
+                    dump_validation_metadata(writer, version, *dynamic_cast<const sstables::validation_metadata*>(metadata_ptr.get()));
                     break;
                 case sstables::metadata_type::Compaction:
-                    dump_compaction_metadata(version, *dynamic_cast<const sstables::compaction_metadata*>(metadata_ptr.get()));
+                    dump_compaction_metadata(writer, version, *dynamic_cast<const sstables::compaction_metadata*>(metadata_ptr.get()));
                     break;
                 case sstables::metadata_type::Stats:
-                    dump_stats_metadata(version, *dynamic_cast<const sstables::stats_metadata*>(metadata_ptr.get()));
+                    dump_stats_metadata(writer, version, *dynamic_cast<const sstables::stats_metadata*>(metadata_ptr.get()));
                     break;
                 case sstables::metadata_type::Serialization:
-                    dump_serialization_header(version, *dynamic_cast<const sstables::serialization_header*>(metadata_ptr.get()));
+                    dump_serialization_header(writer, version, *dynamic_cast<const sstables::serialization_header*>(metadata_ptr.get()));
                     break;
             }
         }
-        fmt::print("{{contents_end}}\n");
-        fmt::print("{{sstable_statistics_end}}\n");
+
+        writer.EndObject();
     }
-    fmt::print("{{stream_end}}\n");
+    writer.EndStream();
 }
 
 const char* to_string(sstables::scylla_metadata_type t) {
@@ -1679,6 +1688,91 @@ data component. In the sstable 3 format, this component is critical for parsing
 the data component.
 For more information about the sstable components and the format itself, visit
 https://docs.scylladb.com/architecture/sstable/.
+
+The content is dumped in JSON, using the following schema:
+
+$ROOT := { "$sstable_path": $SSTABLE, ... }
+
+$SSTABLE := {
+    "offsets": {
+        "$metadata": Uint,
+        ...
+    },
+    "validation": $VALIDATION_METADATA,
+    "compaction": $COMPACTION_METADATA,
+    "stats": $STATS_METADATA,
+    "serialization_header": $SERIALIZATION_HEADER // >= MC only
+}
+
+$VALIDATION_METADATA := {
+    "partitioner": String,
+    "filter_chance": Double
+}
+
+$COMPACTION_METADATA := {
+    "ancestors": [Uint, ...], // < MC only
+    "cardinality": [Uint, ...]
+}
+
+$STATS_METADATA := {
+    "estimated_partition_size": $ESTIMATED_HISTOGRAM,
+    "estimated_cells_count": $ESTIMATED_HISTOGRAM,
+    "position": $REPLAY_POSITION,
+    "min_timestamp": Int64,
+    "max_timestamp": Int64,
+    "min_local_deletion_time": Int64, // >= MC only
+    "max_local_deletion_time": Int64,
+    "min_ttl": Int64, // >= MC only
+    "max_ttl": Int64, // >= MC only
+    "compression_ratio": Double,
+    "estimated_tombstone_drop_time": $STREAMING_HISTOGRAM,
+    "sstable_level": Uint,
+    "repaired_at": Uint64,
+    "min_column_names": [Uint, ...],
+    "max_column_names": [Uint, ...],
+    "has_legacy_counter_shards": Bool,
+    "columns_count": Int64, // >= MC only
+    "rows_count": Int64, // >= MC only
+    "commitlog_lower_bound": $REPLAY_POSITION, // >= MC only
+    "commitlog_intervals": [$COMMITLOG_INTERVAL, ...] // >= MC only
+}
+
+$ESTIMATED_HISTOGRAM := [$ESTIMATED_HISTOGRAM_BUCKET, ...]
+
+$ESTIMATED_HISTOGRAM_BUCKET := {
+    "offset": Int64,
+    "value": Int64
+}
+
+$STREAMING_HISTOGRAM := {
+    "$key": Uint64,
+    ...
+}
+
+$REPLAY_POSITION := {
+    "id": Uint64,
+    "pos": Uint
+}
+
+$COMMITLOG_INTERVAL := {
+    "start": $REPLAY_POSITION,
+    "end": $REPLAY_POSITION
+}
+
+$SERIALIZATION_HEADER_METADATA := {
+    "min_timestamp_base": Uint64,
+    "min_local_deletion_time_base": Uint64,
+    "min_ttl_base": Uint64",
+    "pk_type_name": String,
+    "clustering_key_types_names": [String, ...],
+    "static_columns": [$COLUMN_DESC, ...],
+    "regular_columns": [$COLUMN_DESC, ...],
+}
+
+$COLUMN_DESC := {
+    "name": String,
+    "type_name": String
+}
 )",
             dump_statistics_operation},
 /* dump-scylla-metadata */
