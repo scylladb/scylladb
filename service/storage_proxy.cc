@@ -2845,7 +2845,7 @@ class abstract_read_resolver {
 protected:
     db::consistency_level _cl;
     size_t _targets_count;
-    promise<> _done_promise; // all target responded
+    promise<result<>> _done_promise; // all target responded
     bool _request_failed = false; // will be true if request fails or timeouts
     timer<storage_proxy::clock_type> _timeout;
     schema_ptr _schema;
@@ -2874,7 +2874,7 @@ public:
     virtual ~abstract_read_resolver() {};
     virtual void on_error(gms::inet_address ep, bool disconnect) = 0;
     future<> done() {
-        return _done_promise.get_future();
+        return _done_promise.get_future().then(utils::result_into_future<result<>>);
     }
     void error(gms::inet_address ep, std::exception_ptr eptr) {
         sstring why;
@@ -2911,7 +2911,7 @@ struct digest_read_result {
 class digest_read_resolver : public abstract_read_resolver {
     size_t _block_for;
     size_t _cl_responses = 0;
-    promise<digest_read_result> _cl_promise; // cl is reached
+    promise<result<digest_read_result>> _cl_promise; // cl is reached
     bool _cl_reported = false;
     foreign_ptr<lw_shared_ptr<query::result>> _data_result;
     utils::small_vector<query::result_digest, 3> _digest_results;
@@ -2976,7 +2976,7 @@ public:
         }
         if (is_completed()) {
             _timeout.cancel();
-            _done_promise.set_value();
+            _done_promise.set_value(bo::success());
         }
     }
     void on_error(gms::inet_address ep, bool disconnect) override {
@@ -2994,7 +2994,7 @@ public:
         }
     }
     future<digest_read_result> has_cl() {
-        return _cl_promise.get_future();
+        return _cl_promise.get_future().then(utils::result_into_future<result<digest_read_result>>);
     }
     bool has_data() {
         return _data_result;
@@ -3299,7 +3299,7 @@ public:
             _data_results.emplace_back(std::move(from), std::move(result));
             if (_data_results.size() == _targets_count) {
                 _timeout.cancel();
-                _done_promise.set_value();
+                _done_promise.set_value(bo::success());
             }
         }
     }
