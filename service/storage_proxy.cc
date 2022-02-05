@@ -2854,7 +2854,7 @@ protected:
     virtual void on_failure(std::exception_ptr ex) = 0;
     virtual void on_timeout() = 0;
     virtual size_t response_count() const = 0;
-    virtual void fail_request(std::exception_ptr ex) {
+    void fail_request(std::exception_ptr ex) {
         _request_failed = true;
         _done_promise.set_exception(ex);
         _timeout.cancel();
