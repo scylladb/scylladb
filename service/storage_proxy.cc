@@ -2851,14 +2851,15 @@ protected:
     schema_ptr _schema;
     size_t _failed = 0;
 
-    virtual void on_failure(std::exception_ptr ex) = 0;
+    virtual void on_failure(exceptions::coordinator_exception_container&& ex) = 0;
     virtual void on_timeout() = 0;
     virtual size_t response_count() const = 0;
-    void fail_request(std::exception_ptr ex) {
+    void fail_request(exceptions::coordinator_exception_container&& ex) {
         _request_failed = true;
-        _done_promise.set_exception(ex);
-        _timeout.cancel();
-        on_failure(ex);
+        // The exception container was created on the same shard,
+        // so it should be cheap to clone and not throw
+        _done_promise.set_value(ex.clone());
+        on_failure(std::move(ex));
     }
 public:
     abstract_read_resolver(schema_ptr schema, db::consistency_level cl, size_t target_count, storage_proxy::clock_type::time_point timeout)
@@ -2919,11 +2920,11 @@ class digest_read_resolver : public abstract_read_resolver {
     size_t _target_count_for_cl; // _target_count_for_cl < _targets_count if CL=LOCAL and RRD.GLOBAL
 
     void on_timeout() override {
-        fail_request(std::make_exception_ptr(read_timeout_exception(_schema->ks_name(), _schema->cf_name(), _cl, _cl_responses, _block_for, _data_result)));
+        fail_request(read_timeout_exception(_schema->ks_name(), _schema->cf_name(), _cl, _cl_responses, _block_for, _data_result));
     }
-    void on_failure(std::exception_ptr ex) override {
+    void on_failure(exceptions::coordinator_exception_container&& ex) override {
         if (!_cl_reported) {
-            _cl_promise.set_exception(ex);
+            _cl_promise.set_value(std::move(ex));
         }
         // we will not need them any more
         _data_result = foreign_ptr<lw_shared_ptr<query::result>>();
@@ -2990,7 +2991,7 @@ public:
             return;
         }
         if (_block_for + _failed > _target_count_for_cl) {
-            fail_request(std::make_exception_ptr(read_failure_exception(_schema->ks_name(), _schema->cf_name(), _cl, _cl_responses, _failed, _block_for, _data_result)));
+            fail_request(read_failure_exception(_schema->ks_name(), _schema->cf_name(), _cl, _cl_responses, _failed, _block_for, _data_result));
         }
     }
     future<digest_read_result> has_cl() {
@@ -3086,9 +3087,9 @@ class data_read_resolver : public abstract_read_resolver {
     std::unordered_map<dht::token, std::unordered_map<gms::inet_address, std::optional<mutation>>> _diffs;
 private:
     void on_timeout() override {
-        fail_request(std::make_exception_ptr(read_timeout_exception(_schema->ks_name(), _schema->cf_name(), _cl, response_count(), _targets_count, response_count() != 0)));
+        fail_request(read_timeout_exception(_schema->ks_name(), _schema->cf_name(), _cl, response_count(), _targets_count, response_count() != 0));
     }
-    void on_failure(std::exception_ptr ex) override {
+    void on_failure(exceptions::coordinator_exception_container&& ex) override {
         // we will not need them any more
         _data_results.clear();
     }
@@ -3304,7 +3305,7 @@ public:
         }
     }
     void on_error(gms::inet_address ep, bool disconnect) override {
-        fail_request(std::make_exception_ptr(read_failure_exception(_schema->ks_name(), _schema->cf_name(), _cl, response_count(), 1, _targets_count, response_count() != 0)));
+        fail_request(read_failure_exception(_schema->ks_name(), _schema->cf_name(), _cl, response_count(), 1, _targets_count, response_count() != 0));
     }
     uint32_t max_live_count() const {
         return _max_live_count;
