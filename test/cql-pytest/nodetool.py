@@ -59,6 +59,13 @@ def flush(cql, table):
     else:
         run_nodetool(cql, "flush", ks, cf)
 
+def compact(cql, table):
+    ks, cf = table.split('.')
+    if has_rest_api(cql):
+        requests.post(f'{rest_api_url(cql)}/storage_service/keyspace_compaction/{ks}', params={'cf' : cf})
+    else:
+        run_nodetool(cql, "compact", ks, cf)
+
 def take_snapshot(cql, table, tag, skip_flush):
     ks, cf = table.split('.')
     if has_rest_api(cql):

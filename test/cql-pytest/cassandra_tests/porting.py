@@ -206,8 +206,7 @@ def flush(cql, table):
     nodetool.flush(cql, table)
 
 def compact(cql, table):
-    # FIXME! Currently this doesn't compact at all!
-    print("NOTE: compact() stubbed, and doesn't really compact")
+    nodetool.compact(cql, table)
 
 # Looping "for _ in before_and_after_flush(cql, table)" runs code twice -
 # once immediately, then a flush, and then a second time.
