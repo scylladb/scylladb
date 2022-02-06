@@ -211,11 +211,6 @@ private:
     // Note: must be called on shard 0.
     future<> mutate_token_metadata(std::function<future<> (mutable_token_metadata_ptr)> func, acquire_merge_lock aml = acquire_merge_lock::yes) noexcept;
 
-    // Update pending ranges locally and then replicate to all cores.
-    // Should be serialized under token_metadata_lock.
-    // Must be called on shard 0.
-    future<> update_pending_ranges(mutable_token_metadata_ptr tmptr, sstring reason);
-    future<> update_pending_ranges(sstring reason, acquire_merge_lock aml = acquire_merge_lock::yes);
     future<> keyspace_changed(const sstring& ks_name);
     void register_metrics();
     future<> snitch_reconfigured();
@@ -618,6 +613,8 @@ private:
      * @param keyspaceName the keyspace ranges belong to
      * @param ranges the ranges to find sources for
      * @return multimap of addresses to ranges the address is responsible for
+     *
+     * Must run inside seastar::async context
      */
     std::unordered_multimap<inet_address, dht::token_range> get_new_source_ranges(const sstring& keyspaceName, const dht::token_range_vector& ranges) const;
 public:
