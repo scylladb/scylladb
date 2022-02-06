@@ -16,6 +16,7 @@ import time
 from util import unique_name
 from contextlib import contextmanager
 from cassandra.protocol import SyntaxException, InvalidRequest
+from cassandra.protocol import ConfigurationException
 from cassandra.util import SortedSet, OrderedMapSerializedKey
 
 import nodetool
@@ -69,6 +70,15 @@ def create_materialized_view(cql, keyspace, arg):
     finally:
         cql.execute("DROP MATERIALIZED VIEW " + mv_name)
 
+@contextmanager
+def create_keyspace(cql, arg):
+    ks_name = unique_name()
+    cql.execute("CREATE KEYSPACE " + ks_name + " WITH " + arg)
+    try:
+        yield ks_name
+    finally:
+        cql.execute("DROP KEYSPACE " + ks_name)
+
 # utility function to substitute table name in command.
 # For easy conversion of Java code, support %s as used in Java. Also support
 # it *multiple* times (always interpolating the same table name). In Java,
@@ -121,6 +131,10 @@ def assert_invalid_message_re(cql, table, message, cmd, *args):
 
 def assert_invalid_throw_message(cql, table, message, typ, cmd, *args):
     with pytest.raises(typ, match=re.escape(message)):
+        execute(cql, table, cmd, *args)
+
+def assert_invalid_throw_message_re(cql, table, message, typ, cmd, *args):
+    with pytest.raises(typ, match=message):
         execute(cql, table, cmd, *args)
 
 # Cassandra's CQLTester.java has a much more elaborate implementation
@@ -186,6 +200,15 @@ def assert_rows_ignoring_order(result, *expected):
     allresults = list(result)
     assert len(allresults) == len(expected)
     assert multiset(allresults) == multiset(expected)
+
+# Unfortunately, collections.Counter objects don't implement comparison
+# operators <, <=, >, >=, as sets do. Lets implement the c1 <= c2:
+def is_subset(c1, c2):
+    return all(c1[x] <= c2[x] for x in c1)
+
+def assert_rows_ignoring_order_and_extra(result, *expected):
+    allresults = list(result)
+    assert is_subset(multiset(expected), multiset(allresults))
 
 def assert_all_rows(cql, table, *expected):
     # The original Cassandra implementation of assert_all_rows() calls
