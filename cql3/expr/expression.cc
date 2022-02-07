@@ -103,7 +103,13 @@ managed_bytes_opt get_value(const column_value& col, const column_value_eval_bag
         if (!col_type->is_map()) {
             throw exceptions::invalid_request_exception(format("subscripting non-map column {}", cdef->name_as_text()));
         }
-        const auto deserialized = cdef->type->deserialize(managed_bytes_view(*data.other_columns[data.sel.index_of(*cdef)]));
+        int32_t index = data.sel.index_of(*cdef);
+        if (index == -1) {
+            throw std::runtime_error(
+                    format("Column definition {} does not match any column in the query selection",
+                    cdef->name_as_text()));
+        }
+        const auto deserialized = cdef->type->deserialize(managed_bytes_view(*data.other_columns[index]));
         const auto& data_map = value_cast<map_type_impl::native_type>(deserialized);
         const auto key = evaluate(*col.sub, options);
         auto&& key_type = col_type->name_comparator();
@@ -121,8 +127,16 @@ managed_bytes_opt get_value(const column_value& col, const column_value_eval_bag
         case column_kind::clustering_key:
             return managed_bytes(data.clustering_key[cdef->id]);
         case column_kind::static_column:
-        case column_kind::regular_column:
-            return managed_bytes_opt(data.other_columns[data.sel.index_of(*cdef)]);
+            [[fallthrough]];
+        case column_kind::regular_column: {
+            int32_t index = data.sel.index_of(*cdef);
+            if (index == -1) {
+                throw std::runtime_error(
+                        format("Column definition {} does not match any column in the query selection",
+                        cdef->name_as_text()));
+            }
+            return managed_bytes_opt(data.other_columns[index]);
+        }
         default:
             throw exceptions::unsupported_operation_exception("Unknown column kind");
         }
