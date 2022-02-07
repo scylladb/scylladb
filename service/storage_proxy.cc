@@ -2140,29 +2140,20 @@ future<result<>> storage_proxy::mutate_end(future<result<>> mutate_result, utils
     if (lc.is_start()) {
         stats.estimated_write.add(lc.latency());
     }
-    auto exception_handler = overloaded_functor {
-        [&] (const mutation_write_timeout_exception& ex) {
-            // timeout
-            tracing::trace(trace_state, "Mutation failed: write timeout; received {:d} of {:d} required replies", ex.received, ex.block_for);
-            slogger.debug("Write timeout; received {} of {} required replies", ex.received, ex.block_for);
-            stats.write_timeouts.mark();
-        }
-    };
     try {
         auto res = mutate_result.get();
-        if (res) {
-            tracing::trace(trace_state, "Mutation successfully completed");
-            return make_ready_future<result<>>(bo::success());
-        } else {
-            res.assume_error().accept(exception_handler);
-            return make_ready_future<result<>>(std::move(res));
-        }
+        res.value(); // This will throw the exception, if it has any
+        tracing::trace(trace_state, "Mutation successfully completed");
+        return make_ready_future<result<>>(std::move(res));
     } catch (replica::no_such_keyspace& ex) {
         tracing::trace(trace_state, "Mutation failed: write to non existing keyspace: {}", ex.what());
         slogger.trace("Write to non existing keyspace: {}", ex.what());
         return make_exception_future<result<>>(std::current_exception());
     } catch(mutation_write_timeout_exception& ex) {
-        exception_handler(ex);
+        // timeout
+        tracing::trace(trace_state, "Mutation failed: write timeout; received {:d} of {:d} required replies", ex.received, ex.block_for);
+        slogger.debug("Write timeout; received {} of {} required replies", ex.received, ex.block_for);
+        stats.write_timeouts.mark();
         return make_exception_future<result<>>(std::current_exception());
     } catch (exceptions::unavailable_exception& ex) {
         tracing::trace(trace_state, "Mutation failed: unavailable");
