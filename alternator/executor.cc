@@ -2442,8 +2442,8 @@ static bool hierarchy_actions(
                     if (newv) {
                         rjson::set_with_string_name(v, attr, std::move(*newv));
                     } else {
-                        throw api_error::validation(format("Can't remove document path {} - not present in item",
-                            subh.get_value()._path));
+                        // Removing a.b when a is a map but a.b doesn't exist
+                        // is silently ignored. It's not considered an error.
                     }
                 } else {
                     throw api_error::validation(format("UpdateExpression: document paths not valid for this item:{}", h));

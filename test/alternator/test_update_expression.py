@@ -1014,6 +1014,20 @@ def test_nested_attribute_remove_from_missing_item(test_table_s):
     test_table_s.update_item(Key={'p': p}, UpdateExpression='REMOVE x.y')
     test_table_s.update_item(Key={'p': p}, UpdateExpression='REMOVE x[0]')
 
+# Though in an above test (test_nested_attribute_update_bad_path_dot) we
+# showed that DynamoDB does not allow REMOVE x.y if attribute x doesn't
+# exist - and generates a ValidationException, if x *does* exist but y
+# doesn't, it's fine and the removal should just be silently ignored.
+def test_nested_attribute_remove_missing_leaf(test_table_s):
+    p = random_string()
+    item = {'p': p, 'a': {'x': 3}, 'b': ['hi']}
+    test_table_s.put_item(Item=item)
+    test_table_s.update_item(Key={'p': p}, UpdateExpression='REMOVE a.y')
+    test_table_s.update_item(Key={'p': p}, UpdateExpression='REMOVE b[7]')
+    test_table_s.update_item(Key={'p': p}, UpdateExpression='REMOVE c')
+    # The above UpdateItem calls didn't change anything...
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == item
+
 # Similarly for other types of bad paths - using [0] on something which
 # doesn't exist or isn't an array.
 def test_nested_attribute_update_bad_path_array(test_table_s):
