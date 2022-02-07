@@ -238,7 +238,11 @@ struct uninitialized {
                 add_recognition_error(msg);
                 break;
             }
-            res.emplace(left->raw_text, right->raw_text);
+            if (!res.emplace(left->raw_text, right->raw_text).second) {
+                sstring msg = fmt::format("Multiple definition for property {}", left->raw_text);
+                add_recognition_error(msg);
+                break;
+            }
         }
         return res;
     }
