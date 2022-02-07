@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <seastar/core/coroutine.hh>
 #include <boost/range/adaptor/map.hpp>
 #include "sstables/sstable_directory.hh"
 #include "sstables/sstables.hh"
@@ -164,13 +165,16 @@ sstable_directory::process_sstable_dir(const ::io_priority_class& iop, bool sort
     //   to make sure they all update their own version of scan_state and then merge it.
     // - If all shards scan in parallel, they can start loading sooner. That is faster than having
     //   a separate step to fetch all files, followed by another step to distribute and process.
-    return do_with(scan_state{}, [this, sort_sstables_according_to_owner, &iop] (scan_state& state) {
-        return lister::scan_dir(_sstable_dir, { directory_entry_type::regular },
+
+    scan_state state;
+
+    co_await lister::scan_dir(_sstable_dir, { directory_entry_type::regular },
                 [this, sort_sstables_according_to_owner, &state] (fs::path parent_dir, directory_entry de) {
             auto comps = sstables::entry_descriptor::make_descriptor(_sstable_dir.native(), de.name);
             handle_component(state, std::move(comps), parent_dir / fs::path(de.name));
             return make_ready_future<>();
-        }, &manifest_json_filter).then([this, sort_sstables_according_to_owner, &state, &iop] {
+        }, &manifest_json_filter);
+
             // Always okay to delete files with a temporary TOC. We want to do it before we process
             // the generations seen: it's okay to reuse those generations since the files will have
             // been deleted anyway.
@@ -194,12 +198,13 @@ sstable_directory::process_sstable_dir(const ::io_priority_class& iop, bool sort
 
             // _descriptors is everything with a TOC. So after we remove this, what's left is
             // SSTables for which a TOC was not found.
-            return parallel_for_each_restricted(state.descriptors, [this, sort_sstables_according_to_owner, &state, &iop] (std::tuple<int64_t, sstables::entry_descriptor>&& t) {
+    co_await parallel_for_each_restricted(state.descriptors, [this, sort_sstables_according_to_owner, &state, &iop] (std::tuple<int64_t, sstables::entry_descriptor>&& t) {
                 auto& desc = std::get<1>(t);
                 state.generations_found.erase(desc.generation);
                 // This will try to pre-load this file and throw an exception if it is invalid
                 return process_descriptor(std::move(desc), iop, sort_sstables_according_to_owner);
-            }).then([this, &state] {
+            });
+
                 // For files missing TOC, it depends on where this is coming from.
                 // If scylla was supposed to have generated this SSTable, this is not okay and
                 // we refuse to proceed. If this coming from, say, an import, then we just delete,
@@ -212,9 +217,6 @@ sstable_directory::process_sstable_dir(const ::io_priority_class& iop, bool sort
                         _files_for_removal.insert(path.native());
                     }
                 }
-            });
-        });
-    });
 }
 
 future<>
