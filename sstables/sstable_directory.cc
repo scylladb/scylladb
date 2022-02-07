@@ -168,12 +168,11 @@ sstable_directory::process_sstable_dir(const ::io_priority_class& iop, bool sort
 
     scan_state state;
 
-    co_await lister::scan_dir(_sstable_dir, { directory_entry_type::regular },
-            [this, sort_sstables_according_to_owner, &state] (fs::path parent_dir, directory_entry de) {
-        auto comps = sstables::entry_descriptor::make_descriptor(_sstable_dir.native(), de.name);
-        handle_component(state, std::move(comps), parent_dir / fs::path(de.name));
-        return make_ready_future<>();
-    }, &manifest_json_filter);
+    directory_lister sstable_dir_lister(_sstable_dir, { directory_entry_type::regular }, &manifest_json_filter);
+    while (auto de = co_await sstable_dir_lister.get()) {
+        auto comps = sstables::entry_descriptor::make_descriptor(_sstable_dir.native(), de->name);
+        handle_component(state, std::move(comps), _sstable_dir / de->name);
+    }
 
     // Always okay to delete files with a temporary TOC. We want to do it before we process
     // the generations seen: it's okay to reuse those generations since the files will have
