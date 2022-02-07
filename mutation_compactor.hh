@@ -178,9 +178,6 @@ private:
             partition_is_not_empty_for_gc_consumer(gc_consumer);
             return gc_consumer.consume(std::move(rt));
         } else {
-            if (!sstable_compaction()) {
-                _last_clustering_pos = rt.position();
-            }
             partition_is_not_empty(consumer);
             return consumer.consume(std::move(rt));
         }
@@ -371,6 +368,9 @@ public:
     template <typename Consumer, typename GCConsumer>
     requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
     stop_iteration consume(clustering_row&& cr, Consumer& consumer, GCConsumer& gc_consumer) {
+        if (!sstable_compaction()) {
+            _last_clustering_pos = cr.position();
+        }
         auto current_tombstone = tombstone_for_row(cr.key(), consumer, gc_consumer);
         auto t = cr.tomb();
         t.apply(current_tombstone);
@@ -409,9 +409,6 @@ public:
         }
 
         auto consume_row = [&] () mutable {
-            if (!sstable_compaction()) {
-                _last_clustering_pos = cr.position();
-            }
             partition_is_not_empty(consumer);
             return consumer.consume(std::move(cr), t, is_live);
         };
@@ -438,6 +435,9 @@ public:
     template <typename Consumer, typename GCConsumer>
     requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
     stop_iteration consume(range_tombstone_change&& rtc, Consumer& consumer, GCConsumer& gc_consumer) {
+        if (!sstable_compaction()) {
+            _last_clustering_pos = rtc.position();
+        }
         ++_stats.range_tombstones;
         if (auto rt_opt = _rt_assembler.consume(_schema, std::move(rtc))) {
             return do_consume(std::move(*rt_opt), consumer, gc_consumer);
