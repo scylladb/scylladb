@@ -169,54 +169,54 @@ sstable_directory::process_sstable_dir(const ::io_priority_class& iop, bool sort
     scan_state state;
 
     co_await lister::scan_dir(_sstable_dir, { directory_entry_type::regular },
-                [this, sort_sstables_according_to_owner, &state] (fs::path parent_dir, directory_entry de) {
-            auto comps = sstables::entry_descriptor::make_descriptor(_sstable_dir.native(), de.name);
-            handle_component(state, std::move(comps), parent_dir / fs::path(de.name));
-            return make_ready_future<>();
-        }, &manifest_json_filter);
+            [this, sort_sstables_according_to_owner, &state] (fs::path parent_dir, directory_entry de) {
+        auto comps = sstables::entry_descriptor::make_descriptor(_sstable_dir.native(), de.name);
+        handle_component(state, std::move(comps), parent_dir / fs::path(de.name));
+        return make_ready_future<>();
+    }, &manifest_json_filter);
 
-            // Always okay to delete files with a temporary TOC. We want to do it before we process
-            // the generations seen: it's okay to reuse those generations since the files will have
-            // been deleted anyway.
-            for (auto& desc: state.temp_toc_found) {
-                auto range = state.generations_found.equal_range(desc.generation);
-                for (auto it = range.first; it != range.second; ++it) {
-                    auto& path = it->second;
-                    dirlog.trace("Scheduling to remove file {}, from an SSTable with a Temporary TOC", path.native());
-                    _files_for_removal.insert(path.native());
-                }
-                state.generations_found.erase(range.first, range.second);
-                state.descriptors.erase(desc.generation);
-            }
+    // Always okay to delete files with a temporary TOC. We want to do it before we process
+    // the generations seen: it's okay to reuse those generations since the files will have
+    // been deleted anyway.
+    for (auto& desc: state.temp_toc_found) {
+        auto range = state.generations_found.equal_range(desc.generation);
+        for (auto it = range.first; it != range.second; ++it) {
+            auto& path = it->second;
+            dirlog.trace("Scheduling to remove file {}, from an SSTable with a Temporary TOC", path.native());
+            _files_for_removal.insert(path.native());
+        }
+        state.generations_found.erase(range.first, range.second);
+        state.descriptors.erase(desc.generation);
+    }
 
-            _max_generation_seen =  boost::accumulate(state.generations_found | boost::adaptors::map_keys, int64_t(0), [] (int64_t a, int64_t b) {
-                return std::max<int64_t>(a, b);
-            });
+    _max_generation_seen =  boost::accumulate(state.generations_found | boost::adaptors::map_keys, int64_t(0), [] (int64_t a, int64_t b) {
+        return std::max<int64_t>(a, b);
+    });
 
-            dirlog.debug("After {} scanned, seen generation {}. {} descriptors found, {} different files found ",
-                    _sstable_dir, _max_generation_seen, state.descriptors.size(), state.generations_found.size());
+    dirlog.debug("After {} scanned, seen generation {}. {} descriptors found, {} different files found ",
+            _sstable_dir, _max_generation_seen, state.descriptors.size(), state.generations_found.size());
 
-            // _descriptors is everything with a TOC. So after we remove this, what's left is
-            // SSTables for which a TOC was not found.
+    // _descriptors is everything with a TOC. So after we remove this, what's left is
+    // SSTables for which a TOC was not found.
     co_await parallel_for_each_restricted(state.descriptors, [this, sort_sstables_according_to_owner, &state, &iop] (std::tuple<int64_t, sstables::entry_descriptor>&& t) {
-                auto& desc = std::get<1>(t);
-                state.generations_found.erase(desc.generation);
-                // This will try to pre-load this file and throw an exception if it is invalid
-                return process_descriptor(std::move(desc), iop, sort_sstables_according_to_owner);
-            });
+        auto& desc = std::get<1>(t);
+        state.generations_found.erase(desc.generation);
+        // This will try to pre-load this file and throw an exception if it is invalid
+        return process_descriptor(std::move(desc), iop, sort_sstables_according_to_owner);
+    });
 
-                // For files missing TOC, it depends on where this is coming from.
-                // If scylla was supposed to have generated this SSTable, this is not okay and
-                // we refuse to proceed. If this coming from, say, an import, then we just delete,
-                // log and proceed.
-                for (auto& path : state.generations_found | boost::adaptors::map_values) {
-                    if (_throw_on_missing_toc) {
-                        throw sstables::malformed_sstable_exception(format("At directory: {}: no TOC found for SSTable {}!. Refusing to boot", _sstable_dir.native(), path.native()));
-                    } else {
-                        dirlog.info("Found incomplete SSTable {} at directory {}. Removing", path.native(), _sstable_dir.native());
-                        _files_for_removal.insert(path.native());
-                    }
-                }
+    // For files missing TOC, it depends on where this is coming from.
+    // If scylla was supposed to have generated this SSTable, this is not okay and
+    // we refuse to proceed. If this coming from, say, an import, then we just delete,
+    // log and proceed.
+    for (auto& path : state.generations_found | boost::adaptors::map_values) {
+        if (_throw_on_missing_toc) {
+            throw sstables::malformed_sstable_exception(format("At directory: {}: no TOC found for SSTable {}!. Refusing to boot", _sstable_dir.native(), path.native()));
+        } else {
+            dirlog.info("Found incomplete SSTable {} at directory {}. Removing", path.native(), _sstable_dir.native());
+            _files_for_removal.insert(path.native());
+        }
+    }
 }
 
 future<>
