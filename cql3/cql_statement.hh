@@ -75,11 +75,28 @@ public:
     /**
      * Execute the statement and return the resulting result or null if there is no result.
      *
+     * In case of a failure, it must return an exceptional future. It must not use
+     * the result_message::exception to indicate failure.
+     *
      * @param state the current query state
      * @param options options for this query (consistency, variables, pageSize, ...)
      */
     virtual seastar::future<seastar::shared_ptr<cql_transport::messages::result_message>>
         execute(query_processor& qp, service::query_state& state, const query_options& options) const = 0;
+
+    /**
+     * Execute the statement and return the resulting result or null if there is no result.
+     *
+     * Unlike execute(), it is allowed to return a result_message::exception which contains
+     * an exception that needs to be explicitly handled.
+     *
+     * @param state the current query state
+     * @param options options for this query (consistency, variables, pageSize, ...)
+     */
+    virtual seastar::future<seastar::shared_ptr<cql_transport::messages::result_message>>
+            execute_without_checking_exception_message(query_processor& qp, service::query_state& state, const query_options& options) const {
+        return execute(qp, state, options);
+    }
 
     virtual bool depends_on_keyspace(const seastar::sstring& ks_name) const = 0;
 
