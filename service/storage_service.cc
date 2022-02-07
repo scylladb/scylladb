@@ -165,8 +165,33 @@ void storage_service::register_metrics() {
     });
 }
 
+std::optional<gms::inet_address> storage_service::get_replace_address() {
+    auto& cfg = _db.local().get_config();
+    sstring replace_address = cfg.replace_address();
+    sstring replace_address_first_boot = cfg.replace_address_first_boot();
+    try {
+        if (!replace_address.empty()) {
+            return gms::inet_address(replace_address);
+        } else if (!replace_address_first_boot.empty()) {
+            return gms::inet_address(replace_address_first_boot);
+        }
+        return std::nullopt;
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
+bool storage_service::is_replacing() {
+    sstring replace_address_first_boot = _db.local().get_config().replace_address_first_boot();
+    if (!replace_address_first_boot.empty() && db::system_keyspace::bootstrap_complete()) {
+        slogger.info("Replace address on first boot requested; this node is already bootstrapped");
+        return false;
+    }
+    return bool(get_replace_address());
+}
+
 bool storage_service::is_first_node() {
-    if (_db.local().is_replacing()) {
+    if (is_replacing()) {
         return false;
     }
     auto seeds = _gossiper.get_seeds();
@@ -215,12 +240,12 @@ void storage_service::prepare_to_join(
     bool replacing_a_node_with_diff_ip = false;
     auto tmlock = std::make_unique<token_metadata_lock>(get_token_metadata_lock().get0());
     auto tmptr = get_mutable_token_metadata_ptr().get0();
-    if (_db.local().is_replacing()) {
+    if (is_replacing()) {
         if (db::system_keyspace::bootstrap_complete()) {
             throw std::runtime_error("Cannot replace address with a node that is already bootstrapped");
         }
         _bootstrap_tokens = prepare_replacement_info(initial_contact_nodes, loaded_peer_features).get0();
-        auto replace_address = _db.local().get_replace_address();
+        auto replace_address = get_replace_address();
         replacing_a_node_with_same_ip = *replace_address == get_broadcast_address();
         replacing_a_node_with_diff_ip = *replace_address != get_broadcast_address();
 
@@ -250,7 +275,7 @@ void storage_service::prepare_to_join(
 
     // If this is a restarting node, we should update tokens before gossip starts
     auto my_tokens = db::system_keyspace::get_saved_tokens().get0();
-    bool restarting_normal_node = db::system_keyspace::bootstrap_complete() && !_db.local().is_replacing() && !my_tokens.empty();
+    bool restarting_normal_node = db::system_keyspace::bootstrap_complete() && !is_replacing() && !my_tokens.empty();
     if (restarting_normal_node) {
         slogger.info("Restarting a node in NORMAL status");
         // This node must know about its chosen tokens before other nodes do
@@ -417,7 +442,7 @@ void storage_service::join_token_ring(int delay) {
         }
         slogger.info("Checking bootstrapping/leaving nodes: ok");
 
-        if (!_db.local().is_replacing()) {
+        if (!is_replacing()) {
             if (tmptr->is_member(get_broadcast_address())) {
                 throw std::runtime_error("This node is already a member of the token ring; bootstrap aborted. (If replacing a dead node, remove the old one from the ring first.)");
             }
@@ -433,7 +458,7 @@ void storage_service::join_token_ring(int delay) {
                 _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(tmptr, _db.local().get_config(), dht::check_token_endpoint::yes);
             }
         } else {
-            auto replace_addr = _db.local().get_replace_address();
+            auto replace_addr = get_replace_address();
             if (*replace_addr != get_broadcast_address()) {
                 // Sleep additionally to make sure that the server actually is not alive
                 // and giving it more time to gossip if alive.
@@ -509,7 +534,7 @@ void storage_service::join_token_ring(int delay) {
 
         // Finally, if we're the first node, we'll create the first generation.
 
-        if (!_db.local().is_replacing()
+        if (!is_replacing()
                 && (!db::system_keyspace::bootstrap_complete()
                     || cdc::should_propose_first_generation(get_broadcast_address(), _gossiper))) {
             try {
@@ -584,8 +609,8 @@ void storage_service::bootstrap() {
     auto x = seastar::defer([this] { _is_bootstrap_mode = false; });
     auto bootstrap_rbno = is_repair_based_node_ops_enabled(streaming::stream_reason::bootstrap);
 
-    slogger.debug("bootstrap: rbno={} replacing={}", bootstrap_rbno, _db.local().is_replacing());
-    if (!_db.local().is_replacing()) {
+    slogger.debug("bootstrap: rbno={} replacing={}", bootstrap_rbno, is_replacing());
+    if (!is_replacing()) {
         // Wait until we know tokens of existing node before announcing join status.
         _gossiper.wait_for_range_setup().get();
         int retry = 0;
@@ -645,7 +670,7 @@ void storage_service::bootstrap() {
         // Wait until we know tokens of existing node before announcing replacing status.
         set_mode(mode::JOINING, fmt::format("Wait until local node knows tokens of peer nodes"), true);
         _gossiper.wait_for_range_setup().get();
-        auto replace_addr = _db.local().get_replace_address();
+        auto replace_addr = get_replace_address();
         slogger.debug("Removing replaced endpoint {} from system.peers", *replace_addr);
         db::system_keyspace::remove_endpoint(*replace_addr).get();
         _group0->leave_group0(replace_addr).get();
@@ -658,7 +683,7 @@ void storage_service::bootstrap() {
     }).get();
 
     set_mode(mode::JOINING, "Starting to bootstrap...", true);
-    if (_db.local().is_replacing()) {
+    if (is_replacing()) {
         run_replace_ops();
     } else {
         if (bootstrap_rbno) {
@@ -755,7 +780,7 @@ future<> storage_service::handle_state_replacing(inet_address replacing_node) {
     auto tmlock = co_await get_token_metadata_lock();
     auto tmptr = co_await get_mutable_token_metadata_ptr();
     auto existing_node_opt = tmptr->get_endpoint_for_host_id(host_id);
-    auto replace_addr = _db.local().get_replace_address();
+    auto replace_addr = get_replace_address();
     if (replacing_node == get_broadcast_address() && replace_addr && *replace_addr == get_broadcast_address()) {
         existing_node_opt = replacing_node;
     }
@@ -1494,10 +1519,10 @@ future<> storage_service::remove_endpoint(inet_address endpoint) {
 
 future<storage_service::replacement_info>
 storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> initial_contact_nodes, const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features) {
-    if (!_db.local().get_replace_address()) {
+    if (!get_replace_address()) {
         throw std::runtime_error(format("replace_address is empty"));
     }
-    auto replace_address = _db.local().get_replace_address().value();
+    auto replace_address = get_replace_address().value();
     slogger.info("Gathering node replacement information for {}", replace_address);
 
     // if (!MessagingService.instance().isListening())
@@ -2062,10 +2087,10 @@ void storage_service::run_bootstrap_ops() {
 
 // Runs inside seastar::async context
 void storage_service::run_replace_ops() {
-    if (!_db.local().get_replace_address()) {
+    if (!get_replace_address()) {
         throw std::runtime_error(format("replace_address is empty"));
     }
-    auto replace_address = _db.local().get_replace_address().value();
+    auto replace_address = get_replace_address().value();
     auto uuid = utils::make_random_uuid();
     std::list<gms::inet_address> ignore_nodes = get_ignore_dead_nodes_for_replace();
     // Step 1: Decide who needs to sync data for replace operation
@@ -2155,7 +2180,7 @@ void storage_service::run_replace_ops() {
         } else {
             slogger.info("replace[{}]: Using streaming based node ops to sync data", uuid);
             dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), _bootstrap_tokens, get_token_metadata_ptr());
-            bs.bootstrap(streaming::stream_reason::replace, _gossiper).get();
+            bs.bootstrap(streaming::stream_reason::replace, _gossiper, replace_address).get();
         }
 
 
@@ -2595,7 +2620,7 @@ future<> storage_service::rebuild(sstring source_dc) {
             }
             auto keyspaces = ss._db.local().get_non_system_keyspaces();
             for (auto& keyspace_name : keyspaces) {
-                co_await streamer->add_ranges(keyspace_name, ss.get_ranges_for_endpoint(keyspace_name, utils::fb_utilities::get_broadcast_address()), ss._gossiper);
+                co_await streamer->add_ranges(keyspace_name, ss.get_ranges_for_endpoint(keyspace_name, utils::fb_utilities::get_broadcast_address()), ss._gossiper, false);
             }
             try {
                 co_await streamer->stream_async();

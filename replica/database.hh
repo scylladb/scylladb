@@ -1587,9 +1587,6 @@ public:
         return _dirty_memory_manager.region_group();
     }
 
-    std::optional<gms::inet_address> get_replace_address();
-    bool is_replacing();
-
     db_stats& get_stats() {
         return *_stats;
     }

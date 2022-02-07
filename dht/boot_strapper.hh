@@ -48,7 +48,7 @@ public:
         , _token_metadata_ptr(std::move(tmptr)) {
     }
 
-    future<> bootstrap(streaming::stream_reason reason, gms::gossiper& gossiper);
+    future<> bootstrap(streaming::stream_reason reason, gms::gossiper& gossiper, inet_address replace_address = {});
 
     /**
      * if initialtoken was specified, use that (split on comma).
