@@ -8,6 +8,8 @@
 # tested elsewhere.
 
 import pytest
+import time
+import threading
 from botocore.exceptions import ClientError
 from util import list_tables, unique_table_name, create_test_table, random_string
 
@@ -315,3 +317,142 @@ def test_update_table_non_existent(dynamodb, test_table):
     client = dynamodb.meta.client
     with pytest.raises(ClientError, match='ResourceNotFoundException'):
         client.update_table(TableName=random_string(20), BillingMode='PAY_PER_REQUEST')
+
+# Test for reproducing issues #6391 and #9868 - where CreateTable did not
+# *atomically* perform all the schema modifications - creating a keyspace,
+# a table, secondary indexes and tags - and instead it created the different
+# pieces one after another. In that case it is s possible that if we
+# concurrently create and delete the same table, the deletion may, for
+# example, delete the table just created and then creating the secondary
+# index in it would fail.
+#
+# In each test we'll have two threads - one looping repeatedly creating
+# the same table, and the second looping repeatedly deleting this table.
+# It is expected for the table creation to fail because the table already
+# exists, and for the table deletion to fail because the table doesn't
+# exist. But what we don't want to see is a different kind failure (e.g.,
+# InternalServerError) in the *middle* of the table creation or deletion.
+# Such a failure may even leave behind some half-created table.
+#
+# NOTE: This test, like all cql-pytest tests, runs on a single node. So it
+# doesn't exercise the most general possibility that two concurrent schema
+# modifications from two different coordinators collide. So multi-node
+# tests will be needed to check for that potential problem as well.
+# But even on one coordinator this test can already reproduce the bugs
+# described in #6391 and #9868, so it's worth having this single-node test
+# as well.
+@pytest.mark.parametrize("table_def", [
+    # A table without a secondary index - requiring the creation of
+    # a keyspace and a table in it.
+    {   'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+        'AttributeDefinitions': [
+            { 'AttributeName': 'p', 'AttributeType': 'S' }]
+    },
+    # Reproducer for #9868 - CreateTable needs to create a keyspace,
+    # a table, and a materialized view.
+    pytest.param(
+    {   'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'c', 'KeyType': 'RANGE' }
+        ],
+        'AttributeDefinitions': [
+            { 'AttributeName': 'p', 'AttributeType': 'S' },
+            { 'AttributeName': 'c', 'AttributeType': 'S' },
+        ],
+        'GlobalSecondaryIndexes': [
+            {   'IndexName': 'hello',
+                'KeySchema': [
+                    { 'AttributeName': 'c', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'p', 'KeyType': 'RANGE' },
+                ],
+                'Projection': { 'ProjectionType': 'ALL' }
+            }
+        ]
+    }, marks=pytest.mark.xfail(reason="#9868")),
+    # Reproducer for #6391, a table with tags - which we used to add
+    # non-atomically after having already created the table.
+    pytest.param(
+    {   'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+        'AttributeDefinitions': [
+            { 'AttributeName': 'p', 'AttributeType': 'S' }],
+        'Tags': [{'Key': 'k1', 'Value': 'v1'}]
+    }, marks=pytest.mark.xfail(reason="#6391"))
+])
+def test_concurrent_create_and_delete_table(dynamodb, table_def):
+    # According to boto3 documentation, "Unlike Resources and Sessions,
+    # clients are generally thread-safe.". So because we have two threads
+    # in this test, we must not use "dynamodb" (containing the boto3
+    # "resource") - we should only the boto3 "client":
+    client = dynamodb.meta.client
+    # Unfortunately by default Python threads print their exceptions
+    # (e.g., assertion failures) but don't propagate them to the join(),
+    # so the overall test doesn't fail. The following Thread wrapper
+    # causes join() to rethrow the exception, so the test will fail.
+    class ThreadWrapper(threading.Thread):
+        def run(self):
+            try:
+                self.ret = self._target(*self._args, **self._kwargs)
+            except BaseException as e:
+                self.exception = e
+        def join(self, timeout=None):
+            super().join(timeout)
+            if hasattr(self, 'exception'):
+                raise self.exception
+            return self.ret
+
+    table_name = unique_table_name()
+    # The more iterations we do, the higher the chance of reproducing
+    # this issue. On my laptop, count = 10 reproduces the bug every time.
+    # Lower numbers have some chance of not catching the bug. If this
+    # issue starts to xpass, we may need to increase the count.
+    count = 10
+    def deletes():
+        for i in range(count):
+            try:
+                client.delete_table(TableName=table_name)
+            except Exception as e:
+                # Expect either success or a ResourceNotFoundException.
+                # On DynamoDB we can also get a ResourceInUseException
+                # if we try to delete a table while it's in the middle
+                # of being created.
+                # Anything else (e.g., InternalServerError) is a bug.
+                assert isinstance(e, ClientError) and (
+                    'ResourceNotFoundException' in str(e) or
+                    'ResourceInUseException' in str(e))
+            else:
+                print("delete successful")
+    def creates():
+        for i in range(count):
+            try:
+                client.create_table(TableName=table_name,
+                    BillingMode='PAY_PER_REQUEST',
+                    **table_def)
+            except Exception as e:
+                # Expect either success or a ResourceInUseException.
+                # Anything else (e.g., InternalServerError) is a bug.
+                assert isinstance(e, ClientError) and 'ResourceInUseException' in str(e)
+            else:
+                print("create successful")
+    t1 = ThreadWrapper(target=deletes)
+    t2 = ThreadWrapper(target=creates)
+    t1.start()
+    t2.start()
+    try:
+        t1.join()
+        t2.join()
+    finally:
+        # Make sure that in any case, the table is deleted before the
+        # test finishes. On DynamoDB, we can't just call DeleteTable -
+        # if some CreateTable is still in progress we can't call
+        # DeleteTable until it finishes...
+        timeout = time.time() + 120
+        while time.time() < timeout:
+            try:
+                client.delete_table(TableName=table_name)
+                break
+            except ClientError as e:
+                if 'ResourceInUseException' in str(e):
+                    # A CreateTable opereration is still in progress,
+                    # we can't delete the table yet.
+                    time.sleep(1)
+                    continue
+                raise
