@@ -2082,7 +2082,10 @@ future<> shard_reader::close() noexcept {
         try {
             co_await *std::exchange(_read_ahead, std::nullopt);
         } catch (...) {
-            mrlog.warn("shard_reader::close(): read_ahead on shard {} failed: {}", _shard, std::current_exception());
+            auto ex = std::current_exception();
+            if (!is_timeout_exception(ex)) {
+                mrlog.warn("shard_reader::close(): read_ahead on shard {} failed: {}", _shard, ex);
+            }
         }
     }
 
@@ -2110,7 +2113,7 @@ future<> shard_reader::close() noexcept {
             });
         });
     } catch (...) {
-        mrlog.error("shard_reader::close(): failed to stop reader on shard {}: {}", _shard, std::current_exception());
+        mrlog.warn("shard_reader::close(): failed to stop reader on shard {}: {}", _shard, std::current_exception());
     }
 }
 
