@@ -121,6 +121,11 @@ const column_definition* view_info::view_column(const column_definition& base_de
 
 void view_info::set_base_info(db::view::base_info_ptr base_info) {
     _base_info = std::move(base_info);
+    // Base-dependent view info got overridden, so the cached select statement
+    // should be reset to the current schema - it's done by dropping the current
+    // value and calling the function which regenerates it.
+    _select_statement = nullptr;
+    select_statement();
 }
 
 // A constructor for a base info that can facilitate reads and writes from the materialized view.
