@@ -690,6 +690,8 @@ public:
         return has_component(component_type::Scylla);
     }
 
+    bool validate_originating_host_id() const;
+
     bool has_correct_promoted_index_entries() const {
         return _schema->is_compound() || !has_scylla_component() || _components->scylla_metadata->has_feature(sstable_feature::NonCompoundPIEntries);
     }

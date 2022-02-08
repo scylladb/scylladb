@@ -1784,6 +1784,39 @@ const bool sstable::has_component(component_type f) const {
     return _recognized_components.contains(f);
 }
 
+bool sstable::validate_originating_host_id() const {
+    if (_version < version_types::me) {
+        // earlier formats do not store originating host id
+        return true;
+    }
+
+    auto originating_host_id = get_stats_metadata().originating_host_id;
+    if (!originating_host_id) {
+        // Scylla always fills in originating host id when writing
+        // sstables, so an ME-and-up sstable that does not have it is
+        // invalid
+        sstlog.error("No originating host id in SSTable: {}", get_filename());
+        return false;
+    }
+
+    auto local_host_id = _manager.get_local_host_id();
+    if (local_host_id == utils::UUID{}) {
+        // we don't know the local host id before it is loaded from
+        // (or generated and written to) system.local, but some system
+        // sstable reads must happen before the bootstrap process gets
+        // there, so, welp
+        auto msg = format("Unknown local host id while validating SSTable: {}", get_filename());
+        if (is_system_keyspace(_schema->ks_name())) {
+            sstlog.trace("{}", msg);
+        } else {
+            on_internal_error(sstlog, msg);
+        }
+        return true;
+    }
+
+    return *originating_host_id == local_host_id;
+}
+
 future<> sstable::touch_temp_dir() {
     if (_temp_dir) {
         return make_ready_future<>();
