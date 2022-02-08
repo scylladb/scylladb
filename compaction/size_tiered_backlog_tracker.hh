@@ -7,6 +7,7 @@
 
 #pragma once
 #include "compaction_backlog_manager.hh"
+#include "size_tiered_compaction_strategy.hh"
 #include <cmath>
 #include <ctgmath>
 
@@ -63,15 +64,16 @@
 // certain point in time, whose size is the amount of bytes currently written. So all we need
 // to do is keep track of them too, and add the current estimate to the static part of (4).
 class size_tiered_backlog_tracker final : public compaction_backlog_tracker::impl {
+    sstables::size_tiered_compaction_strategy_options _stcs_options;
     int64_t _total_bytes = 0;
     double _sstables_backlog_contribution = 0.0f;
+    std::unordered_set<sstables::shared_sstable> _sstables_contributing_backlog;
+    std::unordered_set<sstables::shared_sstable> _all;
 
     struct inflight_component {
         int64_t total_bytes = 0;
         double contribution = 0;
     };
-
-    inflight_component partial_backlog(const compaction_backlog_tracker::ongoing_writes& ongoing_writes) const;
 
     inflight_component compacted_backlog(const compaction_backlog_tracker::ongoing_compactions& ongoing_compactions) const;
 
@@ -79,7 +81,11 @@ class size_tiered_backlog_tracker final : public compaction_backlog_tracker::imp
         double inv_log_4 = 1.0f / std::log(4);
         return log(x) * inv_log_4;
     }
+
+    void refresh_sstables_backlog_contribution();
 public:
+    size_tiered_backlog_tracker(sstables::size_tiered_compaction_strategy_options stcs_options) : _stcs_options(stcs_options) {}
+
     virtual double backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override;
 
     // Removing could be the result of a failure of an in progress write, successful finish of a
