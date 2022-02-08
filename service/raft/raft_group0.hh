@@ -62,6 +62,9 @@ public:
     // raft service has group 0 running.
     future<> join_group0();
 
+    // After successful bootstrapping, make this node a voting member.
+    future<> become_voter();
+
     // Remove the node from the cluster-wide raft group.
     // This procedure is idempotent. In case of replace node,
     // it removes the replaced node from the group, since

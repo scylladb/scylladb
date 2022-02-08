@@ -557,6 +557,8 @@ void storage_service::join_token_ring(int delay) {
     db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED).get();
     // At this point our local tokens and CDC streams timestamp are chosen (_bootstrap_tokens, _cdc_gen_id) and will not be changed.
 
+    _group0->become_voter().get();
+
     // start participating in the ring.
     set_gossip_tokens(_gossiper, _bootstrap_tokens, _cdc_gen_id).get();
 
