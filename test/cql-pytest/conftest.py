@@ -122,5 +122,27 @@ def cassandra_bug(cql):
     if not any('scylla' in name for name in names):
         pytest.xfail('A known Cassandra bug')
 
+# While the raft-based schema modifications are still experimental and only
+# optionally enabled (the "--raft" option to test/cql-pytest/run enables it
+# in Scylla), some tests are expected to fail on Scylla without this option
+# enabled, and pass with it enabled (and also pass on Cassandra). These tests
+# should use the "fails_without_raft" fixture. When Raft mode becomes the
+# default, this fixture can be removed.
+@pytest.fixture(scope="session")
+def check_pre_raft(cql):
+    # If not running on Scylla, return false.
+    names = [row.table_name for row in cql.execute("SELECT * FROM system_schema.tables WHERE keyspace_name = 'system'")]
+    if not any('scylla' in name for name in names):
+        return false
+    # In Scylla, we check Raft mode by inspecting the configuration via CQL.
+    experimental_features = list(cql.execute("SELECT value FROM system.config WHERE name = 'experimental_features'"))[0].value
+    # Because of https://github.com/scylladb/scylla/issues/10047 the features
+    # appear as numbers instead of strings. FIXME!
+    return not '\x04' in experimental_features
+@pytest.fixture(scope="function")
+def fails_without_raft(request, check_pre_raft):
+    if check_pre_raft:
+        request.node.add_marker(pytest.mark.xfail(reason='Test expected to fail without Raft experimental feature on'))
+
 # TODO: use new_test_table and "yield from" to make shared test_table
 # fixtures with some common schemas.
