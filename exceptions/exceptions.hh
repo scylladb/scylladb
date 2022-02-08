@@ -348,7 +348,9 @@ public:
 // It is advised to use this mechanism mainly for exceptions which can
 // happen frequently, e.g. signalling timeouts, overloads or rate limits.
 using coordinator_exception_container = utils::exception_container<
-    mutation_write_timeout_exception
+    mutation_write_timeout_exception,
+    read_timeout_exception,
+    read_failure_exception
 >;
 
 template<typename T = void>
