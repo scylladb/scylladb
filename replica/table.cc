@@ -436,18 +436,36 @@ void table::enable_off_strategy_trigger() {
 }
 
 future<>
-table::add_sstable_and_update_cache(sstables::shared_sstable sst, sstables::offstrategy offstrategy) {
+table::do_add_sstable_and_update_cache(sstables::shared_sstable sst, sstables::offstrategy offstrategy) {
     auto permit = co_await seastar::get_units(_sstable_set_mutation_sem, 1);
     co_return co_await get_row_cache().invalidate(row_cache::external_updater([this, sst, offstrategy] () noexcept {
         // FIXME: this is not really noexcept, but we need to provide strong exception guarantees.
         // atomically load all opened sstables into column family.
         if (!offstrategy) {
             add_sstable(sst);
-            trigger_compaction();
         } else {
             add_maintenance_sstable(sst);
         }
     }), dht::partition_range::make({sst->get_first_decorated_key(), true}, {sst->get_last_decorated_key(), true}));
+}
+
+future<>
+table::add_sstable_and_update_cache(sstables::shared_sstable sst, sstables::offstrategy offstrategy) {
+    co_await do_add_sstable_and_update_cache(std::move(sst), offstrategy);
+    trigger_compaction();
+}
+
+future<>
+table::add_sstables_and_update_cache(const std::vector<sstables::shared_sstable>& ssts) {
+    for (auto& sst : ssts) {
+        try {
+            co_await do_add_sstable_and_update_cache(sst, sstables::offstrategy::no);
+        } catch (...) {
+            tlogger.error("Failed to load SSTable {}: {}", sst->toc_filename(), std::current_exception());
+            throw;
+        }
+    }
+    trigger_compaction();
 }
 
 future<>

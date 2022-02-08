@@ -504,6 +504,7 @@ private:
 public:
     future<> add_sstable_and_update_cache(sstables::shared_sstable sst,
                                           sstables::offstrategy offstrategy = sstables::offstrategy::no);
+    future<> add_sstables_and_update_cache(const std::vector<sstables::shared_sstable>& ssts);
     future<> move_sstables_from_staging(std::vector<sstables::shared_sstable>);
     sstables::shared_sstable make_sstable(sstring dir, int64_t generation, sstables::sstable_version_types v, sstables::sstable_format_types f,
             io_error_handler_gen error_handler_gen);
@@ -544,6 +545,7 @@ private:
         return _config.enable_cache && _schema->caching_options().enabled();
     }
     void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable) noexcept;
+    future<> do_add_sstable_and_update_cache(sstables::shared_sstable sst, sstables::offstrategy offstrategy);
     // Adds new sstable to the set of sstables
     // Doesn't update the cache. The cache must be synchronized in order for reads to see
     // the writes contained in this sstable.

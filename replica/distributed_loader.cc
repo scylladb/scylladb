@@ -285,11 +285,9 @@ distributed_loader::make_sstables_available(sstables::sstable_directory& dir, sh
                 return make_ready_future<>();
             }
 
-            return do_for_each(new_sstables, [&table] (sstables::shared_sstable& sst) {
-                return table.add_sstable_and_update_cache(sst).handle_exception([&sst] (std::exception_ptr ep) {
-                    dblog.error("Failed to load {}: {}. Aborting.", sst->toc_filename(), ep);
-                    abort();
-                });
+            return table.add_sstables_and_update_cache(new_sstables).handle_exception([&table] (std::exception_ptr ep) {
+                dblog.error("Failed to load SSTables for {}.{}: {}. Aborting.", table.schema()->ks_name(), table.schema()->cf_name(), ep);
+                abort();
             });
         }).then([&view_update_generator, &table, &new_sstables] {
             return parallel_for_each(new_sstables, [&view_update_generator, &table] (sstables::shared_sstable& sst) {
