@@ -53,6 +53,7 @@
 #include <boost/range/algorithm/transform.hpp>
 #include <boost/range/algorithm/partition.hpp>
 #include <boost/intrusive/list.hpp>
+#include <boost/outcome/result.hpp>
 #include "utils/latency.hh"
 #include "schema.hh"
 #include "schema_registry.hh"
@@ -88,8 +89,13 @@
 #include "idl/frozen_schema.dist.hh"
 #include "idl/frozen_schema.dist.impl.hh"
 #include "idl/storage_proxy.dist.hh"
+#include "utils/result.hh"
+#include "utils/overloaded_functor.hh"
 
 namespace bi = boost::intrusive;
+
+template<typename T = void>
+using result = service::storage_proxy::result<T>;
 
 namespace service {
 
@@ -344,7 +350,7 @@ class abstract_write_response_handler : public seastar::enable_shared_from_this<
 protected:
     using error = storage_proxy::error;
     storage_proxy::response_id_type _id;
-    promise<> _ready; // available when cl is achieved
+    promise<result<>> _ready; // available when cl is achieved
     shared_ptr<storage_proxy> _proxy;
     tracing::trace_state_ptr _trace_state;
     db::consistency_level _cl;
@@ -394,7 +400,7 @@ public:
         --_stats.writes;
         if (_cl_achieved) {
             if (_throttled) {
-                _ready.set_value();
+                _ready.set_value(bo::success());
             } else {
                 _stats.background_writes--;
                 _proxy->_global_stats.background_write_bytes -= _mutation_holder->size();
@@ -402,7 +408,7 @@ public:
             }
         } else {
             if (_error == error::TIMEOUT) {
-                _ready.set_exception(mutation_write_timeout_exception(get_schema()->ks_name(), get_schema()->cf_name(), _cl, _cl_acks, _total_block_for, _type));
+                _ready.set_value(mutation_write_timeout_exception(get_schema()->ks_name(), get_schema()->cf_name(), _cl, _cl_acks, _total_block_for, _type));
             } else if (_error == error::FAILURE) {
                 if (!_message) {
                     _ready.set_exception(mutation_write_failure_exception(get_schema()->ks_name(), get_schema()->cf_name(), _cl, _cl_acks, _failed, _total_block_for, _type));
@@ -428,7 +434,7 @@ public:
         _stats.background_writes++;
         _proxy->_global_stats.background_write_bytes += _mutation_holder->size();
         _throttled = false;
-        _ready.set_value();
+        _ready.set_value(bo::success());
     }
     void signal(size_t nr = 1) {
         _cl_acks += nr;
@@ -582,7 +588,7 @@ public:
             }).handle_exception_type([] (const seastar::sleep_aborted& ignored) { });
         }
     }
-    future<> wait() {
+    future<result<>> wait() {
         return _ready.get_future();
     }
     const inet_address_vector_replica_set& get_targets() const {
@@ -882,7 +888,8 @@ paxos_response_handler::begin_and_repair_paxos(client_state& cs, unsigned& conte
             // create_write_response_handler is overloaded for paxos::proposal and will
             // create cas_mutation holder, which consequently will ensure paxos::learn is
             // used.
-            auto f = _proxy->mutate_internal(std::move(m), db::consistency_level::ANY, false, tr_state, _permit, _timeout);
+            auto f = _proxy->mutate_internal(std::move(m), db::consistency_level::ANY, false, tr_state, _permit, _timeout)
+                    .then(utils::result_into_future<result<>>);
 
             // TODO: provided commits did not invalidate the prepare we just did above (which they
             // didn't), we could just wait for all the missing most recent commits to
@@ -1232,14 +1239,16 @@ future<> paxos_response_handler::learn_decision(lw_shared_ptr<paxos::proposal> d
                 if (mutations.empty()) {
                     return make_ready_future<>();
                 }
-                return _proxy->mutate_internal(std::move(mutations), _cl_for_learn, false, tr_state, _permit, _timeout, std::move(tracker));
+                return _proxy->mutate_internal(std::move(mutations), _cl_for_learn, false, tr_state, _permit, _timeout, std::move(tracker))
+                        .then(utils::result_into_future<result<>>);
             });
         }
     }
 
     // Path for the "base" mutations
     std::array<std::tuple<lw_shared_ptr<paxos::proposal>, schema_ptr, shared_ptr<paxos_response_handler>, dht::token>, 1> m{std::make_tuple(std::move(decision), _schema, shared_from_this(), _key.token())};
-    future<> f_lwt = _proxy->mutate_internal(std::move(m), _cl_for_learn, false, tr_state, _permit, _timeout);
+    future<> f_lwt = _proxy->mutate_internal(std::move(m), _cl_for_learn, false, tr_state, _permit, _timeout)
+            .then(utils::result_into_future<result<>>);
 
     return when_all_succeed(std::move(f_cdc), std::move(f_lwt)).discard_result();
 }
@@ -1410,7 +1419,7 @@ db::view::update_backlog storage_proxy::get_backlog_of(gms::inet_address ep) con
     return it->second.backlog;
 }
 
-future<> storage_proxy::response_wait(storage_proxy::response_id_type id, clock_type::time_point timeout) {
+future<result<>> storage_proxy::response_wait(storage_proxy::response_id_type id, clock_type::time_point timeout) {
     auto& handler = _response_handlers.find(id)->second;
     handler->expire_at(timeout);
     return handler->wait();
@@ -2088,9 +2097,9 @@ future<storage_proxy::unique_response_handler_vector> storage_proxy::mutate_prep
     });
 }
 
-future<> storage_proxy::mutate_begin(unique_response_handler_vector ids, db::consistency_level cl,
+future<result<>> storage_proxy::mutate_begin(unique_response_handler_vector ids, db::consistency_level cl,
                                      tracing::trace_state_ptr trace_state, std::optional<clock_type::time_point> timeout_opt) {
-    return parallel_for_each(ids, [this, cl, timeout_opt] (unique_response_handler& protected_response) {
+    return utils::result_parallel_for_each<result<>>(ids, [this, cl, timeout_opt] (unique_response_handler& protected_response) {
         auto response_id = protected_response.id;
         // This function, mutate_begin(), is called after a preemption point
         // so it's possible that other code besides our caller just ran. In
@@ -2107,7 +2116,7 @@ future<> storage_proxy::mutate_begin(unique_response_handler_vector ids, db::con
             // correctness (e.g., hints are written by timeout_cb(), not
             // because of an exception here).
             slogger.debug("unstarted write cancelled for id {}", response_id);
-            return make_ready_future<>();
+            return make_ready_future<result<>>(bo::success());
         }
         // it is better to send first and hint afterwards to reduce latency
         // but request may complete before hint_to_dead_endpoints() is called and
@@ -2125,36 +2134,46 @@ future<> storage_proxy::mutate_begin(unique_response_handler_vector ids, db::con
 
 // this function should be called with a future that holds result of mutation attempt (usually
 // future returned by mutate_begin()). The future should be ready when function is called.
-future<> storage_proxy::mutate_end(future<> mutate_result, utils::latency_counter lc, write_stats& stats, tracing::trace_state_ptr trace_state) {
+future<result<>> storage_proxy::mutate_end(future<result<>> mutate_result, utils::latency_counter lc, write_stats& stats, tracing::trace_state_ptr trace_state) {
     assert(mutate_result.available());
     stats.write.mark(lc.stop().latency());
     if (lc.is_start()) {
         stats.estimated_write.add(lc.latency());
     }
+    auto exception_handler = overloaded_functor {
+        [&] (const mutation_write_timeout_exception& ex) {
+            // timeout
+            tracing::trace(trace_state, "Mutation failed: write timeout; received {:d} of {:d} required replies", ex.received, ex.block_for);
+            slogger.debug("Write timeout; received {} of {} required replies", ex.received, ex.block_for);
+            stats.write_timeouts.mark();
+        }
+    };
     try {
-        mutate_result.get();
-        tracing::trace(trace_state, "Mutation successfully completed");
-        return make_ready_future<>();
+        auto res = mutate_result.get();
+        if (res) {
+            tracing::trace(trace_state, "Mutation successfully completed");
+            return make_ready_future<result<>>(bo::success());
+        } else {
+            res.assume_error().accept(exception_handler);
+            return make_ready_future<result<>>(std::move(res));
+        }
     } catch (replica::no_such_keyspace& ex) {
         tracing::trace(trace_state, "Mutation failed: write to non existing keyspace: {}", ex.what());
         slogger.trace("Write to non existing keyspace: {}", ex.what());
-        return make_exception_future<>(std::current_exception());
+        return make_exception_future<result<>>(std::current_exception());
     } catch(mutation_write_timeout_exception& ex) {
-        // timeout
-        tracing::trace(trace_state, "Mutation failed: write timeout; received {:d} of {:d} required replies", ex.received, ex.block_for);
-        slogger.debug("Write timeout; received {} of {} required replies", ex.received, ex.block_for);
-        stats.write_timeouts.mark();
-        return make_exception_future<>(std::current_exception());
+        exception_handler(ex);
+        return make_exception_future<result<>>(std::current_exception());
     } catch (exceptions::unavailable_exception& ex) {
         tracing::trace(trace_state, "Mutation failed: unavailable");
         stats.write_unavailables.mark();
         slogger.trace("Unavailable");
-        return make_exception_future<>(std::current_exception());
+        return make_exception_future<result<>>(std::current_exception());
     }  catch(overloaded_exception& ex) {
         tracing::trace(trace_state, "Mutation failed: overloaded");
         stats.write_unavailables.mark();
         slogger.trace("Overloaded");
-        return make_exception_future<>(std::current_exception());
+        return make_exception_future<result<>>(std::current_exception());
     } catch (...) {
         tracing::trace(trace_state, "Mutation failed: unknown reason");
         throw;
@@ -2321,6 +2340,11 @@ storage_proxy::get_paxos_participants(const sstring& ks_name, const dht::token &
  * @param tr_state trace state handle
  */
 future<> storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, bool raw_counters) {
+    return mutate_result(std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), raw_counters)
+            .then(utils::result_into_future<result<>>);
+}
+
+future<result<>> storage_proxy::mutate_result(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, bool raw_counters) {
     if (_cdc && _cdc->needs_cdc_augmentation(mutations)) {
         return _cdc->augment_mutation_call(timeout, std::move(mutations), tr_state, cl).then([this, cl, timeout, tr_state, permit = std::move(permit), raw_counters, cdc = _cdc->shared_from_this()](std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>&& t) mutable {
             auto mutations = std::move(std::get<0>(t));
@@ -2331,20 +2355,24 @@ future<> storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_
     return _mutate_stage(this, std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), raw_counters, nullptr);
 }
 
-future<> storage_proxy::do_mutate(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, bool raw_counters, lw_shared_ptr<cdc::operation_result_tracker> cdc_tracker) {
+future<result<>> storage_proxy::do_mutate(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, bool raw_counters, lw_shared_ptr<cdc::operation_result_tracker> cdc_tracker) {
     auto mid = raw_counters ? mutations.begin() : boost::range::partition(mutations, [] (auto&& m) {
         return m.schema()->is_counter();
     });
     return seastar::when_all_succeed(
         mutate_counters(boost::make_iterator_range(mutations.begin(), mid), cl, tr_state, permit, timeout),
         mutate_internal(boost::make_iterator_range(mid, mutations.end()), cl, false, tr_state, permit, timeout, std::move(cdc_tracker))
-    ).discard_result();
+    ).then([] (std::tuple<result<>> res) {
+        // For now, only mutate_internal returns a result<>
+        return std::get<0>(std::move(res));
+    });
 }
 
 future<> storage_proxy::replicate_counter_from_leader(mutation m, db::consistency_level cl, tracing::trace_state_ptr tr_state,
                                                       clock_type::time_point timeout, service_permit permit) {
     // FIXME: do not send the mutation to itself, it has already been applied (it is not incorrect to do so, though)
-    return mutate_internal(std::array<mutation, 1>{std::move(m)}, cl, true, std::move(tr_state), std::move(permit), timeout);
+    return mutate_internal(std::array<mutation, 1>{std::move(m)}, cl, true, std::move(tr_state), std::move(permit), timeout)
+            .then(utils::result_into_future<result<>>);
 }
 
 /*
@@ -2353,11 +2381,11 @@ future<> storage_proxy::replicate_counter_from_leader(mutation m, db::consistenc
  * endpoints to send mutation to, the one for the late uses enpoints that are used as keys for the map.
  */
 template<typename Range>
-future<>
+future<result<>>
 storage_proxy::mutate_internal(Range mutations, db::consistency_level cl, bool counters, tracing::trace_state_ptr tr_state, service_permit permit,
                                std::optional<clock_type::time_point> timeout_opt, lw_shared_ptr<cdc::operation_result_tracker> cdc_tracker) {
     if (boost::empty(mutations)) {
-        return make_ready_future<>();
+        return make_ready_future<result<>>(bo::success());
     }
 
     slogger.trace("mutate cl={}", cl);
@@ -2376,21 +2404,21 @@ storage_proxy::mutate_internal(Range mutations, db::consistency_level cl, bool c
             tr_state] (storage_proxy::unique_response_handler_vector ids) mutable {
         register_cdc_operation_result_tracker(ids, tracker);
         return mutate_begin(std::move(ids), cl, tr_state, timeout_opt);
-    }).then_wrapped([this, p = shared_from_this(), lc, tr_state] (future<> f) mutable {
+    }).then_wrapped([this, p = shared_from_this(), lc, tr_state] (future<result<>> f) mutable {
         return p->mutate_end(std::move(f), lc, get_stats(), std::move(tr_state));
     });
 }
 
-future<>
+future<result<>>
 storage_proxy::mutate_with_triggers(std::vector<mutation> mutations, db::consistency_level cl,
     clock_type::time_point timeout,
     bool should_mutate_atomically, tracing::trace_state_ptr tr_state, service_permit permit, bool raw_counters) {
     warn(unimplemented::cause::TRIGGERS);
     if (should_mutate_atomically) {
         assert(!raw_counters);
-        return mutate_atomically(std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit));
+        return mutate_atomically_result(std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit));
     }
-    return mutate(std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), raw_counters);
+    return mutate_result(std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), raw_counters);
 }
 
 /**
@@ -2404,7 +2432,12 @@ storage_proxy::mutate_with_triggers(std::vector<mutation> mutations, db::consist
  */
 future<>
 storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit) {
+    return mutate_atomically_result(std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit))
+            .then(utils::result_into_future<result<>>);
+}
 
+future<result<>>
+storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit) {
     utils::latency_counter lc;
     lc.start();
 
@@ -2454,7 +2487,7 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
                 tracing::set_batchlog_endpoints(_trace_state, _batchlog_endpoints);
         }
 
-        future<> send_batchlog_mutation(mutation m, db::consistency_level cl = db::consistency_level::ONE) {
+        future<result<>> send_batchlog_mutation(mutation m, db::consistency_level cl = db::consistency_level::ONE) {
             return _p.mutate_prepare<>(std::array<mutation, 1>{std::move(m)}, cl, db::write_type::BATCH_LOG, _permit, [this] (const mutation& m, db::consistency_level cl, db::write_type type, service_permit permit) {
                 auto& ks = _p._db.local().find_keyspace(m.schema()->ks_name());
                 return _p.create_write_response_handler(ks, cl, type, std::make_unique<shared_mutation>(m), _batchlog_endpoints, {}, {}, _trace_state, _stats, std::move(permit));
@@ -2463,7 +2496,7 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
                 return _p.mutate_begin(std::move(ids), cl, _trace_state, _timeout);
             });
         }
-        future<> sync_write_to_batchlog() {
+        future<result<>> sync_write_to_batchlog() {
             auto m = _p.get_batchlog_mutation_for(_mutations, _batch_uuid, netw::messaging_service::current_version, db_clock::now());
             tracing::trace(_trace_state, "Sending a batchlog write mutation");
             return send_batchlog_mutation(std::move(m));
@@ -2477,18 +2510,27 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
             m.partition().apply_delete(*schema, clustering_key_prefix::make_empty(), tombstone(now, gc_clock::now()));
 
             tracing::trace(_trace_state, "Sending a batchlog remove mutation");
-            return send_batchlog_mutation(std::move(m), db::consistency_level::ANY).handle_exception([] (std::exception_ptr eptr) {
-                slogger.error("Failed to remove mutations from batchlog: {}", eptr);
+            return send_batchlog_mutation(std::move(m), db::consistency_level::ANY).then_wrapped([] (future<result<>> f) {
+                auto print_exception = [] (const auto& ex) {
+                    slogger.error("Failed to remove mutations from batchlog: {}", ex);
+                };
+                if (f.failed()) {
+                    print_exception(f.get_exception());
+                } else if (result<> res = f.get(); !res) {
+                    print_exception(res.assume_error());
+                }
             });
         };
 
-        future<> run() {
+        future<result<>> run() {
             return _p.mutate_prepare(_mutations, _cl, db::write_type::BATCH, _trace_state, _permit).then([this] (unique_response_handler_vector ids) {
-                return sync_write_to_batchlog().then([this, ids = std::move(ids)] () mutable {
+                return sync_write_to_batchlog().then(utils::result_wrap([this, ids = std::move(ids)] () mutable {
                     tracing::trace(_trace_state, "Sending batch mutations");
                     _p.register_cdc_operation_result_tracker(ids, _cdc_tracker);
                     return _p.mutate_begin(std::move(ids), _cl, _trace_state, _timeout);
-                }).then(std::bind(&context::async_remove_from_batchlog, this));
+                })).then(utils::result_wrap([this] {
+                    return utils::then_ok_result<result<>>(async_remove_from_batchlog());
+                }));
             });
         }
     };
@@ -2500,7 +2542,7 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
           return make_exception_future<lw_shared_ptr<context>>(std::current_exception());
       }
     };
-    auto cleanup = [p = shared_from_this(), lc, tr_state] (future<> f) mutable {
+    auto cleanup = [p = shared_from_this(), lc, tr_state] (future<result<>> f) mutable {
         return p->mutate_end(std::move(f), lc, p->get_stats(), std::move(tr_state));
     };
 
@@ -2593,8 +2635,8 @@ future<> storage_proxy::send_to_endpoint(
             std::move(permit));
     }).then([this, cl, tr_state = std::move(tr_state), timeout = std::move(timeout)] (unique_response_handler_vector ids) mutable {
         return mutate_begin(std::move(ids), cl, std::move(tr_state), std::move(timeout));
-    }).then_wrapped([p = shared_from_this(), lc, &stats] (future<>&& f) {
-        return p->mutate_end(std::move(f), lc, stats, nullptr);
+    }).then_wrapped([p = shared_from_this(), lc, &stats] (future<result<>> f) {
+        return p->mutate_end(std::move(f), lc, stats, nullptr).then(utils::result_into_future<result<>>);
     });
 }
 
@@ -2658,11 +2700,13 @@ future<> storage_proxy::send_hint_to_endpoint(frozen_mutation_and_schema fm_a_s,
 future<> storage_proxy::send_hint_to_all_replicas(frozen_mutation_and_schema fm_a_s) {
     if (!_features.cluster_supports_hinted_handoff_separate_connection()) {
         std::array<mutation, 1> ms{fm_a_s.fm.unfreeze(fm_a_s.s)};
-        return mutate_internal(std::move(ms), db::consistency_level::ALL, false, nullptr, empty_service_permit());
+        return mutate_internal(std::move(ms), db::consistency_level::ALL, false, nullptr, empty_service_permit())
+                .then(utils::result_into_future<result<>>);
     }
 
     std::array<hint_wrapper, 1> ms{hint_wrapper { fm_a_s.fm.unfreeze(fm_a_s.s) }};
-    return mutate_internal(std::move(ms), db::consistency_level::ALL, false, nullptr, empty_service_permit());
+    return mutate_internal(std::move(ms), db::consistency_level::ALL, false, nullptr, empty_service_permit())
+            .then(utils::result_into_future<result<>>);
 }
 
 /**
@@ -2799,7 +2843,8 @@ future<> storage_proxy::schedule_repair(std::unordered_map<dht::token, std::unor
     if (diffs.empty()) {
         return make_ready_future<>();
     }
-    return mutate_internal(diffs | boost::adaptors::map_values, cl, false, std::move(trace_state), std::move(permit));
+    return mutate_internal(diffs | boost::adaptors::map_values, cl, false, std::move(trace_state), std::move(permit))
+            .then(utils::result_into_future<result<>>);
 }
 
 class abstract_read_resolver {

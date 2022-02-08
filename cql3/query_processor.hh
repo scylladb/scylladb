@@ -187,8 +187,27 @@ public:
         return _prepared_cache.find(key);
     }
 
+    inline
     future<::shared_ptr<cql_transport::messages::result_message>>
     execute_prepared(
+            statements::prepared_statement::checked_weak_ptr statement,
+            cql3::prepared_cache_key_type cache_key,
+            service::query_state& query_state,
+            const query_options& options,
+            bool needs_authorization) {
+        return execute_prepared_without_checking_exception_message(
+                std::move(statement),
+                std::move(cache_key),
+                query_state,
+                options,
+                needs_authorization)
+                .then(cql_transport::messages::propagate_exception_as_future<::shared_ptr<cql_transport::messages::result_message>>);
+    }
+
+    // Like execute_prepared, but is allowed to return exceptions as result_message::exception.
+    // The result_message::exception must be explicitly handled.
+    future<::shared_ptr<cql_transport::messages::result_message>>
+    execute_prepared_without_checking_exception_message(
             statements::prepared_statement::checked_weak_ptr statement,
             cql3::prepared_cache_key_type cache_key,
             service::query_state& query_state,
@@ -196,8 +215,23 @@ public:
             bool needs_authorization);
 
     /// Execute a client statement that was not prepared.
+    inline
     future<::shared_ptr<cql_transport::messages::result_message>>
     execute_direct(
+            const std::string_view& query_string,
+            service::query_state& query_state,
+            query_options& options) {
+        return execute_direct_without_checking_exception_message(
+                query_string,
+                query_state,
+                options)
+                .then(cql_transport::messages::propagate_exception_as_future<::shared_ptr<cql_transport::messages::result_message>>);
+    }
+
+    // Like execute_direct, but is allowed to return exceptions as result_message::exception.
+    // The result_message::exception must be explicitly handled.
+    future<::shared_ptr<cql_transport::messages::result_message>>
+    execute_direct_without_checking_exception_message(
             const std::string_view& query_string,
             service::query_state& query_state,
             query_options& options);
@@ -296,8 +330,25 @@ public:
 
     future<> stop();
 
+    inline
     future<::shared_ptr<cql_transport::messages::result_message>>
     execute_batch(
+            ::shared_ptr<statements::batch_statement> stmt,
+            service::query_state& query_state,
+            query_options& options,
+            std::unordered_map<prepared_cache_key_type, authorized_prepared_statements_cache::value_type> pending_authorization_entries) {
+        return execute_batch_without_checking_exception_message(
+                std::move(stmt),
+                query_state,
+                options,
+                std::move(pending_authorization_entries))
+                .then(cql_transport::messages::propagate_exception_as_future<::shared_ptr<cql_transport::messages::result_message>>);
+    }
+
+    // Like execute_batch, but is allowed to return exceptions as result_message::exception.
+    // The result_message::exception must be explicitly handled.
+    future<::shared_ptr<cql_transport::messages::result_message>>
+    execute_batch_without_checking_exception_message(
             ::shared_ptr<statements::batch_statement>,
             service::query_state& query_state,
             query_options& options,

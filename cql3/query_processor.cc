@@ -462,7 +462,7 @@ future<> query_processor::stop() {
 }
 
 future<::shared_ptr<result_message>>
-query_processor::execute_direct(const sstring_view& query_string, service::query_state& query_state, query_options& options) {
+query_processor::execute_direct_without_checking_exception_message(const sstring_view& query_string, service::query_state& query_state, query_options& options) {
     log.trace("execute_direct: \"{}\"", query_string);
     tracing::trace(query_state.get_trace_state(), "Parsing a statement");
     auto p = get_statement(query_string, query_state.get_client_state());
@@ -495,7 +495,7 @@ query_processor::execute_direct(const sstring_view& query_string, service::query
 }
 
 future<::shared_ptr<result_message>>
-query_processor::execute_prepared(
+query_processor::execute_prepared_without_checking_exception_message(
         statements::prepared_statement::checked_weak_ptr prepared,
         cql3::prepared_cache_key_type cache_key,
         service::query_state& query_state,
@@ -526,7 +526,7 @@ query_processor::process_authorized_statement(const ::shared_ptr<cql_statement> 
 
     statement->validate(*this, client_state);
 
-    auto fut = statement->execute(*this, query_state, options);
+    auto fut = statement->execute_without_checking_exception_message(*this, query_state, options);
 
     return fut.then([statement] (auto msg) {
         if (msg) {
@@ -849,7 +849,7 @@ query_processor::execute_with_params(
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-query_processor::execute_batch(
+query_processor::execute_batch_without_checking_exception_message(
         ::shared_ptr<statements::batch_statement> batch,
         service::query_state& query_state,
         query_options& options,

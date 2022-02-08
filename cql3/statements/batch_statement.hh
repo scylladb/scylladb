@@ -15,6 +15,7 @@
 #include "timestamp.hh"
 #include "log.hh"
 #include "service_permit.hh"
+#include "exceptions/exceptions.hh"
 
 namespace cql_transport::messages {
     class result_message;
@@ -121,6 +122,9 @@ public:
 
     virtual future<shared_ptr<cql_transport::messages::result_message>> execute(
             query_processor& qp, service::query_state& state, const query_options& options) const override;
+
+    virtual future<shared_ptr<cql_transport::messages::result_message>> execute_without_checking_exception_message(
+            query_processor& qp, service::query_state& state, const query_options& options) const override;
 private:
     friend class batch_statement_executor;
     future<shared_ptr<cql_transport::messages::result_message>> do_execute(
@@ -128,7 +132,7 @@ private:
             service::query_state& query_state, const query_options& options,
             bool local, api::timestamp_type now) const;
 
-    future<> execute_without_conditions(
+    future<exceptions::coordinator_result<>> execute_without_conditions(
             query_processor& qp,
             std::vector<mutation> mutations,
             db::consistency_level cl,

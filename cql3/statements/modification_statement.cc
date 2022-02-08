@@ -33,6 +33,9 @@
 #include "cql3/query_processor.hh"
 #include "service/storage_proxy.hh"
 
+template<typename T = void>
+using coordinator_result = exceptions::coordinator_result<T>;
+
 bool is_internal_keyspace(std::string_view name);
 
 namespace cql3 {
@@ -241,6 +244,12 @@ static thread_local inheriting_concrete_execution_stage<
 
 future<::shared_ptr<cql_transport::messages::result_message>>
 modification_statement::execute(query_processor& qp, service::query_state& qs, const query_options& options) const {
+    return execute_without_checking_exception_message(qp, qs, options)
+            .then(cql_transport::messages::propagate_exception_as_future<shared_ptr<cql_transport::messages::result_message>>);
+}
+
+future<::shared_ptr<cql_transport::messages::result_message>>
+modification_statement::execute_without_checking_exception_message(query_processor& qp, service::query_state& qs, const query_options& options) const {
     cql3::util::validate_timestamp(options, attrs);
     return modify_stage(this, seastar::ref(qp), seastar::ref(qs), seastar::cref(options));
 }
@@ -259,19 +268,23 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
         return execute_with_condition(qp, qs, options);
     }
 
-    return execute_without_condition(qp, qs, options).then([] {
+    return execute_without_condition(qp, qs, options).then([] (coordinator_result<> res) {
+        if (!res) {
+            return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(
+                    seastar::make_shared<cql_transport::messages::result_message::exception>(std::move(res).assume_error()));
+        }
         return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(
                 ::shared_ptr<cql_transport::messages::result_message>{});
     });
 }
 
-future<>
+future<coordinator_result<>>
 modification_statement::execute_without_condition(query_processor& qp, service::query_state& qs, const query_options& options) const {
     auto cl = options.get_consistency();
     auto timeout = db::timeout_clock::now() + get_timeout(qs.get_client_state(), options);
     return get_mutations(qp, options, timeout, false, options.get_timestamp(qs), qs).then([this, cl, timeout, &qp, &qs] (auto mutations) {
         if (mutations.empty()) {
-            return now();
+            return make_ready_future<coordinator_result<>>(bo::success());
         }
         
         return qp.proxy().mutate_with_triggers(std::move(mutations), cl, timeout, false, qs.get_trace_state(), qs.get_permit(), this->is_raw_counter_shard_write());
