@@ -46,9 +46,6 @@ exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store', 'README.md', '_utils']
 # The name of the Pygments (syntax highlighting) style to use.
 pygments_style = 'sphinx'
 
-# If true, `todo` and `todoList` produce output, else they produce nothing.
-todo_include_todos = True
-
 # Setup Sphinx
 def setup(sphinx):
     sphinx.add_config_value('recommonmark_config', {
@@ -105,7 +102,6 @@ html_theme_options = {
     'github_repository': 'scylladb/scylla',
     'github_issues_repository': 'scylladb/scylla',
     'hide_edit_this_page_button': 'false',
-    'hide_sidebar_index': 'false',
     'hide_version_dropdown': ['master'],
 }
 

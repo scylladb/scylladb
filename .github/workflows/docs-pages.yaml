@@ -1,0 +1,31 @@
+name: "Docs / Publish"
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - "docs/**"
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@v2.3.2
+        with:
+          python-version: 3.7
+      - name: Set up Poetry
+        run: curl -sSL https://install.python-poetry.org | python -
+      - name: Build docs
+        run: make -C docs multiversion
+      - name: Deploy docs to GitHub Pages
+        run: ./docs/_utils/deploy.sh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
