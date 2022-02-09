@@ -1006,21 +1006,21 @@ table::compact_sstables(sstables::compaction_descriptor descriptor, sstables::co
     auto start_size = boost::accumulate(descriptor.sstables | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::data_size)), uint64_t(0));
 
     sstables::compaction_result res = co_await sstables::compact_sstables(std::move(descriptor), cdata, as_table_state());
-        if (compaction_type != sstables::compaction_type::Compaction) {
-            co_return;
-        }
-        // skip update if running without a query context, for example, when running a test case.
-        if (!db::qctx) {
-            co_return;
-        }
-        auto ended_at = std::chrono::duration_cast<std::chrono::milliseconds>(res.ended_at.time_since_epoch()).count();
+    if (compaction_type != sstables::compaction_type::Compaction) {
+        co_return;
+    }
+    // skip update if running without a query context, for example, when running a test case.
+    if (!db::qctx) {
+        co_return;
+    }
+    auto ended_at = std::chrono::duration_cast<std::chrono::milliseconds>(res.ended_at.time_since_epoch()).count();
 
-        // FIXME: add support to merged_rows. merged_rows is a histogram that
-        // shows how many sstables each row is merged from. This information
-        // cannot be accessed until we make combined_reader more generic,
-        // for example, by adding a reducer method.
-        co_return co_await db::system_keyspace::update_compaction_history(cdata.compaction_uuid, _schema->ks_name(), _schema->cf_name(), ended_at,
-            start_size, res.end_size, std::unordered_map<int32_t, int64_t>{});
+    // FIXME: add support to merged_rows. merged_rows is a histogram that
+    // shows how many sstables each row is merged from. This information
+    // cannot be accessed until we make combined_reader more generic,
+    // for example, by adding a reducer method.
+    co_return co_await db::system_keyspace::update_compaction_history(cdata.compaction_uuid, _schema->ks_name(), _schema->cf_name(), ended_at,
+        start_size, res.end_size, std::unordered_map<int32_t, int64_t>{});
 }
 
 future<>
