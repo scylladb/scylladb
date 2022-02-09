@@ -65,6 +65,25 @@ hinted_handoff_enabled_to_json(const db::config::hinted_handoff_enabled_type& h)
     return value_to_json(h.to_configuration_string());
 }
 
+// Convert a value that can be printed with operator<<, or a vector of
+// such values, to JSON. An example is enum_option<T>, because enum_option<T>
+// has a operator<<.
+template <typename T>
+static json::json_return_type
+printable_to_json(const T& e) {
+    return value_to_json(format("{}", e));
+}
+template <typename T>
+static json::json_return_type
+printable_vector_to_json(const std::vector<T>& e) {
+    std::vector<sstring> converted;
+    converted.reserve(e.size());
+    for (const auto& option : e) {
+        converted.push_back(format("{}", option));
+    }
+    return value_to_json(converted);
+}
+
 template <>
 const config_type config_type_for<bool> = config_type("bool", value_to_json<bool>);
 
@@ -109,11 +128,11 @@ const config_type config_type_for<db::seed_provider_type> = config_type("seed pr
 
 template <>
 const config_type config_type_for<std::vector<enum_option<db::experimental_features_t>>> = config_type(
-        "experimental features", value_to_json<std::vector<sstring>>);
+        "experimental features", printable_vector_to_json<enum_option<db::experimental_features_t>>);
 
 template <>
 const config_type config_type_for<enum_option<db::tri_mode_restriction_t>> = config_type(
-        "restriction mode", value_to_json<sstring>);
+        "restriction mode", printable_to_json<enum_option<db::tri_mode_restriction_t>>);
 
 template <>
 const config_type config_type_for<db::config::hinted_handoff_enabled_type> = config_type("hinted handoff enabled", hinted_handoff_enabled_to_json);
