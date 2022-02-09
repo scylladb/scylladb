@@ -17,6 +17,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/map_reduce.hh>
 #include <seastar/testing/thread_test_case.hh>
+#include <seastar/util/later.hh>
 
 using namespace seastar;
 
@@ -109,21 +110,58 @@ SEASTAR_THREAD_TEST_CASE(test_result_wrap) {
     BOOST_REQUIRE_EQUAL(run_count, 2);
 }
 
+// If T is a future, attaches a continuation and converts it to future<U>
+// Otherwise, performs a conversion now and returns a ready future<U>
+// The function has an important property that it converts non-futures into
+// _ready_ futures, and this property is relied upon in the tests.
+template<typename T, typename U>
+future<U> futurize_and_convert(T&& t) {
+    if constexpr (is_future<T>::value) {
+        return t.then([] (auto&& unwrapped) -> U {
+            return std::move(unwrapped);
+        });
+    } else {
+        return make_ready_future<U>(std::move(t));
+    }
+}
+
 SEASTAR_THREAD_TEST_CASE(test_result_parallel_for_each) {
-    auto reduce = [] (auto... params) {
-        std::vector<result<>> v;
-        (v.push_back(std::move(params)), ...);
-        utils::result_parallel_for_each<result<>>(std::move(v), [] (result<>& r) {
-            return make_ready_future<result<>>(std::move(r));
+    auto reduce = [] <typename... Params> (Params&&... params) {
+        std::vector<future<result<>>> v;
+        (v.push_back(futurize_and_convert<Params, result<>>(std::move(params))), ...);
+        utils::result_parallel_for_each<result<>>(std::move(v), [] (future<result<>>& f) {
+            return std::move(f);
         }).get().value(); // <- trying to access the value throws in case of error
     };
 
     auto foo_exc = [] () { return result<>(bo::failure(foo_exception())); };
     auto bar_exc = [] () { return result<>(bo::failure(bar_exception())); };
+    auto foo_throw = [] () { return make_exception_future<result<>>(foo_exception()); };
+    auto bar_throw = [] () { return make_exception_future<result<>>(bar_exception()); };
+    auto late = [] (auto&& x) {
+        return yield().then([x = std::move(x)] () mutable {
+            return std::move(x);
+        });
+    };
 
     BOOST_REQUIRE_NO_THROW(reduce(bo::success(), bo::success()));
     BOOST_REQUIRE_THROW(reduce(foo_exc(), bo::success()), foo_exception);
     BOOST_REQUIRE_THROW(reduce(bo::success(), foo_exc()), foo_exception);
     BOOST_REQUIRE_THROW(reduce(foo_exc(), bar_exc()), foo_exception);
     BOOST_REQUIRE_THROW(reduce(bar_exc(), foo_exc()), bar_exception);
+
+    // At least one future is not ready
+    BOOST_REQUIRE_NO_THROW(reduce(late(bo::success()), late(bo::success())));
+    BOOST_REQUIRE_NO_THROW(reduce(bo::success(), late(bo::success())));
+    BOOST_REQUIRE_NO_THROW(reduce(late(bo::success()), bo::success()));
+
+    // Exceptions
+    BOOST_REQUIRE_THROW(reduce(foo_throw(), bar_throw()), foo_exception);
+    BOOST_REQUIRE_THROW(reduce(bar_throw(), foo_throw()), bar_exception);
+
+    // Failures + exceptions mixing; the leftmost exception should win
+    BOOST_REQUIRE_THROW(reduce(foo_throw(), bar_exc()), foo_exception);
+    BOOST_REQUIRE_THROW(reduce(foo_exc(), bar_throw()), foo_exception);
+    BOOST_REQUIRE_THROW(reduce(bar_throw(), foo_exc()), bar_exception);
+    BOOST_REQUIRE_THROW(reduce(bar_exc(), foo_throw()), bar_exception);
 }
