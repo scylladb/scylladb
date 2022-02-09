@@ -136,9 +136,7 @@ def check_pre_raft(cql):
         return false
     # In Scylla, we check Raft mode by inspecting the configuration via CQL.
     experimental_features = list(cql.execute("SELECT value FROM system.config WHERE name = 'experimental_features'"))[0].value
-    # Because of https://github.com/scylladb/scylla/issues/10047 the features
-    # appear as numbers instead of strings. FIXME!
-    return not '\x04' in experimental_features
+    return not '"raft"' in experimental_features
 @pytest.fixture(scope="function")
 def fails_without_raft(request, check_pre_raft):
     if check_pre_raft:
