@@ -987,7 +987,7 @@ future<>
 table::compact_sstables(sstables::compaction_descriptor descriptor, sstables::compaction_data& cdata) {
     if (!descriptor.sstables.size()) {
         // if there is nothing to compact, just return.
-        return make_ready_future<>();
+        co_return;
     }
 
     descriptor.creator = [this] (shard_id dummy) {
@@ -1005,13 +1005,13 @@ table::compact_sstables(sstables::compaction_descriptor descriptor, sstables::co
     auto compaction_type = descriptor.options.type();
     auto start_size = boost::accumulate(descriptor.sstables | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::data_size)), uint64_t(0));
 
-    return sstables::compact_sstables(std::move(descriptor), cdata, as_table_state()).then([this, &cdata, compaction_type, start_size] (sstables::compaction_result res) {
+    sstables::compaction_result res = co_await sstables::compact_sstables(std::move(descriptor), cdata, as_table_state());
         if (compaction_type != sstables::compaction_type::Compaction) {
-            return make_ready_future<>();
+            co_return;
         }
         // skip update if running without a query context, for example, when running a test case.
         if (!db::qctx) {
-            return make_ready_future<>();
+            co_return;
         }
         auto ended_at = std::chrono::duration_cast<std::chrono::milliseconds>(res.ended_at.time_since_epoch()).count();
 
@@ -1019,9 +1019,8 @@ table::compact_sstables(sstables::compaction_descriptor descriptor, sstables::co
         // shows how many sstables each row is merged from. This information
         // cannot be accessed until we make combined_reader more generic,
         // for example, by adding a reducer method.
-        return db::system_keyspace::update_compaction_history(cdata.compaction_uuid, _schema->ks_name(), _schema->cf_name(), ended_at,
+        co_return co_await db::system_keyspace::update_compaction_history(cdata.compaction_uuid, _schema->ks_name(), _schema->cf_name(), ended_at,
             start_size, res.end_size, std::unordered_map<int32_t, int64_t>{});
-    });
 }
 
 future<>
