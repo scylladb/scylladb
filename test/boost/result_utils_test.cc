@@ -10,6 +10,8 @@
 #include <stdexcept>
 #include "utils/exception_container.hh"
 #include "utils/result.hh"
+#include "utils/result_combinators.hh"
+#include "utils/result_loop.hh"
 
 #include <seastar/testing/test_case.hh>
 #include <seastar/core/sstring.hh>

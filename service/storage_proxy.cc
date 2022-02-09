@@ -90,6 +90,8 @@
 #include "idl/frozen_schema.dist.impl.hh"
 #include "idl/storage_proxy.dist.hh"
 #include "utils/result.hh"
+#include "utils/result_combinators.hh"
+#include "utils/result_loop.hh"
 #include "utils/overloaded_functor.hh"
 
 namespace bi = boost::intrusive;
