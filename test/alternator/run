@@ -23,6 +23,14 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 print('Scylla is: ' + run.scylla + '.')
 
+# If the "--raft" option is given, switch to the experimental Raft-based
+# implementation of schema operations. When the experimental feature becomes
+# the default, we can drop this option.
+extra_scylla_options = []
+if '--raft' in sys.argv:
+    sys.argv.remove('--raft')
+    extra_scylla_options += ['--experimental-features=raft']
+
 # run_alternator_cmd runs the same as run_scylla_cmd with *additional*
 # parameters, so in particular both CQL and Alternator will be enabled.
 # This is useful for us because we need CQL to setup authentication.
@@ -50,6 +58,7 @@ def run_alternator_cmd(pid, dir):
         ]
     else:
         cmd += ['--alternator-port', '8000']
+    cmd += extra_scylla_options
 
     return (cmd, env)
 
