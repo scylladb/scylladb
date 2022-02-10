@@ -59,7 +59,7 @@ struct futurizing_converter {
 };
 
 template<typename From, typename Converter, typename To>
-concept ConvertsWithTo = std::convertible_to<From, typename Converter::template wrapped_type<To>>;
+concept ConvertsWithTo = std::convertible_to<typename Converter::template wrapped_type<From>, typename Converter::template wrapped_type<To>>;
 
 // We require forall<ExceptionContainerResult R> ExceptionHandle<H, R>.
 // However, C++ does not support quantification like that in the constraints.
