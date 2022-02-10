@@ -2993,8 +2993,8 @@ public:
             fail_request(read_failure_exception(_schema->ks_name(), _schema->cf_name(), _cl, _cl_responses, _failed, _block_for, _data_result));
         }
     }
-    future<digest_read_result> has_cl() {
-        return _cl_promise.get_future().then(utils::result_into_future<result<digest_read_result>>);
+    future<result<digest_read_result>> has_cl() {
+        return _cl_promise.get_future();
     }
     bool has_data() {
         return _data_result;
@@ -3785,12 +3785,17 @@ public:
         make_requests(digest_resolver, timeout);
 
         // Waited on indirectly.
-        (void)digest_resolver->has_cl().then_wrapped([exec, digest_resolver, timeout] (future<digest_read_result> f) mutable {
+        (void)digest_resolver->has_cl().then_wrapped([exec, digest_resolver, timeout] (future<result<digest_read_result>> f) mutable {
             bool background_repair_check = false;
-            try {
+            // All errors are handled, it's OK to discard the result.
+            (void)utils::result_try([&] () -> result<> {
                 exec->got_cl();
 
-                auto&& [result, digests_match] = f.get0(); // can throw
+                auto&& res = f.get(); // can throw
+                if (!res) {
+                    return std::move(res).as_failure();
+                }
+                auto&& [result, digests_match] = res.value();
 
                 if (digests_match) {
                     exec->_result_promise.set_value(std::move(result));
@@ -3815,10 +3820,12 @@ public:
                     exec->reconcile(exec->_cl, timeout);
                     exec->_proxy->get_stats().read_repair_repaired_blocking++;
                 }
-            } catch (...) {
-                exec->_result_promise.set_exception(std::current_exception());
+                return bo::success();
+            },  utils::result_catch_dots([&] (auto&& handle) {
+                handle.forward_to_promise(exec->_result_promise);
                 exec->on_read_resolved();
-            }
+                return bo::success();
+            }));
 
             // Waited on indirectly.
             (void)digest_resolver->done().then(utils::result_wrap([exec, digest_resolver, timeout, background_repair_check] () mutable {
