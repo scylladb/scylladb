@@ -2832,13 +2832,12 @@ size_t storage_proxy::hint_to_dead_endpoints(std::unique_ptr<mutation_holder>& m
     }
 }
 
-future<> storage_proxy::schedule_repair(std::unordered_map<dht::token, std::unordered_map<gms::inet_address, std::optional<mutation>>> diffs, db::consistency_level cl, tracing::trace_state_ptr trace_state,
+future<result<>> storage_proxy::schedule_repair(std::unordered_map<dht::token, std::unordered_map<gms::inet_address, std::optional<mutation>>> diffs, db::consistency_level cl, tracing::trace_state_ptr trace_state,
                                         service_permit permit) {
     if (diffs.empty()) {
-        return make_ready_future<>();
+        return make_ready_future<result<>>(bo::success());
     }
-    return mutate_internal(diffs | boost::adaptors::map_values, cl, false, std::move(trace_state), std::move(permit))
-            .then(utils::result_into_future<result<>>);
+    return mutate_internal(diffs | boost::adaptors::map_values, cl, false, std::move(trace_state), std::move(permit));
 }
 
 class abstract_read_resolver {
@@ -3702,18 +3701,21 @@ protected:
                     // trigger repair multiple times and to prevent quorum read to return an old value, even after a quorum
                     // another read had returned a newer value (but the newer value had not yet been sent to the other replicas)
                     // Waited on indirectly.
-                    (void)_proxy->schedule_repair(data_resolver->get_diffs_for_repair(), _cl, _trace_state, _permit).then([this, result = std::move(result)] () mutable {
+                    (void)_proxy->schedule_repair(data_resolver->get_diffs_for_repair(), _cl, _trace_state, _permit).then(utils::result_wrap([this, result = std::move(result)] () mutable {
                         _result_promise.set_value(std::move(result));
-                        on_read_resolved();
-                    }).handle_exception([this, exec] (std::exception_ptr eptr) {
-                        try {
-                            std::rethrow_exception(eptr);
-                        } catch (mutation_write_timeout_exception&) {
+                        return make_ready_future<::result<>>(bo::success());
+                    })).then_wrapped([this, exec] (future<::result<>>&& f) {
+                        // All errors are handled, it's OK to discard the result.
+                        (void)utils::result_try([&] {
+                            return f.get();
+                        },  utils::result_catch<mutation_write_timeout_exception>([&] (const auto&) -> ::result<> {
                             // convert write error to read error
                             _result_promise.set_value(read_timeout_exception(_schema->ks_name(), _schema->cf_name(), _cl, _block_for - 1, _block_for, true));
-                        } catch (...) {
-                            _result_promise.set_exception(std::current_exception());
-                        }
+                            return bo::success();
+                        }), utils::result_catch_dots([&] (auto&& handle) -> ::result<> {
+                            handle.forward_to_promise(_result_promise);
+                            return bo::success();
+                        }));
                         on_read_resolved();
                     });
                 } else {
