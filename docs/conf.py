@@ -4,6 +4,7 @@ import sys
 from datetime import date
 import recommonmark
 from recommonmark.transform import AutoStructify
+from pygments.lexers.javascript import JavascriptLexer
 from sphinx_scylladb_theme.utils import multiversion_regex_builder
 
 sys.path.insert(0, os.path.abspath('..'))
@@ -45,17 +46,6 @@ exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store', 'README.md', '_utils']
 
 # The name of the Pygments (syntax highlighting) style to use.
 pygments_style = 'sphinx'
-
-# If true, `todo` and `todoList` produce output, else they produce nothing.
-todo_include_todos = True
-
-# Setup Sphinx
-def setup(sphinx):
-    sphinx.add_config_value('recommonmark_config', {
-        'enable_eval_rst': True,
-        'enable_auto_toc_tree': False,
-    }, True)
-    sphinx.add_transform(AutoStructify)
 
 # -- Options for not found extension -------------------------------------------
 
@@ -105,7 +95,6 @@ html_theme_options = {
     'github_repository': 'scylladb/scylla',
     'github_issues_repository': 'scylladb/scylla',
     'hide_edit_this_page_button': 'false',
-    'hide_sidebar_index': 'false',
     'hide_version_dropdown': ['master'],
 }
 
@@ -127,3 +116,20 @@ html_baseurl = 'https://scylla.docs.scylladb.com'
 
 # Dictionary of values to pass into the template engine’s context for all pages
 html_context = {'html_baseurl': html_baseurl}
+
+
+class AssemblyScriptLexer(JavascriptLexer):
+    pass
+
+# Setup Sphinx
+def setup(sphinx):
+    # Add Markdown support
+    sphinx.add_config_value('recommonmark_config', {
+        'enable_eval_rst': True,
+        'enable_auto_toc_tree': False,
+    }, True)
+    sphinx.add_transform(AutoStructify)
+    
+    # Custom lexers
+    sphinx.add_lexer("assemblyscript", AssemblyScriptLexer)
+
