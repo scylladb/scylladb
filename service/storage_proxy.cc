@@ -3679,9 +3679,14 @@ protected:
         make_mutation_data_requests(cmd, data_resolver, _targets.begin(), _targets.end(), timeout);
 
         // Waited on indirectly.
-        (void)data_resolver->done().then(utils::result_into_future<result<>>).then_wrapped([this, exec, data_resolver, cmd = std::move(cmd), cl, timeout] (future<> f) {
+        (void)data_resolver->done().then_wrapped([this, exec, data_resolver, cmd = std::move(cmd), cl, timeout] (future<result<>> f) {
             try {
-                f.get();
+                result<> res = f.get();
+                if (!res) {
+                    _result_promise.set_value(std::move(res).as_failure());
+                    on_read_resolved();
+                    return;
+                }
                 auto rr_opt = data_resolver->resolve(_schema, *cmd, original_row_limit(), original_per_partition_row_limit(), original_partition_limit()); // reconciliation happens here
 
                 // We generate a retry if at least one node reply with count live columns but after merge we have less
@@ -3753,6 +3758,7 @@ protected:
                     slogger.trace("Retrying query with command {} (previous is {})", *_retry_cmd, *cmd);
                     reconcile(cl, timeout, _retry_cmd);
                 }
+
             } catch (...) {
                 _result_promise.set_exception(std::current_exception());
                 on_read_resolved();
