@@ -1493,7 +1493,7 @@ int main(int ac, char** av) {
         main_func = tools::scylla_types_main;
     } else if (exec_name == "sstable") {
         main_func = tools::scylla_sstable_main;
-    } else if (exec_name[0] == '-') {
+    } else if (exec_name.empty() || exec_name[0] == '-') {
         main_func = scylla_main;
         recognized = false;
     } else {
