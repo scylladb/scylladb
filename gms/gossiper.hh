@@ -222,6 +222,10 @@ private:
     // Replicates given value to all other shards.
     // The value must be kept alive until completes and not change.
     future<> replicate(inet_address, application_state key, const versioned_value& value);
+
+    std::unordered_set<gms::inet_address> _isolated_nodes_due_to_listener_failure;
+
+    bool is_isolated(const gms::inet_address& addr);
 public:
     explicit gossiper(abort_source& as, feature_service& features, const locator::shared_token_metadata& stm, netw::messaging_service& ms, db::config& cfg, gossip_config gcfg);
 
