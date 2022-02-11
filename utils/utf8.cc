@@ -38,6 +38,8 @@
  */
 
 #include "utf8.hh"
+#include <sstream>
+#include <iomanip>
 
 namespace utils {
 
@@ -582,6 +584,30 @@ std::optional<size_t> validate_with_error_position(const uint8_t *data, size_t l
     }
     // Second pass - data is invalid. Find the error position using naive method
     return validate_naive(data, len);
+}
+
+// From https://stackoverflow.com/a/33799784/12786387
+sstring escape_json(const sstring &s) {
+    std::ostringstream o;
+    for (auto c = s.cbegin(); c != s.cend(); c++) {
+        switch (*c) {
+        case '"': o << "\\\""; break;
+        case '\\': o << "\\\\"; break;
+        case '\b': o << "\\b"; break;
+        case '\f': o << "\\f"; break;
+        case '\n': o << "\\n"; break;
+        case '\r': o << "\\r"; break;
+        case '\t': o << "\\t"; break;
+        default:
+            if ('\x00' <= *c && *c <= '\x1f') {
+                o << "\\u"
+                  << std::hex << std::setw(4) << std::setfill('0') << (int)*c;
+            } else {
+                o << *c;
+            }
+        }
+    }
+    return o.str();
 }
 
 } // namespace utf8

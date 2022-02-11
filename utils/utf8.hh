@@ -12,6 +12,7 @@
 #pragma once
 
 #include <cstdint>
+#include <seastar/core/sstring.hh>
 #include "bytes.hh"
 #include "fragment_range.hh"
 
@@ -103,6 +104,8 @@ std::optional<size_t> validate_with_error_position_fragmented(FragmentedView aut
     }
     return std::nullopt;
 }
+
+sstring escape_json(const sstring &s);
 
 } // namespace utf8
 

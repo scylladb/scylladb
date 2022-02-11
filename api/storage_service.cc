@@ -11,6 +11,7 @@
 #include "db/config.hh"
 #include "db/schema_tables.hh"
 #include "utils/hash.hh"
+#include "utils/utf8.hh"
 #include <sstream>
 #include <time.h>
 #include <algorithm>
@@ -127,14 +128,14 @@ seastar::future<json::json_return_type> run_toppartitions_query(db::toppartition
 
                 for (auto& d: topk_results.read.top(q.list_size())) {
                     cf::toppartitions_record r;
-                    r.partition = (legacy_request ? "" : "(" + d.item.schema->ks_name() + ":" + d.item.schema->cf_name() + ") ") + sstring(d.item);
+                    r.partition = (legacy_request ? "" : "(" + d.item.schema->ks_name() + ":" + d.item.schema->cf_name() + ") ") + utils::utf8::escape_json(sstring(d.item));
                     r.count = d.count;
                     r.error = d.error;
                     results.read.push(r);
                 }
                 for (auto& d: topk_results.write.top(q.list_size())) {
                     cf::toppartitions_record r;
-                    r.partition = (legacy_request ? "" : "(" + d.item.schema->ks_name() + ":" + d.item.schema->cf_name() + ") ") + sstring(d.item);
+                    r.partition = (legacy_request ? "" : "(" + d.item.schema->ks_name() + ":" + d.item.schema->cf_name() + ") ") + utils::utf8::escape_json(sstring(d.item));
                     r.count = d.count;
                     r.error = d.error;
                     results.write.push(r);
