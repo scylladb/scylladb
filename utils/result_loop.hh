@@ -10,6 +10,7 @@
 
 #include <iterator>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/map_reduce.hh>
 #include <seastar/coroutine/exception.hh>
 #include "utils/result.hh"
 
@@ -98,6 +99,156 @@ requires
     && std::is_void_v<typename R::value_type>
 inline seastar::future<R> result_parallel_for_each(Range&& range, Func&& func) {
     return result_parallel_for_each<R>(std::begin(range), std::end(range), std::forward<Func>(func));
+}
+
+namespace internal {
+
+template<typename Reducer, ExceptionContainer ExCont>
+struct result_reducer_traits {
+    using result_type = bo::result<void, ExCont, exception_container_throw_policy>;
+
+    static seastar::future<result_type> maybe_call_get(Reducer&& r) {
+        return seastar::make_ready_future<result_type>(bo::success());
+    }
+};
+
+template<typename Reducer, ExceptionContainer ExCont>
+requires requires (Reducer r) {
+    { r.get() };
+}
+struct result_reducer_traits<Reducer, ExCont> {
+    using original_type = seastar::futurize_t<decltype(std::declval<Reducer>().get())>;
+    using result_type = bo::result<typename original_type::value_type, ExCont, exception_container_throw_policy>;
+
+    static seastar::future<result_type> maybe_call_get(Reducer&& r) {
+        auto x = r.get();
+        if constexpr (seastar::Future<decltype(x)>) {
+            return x.then([] (auto&& v) {
+                return seastar::make_ready_future<result_type>(bo::success(std::move(v)));
+            });
+        } else {
+            return seastar::make_ready_future<result_type>(bo::success(std::move(x)));
+        }
+    }
+};
+
+template<typename Reducer, ExceptionContainer ExCont>
+struct result_map_reduce_unary_adapter {
+private:
+    // We could in theory just use result<Reducer> here and turn it into
+    // a failed result on receiving an error, however that would destroy
+    // the Reducer and some map_reduce usages may assume that the reducer
+    // is alive until all mapper calls finish (e.g. it may hold a smart pointer
+    // to some memory used by mappers), therefore it is safer to keep it
+    // separate from the error and only destroy it when the wrapper
+    // is destroyed.
+    Reducer _reducer;
+    ExCont _excont;
+
+    using reducer_traits = result_reducer_traits<Reducer, ExCont>;
+
+public:
+    result_map_reduce_unary_adapter(Reducer&& reducer)
+            : _reducer(std::forward<Reducer>(reducer))
+    { }
+
+    template<ExceptionContainerResult Arg>
+    seastar::future<> operator()(Arg&& arg) {
+        if (!_excont && arg) {
+            return seastar::futurize_invoke(_reducer, std::move(arg).assume_value());
+        }
+        if (_excont) {
+            // We already got an error before, so ignore the new one
+            return seastar::make_ready_future<>();
+        }
+        // `arg` must be a failed result
+        _excont = std::move(arg).assume_error();
+        return seastar::make_ready_future<>();
+    }
+
+    seastar::future<typename reducer_traits::result_type> get() {
+        if (_excont) {
+            return seastar::make_ready_future<typename reducer_traits::result_type>(bo::failure(std::move(_excont)));
+        }
+        return reducer_traits::maybe_call_get(std::move(_reducer));
+    }
+};
+
+}
+
+template<typename Iterator, typename Mapper, typename Reducer>
+requires requires (Iterator i, Mapper mapper, Reducer reduce) {
+    *i++;
+    { i != i } -> std::convertible_to<bool>;
+    { mapper(*i) } -> ExceptionContainerResultFuture<>;
+    { seastar::futurize_invoke(reduce, seastar::futurize_invoke(mapper, *i).get0().value()) }
+            -> std::same_as<seastar::future<>>;
+}
+inline
+auto
+result_map_reduce(Iterator begin, Iterator end, Mapper&& mapper, Reducer&& reducer) {
+    using exception_container_type = typename decltype(seastar::futurize_invoke(mapper, *begin).get0())::error_type;
+    using adapter_type = internal::result_map_reduce_unary_adapter<Reducer, exception_container_type>;
+    return seastar::map_reduce(
+            std::move(begin),
+            std::move(end),
+            std::forward<Mapper>(mapper),
+            adapter_type(std::forward<Reducer>(reducer)));
+}
+
+namespace internal {
+
+template<ExceptionContainerResult Left, ExceptionContainerResult Right, typename Reducer>
+requires ResultRebindableTo<Right, Left>
+struct result_map_reduce_binary_adapter {
+private:
+    using left_value_type = typename Left::value_type;
+    using right_value_type = typename Right::value_type;
+    using return_type = std::invoke_result<Reducer, left_value_type&&, right_value_type&&>;
+
+    Reducer _reducer;
+
+public:
+    result_map_reduce_binary_adapter(Reducer&& reducer)
+            : _reducer(std::forward<Reducer>(reducer))
+    { }
+
+    Left operator()(Left&& left, Right&& right) {
+        if (!left) {
+            return std::move(left);
+        }
+        if (!right) {
+            return std::move(right).as_failure();
+        }
+        return _reducer(std::move(left).assume_value(), std::move(right).assume_value());
+    }
+};
+
+}
+
+template<typename Iterator, typename Mapper, typename Initial, typename Reducer>
+requires requires (Iterator i, Mapper mapper, Initial initial, Reducer reduce) {
+    ExceptionContainerResult<Initial>;
+    *i++;
+    { i != i } -> std::convertible_to<bool>;
+    { mapper(*i) } -> ExceptionContainerResultFuture<>;
+    { reduce(std::move(initial), mapper(*i).get0().value()) }
+            -> std::convertible_to<rebind_result<Initial, decltype(mapper(*i).get0())>>;
+}
+inline
+auto
+result_map_reduce(Iterator begin, Iterator end, Mapper&& mapper, Initial initial, Reducer reduce)
+        -> seastar::future<rebind_result<Initial, decltype(mapper(*begin).get0())>>{
+
+    using right_type = decltype(mapper(*begin).get0());
+    using left_type = rebind_result<Initial, right_type>;
+
+    return seastar::map_reduce(
+            std::move(begin),
+            std::move(end),
+            std::forward<Mapper>(mapper),
+            left_type(std::move(initial)),
+            internal::result_map_reduce_binary_adapter<left_type, right_type, Reducer>(std::move(reduce)));
 }
 
 }

@@ -169,6 +169,78 @@ SEASTAR_THREAD_TEST_CASE(test_result_parallel_for_each) {
 }
 
 namespace test_policies {
+    struct map_reduce_unary_version {
+        template<typename... Params>
+        static result<sstring> reduce(Params&&... params) {
+            struct reducer {
+                sstring accumulator;
+                void operator()(sstring&& s) {
+                    accumulator += " ";
+                    accumulator += s;
+                }
+                sstring get() {
+                    return std::move(accumulator);
+                }
+            };
+
+            std::vector<future<result<sstring>>> v;
+            (v.push_back(futurize_and_convert<Params, result<sstring>>(std::move(params))), ...);
+            return utils::result_map_reduce(
+                    v.begin(), v.end(),
+                    [] (future<result<sstring>>& f) {
+                        return std::move(f);
+                    },
+                    reducer{sstring("the")}).get();
+        }
+    };
+
+    struct map_reduce_binary_version {
+        template<typename... Params>
+        static result<sstring> reduce(Params&&... params) {
+            std::vector<future<result<sstring>>> v;
+            (v.push_back(futurize_and_convert<Params, result<sstring>>(std::move(params))), ...);
+            return utils::result_map_reduce(
+                    v.begin(), v.end(),
+                    [] (future<result<sstring>>& f) {
+                        return std::move(f);
+                    },
+                    sstring("the"),
+                    [] (sstring&& a, sstring&& b) -> result<sstring> {
+                        return bo::success(a + " " + b);
+                    }).get();
+        }
+    };
+}
+
+template<typename TestTemplate>
+void test_map_reduce_with_policies(TestTemplate&& template_fn) {
+    BOOST_TEST_MESSAGE("Running test for map_reduce (unary version)");
+    template_fn(test_policies::map_reduce_unary_version());
+
+    BOOST_TEST_MESSAGE("Running test for map_reduce (binary version)");
+    template_fn(test_policies::map_reduce_binary_version());
+}
+
+SEASTAR_THREAD_TEST_CASE(test_result_map_reduce) {
+    test_map_reduce_with_policies([] (auto policy) {
+        auto reduce = [&policy] <typename... Params> (Params&&... params) { return policy.reduce(std::forward<Params>(params)...); };
+
+        auto foo_exc = [] () { return result<sstring>(bo::failure(foo_exception())); };
+        auto bar_exc = [] () { return result<sstring>(bo::failure(bar_exception())); };
+        auto foo_throw = [] () { return make_exception_future<result<sstring>>(foo_exception()); };
+        auto bar_throw = [] () { return make_exception_future<result<sstring>>(bar_exception()); };
+
+        BOOST_REQUIRE_EQUAL(reduce(sstring("brown"), sstring("fox")).value(), "the brown fox");
+        BOOST_REQUIRE_EQUAL(reduce(foo_exc(), sstring("fox")).error(), exc_container(foo_exception()));
+        BOOST_REQUIRE_EQUAL(reduce(sstring("brown"), foo_exc()).error(), exc_container(foo_exception()));
+        BOOST_REQUIRE_EQUAL(reduce(foo_exc(), bar_exc()).error(), exc_container(foo_exception()));
+        BOOST_REQUIRE_EQUAL(reduce(bar_exc(), foo_exc()).error(), exc_container(bar_exception()));
+        BOOST_REQUIRE_THROW((void)reduce(foo_throw(), sstring("fox")), foo_exception);
+        BOOST_REQUIRE_THROW((void)reduce(sstring("brown"), foo_throw()), foo_exception);
+    });
+}
+
+namespace test_policies {
 
 struct result_try {
     template<typename... Args>
