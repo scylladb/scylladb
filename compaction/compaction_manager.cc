@@ -737,8 +737,10 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compa
             column_family& cf = *task->compacting_cf;
             auto sstable_level = sst->get_sstable_level();
             auto run_identifier = sst->run_identifier();
+
             auto sstable_set_snapshot = can_purge ? std::make_optional(cf.get_sstable_set()) : std::nullopt;
-            auto descriptor = sstables::compaction_descriptor({ sst }, std::move(sstable_set_snapshot), _maintenance_sg.io,
+            // FIXME: this compaction should run with maintenance priority.
+            auto descriptor = sstables::compaction_descriptor({ sst }, std::move(sstable_set_snapshot), service::get_local_compaction_priority(),
                 sstable_level, sstables::compaction_descriptor::default_max_sstable_bytes, run_identifier, options);
 
             // Releases reference to cleaned sstable such that respective used disk space can be freed.
@@ -755,7 +757,7 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compa
                 task->output_run_identifier = descriptor.run_identifier;
                 compaction_backlog_tracker user_initiated(std::make_unique<user_initiated_backlog_tracker>(_compaction_controller.backlog_of_shares(200), _available_memory));
                 return do_with(std::move(user_initiated), [this, &cf, descriptor = std::move(descriptor), task] (compaction_backlog_tracker& bt) mutable {
-                    return with_scheduling_group(_maintenance_sg.cpu, [this, &cf, descriptor = std::move(descriptor), task]() mutable {
+                    return with_scheduling_group(_compaction_controller.sg(), [this, &cf, descriptor = std::move(descriptor), task]() mutable {
                         return cf.compact_sstables(std::move(descriptor), task->compaction_data);
                     });
                 });
