@@ -260,7 +260,7 @@ public:
     /**
      * @param endpoint end point that is convicted.
      */
-    void convict(inet_address endpoint);
+    future<> convict(inet_address endpoint);
 
     /**
      * Return either: the greatest heartbeat or application state
@@ -401,9 +401,9 @@ private:
 
     void mark_alive(inet_address addr, endpoint_state& local_state);
 
-    void real_mark_alive(inet_address addr, endpoint_state& local_state);
+    future<> real_mark_alive(inet_address addr, endpoint_state& local_state);
 
-    void mark_dead(inet_address addr, endpoint_state& local_state);
+    future<> mark_dead(inet_address addr, endpoint_state& local_state);
 
     /**
      * This method is called whenever there is a "big" change in ep state (a generation change for a known node).
@@ -411,7 +411,7 @@ private:
      * @param ep      endpoint
      * @param ep_state EndpointState for the endpoint
      */
-    void handle_major_state_change(inet_address ep, const endpoint_state& eps);
+    future<> handle_major_state_change(inet_address ep, const endpoint_state& eps);
 
 public:
     bool is_alive(inet_address ep) const;
@@ -430,10 +430,10 @@ private:
     void apply_new_states(inet_address addr, endpoint_state& local_state, const endpoint_state& remote_state);
 
     // notify that a local application state is going to change (doesn't get triggered for remote changes)
-    void do_before_change_notifications(inet_address addr, const endpoint_state& ep_state, const application_state& ap_state, const versioned_value& new_value);
+    future<> do_before_change_notifications(inet_address addr, const endpoint_state& ep_state, const application_state& ap_state, const versioned_value& new_value);
 
     // notify that an application state has changed
-    void do_on_change_notifications(inet_address addr, const application_state& state, const versioned_value& value);
+    future<> do_on_change_notifications(inet_address addr, const application_state& state, const versioned_value& value);
     /* Request all the state for the endpoint in the g_digest */
 
     void request_all(gossip_digest& g_digest, utils::chunked_vector<gossip_digest>& delta_gossip_digest_list, int remote_generation);
@@ -554,7 +554,7 @@ public:
     bool is_normal_ring_member(const inet_address& endpoint) const;
     bool is_cql_ready(const inet_address& endpoint) const;
     bool is_silent_shutdown_state(const endpoint_state& ep_state) const;
-    void mark_as_shutdown(const inet_address& endpoint);
+    future<> mark_as_shutdown(const inet_address& endpoint);
     void force_newer_generation();
 public:
     std::string_view get_gossip_status(const endpoint_state& ep_state) const noexcept;
