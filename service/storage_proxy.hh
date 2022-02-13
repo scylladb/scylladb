@@ -291,7 +291,7 @@ private:
 
     cdc_stats _cdc_stats;
 private:
-    future<coordinator_query_result> query_singular(lw_shared_ptr<query::read_command> cmd,
+    future<result<coordinator_query_result>> query_singular(lw_shared_ptr<query::read_command> cmd,
             dht::partition_range_vector&& partition_ranges,
             db::consistency_level cl,
             coordinator_query_options optional_params);

@@ -4092,7 +4092,7 @@ void storage_proxy::handle_read_error(std::variant<exceptions::coordinator_excep
     }));
 }
 
-future<storage_proxy::coordinator_query_result>
+future<result<storage_proxy::coordinator_query_result>>
 storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector&& partition_ranges,
         db::consistency_level cl,
@@ -4135,7 +4135,12 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
     // keeps sp alive for the co-routine lifetime
     auto p = shared_from_this();
 
-    foreign_ptr<lw_shared_ptr<query::result>> result;
+    ::result<foreign_ptr<lw_shared_ptr<query::result>>> result = nullptr;
+
+    // The following try..catch chain could be converted to an equivalent
+    // utils::result_futurize_try, however the code would no longer be placed
+    // inside a single coroutine and the number of task allocations would
+    // increase (utils::result_futurize_try is not a coroutine).
 
     try {
         auto timeout = query_options.timeout(*this);
@@ -4149,25 +4154,37 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
         };
 
         if (exec.size() == 1) [[likely]] {
-            result = (co_await exec[0].first->execute(timeout)).value(); // TODO: This rethrows the exception in case of failed result
-            handle_completion(exec[0]);
+            result = co_await exec[0].first->execute(timeout);
+            // Handle success here. Failure is handled just outside the try..catch.
+            if (result) {
+                handle_completion(exec[0]);
+            }
         } else {
             auto mapper = [timeout, &handle_completion] (
-                    std::pair<::shared_ptr<abstract_read_executor>, dht::token_range>& executor_and_token_range) -> future<foreign_ptr<lw_shared_ptr<query::result>>> {
-                auto result = (co_await executor_and_token_range.first->execute(timeout)).value(); // TODO: This rethrows the exception in case of failed result
-                handle_completion(executor_and_token_range);
+                    std::pair<::shared_ptr<abstract_read_executor>, dht::token_range>& executor_and_token_range) -> future<::result<foreign_ptr<lw_shared_ptr<query::result>>>> {
+                auto result = co_await executor_and_token_range.first->execute(timeout);
+                // Handle success here. Failure is handled (only once) just outside the try..catch.
+                if (result) {
+                    handle_completion(executor_and_token_range);
+                }
                 co_return std::move(result);
             };
             query::result_merger merger(cmd->get_row_limit(), cmd->partition_limit);
             merger.reserve(exec.size());
-            result = co_await ::map_reduce(exec.begin(), exec.end(), std::move(mapper), std::move(merger));
+            result = co_await utils::result_map_reduce(exec.begin(), exec.end(), std::move(mapper), std::move(merger));
         }
     } catch(...) {
         handle_read_error(std::current_exception(), false);
         throw;
     }
 
-    co_return coordinator_query_result(std::move(result), std::move(used_replicas), repair_decision);
+    if (!result) {
+        // TODO: The error could be passed by reference, avoid a clone here
+        handle_read_error(result.error().clone(), false);
+        co_return std::move(result).as_failure();
+    }
+
+    co_return coordinator_query_result(std::move(result).value(), std::move(used_replicas), repair_decision);
 }
 
 future<result<query_partition_key_range_concurrent_result>>
@@ -4499,7 +4516,7 @@ storage_proxy::do_query(schema_ptr s,
                     if (lc.is_start()) {
                         p->get_stats().estimated_read.add(lc.latency());
                     }
-                });
+                }).then(utils::result_into_future<result<storage_proxy::coordinator_query_result>>);
             } catch (const replica::no_such_column_family&) {
                 get_stats().read.mark(lc.stop().latency());
                 return make_empty();
