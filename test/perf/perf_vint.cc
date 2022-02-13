@@ -3,8 +3,6 @@
  */
 
 /*
- * This file is part of Scylla.
- *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
