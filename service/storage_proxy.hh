@@ -344,7 +344,7 @@ private:
                                                                                                    tracing::trace_state_ptr trace_state,
                                                                                                    clock_type::time_point timeout,
                                                                                                    query::digest_algorithm da);
-    future<coordinator_query_result> query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
+    future<result<coordinator_query_result>> query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
             dht::partition_range_vector partition_ranges,
             db::consistency_level cl,
             coordinator_query_options optional_params);

@@ -4372,7 +4372,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
     }));
 }
 
-future<storage_proxy::coordinator_query_result>
+future<result<storage_proxy::coordinator_query_result>>
 storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector partition_ranges,
         db::consistency_level cl,
@@ -4415,7 +4415,7 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
             cmd->get_row_limit(),
             cmd->partition_limit,
             std::move(query_options.preferred_replicas),
-            std::move(query_options.permit)).then(utils::result_into_future<result<query_partition_key_range_concurrent_result>>).then([row_limit, partition_limit] (
+            std::move(query_options.permit)).then(utils::result_wrap([row_limit, partition_limit] (
                     query_partition_key_range_concurrent_result result) {
         std::vector<foreign_ptr<lw_shared_ptr<query::result>>>& results = result.result;
         replicas_per_token_range& used_replicas = result.replicas;
@@ -4427,8 +4427,8 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
             merger(std::move(r));
         }
 
-        return make_ready_future<coordinator_query_result>(coordinator_query_result(merger.get(), std::move(used_replicas)));
-    });
+        return make_ready_future<::result<coordinator_query_result>>(coordinator_query_result(merger.get(), std::move(used_replicas)));
+    }));
 }
 
 future<storage_proxy::coordinator_query_result>
@@ -4514,7 +4514,7 @@ storage_proxy::do_query(schema_ptr s,
             if (lc.is_start()) {
                 p->get_stats().estimated_range.add(lc.latency());
             }
-        });
+        }).then(utils::result_into_future<result<storage_proxy::coordinator_query_result>>);
     }
 }
 
