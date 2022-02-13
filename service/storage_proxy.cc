@@ -93,6 +93,7 @@
 #include "utils/result_combinators.hh"
 #include "utils/result_loop.hh"
 #include "utils/overloaded_functor.hh"
+#include "utils/result_try.hh"
 
 namespace bi = boost::intrusive;
 
@@ -2142,44 +2143,35 @@ future<result<>> storage_proxy::mutate_end(future<result<>> mutate_result, utils
     if (lc.is_start()) {
         stats.estimated_write.add(lc.latency());
     }
-    auto exception_handler = overloaded_functor {
-        [&] (const mutation_write_timeout_exception& ex) {
-            // timeout
-            tracing::trace(trace_state, "Mutation failed: write timeout; received {:d} of {:d} required replies", ex.received, ex.block_for);
-            slogger.debug("Write timeout; received {} of {} required replies", ex.received, ex.block_for);
-            stats.write_timeouts.mark();
-        }
-    };
-    try {
-        auto res = mutate_result.get();
+    return utils::result_futurize_try([&] {
+        auto&& res = mutate_result.get();
         if (res) {
             tracing::trace(trace_state, "Mutation successfully completed");
-            return make_ready_future<result<>>(bo::success());
-        } else {
-            res.assume_error().accept(exception_handler);
-            return make_ready_future<result<>>(std::move(res));
         }
-    } catch (replica::no_such_keyspace& ex) {
+        return std::move(res);
+    },  utils::result_catch<replica::no_such_keyspace>([&] (const auto& ex, auto&& handle) {
         tracing::trace(trace_state, "Mutation failed: write to non existing keyspace: {}", ex.what());
         slogger.trace("Write to non existing keyspace: {}", ex.what());
-        return make_exception_future<result<>>(std::current_exception());
-    } catch(mutation_write_timeout_exception& ex) {
-        exception_handler(ex);
-        return make_exception_future<result<>>(std::current_exception());
-    } catch (exceptions::unavailable_exception& ex) {
+        return handle.into_future();
+    }), utils::result_catch<mutation_write_timeout_exception>([&] (const auto& ex, auto&& handle) {
+        tracing::trace(trace_state, "Mutation failed: write timeout; received {:d} of {:d} required replies", ex.received, ex.block_for);
+        slogger.debug("Write timeout; received {} of {} required replies", ex.received, ex.block_for);
+        stats.write_timeouts.mark();
+        return handle.into_future();
+    }), utils::result_catch<exceptions::unavailable_exception>([&] (const auto& ex, auto&& handle) {
         tracing::trace(trace_state, "Mutation failed: unavailable");
         stats.write_unavailables.mark();
         slogger.trace("Unavailable");
-        return make_exception_future<result<>>(std::current_exception());
-    }  catch(overloaded_exception& ex) {
+        return handle.into_future();
+    }), utils::result_catch<overloaded_exception>([&] (const auto& ex, auto&& handle) {
         tracing::trace(trace_state, "Mutation failed: overloaded");
         stats.write_unavailables.mark();
         slogger.trace("Overloaded");
-        return make_exception_future<result<>>(std::current_exception());
-    } catch (...) {
+        return handle.into_future();
+    }), utils::result_catch_dots([&] (auto&& handle) {
         tracing::trace(trace_state, "Mutation failed: unknown reason");
-        throw;
-    }
+        return handle.into_future();
+    }));
 }
 
 gms::inet_address storage_proxy::find_leader_for_counter_update(const mutation& m, db::consistency_level cl) {
