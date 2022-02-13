@@ -412,6 +412,8 @@ public:
 
     bool is_quarantined() const noexcept;
 
+    bool is_uploaded() const noexcept;
+
     std::vector<std::pair<component_type, sstring>> all_components() const;
 
     future<> create_links(const sstring& dir, int64_t generation) const;
