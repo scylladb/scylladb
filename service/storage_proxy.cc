@@ -4070,19 +4070,26 @@ storage_proxy::query_result_local(schema_ptr s, lw_shared_ptr<query::read_comman
     }
 }
 
-void storage_proxy::handle_read_error(std::exception_ptr eptr, bool range) {
-    try {
-        std::rethrow_exception(eptr);
-    } catch (read_timeout_exception& ex) {
+void storage_proxy::handle_read_error(std::variant<exceptions::coordinator_exception_container, std::exception_ptr> failure, bool range) {
+    // All errors are handled, it's OK to discard the result.
+    (void)utils::result_try([&] () -> result<> {
+        if (auto* excont = std::get_if<0>(&failure)) {
+            return bo::failure(std::move(*excont));
+        } else {
+            std::rethrow_exception(std::get<1>(std::move(failure)));
+        }
+    },  utils::result_catch<read_timeout_exception>([&] (const auto& ex) {
         slogger.debug("Read timeout: received {} of {} required replies, data {}present", ex.received, ex.block_for, ex.data_present ? "" : "not ");
         if (range) {
             get_stats().range_slice_timeouts.mark();
         } else {
             get_stats().read_timeouts.mark();
         }
-    } catch (...) {
-        slogger.debug("Error during read query {}", eptr);
-    }
+        return bo::success();
+    }), utils::result_catch_dots([&] (auto&& handle) {
+        slogger.debug("Error during read query {}", handle.as_inner());
+        return bo::success();
+    }));
 }
 
 future<storage_proxy::coordinator_query_result>
