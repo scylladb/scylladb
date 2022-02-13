@@ -3772,11 +3772,11 @@ protected:
     }
 
 public:
-    future<foreign_ptr<lw_shared_ptr<query::result>>> execute(storage_proxy::clock_type::time_point timeout) {
+    future<result<foreign_ptr<lw_shared_ptr<query::result>>>> execute(storage_proxy::clock_type::time_point timeout) {
         if (_targets.empty()) {
             // We may have no targets to read from if a DC with zero replication is queried with LOCACL_QUORUM.
             // Return an empty result in this case
-            return make_ready_future<foreign_ptr<lw_shared_ptr<query::result>>>(make_foreign(make_lw_shared(query::result())));
+            return make_ready_future<result<foreign_ptr<lw_shared_ptr<query::result>>>>(make_foreign(make_lw_shared(query::result())));
         }
         digest_resolver_ptr digest_resolver = ::make_shared<digest_read_resolver>(_schema, _cl, _block_for,
                 db::is_datacenter_local(_cl) ? db::count_local_endpoints(_targets): _targets.size(), timeout);
@@ -3843,7 +3843,7 @@ public:
             });
         });
 
-        return _result_promise.get_future().then(utils::result_into_future<result<foreign_ptr<lw_shared_ptr<query::result>>>>);
+        return _result_promise.get_future();
     }
 
     lw_shared_ptr<replica::column_family>& get_cf() {
@@ -4142,12 +4142,12 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
         };
 
         if (exec.size() == 1) [[likely]] {
-            result = co_await exec[0].first->execute(timeout);
+            result = (co_await exec[0].first->execute(timeout)).value(); // TODO: This rethrows the exception in case of failed result
             handle_completion(exec[0]);
         } else {
             auto mapper = [timeout, &handle_completion] (
                     std::pair<::shared_ptr<abstract_read_executor>, dht::token_range>& executor_and_token_range) -> future<foreign_ptr<lw_shared_ptr<query::result>>> {
-                auto result = co_await executor_and_token_range.first->execute(timeout);
+                auto result = (co_await executor_and_token_range.first->execute(timeout)).value(); // TODO: This rethrows the exception in case of failed result
                 handle_completion(executor_and_token_range);
                 co_return std::move(result);
             };
@@ -4315,7 +4315,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
     merger.reserve(exec.size());
 
     auto f = ::map_reduce(exec.begin(), exec.end(), [timeout] (::shared_ptr<abstract_read_executor>& rex) {
-        return rex->execute(timeout);
+        return rex->execute(timeout).then(utils::result_into_future<result<foreign_ptr<lw_shared_ptr<query::result>>>>);
     }, std::move(merger));
 
     return f.then([p,
