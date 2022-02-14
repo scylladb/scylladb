@@ -2339,31 +2339,25 @@ table::make_reader_excluding_sstables(schema_ptr s,
 }
 
 future<> table::move_sstables_from_staging(std::vector<sstables::shared_sstable> sstables) {
-    return with_semaphore(_sstable_deletion_sem, 1, [this, sstables = std::move(sstables)] {
-        return do_with(std::set<sstring>({dir()}), std::move(sstables), _main_sstables->all(),
-                       [this] (std::set<sstring>& dirs_to_sync, std::vector<sstables::shared_sstable>& sstables, lw_shared_ptr<sstable_list>& main_sstables) {
-            return do_for_each(sstables, [this, &dirs_to_sync, &main_sstables] (sstables::shared_sstable sst) {
-                dirs_to_sync.emplace(sst->get_dir());
-                return sst->move_to_new_dir(dir(), sst->generation(), false).then_wrapped([this, sst, &dirs_to_sync, &main_sstables] (future<> f) {
-                    if (!f.failed()) {
-                        _sstables_staging.erase(sst->generation());
-                        // Maintenance SSTables being moved from staging shouldn't be added to tracker because they're off-strategy
-                        if (main_sstables->contains(sst)) {
-                            add_sstable_to_backlog_tracker(_compaction_strategy.get_backlog_tracker(), sst);
-                        }
-                        return make_ready_future<>();
-                    } else {
-                        auto ep = f.get_exception();
-                        tlogger.warn("Failed to move sstable {} from staging: {}", sst->get_filename(), ep);
-                        return make_exception_future<>(ep);
-                    }
-                });
-            }).finally([&dirs_to_sync] {
-                return parallel_for_each(dirs_to_sync, [] (sstring dir) {
-                    return sync_directory(dir);
-                });
-            });
-        });
+    auto units = co_await get_units(_sstable_deletion_sem, 1);
+    auto dirs_to_sync = std::set<sstring>({dir()});
+    auto main_sstables = _main_sstables->all();
+    for (auto sst : sstables) {
+        dirs_to_sync.emplace(sst->get_dir());
+        try {
+            co_await sst->move_to_new_dir(dir(), sst->generation(), false);
+            _sstables_staging.erase(sst->generation());
+            // Maintenance SSTables being moved from staging shouldn't be added to tracker because they're off-strategy
+            if (main_sstables->contains(sst)) {
+                add_sstable_to_backlog_tracker(_compaction_strategy.get_backlog_tracker(), sst);
+            }
+        } catch (...) {
+            tlogger.warn("Failed to move sstable {} from staging: {}", sst->get_filename(), std::current_exception());
+            throw;
+        }
+    }
+    co_await parallel_for_each(dirs_to_sync, [] (sstring dir) {
+        return sync_directory(dir);
     });
 }
 
