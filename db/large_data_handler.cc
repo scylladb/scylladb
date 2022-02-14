@@ -67,10 +67,14 @@ template <typename T> static std::string key_to_str(const T& key, const schema& 
     return oss.str();
 }
 
+sstring large_data_handler::sst_filename(const sstables::sstable& sst) {
+    return sst.component_basename(sstables::component_type::Data);
+}
+
 future<> large_data_handler::maybe_delete_large_data_entries(sstables::shared_sstable sst) {
     assert(running());
     auto schema = sst->get_schema();
-    auto filename = sst->get_filename();
+    auto filename = sst_filename(*sst);
     using ldt = sstables::large_data_type;
     auto above_threshold = [sst] (ldt type) -> bool {
         auto entry = sst->get_large_data_stat(type);
@@ -118,7 +122,7 @@ static future<> try_record(std::string_view large_table, const sstables::sstable
     const schema &s = *sst.get_schema();
     auto ks_name = s.ks_name();
     auto cf_name = s.cf_name();
-    const auto sstable_name = sst.get_filename();
+    const auto sstable_name = large_data_handler::sst_filename(sst);
     std::string pk_str = key_to_str(partition_key.to_partition_key(s), s);
     auto timestamp = db_clock::now();
     large_data_logger.warn("Writing large {} {}/{}: {}{} ({} bytes) to {}", desc, ks_name, cf_name, pk_str, extra_path, size, sstable_name);

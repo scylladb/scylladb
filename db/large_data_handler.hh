@@ -114,6 +114,8 @@ public:
         return _rows_count_threshold;
     }
 
+    static sstring sst_filename(const sstables::sstable& sst);
+
 protected:
     virtual future<> record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size) const = 0;
