@@ -71,7 +71,6 @@ future<> large_data_handler::maybe_delete_large_data_entries(sstables::shared_ss
     assert(running());
     auto schema = sst->get_schema();
     auto filename = sst->get_filename();
-    auto data_size = sst->data_size();
     using ldt = sstables::large_data_type;
     auto above_threshold = [sst] (ldt type) -> bool {
         auto entry = sst->get_large_data_stat(type);
