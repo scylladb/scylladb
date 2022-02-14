@@ -2052,21 +2052,17 @@ future<> sstable::move_to_new_dir(sstring new_dir, int64_t new_generation, bool 
     sstring old_dir = get_dir();
     sstlog.debug("Moving {} old_generation={} to {} new_generation={} do_sync_dirs={}",
             get_filename(), old_dir, _generation, new_dir, new_generation, do_sync_dirs);
-    return create_links_and_mark_for_removal(new_dir, new_generation).then([this, old_dir, new_dir, new_generation] {
-        _dir = new_dir;
-        int64_t old_generation = std::exchange(_generation, new_generation);
-        return parallel_for_each(all_components(), [this, old_generation, old_dir] (auto p) {
-            return sstable_write_io_check(remove_file, sstable::filename(old_dir, _schema->ks_name(), _schema->cf_name(), _version, old_generation, _format, p.second));
-        }).then([this, old_dir, old_generation] {
-            auto temp_toc = sstable_version_constants::get_component_map(_version).at(component_type::TemporaryTOC);
-            return sstable_write_io_check(remove_file, sstable::filename(old_dir, _schema->ks_name(), _schema->cf_name(), _version, old_generation, _format, temp_toc));
-        });
-    }).then([this, old_dir, new_dir, do_sync_dirs] {
-        if (!do_sync_dirs) {
-            return make_ready_future<>();
-        }
-        return when_all_succeed(sync_directory(old_dir), sync_directory(new_dir)).discard_result();
+    co_await create_links_and_mark_for_removal(new_dir, new_generation);
+    _dir = new_dir;
+    int64_t old_generation = std::exchange(_generation, new_generation);
+    co_await parallel_for_each(all_components(), [this, old_generation, old_dir] (auto p) {
+        return sstable_write_io_check(remove_file, sstable::filename(old_dir, _schema->ks_name(), _schema->cf_name(), _version, old_generation, _format, p.second));
     });
+    auto temp_toc = sstable_version_constants::get_component_map(_version).at(component_type::TemporaryTOC);
+    co_await sstable_write_io_check(remove_file, sstable::filename(old_dir, _schema->ks_name(), _schema->cf_name(), _version, old_generation, _format, temp_toc));
+    if (do_sync_dirs) {
+        co_await when_all(sstable_write_io_check(sync_directory, old_dir), sstable_write_io_check(sync_directory, new_dir)).discard_result();
+    }
 }
 
 future<> sstable::move_to_quarantine(bool do_sync_dirs) {
