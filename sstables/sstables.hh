@@ -171,10 +171,6 @@ public:
                             format_types format, component_type component);
     static sstring filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, int64_t generation,
                             format_types format, sstring component);
-    // WARNING: it should only be called to remove components of a sstable with
-    // a temporary TOC file.
-    static future<> remove_sstable_with_temp_toc(sstring ks, sstring cf, sstring dir, int64_t generation,
-                                                 version_types v, format_types f);
 
     // load sstable using components shared by a shard
     future<> load(foreign_sstable_open_info info) noexcept;

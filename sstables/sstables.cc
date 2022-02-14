@@ -2519,49 +2519,6 @@ remove_by_toc_name(sstring sstable_toc_name) {
     co_await sstable_io_check(sstable_write_error_handler, remove_file, new_toc_name);
 }
 
-future<>
-sstable::remove_sstable_with_temp_toc(sstring ks, sstring cf, sstring dir, int64_t generation, version_types v, format_types f) {
-    return seastar::async([ks, cf, dir, generation, v, f] {
-        const io_error_handler& error_handler = sstable_write_error_handler;
-        auto toc = sstable_io_check(error_handler, file_exists, filename(dir, ks, cf, v, generation, f, component_type::TOC)).get0();
-
-        sstlog.warn("Deleting components of sstable from {}.{} of generation {} that has a temporary TOC", ks, cf, generation);
-
-        // assert that toc doesn't exist for sstable with temporary toc.
-        assert(toc == false);
-
-        auto tmptoc = sstable_io_check(error_handler, file_exists, filename(dir, ks, cf, v, generation, f, component_type::TemporaryTOC)).get0();
-        // assert that temporary toc exists for this sstable.
-        assert(tmptoc == true);
-
-        for (auto& entry : sstable_version_constants::get_component_map(v)) {
-            // Skipping TemporaryTOC because it must be the last component to
-            // be deleted, and unordered map doesn't guarantee ordering.
-            // This is needed because we may end up with a partial delete in
-            // event of a power failure.
-            // If TemporaryTOC is deleted prematurely and scylla crashes,
-            // the subsequent boot would fail because of that generation
-            // missing a TOC.
-            if (entry.first == component_type::TemporaryTOC) {
-                continue;
-            }
-
-            auto file_path = filename(dir, ks, cf, v, generation, f, entry.first);
-            // Skip component that doesn't exist.
-            auto exists = sstable_io_check(error_handler, file_exists, file_path).get0();
-            if (!exists) {
-                continue;
-            }
-            sstable_io_check(error_handler, remove_file, file_path).get();
-        }
-        fsync_directory(error_handler, dir).get();
-        // Removing temporary
-        sstable_io_check(error_handler, remove_file, filename(dir, ks, cf, v, generation, f, component_type::TemporaryTOC)).get();
-        // Fsync'ing column family dir to guarantee that deletion completed.
-        fsync_directory(error_handler, dir).get();
-    });
-}
-
 /**
  * Returns a pair of positions [p1, p2) in the summary file corresponding to entries
  * covered by the specified range, or a disengaged optional if no such pair exists.
