@@ -926,28 +926,19 @@ void sstable::write_toc(const io_priority_class& pc) {
 future<> sstable::seal_sstable() {
     // SSTable sealing is about renaming temporary TOC file after guaranteeing
     // that each component reached the disk safely.
-    return remove_temp_dir().then([this] {
-        return open_checked_directory(_write_error_handler, _dir).then([this] (file dir_f) {
-            // Guarantee that every component of this sstable reached the disk.
-            return sstable_write_io_check([&] { return dir_f.flush(); }).then([this] {
-                // Rename TOC because it's no longer temporary.
-                return sstable_write_io_check([&] {
-                    return rename_file(filename(component_type::TemporaryTOC), filename(component_type::TOC));
-                });
-            }).then([this, dir_f] () mutable {
-                // Guarantee that the changes above reached the disk.
-                return sstable_write_io_check([&] { return dir_f.flush(); });
-            }).then([this, dir_f] () mutable {
-                return sstable_write_io_check([&] { return dir_f.close(); });
-            }).then([this, dir_f] {
-                if (_marked_for_deletion == mark_for_deletion::implicit) {
-                    _marked_for_deletion = mark_for_deletion::none;
-                }
-                // If this point was reached, sstable should be safe in disk.
-                sstlog.debug("SSTable with generation {} of {}.{} was sealed successfully.", _generation, _schema->ks_name(), _schema->cf_name());
-            });
-        });
-    });
+    co_await remove_temp_dir();
+    auto dir_f = co_await open_checked_directory(_write_error_handler, _dir);
+    // Guarantee that every component of this sstable reached the disk.
+    co_await sstable_write_io_check([&] { return dir_f.flush(); });
+    // Rename TOC because it's no longer temporary.
+    co_await sstable_write_io_check(rename_file, filename(component_type::TemporaryTOC), filename(component_type::TOC));
+    co_await sstable_write_io_check([&] { return dir_f.flush(); });
+    co_await sstable_write_io_check([&] { return dir_f.close(); });
+    if (_marked_for_deletion == mark_for_deletion::implicit) {
+        _marked_for_deletion = mark_for_deletion::none;
+    }
+    // If this point was reached, sstable should be safe in disk.
+    sstlog.debug("SSTable with generation {} of {}.{} was sealed successfully.", _generation, _schema->ks_name(), _schema->cf_name());
 }
 
 void sstable::write_crc(const checksum& c) {
