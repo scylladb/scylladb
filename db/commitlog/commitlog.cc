@@ -264,6 +264,42 @@ public:
     using request_controller_units = semaphore_units<timeout_exception_factory, db::timeout_clock>;
     request_controller_type _request_controller;
 
+    class named_file : public seastar::file {
+        sstring _name;
+        uint64_t _known_size = 0;
+    public:
+        named_file(std::string_view name)
+            : _name(name)
+        {}
+        named_file(named_file&&) = default;
+
+        future<> open(open_flags, file_open_options, std::optional<uint64_t> size_in = std::nullopt) noexcept;
+        future<> rename(std::string_view to);
+
+        // NOT overrides. Nothing virtual. Will rely on exact type
+        template <typename CharType>
+        future<size_t> dma_write(uint64_t pos, const CharType* buffer, size_t len, const io_priority_class& pc = default_priority_class(), io_intent* intent = nullptr) noexcept;
+        future<size_t> dma_write(uint64_t pos, std::vector<iovec> iov, const io_priority_class& pc = default_priority_class(), io_intent* intent = nullptr) noexcept;
+
+        future<> truncate(uint64_t length) noexcept;
+        future<> allocate(uint64_t position, uint64_t length) noexcept;
+        future<> remove_file() noexcept;
+
+        void assign(file&& f, uint64_t size) {
+            this->file::operator=(std::move(f));
+            this->_known_size = size;
+        }
+        uint64_t known_size() const {
+            return _known_size;
+        }
+        const sstring& name() const {
+            return _name;
+        }
+        void maybe_update_size(uint64_t pos) {
+            _known_size = std::max(pos, _known_size);
+        }
+    };
+
     std::optional<shared_future<with_clock<db::timeout_clock>>> _segment_allocating;
     std::unordered_map<sstring, descriptor> _files_to_delete;
     std::vector<file> _files_to_close;
@@ -421,6 +457,59 @@ private:
     std::optional<size_t> _disk_write_alignment;
     seastar::semaphore _reserve_recalculation_guard;
 };
+
+future<> db::commitlog::segment_manager::named_file::open(open_flags flags, file_open_options opt, std::optional<uint64_t> size_in) noexcept {
+    assert(!*this);
+    auto f = co_await open_file_dma(_name, flags, opt);
+    // bypass roundtrip to disk if caller knows size, or open flags truncated file
+    auto existing_size = size_in 
+        ? *size_in
+        : (flags & open_flags::truncate) == open_flags{}
+            ? co_await f.size()
+            : 0
+        ;
+    assign(std::move(f), existing_size);
+}
+
+future<> db::commitlog::segment_manager::named_file::rename(std::string_view to) {
+    assert(!*this);
+    auto s = sstring(to);
+    co_await seastar::rename_file(_name, s);
+    _name = std::move(s);
+}
+
+template <typename CharType>
+future<size_t> db::commitlog::segment_manager::named_file::dma_write(uint64_t pos, const CharType* buffer, size_t len, const io_priority_class& pc, io_intent* intent) noexcept {
+    return file::dma_write(pos, buffer, len, pc, intent).then([this, pos](size_t res) {
+        maybe_update_size(pos + res);
+        return res;
+    });
+}
+
+future<size_t> db::commitlog::segment_manager::named_file::dma_write(uint64_t pos, std::vector<iovec> iov, const io_priority_class& pc, io_intent* intent) noexcept {
+    return file::dma_write(pos, std::move(iov), pc, intent).then([this, pos](size_t res) {
+        maybe_update_size(pos + res);
+        return res;
+    });
+}
+
+future<> db::commitlog::segment_manager::named_file::truncate(uint64_t length) noexcept {
+    return file::truncate(length).then([this, length] {
+        _known_size = length;
+    });
+}
+
+future<> db::commitlog::segment_manager::named_file::allocate(uint64_t position, uint64_t length) noexcept {
+    return file::allocate(position, length).then([this, position, length] {
+        _known_size = position + length;
+    });
+}
+
+future<> db::commitlog::segment_manager::named_file::remove_file() noexcept {
+    return seastar::remove_file(name()).then([this] {
+        _known_size = 0;
+    });
+}
 
 template<typename T>
 static void write(fragmented_temporary_buffer::ostream& out, T value) {
