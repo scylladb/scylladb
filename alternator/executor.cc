@@ -495,6 +495,8 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
     auto& p = _proxy.container();
 
     co_await _mm.container().invoke_on(0, [&] (service::migration_manager& mm) -> future<> {
+        // FIXME: the following needs to be in a loop. If mm.announce() below
+        // fails, we need to retry the whole thing.
         auto group0_guard = co_await mm.start_group0_operation();
 
         if (!p.local().data_dictionary().has_schema(keyspace_name, table_name)) {
@@ -751,6 +753,8 @@ static void update_tags_map(const rjson::value& tags, std::map<sstring, sstring>
 // are fixed, this issue will automatically get fixed as well.
 future<> update_tags(service::migration_manager& mm, schema_ptr schema, std::map<sstring, sstring>&& tags_map) {
     co_await mm.container().invoke_on(0, [s = global_schema_ptr(std::move(schema)), tags_map = std::move(tags_map)] (service::migration_manager& mm) -> future<> {
+        // FIXME: the following needs to be in a loop. If mm.announce() below
+        // fails, we need to retry the whole thing.
         auto group0_guard = co_await mm.start_group0_operation();
 
         schema_builder builder(s);
@@ -1119,6 +1123,8 @@ future<executor::request_return_type> executor::update_table(client_state& clien
 
     co_return co_await _mm.container().invoke_on(0, [&p = _proxy.container(), request = std::move(request), gt = tracing::global_trace_state_ptr(std::move(trace_state))]
                                                 (service::migration_manager& mm) mutable -> future<executor::request_return_type> {
+        // FIXME: the following needs to be in a loop. If mm.announce() below
+        // fails, we need to retry the whole thing.
         auto group0_guard = co_await mm.start_group0_operation();
 
         schema_ptr tab = get_table(p.local(), request);
