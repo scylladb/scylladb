@@ -95,6 +95,11 @@ future<> db::batchlog_manager::batchlog_replay_loop() {
         }
         try {
             co_await do_batch_log_replay();
+        } catch (seastar::broken_semaphore&) {
+            if (_stop.abort_requested()) {
+                co_return;
+            }
+            on_internal_error_noexcept(blogger, fmt::format("Unexcepted exception in batchlog reply: {}", std::current_exception()));
         } catch (...) {
             blogger.error("Exception in batch replay: {}", std::current_exception());
         }
