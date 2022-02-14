@@ -375,7 +375,7 @@ public:
     future<sseg_ptr> new_segment();
     future<sseg_ptr> active_segment(db::timeout_clock::time_point timeout);
     future<sseg_ptr> allocate_segment();
-    future<sseg_ptr> allocate_segment_ex(descriptor, sstring filename, open_flags);
+    future<sseg_ptr> allocate_segment_ex(descriptor, named_file, open_flags);
 
     sstring filename(const descriptor& d) const {
         return cfg.commit_log_location + "/" + d.filename();
@@ -567,12 +567,12 @@ std::enable_if_t<std::is_fundamental<T>::value, T> read(Input& in) {
 
 class db::commitlog::segment : public enable_shared_from_this<segment>, public cf_holder {
     friend class rp_handle;
+    using named_file = segment_manager::named_file;
 
     ::shared_ptr<segment_manager> _segment_manager;
 
     descriptor _desc;
-    file _file;
-    sstring _file_name;
+    named_file _file;
 
     uint64_t _file_pos = 0;
     uint64_t _flush_pos = 0;
@@ -643,9 +643,8 @@ public:
     // TODO : tune initial / default size
     static constexpr size_t default_size = 128 * 1024;
 
-    segment(::shared_ptr<segment_manager> m, descriptor&& d, file&& f, uint64_t initial_disk_size, size_t alignment)
+    segment(::shared_ptr<segment_manager> m, descriptor&& d, named_file&& f, uint64_t initial_disk_size, size_t alignment)
             : _segment_manager(std::move(m)), _desc(std::move(d)), _file(std::move(f)),
-        _file_name(_segment_manager->cfg.commit_log_location + "/" + _desc.filename()), 
         _size_on_disk(initial_disk_size),
         _alignment(alignment),
         _sync_time(clock_type::now()), _pending_ops(true) // want exception propagation
@@ -654,6 +653,8 @@ public:
         clogger.debug("Created new segment {}", *this);
     }
     ~segment() {
+        auto filename = _file.name();
+
         if (!_closed_file) {
             _segment_manager->add_file_to_close(std::move(_file));
         }
@@ -665,7 +666,7 @@ public:
             ++_segment_manager->totals.segments_destroyed;
             _segment_manager->totals.active_size_on_disk -= file_position();
             _segment_manager->totals.wasted_size_on_disk -= _waste;
-            _segment_manager->add_file_to_delete(_file_name, _desc);
+            _segment_manager->add_file_to_delete(filename, _desc);
         } else if (_segment_manager->cfg.warn_about_segments_left_on_disk_after_shutdown) {
             clogger.warn("Segment {} is dirty and is left on disk.", *this);
         }
@@ -1512,26 +1513,26 @@ void db::commitlog::segment_manager::flush_segments(uint64_t size_to_remove) {
     }
 }
 
-future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::allocate_segment_ex(descriptor d, sstring filename, open_flags flags) {
+future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::allocate_segment_ex(descriptor d, named_file f, open_flags flags) {
     file_open_options opt;
     opt.extent_allocation_size_hint = max_size;
     opt.append_is_unlikely = true;
 
-    file f;
     size_t align;
     std::exception_ptr ep;
 
+    auto filename = f.name();
+
     try {
-        f = co_await open_file_dma(filename, flags, opt);
+        // when we get here, f.known_size() is either size of recycled segment we open,
+        // or zero in case we create brand new segment
+        co_await f.open(flags, opt, f.known_size());
 
         align = f.disk_write_dma_alignment();
         auto is_overwrite = false;
 
         if ((flags & open_flags::dsync) != open_flags{}) {
-            auto existing_size = (flags & open_flags::create) == open_flags{}
-                ? co_await f.size()
-                : 0
-                ;
+            auto existing_size = f.known_size();
             is_overwrite = true;
             // would be super nice if we just could mmap(/dev/zero) and do sendto
             // instead of this, but for now we must do explicit buffer writes.
@@ -1551,7 +1552,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
                 // data being committed before we've reached eof/finished writing.
                 // Again an argument for sendfile-like constructs I guess...
                 co_await f.close();
-                f = co_await open_file_dma(filename, flags & open_flags(~int(open_flags::dsync)), opt);
+                co_await f.open(flags & open_flags(~int(open_flags::dsync)), opt, existing_size);
                 co_await f.allocate(existing_size, max_size - existing_size);
 
                 size_t buf_size = align_up<size_t>(16 * 1024, size_t(align));
@@ -1581,7 +1582,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
                 // sync metadata (size/written)
                 co_await f.flush();
                 co_await f.close();
-                f = co_await open_file_dma(filename, flags, opt);
+                co_await f.open(flags, opt, max_size);
 
                 // we will never add blocks (scouts honour). I can haz smaller align?
                 align = f.disk_overwrite_dma_alignment();
@@ -1594,13 +1595,13 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
             for (auto * ext : cfg.extensions->commitlog_file_extensions()) {
                 auto nf = co_await ext->wrap_file(filename, f, flags);
                 if (nf) {
-                    f = std::move(nf);
+                    f.assign(std::move(nf), f.known_size());
                     align = is_overwrite ? f.disk_overwrite_dma_alignment() : f.disk_write_dma_alignment();
                 }
             }
         }
 
-        f = make_checked_file(commit_error_handler, std::move(f));
+        f.assign(make_checked_file(commit_error_handler, std::move(f)), f.known_size());
     } catch (...) {
         ep = std::current_exception();
     }
@@ -1617,7 +1618,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
         co_await f.close();
     }
     if (ep) {
-        add_file_to_delete(filename, d);
+        add_file_to_delete(f.name(), d);
         co_return coroutine::exception(std::move(ep));
     }
 
@@ -1650,8 +1651,9 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
             // that recycled the file we could potentially have
             // out-of-order files. (Sort does not help).
             clogger.debug("Using recycled segment file {} -> {}", src, dst);
-            co_await rename_file(src, dst);
-            co_return co_await allocate_segment_ex(std::move(d), std::move(dst), flags);
+            named_file f(src);
+            co_await f.rename(dst);
+            co_return co_await allocate_segment_ex(std::move(d), std::move(f), flags);
         }
 
         if (!cfg.allow_going_over_size_limit && max_disk_size != 0 && totals.total_size_on_disk >= max_disk_size) {
@@ -1671,7 +1673,8 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
             continue;
         }
 
-        co_return co_await allocate_segment_ex(std::move(d), std::move(dst), flags|open_flags::create);
+        named_file f(dst);
+        co_return co_await allocate_segment_ex(std::move(d), std::move(f), flags|open_flags::create);
     }
 }
 
