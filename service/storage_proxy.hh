@@ -361,7 +361,7 @@ private:
             replicas_per_token_range preferred_replicas,
             service_permit permit);
 
-    future<coordinator_query_result> do_query(schema_ptr,
+    future<result<coordinator_query_result>> do_query(schema_ptr,
         lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector&& partition_ranges,
         db::consistency_level cl,
@@ -579,6 +579,16 @@ public:
      * parameter can be changed after being passed to this method.
      */
     future<coordinator_query_result> query(schema_ptr,
+        lw_shared_ptr<query::read_command> cmd,
+        dht::partition_range_vector&& partition_ranges,
+        db::consistency_level cl,
+        coordinator_query_options optional_params);
+
+    /*
+     * Like query(), but is allowed to return some exceptions as a result.
+     * The caller must remember to handle them properly.
+     */
+    future<result<coordinator_query_result>> query_result(schema_ptr,
         lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector&& partition_ranges,
         db::consistency_level cl,

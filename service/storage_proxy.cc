@@ -4455,18 +4455,33 @@ storage_proxy::query(schema_ptr s,
     db::consistency_level cl,
     storage_proxy::coordinator_query_options query_options)
 {
+    return query_result(std::move(s), std::move(cmd), std::move(partition_ranges), cl, std::move(query_options))
+            .then(utils::result_into_future<result<storage_proxy::coordinator_query_result>>);
+}
+
+future<result<storage_proxy::coordinator_query_result>>
+storage_proxy::query_result(schema_ptr s,
+    lw_shared_ptr<query::read_command> cmd,
+    dht::partition_range_vector&& partition_ranges,
+    db::consistency_level cl,
+    storage_proxy::coordinator_query_options query_options)
+{
     if (slogger.is_enabled(logging::log_level::trace) || qlogger.is_enabled(logging::log_level::trace)) {
         static thread_local int next_id = 0;
         auto query_id = next_id++;
 
         slogger.trace("query {}.{} cmd={}, ranges={}, id={}", s->ks_name(), s->cf_name(), *cmd, partition_ranges, query_id);
-        return do_query(s, cmd, std::move(partition_ranges), cl, std::move(query_options)).then_wrapped([query_id, cmd, s] (future<coordinator_query_result> f) {
-            if (f.failed()) {
-                auto ex = f.get_exception();
-                slogger.trace("query id={} failed: {}", query_id, ex);
-                return make_exception_future<coordinator_query_result>(std::move(ex));
+        return do_query(s, cmd, std::move(partition_ranges), cl, std::move(query_options)).then_wrapped([query_id, cmd, s] (future<result<coordinator_query_result>> f) -> result<coordinator_query_result> {
+            auto rres = utils::result_try([&] {
+                return f.get();
+            },  utils::result_catch_dots([&] (auto&& handle) {
+                slogger.trace("query id={} failed: {}", query_id, handle.as_inner());
+                return handle.into_result();
+            }));
+            if (!rres) {
+                return std::move(rres).as_failure();
             }
-            auto qr = f.get0();
+            auto qr = std::move(rres).value();
             auto& res = qr.query_result;
             if (res->buf().is_linearized()) {
                 res->ensure_counts();
@@ -4475,14 +4490,14 @@ storage_proxy::query(schema_ptr s,
                 slogger.trace("query_result id={}, size={}", query_id, res->buf().size());
             }
             qlogger.trace("id={}, {}", query_id, res->pretty_printer(s, cmd->slice));
-            return make_ready_future<coordinator_query_result>(std::move(qr));
+            return qr;
         });
     }
 
     return do_query(s, cmd, std::move(partition_ranges), cl, std::move(query_options));
 }
 
-future<storage_proxy::coordinator_query_result>
+future<result<storage_proxy::coordinator_query_result>>
 storage_proxy::do_query(schema_ptr s,
     lw_shared_ptr<query::read_command> cmd,
     dht::partition_range_vector&& partition_ranges,
@@ -4490,7 +4505,7 @@ storage_proxy::do_query(schema_ptr s,
     storage_proxy::coordinator_query_options query_options)
 {
     static auto make_empty = [] {
-        return make_ready_future<coordinator_query_result>(make_foreign(make_lw_shared<query::result>()));
+        return make_ready_future<result<coordinator_query_result>>(make_foreign(make_lw_shared<query::result>()));
     };
 
     auto& slice = cmd->slice;
@@ -4500,7 +4515,8 @@ storage_proxy::do_query(schema_ptr s,
     }
 
     if (db::is_serial_consistency(cl)) {
-        return do_query_with_paxos(std::move(s), std::move(cmd), std::move(partition_ranges), cl, std::move(query_options));
+        auto f = do_query_with_paxos(std::move(s), std::move(cmd), std::move(partition_ranges), cl, std::move(query_options));
+        return utils::then_ok_result<result<storage_proxy::coordinator_query_result>>(std::move(f));
     } else {
         utils::latency_counter lc;
         lc.start();
@@ -4516,7 +4532,7 @@ storage_proxy::do_query(schema_ptr s,
                     if (lc.is_start()) {
                         p->get_stats().estimated_read.add(lc.latency());
                     }
-                }).then(utils::result_into_future<result<storage_proxy::coordinator_query_result>>);
+                });
             } catch (const replica::no_such_column_family&) {
                 get_stats().read.mark(lc.stop().latency());
                 return make_empty();
@@ -4531,7 +4547,7 @@ storage_proxy::do_query(schema_ptr s,
             if (lc.is_start()) {
                 p->get_stats().estimated_range.add(lc.latency());
             }
-        }).then(utils::result_into_future<result<storage_proxy::coordinator_query_result>>);
+        });
     }
 }
 
