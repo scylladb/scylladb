@@ -127,6 +127,13 @@ future<U> futurize_and_convert(T&& t) {
     }
 }
 
+template<typename T>
+futurize_t<T> late(T&& t) {
+    return yield().then([t = std::move(t)] () mutable {
+        return std::move(t);
+    });
+}
+
 SEASTAR_THREAD_TEST_CASE(test_result_parallel_for_each) {
     auto reduce = [] <typename... Params> (Params&&... params) {
         std::vector<future<result<>>> v;
@@ -140,11 +147,6 @@ SEASTAR_THREAD_TEST_CASE(test_result_parallel_for_each) {
     auto bar_exc = [] () { return result<>(bo::failure(bar_exception())); };
     auto foo_throw = [] () { return make_exception_future<result<>>(foo_exception()); };
     auto bar_throw = [] () { return make_exception_future<result<>>(bar_exception()); };
-    auto late = [] (auto&& x) {
-        return yield().then([x = std::move(x)] () mutable {
-            return std::move(x);
-        });
-    };
 
     BOOST_REQUIRE_NO_THROW(reduce(bo::success(), bo::success()));
     BOOST_REQUIRE_THROW(reduce(foo_exc(), bo::success()), foo_exception);
@@ -237,6 +239,58 @@ SEASTAR_THREAD_TEST_CASE(test_result_map_reduce) {
         BOOST_REQUIRE_EQUAL(reduce(bar_exc(), foo_exc()).error(), exc_container(bar_exception()));
         BOOST_REQUIRE_THROW((void)reduce(foo_throw(), sstring("fox")), foo_exception);
         BOOST_REQUIRE_THROW((void)reduce(sstring("brown"), foo_throw()), foo_exception);
+    });
+}
+
+template<typename T>
+future<result<>> invoke_or_return(T&& t) {
+    if constexpr (std::is_invocable_v<T>) {
+        return futurize_invoke(std::forward<T>(t));
+    } else {
+        return make_ready_future<result<>>(std::forward<T>(t));
+    }
+}
+
+namespace test_policies {
+    struct do_until {
+        // Must be executed in a thread
+        template<typename OnRepeat, typename OnEnd>
+        static result<> repeat_and_finish(int iterations, OnRepeat on_repeat, OnEnd on_end) {
+            int counter = iterations + 1;
+            return utils::result_do_until(
+                    [&] { return counter == 0; },
+                    [&] {
+                        counter--;
+                        BOOST_REQUIRE(counter >= 0);
+                        if (counter == 0) {
+                            return invoke_or_return(std::move(on_end));
+                        } else {
+                            return invoke_or_return(on_repeat);
+                        }
+                    }).get();
+        }
+    };
+}
+
+template<typename TestTemplate>
+auto test_iteration_with_policies(TestTemplate&& template_fn) {
+    BOOST_TEST_MESSAGE("Running test for do_until");
+    template_fn(test_policies::do_until());
+}
+
+SEASTAR_THREAD_TEST_CASE(test_iteration) {
+    test_iteration_with_policies([] (auto policy) {
+        auto no_preempt = [] { return make_ready_future<result<>>(bo::success()); };
+        auto preempt = [] { return late(make_ready_future<result<>>(bo::success())); };
+
+        BOOST_REQUIRE_NO_THROW(policy.repeat_and_finish(0, no_preempt, bo::success()).value());
+        BOOST_REQUIRE_NO_THROW(policy.repeat_and_finish(10, preempt, bo::success()).value());
+        BOOST_REQUIRE_EQUAL(policy.repeat_and_finish(0, no_preempt, bo::failure(foo_exception())).error(), exc_container(foo_exception()));
+        BOOST_REQUIRE_EQUAL(policy.repeat_and_finish(10, no_preempt, bo::failure(foo_exception())).error(), exc_container(foo_exception()));
+        BOOST_REQUIRE_EQUAL(policy.repeat_and_finish(10, preempt, bo::failure(foo_exception())).error(), exc_container(foo_exception()));
+        BOOST_REQUIRE_THROW((void)policy.repeat_and_finish(0, no_preempt, [] () -> result<> { throw foo_exception(); }), foo_exception);
+        BOOST_REQUIRE_THROW((void)policy.repeat_and_finish(10, no_preempt, [] () -> result<> { throw foo_exception(); }), foo_exception);
+        BOOST_REQUIRE_THROW((void)policy.repeat_and_finish(10, preempt, [] () -> result<> { throw foo_exception(); }), foo_exception);
     });
 }
 

@@ -12,6 +12,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/map_reduce.hh>
 #include <seastar/coroutine/exception.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include "utils/result.hh"
 
 namespace utils {
@@ -249,6 +250,54 @@ result_map_reduce(Iterator begin, Iterator end, Mapper&& mapper, Initial initial
             std::forward<Mapper>(mapper),
             left_type(std::move(initial)),
             internal::result_map_reduce_binary_adapter<left_type, right_type, Reducer>(std::move(reduce)));
+}
+
+template<typename AsyncAction, typename StopCondition>
+requires requires (StopCondition cond, AsyncAction act) {
+    { cond() } -> std::same_as<bool>;
+    { seastar::futurize_invoke(act) } -> ExceptionContainerResultFuture<>;
+}
+inline
+auto
+result_do_until(StopCondition stop_cond, AsyncAction action) {
+    // TODO: Constrain the result of act() better
+    using future_type = seastar::futurize_t<std::invoke_result_t<AsyncAction>>;
+    using result_type = typename future_type::value_type;
+    static_assert(std::is_void_v<typename result_type::value_type>,
+            "The result type of the action must be future<result<void>>");
+    for (;;) {
+        try {
+            if (stop_cond()) {
+                return seastar::make_ready_future<result_type>(bo::success());
+            }
+        } catch (...) {
+            return seastar::current_exception_as_future<result_type>();
+        }
+        auto f = seastar::futurize_invoke(action);
+        if (f.available() && !seastar::need_preempt()) {
+            if (f.failed()) {
+                return f;
+            }
+            result_type&& res = f.get();
+            if (!res) {
+                return seastar::make_ready_future<result_type>(std::move(res));
+            }
+        } else {
+            return ([] (future_type f, StopCondition stop_cond, AsyncAction action) -> seastar::future<result_type> {
+                for (;;) {
+                    // No need to manually maybe_yield because co_await does that for us
+                    result_type res = co_await std::move(f);
+                    if (!res) {
+                        co_return res;
+                    }
+                    if (stop_cond()) {
+                        co_return bo::success();
+                    }
+                    f = seastar::futurize_invoke(action);
+                }
+            })(std::move(f), std::move(stop_cond), std::move(action));
+        }
+    }
 }
 
 }
