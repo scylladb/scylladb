@@ -168,6 +168,9 @@ public:
     void trim(size_t limit);
 
     template<typename RowComparator>
+    requires requires (RowComparator cmp, const row_type& row) {
+        { cmp(row, row) } -> std::same_as<bool>;
+    }
     void sort(const RowComparator& cmp) {
         std::sort(_rows.begin(), _rows.end(), std::ref(cmp));
     }
