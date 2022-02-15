@@ -318,10 +318,36 @@ def test_update_table_non_existent(dynamodb, test_table):
     with pytest.raises(ClientError, match='ResourceNotFoundException'):
         client.update_table(TableName=random_string(20), BillingMode='PAY_PER_REQUEST')
 
+# While the raft-based schema modifications are still experimental and only
+# optionally enabled (use the "--raft" option to test/alternator/run to
+# enable it), some tests are expected to fail on Scylla without this option
+# enabled, and pass with it enabled (and also pass on DynamoDB). These tests
+# should use the "fails_without_raft" fixture. When Raft mode becomes the
+# default, this fixture can be removed.
+@pytest.fixture(scope="session")
+def check_pre_raft(dynamodb):
+    from util import is_aws
+    # If not running on Scylla, return false.
+    if is_aws(dynamodb):
+        return false
+    # In Scylla, we check Raft mode by inspecting the configuration via a
+    # system table (which is also visible in Alternator)
+    config_table = dynamodb.Table('.scylla.alternator.system.config')
+    experimental_features = config_table.query(
+            KeyConditionExpression='#key=:val',
+            ExpressionAttributeNames={'#key': 'name'},
+            ExpressionAttributeValues={':val': 'experimental_features'}
+        )['Items'][0]['value']
+    return not '"raft"' in experimental_features
+@pytest.fixture(scope="function")
+def fails_without_raft(request, check_pre_raft):
+    if check_pre_raft:
+        request.node.add_marker(pytest.mark.xfail(reason='Test expected to fail without Raft experimental feature on'))
+
 # Test for reproducing issues #6391 and #9868 - where CreateTable did not
 # *atomically* perform all the schema modifications - creating a keyspace,
 # a table, secondary indexes and tags - and instead it created the different
-# pieces one after another. In that case it is s possible that if we
+# pieces one after another. In that case it is possible that if we
 # concurrently create and delete the same table, the deletion may, for
 # example, delete the table just created and then creating the secondary
 # index in it would fail.
@@ -350,7 +376,6 @@ def test_update_table_non_existent(dynamodb, test_table):
     },
     # Reproducer for #9868 - CreateTable needs to create a keyspace,
     # a table, and a materialized view.
-    pytest.param(
     {   'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' },
                     { 'AttributeName': 'c', 'KeyType': 'RANGE' }
         ],
@@ -367,17 +392,16 @@ def test_update_table_non_existent(dynamodb, test_table):
                 'Projection': { 'ProjectionType': 'ALL' }
             }
         ]
-    }, marks=pytest.mark.xfail(reason="#9868")),
+    },
     # Reproducer for #6391, a table with tags - which we used to add
     # non-atomically after having already created the table.
-    pytest.param(
     {   'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
         'AttributeDefinitions': [
             { 'AttributeName': 'p', 'AttributeType': 'S' }],
         'Tags': [{'Key': 'k1', 'Value': 'v1'}]
-    }, marks=pytest.mark.xfail(reason="#6391"))
+    }
 ])
-def test_concurrent_create_and_delete_table(dynamodb, table_def):
+def test_concurrent_create_and_delete_table(dynamodb, table_def, fails_without_raft):
     # According to boto3 documentation, "Unlike Resources and Sessions,
     # clients are generally thread-safe.". So because we have two threads
     # in this test, we must not use "dynamodb" (containing the boto3
@@ -450,6 +474,10 @@ def test_concurrent_create_and_delete_table(dynamodb, table_def):
                 client.delete_table(TableName=table_name)
                 break
             except ClientError as e:
+                if 'ResourceNotFoundException' in str(e):
+                    # The table was already deleted by the deletion thread,
+                    # nothing left to do :-)
+                    break
                 if 'ResourceInUseException' in str(e):
                     # A CreateTable opereration is still in progress,
                     # we can't delete the table yet.
