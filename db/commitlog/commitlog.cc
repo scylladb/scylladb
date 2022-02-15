@@ -576,7 +576,6 @@ class db::commitlog::segment : public enable_shared_from_this<segment>, public c
 
     uint64_t _file_pos = 0;
     uint64_t _flush_pos = 0;
-    uint64_t _size_on_disk = 0;
     uint64_t _waste = 0;
 
     size_t _alignment;
@@ -643,9 +642,8 @@ public:
     // TODO : tune initial / default size
     static constexpr size_t default_size = 128 * 1024;
 
-    segment(::shared_ptr<segment_manager> m, descriptor&& d, named_file&& f, uint64_t initial_disk_size, size_t alignment)
+    segment(::shared_ptr<segment_manager> m, descriptor&& d, named_file&& f, size_t alignment)
             : _segment_manager(std::move(m)), _desc(std::move(d)), _file(std::move(f)),
-        _size_on_disk(initial_disk_size),
         _alignment(alignment),
         _sync_time(clock_type::now()), _pending_ops(true) // want exception propagation
     {
@@ -670,6 +668,10 @@ public:
         } else if (_segment_manager->cfg.warn_about_segments_left_on_disk_after_shutdown) {
             clogger.warn("Segment {} is dirty and is left on disk.", *this);
         }
+    }
+
+    uint64_t size_on_disk() const noexcept {
+        return _file.known_size();
     }
 
     bool is_schema_version_known(schema_ptr s) {
@@ -792,7 +794,7 @@ public:
         auto s = co_await sync();
         co_await flush();
         co_await terminate();
-        _waste = _size_on_disk - file_position();
+        _waste = _file.known_size() - file_position();
         _segment_manager->totals.wasted_size_on_disk += _waste;
         co_return s;
     }
@@ -930,9 +932,8 @@ public:
             auto finally = defer([&] () noexcept {
                 _segment_manager->notify_memory_written(size);
                 _segment_manager->totals.buffer_list_bytes -= buf.size_bytes();
-                if (_size_on_disk < _file_pos) {
-                    _segment_manager->totals.total_size_on_disk += (_file_pos - _size_on_disk);
-                    _size_on_disk = _file_pos;
+                if (_file.known_size() < _file_pos) {
+                    _segment_manager->totals.total_size_on_disk += (_file_pos - _file.known_size());
                 }
             });
 
@@ -1482,11 +1483,11 @@ void db::commitlog::segment_manager::flush_segments(uint64_t size_to_remove) {
 
     if (size_to_remove != 0) {
         for (auto& s : _segments) {
-            if (n <= s->_size_on_disk) {
-                high = replay_position(s->_desc.id, db::position_type(s->_size_on_disk));
+            if (n <= s->size_on_disk()) {
+                high = replay_position(s->_desc.id, db::position_type(s->size_on_disk()));
                 break;
             }
-            n -= s->_size_on_disk;
+            n -= s->size_on_disk();
         }
     }
 
@@ -1622,7 +1623,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
         co_return coroutine::exception(std::move(ep));
     }
 
-    co_return make_shared<segment>(shared_from_this(), std::move(d), std::move(f), max_size, align);
+    co_return make_shared<segment>(shared_from_this(), std::move(d), std::move(f), align);
 }
 
 future<> db::commitlog::segment_manager::rename_file(sstring from, sstring to) const {
@@ -2066,10 +2067,10 @@ future<> db::commitlog::segment_manager::recalculate_footprint() {
 
         totals.total_size_on_disk = recycle_size;
         for (auto& s : _segments) {
-            totals.total_size_on_disk += s->_size_on_disk;
+            totals.total_size_on_disk += s->size_on_disk();
         }
         for (auto& s : reserves) {
-            totals.total_size_on_disk += s->_size_on_disk;
+            totals.total_size_on_disk += s->size_on_disk();
         }
 
         // now we need to adjust the actual sizes of recycled files
