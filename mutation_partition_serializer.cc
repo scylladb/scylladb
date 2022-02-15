@@ -7,6 +7,9 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
+
 #include "mutation_partition_serializer.hh"
 #include "mutation_partition.hh"
 
@@ -190,6 +193,21 @@ void mutation_partition_serializer::write_serialized(Writer&& writer, const sche
     std::move(clustering_rows).end_rows().end_mutation_partition();
 }
 
+template<typename Writer>
+future<> mutation_partition_serializer::write_serialized_gently(Writer&& writer, const schema& s, const mutation_partition& mp)
+{
+    auto srow_writer = std::move(writer).write_tomb(mp.partition_tombstone()).start_static_row();
+    auto row_tombstones = write_row_cells(std::move(srow_writer), mp.static_row().get(), s, column_kind::static_column).end_static_row().start_range_tombstones();
+    co_await coroutine::maybe_yield();
+    write_tombstones(s, row_tombstones, mp.row_tombstones());
+    auto clustering_rows = std::move(row_tombstones).end_range_tombstones().start_rows();
+    for (auto&& cr : mp.non_dummy_rows()) {
+        co_await coroutine::maybe_yield();
+        write_row(clustering_rows.add(), s, cr.key(), cr.row().cells(), cr.row().marker(), cr.row().deleted_at()).end_deletable_row();
+    }
+    std::move(clustering_rows).end_rows().end_mutation_partition();
+}
+
 mutation_partition_serializer::mutation_partition_serializer(const schema& schema, const mutation_partition& p)
     : _schema(schema), _p(p)
 { }
@@ -202,6 +220,11 @@ mutation_partition_serializer::write(bytes_ostream& out) const {
 void mutation_partition_serializer::write(ser::writer_of_mutation_partition<bytes_ostream>&& wr) const
 {
     write_serialized(std::move(wr), _schema, _p);
+}
+
+future<> mutation_partition_serializer::write_gently(ser::writer_of_mutation_partition<bytes_ostream>&& wr) const
+{
+    return write_serialized_gently(std::move(wr), _schema, _p);
 }
 
 void serialize_mutation_fragments(const schema& s, tombstone partition_tombstone,

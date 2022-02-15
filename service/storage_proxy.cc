@@ -1869,9 +1869,10 @@ future<>
 storage_proxy::mutate_locally(const mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout, smp_service_group smp_grp) {
     auto shard = _db.local().shard_of(m);
     get_stats().replica_cross_shard_ops += shard != this_shard_id();
-    return _db.invoke_on(shard, {smp_grp, timeout},
+    auto fm = co_await freeze_gently(m);
+    co_await _db.invoke_on(shard, {smp_grp, timeout},
             [s = global_schema_ptr(m.schema()),
-             m = freeze(m),
+             m = std::move(fm),
              gtr = tracing::global_trace_state_ptr(std::move(tr_state)),
              timeout,
              sync] (replica::database& db) mutable -> future<> {
@@ -3327,7 +3328,7 @@ public:
     bool all_reached_end() const {
         return _all_reached_end;
     }
-    std::optional<reconcilable_result> resolve(schema_ptr schema, const query::read_command& cmd, uint64_t original_row_limit, uint64_t original_per_partition_limit,
+    future<std::optional<reconcilable_result>> resolve(schema_ptr schema, const query::read_command& cmd, uint64_t original_row_limit, uint64_t original_per_partition_limit,
             uint32_t original_partition_limit) {
         assert(_data_results.size());
 
@@ -3336,7 +3337,7 @@ public:
             // should happen only for range reads since single key reads will not
             // try to reconcile for CL=ONE
             auto& p = _data_results[0].result;
-            return reconcilable_result(p->row_count(), p->partitions(), p->is_short_read());
+            co_return reconcilable_result(p->row_count(), p->partitions(), p->is_short_read());
         }
 
         const auto& s = *schema;
@@ -3453,7 +3454,7 @@ public:
         if (has_diff) {
             if (got_incomplete_information(*schema, cmd, original_row_limit, original_per_partition_limit,
                                            original_partition_limit, reconciled_partitions, versions)) {
-                return {};
+                co_return std::nullopt;
             }
             // filter out partitions with empty diffs
             for (auto it = _diffs.begin(); it != _diffs.end();) {
@@ -3479,12 +3480,12 @@ public:
         // build reconcilable_result from reconciled data
         // traverse backwards since large keys are at the start
         utils::chunked_vector<partition> vec;
-        auto r = boost::accumulate(reconciled_partitions | boost::adaptors::reversed, std::ref(vec), [] (utils::chunked_vector<partition>& a, const mutation_and_live_row_count& m_a_rc) {
-            a.emplace_back(partition(m_a_rc.live_row_count, freeze(m_a_rc.mut)));
-            return std::ref(a);
-        });
+        for (auto it = reconciled_partitions.rbegin(); it != reconciled_partitions.rend(); it++) {
+            const mutation_and_live_row_count& m_a_rc = *it;
+            vec.emplace_back(partition(m_a_rc.live_row_count, co_await freeze_gently(m_a_rc.mut)));
+        }
 
-        return reconcilable_result(_total_live_count, std::move(r.get()), _is_short_read);
+        co_return reconcilable_result(_total_live_count, std::move(vec), _is_short_read);
     }
     auto total_live_count() const {
         return _total_live_count;
@@ -3678,10 +3679,10 @@ protected:
         make_mutation_data_requests(cmd, data_resolver, _targets.begin(), _targets.end(), timeout);
 
         // Waited on indirectly.
-        (void)data_resolver->done().then_wrapped([this, exec, data_resolver, cmd = std::move(cmd), cl, timeout] (future<> f) {
+        (void)data_resolver->done().then_wrapped([this, exec, data_resolver, cmd = std::move(cmd), cl, timeout] (future<> f) -> future<> {
             try {
                 f.get();
-                auto rr_opt = data_resolver->resolve(_schema, *cmd, original_row_limit(), original_per_partition_row_limit(), original_partition_limit()); // reconciliation happens here
+                auto rr_opt = co_await data_resolver->resolve(_schema, *cmd, original_row_limit(), original_per_partition_row_limit(), original_partition_limit()); // reconciliation happens here
 
                 // We generate a retry if at least one node reply with count live columns but after merge we have less
                 // than the total number of column we are interested in (which may be < count on a retry).
@@ -4693,7 +4694,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
                 tracing::trace(handler->tr_state, "CAS precondition is met; proposing client-requested updates for {}", ballot);
             }
 
-            auto proposal = make_lw_shared<paxos::proposal>(ballot, freeze(*mutation));
+            auto proposal = make_lw_shared<paxos::proposal>(ballot, co_await freeze_gently(*mutation));
 
             bool is_accepted = co_await handler->accept_proposal(proposal);
             if (is_accepted) {
