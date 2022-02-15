@@ -47,7 +47,7 @@ SEASTAR_TEST_CASE(test_exception_container) {
     BOOST_REQUIRE(foo);
     BOOST_REQUIRE(bar);
 
-    BOOST_REQUIRE_THROW(foo_bar_what(empty), utils::bad_exception_container_access);
+    BOOST_REQUIRE_EQUAL(foo_bar_what(empty), sstring("bad exception container access"));
     BOOST_REQUIRE_EQUAL(foo_bar_what(foo), sstring("foo"));
     BOOST_REQUIRE_EQUAL(foo_bar_what(bar), sstring("bar"));
 
@@ -72,6 +72,26 @@ SEASTAR_TEST_CASE(test_exception_container) {
     BOOST_REQUIRE_THROW(f_empty.get(), utils::bad_exception_container_access);
     BOOST_REQUIRE_THROW(f_foo.get(), foo_exception);
     BOOST_REQUIRE_THROW(f_bar.get(), bar_exception);
+
+    return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_exception_container_empty_accept) {
+    auto empty = foo_bar_container();
+
+    struct visitor {
+        sstring operator()(const foo_exception&) {
+            return "had foo exception";
+        }
+        sstring operator()(const bar_exception&) {
+            return "had bar exception";
+        }
+        sstring operator()(const utils::bad_exception_container_access&) {
+            return "was empty";
+        }
+    };
+
+    BOOST_REQUIRE_EQUAL(empty.accept(visitor{}), "was empty");
 
     return make_ready_future<>();
 }

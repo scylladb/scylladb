@@ -79,9 +79,13 @@ public:
         return !empty();
     }
 
-    // Accepts a visitor
+    // Accepts a visitor.
+    // If the container is empty, the visitor is called with
+    // a bad_exception_container_access.
     auto accept(auto f) const {
-        check_nonempty();
+        if (empty()) {
+            return f(bad_exception_container_access());
+        }
         return std::visit(std::move(f), *_eptr);
     }
 
