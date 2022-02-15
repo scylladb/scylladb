@@ -172,7 +172,7 @@ public:
         { cmp(row, row) } -> std::same_as<bool>;
     }
     void sort(const RowComparator& cmp) {
-        std::sort(_rows.begin(), _rows.end(), std::ref(cmp));
+        std::sort(_rows.begin(), _rows.end(), cmp);
     }
 
     metadata& get_metadata();
