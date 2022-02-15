@@ -139,8 +139,12 @@ concept ResultVisitor = requires(Visitor& visitor) {
 };
 
 class result_set {
+    using col_type = bytes_opt;
+    using row_type = std::vector<col_type>;
+    using rows_type = utils::chunked_vector<row_type>;
+
     ::shared_ptr<metadata> _metadata;
-    utils::chunked_vector<std::vector<bytes_opt>> _rows;
+    rows_type _rows;
 
     friend class result;
 public:
@@ -155,9 +159,9 @@ public:
 
     bool empty() const;
 
-    void add_row(std::vector<bytes_opt> row);
+    void add_row(row_type row);
 
-    void add_column_value(bytes_opt value);
+    void add_column_value(col_type value);
 
     void reverse();
 
@@ -173,7 +177,7 @@ public:
     const metadata& get_metadata() const;
 
     // Returns a range of rows. A row is a range of bytes_opt.
-    const utils::chunked_vector<std::vector<bytes_opt>>& rows() const;
+    const rows_type& rows() const;
 
     template<typename Visitor>
     requires ResultVisitor<Visitor>
@@ -194,7 +198,7 @@ public:
 
 class result_set::builder {
     result_set _result;
-    std::vector<bytes_opt> _current_row;
+    row_type _current_row;
 public:
     explicit builder(shared_ptr<metadata> mtd)
         : _result(std::move(mtd)) { }
