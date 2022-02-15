@@ -251,6 +251,16 @@ future<result<>> invoke_or_return(T&& t) {
     }
 }
 
+// Like future::then, but guaranteed not to allocate a task
+// if the future is ready (even in debug mode).
+auto then_asap(auto f, auto fun) {
+    if (f.available() && !f.failed()) {
+        return futurize_invoke(std::move(fun), f.get());
+    } else {
+        return f.then(std::move(fun));
+    }
+}
+
 namespace test_policies {
     struct do_until {
         // Must be executed in a thread
@@ -270,12 +280,37 @@ namespace test_policies {
                     }).get();
         }
     };
+
+    struct repeat {
+        // Must be executed in a thread
+        template<typename OnRepeat, typename OnEnd>
+        static result<> repeat_and_finish(int iterations, OnRepeat on_repeat, OnEnd on_end) {
+            int counter = iterations + 1;
+            return utils::result_repeat([&] () -> future<result<stop_iteration>> {
+                counter--;
+                if (counter == 0) {
+                    return then_asap(
+                        invoke_or_return(std::move(on_end)),
+                        utils::result_wrap([] { return make_ready_future<result<stop_iteration>>(stop_iteration::yes); })
+                    );
+                } else {
+                    return then_asap(
+                        invoke_or_return(on_repeat),
+                        utils::result_wrap([] { return make_ready_future<result<stop_iteration>>(stop_iteration::no); })
+                    );
+                }
+            }).get();
+        }
+    };
 }
 
 template<typename TestTemplate>
 auto test_iteration_with_policies(TestTemplate&& template_fn) {
     BOOST_TEST_MESSAGE("Running test for do_until");
     template_fn(test_policies::do_until());
+
+    BOOST_TEST_MESSAGE("Running test for repeat");
+    template_fn(test_policies::repeat());
 }
 
 SEASTAR_THREAD_TEST_CASE(test_iteration) {

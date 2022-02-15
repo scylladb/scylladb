@@ -300,4 +300,46 @@ result_do_until(StopCondition stop_cond, AsyncAction action) {
     }
 }
 
+template<typename AsyncAction>
+requires requires (AsyncAction act) {
+    { seastar::futurize_invoke(act) } -> ExceptionContainerResultFuture<>;
+}
+inline
+auto result_repeat(AsyncAction&& action) noexcept {
+    using future_type = seastar::futurize_t<std::invoke_result_t<AsyncAction>>;
+    using result_type = typename future_type::value_type;
+    static_assert(std::is_same_v<seastar::stop_iteration, typename result_type::value_type>, "bad AsyncAction signature");
+    using return_result_type = rebind_result<void, result_type>;
+    for (;;) {
+        auto f = seastar::futurize_invoke(action);
+
+        if (f.available() && !seastar::need_preempt()) {
+            if (f.failed()) {
+                return seastar::make_exception_future<return_result_type>(f.get_exception());
+            }
+            result_type&& res = f.get();
+            if (!res) {
+                return seastar::make_ready_future<return_result_type>(std::move(res).as_failure());
+            }
+            if (res.value() == seastar::stop_iteration::yes) {
+                return seastar::make_ready_future<return_result_type>(bo::success());
+            }
+        } else {
+            return ([] (future_type f, AsyncAction action) -> seastar::future<return_result_type> {
+                for (;;) {
+                    // No need to manually maybe_yield because co_await does that for us
+                    auto&& res = co_await std::move(f);
+                    if (!res) {
+                        co_return std::move(res).as_failure();
+                    }
+                    if (res.value() == seastar::stop_iteration::yes) {
+                        co_return bo::success();
+                    }
+                    f = seastar::futurize_invoke(action);
+                }
+            })(std::move(f), std::move(action));
+        }
+    }
+}
+
 }
