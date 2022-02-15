@@ -361,6 +361,23 @@ SEASTAR_THREAD_TEST_CASE(test_result_try_catch_dots) {
     });
 }
 
+SEASTAR_THREAD_TEST_CASE(test_result_try_empty_exception_container) {
+    test_result_try_with_policies([] (auto policy) {
+        auto run = [&] () {
+            return policy.do_try(
+                [&] {
+                    return policy.error(exc_container());
+                },
+                utils::result_catch<utils::bad_exception_container_access>([&] (const auto& ex) {
+                    return policy.value("caught");
+                })
+            );
+        };
+
+        BOOST_CHECK_EQUAL(run().value(), "caught");
+    });
+}
+
 SEASTAR_THREAD_TEST_CASE(test_result_try_catch_forward_to_promise) {
     test_result_try_with_policies([] (auto policy) {
         auto handle = [&] (auto f) -> result<int> {
