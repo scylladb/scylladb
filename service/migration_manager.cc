@@ -651,7 +651,7 @@ future<std::vector<mutation>> migration_manager::prepare_new_column_family_annou
 
         auto ksm = keyspace.metadata();
         return seastar::async([this, cfm, timestamp, ksm] {
-            auto mutations = db::schema_tables::make_create_table_mutations(ksm, cfm, timestamp);
+            auto mutations = db::schema_tables::make_create_table_mutations(cfm, timestamp);
             get_notifier().before_create_column_family(*cfm, mutations, timestamp);
             return mutations;
         }).then([this, ksm](std::vector<mutation> mutations) {

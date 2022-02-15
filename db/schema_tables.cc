@@ -1946,7 +1946,7 @@ std::vector<mutation> make_drop_aggregate_mutations(shared_ptr<cql3::functions::
  * Table metadata serialization/deserialization.
  */
 
-std::vector<mutation> make_create_table_mutations(lw_shared_ptr<keyspace_metadata> keyspace, schema_ptr table, api::timestamp_type timestamp)
+std::vector<mutation> make_create_table_mutations(schema_ptr table, api::timestamp_type timestamp)
 {
     std::vector<mutation> mutations;
     add_table_or_view_to_schema_mutation(table, timestamp, true, mutations);
