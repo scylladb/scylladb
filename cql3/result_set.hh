@@ -193,7 +193,7 @@ public:
 
     template<typename RowComparator>
     void sort(const RowComparator& cmp) {
-        std::sort(_rows.begin(), _rows.end(), std::ref(cmp));
+        std::sort(_rows.begin(), _rows.end(), cmp);
     }
 
     metadata& get_metadata();
