@@ -29,6 +29,10 @@ sstables_manager::~sstables_manager() {
     assert(_undergoing_close.empty());
 }
 
+const utils::UUID& sstables_manager::get_local_host_id() const {
+    return _db_config.host_id;
+}
+
 shared_sstable sstables_manager::make_sstable(schema_ptr schema,
         sstring dir,
         int64_t generation,

@@ -276,6 +276,7 @@ struct compaction_metadata : public metadata_base<compaction_metadata> {
         switch (v) {
         case sstable_version_types::mc:
         case sstable_version_types::md:
+        case sstable_version_types::me:
             return f(
                 cardinality
             );
@@ -312,10 +313,35 @@ struct stats_metadata : public metadata_base<stats_metadata> {
     int64_t rows_count; // 3_x only
     db::replay_position commitlog_lower_bound; // 3_x only
     disk_array<uint32_t, commitlog_interval> commitlog_intervals; // 3_x only
+    std::optional<utils::UUID> originating_host_id; // 3_11_11 and later (me format)
 
     template <typename Describer>
     auto describe_type(sstable_version_types v, Describer f) {
         switch (v) {
+        case sstable_version_types::me:
+            return f(
+                estimated_partition_size,
+                estimated_cells_count,
+                position,
+                min_timestamp,
+                max_timestamp,
+                min_local_deletion_time,
+                max_local_deletion_time,
+                min_ttl,
+                max_ttl,
+                compression_ratio,
+                estimated_tombstone_drop_time,
+                sstable_level,
+                repaired_at,
+                min_column_names,
+                max_column_names,
+                has_legacy_counter_shards,
+                columns_count,
+                rows_count,
+                commitlog_lower_bound,
+                commitlog_intervals,
+                originating_host_id
+            );
         case sstable_version_types::mc:
         case sstable_version_types::md:
             return f(
@@ -389,6 +415,7 @@ struct serialization_header : public metadata_base<serialization_header> {
         switch (v) {
         case sstable_version_types::mc:
         case sstable_version_types::md:
+        case sstable_version_types::me:
             return f(
                 min_timestamp_base,
                 min_local_deletion_time_base,

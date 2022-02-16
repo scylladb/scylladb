@@ -412,6 +412,8 @@ public:
 
     bool is_quarantined() const noexcept;
 
+    bool is_uploaded() const noexcept;
+
     std::vector<std::pair<component_type, sstring>> all_components() const;
 
     future<> create_links(const sstring& dir, int64_t generation) const;
@@ -687,6 +689,8 @@ public:
     bool has_scylla_component() const {
         return has_component(component_type::Scylla);
     }
+
+    bool validate_originating_host_id() const;
 
     bool has_correct_promoted_index_entries() const {
         return _schema->is_compound() || !has_scylla_component() || _components->scylla_metadata->has_feature(sstable_feature::NonCompoundPIEntries);

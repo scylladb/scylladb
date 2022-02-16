@@ -10,6 +10,7 @@
 
 #include "sstables.hh"
 #include "sstable_writer.hh"
+#include "sstables_manager.hh"
 #include "schema_fwd.hh"
 #include "mutation_fragment.hh"
 #include "metadata_collector.hh"
@@ -33,7 +34,7 @@ struct sstable_writer::writer_impl {
         , _schema(schema)
         , _pc(pc)
         , _cfg(cfg)
-        , _collector(_schema, sst.get_filename())
+        , _collector(_schema, sst.get_filename(), sst.manager().get_local_host_id())
         , _validator(format("sstable writer {}", _sst.get_filename()), _schema, _cfg.validation_level)
     {}
 

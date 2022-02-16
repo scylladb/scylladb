@@ -91,6 +91,9 @@ void sstable_directory::validate(sstables::shared_sstable sst) const {
     if (s->is_view() && !_allow_loading_materialized_view) {
         throw std::runtime_error("Loading Materialized View SSTables is not supported. Re-create the view instead.");
     }
+    if (!sst->is_uploaded() && !sst->validate_originating_host_id()) {
+        throw std::runtime_error("Refusing to load a foreign SSTable: host id mismatch. Load foreign SSTables via the upload dir instead.");
+    }
 }
 
 future<>

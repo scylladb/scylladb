@@ -33,6 +33,7 @@ sstables_format_selector::sstables_format_selector(gms::gossiper& g, sharded<gms
     , _features(f)
     , _db(db)
     , _md_feature_listener(*this, sstables::sstable_version_types::md)
+    , _me_feature_listener(*this, sstables::sstable_version_types::me)
 { }
 
 future<> sstables_format_selector::maybe_select_format(sstables::sstable_version_types new_format) {
@@ -61,6 +62,7 @@ future<> sstables_format_selector::do_maybe_select_format(sstables::sstable_vers
 future<> sstables_format_selector::start() {
     assert(this_shard_id() == 0);
     return read_sstables_format().then([this] {
+        _features.local().cluster_supports_me_sstable().when_enabled(_me_feature_listener);
         _features.local().cluster_supports_md_sstable().when_enabled(_md_feature_listener);
         return make_ready_future<>();
     });

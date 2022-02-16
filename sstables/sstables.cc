@@ -159,6 +159,7 @@ std::unordered_map<sstable::version_types, sstring, enum_hash<sstable::version_t
     { sstable::version_types::la , "la" },
     { sstable::version_types::mc , "mc" },
     { sstable::version_types::md , "md" },
+    { sstable::version_types::me , "me" },
 };
 
 std::unordered_map<sstable::format_types, sstring, enum_hash<sstable::format_types>> sstable::_format_string = {
@@ -263,10 +264,6 @@ future<> parse(const schema&, sstable_version_types, random_access_reader& in, u
     });
 }
 
-inline void write(sstable_version_types v, file_writer& out, const utils::UUID& uuid) {
-    out.write(uuid.serialize());
-}
-
 // For all types that take a size, we provide a template that takes the type
 // alone, and another, separate one, that takes a size parameter as well, of
 // type Size. This is because although most of the time the size and the data
@@ -328,6 +325,18 @@ parse(const schema&, sstable_version_types, random_access_reader& in, Size& len,
         for (size_t i = 0; i < now; ++i) {
             arr.push_back(net::ntoh(read_unaligned<Members>(buf.get() + i * sizeof(Members))));
         }
+    }
+}
+
+template <typename Contents>
+future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, std::optional<Contents>& opt) {
+    bool engaged;
+    co_await parse(s, v, in, engaged);
+    if (engaged) {
+        opt.emplace();
+        co_await parse(s, v, in, *opt);
+    } else {
+        opt.reset();
     }
 }
 
@@ -1775,6 +1784,39 @@ const bool sstable::has_component(component_type f) const {
     return _recognized_components.contains(f);
 }
 
+bool sstable::validate_originating_host_id() const {
+    if (_version < version_types::me) {
+        // earlier formats do not store originating host id
+        return true;
+    }
+
+    auto originating_host_id = get_stats_metadata().originating_host_id;
+    if (!originating_host_id) {
+        // Scylla always fills in originating host id when writing
+        // sstables, so an ME-and-up sstable that does not have it is
+        // invalid
+        sstlog.error("No originating host id in SSTable: {}", get_filename());
+        return false;
+    }
+
+    auto local_host_id = _manager.get_local_host_id();
+    if (local_host_id == utils::UUID{}) {
+        // we don't know the local host id before it is loaded from
+        // (or generated and written to) system.local, but some system
+        // sstable reads must happen before the bootstrap process gets
+        // there, so, welp
+        auto msg = format("Unknown local host id while validating SSTable: {}", get_filename());
+        if (is_system_keyspace(_schema->ks_name())) {
+            sstlog.trace("{}", msg);
+        } else {
+            on_internal_error(sstlog, msg);
+        }
+        return true;
+    }
+
+    return *originating_host_id == local_host_id;
+}
+
 future<> sstable::touch_temp_dir() {
     if (_temp_dir) {
         return make_ready_future<>();
@@ -1821,6 +1863,10 @@ bool sstable::is_quarantined() const noexcept {
     return boost::algorithm::ends_with(_dir, quarantine_dir);
 }
 
+bool sstable::is_uploaded() const noexcept {
+    return boost::algorithm::ends_with(_dir, upload_dir);
+}
+
 sstring sstable::component_basename(const sstring& ks, const sstring& cf, version_types version, int64_t generation,
                                     format_types format, sstring component) {
     sstring v = _version_string.at(version);
@@ -1833,6 +1879,7 @@ sstring sstable::component_basename(const sstring& ks, const sstring& cf, versio
         return v + "-" + g + "-" + f + "-" + component;
     case sstable::version_types::mc:
     case sstable::version_types::md:
+    case sstable::version_types::me:
         return v + "-" + g + "-" + f + "-" + component;
     }
     assert(0 && "invalid version");
@@ -2168,7 +2215,7 @@ sstable::make_crawling_reader_v1(
 }
 
 static entry_descriptor make_entry_descriptor(sstring sstdir, sstring fname, sstring* const provided_ks, sstring* const provided_cf) {
-    static std::regex la_mx("(la|m[cd])-(\\d+)-(\\w+)-(.*)");
+    static std::regex la_mx("(la|m[cde])-(\\d+)-(\\w+)-(.*)");
     static std::regex ka("(\\w+)-(\\w+)-ka-(\\d+)-(.*)");
 
     static std::regex dir(format(".*/([^/]*)/([^/]+)-[\\da-fA-F]+(?:/({}|{}|{}|{})(?:/[^/]+)?)?/?",

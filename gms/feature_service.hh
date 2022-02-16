@@ -71,6 +71,7 @@ public:
 private:
     gms::feature _udf_feature;
     gms::feature _md_sstable_feature;
+    gms::feature _me_sstable_feature;
     gms::feature _view_virtual_columns;
     gms::feature _digest_insensitive_to_expiry;
     gms::feature _computed_columns;
@@ -105,6 +106,10 @@ public:
 
     const feature& cluster_supports_md_sstable() const {
         return _md_sstable_feature;
+    }
+
+    const feature& cluster_supports_me_sstable() const {
+        return _me_sstable_feature;
     }
 
     const feature& cluster_supports_cdc() const {

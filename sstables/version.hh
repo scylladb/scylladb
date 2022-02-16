@@ -14,19 +14,21 @@
 
 namespace sstables {
 
-enum class sstable_version_types { ka, la, mc, md };
+enum class sstable_version_types { ka, la, mc, md, me };
 enum class sstable_format_types { big };
 
-constexpr std::array<sstable_version_types, 4> all_sstable_versions = {
+constexpr std::array<sstable_version_types, 5> all_sstable_versions = {
     sstable_version_types::ka,
     sstable_version_types::la,
     sstable_version_types::mc,
     sstable_version_types::md,
+    sstable_version_types::me,
 };
 
-constexpr std::array<sstable_version_types, 2> writable_sstable_versions = {
+constexpr std::array<sstable_version_types, 3> writable_sstable_versions = {
     sstable_version_types::mc,
     sstable_version_types::md,
+    sstable_version_types::me,
 };
 
 constexpr sstable_version_types oldest_writable_sstable_format = sstable_version_types::mc;
@@ -67,6 +69,9 @@ inline sstable_version_types from_string(const seastar::sstring& format) {
     if (format == "md") {
         return sstable_version_types::md;
     }
+    if (format == "me") {
+        return sstable_version_types::me;
+    }
     throw std::invalid_argument("Wrong sstable format name: " + format);
 }
 
@@ -76,6 +81,7 @@ inline seastar::sstring to_string(sstable_version_types format) {
         case sstable_version_types::la: return "la";
         case sstable_version_types::mc: return "mc";
         case sstable_version_types::md: return "md";
+        case sstable_version_types::me: return "me";
     }
     throw std::runtime_error("Wrong sstable format");
 }

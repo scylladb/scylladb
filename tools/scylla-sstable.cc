@@ -690,6 +690,15 @@ private:
         fmt::print(" {}", disk_string_to_string(val));
     }
 
+    template <typename Contents>
+    void visit(const std::optional<Contents>& val) {
+        if (bool(val)) {
+            visit(*val);
+        } else {
+            fmt::print(" <nullopt>");
+        }
+    }
+
     template <typename Integer, typename T>
     void visit(const sstables::disk_array<Integer, T>& val) {
         fmt::print("\n");
@@ -742,6 +751,10 @@ private:
         fmt::print(" {{end: ");
         visit(val.end);
         fmt::print("}}");
+    }
+
+    void visit(const utils::UUID& uuid) {
+        fmt::print(" {}", uuid.to_sstring());
     }
 
     template <typename Integer>
@@ -830,6 +843,7 @@ void dump_stats_metadata(sstables::sstable_version_types version, const sstables
         else if (field == &metadata.rows_count) { return "rows_count"; }
         else if (field == &metadata.commitlog_lower_bound) { return "commitlog_lower_bound"; }
         else if (field == &metadata.commitlog_intervals) { return "commitlog_intervals"; }
+        else if (field == &metadata.originating_host_id) { return "originating_host_id"; }
         else { throw std::invalid_argument("invalid field offset"); }
     });
 }
@@ -1359,6 +1373,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
             db::config dbcfg;
             gms::feature_service feature_service(gms::feature_config_from_db_config(dbcfg));
             cache_tracker tracker;
+            dbcfg.host_id = ::utils::make_random_uuid();
             sstables::sstables_manager sst_man(large_data_handler, dbcfg, feature_service, tracker);
             auto close_sst_man = deferred_close(sst_man);
 
