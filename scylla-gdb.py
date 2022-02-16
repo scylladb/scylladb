@@ -3636,20 +3636,24 @@ class scylla_sstables(gdb.Command):
 
         Should mirror `sstables::sstable::component_basename()`.
         """
-        version_to_str = ['ka', 'la', 'mc', 'md']
+        old_format = '{keyspace}-{table}-{version}-{generation}-Data.db'
+        new_format = '{version}-{generation}-{format}-Data.db'
+        version_to_format = {
+            'ka': old_format,
+            'la': new_format,
+            'mc': new_format,
+            'md': new_format,
+            'me': new_format
+        }
         format_to_str = ['big']
-        formats = [
-                '{keyspace}-{table}-{version}-{generation}-Data.db',
-                '{version}-{generation}-{format}-Data.db',
-                '{version}-{generation}-{format}-Data.db',
-                '{version}-{generation}-{format}-Data.db',
-            ]
         schema = schema_ptr(sst['_schema'])
         int_type = gdb.lookup_type('int')
-        return formats[int(sst['_version'])].format(
+        version_number = int(sst['_version'])
+        version_name = list(version_to_format)[version_number]
+        return version_to_format[version_name].format(
                 keyspace=str(schema.ks_name)[1:-1],
                 table=str(schema.cf_name)[1:-1],
-                version=version_to_str[int(sst['_version'].cast(int_type))],
+                version=version_name,
                 generation=sst['_generation'],
                 format=format_to_str[int(sst['_format'].cast(int_type))],
             )
