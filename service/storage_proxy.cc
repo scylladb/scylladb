@@ -3813,17 +3813,18 @@ public:
             }
 
             // Waited on indirectly.
-            (void)digest_resolver->done().then(utils::result_into_future<result<>>).then([exec, digest_resolver, timeout, background_repair_check] () mutable {
+            (void)digest_resolver->done().then(utils::result_wrap([exec, digest_resolver, timeout, background_repair_check] () mutable {
                 if (background_repair_check && !digest_resolver->digests_match()) {
                     exec->_proxy->get_stats().read_repair_repaired_background++;
                     exec->_result_promise = promise<result<foreign_ptr<lw_shared_ptr<query::result>>>>();
                     exec->reconcile(exec->_cl, timeout);
-                    return exec->_result_promise.get_future().then(utils::result_into_future<result<foreign_ptr<lw_shared_ptr<query::result>>>>).discard_result();
+                    return exec->_result_promise.get_future().then(utils::result_discard_value<result<foreign_ptr<lw_shared_ptr<query::result>>>>);
                 } else {
-                    return make_ready_future<>();
+                    return make_ready_future<result<>>(bo::success());
                 }
-            }).handle_exception([] (std::exception_ptr eptr) {
-                // ignore any failures during background repair
+            })).then_wrapped([] (auto&& f) {
+                // ignore any failures during background repair (both failed results and exceptions)
+                f.ignore_ready_future();
             });
         });
 
