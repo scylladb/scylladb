@@ -56,12 +56,15 @@ const locator::token_metadata& http_context::get_token_metadata() {
 namespace ss = httpd::storage_service_json;
 using namespace json;
 
-sstring validate_keyspace(http_context& ctx, const parameters& param) {
-    const auto& ks_name = param["keyspace"];
+sstring validate_keyspace(http_context& ctx, sstring ks_name) {
     if (ctx.db.local().has_keyspace(ks_name)) {
         return ks_name;
     }
     throw bad_param_exception(replica::no_such_keyspace(ks_name).what());
+}
+
+sstring validate_keyspace(http_context& ctx, const parameters& param) {
+    return validate_keyspace(ctx, param["keyspace"]);
 }
 
 // splits a request parameter assumed to hold a comma-separated list of table names
