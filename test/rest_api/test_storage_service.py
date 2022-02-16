@@ -8,7 +8,7 @@ import requests
 
 # Use the util.py library from ../cql-pytest:
 sys.path.insert(1, sys.path[0] + '/../cql-pytest')
-from util import unique_name, new_test_table
+from util import unique_name, new_test_table, new_test_keyspace
 
 # "keyspace" function: Creates and returns a temporary keyspace to be
 # used in tests that need a keyspace. The keyspace is created with RF=1,
@@ -95,3 +95,40 @@ def test_storage_service_keyspace_offstrategy_compaction_tables(cql, this_dc, re
             assert resp.status_code == requests.codes.bad_request
 
     cql.execute(f"DROP KEYSPACE {keyspace}")
+
+def test_storage_service_keyspace_scrub(cql, this_dc, rest_api):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
+        with new_test_table(cql, keyspace, "a int, PRIMARY KEY (a)") as t0:
+            with new_test_table(cql, keyspace, "a int, PRIMARY KEY (a)") as t1:
+                test_tables = [t0.split('.')[1], t1.split('.')[1]]
+
+                resp = rest_api.send("GET", f"storage_service/keyspace_scrub/{keyspace}")
+                resp.raise_for_status()
+
+                resp = rest_api.send("GET", f"storage_service/keyspace_scrub/{keyspace}", { "cf": f"{test_tables[1]}" })
+                resp.raise_for_status()
+
+                resp = rest_api.send("GET", f"storage_service/keyspace_scrub/{keyspace}", { "cf": f"{test_tables[0]},{test_tables[1]}" })
+                resp.raise_for_status()
+
+                # non-existing table
+                resp = rest_api.send("POST", f"storage_service/keyspace_scrub/{keyspace}", { "cf": f"{test_tables[0]},XXX" })
+                assert resp.status_code == requests.codes.not_found
+
+def test_storage_service_keyspace_scrub_mode(cql, this_dc, rest_api):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
+        with new_test_table(cql, keyspace, "a int, PRIMARY KEY (a)") as t0:
+            with new_test_table(cql, keyspace, "a int, PRIMARY KEY (a)") as t1:
+                test_tables = [t0.split('.')[1], t1.split('.')[1]]
+
+                resp = rest_api.send("GET", f"storage_service/keyspace_scrub/{keyspace}", { "cf": f"{test_tables[0]}", "scrub_mode": "VALIDATE" })
+                resp.raise_for_status()
+
+                resp = rest_api.send("GET", f"storage_service/keyspace_scrub/{keyspace}", { "cf": f"{test_tables[0]}", "scrub_mode": "XXX" })
+                assert resp.status_code == requests.codes.bad_request
+
+                resp = rest_api.send("GET", f"storage_service/keyspace_scrub/{keyspace}", { "cf": f"{test_tables[0]}", "quarantine_mode": "ONLY" })
+                resp.raise_for_status()
+
+                resp = rest_api.send("GET", f"storage_service/keyspace_scrub/{keyspace}", { "cf": f"{test_tables[0]}", "quarantine_mode": "YYY" })
+                assert resp.status_code == requests.codes.bad_request
