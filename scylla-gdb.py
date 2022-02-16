@@ -4809,3 +4809,5 @@ scylla_gdb_func_downcast_vptr()
 scylla_gdb_func_collection_element()
 scylla_gdb_func_sharded_local()
 scylla_gdb_func_variant_member()
+
+gdb.execute('set language c++')
