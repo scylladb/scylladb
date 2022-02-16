@@ -15,6 +15,7 @@
 #include <set>
 #include <optional>
 #include <list>
+#include <map>
 
 #include "seastarx.hh"
 #include "utils/chunked_vector.hh"
