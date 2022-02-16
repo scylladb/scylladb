@@ -1336,17 +1336,29 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         });
     });
 
-    ss::scrub.set(r, wrap_ks_cf(ctx, [&snap_ctl] (http_context& ctx, std::unique_ptr<request> req, sstring keyspace, std::vector<sstring> column_families) {
+    ss::scrub.set(r, [&ctx, &snap_ctl] (std::unique_ptr<request> req) {
+        auto rp = req_params({
+            {"keyspace", {mandatory::yes}},
+            {"cf", {""}},
+            {"scrub_mode", {}},
+            {"skip_corrupted", {}},
+            {"disable_snapshot", {}},
+            {"quarantine_mode", {}},
+        });
+        rp.process(*req);
+        auto keyspace = validate_keyspace(ctx, *rp.get("keyspace"));
+        auto column_families = parse_tables(keyspace, ctx, *rp.get("cf"));
+        auto scrub_mode_opt = rp.get("scrub_mode");
         auto scrub_mode = sstables::compaction_type_options::scrub::mode::abort;
 
-        const sstring scrub_mode_str = req_param<sstring>(*req, "scrub_mode", "");
-        if (scrub_mode_str == "") {
-            const auto skip_corrupted = req_param<bool>(*req, "skip_corrupted", false);
+        if (!scrub_mode_opt) {
+            const auto skip_corrupted = rp.get_as<bool>("skip_corrupted").value_or(false);
 
             if (skip_corrupted) {
                 scrub_mode = sstables::compaction_type_options::scrub::mode::skip;
             }
         } else {
+            auto scrub_mode_str = *scrub_mode_opt;
             if (scrub_mode_str == "ABORT") {
                 scrub_mode = sstables::compaction_type_options::scrub::mode::abort;
             } else if (scrub_mode_str == "SKIP") {
@@ -1392,7 +1404,7 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         }).then([]{
             return make_ready_future<json::json_return_type>(0);
         });
-    }));
+    });
 }
 
 void unset_snapshot(http_context& ctx, routes& r) {

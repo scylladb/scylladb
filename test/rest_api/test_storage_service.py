@@ -132,3 +132,23 @@ def test_storage_service_keyspace_scrub_mode(cql, this_dc, rest_api):
 
                 resp = rest_api.send("GET", f"storage_service/keyspace_scrub/{keyspace}", { "cf": f"{test_tables[0]}", "quarantine_mode": "YYY" })
                 assert resp.status_code == requests.codes.bad_request
+
+def test_storage_service_keyspace_bad_param(cql, this_dc, rest_api):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
+        # Url must include the keyspace param.
+        resp = rest_api.send("GET", f"storage_service/keyspace_scrub")
+        assert resp.status_code == requests.codes.not_found
+
+        # Url must include the keyspace param.
+        # It cannot be given as an optional param
+        resp = rest_api.send("GET", f"storage_service/keyspace_scrub", { "keyspace": "{keyspace}" })
+        assert resp.status_code == requests.codes.not_found
+
+        # Optional param cannot use the same name as a mandatory (positional, in url) param.
+        resp = rest_api.send("GET", f"storage_service/keyspace_scrub/{keyspace}", { "keyspace": "{keyspace}" })
+        assert resp.status_code == requests.codes.bad_request
+
+        # Unknown parameter (See https://github.com/scylladb/scylla/pull/10090)
+        resp = rest_api.send("GET", f"storage_service/keyspace_scrub/{keyspace}", { "foo": "bar" })
+        assert resp.status_code == requests.codes.bad_request
+
