@@ -246,6 +246,10 @@ BOOST_AUTO_TEST_CASE(test_null_uuid) {
     BOOST_CHECK(uuid.is_null());
     BOOST_CHECK(!uuid);
 
+    // Verify that the default constructed
+    // UUID and the null_uuid are equal.
+    BOOST_REQUIRE_EQUAL(UUID(), utils::null_uuid());
+
     // Verify that a random uuid is not null
     uuid = utils::make_random_uuid();
     BOOST_CHECK(!uuid.is_null());
