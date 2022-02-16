@@ -47,6 +47,16 @@ seastar::future<R> then_ok_result(seastar::future<typename R::value_type>&& f) {
     }
 }
 
+// Takes a result<T>, discards the inner value and returns result<>.
+template<ExceptionContainerResult R>
+rebind_result<void, R> result_discard_value(R&& res) {
+    if (res) {
+        return bo::success();
+    } else {
+        return std::move(res).as_failure();
+    }
+}
+
 namespace internal {
 
 template<typename C, typename Arg>
