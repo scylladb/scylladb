@@ -2874,8 +2874,8 @@ public:
     }
     virtual ~abstract_read_resolver() {};
     virtual void on_error(gms::inet_address ep, bool disconnect) = 0;
-    future<> done() {
-        return _done_promise.get_future().then(utils::result_into_future<result<>>);
+    future<result<>> done() {
+        return _done_promise.get_future();
     }
     void error(gms::inet_address ep, std::exception_ptr eptr) {
         sstring why;
@@ -3679,7 +3679,7 @@ protected:
         make_mutation_data_requests(cmd, data_resolver, _targets.begin(), _targets.end(), timeout);
 
         // Waited on indirectly.
-        (void)data_resolver->done().then_wrapped([this, exec, data_resolver, cmd = std::move(cmd), cl, timeout] (future<> f) {
+        (void)data_resolver->done().then(utils::result_into_future<result<>>).then_wrapped([this, exec, data_resolver, cmd = std::move(cmd), cl, timeout] (future<> f) {
             try {
                 f.get();
                 auto rr_opt = data_resolver->resolve(_schema, *cmd, original_row_limit(), original_per_partition_row_limit(), original_partition_limit()); // reconciliation happens here
@@ -3813,7 +3813,7 @@ public:
             }
 
             // Waited on indirectly.
-            (void)digest_resolver->done().then([exec, digest_resolver, timeout, background_repair_check] () mutable {
+            (void)digest_resolver->done().then(utils::result_into_future<result<>>).then([exec, digest_resolver, timeout, background_repair_check] () mutable {
                 if (background_repair_check && !digest_resolver->digests_match()) {
                     exec->_proxy->get_stats().read_repair_repaired_background++;
                     exec->_result_promise = promise<foreign_ptr<lw_shared_ptr<query::result>>>();
