@@ -19,6 +19,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include "transport/messages/result_message.hh"
 #include "index/secondary_index_manager.hh"
+#include "exceptions/exceptions.hh"
 
 namespace service {
     class client_state;
@@ -46,6 +47,8 @@ namespace statements {
  */
 class select_statement : public cql_statement {
 public:
+    template<typename T>
+    using coordinator_result = exceptions::coordinator_result<T>;
     using parameters = raw::select_statement::parameters;
     using ordering_comparator_type = raw::select_statement::ordering_comparator_type;
     static constexpr int DEFAULT_COUNT_PAGE_SIZE = 10000;

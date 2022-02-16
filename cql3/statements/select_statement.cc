@@ -40,12 +40,49 @@
 #include "test/lib/select_statement_utils.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include "gms/feature_service.hh"
+#include "utils/result.hh"
+#include "utils/result_combinators.hh"
+#include "utils/result_loop.hh"
+
+template<typename T = void>
+using coordinator_result = cql3::statements::select_statement::coordinator_result<T>;
 
 bool is_internal_keyspace(std::string_view name);
 
 namespace cql3 {
 
 namespace statements {
+
+template<typename C>
+struct result_to_error_message_wrapper {
+    C c;
+
+    template<typename T>
+    auto operator()(coordinator_result<T>&& arg) {
+        if constexpr (std::is_void_v<T>) {
+            if (arg) {
+                return futurize_invoke(c);
+            } else {
+                return make_ready_future<typename futurize_t<std::invoke_result_t<C>>::value_type>(
+                    ::make_shared<cql_transport::messages::result_message::exception>(std::move(arg).assume_error())
+                );
+            }
+        } else {
+            if (arg) {
+                return futurize_invoke(c, std::move(arg).value());
+            } else {
+                return make_ready_future<typename futurize_t<std::invoke_result_t<C, T>>::value_type>(
+                    ::make_shared<cql_transport::messages::result_message::exception>(std::move(arg).assume_error())
+                );
+            }
+        }
+    }
+};
+
+template<typename C>
+auto wrap_result_to_error_message(C&& c) {
+    return result_to_error_message_wrapper<C>{std::move(c)};
+}
 
 static constexpr int DEFAULT_INTERNAL_PAGING_SIZE = select_statement::DEFAULT_COUNT_PAGE_SIZE;
 thread_local int internal_paging_size = DEFAULT_INTERNAL_PAGING_SIZE;
