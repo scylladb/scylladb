@@ -1346,7 +1346,7 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
             } else if (scrub_mode_str == "VALIDATE") {
                 scrub_mode = sstables::compaction_type_options::scrub::mode::validate;
             } else {
-                throw std::invalid_argument(fmt::format("Unknown argument for 'scrub_mode' parameter: {}", scrub_mode_str));
+                throw httpd::bad_param_exception(fmt::format("Unknown argument for 'scrub_mode' parameter: {}", scrub_mode_str));
             }
         }
 
@@ -1369,7 +1369,7 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         } else if (quarantine_mode_str == "ONLY") {
             opts.quarantine_operation_mode = sstables::compaction_type_options::scrub::quarantine_mode::only;
         } else {
-            throw std::invalid_argument(fmt::format("Unknown argument for 'quarantine_mode' parameter: {}", quarantine_mode_str));
+            throw httpd::bad_param_exception(fmt::format("Unknown argument for 'quarantine_mode' parameter: {}", quarantine_mode_str));
         }
         return f.then([&ctx, keyspace, column_families, opts] {
             return ctx.db.invoke_on_all([=] (replica::database& db) {
