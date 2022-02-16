@@ -115,7 +115,7 @@ public:
         return !most_sig_bits && !least_sig_bits;
     }
 
-    operator bool() const noexcept {
+    explicit operator bool() const noexcept {
         return !is_null();
     }
 
