@@ -3515,7 +3515,7 @@ protected:
     inet_address_vector_replica_set _targets;
     // Targets that were succesfully used for a data or digest request
     inet_address_vector_replica_set _used_targets;
-    promise<foreign_ptr<lw_shared_ptr<query::result>>> _result_promise;
+    promise<result<foreign_ptr<lw_shared_ptr<query::result>>>> _result_promise;
     tracing::trace_state_ptr _trace_state;
     lw_shared_ptr<replica::column_family> _cf;
     bool _foreground = true;
@@ -3705,7 +3705,7 @@ protected:
                             std::rethrow_exception(eptr);
                         } catch (mutation_write_timeout_exception&) {
                             // convert write error to read error
-                            _result_promise.set_exception(read_timeout_exception(_schema->ks_name(), _schema->cf_name(), _cl, _block_for - 1, _block_for, true));
+                            _result_promise.set_value(read_timeout_exception(_schema->ks_name(), _schema->cf_name(), _cl, _block_for - 1, _block_for, true));
                         } catch (...) {
                             _result_promise.set_exception(std::current_exception());
                         }
@@ -3816,9 +3816,9 @@ public:
             (void)digest_resolver->done().then(utils::result_into_future<result<>>).then([exec, digest_resolver, timeout, background_repair_check] () mutable {
                 if (background_repair_check && !digest_resolver->digests_match()) {
                     exec->_proxy->get_stats().read_repair_repaired_background++;
-                    exec->_result_promise = promise<foreign_ptr<lw_shared_ptr<query::result>>>();
+                    exec->_result_promise = promise<result<foreign_ptr<lw_shared_ptr<query::result>>>>();
                     exec->reconcile(exec->_cl, timeout);
-                    return exec->_result_promise.get_future().discard_result();
+                    return exec->_result_promise.get_future().then(utils::result_into_future<result<foreign_ptr<lw_shared_ptr<query::result>>>>).discard_result();
                 } else {
                     return make_ready_future<>();
                 }
@@ -3827,7 +3827,7 @@ public:
             });
         });
 
-        return _result_promise.get_future();
+        return _result_promise.get_future().then(utils::result_into_future<result<foreign_ptr<lw_shared_ptr<query::result>>>>);
     }
 
     lw_shared_ptr<replica::column_family>& get_cf() {
