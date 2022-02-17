@@ -310,6 +310,15 @@ select_statement::execute(query_processor& qp,
                              service::query_state& state,
                              const query_options& options) const
 {
+    return execute_without_checking_exception_message(qp, state, options)
+            .then(cql_transport::messages::propagate_exception_as_future<shared_ptr<cql_transport::messages::result_message>>);
+}
+
+future<shared_ptr<cql_transport::messages::result_message>>
+select_statement::execute_without_checking_exception_message(query_processor& qp,
+                             service::query_state& state,
+                             const query_options& options) const
+{
     return select_stage(this, seastar::ref(qp), seastar::ref(state), seastar::cref(options));
 }
 
@@ -385,7 +394,7 @@ select_statement::do_execute(query_processor& qp,
     if (!aggregate && !_restrictions_need_filtering && (page_size <= 0
             || !service::pager::query_pagers::may_need_paging(*_schema, page_size,
                     *command, key_ranges))) {
-        return execute(qp, command, std::move(key_ranges), state, options, now);
+        return execute_without_checking_exception_message(qp, command, std::move(key_ranges), state, options, now);
     }
 
     command->slice.options.set<query::partition_slice::option::allow_short_read>();
@@ -722,6 +731,18 @@ indexed_table_select_statement::execute_base_query(
 
 future<shared_ptr<cql_transport::messages::result_message>>
 select_statement::execute(query_processor& qp,
+                          lw_shared_ptr<query::read_command> cmd,
+                          dht::partition_range_vector&& partition_ranges,
+                          service::query_state& state,
+                          const query_options& options,
+                          gc_clock::time_point now) const
+{
+    return execute_without_checking_exception_message(qp, std::move(cmd), std::move(partition_ranges), state, options, now)
+            .then(cql_transport::messages::propagate_exception_as_future<shared_ptr<cql_transport::messages::result_message>>);
+}
+
+future<shared_ptr<cql_transport::messages::result_message>>
+select_statement::execute_without_checking_exception_message(query_processor& qp,
                           lw_shared_ptr<query::read_command> cmd,
                           dht::partition_range_vector&& partition_ranges,
                           service::query_state& state,
