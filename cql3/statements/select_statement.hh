@@ -216,11 +216,11 @@ private:
     lw_shared_ptr<const service::pager::paging_state> generate_view_paging_state_from_base_query_results(lw_shared_ptr<const service::pager::paging_state> paging_state,
             const foreign_ptr<lw_shared_ptr<query::result>>& results, service::query_state& state, const query_options& options) const;
 
-    future<std::tuple<dht::partition_range_vector, lw_shared_ptr<const service::pager::paging_state>>> find_index_partition_ranges(query_processor& qp,
+    future<coordinator_result<std::tuple<dht::partition_range_vector, lw_shared_ptr<const service::pager::paging_state>>>> find_index_partition_ranges(query_processor& qp,
                                                                     service::query_state& state,
                                                                     const query_options& options) const;
 
-    future<std::tuple<std::vector<primary_key>, lw_shared_ptr<const service::pager::paging_state>>> find_index_clustering_rows(query_processor& qp,
+    future<coordinator_result<std::tuple<std::vector<primary_key>, lw_shared_ptr<const service::pager::paging_state>>>> find_index_clustering_rows(query_processor& qp,
                                                                 service::query_state& state,
                                                                 const query_options& options) const;
 
@@ -237,7 +237,7 @@ private:
     prepare_command_for_base_query(query_processor& qp, const query_options& options, service::query_state& state, gc_clock::time_point now,
             bool use_paging) const;
 
-    future<std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>>>
+    future<coordinator_result<std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>>>>
     do_execute_base_query(
             query_processor& qp,
             dht::partition_range_vector&& partition_ranges,
@@ -263,7 +263,7 @@ private:
     // but to implement the general case (multiple rows from multiple partitions)
     // efficiently, we will need more support from other layers.
     // Keys are ordered in token order (see #3423)
-    future<std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>>>
+    future<coordinator_result<std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>>>>
     do_execute_base_query(
             query_processor& qp,
             std::vector<primary_key>&& primary_keys,
@@ -285,7 +285,7 @@ private:
         _stats.secondary_index_rows_read += rows_read;
     }
 
-    future<::shared_ptr<cql_transport::messages::result_message::rows>>read_posting_list(
+    future<coordinator_result<::shared_ptr<cql_transport::messages::result_message::rows>>> read_posting_list(
             query_processor& qp,
             const query_options& options,
             uint64_t limit,
