@@ -21,6 +21,7 @@ SEASTAR_THREAD_TEST_CASE(test_keyspace_only) {
 
 SEASTAR_THREAD_TEST_CASE(test_single_table) {
     BOOST_REQUIRE_EQUAL(tools::load_schemas("CREATE TABLE ks.cf (pk int PRIMARY KEY, v int)").get().size(), 1);
+    BOOST_REQUIRE_EQUAL(tools::load_schemas("CREATE TABLE ks.cf (pk int PRIMARY KEY, v map<int, int>)").get().size(), 1);
     BOOST_REQUIRE_EQUAL(tools::load_schemas("CREATE KEYSPACE ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}; CREATE TABLE ks.cf (pk int PRIMARY KEY, v int);").get().size(), 1);
 }
 
