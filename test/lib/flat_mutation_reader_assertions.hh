@@ -851,7 +851,7 @@ public:
             } else {
                 BOOST_REQUIRE(inside_partition);
                 if (previous_fragment) {
-                    if (!less(previous_fragment->position(), mfo->position())) {
+                    if (less(mfo->position(), previous_fragment->position())) {
                         BOOST_FAIL(format("previous fragment is not strictly before: prev={}, current={}",
                                           mutation_fragment_v2::printer(*_reader.schema(), *previous_fragment), mutation_fragment_v2::printer(*_reader.schema(), *mfo)));
                     }
