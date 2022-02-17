@@ -760,13 +760,65 @@ create table lwt (a list<int>, b int, c int, primary key (a, b, c));
 create table lwt (a int, b int, c int, primary key (a, b));
 -- error: can't use token and non-token restrictions
 update lwt set c = 1 where a = 1 and b = 1 and token(a) > 0 and token(a) < 0 if c = 1;
--- error: can't use eq and non-eq restriction 
+-- error: can't use eq and non-eq restriction
 update lwt set c = 1 where a = 1 and b = 1 and a < 0 if c = 1;
 update lwt set c = 1 where a = 1 and b = 1 and a < 0 if c = 1;
 -- error: partition key must be fully restricted
 update lwt set c = 1 where a > 0 and a < 0 and b = 1 if c = 1;
--- error: partition key and IN is not supported 
+-- error: partition key and IN is not supported
 update lwt set c = 1 where a in () and b = 1 if c = 1;
 update lwt set c = 1 where a = 1 and b IN (1, 2) if c = 1;
 update lwt set c = 1 where a = 1 and (b) IN ((1), (2)) if c = 1;
 drop table lwt;
+
+-- gh-10081 Conditional UPDATE fails to apply when IF includes both static
+-- and non-static columns.
+create table t (p int, c int, r int, s int static, primary key(p, c));
+insert into t (p, s) values (1, 1);
+update t set s=2, r=1 where p=1 and c=1 if s=1 and r=null;
+-- in case of LWT batch, each statement in the batch should
+-- use correct regular or static row to evaluate the condition.
+-- Specifically, the following batch must apply because
+-- condition of statement 1 is true for regular row (1,1),
+-- and condition of statements 2 and 3 are true for regular rows (1,2)
+-- (1,3), which do not exist in the table, but are incarnated
+-- to check the condition
+begin batch
+    update t set s=3, r=10 where p=1 and c=1 if s=2 and r=1
+    update t set s=4, r=2 where p=1 and c=2 if s=2 and r=null
+    update t set s=5, r=3 where p=1 and c=3 if s=2 and r=null
+apply batch;
+-- test select behaviour for static rows
+-- the table contains 3 rows, right?
+select count(*) from t;
+-- count(*)  returns 3 rows. So let's delete 3 rows
+delete from t where p=1 and c = 1 if exists;
+delete from t where p=1 and c = 2 if exists;
+delete from t where p=1 and c = 3 if exists;
+-- WAT, count(*) returns 1 row even though
+-- there were 3 rows and we deleted 3 rows!
+select count(*) from t;
+-- there is no DELETE statement syntax to
+-- delete a static row; yep, that's right,
+-- the row is there but you can't DELETE it!
+delete from t where p=1 if exists;
+-- let's kill the sneaky static row now
+update t set s = null where p=1 if exists;
+-- no more sneaky static rows.
+select count(*) from t;
+-- let's add a row back!
+insert into t (p, s) values (1,1) if not exists;
+-- that's right, there is a row now; what row though?
+select count(*) from t;
+-- let's add more rows
+insert into t (p, c, s) values (1,1,1) if not exists;
+-- WAT, we did not add more rows?
+select count(*) from t;
+-- WAT, you can't add a static row by inserting a partition
+-- key alone, but you can add a clustering row by inserting
+-- clustering key alone
+insert into t (p, c) values (1,2) if not exists;
+select count(*) from t;
+-- stop this travesty
+drop table t;
+
