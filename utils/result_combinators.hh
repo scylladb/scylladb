@@ -59,8 +59,12 @@ rebind_result<void, R> result_discard_value(R&& res) {
 
 namespace internal {
 
-template<typename C, typename Arg>
+template<typename C, typename Arg, bool Unpack>
 struct result_wrapped_call_traits {
+};
+
+template<typename C, typename Arg>
+struct result_wrapped_call_traits<C, Arg, false> {
     static_assert(ExceptionContainerResult<Arg>);
     using return_type = decltype(seastar::futurize_invoke(std::declval<C>(), std::declval<typename Arg::value_type>()));
 
@@ -71,7 +75,7 @@ struct result_wrapped_call_traits {
 };
 
 template<typename C, typename... Exs>
-struct result_wrapped_call_traits<C, result_with_exception<void, Exs...>> {
+struct result_wrapped_call_traits<C, result_with_exception<void, Exs...>, false> {
     using return_type = decltype(seastar::futurize_invoke(std::declval<C>()));
 
     static auto invoke_with_value(C& c, result_with_exception<void, Exs...>&& arg) {
@@ -79,7 +83,26 @@ struct result_wrapped_call_traits<C, result_with_exception<void, Exs...>> {
     }
 };
 
-template<typename C>
+template<typename C, ExceptionContainer ExCont, typename... Args>
+struct result_wrapped_call_traits<C, bo::result<std::tuple<Args...>, ExCont, exception_container_throw_policy>, true> {
+private:
+    using result_type = bo::result<std::tuple<Args...>, ExCont, exception_container_throw_policy>;
+
+public:
+    using return_type = decltype(seastar::futurize_apply(std::declval<C>(), std::declval<std::tuple<Args...>>()));
+
+    static auto invoke_with_value(C& c, result_type&& args) {
+        // Arg must have a value
+        return seastar::futurize_apply(c, std::move(args).value());
+    }
+};
+
+template<typename C, typename Arg>
+struct result_wrapped_call_traits<C, Arg, true> {
+    static_assert(false && sizeof(Arg), "result_wrap_apply must be called with a result<std::tuple<...>> as a second argument");
+};
+
+template<typename C, bool Unpack>
 struct result_wrapper {
     C c;
 
@@ -88,7 +111,7 @@ struct result_wrapper {
     template<typename InputResult>
     requires ExceptionContainerResult<InputResult>
     auto operator()(InputResult arg) {
-        using traits = internal::result_wrapped_call_traits<C, InputResult>;
+        using traits = internal::result_wrapped_call_traits<C, InputResult, Unpack>;
         using return_type = typename traits::return_type;
         static_assert(ExceptionContainerResultFuture<return_type>,
                 "the return type of the call must be a future<result<T>> for some T");
@@ -122,7 +145,14 @@ struct result_wrapper {
 // it won't be automatically converted to result<>.
 template<typename C>
 auto result_wrap(C&& c) {
-    return internal::result_wrapper<C>(std::move(c));
+    return internal::result_wrapper<C, false>(std::move(c));
+}
+
+// Similar to result_wrap, but the resulting callable takes a result<tuple<...>>,
+// unpacks the tuple and provides each argument separately to the wrapped callable.
+template<typename C>
+auto result_wrap_unpack(C&& c) {
+    return internal::result_wrapper<C, true>(std::move(c));
 }
 
 }

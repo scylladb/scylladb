@@ -110,6 +110,18 @@ SEASTAR_THREAD_TEST_CASE(test_result_wrap) {
 
     BOOST_REQUIRE_THROW(fun_int(result<int>(bo::failure(foo_exception()))).get().value(), foo_exception);
     BOOST_REQUIRE_EQUAL(run_count, 2);
+
+    // T is a tuple, result_wrap_unpack
+    auto fun_tuple = utils::result_wrap_unpack([&run_count] (int x, int y) -> result<int> {
+        ++run_count;
+        return bo::success(x + y);
+    });
+
+    BOOST_REQUIRE_EQUAL(fun_tuple(result<std::tuple<int, int>>(bo::success(std::make_tuple(123, 321)))).get().value(), 444);
+    BOOST_REQUIRE_EQUAL(run_count, 3);
+
+    BOOST_REQUIRE_THROW(fun_tuple(result<std::tuple<int, int>>(bo::failure(foo_exception()))).get().value(), foo_exception);
+    BOOST_REQUIRE_EQUAL(run_count, 3);
 }
 
 // If T is a future, attaches a continuation and converts it to future<U>
