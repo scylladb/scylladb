@@ -43,16 +43,7 @@ update_parameters::prefetch_data::prefetch_data(schema_ptr schema)
 const update_parameters::prefetch_data::row*
 update_parameters::prefetch_data::find_row(const partition_key& pkey, const clustering_key& ckey) const {
 
-    // If clustering key is empty, find the first matching row of the partition defined by the partition key.
-    key_view key{pkey, ckey};
-    if (ckey.is_empty()) {
-        const auto it = rows.lower_bound(key);
-        if (it != rows.end() && rows.key_comp().pk_cmp(it->first.first, pkey) == 0) {
-            return &it->second;
-        }
-        return nullptr;
-    }
-    const auto it = rows.find(key);
+    const auto it = rows.find({pkey, ckey});
     return it == rows.end() ? nullptr : &it->second;
 }
 
@@ -62,8 +53,6 @@ class prefetch_data_builder {
     const query::partition_slice& _ps;
     schema_ptr _schema;
     std::optional<partition_key> _pkey;
-    // Number of regular rows in the current partition
-    uint64_t _row_count;
 
     // Add partition key columns to the current full row
     void add_partition_key(update_parameters::prefetch_data::row& cells, const partition_key& key)
@@ -109,12 +98,10 @@ public:
         : _data(data)
         , _ps(ps)
         , _schema(std::move(s))
-        , _row_count(0)
     { }
 
     void accept_new_partition(const partition_key& key, uint64_t row_count) {
         _pkey = key;
-        _row_count = row_count;
     }
 
     void accept_new_partition(uint64_t row_count) {
@@ -145,11 +132,17 @@ public:
 
     void accept_partition_end(const query::result_row_view& static_row) {
 
-        if (_row_count > 0) {
-            // Static row cells have been added into every regular row.
+        if (!_schema->clustering_key_size() || !_schema->has_static_columns()) {
+            // Do not add an (empty) static row if there are no
+            // clustering key columns or not static cells, such
+            // row will have no non-null cells in it, so will
+            // be useless.
             return;
         }
-        // The partition contains only a static row. Add it.
+        // When no clustering row matches WHERE condition of
+        // UPSERT-like operation (INSERT, UPDATE)
+        // the static row will be used to materialize the initial
+        // clustering row.
 
         update_parameters::prefetch_data::row cells;
         add_partition_key(cells, *_pkey);
@@ -158,13 +151,9 @@ public:
         for (auto&& id : _ps.static_columns) {
             add_cell(cells, _schema->static_column_at(id), static_row_iterator.next_collection_cell());
         }
-        // There are no regular rows in the partition. Use empty clustering key prefix to create
-        // a row with static columns.
-        // _row_count > 0 check above prevents entering this branch for tables with no clustering
-        // key (and thus no static row), but even if it didn't, emplace() for such a table would do
-        // nothing, since an element with the same key (partition key, empty clustering key, cells)
-        // has already been added to the map by accept_new_row(), called earlier on the same
-        // partition key.
+        // We end up here only if the table has a clustering key,
+        // so no other row added for this partition thus has an
+        // empty ckey.
         _data.rows.emplace(std::make_pair(*_pkey, clustering_key_prefix::make_empty()), std::move(cells));
     }
 };

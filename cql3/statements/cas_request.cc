@@ -120,21 +120,23 @@ std::optional<mutation> cas_request::apply(foreign_ptr<lw_shared_ptr<query::resu
 const update_parameters::prefetch_data::row* cas_request::find_old_row(const cas_row_update& op) const {
     static const clustering_key empty_ckey = clustering_key::make_empty();
     const partition_key& pkey = _key.front().start()->value().key().value();
-    // If a statement has only static columns conditions, we must ignore its clustering columns
-    // restriction when choosing a row to check the conditions, i.e. choose any partition row,
-    // because any of them must have static columns and that's all we need to know if the
-    // statement applies. For example, the following update must successfully apply (effectively
+    // We must ignore statement clustering column restriction when
+    // choosing a row to check the conditions. If there is no
+    // exact match, choose static row to check if the statement
+    // applies.
+    // For example, the following update must successfully apply (effectively
     // turn into INSERT), because, although the table doesn't have any regular rows matching the
     // statement clustering column restriction, the static row matches the statement condition:
     //   CREATE TABLE t(p int, c int, s int static, v int, PRIMARY KEY(p, c));
     //   INSERT INTO t(p, s) VALUES(1, 1);
     //   UPDATE t SET v=1 WHERE p=1 AND c=1 IF s=1;
-    // Another case when we pass an empty clustering key prefix is apparently when the table
-    // doesn't have any clustering key columns and the clustering key range is empty (open
-    // ended on both sides).
-    const clustering_key& ckey = !op.statement.has_only_static_column_conditions() && op.ranges.front().start() ?
-        op.ranges.front().start()->value() : empty_ckey;
-    return _rows.find_row(pkey, ckey);
+    const clustering_key& ckey = op.ranges.front().start() ?  op.ranges.front().start()->value() : empty_ckey;
+    auto row = _rows.find_row(pkey, ckey);
+    if (row == nullptr && !ckey.is_empty() &&
+        !op.statement.has_if_exist_condition() && !op.statement.has_if_not_exist_condition()) {
+        row = _rows.find_row(pkey, empty_ckey);
+    }
+    return row;
 }
 
 seastar::shared_ptr<cql_transport::messages::result_message>
@@ -153,30 +155,12 @@ cas_request::build_cas_result_set(seastar::shared_ptr<cql3::metadata> metadata,
         // Get old row from prefetched data for the row update
         const auto* old_row = find_old_row(op);
         if (!old_row) {
-            if (!op.statement.has_static_column_conditions()) {
-                // In case there is no old row, leave all other columns null
-                // so that we can infer whether the update attempts to insert a
-                // non-existing row.
-                rs_row.resize(metadata->value_count());
-                result_set->add_row(std::move(rs_row));
-                continue;
-            }
-            // If none of the fetched rows matches clustering key restrictions,
-            // but there is a static column condition in the CAS batch,
-            // we must still include the static row into the result set. Consider the following example:
-            //   CREATE TABLE t(p int, c int, s int static, v int, PRIMARY KEY(p, c));
-            //   INSERT INTO t(p, s) VALUES(1, 1);
-            //   DELETE v FROM t WHERE p=1 AND c=1 IF v=1 AND s=1;
-            // In this case the conditional DELETE must return [applied=False, v=null, s=1].
-            old_row = _rows.find_row(pkey, empty_ckey);
-            if (!old_row) {
-                // In case there is no old row, leave all other columns null
-                // so that we can infer whether the update attempts to insert a
-                // non-existing row.
-                rs_row.resize(metadata->value_count());
-                result_set->add_row(std::move(rs_row));
-                continue;
-            }
+            // In case there is no old row, leave all other columns null
+            // so that we can infer whether the update attempts to insert a
+            // non-existing row.
+            rs_row.resize(metadata->value_count());
+            result_set->add_row(std::move(rs_row));
+            continue;
         }
         // Fill in the cells from prefetch data (old row) into the result set row
         for (ordinal_column_id id = columns.find_first(); id != column_set::npos; id = columns.find_next(id)) {

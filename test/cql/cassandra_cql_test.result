@@ -755,12 +755,12 @@ OK
 > INSERT INTO lwt_on_static_columns_with_null_batch (a, b, d) values (2, 2, 'a')
 > UPDATE lwt_on_static_columns_with_null_batch  SET s = 2 WHERE a = 2 IF s = null
 > APPLY BATCH;
-+-------------+-----+-----+------+
-| [applied]   |   a |   b | s    |
-|-------------+-----+-----+------|
-| True        |   2 |   2 | null |
-| True        |   2 |   2 | null |
-+-------------+-----+-----+------+
++-------------+-----+------+------+
+| [applied]   |   a | b    | s    |
+|-------------+-----+------+------|
+| True        |   2 | 2    | null |
+| True        |   2 | null | null |
++-------------+-----+------+------+
 > 
 > SELECT * FROM lwt_on_static_columns_with_null_batch WHERE a = 2;
 +-----+-----+-----+-----+
@@ -773,12 +773,12 @@ OK
 > INSERT INTO lwt_on_static_columns_with_null_batch (a, b, s, d) values (4, 4, 4, 'a')
 > UPDATE lwt_on_static_columns_with_null_batch SET s = 5 WHERE a = 4 IF s = null
 > APPLY BATCH;
-+-------------+-----+-----+------+
-| [applied]   |   a |   b | s    |
-|-------------+-----+-----+------|
-| True        |   4 |   4 | null |
-| True        |   4 |   4 | null |
-+-------------+-----+-----+------+
++-------------+-----+------+------+
+| [applied]   |   a | b    | s    |
+|-------------+-----+------+------|
+| True        |   4 | 4    | null |
+| True        |   4 | null | null |
++-------------+-----+------+------+
 > 
 > SELECT * FROM lwt_on_static_columns_with_null_batch WHERE a = 4;
 +-----+-----+-----+-----+
@@ -791,12 +791,12 @@ OK
 > INSERT INTO lwt_on_static_columns_with_null_batch (a, b, s, d) values (5, 5, 5, 'a')
 > UPDATE lwt_on_static_columns_with_null_batch SET s = 6 WHERE a = 5 IF s IN (1,2,null)
 > APPLY BATCH;
-+-------------+-----+-----+------+
-| [applied]   |   a |   b | s    |
-|-------------+-----+-----+------|
-| True        |   5 |   5 | null |
-| True        |   5 |   5 | null |
-+-------------+-----+-----+------+
++-------------+-----+------+------+
+| [applied]   |   a | b    | s    |
+|-------------+-----+------+------|
+| True        |   5 | 5    | null |
+| True        |   5 | null | null |
++-------------+-----+------+------+
 > 
 > SELECT * FROM lwt_on_static_columns_with_null_batch WHERE a = 5;
 +-----+-----+-----+-----+
@@ -827,52 +827,52 @@ OK
 > INSERT INTO lwt_on_static_columns_with_null_batch (a, b, s, d) values (3, 3, 40, 'a')
 > UPDATE lwt_on_static_columns_with_null_batch SET s = 30 WHERE a = 3 IF s > 5
 > APPLY BATCH;
-+-------------+-----+-----+------+
-| [applied]   |   a |   b | s    |
-|-------------+-----+-----+------|
-| False       |   3 |   3 | null |
-| False       |   3 |   3 | null |
-+-------------+-----+-----+------+
++-------------+-----+------+------+
+| [applied]   |   a | b    | s    |
+|-------------+-----+------+------|
+| False       |   3 | 3    | null |
+| False       |   3 | null | null |
++-------------+-----+------+------+
 > BEGIN BATCH
 > INSERT INTO lwt_on_static_columns_with_null_batch (a, b, s, d) values (3, 3, 40, 'a')
 > UPDATE lwt_on_static_columns_with_null_batch SET s = 30 WHERE a = 3 IF s < 5
 > APPLY BATCH;
-+-------------+-----+-----+------+
-| [applied]   |   a |   b | s    |
-|-------------+-----+-----+------|
-| False       |   3 |   3 | null |
-| False       |   3 |   3 | null |
-+-------------+-----+-----+------+
++-------------+-----+------+------+
+| [applied]   |   a | b    | s    |
+|-------------+-----+------+------|
+| False       |   3 | 3    | null |
+| False       |   3 | null | null |
++-------------+-----+------+------+
 > BEGIN BATCH
 > INSERT INTO lwt_on_static_columns_with_null_batch (a, b, s, d) values (3, 3, 40, 'a')
 > UPDATE lwt_on_static_columns_with_null_batch SET s = 30 WHERE a = 3 IF s >= 5
 > APPLY BATCH;
-+-------------+-----+-----+------+
-| [applied]   |   a |   b | s    |
-|-------------+-----+-----+------|
-| False       |   3 |   3 | null |
-| False       |   3 |   3 | null |
-+-------------+-----+-----+------+
++-------------+-----+------+------+
+| [applied]   |   a | b    | s    |
+|-------------+-----+------+------|
+| False       |   3 | 3    | null |
+| False       |   3 | null | null |
++-------------+-----+------+------+
 > BEGIN BATCH
 > INSERT INTO lwt_on_static_columns_with_null_batch (a, b, s, d) values (3, 3, 40, 'a')
 > UPDATE lwt_on_static_columns_with_null_batch SET s = 30 WHERE a = 3 IF s <= 5
 > APPLY BATCH;
-+-------------+-----+-----+------+
-| [applied]   |   a |   b | s    |
-|-------------+-----+-----+------|
-| False       |   3 |   3 | null |
-| False       |   3 |   3 | null |
-+-------------+-----+-----+------+
++-------------+-----+------+------+
+| [applied]   |   a | b    | s    |
+|-------------+-----+------+------|
+| False       |   3 | 3    | null |
+| False       |   3 | null | null |
++-------------+-----+------+------+
 > BEGIN BATCH
 > INSERT INTO lwt_on_static_columns_with_null_batch (a, b, s, d) values (3, 3, 40, 'a')
 > UPDATE lwt_on_static_columns_with_null_batch SET s = 30 WHERE a = 3 IF s = 5
 > APPLY BATCH;
-+-------------+-----+-----+------+
-| [applied]   |   a |   b | s    |
-|-------------+-----+-----+------|
-| False       |   3 |   3 | null |
-| False       |   3 |   3 | null |
-+-------------+-----+-----+------+
++-------------+-----+------+------+
+| [applied]   |   a | b    | s    |
+|-------------+-----+------+------|
+| False       |   3 | 3    | null |
+| False       |   3 | null | null |
++-------------+-----+------+------+
 > 
 > SELECT * FROM lwt_on_static_columns_with_null_batch WHERE a = 3;
 +-----+-----+------+------+
@@ -885,12 +885,12 @@ OK
 > INSERT INTO lwt_on_static_columns_with_null_batch (a, b, s, d) values (6, 6, 70, 'a')
 > UPDATE lwt_on_static_columns_with_null_batch SET s = 60 WHERE a = 6 IF s IN (1,2,3)
 > APPLY BATCH;
-+-------------+-----+-----+------+
-| [applied]   |   a |   b | s    |
-|-------------+-----+-----+------|
-| False       |   6 |   6 | null |
-| False       |   6 |   6 | null |
-+-------------+-----+-----+------+
++-------------+-----+------+------+
+| [applied]   |   a | b    | s    |
+|-------------+-----+------+------|
+| False       |   6 | 6    | null |
+| False       |   6 | null | null |
++-------------+-----+------+------+
 > 
 > SELECT * FROM lwt_on_static_columns_with_null_batch WHERE a = 6;
 +-----+-----+------+------+
