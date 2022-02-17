@@ -408,11 +408,11 @@ select_statement::do_execute(query_processor& qp,
                 cql3::selection::result_set_builder(*_selection, now,
                         options.get_cql_serialization_format(), *_group_by_cell_indices), std::move(p),
                 [this, page_size, now, timeout](auto& builder, std::unique_ptr<service::pager::query_pager>& p) {
-                    return do_until([&p] {return p->is_exhausted();},
+                    return utils::result_do_until([&p] {return p->is_exhausted();},
                             [&p, &builder, page_size, now, timeout] {
-                                return p->fetch_page(builder, page_size, now, timeout);
+                                return p->fetch_page_result(builder, page_size, now, timeout);
                             }
-                    ).then([this, &p, &builder] {
+                    ).then(wrap_result_to_error_message([this, &p, &builder] {
                         return builder.with_thread_if_needed([this, &p, &builder] {
                             auto rs = builder.build();
                             if (_restrictions_need_filtering) {
@@ -423,7 +423,7 @@ select_statement::do_execute(query_processor& qp,
                             auto msg = ::make_shared<cql_transport::messages::result_message::rows>(result(std::move(rs)));
                             return shared_ptr<cql_transport::messages::result_message>(std::move(msg));
                         });
-                    });
+                    }));
                 });
     }
 
@@ -434,7 +434,7 @@ select_statement::do_execute(query_processor& qp,
     }
 
     if (_selection->is_trivial() && !_restrictions_need_filtering && !_per_partition_limit) {
-        return p->fetch_page_generator(page_size, now, timeout, _stats).then([this, p = std::move(p)] (result_generator generator) {
+        return p->fetch_page_generator_result(page_size, now, timeout, _stats).then(wrap_result_to_error_message([this, p = std::move(p)] (result_generator&& generator) {
             auto meta = [&] () -> shared_ptr<const cql3::metadata> {
                 if (!p->is_exhausted()) {
                     auto meta = make_shared<metadata>(*_selection->get_result_metadata());
@@ -448,12 +448,11 @@ select_statement::do_execute(query_processor& qp,
             return shared_ptr<cql_transport::messages::result_message>(
                 make_shared<cql_transport::messages::result_message::rows>(result(std::move(generator), std::move(meta)))
             );
-        });
+        }));
     }
 
-    return p->fetch_page(page_size, now, timeout).then(
-            [this, p = std::move(p), &options, now](std::unique_ptr<cql3::result_set> rs) {
-
+    return p->fetch_page_result(page_size, now, timeout).then(wrap_result_to_error_message(
+            [this, p = std::move(p), &options, now](std::unique_ptr<cql3::result_set>&& rs) {
                 if (!p->is_exhausted()) {
                     rs->get_metadata().set_paging_state(p->state());
                 }
@@ -465,7 +464,7 @@ select_statement::do_execute(query_processor& qp,
                 update_stats_rows_read(rs->size());
                 auto msg = ::make_shared<cql_transport::messages::result_message::rows>(result(std::move(rs)));
                 return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(std::move(msg));
-            });
+            }));
 }
 
 template<typename KeyType>
