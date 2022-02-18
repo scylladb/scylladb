@@ -296,6 +296,17 @@ SEASTAR_TEST_CASE(test_insert_json_types) {
             }
         });
 
+        BOOST_REQUIRE_THROW(e.execute_cql(R"(
+            INSERT INTO all_types JSON '{
+                "a": "abc", "c": "6"
+            }'
+        )").get(), marshal_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql(R"(
+            INSERT INTO all_types JSON '{
+                "a": "abc", "c": "0392fa"
+            }'
+        )").get(), marshal_exception);
+
         e.execute_cql("CREATE TABLE multi_column_pk_table (p1 int, p2 int, p3 int, c1 int, c2 int, v int, PRIMARY KEY((p1, p2, p3), c1, c2));").get();
         e.require_table_exists("ks", "multi_column_pk_table").get();
 

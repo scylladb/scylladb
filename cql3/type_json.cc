@@ -218,7 +218,7 @@ struct from_json_object_visitor {
             throw marshal_exception("bytes_type must be represented as string");
         }
         std::string_view string_v = rjson::to_string_view(value);
-        if (string_v.size() < 2 && string_v[0] != '0' && string_v[1] != 'x') {
+        if (string_v.size() < 2 || string_v[0] != '0' || string_v[1] != 'x') {
             throw marshal_exception("Blob JSON strings must start with 0x");
         }
         string_v.remove_prefix(2);
