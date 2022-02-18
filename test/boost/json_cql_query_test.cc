@@ -26,6 +26,7 @@
 #include "types/tuple.hh"
 #include "types/user.hh"
 #include "types/list.hh"
+#include "utils/rjson.hh"
 
 using namespace std::literals::chrono_literals;
 
@@ -409,6 +410,115 @@ SEASTAR_TEST_CASE(test_insert_json_null_frozen_collections) {
                 )
             }
          });
+    });
+}
+
+SEASTAR_TEST_CASE(test_insert_json_integer_in_scientific_notation) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        // Verify that our JSON parsing supports
+        // inserting numbers like 1.23e+7 to an integer
+        // column (int, bigint, etc.). Numbers that contain
+        // a fractional part (12.34) are disallowed. Note
+        // that this behavior differs from Cassandra, which
+        // disallows all those types (1.23e+7, 12.34).
+
+        cquery_nofail(e,          
+            "CREATE TABLE scientific_notation ("
+                "    pk int primary key,"
+                "    v bigint,"
+                ");");
+
+        cquery_nofail(e, R"(
+            INSERT INTO scientific_notation JSON '{
+                "pk": 1, "v": 150.0
+            }'
+        )");
+        cquery_nofail(e, R"(
+            INSERT INTO scientific_notation JSON '{
+                "pk": 2, "v": 234
+            }'
+        )");
+        cquery_nofail(e, R"(
+            INSERT INTO scientific_notation JSON '{
+                "pk": 3, "v": 1E+6
+            }'
+        )");
+
+        // JSON standard specifies that numbers
+        // in range [-2^53+1, 2^53-1] are interoperable
+        // meaning implementations will agree 
+        // exactly on their numeric values. This range
+        // corresponds to a fact that double floating-point
+        // type has a 53-bit significand and converting
+        // from an integer in that range to double is non-lossy.
+        //
+        // This checks that precision is not lost 
+        // for the largest possible value in that range
+        // (2^53-1).
+        cquery_nofail(e, R"(
+            INSERT INTO scientific_notation JSON '{
+                "pk": 4, "v": 9.007199254740991E+15
+            }'
+        )"); 
+
+        cquery_nofail(e, R"(
+            INSERT INTO scientific_notation JSON '{
+                "pk": 5, "v": 0.0e3
+            }'
+        )");
+        cquery_nofail(e, R"(
+            INSERT INTO scientific_notation JSON '{
+                "pk": 6, "v": -0.0e1
+            }'
+        )");
+        cquery_nofail(e, R"(
+            INSERT INTO scientific_notation JSON '{
+                "pk": 7, "v": -1.234E+3
+            }'
+        )");
+
+        require_rows(e, "SELECT pk, v FROM scientific_notation", {
+            {int32_type->decompose(1), long_type->decompose(int64_t(150))},
+            {int32_type->decompose(2), long_type->decompose(int64_t(234))},
+            {int32_type->decompose(3), long_type->decompose(int64_t(1000000))},
+            {int32_type->decompose(4), long_type->decompose(int64_t(9007199254740991))},
+            {int32_type->decompose(5), long_type->decompose(int64_t(0))},
+            {int32_type->decompose(6), long_type->decompose(int64_t(0))},
+            {int32_type->decompose(7), long_type->decompose(int64_t(-1234))},
+        });
+
+        BOOST_REQUIRE_THROW(e.execute_cql(R"(
+            INSERT INTO scientific_notation JSON '{
+                "pk": 8, "v": 12.34
+            }'
+        )").get(), marshal_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql(R"(
+            INSERT INTO scientific_notation JSON '{
+                "pk": 9, "v": 1e-1
+            }'
+        )").get(), marshal_exception);
+
+        // JSON specification disallows Inf, -Inf, NaN:
+        // "Numeric values that cannot be represented in the 
+        // grammar below (such as Infinity and NaN) are not permitted."
+        //
+        // RapidJSON has a parsing flag: kParseNanAndInfFlag
+        // which allows it. Verify it's not used:
+        BOOST_REQUIRE_THROW(e.execute_cql(R"(
+            INSERT INTO scientific_notation JSON '{
+                "pk": 10, "v": +Inf
+            }'
+        )").get(), rjson::error);
+        BOOST_REQUIRE_THROW(e.execute_cql(R"(
+            INSERT INTO scientific_notation JSON '{
+                "pk": 11, "v": -inf
+            }'
+        )").get(), rjson::error);
+        BOOST_REQUIRE_THROW(e.execute_cql(R"(
+            INSERT INTO scientific_notation JSON '{
+                "pk": 12, "v": NaN
+            }'
+        )").get(), rjson::error);
     });
 }
 
