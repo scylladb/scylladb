@@ -78,8 +78,35 @@ static int64_t to_int64_t(const rjson::value& value) {
         return value.GetInt();
     } else if (value.IsUint()) {
         return value.GetUint();
-    } else if (value.GetUint64()) {
+    } else if (value.IsUint64()) {
         return value.GetUint64(); //NOTICE: large uint64_t values will get overflown
+    } else if (value.IsDouble()) {
+        // We allow specifing integer constants
+        // using scientific notation (for example 1.3e8)
+        // and floating-point numbers ending with .0 (for example 12.0),
+        // but not floating-point numbers with fractional part (12.34).
+        //
+        // The reason is that JSON standard does not have separate
+        // types for integers and floating-point numbers, only
+        // a single "number" type. Some serializers may
+        // produce an integer in that floating-point format.
+        double double_value = value.GetDouble();
+
+        // Check if the value contains disallowed fractional part (.34 from 12.34).
+        // With RapidJSON and an integer value in range [-(2^53)+1, (2^53)-1], 
+        // the fractional part will be zero as the entire value
+        // fits in 53-bit significand. RapidJSON's parsing code does not lose accuracy:
+        // when parsing a number like 12.34e8, it accumulates 1234 to a int64_t number,
+        // then converts it to double and multiples by power of 10, never having any
+        // digit in fractional part.
+        double integral;
+        double fractional = std::modf(double_value, &integral);
+        if (fractional != 0.0 && fractional != -0.0) {
+            throw marshal_exception(format("Incorrect JSON floating-point value "
+                "for int64 type: {} (it should not contain fractional part {})", value, fractional));
+        }
+
+        return double_value;
     }
     throw marshal_exception(format("Incorrect JSON value for int64 type: {}", value));
 }
