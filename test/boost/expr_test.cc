@@ -66,3 +66,22 @@ BOOST_AUTO_TEST_CASE(expr_visit_ref) {
 
     BOOST_REQUIRE_EQUAL(ref2.bind_index, 135);
 }
+
+
+struct rvalue_visitor {
+    rvalue_visitor(){};
+    rvalue_visitor(const rvalue_visitor&) = delete;
+
+    bind_variable& operator()(bind_variable& bv) && { return bv; }
+    bind_variable& operator()(auto&) && { throw std::runtime_error("Unreachable"); }
+} v;
+
+BOOST_AUTO_TEST_CASE(expr_visit_visitor_rvalue) {
+    expression e = new_bind_variable(456);
+
+    rvalue_visitor visitor;
+
+    bind_variable& ref2 = visit(std::move(visitor), e);
+
+    BOOST_REQUIRE_EQUAL(ref2.bind_index, 456);
+}
