@@ -151,7 +151,16 @@ gossiper::gossiper(abort_source& as, feature_service& features, const locator::s
                     return 0;
                 }
             }, sm::description("Heartbeat of the current Node.")),
+        sm::make_gauge("live",
+            [this] {
+                return _live_endpoints.size();
+            }, sm::description("How many live nodes the current node sees")),
+        sm::make_gauge("unreachable",
+            [this] {
+                return _unreachable_endpoints.size();
+            }, sm::description("How many unreachable nodes the current node sees")),
     });
+
 }
 
 /*
