@@ -43,6 +43,7 @@ public:
 
 sstring compaction_name(compaction_type type);
 compaction_type to_compaction_type(sstring type_name);
+std::string_view to_string(compaction_type type);
 
 struct compaction_info {
     utils::UUID compaction_uuid;
