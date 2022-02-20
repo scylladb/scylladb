@@ -259,7 +259,7 @@ future<> compaction_manager::perform_major_compaction(replica::table* t) {
         return make_ready_future<>();
     }
 
-    auto task = make_shared<compaction_manager::task>(t, sstables::compaction_type::Compaction, get_compaction_state(t));
+    auto task = make_shared<compaction_manager::task>(*this, t, sstables::compaction_type::Compaction);
     _tasks.push_back(task);
     cmlog.debug("Major compaction task {} table={}: started", fmt::ptr(task.get()), fmt::ptr(t));
 
@@ -314,7 +314,7 @@ future<> compaction_manager::run_custom_job(replica::table* t, sstables::compact
         return make_ready_future<>();
     }
 
-    auto task = make_shared<compaction_manager::task>(t, type, get_compaction_state(t));
+    auto task = make_shared<compaction_manager::task>(*this, t, type);
     _tasks.push_back(task);
     cmlog.debug("{} task {} table={}: started", type, fmt::ptr(task.get()), fmt::ptr(task->compacting_table));
 
@@ -642,7 +642,7 @@ void compaction_manager::submit(replica::table* t) {
         return;
     }
 
-    auto task = make_shared<compaction_manager::task>(t, sstables::compaction_type::Compaction, get_compaction_state(t));
+    auto task = make_shared<compaction_manager::task>(*this, t, sstables::compaction_type::Compaction);
     _tasks.push_back(task);
     _stats.pending_tasks++;
     cmlog.debug("Compaction task {} table={}: started", fmt::ptr(task.get()), fmt::ptr(task->compacting_table));
@@ -711,7 +711,7 @@ void compaction_manager::submit(replica::table* t) {
 }
 
 future<> compaction_manager::perform_offstrategy(replica::table* t) {
-    auto task = make_shared<compaction_manager::task>(t, sstables::compaction_type::Reshape, get_compaction_state(t));
+    auto task = make_shared<compaction_manager::task>(*this, t, sstables::compaction_type::Reshape);
     _tasks.push_back(task);
     _stats.pending_tasks++;
     cmlog.debug("Offstrategy compaction task {} table={}: started", fmt::ptr(task.get()), fmt::ptr(task->compacting_table));
@@ -779,7 +779,7 @@ future<> compaction_manager::rewrite_sstables(replica::table* t, sstables::compa
         return a->data_size() > b->data_size();
     });
 
-    auto task = make_shared<compaction_manager::task>(t, options.type(), get_compaction_state(t));
+    auto task = make_shared<compaction_manager::task>(*this, t, options.type());
     _tasks.push_back(task);
     cmlog.debug("{} task {} table={}: started", options.type(), fmt::ptr(task.get()), fmt::ptr(task->compacting_table));
 

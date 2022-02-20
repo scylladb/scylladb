@@ -74,6 +74,7 @@ private:
     };
 
     struct task {
+        compaction_manager& cm;
         replica::table* compacting_table = nullptr;
         shared_future<> compaction_done = make_ready_future<>();
         exponential_backoff_retry compaction_retry = exponential_backoff_retry(std::chrono::seconds(5), std::chrono::seconds(300));
@@ -84,10 +85,11 @@ private:
         compaction_state& compaction_state;
         gate::holder gate_holder;
 
-        explicit task(replica::table* t, sstables::compaction_type type, struct compaction_state& cs)
-            : compacting_table(t)
+        explicit task(compaction_manager& mgr, replica::table* t, sstables::compaction_type type)
+            : cm(mgr)
+            , compacting_table(t)
             , type(type)
-            , compaction_state(cs)
+            , compaction_state(cm.get_compaction_state(t))
             , gate_holder(compaction_state.gate.hold())
         {}
 

@@ -189,7 +189,7 @@ future<shared_sstable> test_env::reusable_sst(schema_ptr schema, sstring dir, un
 }
 
 sstables::compaction_data& compaction_manager_test::register_compaction(utils::UUID output_run_id, replica::column_family* cf) {
-    auto task = make_shared<compaction_manager::task>(cf, sstables::compaction_type::Compaction, _cm._compaction_state[cf]);
+    auto task = make_shared<compaction_manager::task>(_cm, cf, sstables::compaction_type::Compaction);
     testlog.debug("compaction_manager_test: register_compaction: task {} cf={}", fmt::ptr(task.get()), fmt::ptr(cf));
     task->compaction_running = true;
     task->compaction_data = compaction_manager::create_compaction_data();
