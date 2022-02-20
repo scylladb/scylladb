@@ -155,8 +155,11 @@ public:
     expression& operator=(const expression&);
     expression& operator=(expression&&) noexcept = default;
 
-    friend auto visit(invocable_on_expression auto&& visitor, const expression& e);
-    friend auto visit(invocable_on_expression_ref auto&& visitor, expression& e);
+    template <invocable_on_expression Visitor>
+    friend decltype(auto) visit(Visitor&& visitor, const expression& e);
+
+    template <invocable_on_expression_ref Visitor>
+    friend decltype(auto) visit(Visitor&& visitor, expression& e);
 
     template <ExpressionElement E>
     friend bool is(const expression& e);
@@ -371,12 +374,14 @@ inline expression::expression()
         : expression(conjunction{}) {
 }
 
-auto visit(invocable_on_expression auto&& visitor, const expression& e) {
-    return std::visit(visitor, e._v->v);
+template <invocable_on_expression Visitor>
+decltype(auto) visit(Visitor&& visitor, const expression& e) {
+    return std::visit(std::forward<Visitor>(visitor), e._v->v);
 }
 
-auto visit(invocable_on_expression_ref auto&& visitor, expression& e) {
-    return std::visit(visitor, e._v->v);
+template <invocable_on_expression_ref Visitor>
+decltype(auto) visit(Visitor&& visitor, expression& e) {
+    return std::visit(std::forward<Visitor>(visitor), e._v->v);
 }
 
 template <ExpressionElement E>

@@ -503,6 +503,7 @@ scylla_tests = set([
     'test/boost/group0_test',
     'test/boost/exception_container_test',
     'test/boost/result_utils_test',
+    'test/boost/expr_test',
     'test/manual/ec2_snitch_test',
     'test/manual/enormous_table_scan_test',
     'test/manual/gce_snitch_test',
@@ -1268,6 +1269,7 @@ deps['test/boost/linearizing_input_stream_test'] = [
     "test/boost/linearizing_input_stream_test.cc",
     "test/lib/log.cc",
 ]
+deps['test/boost/expr_test'] = ['test/boost/expr_test.cc'] + scylla_core
 
 deps['test/boost/duration_test'] += ['test/lib/exception_utils.cc']
 deps['test/boost/schema_loader_test'] += ['tools/schema_loader.cc']
