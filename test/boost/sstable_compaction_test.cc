@@ -3242,6 +3242,9 @@ SEASTAR_TEST_CASE(partial_sstable_run_filtered_out_test) {
         auto tmp = tmpdir();
 
         auto cm = make_lw_shared<compaction_manager>();
+        auto stop_cm = defer([cm] {
+            cm->stop().get();
+        });
         cm->enable();
 
         replica::column_family::config cfg = column_family_test_config(env.manager(), env.semaphore());
@@ -3287,8 +3290,6 @@ SEASTAR_TEST_CASE(partial_sstable_run_filtered_out_test) {
 
         // make sure partial sstable run has none of its fragments compacted.
         BOOST_REQUIRE(generation_exists(partial_sstable_run_sst->generation()));
-
-        cm->stop().get();
     });
 }
 
@@ -4133,6 +4134,10 @@ SEASTAR_TEST_CASE(test_offstrategy_sstable_compaction) {
             ss.add_row(mut, ss.make_ckey(0), "val");
 
             auto cm = make_lw_shared<compaction_manager>();
+            auto stop_cm = defer([cm] {
+                cm->stop().get();
+            });
+
             replica::column_family::config cfg = column_family_test_config(env.manager(), env.semaphore());
             cfg.datadir = tmp.path().string();
             cfg.enable_disk_writes = true;
@@ -4140,6 +4145,10 @@ SEASTAR_TEST_CASE(test_offstrategy_sstable_compaction) {
             auto tracker = make_lw_shared<cache_tracker>();
             cell_locker_stats cl_stats;
             auto cf = make_lw_shared<replica::column_family>(s, cfg, replica::column_family::no_commitlog(), *cm, cl_stats, *tracker);
+            // Make sure we release reference to all sstables, allowing them to be deleted before dir is destroyed
+            auto stop_cf = defer([cf] {
+                cf->stop().get();
+            });
             auto sst_gen = [&env, s, cf, path = tmp.path().string(), version] () mutable {
                 return env.make_sstable(s, path, column_family_test::calculate_generation_for_new_table(*cf), version, big);
             };
@@ -4153,9 +4162,6 @@ SEASTAR_TEST_CASE(test_offstrategy_sstable_compaction) {
             }
             auto info = make_lw_shared<sstables::compaction_data>();
             cf->run_offstrategy_compaction(*info).get();
-
-            // Make sure we release reference to all sstables, allowing them to be deleted before dir is destroyed
-            cf->stop().get();
         }
     });
 }
