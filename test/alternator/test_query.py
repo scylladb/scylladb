@@ -479,6 +479,67 @@ def test_query_reverse_long(test_table_sn):
     assert got_sort_keys == list(reversed(range(N-n, N)))
     assert n < N
 
+# The above test_query_reverse_long() tests a very long (over 100MB)
+# partition, so is very slow especially over a slow network. The following
+# is a much smaller subset of the above test that reproduces issue #9487:
+# When doing a reverse query without "Limit" on a partition of 2MB, a result
+# page should nevertheless be limited to 1MB of data and not return the
+# entire 2MB in one page.
+def test_query_reverse_longish(test_table_sn):
+    # Insert a 2MB partition
+    p = random_string()
+    str = 'x' * 10240
+    N = 200
+    with test_table_sn.batch_writer() as batch:
+        for i in range(N):
+            batch.put_item({'p': p, 'c': i, 's': str})
+
+    # Query one page of a specific length (Limit=50) in reverse order.
+    # We should get the requested number of items, starting from the last
+    # item (N-1), in reversed order:
+    got_items = test_table_sn.query(KeyConditions={
+        'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}},
+        ScanIndexForward=False,
+        Limit=50,
+        ConsistentRead=True)['Items']
+    assert len(got_items) == 50
+    got_sort_keys = [x['c'] for x in got_items]
+    assert got_sort_keys == list(reversed(range(N-50, N)))
+
+    # A similar limited and reveresed query - with an explicit starting
+    # point (2345) instead of the end:
+    start = 147
+    got_items = test_table_sn.query(KeyConditions={
+        'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}},
+        ExclusiveStartKey={'p': p, 'c': start},
+        ScanIndexForward=False, Limit=50, ConsistentRead=True)['Items']
+    assert len(got_items) == 50
+    got_sort_keys = [x['c'] for x in got_items]
+    assert got_sort_keys == list(reversed(range(start-50, start)))
+
+    # Even if a Limit is *not* specified, queries have some built-in size
+    # limit (around 1MB) - a query should never return the entire 2MB
+    # partition in one response. One of the development versions had a bug
+    # here - normal (unreversed) queries were limited to 1MB, but reversed
+    # queries returned the entire 100MB.
+    # First check this with regular (unreversed) order:
+    got_items = test_table_sn.query(KeyConditions={
+        'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}},
+        ConsistentRead=True)['Items']
+    n = len(got_items)
+    got_sort_keys = [x['c'] for x in got_items]
+    assert got_sort_keys == list(range(n))
+    assert n < N  # we don't how big n should be, but definitely not N!
+    # And in reverse order:
+    got_items = test_table_sn.query(KeyConditions={
+        'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}},
+        ScanIndexForward=False,
+        ConsistentRead=True)['Items']
+    n = len(got_items)
+    got_sort_keys = [x['c'] for x in got_items]
+    assert got_sort_keys == list(reversed(range(N-n, N)))
+    assert n < N
+
 # A query without a KeyConditions or KeyConditionExpress is, or an empty
 # one, is obviously not allowed:
 def test_query_missing_key(test_table):
