@@ -344,7 +344,7 @@ class compaction_manager_test {
 public:
     explicit compaction_manager_test(compaction_manager& cm) noexcept : _cm(cm) {}
 
-    sstables::compaction_data& register_compaction(utils::UUID output_run_id = {}, replica::column_family* cf = nullptr);
+    sstables::compaction_data& register_compaction(utils::UUID output_run_id, replica::column_family* cf);
 
     void deregister_compaction(const sstables::compaction_data& c);
 };

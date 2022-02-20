@@ -3275,7 +3275,7 @@ SEASTAR_TEST_CASE(partial_sstable_run_filtered_out_test) {
 
         // register partial sstable run
         auto cm_test = compaction_manager_test(*cm);
-        auto& cdata = cm_test.register_compaction(partial_sstable_run_identifier);
+        auto& cdata = cm_test.register_compaction(partial_sstable_run_identifier, cf.get());
         auto deregister_compaction = defer([&] () noexcept {
             cm_test.deregister_compaction(cdata);
         });
