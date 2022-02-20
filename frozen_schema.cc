@@ -29,7 +29,7 @@ frozen_schema::frozen_schema(const schema_ptr& s)
         std::move(wr).write_version(s->version())
                      .write_mutations(sm)
                      .end_schema();
-        return to_bytes(out.linearize());
+        return out;
     }())
 { }
 
@@ -41,11 +41,11 @@ schema_ptr frozen_schema::unfreeze(const db::schema_ctxt& ctxt) const {
          : db::schema_tables::create_table_from_mutations(ctxt, sv.mutations(), sv.version());
 }
 
-frozen_schema::frozen_schema(bytes b)
+frozen_schema::frozen_schema(bytes_ostream b)
     : _data(std::move(b))
 { }
 
-bytes_view frozen_schema::representation() const
+const bytes_ostream& frozen_schema::representation() const
 {
     return _data;
 }
