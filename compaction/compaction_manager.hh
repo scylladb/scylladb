@@ -114,7 +114,7 @@ private:
     };
 
     // compaction manager may have N fibers to allow parallel compaction per shard.
-    std::list<lw_shared_ptr<task>> _tasks;
+    std::list<shared_ptr<task>> _tasks;
 
     // Possible states in which the compaction manager can be found.
     //
@@ -170,7 +170,7 @@ private:
     class strategy_control;
     std::unique_ptr<strategy_control> _strategy_control;
 private:
-    future<> stop_tasks(std::vector<lw_shared_ptr<task>> tasks, sstring reason);
+    future<> stop_tasks(std::vector<shared_ptr<task>> tasks, sstring reason);
 
     // Return the largest fan-in of currently running compactions
     unsigned current_compaction_fan_in_threshold() const;
@@ -199,9 +199,9 @@ private:
     compaction_state& get_compaction_state(replica::table* t);
 
     // Return true if compaction manager and task weren't asked to stop.
-    inline bool can_proceed(const lw_shared_ptr<task>& task);
+    inline bool can_proceed(const shared_ptr<task>& task);
 
-    inline future<> put_task_to_sleep(lw_shared_ptr<task>& task);
+    inline future<> put_task_to_sleep(shared_ptr<task>& task);
 
     // Compaction manager stop itself if it finds an storage I/O error which results in
     // stop of transportation services. It cannot make progress anyway.
@@ -299,7 +299,7 @@ public:
 
     // Returns true if table has an ongoing compaction, running on its behalf
     bool has_table_ongoing_compaction(const replica::table* t) const {
-        return std::any_of(_tasks.begin(), _tasks.end(), [t] (const lw_shared_ptr<task>& task) {
+        return std::any_of(_tasks.begin(), _tasks.end(), [t] (const shared_ptr<task>& task) {
             return task->compacting_table == t && task->compaction_running;
         });
     };

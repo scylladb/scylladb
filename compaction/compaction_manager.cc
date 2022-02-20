@@ -259,7 +259,7 @@ future<> compaction_manager::perform_major_compaction(replica::table* t) {
         return make_ready_future<>();
     }
 
-    auto task = make_lw_shared<compaction_manager::task>(t, sstables::compaction_type::Compaction, get_compaction_state(t));
+    auto task = make_shared<compaction_manager::task>(t, sstables::compaction_type::Compaction, get_compaction_state(t));
     _tasks.push_back(task);
     cmlog.debug("Major compaction task {} table={}: started", fmt::ptr(task.get()), fmt::ptr(t));
 
@@ -314,7 +314,7 @@ future<> compaction_manager::run_custom_job(replica::table* t, sstables::compact
         return make_ready_future<>();
     }
 
-    auto task = make_lw_shared<compaction_manager::task>(t, type, get_compaction_state(t));
+    auto task = make_shared<compaction_manager::task>(t, type, get_compaction_state(t));
     _tasks.push_back(task);
     cmlog.debug("{} task {} table={}: started", type, fmt::ptr(task.get()), fmt::ptr(task->compacting_table));
 
@@ -512,7 +512,7 @@ void compaction_manager::postpone_compaction_for_table(replica::table* t) {
     _postponed.insert(t);
 }
 
-future<> compaction_manager::stop_tasks(std::vector<lw_shared_ptr<task>> tasks, sstring reason) {
+future<> compaction_manager::stop_tasks(std::vector<shared_ptr<task>> tasks, sstring reason) {
     // To prevent compaction from being postponed while tasks are being stopped,
     // let's stop all tasks before the deferring point below.
     for (auto& t : tasks) {
@@ -534,7 +534,7 @@ future<> compaction_manager::stop_tasks(std::vector<lw_shared_ptr<task>> tasks, 
 
 future<> compaction_manager::stop_ongoing_compactions(sstring reason, replica::table* t, std::optional<sstables::compaction_type> type_opt) {
     auto ongoing_compactions = get_compactions(t).size();
-    auto tasks = boost::copy_range<std::vector<lw_shared_ptr<task>>>(_tasks | boost::adaptors::filtered([t, type_opt] (auto& task) {
+    auto tasks = boost::copy_range<std::vector<shared_ptr<task>>>(_tasks | boost::adaptors::filtered([t, type_opt] (auto& task) {
         return (!t || task->compacting_table == t) && (!type_opt || task->type == *type_opt);
     }));
     logging::log_level level = tasks.empty() ? log_level::debug : log_level::info;
@@ -602,12 +602,12 @@ void compaction_manager::do_stop() noexcept {
     }
 }
 
-inline bool compaction_manager::can_proceed(const lw_shared_ptr<task>& task) {
+inline bool compaction_manager::can_proceed(const shared_ptr<task>& task) {
     return (_state == state::enabled) && !task->stopping() && _compaction_state.contains(task->compacting_table) &&
         !_compaction_state[task->compacting_table].compaction_disabled();
 }
 
-inline future<> compaction_manager::put_task_to_sleep(lw_shared_ptr<task>& task) {
+inline future<> compaction_manager::put_task_to_sleep(shared_ptr<task>& task) {
     cmlog.info("compaction task handler sleeping for {} seconds",
         std::chrono::duration_cast<std::chrono::seconds>(task->compaction_retry.sleep_time()).count());
     return task->compaction_retry.retry(task->compaction_data.abort).handle_exception_type([task] (sleep_aborted&) {
@@ -642,7 +642,7 @@ void compaction_manager::submit(replica::table* t) {
         return;
     }
 
-    auto task = make_lw_shared<compaction_manager::task>(t, sstables::compaction_type::Compaction, get_compaction_state(t));
+    auto task = make_shared<compaction_manager::task>(t, sstables::compaction_type::Compaction, get_compaction_state(t));
     _tasks.push_back(task);
     _stats.pending_tasks++;
     cmlog.debug("Compaction task {} table={}: started", fmt::ptr(task.get()), fmt::ptr(task->compacting_table));
@@ -711,7 +711,7 @@ void compaction_manager::submit(replica::table* t) {
 }
 
 future<> compaction_manager::perform_offstrategy(replica::table* t) {
-    auto task = make_lw_shared<compaction_manager::task>(t, sstables::compaction_type::Reshape, get_compaction_state(t));
+    auto task = make_shared<compaction_manager::task>(t, sstables::compaction_type::Reshape, get_compaction_state(t));
     _tasks.push_back(task);
     _stats.pending_tasks++;
     cmlog.debug("Offstrategy compaction task {} table={}: started", fmt::ptr(task.get()), fmt::ptr(task->compacting_table));
@@ -779,7 +779,7 @@ future<> compaction_manager::rewrite_sstables(replica::table* t, sstables::compa
         return a->data_size() > b->data_size();
     });
 
-    auto task = make_lw_shared<compaction_manager::task>(t, options.type(), get_compaction_state(t));
+    auto task = make_shared<compaction_manager::task>(t, options.type(), get_compaction_state(t));
     _tasks.push_back(task);
     cmlog.debug("{} task {} table={}: started", options.type(), fmt::ptr(task.get()), fmt::ptr(task->compacting_table));
 
@@ -1057,7 +1057,7 @@ future<> compaction_manager::remove(replica::table* t) {
 }
 
 const std::vector<sstables::compaction_info> compaction_manager::get_compactions(replica::table* t) const {
-    auto to_info = [] (const lw_shared_ptr<task>& task) {
+    auto to_info = [] (const shared_ptr<task>& task) {
         sstables::compaction_info ret;
         ret.compaction_uuid = task->compaction_data.compaction_uuid;
         ret.type = task->type;
@@ -1068,7 +1068,7 @@ const std::vector<sstables::compaction_info> compaction_manager::get_compactions
         return ret;
     };
     using ret = std::vector<sstables::compaction_info>;
-    return boost::copy_range<ret>(_tasks | boost::adaptors::filtered([t] (const lw_shared_ptr<task>& task) {
+    return boost::copy_range<ret>(_tasks | boost::adaptors::filtered([t] (const shared_ptr<task>& task) {
                 return (!t || task->compacting_table == t) && task->compaction_running;
             }) | boost::adaptors::transformed(to_info));
 }
@@ -1107,7 +1107,7 @@ public:
     explicit strategy_control(compaction_manager& cm) noexcept : _cm(cm) {}
 
     bool has_ongoing_compaction(table_state& table_s) const noexcept override {
-        return std::any_of(_cm._tasks.begin(), _cm._tasks.end(), [&s = table_s.schema()] (const lw_shared_ptr<task>& task) {
+        return std::any_of(_cm._tasks.begin(), _cm._tasks.end(), [&s = table_s.schema()] (const shared_ptr<task>& task) {
             return task->compaction_running
                 && task->compacting_table->schema()->ks_name() == s->ks_name()
                 && task->compacting_table->schema()->cf_name() == s->cf_name();
