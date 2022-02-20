@@ -29,7 +29,7 @@ def type1(cql, test_keyspace):
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace, type1):
     table = test_keyspace + "." + unique_name()
-    cql.execute(f"CREATE TABLE {table} (p int PRIMARY KEY, v int, a ascii, b boolean, vi varint, mai map<ascii, int>, tup frozen<tuple<text, int>>, l list<text>, d double, t time, dec decimal, tupmap map<frozen<tuple<text, int>>, int>, t1 frozen<{type1}>)")
+    cql.execute(f"CREATE TABLE {table} (p int PRIMARY KEY, v int, bigv bigint, a ascii, b boolean, vi varint, mai map<ascii, int>, tup frozen<tuple<text, int>>, l list<text>, d double, t time, dec decimal, tupmap map<frozen<tuple<text, int>>, int>, t1 frozen<{type1}>)")
     yield table
     cql.execute("DROP TABLE " + table)
 
@@ -85,6 +85,32 @@ def test_fromjson_nonint_prepared(cql, table1):
     stmt = cql.prepare(f"INSERT INTO {table1} (p, v) VALUES (?, fromJson(?))")
     with pytest.raises(FunctionFailure):
         cql.execute(stmt, [p, '1.2'])
+
+# In test_fromjson_nonint_*() above we noted that the floating point number 1.2
+# cannot be assigned into an integer column v. In contrast, the numbers 1e6
+# or 1.23456789E+9, despite appearing to C programmers like a floating-point
+# constant, are perfectly valid integers - whole numbers and fitting the range
+# of int and bigint respectively - so they should be assignable into an int or
+# bigint. This test checks that.
+# Reproduces issue #10100.
+# This test is marked with "cassandra_bug" because it fails in Cassandra as
+# well and we consider this failure a bug.
+@pytest.mark.xfail(reason="issue #10100")
+def test_fromjson_int_scientific_notation_unprepared(cql, table1, cassandra_bug):
+    p = unique_key_int()
+    cql.execute(f"INSERT INTO {table1} (p, bigv) VALUES ({p}, fromJson('1.23456789E+9'))")
+    assert list(cql.execute(f"SELECT p, bigv from {table1} where p = {p}")) == [(p, 1234567890)]
+    cql.execute(f"INSERT INTO {table1} (p, v) VALUES ({p}, fromJson('1e6'))")
+    assert list(cql.execute(f"SELECT p, v from {table1} where p = {p}")) == [(p, 1000000)]
+@pytest.mark.xfail(reason="issue #10100")
+def test_fromjson_int_scientific_notation_prepared(cql, table1, cassandra_bug):
+    p = unique_key_int()
+    stmt = cql.prepare(f"INSERT INTO {table1} (p, bigv) VALUES (?, fromJson(?))")
+    cql.execute(stmt, [p, '1.23456789E+9'])
+    assert list(cql.execute(f"SELECT p, bigv from {table1} where p = {p}")) == [(p, 1234567890)]
+    stmt = cql.prepare(f"INSERT INTO {table1} (p, v) VALUES (?, fromJson(?))")
+    cql.execute(stmt, [p, '1e6'])
+    assert list(cql.execute(f"SELECT p, v from {table1} where p = {p}")) == [(p, 1000000)]
 
 # The JSON standard does not define or limit the range or precision of
 # numbers. However, if a number is assigned to a Scylla number type, the
