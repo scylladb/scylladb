@@ -695,7 +695,7 @@ partition_snapshot_ptr memtable_entry::snapshot(memtable& mtbl) {
     return _pe.read(mtbl.region(), mtbl.cleaner(), _schema, no_cache_tracker);
 }
 
-flat_mutation_reader
+flat_mutation_reader_v2
 memtable::make_flat_reader(schema_ptr s,
                       reader_permit permit,
                       const dht::partition_range& range,
@@ -717,7 +717,7 @@ memtable::make_flat_reader(schema_ptr s,
             }
         });
         if (!snp) {
-            return make_empty_flat_reader(std::move(s), std::move(permit));
+            return make_empty_flat_reader_v2(std::move(s), std::move(permit));
         }
         auto dk = pos.as_decorated_key();
 
@@ -728,14 +728,13 @@ memtable::make_flat_reader(schema_ptr s,
         bool digest_requested = slice.options.contains<query::partition_slice::option::with_digest>();
         auto rd = make_partition_snapshot_flat_reader_from_snp_schema(is_reversed, std::move(permit), std::move(dk), std::move(cr), std::move(snp), digest_requested, *this, _read_section, shared_from_this(), fwd, *this);
         rd.upgrade_schema(s);
-        return rd;
+        return upgrade_to_v2(std::move(rd));
     } else {
-        flat_mutation_reader_v2 res = make_flat_mutation_reader_v2<scanning_reader>(std::move(s), shared_from_this(), std::move(permit), range, slice, pc, fwd_mr);
-        auto res_v1 = downgrade_to_v1(std::move(res));
+        auto res = make_flat_mutation_reader_v2<scanning_reader>(std::move(s), shared_from_this(), std::move(permit), range, slice, pc, fwd_mr);
         if (fwd == streamed_mutation::forwarding::yes) {
-            return make_forwardable(std::move(res_v1));
+            return make_forwardable(std::move(res));
         } else {
-            return res_v1;
+            return res;
         }
     }
 }

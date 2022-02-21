@@ -239,18 +239,18 @@ public:
     // The 'range' parameter must be live as long as the reader is being used
     //
     // Mutations returned by the reader will all have given schema.
-    flat_mutation_reader make_flat_reader(schema_ptr,
-                                          reader_permit permit,
-                                          const dht::partition_range& range,
-                                          const query::partition_slice& slice,
-                                          const io_priority_class& pc = default_priority_class(),
-                                          tracing::trace_state_ptr trace_state_ptr = nullptr,
-                                          streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
-                                          mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
+    flat_mutation_reader_v2 make_flat_reader(schema_ptr,
+                                             reader_permit permit,
+                                             const dht::partition_range& range,
+                                             const query::partition_slice& slice,
+                                             const io_priority_class& pc = default_priority_class(),
+                                             tracing::trace_state_ptr trace_state_ptr = nullptr,
+                                             streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
+                                             mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
 
-    flat_mutation_reader make_flat_reader(schema_ptr s,
-                                          reader_permit permit,
-                                          const dht::partition_range& range = query::full_partition_range) {
+    flat_mutation_reader_v2 make_flat_reader(schema_ptr s,
+                                             reader_permit permit,
+                                             const dht::partition_range& range = query::full_partition_range) {
         auto& full_slice = s->full_slice();
         return make_flat_reader(s, std::move(permit), range, full_slice);
     }

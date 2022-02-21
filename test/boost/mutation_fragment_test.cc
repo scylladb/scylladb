@@ -122,7 +122,7 @@ SEASTAR_TEST_CASE(test_mutation_merger_conforms_to_mutation_source) {
             {
                 std::vector<flat_mutation_reader_v2> readers;
                 for (int i = 0; i < n; ++i) {
-                    readers.push_back(upgrade_to_v2(memtables[i]->make_flat_reader(s, permit, range, slice, pc, trace_state, fwd, fwd_mr)));
+                    readers.push_back(memtables[i]->make_flat_reader(s, permit, range, slice, pc, trace_state, fwd, fwd_mr));
                 }
                 return make_combined_reader(s, std::move(permit), std::move(readers), fwd, fwd_mr);
             });

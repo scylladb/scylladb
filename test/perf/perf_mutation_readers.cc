@@ -388,6 +388,15 @@ protected:
             });
         });
     }
+
+    future<> consume_all(flat_mutation_reader_v2 mr) const {
+        return with_closeable(std::move(mr), [] (auto& mr) {
+            return mr.consume_pausable([] (mutation_fragment_v2 mf) {
+                perf_tests::do_not_optimize(mf);
+                return stop_iteration::no;
+            });
+        });
+    }
 };
 
 PERF_TEST_F(memtable, one_partition_one_row)

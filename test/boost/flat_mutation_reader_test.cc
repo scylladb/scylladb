@@ -922,9 +922,9 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_reader_reads_in_native_reverse_order) {
         reverse_mt->apply(mut.build(reverse_schema));
     }
 
-    auto reversed_forward_reader = assert_that(make_reversing_reader(forward_mt->make_flat_reader(forward_schema, permit), query::max_result_size(1 << 20)));
+    auto reversed_forward_reader = assert_that(make_reversing_reader(downgrade_to_v1(forward_mt->make_flat_reader(forward_schema, permit)), query::max_result_size(1 << 20)));
 
-    auto reverse_reader = reverse_mt->make_flat_reader(reverse_schema, permit);
+    auto reverse_reader = downgrade_to_v1(reverse_mt->make_flat_reader(reverse_schema, permit));
     auto deferred_reverse_close = deferred_close(reverse_reader);
 
     while (auto mf_opt = reverse_reader().get()) {
@@ -963,8 +963,8 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_reader_is_mutation_source) {
                 reversed_slices.emplace_back(query::reverse_slice(*schema, slice));
                 // We don't want the memtable reader to read in reverse.
                 reversed_slices.back().options.remove(query::partition_slice::option::reversed);
-                rd = reverse_mt->make_flat_reader(schema, std::move(permit), range, reversed_slices.back(), pc, std::move(trace_ptr),
-                        streamed_mutation::forwarding::no, fwd_mr);
+                rd = downgrade_to_v1(reverse_mt->make_flat_reader(schema, std::move(permit), range, reversed_slices.back(), pc, std::move(trace_ptr),
+                        streamed_mutation::forwarding::no, fwd_mr));
             }
 
             rd = make_reversing_reader(std::move(rd), query::max_result_size(1 << 20));

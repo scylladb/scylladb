@@ -154,11 +154,11 @@ struct table {
         std::vector<flat_mutation_reader_v2> rd;
         auto permit = make_permit();
         if (prev_mt) {
-            rd.push_back(upgrade_to_v2(prev_mt->make_flat_reader(s.schema(), permit, r->pr, r->slice, default_priority_class(), nullptr,
-                streamed_mutation::forwarding::no, mutation_reader::forwarding::no)));
+            rd.push_back(prev_mt->make_flat_reader(s.schema(), permit, r->pr, r->slice, default_priority_class(), nullptr,
+                streamed_mutation::forwarding::no, mutation_reader::forwarding::no));
         }
-        rd.push_back(upgrade_to_v2(mt->make_flat_reader(s.schema(), permit, r->pr, r->slice, default_priority_class(), nullptr,
-            streamed_mutation::forwarding::no, mutation_reader::forwarding::no)));
+        rd.push_back(mt->make_flat_reader(s.schema(), permit, r->pr, r->slice, default_priority_class(), nullptr,
+            streamed_mutation::forwarding::no, mutation_reader::forwarding::no));
         rd.push_back(upgrade_to_v2(cache.make_reader(s.schema(), permit, r->pr, r->slice, default_priority_class(), nullptr,
             streamed_mutation::forwarding::no, mutation_reader::forwarding::no)));
         r->rd = downgrade_to_v1(make_combined_reader(s.schema(), permit, std::move(rd), streamed_mutation::forwarding::no, mutation_reader::forwarding::no));

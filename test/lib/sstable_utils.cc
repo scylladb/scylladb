@@ -122,7 +122,7 @@ shared_sstable make_sstable_easy(test_env& env, const fs::path& path, lw_shared_
     schema_ptr s = mt->schema();
     auto sst = env.make_sstable(s, path.string(), gen, v, sstable_format_types::big, default_sstable_buffer_size, query_time);
     auto mr = mt->make_flat_reader(s, env.make_reader_permit());
-    sst->write_components(std::move(mr), estimated_partitions, s, cfg, mt->get_encoding_stats()).get();
+    sst->write_components(downgrade_to_v1(std::move(mr)), estimated_partitions, s, cfg, mt->get_encoding_stats()).get();
     sst->load().get();
     return sst;
 }

@@ -83,7 +83,7 @@ static auto make_populate(bool evict_paused_readers, bool single_fragment_buffer
                     if (single_fragment_buffer) {
                         reader.set_max_buffer_size(1);
                     }
-                    return upgrade_to_v2(std::move(reader));
+                    return reader;
             };
 
             auto lifecycle_policy = seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory), evict_paused_readers);
