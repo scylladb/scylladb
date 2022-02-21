@@ -755,6 +755,7 @@ table::stop() {
                             _sstables = make_compound_sstable_set();
                             _sstables_staging.clear();
                         })).then([this] {
+                            _compaction_strategy.get_backlog_tracker().disable();
                             _cache.refresh_snapshot();
                         });
                     });
