@@ -1273,7 +1273,7 @@ auto-generated. Dropped columns should be present in the form of insert
 statements into the system_schema.dropped_columns table.
 Example scylla.cql:
 
-    CREATE KEYSPACE ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
+    CREATE KEYSPACE ks WITH replication = {{'class': 'SimpleStrategy', 'replication_factor': 1}};
 
     CREATE TYPE ks.type1 (f1 int, f2 text);
 
