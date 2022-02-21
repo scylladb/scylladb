@@ -391,10 +391,14 @@ void compaction_manager::task::finish_compaction() noexcept {
     output_run_identifier = {};
 }
 
+void compaction_manager::task::stop(sstring reason) noexcept {
+    stopping = true;
+    compaction_data.stop(std::move(reason));
+}
+
 future<> compaction_manager::task_stop(lw_shared_ptr<compaction_manager::task> task, sstring reason) {
     cmlog.debug("Stopping task {} table={}", fmt::ptr(task.get()), fmt::ptr(task->compacting_table));
-    task->stopping = true;
-    task->compaction_data.stop(reason);
+    task->stop(reason);
     auto f = task->compaction_done.get_future();
     return f.then_wrapped([task] (future<> f) {
         task->stopping = false;

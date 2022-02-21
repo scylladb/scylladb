@@ -103,6 +103,8 @@ private:
         const utils::UUID& output_run_id() const noexcept {
             return *output_run_identifier;
         }
+
+        void stop(sstring reason) noexcept;
     };
 
     // compaction manager may have N fibers to allow parallel compaction per shard.
