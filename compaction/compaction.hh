@@ -17,6 +17,7 @@
 #include "utils/UUID.hh"
 #include "table_state.hh"
 #include <seastar/core/thread.hh>
+#include <seastar/core/abort_source.hh>
 
 class flat_mutation_reader;
 using namespace compaction;
@@ -56,6 +57,7 @@ struct compaction_data {
     uint64_t total_partitions = 0;
     uint64_t total_keys_written = 0;
     sstring stop_requested;
+    abort_source abort;
     utils::UUID compaction_uuid;
     unsigned compaction_fan_in = 0;
     struct replacement {
@@ -70,6 +72,7 @@ struct compaction_data {
 
     void stop(sstring reason) {
         stop_requested = std::move(reason);
+        abort.request_abort();
     }
 };
 

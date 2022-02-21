@@ -632,7 +632,9 @@ inline bool compaction_manager::can_proceed(const lw_shared_ptr<task>& task) {
 inline future<> compaction_manager::put_task_to_sleep(lw_shared_ptr<task>& task) {
     cmlog.info("compaction task handler sleeping for {} seconds",
         std::chrono::duration_cast<std::chrono::seconds>(task->compaction_retry.sleep_time()).count());
-    return task->compaction_retry.retry();
+    return task->compaction_retry.retry(task->compaction_data.abort).handle_exception_type([task] (sleep_aborted&) {
+        return make_exception_future<>(task->make_compaction_stopped_exception());
+    });
 }
 
 inline bool compaction_manager::maybe_stop_on_error(std::exception_ptr err, bool can_retry) {
