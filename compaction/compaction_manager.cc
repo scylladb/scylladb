@@ -1147,11 +1147,11 @@ compaction::strategy_control& compaction_manager::get_strategy_control() const n
 }
 
 double compaction_backlog_tracker::backlog() const {
-    return _disabled ? compaction_controller::disable_backlog : _impl->backlog(_ongoing_writes, _ongoing_compactions);
+    return disabled() ? compaction_controller::disable_backlog : _impl->backlog(_ongoing_writes, _ongoing_compactions);
 }
 
 void compaction_backlog_tracker::add_sstable(sstables::shared_sstable sst) {
-    if (_disabled || !sstable_belongs_to_tracker(sst)) {
+    if (disabled() || !sstable_belongs_to_tracker(sst)) {
         return;
     }
     _ongoing_writes.erase(sst);
@@ -1164,7 +1164,7 @@ void compaction_backlog_tracker::add_sstable(sstables::shared_sstable sst) {
 }
 
 void compaction_backlog_tracker::remove_sstable(sstables::shared_sstable sst) {
-    if (_disabled || !sstable_belongs_to_tracker(sst)) {
+    if (disabled() || !sstable_belongs_to_tracker(sst)) {
         return;
     }
 
@@ -1182,7 +1182,7 @@ bool compaction_backlog_tracker::sstable_belongs_to_tracker(const sstables::shar
 }
 
 void compaction_backlog_tracker::register_partially_written_sstable(sstables::shared_sstable sst, backlog_write_progress_manager& wp) {
-    if (_disabled) {
+    if (disabled()) {
         return;
     }
     try {
@@ -1197,7 +1197,7 @@ void compaction_backlog_tracker::register_partially_written_sstable(sstables::sh
 }
 
 void compaction_backlog_tracker::register_compacting_sstable(sstables::shared_sstable sst, backlog_read_progress_manager& rp) {
-    if (_disabled) {
+    if (disabled()) {
         return;
     }
 

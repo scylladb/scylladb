@@ -83,11 +83,11 @@ private:
     bool sstable_belongs_to_tracker(const sstables::shared_sstable& sst);
 
     void disable() {
-        _disabled = true;
+        _impl = {};
         _ongoing_writes = {};
         _ongoing_compactions = {};
     }
-    bool _disabled = false;
+    bool disabled() const noexcept { return !_impl; }
     std::unique_ptr<impl> _impl;
     // We keep track of this so that we can transfer to a new tracker if the compaction strategy is
     // changed in the middle of a compaction.
