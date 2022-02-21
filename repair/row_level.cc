@@ -349,7 +349,7 @@ private:
     std::optional<utils::phased_barrier::operation> _local_read_op;
     // Local reader or multishard reader to read the range
     flat_mutation_reader _reader;
-    std::optional<evictable_reader_handle> _reader_handle;
+    std::optional<evictable_reader_handle_v2> _reader_handle;
     // Current partition read from disk
     lw_shared_ptr<const decorated_key_with_hash> _current_dk;
     uint64_t _reads_issued = 0;
@@ -385,7 +385,8 @@ public:
                         mutation_reader::forwarding fwd_mr) {
                 return cf.make_streaming_reader(std::move(s), std::move(permit), pr, ps, fwd_mr);
             });
-            std::tie(_reader, _reader_handle) = make_manually_paused_evictable_reader(
+            flat_mutation_reader_v2 rd(nullptr);
+            std::tie(rd, _reader_handle) = make_manually_paused_evictable_reader_v2(
                     std::move(ms),
                     _schema,
                     _permit,
@@ -394,6 +395,7 @@ public:
                     service::get_local_streaming_priority(),
                     {},
                     mutation_reader::forwarding::no);
+            _reader = downgrade_to_v1(std::move(rd));
         } else {
             // We can't have two permits with count resource for 1 repair.
             // So we release the one on _permit so the only one is the one the

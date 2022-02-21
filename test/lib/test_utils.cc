@@ -25,12 +25,13 @@ std::string format_msg(std::string_view test_function_name, bool ok, std::experi
 
 }
 
-void do_check(bool condition, std::experimental::source_location sl, std::string_view msg) {
+bool do_check(bool condition, std::experimental::source_location sl, std::string_view msg) {
     if (condition) {
         testlog.trace("{}", format_msg(__FUNCTION__, condition, sl, msg));
     } else {
         testlog.error("{}", format_msg(__FUNCTION__, condition, sl, msg));
     }
+    return condition;
 }
 
 void do_require(bool condition, std::experimental::source_location sl, std::string_view msg) {

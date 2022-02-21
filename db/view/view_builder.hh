@@ -135,7 +135,7 @@ class view_builder final : public service::migration_listener::only_view_notific
         lw_shared_ptr<replica::column_family> base;
         query::partition_slice pslice;
         dht::partition_range prange;
-        flat_mutation_reader reader{nullptr};
+        flat_mutation_reader_v2 reader{nullptr};
         dht::decorated_key current_key{dht::minimum_token(), partition_key::make_empty()};
         std::vector<view_build_status> build_status;
 

@@ -1018,19 +1018,21 @@ validate_result_size(size_t i, schema_ptr schema, const std::vector<mutation>& r
     }
 }
 
-static void validate_row(const schema& s, const partition_key& pk, const clustering_key* const ck, column_kind kind, const row& r) {
+[[nodiscard]] static bool validate_row(const schema& s, const partition_key& pk, const clustering_key* const ck, column_kind kind, const row& r) {
+    bool OK = true;
     const auto& cdef = s.column_at(kind, 0);
     if (auto* cell = r.find_cell(0)) {
-        tests::check(validate_payload(s, cell->as_atomic_cell(cdef).value(), pk, ck));
+        OK &= tests::check(validate_payload(s, cell->as_atomic_cell(cdef).value(), pk, ck));
     }
+    return OK;
 }
 
-static void validate_static_row(const schema& s, const partition_key& pk, const row& sr) {
-    validate_row(s, pk, {}, column_kind::static_column, sr);
+[[nodiscard]] static bool validate_static_row(const schema& s, const partition_key& pk, const row& sr) {
+    return validate_row(s, pk, {}, column_kind::static_column, sr);
 }
 
-static void validate_regular_row(const schema& s, const partition_key& pk, const clustering_key& ck, const deletable_row& dr) {
-    validate_row(s, pk, &ck, column_kind::regular_column, dr.cells());
+[[nodiscard]] static bool validate_regular_row(const schema& s, const partition_key& pk, const clustering_key& ck, const deletable_row& dr) {
+    return validate_row(s, pk, &ck, column_kind::regular_column, dr.cells());
 }
 
 struct pkey_with_schema {
@@ -1077,8 +1079,10 @@ static void validate_result(size_t i, const mutation& result_mut, const expected
     auto& schema = *result_mut.schema();
     const auto wrapper = with_schema_wrapper{schema};
 
+    bool OK = true;
+
     tests::require_equal(result_mut.partition().static_row().empty(), !expected_part.has_static_row);
-    validate_static_row(schema, expected_part.dkey.key(), result_mut.partition().static_row().get());
+    OK &= validate_static_row(schema, expected_part.dkey.key(), result_mut.partition().static_row().get());
 
     const auto& res_rows = result_mut.partition().clustered_rows();
     auto res_it = res_rows.begin();
@@ -1103,7 +1107,7 @@ static void validate_result(size_t i, const mutation& result_mut, const expected
         testlog.trace("[scan#{}]: validating {}/{}: is_live={}", i, expected_part.dkey, res_it->key(), is_live);
 
         if (is_live) {
-            tests::check_equal(wrapper(res_it->key()), wrapper(*exp_live_it++));
+            OK &= tests::check_equal(wrapper(res_it->key()), wrapper(*exp_live_it++));
         } else {
             // FIXME: Only a fraction of the dead rows is present in the result.
             if (!res_it->key().equal(schema, *exp_dead_it)) {
@@ -1117,7 +1121,7 @@ static void validate_result(size_t i, const mutation& result_mut, const expected
                 auto it = std::find_if(exp_dead_it, exp_dead_end, [&] (const clustering_key& key) {
                     return key.equal(schema, res_it->key());
                 });
-                tests::check(it != exp_dead_it);
+                OK &= tests::check(it != exp_dead_it);
 
                 testlog.trace("[scan#{}]: validating {}/{}: skipped over {} expected dead rows", i, expected_part.dkey,
                         res_it->key(), std::distance(exp_dead_it, it));
@@ -1125,13 +1129,13 @@ static void validate_result(size_t i, const mutation& result_mut, const expected
             }
             ++exp_dead_it;
         }
-        validate_regular_row(schema, expected_part.dkey.key(), res_it->key(), res_it->row());
+        OK &= validate_regular_row(schema, expected_part.dkey.key(), res_it->key(), res_it->row());
     }
 
     // We don't want to call res_rows.calculate_size() as it has linear complexity.
     // Instead, check that after iterating through the results and expected
     // results in lock-step, both have reached the end.
-    tests::check(res_it == res_end);
+    OK &= tests::check(res_it == res_end);
     if (res_it != res_end) {
         testlog.error("[scan#{}]: validating {} failed: result contains unexpected trailing rows: {}", i, expected_part.dkey,
                 boost::copy_range<std::vector<clustering_key>>(
@@ -1139,7 +1143,7 @@ static void validate_result(size_t i, const mutation& result_mut, const expected
                         | boost::adaptors::transformed([] (const rows_entry& e) { return e.key(); })));
     }
 
-    tests::check(exp_live_it == exp_live_end);
+    OK &= tests::check(exp_live_it == exp_live_end);
     if (exp_live_it != exp_live_end) {
         testlog.error("[scan#{}]: validating {} failed: {} expected live rows missing from result", i, expected_part.dkey,
                 std::distance(exp_live_it, exp_live_end));
@@ -1150,6 +1154,8 @@ static void validate_result(size_t i, const mutation& result_mut, const expected
         testlog.trace("[scan#{}]: validating {}: {} expected dead rows missing from result", i, expected_part.dkey,
                 std::distance(exp_dead_it, exp_dead_end));
     }
+
+    tests::require(OK);
 }
 
 struct fuzzy_test_config {

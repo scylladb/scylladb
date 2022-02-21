@@ -188,7 +188,7 @@ future<mutation_opt> read_mutation_from_flat_mutation_reader(flat_mutation_reade
 
 mutation reverse(mutation mut) {
     auto reverse_schema = mut.schema()->make_reversed();
-    mutation_rebuilder reverse_rebuilder(reverse_schema);
+    mutation_rebuilder_v2 reverse_rebuilder(reverse_schema);
     return *std::move(mut).consume(reverse_rebuilder, consume_in_reverse::yes).result;
 }
 

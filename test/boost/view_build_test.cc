@@ -827,7 +827,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
             mt->apply(mut);
         }
 
-        auto p = make_manually_paused_evictable_reader(
+        auto p = make_manually_paused_evictable_reader_v2(
                 mt->as_data_source(),
                 schema,
                 permit,

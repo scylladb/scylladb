@@ -675,7 +675,7 @@ table::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_
 
         if (old->has_any_tombstones()) {
             reader = make_compacting_reader(
-                std::move(reader),
+                upgrade_to_v2(std::move(reader)),
                 gc_clock::now(),
                 [] (const dht::decorated_key&) { return api::min_timestamp; });
         }

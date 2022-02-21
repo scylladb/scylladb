@@ -1314,12 +1314,14 @@ uint32_t mutation_partition::do_compact(const schema& s,
             return stop_iteration::no;
         }
         deletable_row& row = e.row();
-        row_tombstone tomb = tombstone_for_row(s, e);
+        const auto higher_tomb = std::max(_tombstone, range_tombstone_for_row(s, e.key()));
+        row_tombstone tomb = row.deleted_at();
+        tomb.apply(higher_tomb);
 
         bool is_live = row.marker().compact_and_expire(tomb.tomb(), query_time, can_gc, gc_before);
         is_live |= row.cells().compact_and_expire(s, column_kind::regular_column, tomb, query_time, can_gc, gc_before, row.marker());
 
-        if (should_purge_row_tombstone(row.deleted_at())) {
+        if (should_purge_row_tombstone(row.deleted_at()) || row.deleted_at().tomb() <= higher_tomb) {
             row.remove_tombstone();
         }
 
@@ -2277,7 +2279,7 @@ future<mutation_opt> counter_write_query(schema_ptr s, const mutation_source& so
 {
     struct range_and_reader {
         dht::partition_range range;
-        flat_mutation_reader reader;
+        flat_mutation_reader_v2 reader;
 
         range_and_reader(range_and_reader&&) = delete;
         range_and_reader(const range_and_reader&) = delete;
@@ -2287,7 +2289,7 @@ future<mutation_opt> counter_write_query(schema_ptr s, const mutation_source& so
                          const query::partition_slice& slice,
                          tracing::trace_state_ptr trace_ptr)
             : range(dht::partition_range::make_singular(dk))
-            , reader(source.make_reader(s, std::move(permit), range, slice, service::get_local_sstable_query_read_priority(),
+            , reader(source.make_reader_v2(s, std::move(permit), range, slice, service::get_local_sstable_query_read_priority(),
                                                       std::move(trace_ptr), streamed_mutation::forwarding::no,
                                                       mutation_reader::forwarding::no))
         { }

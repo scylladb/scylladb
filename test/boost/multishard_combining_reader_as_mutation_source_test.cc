@@ -83,11 +83,11 @@ static auto make_populate(bool evict_paused_readers, bool single_fragment_buffer
                     if (single_fragment_buffer) {
                         reader.set_max_buffer_size(1);
                     }
-                    return reader;
+                    return upgrade_to_v2(std::move(reader));
             };
 
             auto lifecycle_policy = seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory), evict_paused_readers);
-            auto mr = make_multishard_combining_reader_for_tests(keep_alive_sharder.back(), std::move(lifecycle_policy), s,
+            auto mr = make_multishard_combining_reader_v2_for_tests(keep_alive_sharder.back(), std::move(lifecycle_policy), s,
                     std::move(permit), range, slice, pc, trace_state, fwd_mr);
             if (fwd_sm == streamed_mutation::forwarding::yes) {
                 return make_forwardable(std::move(mr));
