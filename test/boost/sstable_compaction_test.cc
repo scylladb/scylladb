@@ -3209,7 +3209,7 @@ SEASTAR_TEST_CASE(backlog_tracker_correctness_after_changing_compaction_strategy
             };
 
             for (auto& sst : ssts) {
-                cf->get_compaction_strategy().get_backlog_tracker().add_sstable(sst);
+                cf->get_compaction_strategy().get_backlog_tracker().replace_sstables({}, {sst});
             }
 
             // Start compaction, then stop tracking compaction, switch to TWCS, wait for compaction to finish and check for backlog.
@@ -3220,7 +3220,7 @@ SEASTAR_TEST_CASE(backlog_tracker_correctness_after_changing_compaction_strategy
             // set_compaction_strategy() itself is responsible for transferring charges from old to new backlog tracker.
             cf->set_compaction_strategy(sstables::compaction_strategy_type::time_window);
             for (auto& sst : ssts) {
-                cf->get_compaction_strategy().get_backlog_tracker().add_sstable(sst);
+                cf->get_compaction_strategy().get_backlog_tracker().replace_sstables({}, {sst});
             }
 
             auto ret = fut.get0();

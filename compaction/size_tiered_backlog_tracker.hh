@@ -82,11 +82,9 @@ class size_tiered_backlog_tracker final : public compaction_backlog_tracker::imp
 public:
     virtual double backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override;
 
-    virtual void add_sstable(sstables::shared_sstable sst) override;
-
     // Removing could be the result of a failure of an in progress write, successful finish of a
     // compaction, or some one-off operation, like drop
-    virtual void remove_sstable(sstables::shared_sstable sst) override;
+    virtual void replace_sstables(std::vector<sstables::shared_sstable> old_ssts, std::vector<sstables::shared_sstable> new_ssts) override;
 
     int64_t total_bytes() const {
         return _total_bytes;

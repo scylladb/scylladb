@@ -131,17 +131,18 @@ double size_tiered_backlog_tracker::backlog(const compaction_backlog_tracker::on
     return b > 0 ? b : 0;
 }
 
-void size_tiered_backlog_tracker::add_sstable(sstables::shared_sstable sst) {
-    if (sst->data_size() > 0) {
-        _total_bytes += sst->data_size();
-        _sstables_backlog_contribution += sst->data_size() * log4(sst->data_size());
+void size_tiered_backlog_tracker::replace_sstables(std::vector<sstables::shared_sstable> old_ssts, std::vector<sstables::shared_sstable> new_ssts) {
+    for (auto& sst : new_ssts) {
+        if (sst->data_size() > 0) {
+            _total_bytes += sst->data_size();
+            _sstables_backlog_contribution += sst->data_size() * log4(sst->data_size());
+        }
     }
-}
-
-void size_tiered_backlog_tracker::remove_sstable(sstables::shared_sstable sst) {
-    if (sst->data_size() > 0) {
-        _total_bytes -= sst->data_size();
-        _sstables_backlog_contribution -= sst->data_size() * log4(sst->data_size());
+    for (auto& sst : old_ssts) {
+        if (sst->data_size() > 0) {
+            _total_bytes -= sst->data_size();
+            _sstables_backlog_contribution -= sst->data_size() * log4(sst->data_size());
+        }
     }
 }
 
@@ -218,18 +219,29 @@ public:
         return b;
     }
 
-    virtual void add_sstable(sstables::shared_sstable sst) override {
-        auto bound = lower_bound_of(sst->get_stats_metadata().max_timestamp);
-        _windows[bound].add_sstable(sst);
-    }
+    virtual void replace_sstables(std::vector<sstables::shared_sstable> old_ssts, std::vector<sstables::shared_sstable> new_ssts) override {
+        struct replacement {
+            std::vector<sstables::shared_sstable> old_ssts;
+            std::vector<sstables::shared_sstable> new_ssts;
+        };
+        std::unordered_map<api::timestamp_type, replacement> per_window_replacement;
 
-    virtual void remove_sstable(sstables::shared_sstable sst) override {
-        auto bound = lower_bound_of(sst->get_stats_metadata().max_timestamp);
-        auto it = _windows.find(bound);
-        if (it != _windows.end()) {
-            it->second.remove_sstable(sst);
-            if (it->second.total_bytes() <= 0) {
-                _windows.erase(it);
+        for (auto& sst : new_ssts) {
+            auto bound = lower_bound_of(sst->get_stats_metadata().max_timestamp);
+            per_window_replacement[bound].new_ssts.push_back(std::move(sst));
+        }
+        for (auto& sst : old_ssts) {
+            auto bound = lower_bound_of(sst->get_stats_metadata().max_timestamp);
+            if (_windows.contains(bound)) {
+                per_window_replacement[bound].old_ssts.push_back(std::move(sst));
+            }
+        }
+
+        for (auto& [bound, r] : per_window_replacement) {
+            auto& w = _windows[bound];
+            w.replace_sstables(std::move(r.old_ssts), std::move(r.new_ssts));
+            if (w.total_bytes() <= 0) {
+                _windows.erase(bound);
             }
         }
     }
@@ -288,20 +300,23 @@ public:
         return b;
     }
 
-    virtual void add_sstable(sstables::shared_sstable sst) override {
-        auto level = sst->get_sstable_level();
-        _size_per_level[level] += sst->data_size();
-        if (level == 0) {
-            _l0_scts.add_sstable(sst);
+    virtual void replace_sstables(std::vector<sstables::shared_sstable> old_ssts, std::vector<sstables::shared_sstable> new_ssts) override {
+        std::vector<sstables::shared_sstable> l0_old_ssts, l0_new_ssts;
+        for (auto& sst : new_ssts) {
+            auto level = sst->get_sstable_level();
+            _size_per_level[level] += sst->data_size();
+            if (level == 0) {
+                l0_new_ssts.push_back(std::move(sst));
+            }
         }
-    }
-
-    virtual void remove_sstable(sstables::shared_sstable sst) override {
-        auto level = sst->get_sstable_level();
-        _size_per_level[level] -= sst->data_size();
-        if (level == 0) {
-            _l0_scts.remove_sstable(sst);
+        for (auto& sst : old_ssts) {
+            auto level = sst->get_sstable_level();
+            _size_per_level[level] -= sst->data_size();
+            if (level == 0) {
+                l0_old_ssts.push_back(std::move(sst));
+            }
         }
+        _l0_scts.replace_sstables(std::move(l0_old_ssts), std::move(l0_new_ssts));
     }
 };
 
@@ -309,16 +324,14 @@ struct unimplemented_backlog_tracker final : public compaction_backlog_tracker::
     virtual double backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override {
         return compaction_controller::disable_backlog;
     }
-    virtual void add_sstable(sstables::shared_sstable sst) override { }
-    virtual void remove_sstable(sstables::shared_sstable sst) override { }
+    virtual void replace_sstables(std::vector<sstables::shared_sstable> old_ssts, std::vector<sstables::shared_sstable> new_ssts) override {}
 };
 
 struct null_backlog_tracker final : public compaction_backlog_tracker::impl {
     virtual double backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override {
         return 0;
     }
-    virtual void add_sstable(sstables::shared_sstable sst) override { }
-    virtual void remove_sstable(sstables::shared_sstable sst)  override { }
+    virtual void replace_sstables(std::vector<sstables::shared_sstable> old_ssts, std::vector<sstables::shared_sstable> new_ssts) override {}
 };
 
 // Just so that if we have more than one CF with NullStrategy, we don't create a lot
