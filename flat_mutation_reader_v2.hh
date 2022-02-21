@@ -881,6 +881,26 @@ make_flat_mutation_reader_from_fragments(schema_ptr, reader_permit, std::deque<m
 flat_mutation_reader_v2
 make_flat_mutation_reader_from_fragments(schema_ptr, reader_permit, std::deque<mutation_fragment_v2>, const dht::partition_range& pr, const query::partition_slice& slice);
 
+// Calls the consumer for each element of the reader's stream until end of stream
+// is reached or the consumer requests iteration to stop by returning stop_iteration::yes.
+// The consumer should accept mutation as the argument and return stop_iteration.
+// The returned future<> resolves when consumption ends.
+template <typename Consumer>
+requires MutationConsumer<Consumer>
+inline
+future<> consume_partitions(flat_mutation_reader_v2& reader, Consumer consumer) {
+    return do_with(std::move(consumer), [&reader] (Consumer& c) -> future<> {
+        return repeat([&reader, &c] () {
+            return read_mutation_from_flat_mutation_reader(reader).then([&c] (mutation_opt&& mo) -> future<stop_iteration> {
+                if (!mo) {
+                    return make_ready_future<stop_iteration>(stop_iteration::yes);
+                }
+                return futurize_invoke(c, std::move(*mo));
+            });
+        });
+    });
+}
+
 /// A cosumer function that is passed a flat_mutation_reader to be consumed from
 /// and returns a future<> resolved when the reader is fully consumed, and closed.
 /// Note: the function assumes ownership of the reader and must close it in all cases.
