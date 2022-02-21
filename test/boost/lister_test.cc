@@ -39,6 +39,18 @@ SEASTAR_TEST_CASE(test_empty_lister) {
     BOOST_REQUIRE(!count);
 }
 
+SEASTAR_TEST_CASE(test_empty_directory_lister) {
+    auto tmp = tmpdir();
+    auto dl = directory_lister(tmp.path());
+    size_t count = 0;
+
+    while (auto de = co_await dl.get()) {
+        count++;
+    }
+
+    BOOST_REQUIRE(!count);
+}
+
 static future<> touch_file(fs::path filename, open_flags flags = open_flags::wo | open_flags::create, file_permissions create_permissions = file_permissions::default_file_permissions) {
     file_open_options opts;
     opts.create_permissions = create_permissions;
@@ -107,4 +119,116 @@ SEASTAR_TEST_CASE(test_lister_abort) {
     });
     BOOST_REQUIRE_THROW(co_await std::move(f), expected_exception);
     BOOST_REQUIRE_EQUAL(walked, initial);
+}
+
+SEASTAR_TEST_CASE(test_directory_lister) {
+    auto tmp = tmpdir();
+
+    std::unordered_set<std::string> file_names;
+    std::unordered_set<std::string> dir_names;
+
+    auto count = co_await generate_random_content(tmp, file_names, dir_names);
+    BOOST_TEST_MESSAGE(fmt::format("Generated {} dir entries", count));
+
+    std::unordered_set<std::string> found_file_names;
+    std::unordered_set<std::string> found_dir_names;
+
+    auto dl = directory_lister(tmp.path());
+
+    while (auto de = co_await dl.get()) {
+        switch (*de->type) {
+        case directory_entry_type::regular: {
+            auto [it, inserted] = found_file_names.insert(de->name);
+            BOOST_REQUIRE(inserted);
+            break;
+        }
+        case directory_entry_type::directory: {
+            auto [it, inserted] = found_dir_names.insert(de->name);
+            BOOST_REQUIRE(inserted);
+            break;
+        }
+        default:
+            BOOST_FAIL(fmt::format("Unexpected directory_entry_type: {}", *de->type));
+        }
+    }
+
+    BOOST_REQUIRE(found_file_names == file_names);
+    BOOST_REQUIRE(found_dir_names == dir_names);
+}
+
+SEASTAR_TEST_CASE(test_directory_lister_close) {
+    auto tmp = tmpdir();
+
+    std::unordered_set<std::string> file_names;
+    std::unordered_set<std::string> dir_names;
+
+    auto count = co_await generate_random_content(tmp, file_names, dir_names, tests::random::get_int(100, 1000));
+    BOOST_TEST_MESSAGE(fmt::format("Generated {} dir entries", count));
+
+    {
+        auto dl = directory_lister(tmp.path());
+        auto initial = tests::random::get_int(count);
+        BOOST_TEST_MESSAGE(fmt::format("Getting {} dir entries", initial));
+        for (auto i = 0; i < initial; i++) {
+            auto de = co_await dl.get();
+            BOOST_REQUIRE(de);
+        }
+        BOOST_TEST_MESSAGE("Closing directory_lister");
+        co_await dl.close();
+    }
+
+    {
+        auto dl = directory_lister(tmp.path());
+        auto initial = tests::random::get_int(count);
+        BOOST_TEST_MESSAGE(fmt::format("Getting {} dir entries", initial));
+        for (auto i = 0; i < initial; i++) {
+            auto de = co_await dl.get();
+            BOOST_REQUIRE(de);
+        }
+        BOOST_TEST_MESSAGE("Closing directory_lister");
+        co_await dl.close();
+        BOOST_REQUIRE_THROW(co_await dl.get(), std::exception);
+    }
+}
+
+SEASTAR_TEST_CASE(test_directory_lister_abort) {
+    auto tmp = tmpdir();
+
+    std::unordered_set<std::string> file_names;
+    std::unordered_set<std::string> dir_names;
+
+    auto count = co_await generate_random_content(tmp, file_names, dir_names, tests::random::get_int(100, 1000));
+    BOOST_TEST_MESSAGE(fmt::format("Generated {} dir entries", count));
+
+    auto dl = directory_lister(tmp.path());
+
+    auto initial = tests::random::get_int(count);
+    BOOST_TEST_MESSAGE(fmt::format("Getting {} dir entries", initial));
+    for (auto i = 0; i < initial; i++) {
+        auto de = co_await dl.get();
+        BOOST_REQUIRE(de);
+    }
+
+    BOOST_TEST_MESSAGE("Aborting directory_lister");
+    dl.abort(std::make_exception_ptr(expected_exception()));
+    BOOST_REQUIRE_THROW(co_await dl.get(), expected_exception);
+
+    BOOST_TEST_MESSAGE("Closing directory_lister");
+    co_await dl.close();
+}
+
+SEASTAR_TEST_CASE(test_directory_lister_extra_get) {
+    auto tmp = tmpdir();
+
+    std::unordered_set<std::string> file_names;
+    std::unordered_set<std::string> dir_names;
+
+    auto count = co_await generate_random_content(tmp, file_names, dir_names, tests::random::get_int(100, 1000));
+    BOOST_TEST_MESSAGE(fmt::format("Generated {} dir entries", count));
+
+    auto dl = directory_lister(tmp.path());
+    while (auto de = co_await dl.get()) {
+    }
+
+    BOOST_REQUIRE_THROW(co_await dl.get(), seastar::broken_pipe_exception);
 }
