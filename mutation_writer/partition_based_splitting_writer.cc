@@ -34,7 +34,7 @@ private:
     }
 
     future<> flush_memtable() {
-        co_await _consumer(_memtable->make_flush_reader(_schema, _permit, _pc));
+        co_await _consumer(downgrade_to_v1(_memtable->make_flush_reader(_schema, _permit, _pc)));
         _memtable = make_lw_shared<replica::memtable>(_schema);
     }
 

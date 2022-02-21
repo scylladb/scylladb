@@ -24,7 +24,6 @@
 #include "utils/double-decker.hh"
 
 class frozen_mutation;
-class flat_mutation_reader;
 class row_cache;
 
 namespace bi = boost::intrusive;
@@ -255,7 +254,7 @@ public:
         return make_flat_reader(s, std::move(permit), range, full_slice);
     }
 
-    flat_mutation_reader make_flush_reader(schema_ptr, reader_permit permit, const io_priority_class& pc);
+    flat_mutation_reader_v2 make_flush_reader(schema_ptr, reader_permit permit, const io_priority_class& pc);
 
     mutation_source as_data_source();
 
