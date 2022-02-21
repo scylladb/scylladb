@@ -254,6 +254,10 @@ flat_mutation_reader make_delegating_reader(flat_mutation_reader& r) {
     return make_flat_mutation_reader<delegating_reader>(r);
 }
 
+flat_mutation_reader_v2 make_delegating_reader_v2(flat_mutation_reader_v2& r) {
+    return make_flat_mutation_reader_v2<delegating_reader_v2>(r);
+}
+
 flat_mutation_reader make_forwardable(flat_mutation_reader m) {
     class reader : public flat_mutation_reader::impl {
         flat_mutation_reader _underlying;
