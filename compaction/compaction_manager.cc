@@ -322,8 +322,7 @@ future<> compaction_manager::run_custom_job(replica::table* t, sstables::compact
         return with_lock(task->compaction_state.lock.for_read(), [this, task, &job] () mutable {
             // Allow caller to know that task (e.g. reshape) was asked to stop while waiting for a chance to run.
             if (task->stopping) {
-                throw sstables::compaction_stopped_exception(task->compacting_table->schema()->ks_name(), task->compacting_table->schema()->cf_name(),
-                    task->compaction_data.stop_requested);
+                return make_exception_future<>(task->make_compaction_stopped_exception());
             }
             _stats.active_tasks++;
             if (!can_proceed(task)) {
@@ -394,6 +393,11 @@ void compaction_manager::task::finish_compaction() noexcept {
 void compaction_manager::task::stop(sstring reason) noexcept {
     stopping = true;
     compaction_data.stop(std::move(reason));
+}
+
+sstables::compaction_stopped_exception compaction_manager::task::make_compaction_stopped_exception() const {
+    auto s = compacting_table->schema();
+    return sstables::compaction_stopped_exception(s->ks_name(), s->cf_name(), compaction_data.stop_requested);
 }
 
 future<> compaction_manager::task_stop(lw_shared_ptr<compaction_manager::task> task, sstring reason) {
