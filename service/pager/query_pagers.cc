@@ -19,6 +19,10 @@
 #include "log.hh"
 #include "service/storage_proxy.hh"
 #include "to_string.hh"
+#include "utils/result_combinators.hh"
+
+template<typename T = void>
+using result = service::pager::query_pager::result<T>;
 
 static logging::logger qlogger("paging");
 
@@ -55,7 +59,7 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
                     , _ranges(std::move(ranges))
     {}
 
-    future<service::storage_proxy::coordinator_query_result> query_pager::do_fetch_page(uint32_t page_size, gc_clock::time_point now, db::timeout_clock::time_point timeout) {
+    future<result<service::storage_proxy::coordinator_query_result>> query_pager::do_fetch_page(uint32_t page_size, gc_clock::time_point now, db::timeout_clock::time_point timeout) {
         auto state = _options.get_paging_state();
 
         // Most callers should set this but we want to make sure, as results
@@ -171,7 +175,7 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
 
         auto ranges = _ranges;
         auto command = ::make_lw_shared<query::read_command>(*_cmd);
-        return _proxy->query(_schema,
+        return _proxy->query_result(_schema,
                 std::move(command),
                 std::move(ranges),
                 _options.get_consistency(),
@@ -179,35 +183,54 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
     }
 
     future<> query_pager::fetch_page(cql3::selection::result_set_builder& builder, uint32_t page_size, gc_clock::time_point now, db::timeout_clock::time_point timeout) {
-        return do_fetch_page(page_size, now, timeout).then([this, &builder, page_size, now] (service::storage_proxy::coordinator_query_result qr) {
+        return fetch_page_result(builder, page_size, now, timeout)
+                .then(utils::result_into_future<result<>>);
+    }
+
+    future<result<>> query_pager::fetch_page_result(cql3::selection::result_set_builder& builder, uint32_t page_size, gc_clock::time_point now, db::timeout_clock::time_point timeout) {
+        return do_fetch_page(page_size, now, timeout).then(utils::result_wrap([this, &builder, page_size, now] (service::storage_proxy::coordinator_query_result qr) {
             _last_replicas = std::move(qr.last_replicas);
             _query_read_repair_decision = qr.read_repair_decision;
-            return builder.with_thread_if_needed([this, &builder, page_size, now, qr = std::move(qr)] () mutable {
+            return builder.with_thread_if_needed([this, &builder, page_size, now, qr = std::move(qr)] () mutable -> result<> {
                 handle_result(cql3::selection::result_set_builder::visitor(builder, *_schema, *_selection),
                               std::move(qr.query_result), page_size, now);
+                return bo::success();
             });
-        });
+        }));
     }
 
     future<std::unique_ptr<cql3::result_set>> query_pager::fetch_page(uint32_t page_size,
+            gc_clock::time_point now, db::timeout_clock::time_point timeout) {
+        return fetch_page_result(page_size, now, timeout)
+                .then(utils::result_into_future<result<std::unique_ptr<cql3::result_set>>>);
+    }
+
+    future<result<std::unique_ptr<cql3::result_set>>> query_pager::fetch_page_result(uint32_t page_size,
             gc_clock::time_point now, db::timeout_clock::time_point timeout) {
         return do_with(
                 cql3::selection::result_set_builder(*_selection, now,
                         _options.get_cql_serialization_format()),
                 [this, page_size, now, timeout](auto& builder) {
-                    return this->fetch_page(builder, page_size, now, timeout).then([&builder] {
-                        return builder.with_thread_if_needed([&builder] { return builder.build(); });
-                    });
+                    return this->fetch_page_result(builder, page_size, now, timeout).then(utils::result_wrap([&builder] {
+                        return builder.with_thread_if_needed([&builder] () -> result<std::unique_ptr<cql3::result_set>> {
+                            return bo::success(builder.build());
+                        });
+                    }));
                 });
     }
 
 future<cql3::result_generator> query_pager::fetch_page_generator(uint32_t page_size, gc_clock::time_point now, db::timeout_clock::time_point timeout, cql3::cql_stats& stats) {
-    return do_fetch_page(page_size, now, timeout).then([this, page_size, now, &stats] (service::storage_proxy::coordinator_query_result qr) {
+    return fetch_page_generator_result(page_size, now, timeout, stats)
+            .then(utils::result_into_future<result<cql3::result_generator>>);
+}
+
+future<result<cql3::result_generator>> query_pager::fetch_page_generator_result(uint32_t page_size, gc_clock::time_point now, db::timeout_clock::time_point timeout, cql3::cql_stats& stats) {
+    return do_fetch_page(page_size, now, timeout).then(utils::result_wrap([this, page_size, now, &stats] (service::storage_proxy::coordinator_query_result qr) -> future<result<cql3::result_generator>> {
         _last_replicas = std::move(qr.last_replicas);
         _query_read_repair_decision = qr.read_repair_decision;
         handle_result(noop_visitor(), qr.query_result, page_size, now);
-        return cql3::result_generator(_schema, std::move(qr.query_result), _cmd, _selection, stats);
-    });
+        return make_ready_future<result<cql3::result_generator>>(cql3::result_generator(_schema, std::move(qr.query_result), _cmd, _selection, stats));
+    }));
 }
 
 class filtering_query_pager : public query_pager {
@@ -224,18 +247,19 @@ public:
         {}
     virtual ~filtering_query_pager() {}
 
-    virtual future<> fetch_page(cql3::selection::result_set_builder& builder, uint32_t page_size, gc_clock::time_point now, db::timeout_clock::time_point timeout) override {
-        return do_fetch_page(page_size, now, timeout).then([this, &builder, page_size, now] (service::storage_proxy::coordinator_query_result qr) {
+    virtual future<result<>> fetch_page_result(cql3::selection::result_set_builder& builder, uint32_t page_size, gc_clock::time_point now, db::timeout_clock::time_point timeout) override {
+        return do_fetch_page(page_size, now, timeout).then(utils::result_wrap([this, &builder, page_size, now] (service::storage_proxy::coordinator_query_result qr) {
             _last_replicas = std::move(qr.last_replicas);
             _query_read_repair_decision = qr.read_repair_decision;
             qr.query_result->ensure_counts();
             _stats.rows_read_total += *qr.query_result->row_count();
-            return builder.with_thread_if_needed([&builder, this, query_result = std::move(qr.query_result), page_size, now] () mutable {
+            return builder.with_thread_if_needed([&builder, this, query_result = std::move(qr.query_result), page_size, now] () mutable -> result<> {
                 handle_result(cql3::selection::result_set_builder::visitor(builder, *_schema, *_selection,
                             cql3::selection::result_set_builder::restrictions_filter(_filtering_restrictions, _options, _max, _schema, _per_partition_limit, _last_pkey, _rows_fetched_for_last_partition)),
                             std::move(query_result), page_size, now);
+                return bo::success();
             });
-        });
+        }));
     }
 
 protected:

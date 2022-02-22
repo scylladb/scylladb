@@ -13,6 +13,7 @@
 
 #pragma once
 
+#include <variant>
 #include "replica/database_fwd.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "message/messaging_service_fwd.hh"
@@ -290,7 +291,7 @@ private:
 
     cdc_stats _cdc_stats;
 private:
-    future<coordinator_query_result> query_singular(lw_shared_ptr<query::read_command> cmd,
+    future<result<coordinator_query_result>> query_singular(lw_shared_ptr<query::read_command> cmd,
             dht::partition_range_vector&& partition_ranges,
             db::consistency_level cl,
             coordinator_query_options optional_params);
@@ -343,12 +344,12 @@ private:
                                                                                                    tracing::trace_state_ptr trace_state,
                                                                                                    clock_type::time_point timeout,
                                                                                                    query::digest_algorithm da);
-    future<coordinator_query_result> query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
+    future<result<coordinator_query_result>> query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
             dht::partition_range_vector partition_ranges,
             db::consistency_level cl,
             coordinator_query_options optional_params);
     static inet_address_vector_replica_set intersection(const inet_address_vector_replica_set& l1, const inet_address_vector_replica_set& l2);
-    future<query_partition_key_range_concurrent_result> query_partition_key_range_concurrent(clock_type::time_point timeout,
+    future<result<query_partition_key_range_concurrent_result>> query_partition_key_range_concurrent(clock_type::time_point timeout,
             std::vector<foreign_ptr<lw_shared_ptr<query::result>>>&& results,
             lw_shared_ptr<query::read_command> cmd,
             db::consistency_level cl,
@@ -360,7 +361,7 @@ private:
             replicas_per_token_range preferred_replicas,
             service_permit permit);
 
-    future<coordinator_query_result> do_query(schema_ptr,
+    future<result<coordinator_query_result>> do_query(schema_ptr,
         lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector&& partition_ranges,
         db::consistency_level cl,
@@ -376,10 +377,10 @@ private:
     future<unique_response_handler_vector> mutate_prepare(Range&& mutations, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit);
     future<result<>> mutate_begin(unique_response_handler_vector ids, db::consistency_level cl, tracing::trace_state_ptr trace_state, std::optional<clock_type::time_point> timeout_opt = { });
     future<result<>> mutate_end(future<result<>> mutate_result, utils::latency_counter, write_stats& stats, tracing::trace_state_ptr trace_state);
-    future<> schedule_repair(std::unordered_map<dht::token, std::unordered_map<gms::inet_address, std::optional<mutation>>> diffs, db::consistency_level cl, tracing::trace_state_ptr trace_state, service_permit permit);
+    future<result<>> schedule_repair(std::unordered_map<dht::token, std::unordered_map<gms::inet_address, std::optional<mutation>>> diffs, db::consistency_level cl, tracing::trace_state_ptr trace_state, service_permit permit);
     bool need_throttle_writes() const;
     void unthrottle();
-    void handle_read_error(std::exception_ptr eptr, bool range);
+    void handle_read_error(std::variant<exceptions::coordinator_exception_container, std::exception_ptr> failure, bool range);
     template<typename Range>
     future<result<>> mutate_internal(Range mutations, db::consistency_level cl, bool counter_write, tracing::trace_state_ptr tr_state, service_permit permit, std::optional<clock_type::time_point> timeout_opt = { }, lw_shared_ptr<cdc::operation_result_tracker> cdc_tracker = { });
     future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> query_nonsingular_mutations_locally(
@@ -578,6 +579,16 @@ public:
      * parameter can be changed after being passed to this method.
      */
     future<coordinator_query_result> query(schema_ptr,
+        lw_shared_ptr<query::read_command> cmd,
+        dht::partition_range_vector&& partition_ranges,
+        db::consistency_level cl,
+        coordinator_query_options optional_params);
+
+    /*
+     * Like query(), but is allowed to return some exceptions as a result.
+     * The caller must remember to handle them properly.
+     */
+    future<result<coordinator_query_result>> query_result(schema_ptr,
         lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector&& partition_ranges,
         db::consistency_level cl,

@@ -110,6 +110,18 @@ SEASTAR_THREAD_TEST_CASE(test_result_wrap) {
 
     BOOST_REQUIRE_THROW(fun_int(result<int>(bo::failure(foo_exception()))).get().value(), foo_exception);
     BOOST_REQUIRE_EQUAL(run_count, 2);
+
+    // T is a tuple, result_wrap_unpack
+    auto fun_tuple = utils::result_wrap_unpack([&run_count] (int x, int y) -> result<int> {
+        ++run_count;
+        return bo::success(x + y);
+    });
+
+    BOOST_REQUIRE_EQUAL(fun_tuple(result<std::tuple<int, int>>(bo::success(std::make_tuple(123, 321)))).get().value(), 444);
+    BOOST_REQUIRE_EQUAL(run_count, 3);
+
+    BOOST_REQUIRE_THROW(fun_tuple(result<std::tuple<int, int>>(bo::failure(foo_exception()))).get().value(), foo_exception);
+    BOOST_REQUIRE_EQUAL(run_count, 3);
 }
 
 // If T is a future, attaches a continuation and converts it to future<U>
@@ -127,6 +139,13 @@ future<U> futurize_and_convert(T&& t) {
     }
 }
 
+template<typename T>
+futurize_t<T> late(T&& t) {
+    return yield().then([t = std::move(t)] () mutable {
+        return std::move(t);
+    });
+}
+
 SEASTAR_THREAD_TEST_CASE(test_result_parallel_for_each) {
     auto reduce = [] <typename... Params> (Params&&... params) {
         std::vector<future<result<>>> v;
@@ -140,11 +159,6 @@ SEASTAR_THREAD_TEST_CASE(test_result_parallel_for_each) {
     auto bar_exc = [] () { return result<>(bo::failure(bar_exception())); };
     auto foo_throw = [] () { return make_exception_future<result<>>(foo_exception()); };
     auto bar_throw = [] () { return make_exception_future<result<>>(bar_exception()); };
-    auto late = [] (auto&& x) {
-        return yield().then([x = std::move(x)] () mutable {
-            return std::move(x);
-        });
-    };
 
     BOOST_REQUIRE_NO_THROW(reduce(bo::success(), bo::success()));
     BOOST_REQUIRE_THROW(reduce(foo_exc(), bo::success()), foo_exception);
@@ -166,6 +180,165 @@ SEASTAR_THREAD_TEST_CASE(test_result_parallel_for_each) {
     BOOST_REQUIRE_THROW(reduce(foo_exc(), bar_throw()), foo_exception);
     BOOST_REQUIRE_THROW(reduce(bar_throw(), foo_exc()), bar_exception);
     BOOST_REQUIRE_THROW(reduce(bar_exc(), foo_throw()), bar_exception);
+}
+
+namespace test_policies {
+    struct map_reduce_unary_version {
+        template<typename... Params>
+        static result<sstring> reduce(Params&&... params) {
+            struct reducer {
+                sstring accumulator;
+                void operator()(sstring&& s) {
+                    accumulator += " ";
+                    accumulator += s;
+                }
+                sstring get() {
+                    return std::move(accumulator);
+                }
+            };
+
+            std::vector<future<result<sstring>>> v;
+            (v.push_back(futurize_and_convert<Params, result<sstring>>(std::move(params))), ...);
+            return utils::result_map_reduce(
+                    v.begin(), v.end(),
+                    [] (future<result<sstring>>& f) {
+                        return std::move(f);
+                    },
+                    reducer{sstring("the")}).get();
+        }
+    };
+
+    struct map_reduce_binary_version {
+        template<typename... Params>
+        static result<sstring> reduce(Params&&... params) {
+            std::vector<future<result<sstring>>> v;
+            (v.push_back(futurize_and_convert<Params, result<sstring>>(std::move(params))), ...);
+            return utils::result_map_reduce(
+                    v.begin(), v.end(),
+                    [] (future<result<sstring>>& f) {
+                        return std::move(f);
+                    },
+                    sstring("the"),
+                    [] (sstring&& a, sstring&& b) -> result<sstring> {
+                        return bo::success(a + " " + b);
+                    }).get();
+        }
+    };
+}
+
+template<typename TestTemplate>
+void test_map_reduce_with_policies(TestTemplate&& template_fn) {
+    BOOST_TEST_MESSAGE("Running test for map_reduce (unary version)");
+    template_fn(test_policies::map_reduce_unary_version());
+
+    BOOST_TEST_MESSAGE("Running test for map_reduce (binary version)");
+    template_fn(test_policies::map_reduce_binary_version());
+}
+
+SEASTAR_THREAD_TEST_CASE(test_result_map_reduce) {
+    test_map_reduce_with_policies([] (auto policy) {
+        auto reduce = [&policy] <typename... Params> (Params&&... params) { return policy.reduce(std::forward<Params>(params)...); };
+
+        auto foo_exc = [] () { return result<sstring>(bo::failure(foo_exception())); };
+        auto bar_exc = [] () { return result<sstring>(bo::failure(bar_exception())); };
+        auto foo_throw = [] () { return make_exception_future<result<sstring>>(foo_exception()); };
+        auto bar_throw = [] () { return make_exception_future<result<sstring>>(bar_exception()); };
+
+        BOOST_REQUIRE_EQUAL(reduce(sstring("brown"), sstring("fox")).value(), "the brown fox");
+        BOOST_REQUIRE_EQUAL(reduce(foo_exc(), sstring("fox")).error(), exc_container(foo_exception()));
+        BOOST_REQUIRE_EQUAL(reduce(sstring("brown"), foo_exc()).error(), exc_container(foo_exception()));
+        BOOST_REQUIRE_EQUAL(reduce(foo_exc(), bar_exc()).error(), exc_container(foo_exception()));
+        BOOST_REQUIRE_EQUAL(reduce(bar_exc(), foo_exc()).error(), exc_container(bar_exception()));
+        BOOST_REQUIRE_THROW((void)reduce(foo_throw(), sstring("fox")), foo_exception);
+        BOOST_REQUIRE_THROW((void)reduce(sstring("brown"), foo_throw()), foo_exception);
+    });
+}
+
+template<typename T>
+future<result<>> invoke_or_return(T&& t) {
+    if constexpr (std::is_invocable_v<T>) {
+        return futurize_invoke(std::forward<T>(t));
+    } else {
+        return make_ready_future<result<>>(std::forward<T>(t));
+    }
+}
+
+// Like future::then, but guaranteed not to allocate a task
+// if the future is ready (even in debug mode).
+auto then_asap(auto f, auto fun) {
+    if (f.available() && !f.failed()) {
+        return futurize_invoke(std::move(fun), f.get());
+    } else {
+        return f.then(std::move(fun));
+    }
+}
+
+namespace test_policies {
+    struct do_until {
+        // Must be executed in a thread
+        template<typename OnRepeat, typename OnEnd>
+        static result<> repeat_and_finish(int iterations, OnRepeat on_repeat, OnEnd on_end) {
+            int counter = iterations + 1;
+            return utils::result_do_until(
+                    [&] { return counter == 0; },
+                    [&] {
+                        counter--;
+                        BOOST_REQUIRE(counter >= 0);
+                        if (counter == 0) {
+                            return invoke_or_return(std::move(on_end));
+                        } else {
+                            return invoke_or_return(on_repeat);
+                        }
+                    }).get();
+        }
+    };
+
+    struct repeat {
+        // Must be executed in a thread
+        template<typename OnRepeat, typename OnEnd>
+        static result<> repeat_and_finish(int iterations, OnRepeat on_repeat, OnEnd on_end) {
+            int counter = iterations + 1;
+            return utils::result_repeat([&] () -> future<result<stop_iteration>> {
+                counter--;
+                if (counter == 0) {
+                    return then_asap(
+                        invoke_or_return(std::move(on_end)),
+                        utils::result_wrap([] { return make_ready_future<result<stop_iteration>>(stop_iteration::yes); })
+                    );
+                } else {
+                    return then_asap(
+                        invoke_or_return(on_repeat),
+                        utils::result_wrap([] { return make_ready_future<result<stop_iteration>>(stop_iteration::no); })
+                    );
+                }
+            }).get();
+        }
+    };
+}
+
+template<typename TestTemplate>
+auto test_iteration_with_policies(TestTemplate&& template_fn) {
+    BOOST_TEST_MESSAGE("Running test for do_until");
+    template_fn(test_policies::do_until());
+
+    BOOST_TEST_MESSAGE("Running test for repeat");
+    template_fn(test_policies::repeat());
+}
+
+SEASTAR_THREAD_TEST_CASE(test_iteration) {
+    test_iteration_with_policies([] (auto policy) {
+        auto no_preempt = [] { return make_ready_future<result<>>(bo::success()); };
+        auto preempt = [] { return late(make_ready_future<result<>>(bo::success())); };
+
+        BOOST_REQUIRE_NO_THROW(policy.repeat_and_finish(0, no_preempt, bo::success()).value());
+        BOOST_REQUIRE_NO_THROW(policy.repeat_and_finish(10, preempt, bo::success()).value());
+        BOOST_REQUIRE_EQUAL(policy.repeat_and_finish(0, no_preempt, bo::failure(foo_exception())).error(), exc_container(foo_exception()));
+        BOOST_REQUIRE_EQUAL(policy.repeat_and_finish(10, no_preempt, bo::failure(foo_exception())).error(), exc_container(foo_exception()));
+        BOOST_REQUIRE_EQUAL(policy.repeat_and_finish(10, preempt, bo::failure(foo_exception())).error(), exc_container(foo_exception()));
+        BOOST_REQUIRE_THROW((void)policy.repeat_and_finish(0, no_preempt, [] () -> result<> { throw foo_exception(); }), foo_exception);
+        BOOST_REQUIRE_THROW((void)policy.repeat_and_finish(10, no_preempt, [] () -> result<> { throw foo_exception(); }), foo_exception);
+        BOOST_REQUIRE_THROW((void)policy.repeat_and_finish(10, preempt, [] () -> result<> { throw foo_exception(); }), foo_exception);
+    });
 }
 
 namespace test_policies {

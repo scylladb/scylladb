@@ -59,7 +59,7 @@ struct futurizing_converter {
 };
 
 template<typename From, typename Converter, typename To>
-concept ConvertsWithTo = std::convertible_to<From, typename Converter::template wrapped_type<To>>;
+concept ConvertsWithTo = std::convertible_to<typename Converter::template wrapped_type<From>, typename Converter::template wrapped_type<To>>;
 
 // We require forall<ExceptionContainerResult R> ExceptionHandle<H, R>.
 // However, C++ does not support quantification like that in the constraints.
@@ -103,6 +103,18 @@ public:
     void forward_to_promise(seastar::promise<S>& p) {
         p.set_value(std::move(_failed_result).as_failure());
     }
+
+    const typename R::error_type& as_inner() const & {
+        return _failed_result.assume_error();
+    }
+
+    typename R::error_type&& as_inner() && {
+        return std::move(_failed_result).assume_error();
+    }
+
+    typename R::error_type clone_inner() {
+        return _failed_result.assume_error().clone();
+    }
 };
 
 static_assert(ExceptionHandle<failed_result_handle<dummy_result<>>>);
@@ -128,6 +140,18 @@ public:
     requires std::same_as<typename R::error_type, typename S::error_type>
     void forward_to_promise(seastar::promise<S>& p) {
         p.set_exception(std::move(_eptr));
+    }
+
+    const std::exception_ptr& as_inner() const & {
+        return _eptr;
+    }
+
+    std::exception_ptr&& as_inner() && {
+        return std::move(_eptr);
+    }
+
+    std::exception_ptr clone_inner() {
+        return _eptr;
     }
 };
 

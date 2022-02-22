@@ -44,4 +44,16 @@ concept ExceptionContainerResult = bo::is_basic_result<R>::value && ExceptionCon
 template<typename F>
 concept ExceptionContainerResultFuture = seastar::is_future<F>::value && ExceptionContainerResult<typename F::value_type>;
 
+template<typename L, typename R>
+concept ResultRebindableTo =
+    bo::is_basic_result<L>::value &&
+    bo::is_basic_result<R>::value &&
+    std::same_as<typename L::error_type, typename R::error_type> &&
+    std::same_as<typename L::no_value_policy_type, typename R::no_value_policy_type>;
+
+// Creates a result type which has the same error type as R, but has a different value type.
+// The name was inspired by std::allocator::rebind.
+template<typename T, ExceptionContainerResult R>
+using rebind_result = bo::result<T, typename R::error_type, exception_container_throw_policy>;
+
 }

@@ -36,12 +36,12 @@ public:
 // It's not as ergonomic as using exceptions with seastar, but allows for
 // fast inspection and manipulation.
 //
-// Exceptions are held in a std::variant. The variant is kept behind
-// a std::unique_ptr to ensure that moves are cheap. This means that
-// a moved-out exception container becomes "empty" and does not contain
-// a valid exception.
+// The exception is held behind a std::shared_ptr. In order to minimize use
+// of atomic operations, the copy constructor is deleted and copying is only
+// possible by using the `clone()` method.
 //
-// Copying is not supported.
+// This means that the moved-out exception container becomes "empty" and
+// does not contain a valid exception.
 template<typename... Exs>
 struct exception_container {
 private:
@@ -53,7 +53,11 @@ private:
     // Bonus points: if each error type has a unique, globally-assigned
     // identified integer, then conversion of the exception_container
     // to a container supporting a superset of errors becomes very cheap.
-    seastar::foreign_ptr<std::unique_ptr<std::variant<Exs...>>> _eptr;
+    std::shared_ptr<exception_variant> _eptr;
+
+    // Users should use `clone()` in order to copy the exception container.
+    // The copy constructor is made private in order to make copying explicit.
+    exception_container(const exception_container&) = default;
 
     void check_nonempty() const {
         if (empty()) {
@@ -65,10 +69,14 @@ public:
     // Constructs an exception_container which does not contain any exception.
     exception_container() = default;
 
+    exception_container(exception_container&&) = default;
+    exception_container& operator=(exception_container&&) = default;
+    exception_container& operator=(const exception_container&) = delete; // Must be explicitly copied with `clone()`
+
     template<typename Ex>
     requires VariantElement<Ex, exception_variant>
     exception_container(Ex&& ex)
-            : _eptr(seastar::make_foreign(std::make_unique<exception_variant>(std::move(ex))))
+            : _eptr(std::make_shared<exception_variant>(std::forward<Ex>(ex)))
     { }
 
     inline bool empty() const {
@@ -87,6 +95,11 @@ public:
             return f(bad_exception_container_access());
         }
         return std::visit(std::move(f), *_eptr);
+    }
+
+    // Explicitly clones the exception container.
+    exception_container clone() const noexcept {
+        return exception_container(*this);
     }
 
     // Throws currently held exception as a C++ exception.
