@@ -77,3 +77,26 @@ def test_unicode_equivalence_like(scylla_only, cql, table1):
     cql.execute(insert, [s, u2])
     assert set(cql.execute(search, [s, 'n%'])) == set([(s, u2)])
     assert set(cql.execute(search, [s, '_'])) == set([(s, u1)])
+
+# The CREATE TABLE documentation on Datastax's site says that "The name of a
+# table can be a string of alphanumeric characters and underscores, but it
+# must begin with a letter.". The words "alphanumeric" and "letter" are
+# ambiguous - are various Unicode letters (e.g., Hebrew letters) allowed, or
+# not, in table names? The Apache Cassandra and Scylla DDL documentation is
+# more explicit  - table names must match the regular expression
+# [a-zA-Z_0-9]{1, 48} - so must use the Latin alphabet and nothing else.
+# Let's confirm this in a test.
+def test_unicode_in_table_names(cql, test_keyspace):
+    n = unique_name()
+    for s in ['עברית', 'Français']:
+        # The non-Latin alphabet shouldn't work neither quoted, nor unquoted.
+        # The specific error returned is different in both cases - invalid
+        # characters in an unquoted name result in a SyntaxException, while
+        # inside quotes it is detected later, and generates an InvalidRequest
+        # in Scylla or ConfigurationException in Cassandra (we'll allow both).
+        with pytest.raises(SyntaxException):
+            cql.execute(f'CREATE TABLE {test_keyspace}.{n}{s} (p int PRIMARY KEY)')
+            cql.execute(f'DROP TABLE {test_keyspace}.{n}{s}')
+        with pytest.raises((InvalidRequest, ConfigurationException)):
+            cql.execute(f'CREATE TABLE {test_keyspace}."{n}{s}" (p int PRIMARY KEY)')
+            cql.execute(f'DROP TABLE {test_keyspace}."{n}{s}"')
