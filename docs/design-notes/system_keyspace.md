@@ -328,4 +328,31 @@ The table can be updated with the UPDATE statement. The accepted value parameter
 must (of course) be a text, it's converted to the target configuration value as
 needed.
 
+## system.clients
+
+Holds information about clients connections
+
+Schema:
+~~~
+CREATE TABLE system.clients (
+    address inet,
+    port int,
+    client_type text,
+    connection_stage text,
+    driver_name text,
+    driver_version text,
+    hostname text,
+    protocol_version int,
+    shard_id int,
+    ssl_cipher_suite text,
+    ssl_enabled boolean,
+    ssl_protocol text,
+    username text,
+    PRIMARY KEY (address, port, client_type)
+) WITH CLUSTERING ORDER BY (port ASC, client_type ASC)
+~~~
+
+Currently only CQL clients are tracked. The table used to be present on disk (in data
+directory) before and including version 4.5.
+
 ## TODO: the rest

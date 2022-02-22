@@ -17,6 +17,7 @@
 #include <boost/range/adaptor/map.hpp>
 
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/json/json_elements.hh>
 #include "system_keyspace.hh"
@@ -66,6 +67,7 @@
 #include "serializer_impl.hh"
 #include "idl/frozen_mutation.dist.impl.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
+#include "client_data.hh"
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
@@ -652,44 +654,6 @@ schema_ptr system_keyspace::large_cells() {
     }();
     return scylla_local;
 }
-
-/** Layout based on C*-4.0.0 with extra columns `shard_id' and `client_type'
-  * but without `request_count'. Also CK is different: C* has only (`port'). */
-schema_ptr system_keyspace::clients() {
-    thread_local auto clients = [] {
-        schema_builder builder(generate_legacy_id(NAME, CLIENTS), NAME, CLIENTS,
-            // partition key
-            {{"address", inet_addr_type}},
-            // clustering key
-            {{"port", int32_type}, {"client_type", utf8_type}},
-            // regular columns
-            {
-                {"shard_id", int32_type},
-                {"connection_stage", utf8_type},
-                {"driver_name", utf8_type},
-                {"driver_version", utf8_type},
-                {"hostname", utf8_type},
-                {"protocol_version", int32_type},
-                {"ssl_cipher_suite", utf8_type},
-                {"ssl_enabled", boolean_type},
-                {"ssl_protocol", utf8_type},
-                {"username", utf8_type}
-            },
-            // static columns
-            {},
-            // regular column name type
-            utf8_type,
-            // comment
-            "list of connected clients"
-            );
-        builder.set_gc_grace_seconds(0);
-        builder.with_version(generate_schema_version(builder.uuid()));
-        return builder.build(schema_builder::compact_storage::no);
-    }();
-    return clients;
-}
-
-const char *const system_keyspace::CLIENTS = "clients";
 
 schema_ptr system_keyspace::v3::batches() {
     static thread_local auto schema = [] {
@@ -2502,6 +2466,146 @@ public:
     }
 };
 
+class clients_table : public streaming_virtual_table {
+    service::storage_service& _ss;
+
+    static schema_ptr build_schema() {
+        auto id = generate_legacy_id(system_keyspace::NAME, "clients");
+        return schema_builder(system_keyspace::NAME, "clients", std::make_optional(id))
+            .with_column("address", inet_addr_type, column_kind::partition_key)
+            .with_column("port", int32_type, column_kind::clustering_key)
+            .with_column("client_type", utf8_type, column_kind::clustering_key)
+            .with_column("shard_id", int32_type)
+            .with_column("connection_stage", utf8_type)
+            .with_column("driver_name", utf8_type)
+            .with_column("driver_version", utf8_type)
+            .with_column("hostname", utf8_type)
+            .with_column("protocol_version", int32_type)
+            .with_column("ssl_cipher_suite", utf8_type)
+            .with_column("ssl_enabled", boolean_type)
+            .with_column("ssl_protocol", utf8_type)
+            .with_column("username", utf8_type)
+            .with_version(system_keyspace::generate_schema_version(id))
+            .build();
+    }
+
+    dht::decorated_key make_partition_key(net::inet_address ip) {
+        return dht::decorate_key(*_s, partition_key::from_single_value(*_s, data_value(ip).serialize_nonnull()));
+    }
+
+    clustering_key make_clustering_key(int32_t port, sstring clt) {
+        return clustering_key::from_exploded(*_s, {
+            data_value(port).serialize_nonnull(),
+            data_value(clt).serialize_nonnull()
+        });
+    }
+
+    future<> execute(reader_permit permit, result_collector& result, const query_restrictions& qr) override {
+        // Collect
+        using client_data_vec = utils::chunked_vector<client_data>;
+        using shard_client_data = std::vector<client_data_vec>;
+        std::vector<foreign_ptr<std::unique_ptr<shard_client_data>>> cd_vec;
+        cd_vec.resize(smp::count);
+
+        auto servers = co_await _ss.container().invoke_on(0, [] (auto& ss) { return ss.protocol_servers(); });
+        co_await smp::invoke_on_all([&cd_vec_ = cd_vec, &servers_ = servers] () -> future<> {
+            auto& cd_vec = cd_vec_;
+            auto& servers = servers_;
+
+            auto scd = std::make_unique<shard_client_data>();
+            for (const auto& ps : servers) {
+                client_data_vec cds = co_await ps->get_client_data();
+                if (cds.size() != 0) {
+                    scd->emplace_back(std::move(cds));
+                }
+            }
+            cd_vec[this_shard_id()] = make_foreign(std::move(scd));
+        });
+
+        // Partition
+        struct decorated_ip {
+            dht::decorated_key key;
+            net::inet_address ip;
+
+            struct compare {
+                dht::ring_position_less_comparator less;
+                explicit compare(const class schema& s) : less(s) {}
+                bool operator()(const decorated_ip& a, const decorated_ip& b) const {
+                    return less(a.key, b.key);
+                }
+            };
+        };
+
+        decorated_ip::compare cmp(*_s);
+        std::set<decorated_ip, decorated_ip::compare> ips(cmp);
+        std::unordered_map<net::inet_address, client_data_vec> cd_map;
+        for (int i = 0; i < smp::count; i++) {
+            for (auto&& ps_cdc : *cd_vec[i]) {
+                for (auto&& cd : ps_cdc) {
+                    if (cd_map.contains(cd.ip)) {
+                        cd_map[cd.ip].emplace_back(std::move(cd));
+                    } else {
+                        dht::decorated_key key = make_partition_key(cd.ip);
+                        if (this_shard_owns(key) && contains_key(qr.partition_range(), key)) {
+                            ips.insert(decorated_ip{std::move(key), cd.ip});
+                            cd_map[cd.ip].emplace_back(std::move(cd));
+                        }
+                    }
+                    co_await coroutine::maybe_yield();
+                }
+            }
+        }
+
+        // Emit
+        for (const auto& dip : ips) {
+            co_await result.emit_partition_start(dip.key);
+            auto& clients = cd_map[dip.ip];
+
+            boost::sort(clients, [] (const client_data& a, const client_data& b) {
+                return a.port < b.port || a.client_type_str() < b.client_type_str();
+            });
+
+            for (const auto& cd : clients) {
+                clustering_row cr(make_clustering_key(cd.port, cd.client_type_str()));
+                set_cell(cr.cells(), "shard_id", cd.shard_id);
+                set_cell(cr.cells(), "connection_stage", cd.stage_str());
+                if (cd.driver_name) {
+                    set_cell(cr.cells(), "driver_name", *cd.driver_name);
+                }
+                if (cd.driver_version) {
+                    set_cell(cr.cells(), "driver_version", *cd.driver_version);
+                }
+                if (cd.hostname) {
+                    set_cell(cr.cells(), "hostname", *cd.hostname);
+                }
+                if (cd.protocol_version) {
+                    set_cell(cr.cells(), "protocol_version", *cd.protocol_version);
+                }
+                if (cd.ssl_cipher_suite) {
+                    set_cell(cr.cells(), "ssl_cipher_suite", *cd.ssl_cipher_suite);
+                }
+                if (cd.ssl_enabled) {
+                    set_cell(cr.cells(), "ssl_enabled", *cd.ssl_enabled);
+                }
+                if (cd.ssl_protocol) {
+                    set_cell(cr.cells(), "ssl_protocol", *cd.ssl_protocol);
+                }
+                set_cell(cr.cells(), "username", cd.username ? *cd.username : sstring("anonymous"));
+                co_await result.emit_row(std::move(cr));
+            }
+            co_await result.emit_partition_end();
+        }
+    }
+
+public:
+    clients_table(service::storage_service& ss)
+            : streaming_virtual_table(build_schema())
+            , _ss(ss)
+    {
+        _shard_aware = true;
+    }
+};
+
 // Map from table's schema ID to table itself. Helps avoiding accidental duplication.
 static thread_local std::map<utils::UUID, std::unique_ptr<virtual_table>> virtual_tables;
 
@@ -2522,6 +2626,7 @@ void register_virtual_tables(distributed<replica::database>& dist_db, distribute
     add_table(std::make_unique<runtime_info_table>(dist_db, ss));
     add_table(std::make_unique<versions_table>());
     add_table(std::make_unique<db_config_table>(cfg));
+    add_table(std::make_unique<clients_table>(ss));
 }
 
 std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
@@ -2531,7 +2636,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
     r.insert(r.end(), { built_indexes(), hints(), batchlog(), paxos(), local(),
                     peers(), peer_events(), range_xfers(),
                     compactions_in_progress(), compaction_history(),
-                    sstable_activity(), clients(), size_estimates(), large_partitions(), large_rows(), large_cells(),
+                    sstable_activity(), size_estimates(), large_partitions(), large_rows(), large_cells(),
                     scylla_local(), db::schema_tables::scylla_table_schema_history(),
                     repair_history(),
                     v3::views_builds_in_progress(), v3::built_views(),
@@ -3114,7 +3219,5 @@ future<mutation> system_keyspace::get_group0_history(distributed<service::storag
 sstring system_keyspace_name() {
     return system_keyspace::NAME;
 }
-
-const char *const system_keyspace_CLIENTS = system_keyspace::CLIENTS;
 
 } // namespace db

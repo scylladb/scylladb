@@ -88,7 +88,6 @@ class system_keyspace {
     static schema_ptr large_rows();
     static schema_ptr large_cells();
     static schema_ptr scylla_local();
-    static schema_ptr clients();
     static future<> setup_version(sharded<netw::messaging_service>& ms, const db::config& cfg);
     static future<> check_health(const sstring& cluster_name);
     static future<> force_blocking_flush(sstring cfname);
@@ -123,7 +122,6 @@ public:
     static constexpr auto RAFT_CONFIG = "raft_config";
     static constexpr auto REPAIR_HISTORY = "repair_history";
     static constexpr auto GROUP0_HISTORY = "group0_history";
-    static const char *const CLIENTS;
 
     struct v3 {
         static constexpr auto BATCHES = "batches";
@@ -436,6 +434,5 @@ public:
 }; // class system_keyspace
 
 future<> system_keyspace_make(distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g);
-extern const char *const system_keyspace_CLIENTS;
 
 } // namespace db

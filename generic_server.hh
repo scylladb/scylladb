@@ -80,7 +80,15 @@ protected:
     uint64_t _connections_being_accepted = 0;
     uint64_t _total_connections = 0;
     future<> _stopped = _all_connections_stopped.get_future();
-    boost::intrusive::list<connection> _connections_list;
+    using connections_list_t = boost::intrusive::list<connection>;
+    connections_list_t _connections_list;
+    struct gentle_iterator {
+        connections_list_t::const_iterator iter, end;
+        gentle_iterator(const server& s) : iter(s._connections_list.begin()), end(s._connections_list.end()) {}
+        gentle_iterator(const gentle_iterator&) = delete;
+        gentle_iterator(gentle_iterator&&) = delete;
+    };
+    std::list<gentle_iterator> _gentle_iterators;
     std::vector<server_socket> _listeners;
 
 public:
@@ -100,6 +108,8 @@ protected:
     virtual future<> advertise_new_connection(shared_ptr<connection> conn);
 
     virtual future<> unadvertise_connection(shared_ptr<connection> conn);
+
+    future<> for_each_gently(noncopyable_function<void(const connection&)>);
 
     void maybe_stop();
 };

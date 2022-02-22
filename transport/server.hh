@@ -29,6 +29,7 @@
 #include "service/query_state.hh"
 #include "cql3/query_options.hh"
 #include "transport/messages/result_message.hh"
+#include "utils/chunked_vector.hh"
 
 namespace cql3 {
 
@@ -172,6 +173,8 @@ public:
     using result_with_foreign_response_ptr = exceptions::coordinator_result<foreign_ptr<std::unique_ptr<cql_server::response>>>;
     service::endpoint_lifecycle_subscriber* get_lifecycle_listener() const noexcept;
     service::migration_listener* get_migration_listener() const noexcept;
+
+    future<utils::chunked_vector<client_data>> get_client_data();
 private:
     class fmt_visitor;
     friend class connection;
@@ -189,6 +192,8 @@ private:
         timer<lowres_clock> _shedding_timer;
         bool _shed_incoming_requests = false;
         unsigned _request_cpu = 0;
+        bool _ready = false;
+        bool _authenticating = false;
 
         enum class tracing_request_type : uint8_t {
             not_requested,
