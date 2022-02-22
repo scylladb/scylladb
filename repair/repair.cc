@@ -25,6 +25,7 @@
 #include "utils/bit_cast.hh"
 #include "service/migration_manager.hh"
 #include "partition_range_compat.hh"
+#include "gms/feature_service.hh"
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/algorithm/string/split.hpp>
@@ -1098,33 +1099,48 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
             cfs = std::move(cfs), ranges = std::move(ranges), options = std::move(options), ignore_nodes = std::move(ignore_nodes)] () mutable {
         auto uuid = id.uuid;
 
-        auto waiting_nodes = db.local().get_token_metadata().get_all_endpoints();
-        std::erase_if(waiting_nodes, [&] (const auto& addr) {
-            return ignore_nodes.contains(addr);
-        });
-        auto participants = get_hosts_participating_in_repair(db.local(), keyspace, ranges, options.data_centers, options.hosts, ignore_nodes).get();
-        auto hints_timeout = std::chrono::seconds(300);
-        auto batchlog_timeout = std::chrono::seconds(300);
-        repair_flush_hints_batchlog_request req{id.uuid, participants, hints_timeout, batchlog_timeout};
+        bool needs_flush_before_repair = false;
+        if (db.local().features().cluster_supports_tombstone_gc_options()) {
+            for (auto& table: cfs) {
+                auto s = db.local().find_column_family(keyspace, table).schema();
+                const auto& options = s->tombstone_gc_options();
+                if (options.mode() == tombstone_gc_mode::repair) {
+                    needs_flush_before_repair = true;
+                }
+            }
+        }
 
         bool hints_batchlog_flushed = false;
-        try {
-            parallel_for_each(waiting_nodes, [this, uuid, &req, &participants] (gms::inet_address node) -> future<> {
-                rlogger.info("repair[{}]: Sending repair_flush_hints_batchlog to node={}, participants={}, started",
-                        uuid, node, participants);
-                try {
-                    auto& ms = get_messaging();
-                    auto resp = co_await ser::partition_checksum_rpc_verbs::send_repair_flush_hints_batchlog(&ms, netw::msg_addr(node), req);
-                } catch (...) {
-                    rlogger.warn("repair[{}]: Sending repair_flush_hints_batchlog to node={}, participants={}, failed: {}",
-                            uuid, node, participants, std::current_exception());
-                    throw;
-                }
-            }).get();
-            hints_batchlog_flushed = true;
-        } catch (...) {
-            rlogger.warn("repair[{}]: Sending repair_flush_hints_batchlog to participants={} failed, continue to run repair",
-                    uuid, participants);
+        auto participants = get_hosts_participating_in_repair(db.local(), keyspace, ranges, options.data_centers, options.hosts, ignore_nodes).get();
+        if (needs_flush_before_repair) {
+            auto waiting_nodes = db.local().get_token_metadata().get_all_endpoints();
+            std::erase_if(waiting_nodes, [&] (const auto& addr) {
+                return ignore_nodes.contains(addr);
+            });
+            auto hints_timeout = std::chrono::seconds(300);
+            auto batchlog_timeout = std::chrono::seconds(300);
+            repair_flush_hints_batchlog_request req{id.uuid, participants, hints_timeout, batchlog_timeout};
+
+            try {
+                parallel_for_each(waiting_nodes, [this, uuid, &req, &participants] (gms::inet_address node) -> future<> {
+                    rlogger.info("repair[{}]: Sending repair_flush_hints_batchlog to node={}, participants={}, started",
+                            uuid, node, participants);
+                    try {
+                        auto& ms = get_messaging();
+                        auto resp = co_await ser::partition_checksum_rpc_verbs::send_repair_flush_hints_batchlog(&ms, netw::msg_addr(node), req);
+                    } catch (...) {
+                        rlogger.warn("repair[{}]: Sending repair_flush_hints_batchlog to node={}, participants={}, failed: {}",
+                                uuid, node, participants, std::current_exception());
+                        throw;
+                    }
+                }).get();
+                hints_batchlog_flushed = true;
+            } catch (...) {
+                rlogger.warn("repair[{}]: Sending repair_flush_hints_batchlog to participants={} failed, continue to run repair",
+                        uuid, participants);
+            }
+        } else {
+            rlogger.info("repair[{}]: Skipped sending repair_flush_hints_batchlog to nodes={}", uuid, participants);
         }
 
         std::vector<future<>> repair_results;
