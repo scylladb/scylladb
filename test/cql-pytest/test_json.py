@@ -95,14 +95,12 @@ def test_fromjson_nonint_prepared(cql, table1):
 # Reproduces issue #10100.
 # This test is marked with "cassandra_bug" because it fails in Cassandra as
 # well and we consider this failure a bug.
-@pytest.mark.xfail(reason="issue #10100")
 def test_fromjson_int_scientific_notation_unprepared(cql, table1, cassandra_bug):
     p = unique_key_int()
     cql.execute(f"INSERT INTO {table1} (p, bigv) VALUES ({p}, fromJson('1.23456789E+9'))")
     assert list(cql.execute(f"SELECT p, bigv from {table1} where p = {p}")) == [(p, 1234567890)]
     cql.execute(f"INSERT INTO {table1} (p, v) VALUES ({p}, fromJson('1e6'))")
     assert list(cql.execute(f"SELECT p, v from {table1} where p = {p}")) == [(p, 1000000)]
-@pytest.mark.xfail(reason="issue #10100")
 def test_fromjson_int_scientific_notation_prepared(cql, table1, cassandra_bug):
     p = unique_key_int()
     stmt = cql.prepare(f"INSERT INTO {table1} (p, bigv) VALUES (?, fromJson(?))")
