@@ -12,7 +12,7 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/core/metrics.hh>
 #include <seastar/util/defer.hh>
-#include "memtable.hh"
+#include "replica/memtable.hh"
 #include <chrono>
 #include <boost/version.hpp>
 #include <sys/sdt.h>
@@ -901,11 +901,11 @@ row_cache::snapshot_and_phase row_cache::snapshot_of(dht::ring_position_view pos
     return {*_prev_snapshot, _underlying_phase - 1};
 }
 
-void row_cache::invalidate_sync(memtable& m) noexcept {
+void row_cache::invalidate_sync(replica::memtable& m) noexcept {
     with_allocator(_tracker.allocator(), [&m, this] () {
         logalloc::reclaim_lock _(_tracker.region());
         bool blow_cache = false;
-        m.partitions.clear_and_dispose([this, &m, &blow_cache] (memtable_entry* entry) noexcept {
+        m.partitions.clear_and_dispose([this, &m, &blow_cache] (replica::memtable_entry* entry) noexcept {
             try {
                 invalidate_locked(entry->key());
             } catch (...) {
@@ -929,7 +929,7 @@ row_cache::phase_type row_cache::phase_of(dht::ring_position_view pos) {
 }
 
 template <typename Updater>
-future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater) {
+future<> row_cache::do_update(external_updater eu, replica::memtable& m, Updater updater) {
   return do_update(std::move(eu), [this, &m, updater = std::move(updater)] {
     real_dirty_memory_accounter real_dirty_acc(m, _tracker);
     m.on_detach_from_region_group();
@@ -966,7 +966,7 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
                           {
                             if (!update) {
                                 _update_section(_tracker.region(), [&] {
-                                    memtable_entry& mem_e = *m.partitions.begin();
+                                    replica::memtable_entry& mem_e = *m.partitions.begin();
                                     size_entry = mem_e.size_in_allocator_without_rows(_tracker.allocator());
                                     partitions_type::bound_hint hint;
                                     auto cache_i = _partitions.lower_bound(mem_e.key(), cmp, hint);
@@ -983,7 +983,7 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
                             real_dirty_acc.unpin_memory(size_entry);
                             _update_section(_tracker.region(), [&] {
                                 auto i = m.partitions.begin();
-                                i.erase_and_dispose(dht::raw_token_less_comparator{}, [&] (memtable_entry* e) noexcept {
+                                i.erase_and_dispose(dht::raw_token_less_comparator{}, [&] (replica::memtable_entry* e) noexcept {
                                     m.evict_entry(*e, _tracker.memtable_cleaner());
                                 });
                             });
@@ -1011,9 +1011,9 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
   });
 }
 
-future<> row_cache::update(external_updater eu, memtable& m) {
+future<> row_cache::update(external_updater eu, replica::memtable& m) {
     return do_update(std::move(eu), m, [this] (logalloc::allocating_section& alloc,
-            row_cache::partitions_type::iterator cache_i, memtable_entry& mem_e, partition_presence_checker& is_present,
+            row_cache::partitions_type::iterator cache_i, replica::memtable_entry& mem_e, partition_presence_checker& is_present,
             real_dirty_memory_accounter& acc, const partitions_type::bound_hint& hint) mutable {
         // If cache doesn't contain the entry we cannot insert it because the mutation may be incomplete.
         // FIXME: keep a bitmap indicating which sstables we do cover, so we don't have to
@@ -1044,9 +1044,9 @@ future<> row_cache::update(external_updater eu, memtable& m) {
     });
 }
 
-future<> row_cache::update_invalidating(external_updater eu, memtable& m) {
+future<> row_cache::update_invalidating(external_updater eu, replica::memtable& m) {
     return do_update(std::move(eu), m, [this] (logalloc::allocating_section& alloc,
-        row_cache::partitions_type::iterator cache_i, memtable_entry& mem_e, partition_presence_checker& is_present,
+        row_cache::partitions_type::iterator cache_i, replica::memtable_entry& mem_e, partition_presence_checker& is_present,
         real_dirty_memory_accounter& acc, const partitions_type::bound_hint&)
     {
         if (cache_i != partitions_end() && cache_i->key().equal(*_schema, mem_e.key())) {

@@ -37,7 +37,7 @@ public:
 
     virtual future<> execute(reader_permit permit, db::result_collector& rc) override {
         return async([this, permit, &rc] {
-            auto mt = make_lw_shared<memtable>(_s);
+            auto mt = make_lw_shared<replica::memtable>(_s);
             do_for_each(_mutations, [mt] (const mutation& m) {
                 mt->apply(m);
             }).get();

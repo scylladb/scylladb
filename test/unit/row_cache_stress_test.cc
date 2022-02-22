@@ -11,7 +11,7 @@
 #include "test/lib/simple_schema.hh"
 #include "test/lib/log.hh"
 #include <seastar/core/app-template.hh>
-#include "memtable.hh"
+#include "replica/memtable.hh"
 #include "row_cache.hh"
 #include "partition_slice_builder.hh"
 #include "utils/int_range.hh"
@@ -36,15 +36,15 @@ struct table {
     uint64_t reads_started = 0;
     uint64_t scans_started = 0;
 
-    lw_shared_ptr<memtable> mt;
-    lw_shared_ptr<memtable> prev_mt;
+    lw_shared_ptr<replica::memtable> mt;
+    lw_shared_ptr<replica::memtable> prev_mt;
     memtable_snapshot_source underlying;
     cache_tracker tracker;
     row_cache cache;
 
     table(unsigned partitions, unsigned rows)
         : semaphore(reader_concurrency_semaphore::no_limits{}, __FILE__)
-        , mt(make_lw_shared<memtable>(s.schema()))
+        , mt(make_lw_shared<replica::memtable>(s.schema()))
         , underlying(s.schema())
         , cache(s.schema(), snapshot_source([this] { return underlying(); }), tracker)
     {
@@ -94,8 +94,8 @@ struct table {
     // Must not be called concurrently
     void flush() {
         testlog.trace("flushing");
-        prev_mt = std::exchange(mt, make_lw_shared<memtable>(s.schema()));
-        auto flushed = make_lw_shared<memtable>(s.schema());
+        prev_mt = std::exchange(mt, make_lw_shared<replica::memtable>(s.schema()));
+        auto flushed = make_lw_shared<replica::memtable>(s.schema());
         flushed->apply(*prev_mt, make_permit()).get();
         prev_mt->mark_flushed(flushed->as_data_source());
         testlog.trace("updating cache");

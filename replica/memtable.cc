@@ -13,6 +13,8 @@
 #include "partition_builder.hh"
 #include "mutation_partition_view.hh"
 
+namespace replica {
+
 static flat_mutation_reader make_partition_snapshot_flat_reader_from_snp_schema(
         bool is_reversed,
         reader_permit permit,
@@ -865,4 +867,6 @@ std::ostream& operator<<(std::ostream& out, memtable& mt) {
 
 std::ostream& operator<<(std::ostream& out, const memtable_entry& mt) {
     return out << "{" << mt.key() << ": " << partition_entry::printer(*mt.schema(), mt.partition()) << "}";
+}
+
 }

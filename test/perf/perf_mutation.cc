@@ -35,7 +35,7 @@ int main(int argc, char* argv[]) {
         }
 
         auto s = builder.build();
-        memtable mt(s);
+        replica::memtable mt(s);
 
         std::cout << "Timing mutation of single column within one row...\n";
 

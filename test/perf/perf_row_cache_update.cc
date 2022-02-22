@@ -18,7 +18,7 @@
 #include "row_cache.hh"
 #include "log.hh"
 #include "schema_builder.hh"
-#include "memtable.hh"
+#include "replica/memtable.hh"
 #include "test/perf/perf.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 
@@ -41,7 +41,7 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
         auto prefill_compacted = logalloc::memory_compacted();
         auto prefill_allocated = logalloc::memory_allocated();
 
-        auto mt = make_lw_shared<memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s);
         while (mt->occupancy().total_space() < memtable_size) {
             auto pk = dht::decorate_key(*s, partition_key::from_single_value(*s,
                 serialized(utils::UUID_gen::get_time_UUID())));

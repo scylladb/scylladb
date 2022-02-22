@@ -46,7 +46,7 @@ static
 void test_cache_population_with_range_tombstone_adjacent_to_population_range(populate_fn_ex populate) {
     simple_schema s;
     tests::reader_concurrency_semaphore_wrapper semaphore;
-    auto cache_mt = make_lw_shared<memtable>(s.schema());
+    auto cache_mt = make_lw_shared<replica::memtable>(s.schema());
 
     auto pkey = s.make_pkey();
 

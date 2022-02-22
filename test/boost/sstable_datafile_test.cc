@@ -36,7 +36,7 @@
 #include "counters.hh"
 #include "cell_locking.hh"
 #include "test/lib/simple_schema.hh"
-#include "memtable-sstable.hh"
+#include "replica/memtable-sstable.hh"
 #include "test/lib/index_reader_assertions.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
 #include "test/lib/make_random_string.hh"
@@ -86,7 +86,7 @@ SEASTAR_TEST_CASE(datafile_generation_09) {
         auto s = make_shared_schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}}, {}, utf8_type);
 
-        auto mt = make_lw_shared<memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s);
 
         const column_definition& r1_col = *s->get_column_definition("r1");
 
@@ -127,7 +127,7 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
     return test_setup::do_with_tmp_directory([] (test_env& env, sstring tmpdir_path) {
         auto s = complex_schema();
 
-        auto mt = make_lw_shared<memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s);
 
         const column_definition& set_col = *s->get_column_definition("reg_set");
         const column_definition& static_set_col = *s->get_column_definition("static_collection");
@@ -226,7 +226,7 @@ SEASTAR_TEST_CASE(datafile_generation_12) {
     return test_setup::do_with_tmp_directory([] (test_env& env, sstring tmpdir_path) {
         auto s = complex_schema();
 
-        auto mt = make_lw_shared<memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s);
 
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         auto cp = clustering_key_prefix::from_exploded(*s, {to_bytes("c1")});
@@ -264,7 +264,7 @@ static future<> sstable_compression_test(compressor_ptr c, unsigned generation) 
         builder.set_compressor_params(c);
         auto s = builder.build(schema_builder::compact_storage::no);
 
-        auto mtp = make_lw_shared<memtable>(s);
+        auto mtp = make_lw_shared<replica::memtable>(s);
 
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         auto cp = clustering_key_prefix::from_exploded(*s, {to_bytes("c1")});
@@ -311,7 +311,7 @@ SEASTAR_TEST_CASE(datafile_generation_16) {
     return test_setup::do_with_tmp_directory([] (test_env& env, sstring tmpdir_path) {
         auto s = uncompressed_schema();
 
-        auto mtp = make_lw_shared<memtable>(s);
+        auto mtp = make_lw_shared<replica::memtable>(s);
         // Create a number of keys that is a multiple of the sampling level
         for (int i = 0; i < 0x80; ++i) {
             sstring k = "key" + to_sstring(i);
@@ -347,7 +347,7 @@ SEASTAR_TEST_CASE(datafile_generation_37) {
     return test_setup::do_with_tmp_directory([] (test_env& env, sstring tmpdir_path) {
         auto s = compact_simple_dense_schema();
 
-        auto mtp = make_lw_shared<memtable>(s);
+        auto mtp = make_lw_shared<replica::memtable>(s);
 
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         mutation m(s, key);
@@ -384,7 +384,7 @@ SEASTAR_TEST_CASE(datafile_generation_38) {
     return test_setup::do_with_tmp_directory([] (test_env& env, sstring tmpdir_path) {
         auto s = compact_dense_schema();
 
-        auto mtp = make_lw_shared<memtable>(s);
+        auto mtp = make_lw_shared<replica::memtable>(s);
 
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         mutation m(s, key);
@@ -420,7 +420,7 @@ SEASTAR_TEST_CASE(datafile_generation_39) {
     return test_setup::do_with_tmp_directory([] (test_env& env, sstring tmpdir_path) {
         auto s = compact_sparse_schema();
 
-        auto mtp = make_lw_shared<memtable>(s);
+        auto mtp = make_lw_shared<replica::memtable>(s);
 
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         mutation m(s, key);
@@ -458,7 +458,7 @@ SEASTAR_TEST_CASE(datafile_generation_41) {
         auto s = make_shared_schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}, {"r2", int32_type}}, {}, utf8_type);
 
-        auto mt = make_lw_shared<memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s);
 
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         auto c_key = clustering_key::from_exploded(*s, {to_bytes("c1")});
@@ -493,7 +493,7 @@ SEASTAR_TEST_CASE(datafile_generation_47) {
         auto s = make_shared_schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", utf8_type}}, {}, utf8_type);
 
-        auto mt = make_lw_shared<memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s);
 
         const column_definition& r1_col = *s->get_column_definition("r1");
 
@@ -531,7 +531,7 @@ SEASTAR_TEST_CASE(test_counter_write) {
                     .with_column("r1", counter_type)
                     .with_column("r2", counter_type)
                     .build();
-            auto mt = make_lw_shared<memtable>(s);
+            auto mt = make_lw_shared<replica::memtable>(s);
 
             auto& r1_col = *s->get_column_definition("r1");
             auto& r2_col = *s->get_column_definition("r2");
@@ -954,7 +954,7 @@ SEASTAR_TEST_CASE(test_sstable_max_local_deletion_time) {
                 builder.with_column("c1", utf8_type, column_kind::clustering_key);
                 builder.with_column("r1", utf8_type);
                 schema_ptr s = builder.build(schema_builder::compact_storage::no);
-                auto mt = make_lw_shared<memtable>(s);
+                auto mt = make_lw_shared<replica::memtable>(s);
                 int32_t last_expiry = 0;
                 for (auto i = 0; i < 10; i++) {
                     auto key = partition_key::from_exploded(*s, {to_bytes("key" + to_sstring(i))});
@@ -1053,7 +1053,7 @@ static void check_min_max_column_names(const sstable_ptr& sst, std::vector<bytes
 
 static void test_min_max_clustering_key(test_env& env, schema_ptr s, std::vector<bytes> exploded_pk, std::vector<std::vector<bytes>> exploded_cks,
         std::vector<bytes> min_components, std::vector<bytes> max_components, sstable_version_types version, bool remove = false) {
-    auto mt = make_lw_shared<memtable>(s);
+    auto mt = make_lw_shared<replica::memtable>(s);
     auto insert_data = [&mt, &s] (std::vector<bytes>& exploded_pk, std::vector<bytes>&& exploded_ck) {
         const column_definition& r1_col = *s->get_column_definition("r1");
         auto key = partition_key::from_exploded(*s, exploded_pk);
@@ -1215,7 +1215,7 @@ SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
             BOOST_TEST_MESSAGE(fmt::format("version {}", to_string(version)));
 
             {
-                auto mt = make_lw_shared<memtable>(s);
+                auto mt = make_lw_shared<replica::memtable>(s);
                 mutation m(s, key);
                 tombstone tomb(api::new_timestamp(), gc_clock::now());
                 m.partition().apply_delete(*s, c_key, tomb);
@@ -1228,7 +1228,7 @@ SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
             }
 
             {
-                auto mt = make_lw_shared<memtable>(s);
+                auto mt = make_lw_shared<replica::memtable>(s);
                 mutation m(s, key);
                 m.set_clustered_cell(c_key, r1_col, make_dead_atomic_cell(3600));
                 mt->apply(std::move(m));
@@ -1240,7 +1240,7 @@ SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
             }
 
             {
-                auto mt = make_lw_shared<memtable>(s);
+                auto mt = make_lw_shared<replica::memtable>(s);
                 mutation m(s, key);
                 m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
                 mt->apply(std::move(m));
@@ -1252,7 +1252,7 @@ SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
             }
 
             {
-                auto mt = make_lw_shared<memtable>(s);
+                auto mt = make_lw_shared<replica::memtable>(s);
 
                 mutation m(s, key);
                 tombstone tomb(api::new_timestamp(), gc_clock::now());
@@ -1272,7 +1272,7 @@ SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
             }
 
             {
-                auto mt = make_lw_shared<memtable>(s);
+                auto mt = make_lw_shared<replica::memtable>(s);
                 mutation m(s, key);
                 tombstone tomb(api::new_timestamp(), gc_clock::now());
                 m.partition().apply(tomb);
@@ -1285,7 +1285,7 @@ SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
             }
 
             {
-                auto mt = make_lw_shared<memtable>(s);
+                auto mt = make_lw_shared<replica::memtable>(s);
                 mutation m(s, key);
                 tombstone tomb(api::new_timestamp(), gc_clock::now());
                 range_tombstone rt(clustering_key_prefix::from_single_value(*s, bytes(
@@ -1302,7 +1302,7 @@ SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
             }
 
             {
-                auto mt = make_lw_shared<memtable>(s);
+                auto mt = make_lw_shared<replica::memtable>(s);
                 mutation m(s, key);
                 m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
                 tombstone tomb(api::new_timestamp(), gc_clock::now());
@@ -1322,7 +1322,7 @@ SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
             }
 
             {
-                auto mt = make_lw_shared<memtable>(s);
+                auto mt = make_lw_shared<replica::memtable>(s);
                 mutation m(s, key);
                 m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
                 tombstone tomb(api::new_timestamp(), gc_clock::now());
@@ -1342,7 +1342,7 @@ SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
             }
 
             {
-                auto mt = make_lw_shared<memtable>(s);
+                auto mt = make_lw_shared<replica::memtable>(s);
                 mutation m(s, key);
                 m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
                 tombstone tomb(api::new_timestamp(), gc_clock::now());
@@ -1363,7 +1363,7 @@ SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
 
             if (version >= sstable_version_types::mc) {
                 {
-                    auto mt = make_lw_shared<memtable>(s);
+                    auto mt = make_lw_shared<replica::memtable>(s);
                     mutation m(s, key);
                     m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
                     tombstone tomb(api::new_timestamp(), gc_clock::now());
@@ -1381,7 +1381,7 @@ SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
                 }
 
                 {
-                    auto mt = make_lw_shared<memtable>(s);
+                    auto mt = make_lw_shared<replica::memtable>(s);
                     mutation m(s, key);
                     m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
                     tombstone tomb(api::new_timestamp(), gc_clock::now());
@@ -1399,7 +1399,7 @@ SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
                 }
 
                 {
-                    auto mt = make_lw_shared<memtable>(s);
+                    auto mt = make_lw_shared<replica::memtable>(s);
                     mutation m(s, key);
                     m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
                     tombstone tomb(api::new_timestamp(), gc_clock::now());
@@ -1433,7 +1433,7 @@ SEASTAR_TEST_CASE(sstable_composite_tombstone_metadata_check) {
             BOOST_TEST_MESSAGE(fmt::format("version {}", to_string(version)));
 
             {
-                auto mt = make_lw_shared<memtable>(s);
+                auto mt = make_lw_shared<replica::memtable>(s);
                 mutation m(s, key);
                 tombstone tomb(api::new_timestamp(), gc_clock::now());
                 m.partition().apply_delete(*s, c_key, tomb);
@@ -1446,7 +1446,7 @@ SEASTAR_TEST_CASE(sstable_composite_tombstone_metadata_check) {
             }
 
             {
-                auto mt = make_lw_shared<memtable>(s);
+                auto mt = make_lw_shared<replica::memtable>(s);
                 mutation m(s, key);
                 m.set_clustered_cell(c_key, r1_col, make_dead_atomic_cell(3600));
                 mt->apply(std::move(m));
@@ -1458,7 +1458,7 @@ SEASTAR_TEST_CASE(sstable_composite_tombstone_metadata_check) {
             }
 
             {
-                auto mt = make_lw_shared<memtable>(s);
+                auto mt = make_lw_shared<replica::memtable>(s);
                 mutation m(s, key);
                 m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
                 mt->apply(std::move(m));
@@ -1470,7 +1470,7 @@ SEASTAR_TEST_CASE(sstable_composite_tombstone_metadata_check) {
             }
 
             {
-                auto mt = make_lw_shared<memtable>(s);
+                auto mt = make_lw_shared<replica::memtable>(s);
 
                 mutation m(s, key);
                 tombstone tomb(api::new_timestamp(), gc_clock::now());
@@ -1490,7 +1490,7 @@ SEASTAR_TEST_CASE(sstable_composite_tombstone_metadata_check) {
             }
 
             {
-                auto mt = make_lw_shared<memtable>(s);
+                auto mt = make_lw_shared<replica::memtable>(s);
                 mutation m(s, key);
                 tombstone tomb(api::new_timestamp(), gc_clock::now());
                 m.partition().apply(tomb);
@@ -1503,7 +1503,7 @@ SEASTAR_TEST_CASE(sstable_composite_tombstone_metadata_check) {
             }
 
             {
-                auto mt = make_lw_shared<memtable>(s);
+                auto mt = make_lw_shared<replica::memtable>(s);
                 mutation m(s, key);
                 tombstone tomb(api::new_timestamp(), gc_clock::now());
                 range_tombstone rt(
@@ -1522,7 +1522,7 @@ SEASTAR_TEST_CASE(sstable_composite_tombstone_metadata_check) {
             }
 
             {
-                auto mt = make_lw_shared<memtable>(s);
+                auto mt = make_lw_shared<replica::memtable>(s);
                 mutation m(s, key);
                 m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
                 tombstone tomb(api::new_timestamp(), gc_clock::now());
@@ -1542,7 +1542,7 @@ SEASTAR_TEST_CASE(sstable_composite_tombstone_metadata_check) {
             }
 
             {
-                auto mt = make_lw_shared<memtable>(s);
+                auto mt = make_lw_shared<replica::memtable>(s);
                 mutation m(s, key);
                 m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
                 tombstone tomb(api::new_timestamp(), gc_clock::now());
@@ -1562,7 +1562,7 @@ SEASTAR_TEST_CASE(sstable_composite_tombstone_metadata_check) {
             }
 
             {
-                auto mt = make_lw_shared<memtable>(s);
+                auto mt = make_lw_shared<replica::memtable>(s);
                 mutation m(s, key);
                 m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
                 tombstone tomb(api::new_timestamp(), gc_clock::now());
@@ -1583,7 +1583,7 @@ SEASTAR_TEST_CASE(sstable_composite_tombstone_metadata_check) {
 
             if (version >= sstable_version_types::mc) {
                 {
-                    auto mt = make_lw_shared<memtable>(s);
+                    auto mt = make_lw_shared<replica::memtable>(s);
                     mutation m(s, key);
                     m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
                     tombstone tomb(api::new_timestamp(), gc_clock::now());
@@ -1601,7 +1601,7 @@ SEASTAR_TEST_CASE(sstable_composite_tombstone_metadata_check) {
                 }
 
                 {
-                    auto mt = make_lw_shared<memtable>(s);
+                    auto mt = make_lw_shared<replica::memtable>(s);
                     mutation m(s, key);
                     m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
                     tombstone tomb(api::new_timestamp(), gc_clock::now());
@@ -1639,7 +1639,7 @@ SEASTAR_TEST_CASE(sstable_composite_reverse_tombstone_metadata_check) {
             BOOST_TEST_MESSAGE(fmt::format("version {}", to_string(version)));
 
             {
-                auto mt = make_lw_shared<memtable>(s);
+                auto mt = make_lw_shared<replica::memtable>(s);
                 mutation m(s, key);
                 tombstone tomb(api::new_timestamp(), gc_clock::now());
                 m.partition().apply_delete(*s, c_key, tomb);
@@ -1652,7 +1652,7 @@ SEASTAR_TEST_CASE(sstable_composite_reverse_tombstone_metadata_check) {
             }
 
             {
-                auto mt = make_lw_shared<memtable>(s);
+                auto mt = make_lw_shared<replica::memtable>(s);
                 mutation m(s, key);
                 m.set_clustered_cell(c_key, r1_col, make_dead_atomic_cell(3600));
                 mt->apply(std::move(m));
@@ -1664,7 +1664,7 @@ SEASTAR_TEST_CASE(sstable_composite_reverse_tombstone_metadata_check) {
             }
 
             {
-                auto mt = make_lw_shared<memtable>(s);
+                auto mt = make_lw_shared<replica::memtable>(s);
                 mutation m(s, key);
                 m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
                 mt->apply(std::move(m));
@@ -1676,7 +1676,7 @@ SEASTAR_TEST_CASE(sstable_composite_reverse_tombstone_metadata_check) {
             }
 
             {
-                auto mt = make_lw_shared<memtable>(s);
+                auto mt = make_lw_shared<replica::memtable>(s);
 
                 mutation m(s, key);
                 tombstone tomb(api::new_timestamp(), gc_clock::now());
@@ -1696,7 +1696,7 @@ SEASTAR_TEST_CASE(sstable_composite_reverse_tombstone_metadata_check) {
             }
 
             {
-                auto mt = make_lw_shared<memtable>(s);
+                auto mt = make_lw_shared<replica::memtable>(s);
                 mutation m(s, key);
                 tombstone tomb(api::new_timestamp(), gc_clock::now());
                 m.partition().apply(tomb);
@@ -1709,7 +1709,7 @@ SEASTAR_TEST_CASE(sstable_composite_reverse_tombstone_metadata_check) {
             }
 
             {
-                auto mt = make_lw_shared<memtable>(s);
+                auto mt = make_lw_shared<replica::memtable>(s);
                 mutation m(s, key);
                 tombstone tomb(api::new_timestamp(), gc_clock::now());
                 range_tombstone rt(
@@ -1728,7 +1728,7 @@ SEASTAR_TEST_CASE(sstable_composite_reverse_tombstone_metadata_check) {
             }
 
             {
-                auto mt = make_lw_shared<memtable>(s);
+                auto mt = make_lw_shared<replica::memtable>(s);
                 mutation m(s, key);
                 m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
                 tombstone tomb(api::new_timestamp(), gc_clock::now());
@@ -1748,7 +1748,7 @@ SEASTAR_TEST_CASE(sstable_composite_reverse_tombstone_metadata_check) {
             }
 
             {
-                auto mt = make_lw_shared<memtable>(s);
+                auto mt = make_lw_shared<replica::memtable>(s);
                 mutation m(s, key);
                 m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
                 tombstone tomb(api::new_timestamp(), gc_clock::now());
@@ -1768,7 +1768,7 @@ SEASTAR_TEST_CASE(sstable_composite_reverse_tombstone_metadata_check) {
             }
 
             {
-                auto mt = make_lw_shared<memtable>(s);
+                auto mt = make_lw_shared<replica::memtable>(s);
                 mutation m(s, key);
                 m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
                 tombstone tomb(api::new_timestamp(), gc_clock::now());
@@ -1789,7 +1789,7 @@ SEASTAR_TEST_CASE(sstable_composite_reverse_tombstone_metadata_check) {
 
             if (version >= sstable_version_types::mc) {
                 {
-                    auto mt = make_lw_shared<memtable>(s);
+                    auto mt = make_lw_shared<replica::memtable>(s);
                     mutation m(s, key);
                     m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
                     tombstone tomb(api::new_timestamp(), gc_clock::now());
@@ -1807,7 +1807,7 @@ SEASTAR_TEST_CASE(sstable_composite_reverse_tombstone_metadata_check) {
                 }
 
                 {
-                    auto mt = make_lw_shared<memtable>(s);
+                    auto mt = make_lw_shared<replica::memtable>(s);
                     mutation m(s, key);
                     m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
                     tombstone tomb(api::new_timestamp(), gc_clock::now());
@@ -2967,7 +2967,7 @@ SEASTAR_TEST_CASE(sstable_reader_with_timeout) {
         return async([&env, tmpdir_path] {
             auto s = complex_schema();
 
-            auto mt = make_lw_shared<memtable>(s);
+            auto mt = make_lw_shared<replica::memtable>(s);
 
             auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
             auto cp = clustering_key_prefix::from_exploded(*s, {to_bytes("c1")});

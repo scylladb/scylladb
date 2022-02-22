@@ -128,11 +128,12 @@ class engine;
 
 class mutation_reordered_with_truncate_exception : public std::exception {};
 
-using shared_memtable = lw_shared_ptr<memtable>;
-
-class memtable_list;
 class column_family_test;
 class database_test;
+
+namespace replica {
+
+using shared_memtable = lw_shared_ptr<memtable>;
 
 // We could just add all memtables, regardless of types, to a single list, and
 // then filter them out when we read them. Here's why I have chosen not to do
@@ -274,6 +275,8 @@ public:
 private:
     lw_shared_ptr<memtable> new_memtable();
 };
+
+}
 
 using sstable_list = sstables::sstable_list;
 

@@ -19,7 +19,7 @@
 #include "schema_builder.hh"
 #include "test/boost/total_order_check.hh"
 #include "schema_upgrader.hh"
-#include "memtable.hh"
+#include "replica/memtable.hh"
 
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
@@ -93,9 +93,9 @@ SEASTAR_TEST_CASE(test_mutation_merger_conforms_to_mutation_source) {
 
             const int n = 5;
 
-            std::vector<lw_shared_ptr<memtable>> memtables;
+            std::vector<lw_shared_ptr<replica::memtable>> memtables;
             for (int i = 0; i < n; ++i) {
-                memtables.push_back(make_lw_shared<memtable>(s));
+                memtables.push_back(make_lw_shared<replica::memtable>(s));
             }
 
             for (auto&& m : partitions) {

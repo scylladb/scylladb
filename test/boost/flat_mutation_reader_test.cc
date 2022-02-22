@@ -18,7 +18,7 @@
 #include "flat_mutation_reader.hh"
 #include "mutation_reader.hh"
 #include "schema_builder.hh"
-#include "memtable.hh"
+#include "replica/memtable.hh"
 #include "row_cache.hh"
 #include "test/lib/tmpdir.hh"
 #include "repair/repair.hh"
@@ -893,8 +893,8 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_reader_reads_in_native_reverse_order) {
     auto forward_schema = rnd_schema.schema();
     auto reverse_schema = forward_schema->make_reversed();
 
-    auto forward_mt = make_lw_shared<memtable>(forward_schema);
-    auto reverse_mt = make_lw_shared<memtable>(reverse_schema);
+    auto forward_mt = make_lw_shared<replica::memtable>(forward_schema);
+    auto reverse_mt = make_lw_shared<replica::memtable>(reverse_schema);
 
     for (size_t pk = 0; pk != 8; ++pk) {
         auto mut = rnd_schema.new_mutation(pk);
@@ -938,7 +938,7 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_reader_is_mutation_source) {
     std::list<query::partition_slice> reversed_slices;
     auto populate = [&reversed_slices] (schema_ptr s, const std::vector<mutation> &muts) {
         auto reverse_schema = s->make_reversed();
-        auto reverse_mt = make_lw_shared<memtable>(reverse_schema);
+        auto reverse_mt = make_lw_shared<replica::memtable>(reverse_schema);
         for (const auto& mut : muts) {
             reverse_mt->apply(reverse(mut));
         }

@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "memtable.hh"
+#include "replica/memtable.hh"
 #include "row_cache.hh"
 #include "dirty_memory_manager.hh"
 
@@ -20,7 +20,7 @@ class real_dirty_memory_accounter {
     uint64_t _uncommitted = 0;
 public:
     real_dirty_memory_accounter(dirty_memory_manager& mgr, cache_tracker& tracker, size_t size);
-    real_dirty_memory_accounter(memtable& m, cache_tracker& tracker);
+    real_dirty_memory_accounter(replica::memtable& m, cache_tracker& tracker);
     ~real_dirty_memory_accounter();
     real_dirty_memory_accounter(real_dirty_memory_accounter&& c);
     real_dirty_memory_accounter(const real_dirty_memory_accounter& c) = delete;
@@ -38,7 +38,7 @@ real_dirty_memory_accounter::real_dirty_memory_accounter(dirty_memory_manager& m
 }
 
 inline
-real_dirty_memory_accounter::real_dirty_memory_accounter(memtable& m, cache_tracker& tracker)
+real_dirty_memory_accounter::real_dirty_memory_accounter(replica::memtable& m, cache_tracker& tracker)
     : real_dirty_memory_accounter(m.get_dirty_memory_manager(), tracker, m.occupancy().used_space())
 { }
 

@@ -18,7 +18,7 @@
 #include "row_cache.hh"
 #include "partition_slice_builder.hh"
 #include "schema_builder.hh"
-#include "memtable.hh"
+#include "replica/memtable.hh"
 #include "test/lib/memtable_snapshot_source.hh"
 #include "test/perf/perf.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"

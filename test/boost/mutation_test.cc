@@ -77,7 +77,7 @@ static atomic_cell make_collection_member(data_type dt, T value) {
     return atomic_cell::make_live(*dt, 0, dt->decompose(std::move(value)), atomic_cell::collection_member::yes);
 };
 
-static mutation_partition get_partition(reader_permit permit, memtable& mt, const partition_key& key) {
+static mutation_partition get_partition(reader_permit permit, replica::memtable& mt, const partition_key& key) {
     auto dk = dht::decorate_key(*mt.schema(), key);
     auto range = dht::partition_range::make_singular(dk);
     auto reader = mt.make_flat_reader(mt.schema(), std::move(permit), range);
@@ -108,7 +108,7 @@ SEASTAR_TEST_CASE(test_mutation_is_applied) {
         auto s = make_shared_schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type);
 
-        auto mt = make_lw_shared<memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s);
 
         const column_definition& r1_col = *s->get_column_definition("r1");
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
@@ -212,7 +212,7 @@ SEASTAR_TEST_CASE(test_map_mutations) {
         auto my_map_type = map_type_impl::get_instance(int32_type, utf8_type, true);
         auto s = make_shared_schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", my_map_type}}, utf8_type);
-        auto mt = make_lw_shared<memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s);
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         auto& column = *s->get_column_definition("s1");
         auto mmut1 = make_collection_mutation({}, int32_type->decompose(101), make_collection_member(utf8_type, sstring("101")));
@@ -250,7 +250,7 @@ SEASTAR_TEST_CASE(test_set_mutations) {
         auto my_set_type = set_type_impl::get_instance(int32_type, true);
         auto s = make_shared_schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", my_set_type}}, utf8_type);
-        auto mt = make_lw_shared<memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s);
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         auto& column = *s->get_column_definition("s1");
         auto mmut1 = make_collection_mutation({}, int32_type->decompose(101), make_atomic_cell());
@@ -288,7 +288,7 @@ SEASTAR_TEST_CASE(test_list_mutations) {
         auto my_list_type = list_type_impl::get_instance(int32_type, true);
         auto s = make_shared_schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", my_list_type}}, utf8_type);
-        auto mt = make_lw_shared<memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s);
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         auto& column = *s->get_column_definition("s1");
         auto make_key = [] { return timeuuid_type->decompose(utils::UUID_gen::get_time_UUID()); };
@@ -331,7 +331,7 @@ SEASTAR_THREAD_TEST_CASE(test_udt_mutations) {
 
     auto s = make_shared_schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", ut}}, utf8_type);
-    auto mt = make_lw_shared<memtable>(s);
+    auto mt = make_lw_shared<replica::memtable>(s);
     auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
     auto& column = *s->get_column_definition("s1");
 
@@ -404,7 +404,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_collection_allocation) {
         .build();
 
     const std::array sizes_kb{size_t(1), size_t(10), size_t(64)};
-    auto mt = make_lw_shared<memtable>(schema);
+    auto mt = make_lw_shared<replica::memtable>(schema);
 
     auto make_mutation_with_collection = [&schema, &semaphore, collection_type] (partition_key pk, collection_mutation_description cmd) {
         const auto& cdef = schema->column_at(column_kind::regular_column, 0);
@@ -587,7 +587,7 @@ SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
                 assert_that_scanner3.produces(mutations[i]);
             }
 
-            memtable& m = cf.active_memtable(); // held by scanners
+            replica::memtable& m = cf.active_memtable(); // held by scanners
 
             auto flushed = cf.flush();
 
@@ -1155,7 +1155,7 @@ SEASTAR_TEST_CASE(test_large_blobs) {
         auto s = make_shared_schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {}, {}, {{"s1", bytes_type}}, utf8_type);
 
-        auto mt = make_lw_shared<memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s);
 
         auto blob1 = make_blob(1234567);
         auto blob2 = make_blob(2345678);

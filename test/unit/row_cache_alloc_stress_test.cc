@@ -17,7 +17,7 @@
 #include "row_cache.hh"
 #include "log.hh"
 #include "schema_builder.hh"
-#include "memtable.hh"
+#include "replica/memtable.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 
 static
@@ -60,7 +60,7 @@ int main(int argc, char** argv) {
             cache_tracker tracker;
             row_cache cache(s, make_empty_snapshot_source(), tracker);
 
-            auto mt = make_lw_shared<memtable>(s);
+            auto mt = make_lw_shared<replica::memtable>(s);
             std::vector<dht::decorated_key> keys;
 
             size_t cell_size = 1024;

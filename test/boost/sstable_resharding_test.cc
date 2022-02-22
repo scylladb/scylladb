@@ -55,7 +55,7 @@ void run_sstable_resharding_test() {
 
     // create sst shared by all shards
     {
-        auto mt = make_lw_shared<memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s);
         auto get_mutation = [mt, s] (sstring key_to_write, auto value) {
             auto key = partition_key::from_exploded(*s, {to_bytes(key_to_write)});
             mutation m(s, key);
