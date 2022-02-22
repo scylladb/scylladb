@@ -30,6 +30,7 @@
 #include "strategy_control.hh"
 #include "backlog_controller.hh"
 #include "seastarx.hh"
+#include "sstables/exceptions.hh"
 
 namespace replica {
 class table;
@@ -103,6 +104,10 @@ private:
         const utils::UUID& output_run_id() const noexcept {
             return *output_run_identifier;
         }
+
+        void stop(sstring reason) noexcept;
+
+        sstables::compaction_stopped_exception make_compaction_stopped_exception() const;
     };
 
     // compaction manager may have N fibers to allow parallel compaction per shard.

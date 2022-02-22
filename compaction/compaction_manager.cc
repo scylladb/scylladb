@@ -322,8 +322,7 @@ future<> compaction_manager::run_custom_job(replica::table* t, sstables::compact
         return with_lock(task->compaction_state.lock.for_read(), [this, task, &job] () mutable {
             // Allow caller to know that task (e.g. reshape) was asked to stop while waiting for a chance to run.
             if (task->stopping) {
-                throw sstables::compaction_stopped_exception(task->compacting_table->schema()->ks_name(), task->compacting_table->schema()->cf_name(),
-                    task->compaction_data.stop_requested);
+                return make_exception_future<>(task->make_compaction_stopped_exception());
             }
             _stats.active_tasks++;
             if (!can_proceed(task)) {
@@ -391,10 +390,19 @@ void compaction_manager::task::finish_compaction() noexcept {
     output_run_identifier = {};
 }
 
+void compaction_manager::task::stop(sstring reason) noexcept {
+    stopping = true;
+    compaction_data.stop(std::move(reason));
+}
+
+sstables::compaction_stopped_exception compaction_manager::task::make_compaction_stopped_exception() const {
+    auto s = compacting_table->schema();
+    return sstables::compaction_stopped_exception(s->ks_name(), s->cf_name(), compaction_data.stop_requested);
+}
+
 future<> compaction_manager::task_stop(lw_shared_ptr<compaction_manager::task> task, sstring reason) {
     cmlog.debug("Stopping task {} table={}", fmt::ptr(task.get()), fmt::ptr(task->compacting_table));
-    task->stopping = true;
-    task->compaction_data.stop(reason);
+    task->stop(reason);
     auto f = task->compaction_done.get_future();
     return f.then_wrapped([task] (future<> f) {
         task->stopping = false;
@@ -624,7 +632,9 @@ inline bool compaction_manager::can_proceed(const lw_shared_ptr<task>& task) {
 inline future<> compaction_manager::put_task_to_sleep(lw_shared_ptr<task>& task) {
     cmlog.info("compaction task handler sleeping for {} seconds",
         std::chrono::duration_cast<std::chrono::seconds>(task->compaction_retry.sleep_time()).count());
-    return task->compaction_retry.retry();
+    return task->compaction_retry.retry(task->compaction_data.abort).handle_exception_type([task] (sleep_aborted&) {
+        return make_exception_future<>(task->make_compaction_stopped_exception());
+    });
 }
 
 inline bool compaction_manager::maybe_stop_on_error(std::exception_ptr err, bool can_retry) {
