@@ -233,5 +233,32 @@ future<> set_server_done(http_context& ctx) {
     });
 }
 
+void req_params::process(const request& req) {
+    // Process mandatory parameters
+    for (auto& [name, ent] : params) {
+        if (!ent.is_mandatory) {
+            continue;
+        }
+        try {
+            ent.value = req.param[name];
+        } catch (std::out_of_range&) {
+            throw httpd::bad_param_exception(fmt::format("Mandatory parameter '{}' was not provided", name));
+        }
+    }
+
+    // Process optional parameters
+    for (auto& [name, value] : req.query_parameters) {
+        try {
+            auto& ent = params.at(name);
+            if (ent.is_mandatory) {
+                throw httpd::bad_param_exception(fmt::format("Parameter '{}' is expected to be provided as part of the request url", name));
+            }
+            ent.value = value;
+        } catch (std::out_of_range&) {
+            throw httpd::bad_param_exception(fmt::format("Unsupported optional parameter '{}'", name));
+        }
+    }
+}
+
 }
 
