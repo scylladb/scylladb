@@ -42,7 +42,7 @@
 #include "counters.hh"
 #include "cell_locking.hh"
 #include "test/lib/simple_schema.hh"
-#include "memtable-sstable.hh"
+#include "replica/memtable-sstable.hh"
 #include "test/lib/index_reader_assertions.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
 #include "test/lib/make_random_string.hh"
@@ -205,7 +205,7 @@ SEASTAR_TEST_CASE(compaction_manager_basic_test) {
     for (auto generation : generations) {
         // create 4 sstables of similar size to be compacted later on.
 
-        auto mt = make_lw_shared<memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s);
 
         const column_definition& r1_col = *s->get_column_definition("r1");
 
@@ -384,7 +384,7 @@ static future<std::vector<unsigned long>> compact_sstables(test_env& env, sstrin
             });
         }
         return do_for_each(*generations, [&env, generations, sstables, s, min_sstable_size, tmpdir_path] (unsigned long generation) {
-            auto mt = make_lw_shared<memtable>(s);
+            auto mt = make_lw_shared<replica::memtable>(s);
 
             const column_definition& r1_col = *s->get_column_definition("r1");
 
@@ -1245,7 +1245,7 @@ SEASTAR_TEST_CASE(sstable_rewrite) {
         auto s = make_shared_schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", utf8_type}}, {}, utf8_type);
 
-        auto mt = make_lw_shared<memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s);
 
         const column_definition& r1_col = *s->get_column_definition("r1");
 
@@ -1311,7 +1311,7 @@ SEASTAR_TEST_CASE(test_sstable_max_local_deletion_time_2) {
                 schema_ptr s = builder.build(schema_builder::compact_storage::no);
                 column_family_for_tests cf(env.manager(), s);
                 auto close_cf = deferred_stop(cf);
-                auto mt = make_lw_shared<memtable>(s);
+                auto mt = make_lw_shared<replica::memtable>(s);
                 auto now = gc_clock::now();
                 int32_t last_expiry = 0;
                 auto add_row = [&now, &mt, &s, &last_expiry](mutation &m, bytes column_name, uint32_t ttl) {
@@ -1321,7 +1321,7 @@ SEASTAR_TEST_CASE(test_sstable_max_local_deletion_time_2) {
                                          make_atomic_cell(utf8_type, bytes(""), ttl, last_expiry));
                     mt->apply(std::move(m));
                 };
-                auto get_usable_sst = [&env, s, tmpdir_path, version](memtable &mt, int64_t gen) -> future<sstable_ptr> {
+                auto get_usable_sst = [&env, s, tmpdir_path, version](replica::memtable &mt, int64_t gen) -> future<sstable_ptr> {
                     auto sst = env.make_sstable(s, tmpdir_path, gen, version, big);
                     return write_memtable_to_sstable_for_test(mt, sst).then([&env, sst, gen, s, tmpdir_path, version] {
                         return env.reusable_sst(s, tmpdir_path, gen, version);
@@ -1336,7 +1336,7 @@ SEASTAR_TEST_CASE(test_sstable_max_local_deletion_time_2) {
                 auto sst1 = get_usable_sst(*mt, 54).get0();
                 BOOST_REQUIRE(last_expiry == sst1->get_stats_metadata().max_local_deletion_time);
 
-                mt = make_lw_shared<memtable>(s);
+                mt = make_lw_shared<replica::memtable>(s);
                 m = mutation(s, partition_key::from_exploded(*s, {to_bytes("deletetest")}));
                 tombstone tomb(api::new_timestamp(), now);
                 m.partition().apply_delete(*s, clustering_key::from_exploded(*s, {to_bytes("todelete")}), tomb);
@@ -1419,7 +1419,7 @@ SEASTAR_TEST_CASE(compaction_with_fully_expired_table) {
             return env.make_sstable(s, tmp.path().string(), (*gen)++, sstables::get_highest_sstable_version(), big);
         };
 
-        auto mt = make_lw_shared<memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s);
         mutation m(s, key);
         tombstone tomb(api::new_timestamp(), gc_clock::now() - std::chrono::seconds(3600));
         m.partition().apply_delete(*s, c_key, tomb);
@@ -1811,7 +1811,7 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test_2) {
             column_family_for_tests cf(env.manager(), s);
             auto close_cf = deferred_stop(cf);
             auto tmp = tmpdir();
-            auto mt = make_lw_shared<memtable>(s);
+            auto mt = make_lw_shared<replica::memtable>(s);
             const column_definition &r1_col = *s->get_column_definition("r1");
 
             for (auto j = 0; j < 8; j++) {
@@ -1828,7 +1828,7 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test_2) {
             sst = env.reusable_sst(s, tmp.path().string(), 1, version).get0();
             check_min_max_column_names(sst, {"0ck100"}, {"7ck149"});
 
-            mt = make_lw_shared<memtable>(s);
+            mt = make_lw_shared<replica::memtable>(s);
             auto key = partition_key::from_exploded(*s, {to_bytes("key9")});
             mutation m(s, key);
             for (auto i = 101; i < 299; i++) {
@@ -1876,7 +1876,7 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
         auto s = make_shared_schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", utf8_type}}, {}, utf8_type);
 
-        auto mt = make_lw_shared<memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s);
 
         static constexpr float expired = 0.33;
         // we want number of expired keys to be ~ 1.5*sstables::TOMBSTONE_HISTOGRAM_BIN_SIZE so as to
@@ -2251,7 +2251,7 @@ SEASTAR_TEST_CASE(sstable_scrub_validate_mode_test) {
                 return env.make_sstable(schema, tmp.path().string(), (*gen)++);
             };
 
-            auto scrubbed_mt = make_lw_shared<memtable>(schema);
+            auto scrubbed_mt = make_lw_shared<replica::memtable>(schema);
             auto sst = sst_gen();
 
             testlog.info("Writing sstable {}", sst->get_filename());
@@ -2547,7 +2547,7 @@ SEASTAR_TEST_CASE(sstable_scrub_segregate_mode_test) {
                 return env.make_sstable(schema, tmp.path().string(), (*gen)++);
             };
 
-            auto scrubbed_mt = make_lw_shared<memtable>(schema);
+            auto scrubbed_mt = make_lw_shared<replica::memtable>(schema);
             auto sst = sst_gen();
 
             testlog.info("Writing sstable {}", sst->get_filename());
@@ -2659,7 +2659,7 @@ SEASTAR_TEST_CASE(sstable_scrub_quarantine_mode_test) {
                     return env.make_sstable(schema, tmp.path().string(), (*gen)++);
                 };
 
-                auto scrubbed_mt = make_lw_shared<memtable>(schema);
+                auto scrubbed_mt = make_lw_shared<replica::memtable>(schema);
                 auto sst = sst_gen();
 
                 testlog.info("Writing sstable {}", sst->get_filename());
@@ -4040,7 +4040,7 @@ SEASTAR_TEST_CASE(test_twcs_interposer_on_memtable_flush) {
         size_t target_windows_span = (split_during_flush) ? 10 : 1;
         constexpr size_t rows_per_window = 10;
 
-        auto mt = make_lw_shared<memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s);
         for (unsigned i = 1; i <= target_windows_span; i++) {
             for (unsigned j = 0; j < rows_per_window; j++) {
                 mt->apply(make_row(std::chrono::hours(i)));

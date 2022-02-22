@@ -7,7 +7,7 @@
  */
 
 #include "mutation_writer/partition_based_splitting_writer.hh"
-#include "memtable.hh"
+#include "replica/memtable.hh"
 
 #include <seastar/core/coroutine.hh>
 
@@ -21,7 +21,7 @@ class partition_sorting_mutation_writer {
     size_t _max_memory;
     bucket_writer _bucket_writer;
     std::optional<dht::decorated_key> _last_bucket_key;
-    lw_shared_ptr<memtable> _memtable;
+    lw_shared_ptr<replica::memtable> _memtable;
     future<> _background_memtable_flush = make_ready_future<>();
     std::optional<mutation> _current_mut;
     size_t _current_mut_size = 0;
@@ -35,7 +35,7 @@ private:
 
     future<> flush_memtable() {
         co_await _consumer(_memtable->make_flush_reader(_schema, _permit, _pc));
-        _memtable = make_lw_shared<memtable>(_schema);
+        _memtable = make_lw_shared<replica::memtable>(_schema);
     }
 
     future<> maybe_flush_memtable() {
@@ -66,7 +66,7 @@ public:
         , _pc(cfg.pc)
         , _max_memory(cfg.max_memory)
         , _bucket_writer(_schema, _permit, _consumer)
-        , _memtable(make_lw_shared<memtable>(_schema))
+        , _memtable(make_lw_shared<replica::memtable>(_schema))
     { }
 
     future<> consume(partition_start ps) {

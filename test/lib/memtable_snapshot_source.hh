@@ -9,7 +9,7 @@
 #pragma once
 
 #include "mutation_reader.hh"
-#include "memtable.hh"
+#include "replica/memtable.hh"
 #include "utils/phased_barrier.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include <seastar/core/circular_buffer.hh>
@@ -21,7 +21,7 @@
 // Must be destroyed in a seastar thread.
 class memtable_snapshot_source {
     schema_ptr _s;
-    circular_buffer<lw_shared_ptr<memtable>> _memtables;
+    circular_buffer<lw_shared_ptr<replica::memtable>> _memtables;
     utils::phased_barrier _apply;
     bool _closed = false;
     seastar::condition_variable _should_compact;
@@ -30,10 +30,10 @@ private:
     bool should_compact() const {
         return !_closed && _memtables.size() >= 3;
     }
-    lw_shared_ptr<memtable> new_memtable() {
-        return make_lw_shared<memtable>(_s);
+    lw_shared_ptr<replica::memtable> new_memtable() {
+        return make_lw_shared<replica::memtable>(_s);
     }
-    lw_shared_ptr<memtable> pending() {
+    lw_shared_ptr<replica::memtable> pending() {
         if (_memtables.empty()) {
             _memtables.push_back(new_memtable());
             on_new_memtable();
@@ -51,7 +51,7 @@ private:
         }
         auto count = _memtables.size();
         auto op = _apply.start();
-        auto new_mt = make_lw_shared<memtable>(_s);
+        auto new_mt = make_lw_shared<replica::memtable>(_s);
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto permit = semaphore.make_permit();
         std::vector<flat_mutation_reader_v2> readers;
@@ -119,7 +119,7 @@ public:
         pending()->apply(mt);
     }
     // Must run in a seastar thread
-    void apply(memtable& mt) {
+    void apply(replica::memtable& mt) {
         auto op = _apply.start();
         auto new_mt = new_memtable();
         tests::reader_concurrency_semaphore_wrapper semaphore;
@@ -127,7 +127,7 @@ public:
         _memtables.push_back(new_mt);
     }
     // mt must not change from now on.
-    void apply(lw_shared_ptr<memtable> mt) {
+    void apply(lw_shared_ptr<replica::memtable> mt) {
         auto op = _apply.start();
         _memtables.push_back(std::move(mt));
         on_new_memtable();

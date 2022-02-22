@@ -16,7 +16,6 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/io_priority_class.hh>
 
-class memtable;
 class flat_mutation_reader;
 
 namespace sstables {
@@ -24,6 +23,10 @@ class sstables_manager;
 class sstable_writer_config;
 class write_monitor;
 }
+
+namespace replica {
+
+class memtable;
 
 seastar::future<>
 write_memtable_to_sstable(flat_mutation_reader reader,
@@ -45,3 +48,5 @@ seastar::future<>
 write_memtable_to_sstable(memtable& mt,
         sstables::shared_sstable sst,
         sstables::sstable_writer_config cfg);
+
+}

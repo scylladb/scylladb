@@ -822,7 +822,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
 
         auto permit = sem.obtain_permit(schema.get(), get_name(), replica::new_reader_base_cost, db::no_timeout).get0();
 
-        auto mt = make_lw_shared<memtable>(schema);
+        auto mt = make_lw_shared<replica::memtable>(schema);
         for (const auto& mut : muts) {
             mt->apply(mut);
         }

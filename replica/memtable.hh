@@ -25,9 +25,11 @@
 
 class frozen_mutation;
 class flat_mutation_reader;
-
+class row_cache;
 
 namespace bi = boost::intrusive;
+
+namespace replica {
 
 class memtable_entry {
     schema_ptr _schema;
@@ -92,11 +94,13 @@ public:
     friend std::ostream& operator<<(std::ostream&, const memtable_entry&);
 };
 
+}
+
 class dirty_memory_manager;
 
 namespace replica {
+
 struct table_stats;
-}
 
 // Managed by lw_shared_ptr<>.
 class memtable final : public enable_lw_shared_from_this<memtable>, private logalloc::region {
@@ -153,7 +157,7 @@ private:
     } _stats_collector;
 
     void update(db::rp_handle&&);
-    friend class row_cache;
+    friend class ::row_cache;
     friend class memtable_entry;
     friend class flush_reader;
     friend class flush_memory_accounter;
@@ -281,3 +285,5 @@ public:
 
     friend std::ostream& operator<<(std::ostream&, memtable&);
 };
+
+}

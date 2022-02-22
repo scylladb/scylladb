@@ -9,7 +9,7 @@
 #include "test/lib/sstable_utils.hh"
 
 #include "replica/database.hh"
-#include "memtable-sstable.hh"
+#include "replica/memtable-sstable.hh"
 #include "dht/i_partitioner.hh"
 #include "dht/murmur3_partitioner.hh"
 #include <boost/range/irange.hpp>
@@ -60,7 +60,7 @@ sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_
 
     auto sst = sst_factory();
     schema_ptr s = muts[0].schema();
-    auto mt = make_lw_shared<memtable>(s);
+    auto mt = make_lw_shared<replica::memtable>(s);
 
     std::size_t i{0};
     for (auto&& m : muts) {
@@ -98,7 +98,7 @@ sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_
 
 shared_sstable make_sstable(sstables::test_env& env, schema_ptr s, sstring dir, std::vector<mutation> mutations,
         sstable_writer_config cfg, sstables::sstable::version_types version, gc_clock::time_point query_time) {
-    auto mt = make_lw_shared<memtable>(s);
+    auto mt = make_lw_shared<replica::memtable>(s);
     fs::path dir_path(dir);
 
     for (auto&& m : mutations) {
@@ -117,7 +117,7 @@ shared_sstable make_sstable_easy(test_env& env, const fs::path& path, flat_mutat
     return sst;
 }
 
-shared_sstable make_sstable_easy(test_env& env, const fs::path& path, lw_shared_ptr<memtable> mt, sstable_writer_config cfg,
+shared_sstable make_sstable_easy(test_env& env, const fs::path& path, lw_shared_ptr<replica::memtable> mt, sstable_writer_config cfg,
         unsigned long gen, const sstable::version_types v, int estimated_partitions, gc_clock::time_point query_time) {
     schema_ptr s = mt->schema();
     auto sst = env.make_sstable(s, path.string(), gen, v, sstable_format_types::big, default_sstable_buffer_size, query_time);

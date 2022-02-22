@@ -18,7 +18,7 @@
 #include "service/migration_manager.hh"
 
 #include <seastar/core/thread.hh>
-#include "memtable.hh"
+#include "replica/memtable.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/mutation_source_test.hh"
@@ -66,7 +66,7 @@ std::vector<mutation> make_ring(schema_ptr s, int n_mutations) {
 SEASTAR_TEST_CASE(test_memtable_conforms_to_mutation_source) {
     return seastar::async([] {
         run_mutation_source_tests([](schema_ptr s, const std::vector<mutation>& partitions) {
-            auto mt = make_lw_shared<memtable>(s);
+            auto mt = make_lw_shared<replica::memtable>(s);
 
             for (auto&& m : partitions) {
                 mt->apply(m);
@@ -82,7 +82,7 @@ SEASTAR_TEST_CASE(test_memtable_conforms_to_mutation_source) {
 SEASTAR_TEST_CASE(test_memtable_with_many_versions_conforms_to_mutation_source) {
     return seastar::async([] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        lw_shared_ptr<memtable> mt;
+        lw_shared_ptr<replica::memtable> mt;
         std::vector<flat_mutation_reader> readers;
         auto clear_readers = [&readers] {
             parallel_for_each(readers, [] (flat_mutation_reader& rd) {
@@ -105,7 +105,7 @@ SEASTAR_TEST_CASE(test_memtable_with_many_versions_conforms_to_mutation_source) 
         });
         run_mutation_source_tests([&] (schema_ptr s, const std::vector<mutation>& muts) {
             clear_readers();
-            mt = make_lw_shared<memtable>(s);
+            mt = make_lw_shared<replica::memtable>(s);
 
             for (auto&& m : muts) {
                 mt->apply(m);
@@ -133,7 +133,7 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
 
         auto make_memtable = [] (dirty_memory_manager& mgr, replica::table_stats& tbl_stats, std::vector<mutation> muts) {
             assert(!muts.empty());
-            auto mt = make_lw_shared<memtable>(muts.front().schema(), mgr, tbl_stats);
+            auto mt = make_lw_shared<replica::memtable>(muts.front().schema(), mgr, tbl_stats);
             for (auto& m : muts) {
                 mt->apply(m);
             }
@@ -210,7 +210,7 @@ SEASTAR_TEST_CASE(test_adding_a_column_during_reading_doesnt_affect_read_result)
 
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
-        auto mt = make_lw_shared<memtable>(s1);
+        auto mt = make_lw_shared<replica::memtable>(s1);
 
         std::vector<mutation> ring = make_ring(s1, 3);
 
@@ -257,7 +257,7 @@ SEASTAR_TEST_CASE(test_virtual_dirty_accounting_on_flush) {
         dirty_memory_manager mgr;
         replica::table_stats tbl_stats;
 
-        auto mt = make_lw_shared<memtable>(s, mgr, tbl_stats);
+        auto mt = make_lw_shared<replica::memtable>(s, mgr, tbl_stats);
 
         std::vector<mutation> ring = make_ring(s, 3);
         std::vector<mutation> current_ring;
@@ -320,7 +320,7 @@ SEASTAR_TEST_CASE(test_partition_version_consistency_after_lsa_compaction_happen
 
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
-        auto mt = make_lw_shared<memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s);
 
         auto empty_m = make_unique_mutation(s);
         auto ck1 = clustering_key::from_single_value(*s, serialized(make_unique_bytes()));
@@ -392,7 +392,7 @@ SEASTAR_TEST_CASE(test_segment_migration_during_flush) {
         replica::table_stats tbl_stats;
         dirty_memory_manager mgr;
 
-        auto mt = make_lw_shared<memtable>(s, mgr, tbl_stats);
+        auto mt = make_lw_shared<replica::memtable>(s, mgr, tbl_stats);
 
         const int rows_per_partition = 300;
         const int partitions = 3;
@@ -441,8 +441,8 @@ SEASTAR_TEST_CASE(test_fast_forward_to_after_memtable_is_flushed) {
 
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
-        auto mt = make_lw_shared<memtable>(s);
-        auto mt2 = make_lw_shared<memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s);
+        auto mt2 = make_lw_shared<replica::memtable>(s);
 
         std::vector<mutation> ring = make_ring(s, 5);
 
@@ -468,7 +468,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_partition_range_reads) {
         tests::reader_concurrency_semaphore_wrapper semaphore;
         std::vector<mutation> ms = gen(2);
 
-        auto mt = make_lw_shared<memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s);
         for (auto& m : ms) {
             mt->apply(m);
         }
@@ -487,7 +487,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_flush_reads) {
         tests::reader_concurrency_semaphore_wrapper semaphore;
         std::vector<mutation> ms = gen(2);
 
-        auto mt = make_lw_shared<memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s);
         for (auto& m : ms) {
             mt->apply(m);
         }
@@ -509,7 +509,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_single_partition_reads) {
         tests::reader_concurrency_semaphore_wrapper semaphore;
         std::vector<mutation> ms = gen(2);
 
-        auto mt = make_lw_shared<memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s);
         for (auto& m : ms) {
             mt->apply(m);
         }
@@ -529,7 +529,7 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
                 .build();
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
-        auto mt = make_lw_shared<memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s);
 
         auto m = make_unique_mutation(s);
         set_column(m, "v");
@@ -628,7 +628,7 @@ SEASTAR_THREAD_TEST_CASE(test_collecting_encoding_stats) {
             tests::data_model::mutation_description::atomic_value(random_int32_value(), tests::data_model::data_timestamp, md3_ttl, md3_expiry_point));
     auto m3 = md3.build(s);
 
-    auto mt = make_lw_shared<memtable>(s);
+    auto mt = make_lw_shared<replica::memtable>(s);
 
     auto stats = mt->get_encoding_stats();
     BOOST_CHECK(stats.min_local_deletion_time == gc_clock::time_point::max());
@@ -780,7 +780,7 @@ SEASTAR_TEST_CASE(failed_flush_prevents_writes) {
         mm.announce(mm.prepare_new_column_family_announcement(s, ts).get(), std::move(group0_guard)).get();
 
         replica::table& t = db.find_column_family("ks", "cf");
-        memtable& m = t.active_memtable();
+        replica::memtable& m = t.active_memtable();
         dirty_memory_manager& dmm = m.get_dirty_memory_manager();
 
         // Insert something so that we have data in memtable to flush

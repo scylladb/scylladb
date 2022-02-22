@@ -37,7 +37,7 @@
 #include "compress.hh"
 #include "unimplemented.hh"
 #include "index_reader.hh"
-#include "memtable.hh"
+#include "replica/memtable.hh"
 #include "downsampling.hh"
 #include <boost/algorithm/string.hpp>
 #include <boost/range/adaptor/map.hpp>

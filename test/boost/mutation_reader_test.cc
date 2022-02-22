@@ -1197,9 +1197,9 @@ SEASTAR_TEST_CASE(test_combined_mutation_source_is_a_mutation_source) {
         // among them in a round robin fashion.
         auto make_combined_populator = [&semaphore] (int n_sources) mutable {
             return [=, &semaphore] (schema_ptr s, const std::vector<mutation>& muts) mutable {
-                std::vector<lw_shared_ptr<memtable>> memtables;
+                std::vector<lw_shared_ptr<replica::memtable>> memtables;
                 for (int i = 0; i < n_sources; ++i) {
-                    memtables.push_back(make_lw_shared<memtable>(s));
+                    memtables.push_back(make_lw_shared<replica::memtable>(s));
                 }
 
                 int source_index = 0;
@@ -1241,7 +1241,7 @@ SEASTAR_THREAD_TEST_CASE(test_foreign_reader_as_mutation_source) {
                 mutations
                 | boost::adaptors::transformed([] (const mutation& m) { return freeze(m); }));
             auto remote_mt = smp::submit_to(remote_shard, [s = global_schema_ptr(s), &frozen_mutations] {
-                auto mt = make_lw_shared<memtable>(s.get());
+                auto mt = make_lw_shared<replica::memtable>(s.get());
 
                 for (auto& mut : frozen_mutations) {
                     mt->apply(mut, s.get());
@@ -2656,7 +2656,7 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
 SEASTAR_THREAD_TEST_CASE(test_compacting_reader_as_mutation_source) {
     auto make_populate = [] (bool single_fragment_buffer) {
         return [single_fragment_buffer] (schema_ptr s, const std::vector<mutation>& mutations, gc_clock::time_point query_time) mutable {
-            auto mt = make_lw_shared<memtable>(s);
+            auto mt = make_lw_shared<replica::memtable>(s);
             for (auto& mut : mutations) {
                 mt->apply(mut);
             }
@@ -2751,7 +2751,7 @@ SEASTAR_THREAD_TEST_CASE(test_compacting_reader_next_partition) {
 
 SEASTAR_THREAD_TEST_CASE(test_auto_paused_evictable_reader_is_mutation_source) {
     auto make_populate = [] (schema_ptr s, const std::vector<mutation>& mutations, gc_clock::time_point query_time) {
-        auto mt = make_lw_shared<memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s);
         for (auto& mut : mutations) {
             mt->apply(mut);
         }
@@ -2789,7 +2789,7 @@ SEASTAR_THREAD_TEST_CASE(test_manual_paused_evictable_reader_is_mutation_source)
 
     public:
         maybe_pausing_reader(
-                memtable& mt,
+                replica::memtable& mt,
                 schema_ptr query_schema,
                 reader_permit permit,
                 const dht::partition_range& pr,
@@ -2833,7 +2833,7 @@ SEASTAR_THREAD_TEST_CASE(test_manual_paused_evictable_reader_is_mutation_source)
     };
 
     auto make_populate = [] (schema_ptr s, const std::vector<mutation>& mutations, gc_clock::time_point query_time) {
-        auto mt = make_lw_shared<memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s);
         for (auto& mut : mutations) {
             mt->apply(mut);
         }

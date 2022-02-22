@@ -29,9 +29,12 @@
 namespace bi = boost::intrusive;
 
 class row_cache;
-class memtable_entry;
 class cache_tracker;
 class flat_mutation_reader;
+
+namespace replica {
+class memtable_entry;
+}
 
 namespace cache {
 
@@ -327,10 +330,10 @@ private:
     // It is invoked inside allocating section and in the context of cache's allocator.
     // All memtable entries will be removed.
     template <typename Updater>
-    future<> do_update(external_updater, memtable& m, Updater func);
+    future<> do_update(external_updater, replica::memtable& m, Updater func);
 
     // Clears given memtable invalidating any affected cache elements.
-    void invalidate_sync(memtable&) noexcept;
+    void invalidate_sync(replica::memtable&) noexcept;
 
     // A function which updates cache to the current snapshot.
     // It's responsible for advancing _prev_snapshot_pos between deferring points.
@@ -387,13 +390,13 @@ public:
     // has just been flushed to the underlying data source.
     // The memtable can be queried during the process, but must not be written.
     // After the update is complete, memtable is empty.
-    future<> update(external_updater, memtable&);
+    future<> update(external_updater, replica::memtable&);
 
     // Like update(), synchronizes cache with an incremental change to the underlying
     // mutation source, but instead of inserting and merging data, invalidates affected ranges.
     // Can be thought of as a more fine-grained version of invalidate(), which invalidates
     // as few elements as possible.
-    future<> update_invalidating(external_updater, memtable&);
+    future<> update_invalidating(external_updater, replica::memtable&);
 
     // Refreshes snapshot. Must only be used if logical state in the underlying data
     // source hasn't changed.

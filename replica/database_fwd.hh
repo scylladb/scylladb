@@ -15,10 +15,10 @@ class database;
 class keyspace;
 class table;
 using column_family = table;
+class memtable_list;
 
 }
 
-class memtable_list;
 
 // mutation.hh
 class mutation;
@@ -42,4 +42,6 @@ using clustering_key = clustering_key_prefix;
 using clustering_key_view = clustering_key_prefix_view;
 
 // memtable.hh
+namespace replica {
 class memtable;
+}

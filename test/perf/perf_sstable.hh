@@ -67,7 +67,7 @@ private:
     schema_ptr s;
     std::default_random_engine _generator;
     std::uniform_int_distribution<char> _distribution;
-    lw_shared_ptr<memtable> _mt;
+    lw_shared_ptr<replica::memtable> _mt;
     std::vector<shared_sstable> _sst;
 
     schema_ptr create_schema(sstables::compaction_strategy_type type) {
@@ -99,7 +99,7 @@ public:
     perf_sstable_test_env(conf cfg) : _cfg(std::move(cfg))
            , s(create_schema(cfg.compaction_strategy))
            , _distribution('@', '~')
-           , _mt(make_lw_shared<memtable>(s))
+           , _mt(make_lw_shared<replica::memtable>(s))
     {}
 
     future<> stop() {

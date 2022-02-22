@@ -18,7 +18,7 @@
 
 #include "mutation_reader.hh"
 #include "flat_mutation_reader.hh"
-#include "memtable.hh"
+#include "replica/memtable.hh"
 
 namespace tests {
 
@@ -305,18 +305,18 @@ class memtable {
     perf::reader_concurrency_semaphore_wrapper _semaphore;
     reader_permit _permit;
     std::vector<dht::decorated_key> _dkeys;
-    lw_shared_ptr<::memtable> _single_row;
-    lw_shared_ptr<::memtable> _multi_row;
-    lw_shared_ptr<::memtable> _large_partition;
+    lw_shared_ptr<replica::memtable> _single_row;
+    lw_shared_ptr<replica::memtable> _multi_row;
+    lw_shared_ptr<replica::memtable> _large_partition;
     std::optional<dht::partition_range> _partition_range;
 public:
     memtable()
         : _semaphore(__FILE__)
         , _permit(_semaphore.make_permit())
         , _dkeys(_schema.make_pkeys(partition_count))
-        , _single_row(make_lw_shared<::memtable>(_schema.schema()))
-        , _multi_row(make_lw_shared<::memtable>(_schema.schema()))
-        , _large_partition(make_lw_shared<::memtable>(_schema.schema()))
+        , _single_row(make_lw_shared<replica::memtable>(_schema.schema()))
+        , _multi_row(make_lw_shared<replica::memtable>(_schema.schema()))
+        , _large_partition(make_lw_shared<replica::memtable>(_schema.schema()))
     {
         boost::for_each(
             _dkeys
@@ -361,9 +361,9 @@ protected:
     schema_ptr schema() const { return _schema.schema(); }
     reader_permit permit() const { return _permit; }
 
-    ::memtable& single_row_mt() { return *_single_row; }
-    ::memtable& multi_row_mt() { return *_multi_row; }
-    ::memtable& large_partition_mt() { return *_large_partition; }
+    replica::memtable& single_row_mt() { return *_single_row; }
+    replica::memtable& multi_row_mt() { return *_multi_row; }
+    replica::memtable& large_partition_mt() { return *_large_partition; }
 
     const dht::partition_range& single_partition_range() {
         auto& dk = _dkeys[_dkeys.size() / 2];

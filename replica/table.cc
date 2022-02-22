@@ -2045,8 +2045,6 @@ future<> table::apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_hand
 
 template void table::do_apply(db::rp_handle&&, const frozen_mutation&, const schema_ptr&);
 
-}
-
 future<>
 write_memtable_to_sstable(flat_mutation_reader reader,
                           memtable& mt, sstables::shared_sstable sst,
@@ -2082,8 +2080,6 @@ write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst, sstables::
         });
     });
 }
-
-namespace replica {
 
 struct query_state {
     explicit query_state(schema_ptr s,

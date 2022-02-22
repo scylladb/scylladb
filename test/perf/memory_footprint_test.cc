@@ -14,7 +14,7 @@
 
 #include "partition_slice_builder.hh"
 #include "schema_builder.hh"
-#include "memtable.hh"
+#include "replica/memtable.hh"
 #include "row_cache.hh"
 #include "frozen_mutation.hh"
 #include "test/lib/tmpdir.hh"
@@ -45,7 +45,7 @@ class size_calculator {
 public:
     static void print_cache_entry_size() {
         std::cout << prefix() << "sizeof(cache_entry) = " << sizeof(cache_entry) << "\n";
-        std::cout << prefix() << "sizeof(memtable_entry) = " << sizeof(memtable_entry) << "\n";
+        std::cout << prefix() << "sizeof(memtable_entry) = " << sizeof(replica::memtable_entry) << "\n";
         std::cout << prefix() << "sizeof(bptree::node) = " << sizeof(row_cache::partitions_type::outer_tree::node) << "\n";
         std::cout << prefix() << "sizeof(bptree::data) = " << sizeof(row_cache::partitions_type::outer_tree::data) << "\n";
 
@@ -181,7 +181,7 @@ struct sizes {
 static sizes calculate_sizes(cache_tracker& tracker, const mutation_settings& settings) {
     sizes result;
     auto s = make_schema(settings);
-    auto mt = make_lw_shared<memtable>(s);
+    auto mt = make_lw_shared<replica::memtable>(s);
     row_cache cache(s, make_empty_snapshot_source(), tracker);
 
     auto cache_initial_occupancy = tracker.region().occupancy().used_space();
@@ -210,7 +210,7 @@ static sizes calculate_sizes(cache_tracker& tracker, const mutation_settings& se
                 1 /* generation */,
                 v,
                 sstables::sstable::format_types::big);
-            auto mt2 = make_lw_shared<memtable>(s);
+            auto mt2 = make_lw_shared<replica::memtable>(s);
             mt2->apply(*mt, env.make_reader_permit()).get();
             write_memtable_to_sstable_for_test(*mt2, sst).get();
             sst->load().get();
