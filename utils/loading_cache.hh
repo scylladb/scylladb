@@ -108,81 +108,81 @@ template<typename Key,
          typename Alloc = std::pmr::polymorphic_allocator<>>
 class loading_cache {
 
-using loading_cache_clock_type = seastar::lowres_clock;
-using safe_link_list_hook = bi::list_base_hook<bi::link_mode<bi::safe_link>>;
+    using loading_cache_clock_type = seastar::lowres_clock;
+    using safe_link_list_hook = bi::list_base_hook<bi::link_mode<bi::safe_link>>;
 
-class timestamped_val {
-public:
-    using value_type = Tp;
-    using loading_values_type = typename utils::loading_shared_values<Key, timestamped_val, Hash, EqualPred, LoadingSharedValuesStats, 256>;
-    class lru_entry;
-    class value_ptr;
+    class timestamped_val {
+    public:
+        using value_type = Tp;
+        using loading_values_type = typename utils::loading_shared_values<Key, timestamped_val, Hash, EqualPred, LoadingSharedValuesStats, 256>;
+        class lru_entry;
+        class value_ptr;
 
-private:
-    value_type _value;
-    loading_cache_clock_type::time_point _loaded;
-    loading_cache_clock_type::time_point _last_read;
-    lru_entry* _lru_entry_ptr = nullptr; /// MRU item is at the front, LRU - at the back
-    size_t _size = 0;
+    private:
+        value_type _value;
+        loading_cache_clock_type::time_point _loaded;
+        loading_cache_clock_type::time_point _last_read;
+        lru_entry* _lru_entry_ptr = nullptr; /// MRU item is at the front, LRU - at the back
+        size_t _size = 0;
 
-public:
-    timestamped_val(value_type val)
-        : _value(std::move(val))
-        , _loaded(loading_cache_clock_type::now())
-        , _last_read(_loaded)
-        , _size(EntrySize()(_value))
-    {}
-    timestamped_val(timestamped_val&&) = default;
+    public:
+        timestamped_val(value_type val)
+            : _value(std::move(val))
+            , _loaded(loading_cache_clock_type::now())
+            , _last_read(_loaded)
+            , _size(EntrySize()(_value))
+        {}
+        timestamped_val(timestamped_val&&) = default;
 
-    timestamped_val& operator=(value_type new_val) {
-        assert(_lru_entry_ptr);
+        timestamped_val& operator=(value_type new_val) {
+            assert(_lru_entry_ptr);
 
-        _value = std::move(new_val);
-        _loaded = loading_cache_clock_type::now();
-        _lru_entry_ptr->cache_size() -= _size;
-        _size = EntrySize()(_value);
-        _lru_entry_ptr->cache_size() += _size;
-        return *this;
-    }
+            _value = std::move(new_val);
+            _loaded = loading_cache_clock_type::now();
+            _lru_entry_ptr->cache_size() -= _size;
+            _size = EntrySize()(_value);
+            _lru_entry_ptr->cache_size() += _size;
+            return *this;
+        }
 
-    value_type& value() noexcept { return _value; }
-    const value_type& value() const noexcept { return _value; }
+        value_type& value() noexcept { return _value; }
+        const value_type& value() const noexcept { return _value; }
 
-    static const timestamped_val& container_of(const value_type& value) {
-        return *bi::get_parent_from_member(&value, &timestamped_val::_value);
-    }
+        static const timestamped_val& container_of(const value_type& value) {
+            return *bi::get_parent_from_member(&value, &timestamped_val::_value);
+        }
 
-    loading_cache_clock_type::time_point last_read() const noexcept {
-        return _last_read;
-    }
+        loading_cache_clock_type::time_point last_read() const noexcept {
+            return _last_read;
+        }
 
-    loading_cache_clock_type::time_point loaded() const noexcept {
-        return _loaded;
-    }
+        loading_cache_clock_type::time_point loaded() const noexcept {
+            return _loaded;
+        }
 
-    size_t size() const {
-        return _size;
-    }
+        size_t size() const {
+            return _size;
+        }
 
-    bool ready() const noexcept {
-        return _lru_entry_ptr;
-    }
+        bool ready() const noexcept {
+            return _lru_entry_ptr;
+        }
 
-    lru_entry* lru_entry_ptr() const noexcept {
-        return _lru_entry_ptr;
-    }
+        lru_entry* lru_entry_ptr() const noexcept {
+            return _lru_entry_ptr;
+        }
 
-private:
-    void touch() noexcept {
-        assert(_lru_entry_ptr);
-        _last_read = loading_cache_clock_type::now();
-        _lru_entry_ptr->touch();
-    }
+    private:
+        void touch() noexcept {
+            assert(_lru_entry_ptr);
+            _last_read = loading_cache_clock_type::now();
+            _lru_entry_ptr->touch();
+        }
 
-    void set_anchor_back_reference(lru_entry* lru_entry_ptr) noexcept {
-        _lru_entry_ptr = lru_entry_ptr;
-    }
-};
+        void set_anchor_back_reference(lru_entry* lru_entry_ptr) noexcept {
+            _lru_entry_ptr = lru_entry_ptr;
+        }
+    };
 
 private:
     using loading_values_type = typename timestamped_val::loading_values_type;
