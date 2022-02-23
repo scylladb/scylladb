@@ -93,6 +93,7 @@ private:
     gms::feature _uses_raft_cluster_mgmt;
     gms::feature _tombstone_gc_options;
     gms::feature _parallelized_aggregation;
+    gms::feature _keyspace_storage_options;
 
 public:
 
@@ -201,6 +202,10 @@ public:
 
     const feature& cluster_supports_raft_cluster_mgmt() const {
         return _supports_raft_cluster_mgmt;
+    }
+
+    bool cluster_supports_keyspace_storage_options() const {
+        return bool(_keyspace_storage_options);
     }
 
     static std::set<sstring> to_feature_set(sstring features_string);
