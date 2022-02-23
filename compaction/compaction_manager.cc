@@ -387,7 +387,7 @@ void compaction_manager::task::setup_new_compaction() {
 
 void compaction_manager::task::finish_compaction() noexcept {
     compaction_running = false;
-    output_run_identifier = {};
+    output_run_identifier = utils::null_uuid();
 }
 
 void compaction_manager::task::stop(sstring reason) noexcept {

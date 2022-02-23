@@ -80,7 +80,7 @@ private:
         bool stopping = false;
         sstables::compaction_type type = sstables::compaction_type::Compaction;
         bool compaction_running = false;
-        std::optional<utils::UUID> output_run_identifier;
+        utils::UUID output_run_identifier;
         sstables::compaction_data compaction_data;
         compaction_state& compaction_state;
         gate::holder gate_holder;
@@ -102,7 +102,7 @@ private:
             return compaction_running && output_run_identifier;
         }
         const utils::UUID& output_run_id() const noexcept {
-            return *output_run_identifier;
+            return output_run_identifier;
         }
 
         void stop(sstring reason) noexcept;
