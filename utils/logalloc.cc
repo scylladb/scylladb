@@ -827,8 +827,12 @@ public:
     void clear_allocation_failure_flag() { _allocation_failure_flag = false; }
     bool allocation_failure_flag() { return _allocation_failure_flag; }
     void refill_emergency_reserve();
-    void update_non_lsa_memory_in_use(ssize_t n) {
+    void add_non_lsa_memory_in_use(size_t n) {
         _non_lsa_memory_in_use += n;
+    }
+    void subtract_non_lsa_memory_in_use(size_t n) {
+        assert(_non_lsa_memory_in_use >= n);
+        _non_lsa_memory_in_use -= n;
     }
     size_t non_lsa_memory_in_use() const {
         return _non_lsa_memory_in_use;
@@ -1640,7 +1644,7 @@ public:
                  _evictable_space += allocated_size;
                 _group->increase_usage(_heap_handle, allocated_size);
             }
-            shard_segment_pool.update_non_lsa_memory_in_use(allocated_size);
+            shard_segment_pool.add_non_lsa_memory_in_use(allocated_size);
             return ptr;
         } else {
             auto ptr = alloc_small(object_descriptor(migrator), (segment::size_type) size, alignment);
@@ -1657,7 +1661,7 @@ private:
             _evictable_space -= allocated_size;
             _group->decrease_usage(_heap_handle, allocated_size);
         }
-        shard_segment_pool.update_non_lsa_memory_in_use(-allocated_size);
+        shard_segment_pool.subtract_non_lsa_memory_in_use(allocated_size);
     }
 public:
     virtual void free(void* obj) noexcept override {
