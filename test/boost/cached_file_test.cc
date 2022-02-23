@@ -207,7 +207,9 @@ SEASTAR_THREAD_TEST_CASE(test_eviction_via_lru) {
         }
 
         {
-            cf_lru.evict_all();
+            with_allocator(region.allocator(), [] {
+                cf_lru.evict_all();
+            });
 
             BOOST_REQUIRE_EQUAL(0, metrics.cached_bytes); // change here
             BOOST_REQUIRE_EQUAL(0, cf.cached_bytes()); // change here
@@ -215,6 +217,8 @@ SEASTAR_THREAD_TEST_CASE(test_eviction_via_lru) {
             BOOST_REQUIRE_EQUAL(3, metrics.page_evictions); // change here
             BOOST_REQUIRE_EQUAL(0, metrics.page_hits);
             BOOST_REQUIRE_EQUAL(3, metrics.page_populations);
+
+            BOOST_REQUIRE_EQUAL(region.occupancy().used_space(), 0);
         }
 
         {
