@@ -584,6 +584,10 @@ static constexpr auto max_used_space_ratio_for_compaction = 0.85;
 static constexpr size_t max_used_space_for_compaction = segment_size * max_used_space_ratio_for_compaction;
 static constexpr size_t min_free_space_for_compaction = segment_size - max_used_space_for_compaction;
 
+struct [[gnu::packed]] non_lsa_object_cookie {
+    uint64_t value = 0xbadcaffe;
+};
+
 static_assert(min_free_space_for_compaction >= max_managed_object_size,
     "Segments which cannot fit max_managed_object_size must not be considered compactible for the sake of forward progress of compaction");
 
@@ -1634,11 +1638,12 @@ public:
         memory::on_alloc_point();
         shard_segment_pool.on_memory_allocation(size);
         if (size > max_managed_object_size) {
-            auto ptr = standard_allocator().alloc(migrator, size, alignment);
+            auto ptr = standard_allocator().alloc(migrator, size + sizeof(non_lsa_object_cookie), alignment);
             // This isn't very acurrate, the correct free_space value would be
             // malloc_usable_size(ptr) - size, but there is no way to get
             // the exact object size at free.
             auto allocated_size = malloc_usable_size(ptr);
+            new ((char*)ptr + allocated_size - sizeof(non_lsa_object_cookie)) non_lsa_object_cookie();
             _non_lsa_occupancy += occupancy_stats(0, allocated_size);
             if (_group) {
                  _evictable_space += allocated_size;
@@ -1656,6 +1661,8 @@ public:
 private:
     void on_non_lsa_free(void* obj) noexcept {
         auto allocated_size = malloc_usable_size(obj);
+        auto cookie = (non_lsa_object_cookie*)((char*)obj + allocated_size) - 1;
+        assert(cookie->value == non_lsa_object_cookie().value);
         _non_lsa_occupancy -= occupancy_stats(0, allocated_size);
         if (_group) {
             _evictable_space -= allocated_size;
