@@ -100,7 +100,7 @@ batch_statement::batch_statement(type type_,
 
 bool batch_statement::depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const
 {
-    return false;
+    return boost::algorithm::any_of(_statements, [&ks_name, &cf_name] (auto&& s) { return s.statement->depends_on(ks_name, cf_name); });
 }
 
 uint32_t batch_statement::get_bound_terms() const
