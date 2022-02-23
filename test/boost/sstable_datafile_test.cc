@@ -59,6 +59,7 @@
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/random_utils.hh"
+#include "test/lib/random_schema.hh"
 
 namespace fs = std::filesystem;
 
@@ -2988,5 +2989,81 @@ SEASTAR_TEST_CASE(sstable_reader_with_timeout) {
             auto f = read_mutation_from_flat_mutation_reader(rd);
             BOOST_REQUIRE_THROW(f.get(), timed_out_error);
         });
+    });
+}
+
+SEASTAR_TEST_CASE(test_validate_checksums) {
+    return test_setup::do_with_tmp_directory([&] (test_env& env, sstring tmpdir_path) {
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+        auto random_spec = tests::make_random_schema_specification(
+                get_name(),
+                std::uniform_int_distribution<size_t>(1, 4),
+                std::uniform_int_distribution<size_t>(2, 4),
+                std::uniform_int_distribution<size_t>(2, 8),
+                std::uniform_int_distribution<size_t>(2, 8));
+        auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
+        auto schema = random_schema.schema();
+        auto permit = env.make_reader_permit();
+
+        testlog.info("Random schema:\n{}", random_schema.cql());
+
+        const auto muts = tests::generate_random_mutations(random_schema).get();
+
+        const std::map<sstring, sstring> no_compression_params = {};
+        const std::map<sstring, sstring> lz4_compression_params = {{compression_parameters::SSTABLE_COMPRESSION, "LZ4Compressor"}};
+
+        int gen = 0;
+
+        for (const auto version : writable_sstable_versions) {
+            testlog.info("version={}", sstables::to_string(version));
+            for (const auto& compression_params : {no_compression_params, lz4_compression_params}) {
+                testlog.info("compression={}", compression_params);
+                auto sst_schema = schema_builder(schema).set_compressor_params(compression_params).build();
+
+                auto mr = make_flat_mutation_reader_from_mutations_v2(schema, permit, muts);
+                auto close_mr = deferred_close(mr);
+
+                auto sst = env.make_sstable(sst_schema, tmpdir_path, gen++, version, big);
+                sstable_writer_config cfg = env.manager().configure_writer();
+
+                auto wr = sst->get_writer(*sst_schema, 1, cfg, encoding_stats{}, default_priority_class());
+                mr.consume_in_thread(std::move(wr));
+
+                sst->load().get();
+
+                bool valid;
+
+                testlog.info("Validating intact {}", sst->get_filename());
+
+                valid = sstables::validate_checksums(sst, permit, default_priority_class()).get();
+                BOOST_REQUIRE(valid);
+
+                auto sst_file = open_file_dma(sst->get_filename(), open_flags::wo).get();
+                auto close_sst_file = defer([&sst_file] { sst_file.close().get(); });
+
+                testlog.info("Validating corrupted {}", sst->get_filename());
+
+                { // corrupt the sstable
+                    const auto size = std::min(sst->ondisk_data_size() / 2, uint64_t(1024));
+                    auto buf = temporary_buffer<char>::aligned(sst_file.disk_write_dma_alignment(), size);
+                    std::fill(buf.get_write(), buf.get_write() + size, 0xba);
+                    sst_file.dma_write(sst->ondisk_data_size() / 2, buf.begin(), buf.size(), default_priority_class()).get();
+                }
+
+                valid = sstables::validate_checksums(sst, permit, default_priority_class()).get();
+                BOOST_REQUIRE(!valid);
+
+                testlog.info("Validating truncated {}", sst->get_filename());
+
+                { // truncate the sstable
+                    sst_file.truncate(sst->ondisk_data_size() / 2).get();
+                }
+
+                valid = sstables::validate_checksums(sst, permit, default_priority_class()).get();
+                BOOST_REQUIRE(!valid);
+            }
+        }
+
+        return make_ready_future<>();
     });
 }

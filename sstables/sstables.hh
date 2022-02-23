@@ -911,6 +911,31 @@ public:
 future<> delete_atomically(std::vector<shared_sstable> ssts);
 future<> replay_pending_delete_log(sstring log_file);
 
+// Validate checksums
+//
+// Sstables have two kind of checksums: per-chunk checksums and a
+// full-checksum (digest) calculated over the entire content of Data.db.
+//
+// The full-checksum (digest) is stored in Digest.crc (component_type::Digest).
+//
+// When compression is used, the per-chunk checksum is stored directly inside
+// Data.db, after each compressed chunk. These are validated on read, when
+// decompressing the respective chunks.
+// When no compression is used, the per-chunk checksum is stored separately
+// in CRC.db (component_type::CRC). Chunk size is defined and stored in said
+// component as well.
+//
+// In both compressed and uncompressed sstables, checksums are calculated
+// on the data that is actually written to disk, so in case of compressed
+// data, on the compressed data.
+//
+// This method validates both the full checksum and the per-chunk checksum
+// for the entire Data.db.
+//
+// Returns true if all checksums are valid.
+// Validation errors are logged individually.
+future<bool> validate_checksums(shared_sstable sst, reader_permit permit, const io_priority_class& pc);
+
 struct index_sampling_state {
     static constexpr size_t default_summary_byte_cost = 2000;
 
