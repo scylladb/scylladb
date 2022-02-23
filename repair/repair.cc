@@ -458,7 +458,7 @@ future<> tracker::run(repair_uniq_id id, std::function<void ()> func) {
     return seastar::with_gate(_gate, [this, id, func =std::move(func)] {
         start(id);
         return seastar::async([func = std::move(func)] { func(); }).then([this, id] {
-            rlogger.info("repair id {} completed successfully", id);
+            rlogger.info("repair[{}]: completed successfully", id.uuid);
             done(id, true);
         }).handle_exception([this, id] (std::exception_ptr ep) {
             done(id, false);
@@ -552,16 +552,16 @@ repair_info::repair_info(repair_service& repair,
 }
 
 void repair_info::check_failed_ranges() {
-    rlogger.info("repair id {} on shard {} stats: repair_reason={}, keyspace={}, tables={}, ranges_nr={}, {}",
-        id, shard, reason, keyspace, table_names(), ranges.size(), _stats.get_stats());
+    rlogger.info("repair[{}]: shard {} stats: repair_reason={}, keyspace={}, tables={}, ranges_nr={}, {}",
+        id.uuid, shard, reason, keyspace, table_names(), ranges.size(), _stats.get_stats());
     if (nr_failed_ranges) {
-        rlogger.warn("repair id {} on shard {} failed - {} out of {} ranges failed", id, shard, nr_failed_ranges, ranges.size());
-        throw std::runtime_error(format("repair id {} on shard {} failed to repair {} out of {} ranges", id, shard, nr_failed_ranges, ranges.size()));
+        rlogger.warn("repair[{}]: shard {} failed - {} out of {} ranges failed", id.uuid, shard, nr_failed_ranges, ranges.size());
+        throw std::runtime_error(format("repair[{}] on shard {} failed to repair {} out of {} ranges", id.uuid, shard, nr_failed_ranges, ranges.size()));
     } else {
         if (dropped_tables.size()) {
-            rlogger.warn("repair id {} on shard {} completed successfully, keyspace={}, ignoring dropped tables={}", id, shard, keyspace, dropped_tables);
+            rlogger.warn("repair[{}]: shard {} completed successfully, keyspace={}, ignoring dropped tables={}", id.uuid, shard, keyspace, dropped_tables);
         } else {
-            rlogger.info("repair id {} on shard {} completed successfully, keyspace={}", id, shard, keyspace);
+            rlogger.info("repair[{}]: shard {} completed successfully, keyspace={}", id.uuid, shard, keyspace);
         }
     }
 }
@@ -572,7 +572,7 @@ void repair_info::abort() {
 
 void repair_info::check_in_abort() {
     if (aborted) {
-        throw std::runtime_error(format("repair id {} is aborted on shard {}", id, shard));
+        throw std::runtime_error(format("repair[{}]: aborted on shard {}", id.uuid, shard));
     }
 }
 
@@ -597,8 +597,8 @@ future<> repair_info::repair_range(const dht::token_range& range) {
            if (it == live_neighbors.end()) {
                 nr_failed_ranges++;
                 auto status = format("failed: mandatory neighbor={} is not alive", node);
-                rlogger.error("Repair {} out of {} ranges, id={}, shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
-                    ranges_index, ranges.size(), id, shard, keyspace, table_names(), range, neighbors, live_neighbors, status);
+                rlogger.error("repair[{}]: Repair {} out of {} ranges, shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
+                        id.uuid, ranges_index, ranges.size(), shard, keyspace, table_names(), range, neighbors, live_neighbors, status);
                 abort();
                 return make_exception_future<>(std::runtime_error(format("Repair mandatory neighbor={} is not alive, keyspace={}, mandatory_neighbors={}",
                     node, keyspace, mandatory_neighbors)));
@@ -607,8 +607,8 @@ future<> repair_info::repair_range(const dht::token_range& range) {
       if (live_neighbors.size() != neighbors.size()) {
             nr_failed_ranges++;
             auto status = live_neighbors.empty() ? "skipped" : "partial";
-            rlogger.warn("Repair {} out of {} ranges, id={}, shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
-            ranges_index, ranges.size(), id, shard, keyspace, table_names(), range, neighbors, live_neighbors, status);
+            rlogger.warn("repair[{}]: Repair {} out of {} ranges, shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
+                    id.uuid, ranges_index, ranges.size(), shard, keyspace, table_names(), range, neighbors, live_neighbors, status);
             if (live_neighbors.empty()) {
                 return make_ready_future<>();
             }
@@ -616,12 +616,12 @@ future<> repair_info::repair_range(const dht::token_range& range) {
       }
       if (neighbors.empty()) {
             auto status = "skipped_no_followers";
-            rlogger.warn("Repair {} out of {} ranges, id={}, shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
-            ranges_index, ranges.size(), id, shard, keyspace, table_names(), range, neighbors, live_neighbors, status);
+            rlogger.warn("repair[{}]: Repair {} out of {} ranges,  shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
+                    id.uuid, ranges_index, ranges.size(), shard, keyspace, table_names(), range, neighbors, live_neighbors, status);
             return make_ready_future<>();
       }
-      rlogger.info("Repair {} out of {} ranges, id={}, shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}",
-            ranges_index, ranges.size(), id, shard, keyspace, table_names(), range, neighbors, live_neighbors);
+      rlogger.info("repair[{}]: Repair {} out of {} ranges, shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}",
+            id.uuid, ranges_index, ranges.size(), shard, keyspace, table_names(), range, neighbors, live_neighbors);
       return mm.sync_schema(db.local(), neighbors).then([this, &neighbors, range] {
         return do_for_each(table_ids.begin(), table_ids.end(), [this, &neighbors, range] (utils::UUID table_id) {
             sstring cf;
@@ -969,7 +969,7 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
     // that "Nothing to repair for keyspace '...'". We don't have such a case
     // yet. Real ids returned by next_repair_command() will be >= 1.
     auto id = repair_tracker().next_repair_command();
-    rlogger.info("starting user-requested repair for keyspace {}, repair id {}, options {}", keyspace, id, options_map);
+    rlogger.info("repair[{}]: starting user-requested repair for keyspace {}, repair id {}, options {}", id.uuid, keyspace, id.id, options_map);
 
     if (!_gossiper.local().is_normal(utils::fb_utilities::get_broadcast_address())) {
         throw std::runtime_error("Node is not in NORMAL status yet!");
@@ -1051,7 +1051,7 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
     std::vector<sstring> cfs =
         options.column_families.size() ? options.column_families : list_column_families(db.local(), keyspace);
     if (cfs.empty()) {
-        rlogger.info("repair id {} completed successfully: no tables to repair", id);
+        rlogger.info("repair[{}]: completed successfully: no tables to repair", id.uuid);
         return id.id;
     }
 
@@ -1156,7 +1156,7 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
             return make_ready_future<>();
         }).get();
     }).handle_exception([id] (std::exception_ptr ep) {
-        rlogger.warn("repair_tracker run for repair id {} failed: {}", id, ep);
+        rlogger.warn("repair[{}]: repair_tracker run failed: {}", id.uuid, ep);
     });
 
     return id.id;
@@ -1221,11 +1221,11 @@ future<> repair_service::do_sync_data_using_repair(
     seastar::sharded<replica::database>& db = get_db();
 
     repair_uniq_id id = repair_tracker().next_repair_command();
-    rlogger.info("repair id {} to sync data for keyspace={}, status=started", id, keyspace);
+    rlogger.info("repair[{}]: sync data for keyspace={}, status=started", id.uuid, keyspace);
     return repair_tracker().run(id, [this, id, &db, keyspace, ranges = std::move(ranges), neighbors = std::move(neighbors), reason, ops_uuid] () mutable {
         auto cfs = list_column_families(db.local(), keyspace);
         if (cfs.empty()) {
-            rlogger.warn("repair id {} to sync data for keyspace={}, no table in this keyspace", id, keyspace);
+            rlogger.warn("repair[{}]: sync data for keyspace={}, no table in this keyspace", id.uuid, keyspace);
             return;
         }
         auto table_ids = get_table_ids(db.local(), keyspace, cfs);
@@ -1260,13 +1260,13 @@ future<> repair_service::do_sync_data_using_repair(
             return make_ready_future<>();
         }).get();
     }).then([id, keyspace] {
-        rlogger.info("repair id {} to sync data for keyspace={}, status=succeeded", id, keyspace);
+        rlogger.info("repair[{}]: sync data for keyspace={}, status=succeeded", id.uuid, keyspace);
     }).handle_exception([&db, id, keyspace] (std::exception_ptr ep) {
         if (!db.local().has_keyspace(keyspace)) {
-            rlogger.warn("repair id {} to sync data for keyspace={}, status=failed: keyspace does not exist any more, ignoring it, {}", id, keyspace, ep);
+            rlogger.warn("repair[{}]: sync data for keyspace={}, status=failed: keyspace does not exist any more, ignoring it, {}", id.uuid, keyspace, ep);
             return make_ready_future<>();
         }
-        rlogger.warn("repair id {} to sync data for keyspace={}, status=failed: {}", id, keyspace,  ep);
+        rlogger.warn("repair[{}]: sync data for keyspace={}, status=failed: {}", id.uuid, keyspace,  ep);
         return make_exception_future<>(ep);
     });
 }

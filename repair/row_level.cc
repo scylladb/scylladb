@@ -2837,12 +2837,12 @@ public:
                 }
             } catch (replica::no_such_column_family& e) {
                 table_dropped = true;
-                rlogger.warn("repair id {} on shard {}, keyspace={}, cf={}, range={}, got error in row level repair: {}",
-                        _ri.id, this_shard_id(), _ri.keyspace, _cf_name, _range, e);
+                rlogger.warn("repair[{}]: shard={}, keyspace={}, cf={}, range={}, got error in row level repair: {}",
+                        _ri.id.uuid, this_shard_id(), _ri.keyspace, _cf_name, _range, e);
                 _failed = true;
             } catch (std::exception& e) {
-                rlogger.warn("repair id {} on shard {}, keyspace={}, cf={}, range={}, got error in row level repair: {}",
-                        _ri.id, this_shard_id(), _ri.keyspace, _cf_name, _range, e);
+                rlogger.warn("repair[{}]: shard={}, keyspace={}, cf={}, range={}, got error in row level repair: {}",
+                        _ri.id.uuid, this_shard_id(), _ri.keyspace, _cf_name, _range, e);
                 // In case the repair process fail, we need to call repair_row_level_stop to clean up repair followers
                 _failed = true;
             }
