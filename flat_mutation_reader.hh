@@ -842,10 +842,9 @@ make_flat_mutation_reader_from_fragments(schema_ptr, reader_permit, std::deque<m
 // The consumer should accept mutation as the argument and return stop_iteration.
 // The returned future<> resolves when consumption ends.
 template <typename Consumer>
+requires std::is_same_v<future<stop_iteration>, futurize_t<std::invoke_result_t<Consumer, mutation&&>>>
 inline
 future<> consume_partitions(flat_mutation_reader& reader, Consumer consumer) {
-    static_assert(std::is_same<future<stop_iteration>, futurize_t<std::result_of_t<Consumer(mutation&&)>>>::value, "bad Consumer signature");
-
     return do_with(std::move(consumer), [&reader] (Consumer& c) -> future<> {
         return repeat([&reader, &c] () {
             return read_mutation_from_flat_mutation_reader(reader).then([&c] (mutation_opt&& mo) -> future<stop_iteration> {
