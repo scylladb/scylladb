@@ -1416,6 +1416,13 @@ void dump_scylla_metadata_operation(schema_ptr schema, reader_permit permit, con
     writer.EndStream();
 }
 
+void validate_checksums_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map&) {
+    for (auto& sst : sstables) {
+        const auto valid = sstables::validate_checksums(sst, permit, default_priority_class()).get();
+        sst_log.info("validated the checksums of {}: {}", sst->get_filename(), valid ? "valid" : "invalid");
+    }
+}
+
 template <typename SstableConsumer>
 void sstable_consumer_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map& vm) {
     const auto merge = vm.count("merge");
@@ -1935,6 +1942,30 @@ well defined internal order.
 )",
             {"merge"},
             validate_operation},
+    {"validate-checksums",
+            "Validate the checksums of the sstable(s)",
+R"(
+There are two kinds of checksums for sstable data files:
+* The digest (full checksum), stored in the Digest.crc32 file. This is calculated
+  over the entire content of Data.db.
+* The per-chunk checksum. For uncompressed sstables, this is stored in CRC.db,
+  for compressed sstables it is stored inline after each compressed chunk in
+  Data.db.
+
+During normal reads Scylla validates the per-chunk checksum for compressed
+sstables. The digest and the per-chunk checksum of uncompressed sstables are not
+checked on any code-paths currently.
+
+This operation reads the entire Data.db and validates both kind of checksums
+against the data. Errors found are logged to stderr. The output just contains a
+bool for each sstable that is true if the sstable matches all checksums.
+
+The content is dumped in JSON, using the following schema:
+
+$ROOT := { "$sstable_path": Bool, ... }
+
+)",
+            validate_checksums_operation},
 };
 
 } // anonymous namespace
