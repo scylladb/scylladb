@@ -28,7 +28,7 @@ class compacting_sstable_registration {
     compaction_manager& _cm;
     std::unordered_set<sstables::shared_sstable> _compacting;
 public:
-    explicit compacting_sstable_registration(compaction_manager& cm)
+    explicit compacting_sstable_registration(compaction_manager& cm) noexcept
         : _cm(cm)
     { }
 
@@ -794,7 +794,7 @@ future<> compaction_manager::rewrite_sstables(replica::table* t, sstables::compa
     cmlog.debug("{} task {} table={}: started", options.type(), fmt::ptr(task.get()), fmt::ptr(task->compacting_table));
 
     std::vector<sstables::shared_sstable> sstables;
-    std::optional<compacting_sstable_registration> compacting;
+    compacting_sstable_registration compacting(*this);
 
     auto task_completion = defer([this, &task, &sstables, &options] {
         _stats.pending_tasks -= sstables.size();
@@ -808,7 +808,7 @@ future<> compaction_manager::rewrite_sstables(replica::table* t, sstables::compa
     // compaction.
     co_await run_with_compaction_disabled(t, [&] () mutable -> future<> {
         sstables = co_await get_func();
-        compacting = compacting_sstable_registration(*this, sstables);
+        compacting.register_compacting(sstables);
     });
     // sort sstables by size in descending order, such that the smallest files will be rewritten first
     // (as sstable to be rewritten is popped off from the back of container), so rewrite will have higher
@@ -832,7 +832,7 @@ future<> compaction_manager::rewrite_sstables(replica::table* t, sstables::compa
 
             // Releases reference to cleaned sstable such that respective used disk space can be freed.
             descriptor.release_exhausted = [&compacting] (const std::vector<sstables::shared_sstable>& exhausted_sstables) {
-                compacting->release_compacting(exhausted_sstables);
+                compacting.release_compacting(exhausted_sstables);
             };
 
             auto maintenance_permit = co_await seastar::get_units(_maintenance_ops_sem, 1);
