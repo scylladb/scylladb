@@ -27,6 +27,23 @@ namespace alternator {
 // items in all tables with per-item expiration enabled. Currently, this means
 // Alternator tables with TTL configured via a UpdateTimeToLeave request.
 class expiration_service final : public seastar::peering_sharded_service<expiration_service> {
+public:
+    // Object holding per-shard statistics related to the expiration service.
+    // While this object is alive, these metrics are also registered to be
+    // visible by the metrics REST API, with the "expiration_" prefix.
+    class stats {
+    public:
+        stats();
+        uint64_t scan_passes = 0;
+        uint64_t scan_table = 0;
+        uint64_t items_deleted = 0;
+        uint64_t secondary_ranges_scanned = 0;
+    private:
+        // The metric_groups object holds this stat object's metrics registered
+        // as long as the stats object is alive.
+        seastar::metrics::metric_groups _metrics;
+    };
+private:
     data_dictionary::database _db;
     service::storage_proxy& _proxy;
     // _end is set by start(), and resolves when the the background service
@@ -37,6 +54,7 @@ class expiration_service final : public seastar::peering_sharded_service<expirat
     // Ensures that at most 1 page of scan results at a time is processed by the TTL service
     named_semaphore _page_sem{1, named_semaphore_exception_factory{"alternator_ttl"}};
     bool shutting_down() { return _abort_source.abort_requested(); }
+    stats _expiration_stats;
 public:
     // sharded_service<expiration_service>::start() creates this object on
     // all shards, so calls this constructor on each shard. Later, the
