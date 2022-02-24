@@ -58,13 +58,10 @@ flat_mutation_reader_v2 make_combined_reader(schema_ptr schema,
         mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
 
 template <typename MutationFilter>
-requires requires(MutationFilter mf, const dht::decorated_key& dk) {
-    { mf(dk) } -> std::same_as<bool>;
-}
+requires std::is_invocable_r_v<bool, MutationFilter, const dht::decorated_key&>
 class filtering_reader : public flat_mutation_reader_v2::impl {
     flat_mutation_reader_v2 _rd;
     MutationFilter _filter;
-    static_assert(std::is_same<bool, std::result_of_t<MutationFilter(const dht::decorated_key&)>>::value, "bad MutationFilter signature");
 public:
     filtering_reader(flat_mutation_reader_v2 rd, MutationFilter&& filter)
         : impl(rd.schema(), rd.permit())
