@@ -11,6 +11,7 @@
 #include "utils/allocation_strategy.hh"
 
 template<typename T>
+requires std::is_nothrow_move_constructible_v<T>
 class managed;
 
 //
@@ -89,6 +90,7 @@ struct managed_ref {
 };
 
 template<typename T>
+requires std::is_nothrow_move_constructible_v<T>
 class managed {
     managed<T>** _backref;
     T _value;
@@ -96,8 +98,6 @@ class managed {
     template<typename T_>
     friend struct managed_ref;
 public:
-    static_assert(std::is_nothrow_move_constructible<T>::value, "Throwing move constructor not supported");
-
     managed(managed<T>** backref, T&& v) noexcept
         : _backref(backref)
         , _value(std::move(v))

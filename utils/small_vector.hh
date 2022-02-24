@@ -41,12 +41,8 @@ namespace utils {
 /// Unless otherwise specified (e.g. move ctor and assignment) small_vector
 /// provides guarantees at least as strong as those of std::vector<>.
 template<typename T, size_t N>
+requires std::is_nothrow_move_constructible_v<T> && std::is_nothrow_move_assignable_v<T> && std::is_nothrow_destructible_v<T> && (N > 0)
 class small_vector {
-    static_assert(N > 0);
-    static_assert(std::is_nothrow_move_constructible_v<T>);
-    static_assert(std::is_nothrow_move_assignable_v<T>);
-    static_assert(std::is_nothrow_destructible_v<T>);
-
 private:
     T* _begin;
     T* _end;

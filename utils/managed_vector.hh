@@ -14,9 +14,8 @@
 #include "utils/allocation_strategy.hh"
 
 template<typename T, unsigned InternalSize = 0, typename SizeType = size_t>
+requires std::is_nothrow_move_constructible_v<T>
 class managed_vector {
-    static_assert(std::is_nothrow_move_constructible<T>::value,
-        "objects stored in managed_vector need to be nothrow move-constructible");
 public:
     using value_type = T;
     using size_type = SizeType;
