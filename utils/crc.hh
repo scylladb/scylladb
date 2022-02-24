@@ -157,8 +157,8 @@ public:
     uint32_t crc32_vpmsum(uint32_t crc, const uint8_t* p, size_t len);
 
     template <class T>
+    requires std::is_integral_v<T>
     void process_le(T in) {
-        static_assert(std::is_integral<T>::value, "T must be integral type.");
 #if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
         switch (sizeof(T)) {
         case 1: break;
@@ -171,8 +171,8 @@ public:
     }
 
     template <class T>
+    requires std::is_integral_v<T>
     void process_be(T in) {
-        static_assert(std::is_integral<T>::value, "T must be integral type.");
         in = seastar::net::hton(in);
         _r = crc32_vpmsum(_r, reinterpret_cast<const uint8_t*>(&in), sizeof(T));
     }
@@ -182,8 +182,8 @@ public:
     }
 #else
     template <class T>
+    requires std::is_integral_v<T>
     void process_le(T in) {
-        static_assert(std::is_integral<T>::value, "T must be integral type.");
 #if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
         switch (sizeof(T)) {
         case 1: break;
@@ -196,8 +196,8 @@ public:
     }
 
     template <class T>
+    requires std::is_integral_v<T>
     void process_be(T in) {
-        static_assert(std::is_integral<T>::value, "T must be integral type.");
         in = seastar::net::hton(in);
         _r = ::crc32(_r, reinterpret_cast<const uint8_t*>(&in), sizeof(T));
     }
