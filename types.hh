@@ -153,7 +153,7 @@ std::strong_ordering lexicographical_tri_compare(InputIt1 first1, InputIt1 last1
     bool e1 = first1 == last1;
     bool e2 = first2 == last2;
     if (e1 == e2) {
-        return (static_cast<int>(relation1) - static_cast<int>(relation2)) <=> 0;
+        return static_cast<int>(relation1) <=> static_cast<int>(relation2);
     }
     if (e2) {
         return relation2 == lexicographical_relation::after_all_prefixed ? std::strong_ordering::less : std::strong_ordering::greater;
@@ -737,7 +737,7 @@ inline
 std::strong_ordering
 tri_compare_opt(data_type t, managed_bytes_view_opt v1, managed_bytes_view_opt v2) {
     if (!v1 || !v2) {
-        return int(bool(v1)) - int(bool(v2)) <=> 0;
+        return bool(v1) <=> bool(v2);
     } else {
         return tri_compare(std::move(t), *v1, *v2);
     }
@@ -877,10 +877,10 @@ class serialized_tri_compare {
 public:
     serialized_tri_compare(data_type type) : _type(type) {}
     std::strong_ordering operator()(const bytes_view& v1, const bytes_view& v2) const {
-        return _type->compare(v1, v2) <=> 0;
+        return _type->compare(v1, v2);
     }
     std::strong_ordering operator()(const managed_bytes_view& v1, const managed_bytes_view& v2) const {
-        return _type->compare(v1, v2) <=> 0;
+        return _type->compare(v1, v2);
     }
 };
 
