@@ -141,9 +141,8 @@ public:
     }
 
     template <typename Pred>
+    requires std::is_invocable_r_v<bool, Pred, ::shared_ptr<cql_statement>>
     void remove_if(Pred&& pred) {
-        static_assert(std::is_same<bool, std::result_of_t<Pred(::shared_ptr<cql_statement>)>>::value, "Bad Pred signature");
-
         _cache.remove_if([&pred] (const prepared_cache_entry& e) {
             return pred(e->statement);
         });

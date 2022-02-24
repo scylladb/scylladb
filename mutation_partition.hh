@@ -1243,6 +1243,7 @@ private:
     // If reversed is true, func will be called on entries in reverse order. In that case row_ranges
     // must be already in reverse order.
     template<bool reversed, typename Func>
+    requires std::is_invocable_r_v<stop_iteration, Func, rows_entry&>
     void trim_rows(const schema& s,
         const std::vector<query::clustering_range>& row_ranges,
         Func&& func);

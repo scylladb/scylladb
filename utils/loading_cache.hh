@@ -216,11 +216,11 @@ private:
 
 public:
     template<typename Func>
+    requires std::is_invocable_r_v<future<value_type>, Func, const key_type&>
     loading_cache(size_t max_size, lowres_clock::duration expiry, lowres_clock::duration refresh, logging::logger& logger, Func&& load)
         : loading_cache(max_size, expiry, refresh, logger)
     {
         static_assert(ReloadEnabled == loading_cache_reload_enabled::yes, "This constructor should only be invoked when ReloadEnabled == loading_cache_reload_enabled::yes");
-        static_assert(std::is_same<future<value_type>, std::result_of_t<Func(const key_type&)>>::value, "Bad Func signature");
 
         _load = std::forward<Func>(load);
 
@@ -254,8 +254,8 @@ public:
     }
 
     template <typename LoadFunc>
+    requires std::is_invocable_r_v<future<value_type>, LoadFunc, const key_type&>
     future<value_ptr> get_ptr(const Key& k, LoadFunc&& load) {
-        static_assert(std::is_same<future<value_type>, std::result_of_t<LoadFunc(const key_type&)>>::value, "Bad LoadFunc signature");
         // We shouldn't be here if caching is disabled
         assert(caching_enabled());
 
@@ -332,9 +332,8 @@ public:
     }
 
     template <typename Pred>
+    requires std::is_invocable_r_v<bool, Pred, const value_type&>
     void remove_if(Pred&& pred) {
-        static_assert(std::is_same<bool, std::result_of_t<Pred(const value_type&)>>::value, "Bad Pred signature");
-
         auto cond_pred = [this, &pred] (const ts_value_lru_entry& v) {
             return pred(v.timestamped_value().value());
         };

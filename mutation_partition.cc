@@ -1239,12 +1239,12 @@ size_t mutation_partition::external_memory_usage(const schema& s) const {
 }
 
 template<bool reversed, typename Func>
+requires std::is_invocable_r_v<stop_iteration, Func, rows_entry&>
 void mutation_partition::trim_rows(const schema& s,
     const std::vector<query::clustering_range>& row_ranges,
     Func&& func)
 {
     check_schema(s);
-    static_assert(std::is_same<stop_iteration, std::result_of_t<Func(rows_entry&)>>::value, "Bad func signature");
 
     stop_iteration stop = stop_iteration::no;
     auto last = reversal_traits<reversed>::begin(_rows);

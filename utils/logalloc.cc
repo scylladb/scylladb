@@ -1309,11 +1309,9 @@ private:
     }
 
     template<typename Func>
+    requires std::is_invocable_r_v<void, Func, const object_descriptor*, void*, size_t>
     void for_each_live(segment* seg, Func&& func) {
         // scylla-gdb.py:scylla_lsa_segment is coupled with this implementation.
-
-        static_assert(std::is_same<void, std::result_of_t<Func(const object_descriptor*, void*, size_t)>>::value, "bad Func signature");
-
         auto pos = align_up_for_asan(seg->at<const char>(0));
         while (pos < seg->at<const char>(segment::size)) {
             auto old_pos = pos;
