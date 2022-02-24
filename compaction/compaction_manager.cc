@@ -26,13 +26,12 @@ using namespace std::chrono_literals;
 
 class compacting_sstable_registration {
     compaction_manager* _cm;
-    std::vector<sstables::shared_sstable> _compacting;
+    std::unordered_set<sstables::shared_sstable> _compacting;
 public:
     compacting_sstable_registration(compaction_manager* cm, std::vector<sstables::shared_sstable> compacting)
         : _cm(cm)
-        , _compacting(std::move(compacting))
     {
-        _cm->register_compacting_sstables(_compacting);
+        register_compacting(compacting);
     }
 
     compacting_sstable_registration& operator=(const compacting_sstable_registration&) = delete;
@@ -55,15 +54,21 @@ public:
 
     ~compacting_sstable_registration() {
         if (_cm) {
-            _cm->deregister_compacting_sstables(_compacting);
+            _cm->deregister_compacting_sstables(_compacting.begin(), _compacting.end());
         }
+    }
+
+    void register_compacting(const std::vector<sstables::shared_sstable>& sstables) {
+        _compacting.reserve(_compacting.size() + sstables.size());
+        _compacting.insert(sstables.begin(), sstables.end());
+        _cm->register_compacting_sstables(sstables.begin(), sstables.end());
     }
 
     // Explicitly release compacting sstables
     void release_compacting(const std::vector<sstables::shared_sstable>& sstables) {
-        _cm->deregister_compacting_sstables(sstables);
-        for (auto& sst : sstables) {
-            _compacting.erase(boost::remove(_compacting, sst), _compacting.end());
+        _cm->deregister_compacting_sstables(sstables.begin(), sstables.end());
+        for (const auto& sst : sstables) {
+            _compacting.erase(sst);
         }
     }
 };
@@ -204,27 +209,25 @@ std::vector<sstables::shared_sstable> compaction_manager::get_candidates(const r
     return candidates;
 }
 
-void compaction_manager::register_compacting_sstables(const std::vector<sstables::shared_sstable>& sstables) {
-    std::unordered_set<sstables::shared_sstable> sstables_to_merge;
-    sstables_to_merge.reserve(sstables.size());
-    for (auto& sst : sstables) {
-        sstables_to_merge.insert(sst);
-    }
-
+template <typename Iterator, typename Sentinel>
+requires std::same_as<Sentinel, Iterator> || std::sentinel_for<Sentinel, Iterator>
+void compaction_manager::register_compacting_sstables(Iterator first, Sentinel last) {
     // make all required allocations in advance to merge
     // so it should not throw
-    _compacting_sstables.reserve(_compacting_sstables.size() + sstables.size());
+    _compacting_sstables.reserve(_compacting_sstables.size() + std::distance(first, last));
     try {
-        _compacting_sstables.merge(sstables_to_merge);
+        _compacting_sstables.insert(first, last);
     } catch (...) {
         cmlog.error("Unexpected error when registering compacting SSTables: {}. Ignored...", std::current_exception());
     }
 }
 
-void compaction_manager::deregister_compacting_sstables(const std::vector<sstables::shared_sstable>& sstables) {
+template <typename Iterator, typename Sentinel>
+requires std::same_as<Sentinel, Iterator> || std::sentinel_for<Sentinel, Iterator>
+void compaction_manager::deregister_compacting_sstables(Iterator first, Sentinel last) {
     // Remove compacted sstables from the set of compacting sstables.
-    for (auto& sst : sstables) {
-        _compacting_sstables.erase(sst);
+    for (; first != last; ++first) {
+        _compacting_sstables.erase(*first);
     }
 }
 

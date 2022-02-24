@@ -184,8 +184,13 @@ private:
     // Get candidates for compaction strategy, which are all sstables but the ones being compacted.
     std::vector<sstables::shared_sstable> get_candidates(const replica::table& t);
 
-    void register_compacting_sstables(const std::vector<sstables::shared_sstable>& sstables);
-    void deregister_compacting_sstables(const std::vector<sstables::shared_sstable>& sstables);
+    template <typename Iterator, typename Sentinel>
+    requires std::same_as<Sentinel, Iterator> || std::sentinel_for<Sentinel, Iterator>
+    void register_compacting_sstables(Iterator first, Sentinel last);
+
+    template <typename Iterator, typename Sentinel>
+    requires std::same_as<Sentinel, Iterator> || std::sentinel_for<Sentinel, Iterator>
+    void deregister_compacting_sstables(Iterator first, Sentinel last);
 
     // gets the table's compaction state
     // throws std::out_of_range exception if not found.
