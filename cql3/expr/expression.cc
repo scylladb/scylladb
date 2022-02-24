@@ -238,7 +238,7 @@ const abstract_type* get_value_comparator(const column_maybe_subscripted& col) {
 }
 
 /// True iff lhs's value equals rhs.
-bool equal(const managed_bytes_opt& rhs, const column_value& lhs, const column_value_eval_bag& bag) {
+bool equal(const managed_bytes_opt& rhs, const column_maybe_subscripted& lhs, const column_value_eval_bag& bag) {
     if (!rhs) {
         return false;
     }
@@ -250,7 +250,7 @@ bool equal(const managed_bytes_opt& rhs, const column_value& lhs, const column_v
 }
 
 /// Convenience overload for expression.
-bool equal(const expression& rhs, const column_value& lhs, const column_value_eval_bag& bag) {
+bool equal(const expression& rhs, const column_maybe_subscripted& lhs, const column_value_eval_bag& bag) {
     return equal(evaluate(rhs, bag.options).value.to_managed_bytes_opt(), lhs, bag);
 }
 
@@ -266,8 +266,8 @@ bool equal(const expression& t, const tuple_constructor& columns_tuple, const co
                 format("tuple equality size mismatch: {} elements on left-hand side, {} on right",
                        columns_tuple.elements.size(), rhs.size()));
     }
-    auto as_column_value = [] (const expression& e) { return expr::as<column_value>(e); };
-    return boost::equal(rhs, columns_tuple.elements | boost::adaptors::transformed(as_column_value), [&] (const managed_bytes_opt& b, const column_value& lhs) {
+    return boost::equal(rhs, columns_tuple.elements | boost::adaptors::transformed(as_column_maybe_subscripted),
+    [&] (const managed_bytes_opt& b, const column_maybe_subscripted& lhs) {
         return equal(b, lhs, bag);
     });
 }
@@ -488,7 +488,7 @@ bool is_one_of(const column_value& col, const expression& rhs, const column_valu
         throw std::logic_error("unexpected expression type in is_one_of(single column)");
     }
     return boost::algorithm::any_of(get_list_elements(in_list), [&] (const managed_bytes_opt& b) {
-        return equal(b, col, bag);
+        return equal(b, as_column_maybe_subscripted(col), bag);
     });
 }
 
@@ -500,7 +500,7 @@ bool is_one_of(const tuple_constructor& tuple, const expression& rhs, const colu
     }
     return boost::algorithm::any_of(get_list_of_tuples_elements(in_list), [&] (const std::vector<managed_bytes_opt>& el) {
         return boost::equal(tuple.elements, el, [&] (const expression& c, const managed_bytes_opt& b) {
-            return equal(b, expr::as<column_value>(c), bag);
+            return equal(b, as_column_maybe_subscripted(c), bag);
         });
     });
 }
@@ -540,9 +540,9 @@ bool is_satisfied_by(const binary_operator& opr, const column_value_eval_bag& ba
     return expr::visit(overloaded_functor{
             [&] (const column_value& col) {
                 if (opr.op == oper_t::EQ) {
-                    return equal(opr.rhs, col, bag);
+                    return equal(opr.rhs, &col, bag);
                 } else if (opr.op == oper_t::NEQ) {
-                    return !equal(opr.rhs, col, bag);
+                    return !equal(opr.rhs, &col, bag);
                 } else if (is_slice(opr.op)) {
                     return limits(col, opr.op, opr.rhs, bag);
                 } else if (opr.op == oper_t::CONTAINS) {
