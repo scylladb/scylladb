@@ -25,11 +25,15 @@ static logging::logger cmlog("compaction_manager");
 using namespace std::chrono_literals;
 
 class compacting_sstable_registration {
-    compaction_manager* _cm;
+    compaction_manager& _cm;
     std::unordered_set<sstables::shared_sstable> _compacting;
 public:
-    compacting_sstable_registration(compaction_manager* cm, std::vector<sstables::shared_sstable> compacting)
+    explicit compacting_sstable_registration(compaction_manager& cm)
         : _cm(cm)
+    { }
+
+    compacting_sstable_registration(compaction_manager& cm, std::vector<sstables::shared_sstable> compacting)
+        : compacting_sstable_registration(cm)
     {
         register_compacting(compacting);
     }
@@ -48,25 +52,23 @@ public:
     compacting_sstable_registration(compacting_sstable_registration&& other) noexcept
         : _cm(other._cm)
         , _compacting(std::move(other._compacting))
-    {
-        other._cm = nullptr;
-    }
+    { }
 
     ~compacting_sstable_registration() {
-        if (_cm) {
-            _cm->deregister_compacting_sstables(_compacting.begin(), _compacting.end());
-        }
+        // _compacting might be empty, but this should be just fine
+        // for deregister_compacting_sstables.
+        _cm.deregister_compacting_sstables(_compacting.begin(), _compacting.end());
     }
 
     void register_compacting(const std::vector<sstables::shared_sstable>& sstables) {
         _compacting.reserve(_compacting.size() + sstables.size());
         _compacting.insert(sstables.begin(), sstables.end());
-        _cm->register_compacting_sstables(sstables.begin(), sstables.end());
+        _cm.register_compacting_sstables(sstables.begin(), sstables.end());
     }
 
     // Explicitly release compacting sstables
     void release_compacting(const std::vector<sstables::shared_sstable>& sstables) {
-        _cm->deregister_compacting_sstables(sstables.begin(), sstables.end());
+        _cm.deregister_compacting_sstables(sstables.begin(), sstables.end());
         for (const auto& sst : sstables) {
             _compacting.erase(sst);
         }
@@ -275,7 +277,7 @@ future<> compaction_manager::perform_major_compaction(replica::table* t) {
             // those are eligible for major compaction.
             sstables::compaction_strategy cs = t->get_compaction_strategy();
             sstables::compaction_descriptor descriptor = cs.get_major_compaction_job(t->as_table_state(), get_candidates(*t));
-            auto compacting = make_lw_shared<compacting_sstable_registration>(this, descriptor.sstables);
+            auto compacting = make_lw_shared<compacting_sstable_registration>(*this, descriptor.sstables);
             descriptor.release_exhausted = [compacting] (const std::vector<sstables::shared_sstable>& exhausted_sstables) {
                 compacting->release_compacting(exhausted_sstables);
             };
@@ -696,7 +698,7 @@ void compaction_manager::submit(replica::table* t) {
                 postpone_compaction_for_table(&t);
                 return make_ready_future<stop_iteration>(stop_iteration::yes);
             }
-            auto compacting = make_lw_shared<compacting_sstable_registration>(this, descriptor.sstables);
+            auto compacting = make_lw_shared<compacting_sstable_registration>(*this, descriptor.sstables);
             auto weight_r = compaction_weight_registration(this, weight);
             descriptor.release_exhausted = [compacting] (const std::vector<sstables::shared_sstable>& exhausted_sstables) {
                 compacting->release_compacting(exhausted_sstables);
@@ -806,7 +808,7 @@ future<> compaction_manager::rewrite_sstables(replica::table* t, sstables::compa
     // compaction.
     co_await run_with_compaction_disabled(t, [&] () mutable -> future<> {
         sstables = co_await get_func();
-        compacting = compacting_sstable_registration(this, sstables);
+        compacting = compacting_sstable_registration(*this, sstables);
     });
     // sort sstables by size in descending order, such that the smallest files will be rewritten first
     // (as sstable to be rewritten is popped off from the back of container), so rewrite will have higher
