@@ -143,6 +143,9 @@ managed_bytes_opt get_value(const column_value& col, const column_value_eval_bag
     }
 }
 
+/// column that might be subscripted - e.g col1, col2, col3[sub1]
+using column_maybe_subscripted = std::variant<const column_value*, const subscript*>;
+
 /// Type for comparing results of get_value().
 const abstract_type* get_value_comparator(const column_definition* cdef) {
     return &cdef->type->without_reversed();
