@@ -146,6 +146,44 @@ managed_bytes_opt get_value(const column_value& col, const column_value_eval_bag
 /// column that might be subscripted - e.g col1, col2, col3[sub1]
 using column_maybe_subscripted = std::variant<const column_value*, const subscript*>;
 
+/// Returns col's value from queried data.
+__attribute__((unused)) // For now mark as unused so that the code compiles, will be used soon
+static managed_bytes_opt get_value(const column_maybe_subscripted& col, const column_value_eval_bag& bag) {
+    const row_data_from_partition_slice& data = bag.row_data;
+    const query_options& options = bag.options;
+
+    return std::visit(overloaded_functor {
+        [&](const column_value* cval) -> managed_bytes_opt {
+            return get_value(*cval, bag);
+        },
+        [&](const subscript* s) -> managed_bytes_opt {
+            const column_definition* cdef = get_subscripted_column(*s).col;
+
+            auto col_type = static_pointer_cast<const collection_type_impl>(cdef->type);
+            if (!col_type->is_map()) {
+                throw exceptions::invalid_request_exception(format("subscripting non-map column {}", cdef->name_as_text()));
+            }
+            int32_t index = data.sel.index_of(*cdef);
+            if (index == -1) {
+                throw std::runtime_error(
+                        format("Column definition {} does not match any column in the query selection",
+                        cdef->name_as_text()));
+            }
+            const auto deserialized = cdef->type->deserialize(managed_bytes_view(*data.other_columns[index]));
+            const auto& data_map = value_cast<map_type_impl::native_type>(deserialized);
+            const auto key = evaluate(s->sub, options);
+            auto&& key_type = col_type->name_comparator();
+            const auto found = key.view().with_linearized([&] (bytes_view key_bv) {
+                using entry = std::pair<data_value, data_value>;
+                return std::find_if(data_map.cbegin(), data_map.cend(), [&] (const entry& element) {
+                    return key_type->compare(element.first.serialize_nonnull(), key_bv) == 0;
+                });
+            });
+            return found == data_map.cend() ? std::nullopt : managed_bytes_opt(found->second.serialize_nonnull());
+        }
+    }, col);
+}
+
 /// Type for comparing results of get_value().
 const abstract_type* get_value_comparator(const column_definition* cdef) {
     return &cdef->type->without_reversed();
