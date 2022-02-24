@@ -633,6 +633,7 @@ private:
 
     future<> create_data() noexcept;
 
+public:
     // Return an input_stream which reads exactly the specified byte range
     // from the data file (after uncompression, if the file is compressed).
     // Unlike data_read() below, this method does not read the entire byte
@@ -652,6 +653,7 @@ private:
     // for iteration through all the rows.
     future<temporary_buffer<char>> data_read(uint64_t pos, size_t len, const io_priority_class& pc, reader_permit permit);
 
+private:
     future<summary_entry&> read_summary_entry(size_t i);
 
     // FIXME: pending on Bloom filter implementation
