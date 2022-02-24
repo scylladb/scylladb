@@ -1423,6 +1423,36 @@ void validate_checksums_operation(schema_ptr schema, reader_permit permit, const
     }
 }
 
+void decompress_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map& vm) {
+    for (const auto& sst : sstables) {
+        if (!sst->get_compression()) {
+            sst_log.info("Sstable {} is not compressed, nothing to do", sst->get_filename());
+            continue;
+        }
+
+        auto output_filename = sst->get_filename();
+        output_filename += ".decompressed";
+
+        auto ofile = open_file_dma(output_filename, open_flags::wo | open_flags::create).get();
+        file_output_stream_options options;
+        options.buffer_size = 4096;
+        auto ostream = make_file_output_stream(std::move(ofile), options).get();
+        auto close_ostream = defer([&ostream] { ostream.close().get(); });
+
+        auto istream = sst->data_stream(0, sst->data_size(), default_priority_class(), permit, nullptr, nullptr);
+        auto close_istream = defer([&istream] { istream.close().get(); });
+
+        istream.consume([&] (temporary_buffer<char> buf) {
+            return ostream.write(buf.get(), buf.size()).then([] {
+                return consumption_result<char>(continue_consuming{});
+            });
+        }).get();
+        ostream.flush().get();
+
+        sst_log.info("Sstable {} decompressed into {}", sst->get_filename(), output_filename);
+    }
+}
+
 template <typename SstableConsumer>
 void sstable_consumer_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map& vm) {
     const auto merge = vm.count("merge");
@@ -1966,6 +1996,19 @@ $ROOT := { "$sstable_path": Bool, ... }
 
 )",
             validate_checksums_operation},
+    {"decompress",
+            "Decompress sstable(s)",
+R"(
+Decompress Data.db if compressed. Noop if not compressed. The decompressed data
+is written to Data.db.decompressed. E.g. for an sstable:
+
+    md-12311-big-Data.db
+
+the output will be:
+
+    md-12311-big-Data.db.decompressed
+)",
+            decompress_operation},
 };
 
 } // anonymous namespace
