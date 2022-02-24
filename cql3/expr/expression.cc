@@ -160,6 +160,20 @@ column_maybe_subscripted as_column_maybe_subscripted(const expression& e) {
     return &as<column_value>(e);
 }
 
+/// Gets the subscripted column_value out of the column_maybe_subscript.
+/// Only columns can be subscripted in CQL, so we can expect that the subscripted expression is a column_value.
+__attribute__((unused)) // For now mark as unused so that the code compiles, will be used soon
+const column_value& get_subscripted_column(const column_maybe_subscripted& cms) {
+    return std::visit(overloaded_functor{
+        [&](const column_value* cv) -> const column_value& {
+            return *cv;
+        },
+        [&](const subscript* sub) -> const column_value& {
+            return get_subscripted_column(*sub);
+        }
+    }, cms);
+}
+
 /// Returns col's value from queried data.
 __attribute__((unused)) // For now mark as unused so that the code compiles, will be used soon
 static managed_bytes_opt get_value(const column_maybe_subscripted& col, const column_value_eval_bag& bag) {
