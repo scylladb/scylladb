@@ -237,8 +237,7 @@ private:
     virtual double backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override {
         return _added_backlog * _available_memory;
     }
-    virtual void add_sstable(sstables::shared_sstable sst)  override { }
-    virtual void remove_sstable(sstables::shared_sstable sst)  override { }
+    virtual void replace_sstables(std::vector<sstables::shared_sstable> old_ssts, std::vector<sstables::shared_sstable> new_ssts) override {}
 };
 
 compaction_manager::compaction_state& compaction_manager::get_compaction_state(replica::table* t) {
@@ -489,6 +488,8 @@ void compaction_manager::register_metrics() {
                        sm::description("Holds the number of compaction tasks waiting for an opportunity to run.")),
         sm::make_gauge("backlog", [this] { return _last_backlog; },
                        sm::description("Holds the sum of compaction backlog for all tables in the system.")),
+        sm::make_gauge("normalized_backlog", [this] { return _last_backlog / _available_memory; },
+                       sm::description("Holds the sum of normalized compaction backlog for all tables in the system. Backlog is normalized by dividing backlog by shard's available memory.")),
     });
 }
 
@@ -1153,30 +1154,26 @@ compaction::strategy_control& compaction_manager::get_strategy_control() const n
 }
 
 double compaction_backlog_tracker::backlog() const {
-    return _disabled ? compaction_controller::disable_backlog : _impl->backlog(_ongoing_writes, _ongoing_compactions);
+    return disabled() ? compaction_controller::disable_backlog : _impl->backlog(_ongoing_writes, _ongoing_compactions);
 }
 
-void compaction_backlog_tracker::add_sstable(sstables::shared_sstable sst) {
-    if (_disabled || !sstable_belongs_to_tracker(sst)) {
+void compaction_backlog_tracker::replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) {
+    if (disabled()) {
         return;
     }
-    _ongoing_writes.erase(sst);
-    try {
-        _impl->add_sstable(std::move(sst));
-    } catch (...) {
-        cmlog.warn("Disabling backlog tracker due to exception {}", std::current_exception());
-        disable();
-    }
-}
+    auto filter_and_revert_charges = [this] (const std::vector<sstables::shared_sstable>& ssts) {
+        std::vector<sstables::shared_sstable> ret;
+        for (auto& sst : ssts) {
+            if (sstable_belongs_to_tracker(sst)) {
+                revert_charges(sst);
+                ret.push_back(sst);
+            }
+        }
+        return ret;
+    };
 
-void compaction_backlog_tracker::remove_sstable(sstables::shared_sstable sst) {
-    if (_disabled || !sstable_belongs_to_tracker(sst)) {
-        return;
-    }
-
-    _ongoing_compactions.erase(sst);
     try {
-        _impl->remove_sstable(std::move(sst));
+        _impl->replace_sstables(filter_and_revert_charges(old_ssts), filter_and_revert_charges(new_ssts));
     } catch (...) {
         cmlog.warn("Disabling backlog tracker due to exception {}", std::current_exception());
         disable();
@@ -1188,7 +1185,7 @@ bool compaction_backlog_tracker::sstable_belongs_to_tracker(const sstables::shar
 }
 
 void compaction_backlog_tracker::register_partially_written_sstable(sstables::shared_sstable sst, backlog_write_progress_manager& wp) {
-    if (_disabled) {
+    if (disabled()) {
         return;
     }
     try {
@@ -1203,7 +1200,7 @@ void compaction_backlog_tracker::register_partially_written_sstable(sstables::sh
 }
 
 void compaction_backlog_tracker::register_compacting_sstable(sstables::shared_sstable sst, backlog_read_progress_manager& rp) {
-    if (_disabled) {
+    if (disabled()) {
         return;
     }
 

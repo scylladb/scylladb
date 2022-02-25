@@ -13,6 +13,8 @@
 #include "sstables/sstables.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 
+class size_tiered_backlog_tracker;
+
 namespace sstables {
 
 class size_tiered_compaction_strategy_options {
@@ -106,7 +108,7 @@ class size_tiered_compaction_strategy : public compaction_strategy_impl {
         return n / sstables.size();
     }
 
-    bool is_bucket_interesting(const std::vector<sstables::shared_sstable>& bucket, int min_threshold) const {
+    static bool is_bucket_interesting(const std::vector<sstables::shared_sstable>& bucket, int min_threshold) {
         return bucket.size() >= size_t(min_threshold);
     }
 
@@ -142,6 +144,7 @@ public:
 
     virtual compaction_descriptor get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode) override;
 
+    friend class ::size_tiered_backlog_tracker;
 };
 
 }

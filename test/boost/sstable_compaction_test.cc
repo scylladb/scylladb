@@ -3209,7 +3209,7 @@ SEASTAR_TEST_CASE(backlog_tracker_correctness_after_changing_compaction_strategy
             };
 
             for (auto& sst : ssts) {
-                cf->get_compaction_strategy().get_backlog_tracker().add_sstable(sst);
+                cf->get_compaction_strategy().get_backlog_tracker().replace_sstables({}, {sst});
             }
 
             // Start compaction, then stop tracking compaction, switch to TWCS, wait for compaction to finish and check for backlog.
@@ -3220,7 +3220,7 @@ SEASTAR_TEST_CASE(backlog_tracker_correctness_after_changing_compaction_strategy
             // set_compaction_strategy() itself is responsible for transferring charges from old to new backlog tracker.
             cf->set_compaction_strategy(sstables::compaction_strategy_type::time_window);
             for (auto& sst : ssts) {
-                cf->get_compaction_strategy().get_backlog_tracker().add_sstable(sst);
+                cf->get_compaction_strategy().get_backlog_tracker().replace_sstables({}, {sst});
             }
 
             auto ret = fut.get0();
@@ -4803,5 +4803,112 @@ SEASTAR_TEST_CASE(test_major_does_not_miss_data_in_memtable) {
         assert_that(sstable_reader(new_sst, s, env.make_reader_permit()))
                 .produces(deletion_mut)
                 .produces_end_of_stream();
+    });
+}
+
+SEASTAR_TEST_CASE(simple_backlog_controller_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        /////////////
+        // settings
+        static constexpr float disk_memory_ratio = 78.125; /* AWS I3en is ~78.125 */
+        static constexpr uint64_t available_memory_per_shard = 8'000'000'000; /* AWS I3en */
+        static constexpr float target_disk_usage = 0.50;
+
+        const uint64_t available_disk_size_per_shard = disk_memory_ratio * available_memory_per_shard;
+        const uint64_t available_memory = available_memory_per_shard * 0.92; /* 8% is reserved for the OS */
+        const uint64_t estimated_flush_size = double(available_memory) * 0.05; /* flush threshold is 5% of available shard mem */
+        const uint64_t all_tables_disk_usage = double(available_disk_size_per_shard) * target_disk_usage;
+
+        auto as = abort_source();
+        compaction_manager::compaction_scheduling_group csg = { default_scheduling_group(), default_priority_class() };
+        compaction_manager::maintenance_scheduling_group msg = { default_scheduling_group(), default_priority_class() };
+        auto manager = compaction_manager(csg, msg, available_memory, as);
+
+        auto add_sstable = [&env, &manager, gen = make_lw_shared<unsigned>(1)] (replica::table& t, uint64_t data_size) {
+            auto sst = env.make_sstable(t.schema(), "", (*gen)++, la, big);
+            auto key = make_local_key(t.schema());
+            sstables::test(sst).set_values_for_leveled_strategy(data_size, 0 /*level*/, 0 /*max ts*/, key, key);
+            assert(sst->data_size() == data_size);
+            auto backlog_before = t.get_compaction_strategy().get_backlog_tracker().backlog();
+            t.add_sstable_and_update_cache(sst).get();
+            testlog.debug("\tNew sstable of size={}; Backlog diff={};",
+                          sstables::pretty_printed_data_size(data_size),
+                          t.get_compaction_strategy().get_backlog_tracker().backlog() - backlog_before);
+        };
+
+        auto tracker = make_lw_shared<cache_tracker>();
+        cell_locker_stats cl_stats;
+        auto create_table = [&] () {
+            simple_schema ss;
+            auto s = ss.schema();
+
+            replica::column_family::config cfg = column_family_test_config(env.manager(), env.semaphore());
+            cfg.datadir = "";
+            cfg.enable_disk_writes = true;
+            cfg.enable_cache = false;
+            auto t = make_lw_shared<replica::table>(s, cfg, replica::table::no_commitlog(), manager, cl_stats, *tracker);
+            t->mark_ready_for_writes();
+            t->start();
+            t->set_compaction_strategy(sstables::compaction_strategy_type::size_tiered);
+            return t;
+        };
+
+        auto get_size_for_tier = [&] (int tier) -> uint64_t {
+            return std::pow(4, tier) * estimated_flush_size;
+        };
+        auto get_total_tiers = [&] (uint64_t target_size) -> unsigned {
+            double inv_log_4 = 1.0f / std::log(4);
+            return std::ceil(std::log(double(target_size) / estimated_flush_size) * inv_log_4);
+        };
+        auto normalize_backlog = [&] (double backlog) -> double {
+            return backlog / available_memory;
+        };
+
+        struct result {
+            unsigned table_count;
+            uint64_t per_table_max_disk_usage;
+            double normalized_backlog;
+        };
+        std::vector<result> results;
+
+        std::vector<unsigned> target_table_count_s = { 1, 2, 5, 10, 20 };
+        for (auto target_table_count : target_table_count_s) {
+            const uint64_t per_table_max_disk_usage = std::ceil(all_tables_disk_usage / target_table_count);
+
+            testlog.info("Creating tables, with max size={}", sstables::pretty_printed_data_size(per_table_max_disk_usage));
+
+            std::vector<lw_shared_ptr<replica::table>> tables;
+            uint64_t tables_total_size = 0;
+
+            for (uint64_t t_idx = 0, available_space = all_tables_disk_usage; available_space >= estimated_flush_size; t_idx++) {
+                auto target_disk_usage = std::min(available_space, per_table_max_disk_usage);
+                auto tiers = get_total_tiers(target_disk_usage);
+
+                auto t = create_table();
+                for (auto tier_idx = 0; tier_idx < tiers; tier_idx++) {
+                    auto tier_size = get_size_for_tier(tier_idx);
+                    if (tier_size > available_space) {
+                        break;
+                    }
+                    add_sstable(*t, tier_size);
+                    available_space -= std::min(available_space, uint64_t(tier_size));
+                }
+
+                auto table_size = t->get_stats().live_disk_space_used;
+                testlog.debug("T{}: {} tiers, with total size={}", t_idx, tiers, sstables::pretty_printed_data_size(table_size));
+                tables.push_back(t);
+                tables_total_size += table_size;
+            }
+            testlog.debug("Created {} tables, with total size={}", tables.size(), sstables::pretty_printed_data_size(tables_total_size));
+            results.push_back(result{ tables.size(), per_table_max_disk_usage, normalize_backlog(manager.backlog()) });
+            for (auto& t : tables) {
+                t->stop().get();
+            }
+        }
+        for (auto& r : results) {
+            testlog.info("Tables={} with max size={} -> NormalizedBacklog={}", r.table_count, sstables::pretty_printed_data_size(r.per_table_max_disk_usage), r.normalized_backlog);
+            // Expect 0 backlog as tiers are all perfectly compacted
+            BOOST_REQUIRE(r.normalized_backlog == 0.0f);
+        }
     });
 }
