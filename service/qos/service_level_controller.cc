@@ -362,7 +362,7 @@ future<> service_level_controller::set_distributed_service_level(sstring name, s
         // test for illegal requests or requests that should terminate without any action
         if (it == sl_info.end()) {
             if (op_type == set_service_level_op_type::alter) {
-                return make_exception_future(exceptions::invalid_request_exception(format("The service level '{}' desn't exist.", name)));
+                return make_exception_future(exceptions::invalid_request_exception(format("The service level '{}' doesn't exist.", name)));
             }
         } else {
             if (op_type == set_service_level_op_type::add) {
