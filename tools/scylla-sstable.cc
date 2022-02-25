@@ -837,14 +837,14 @@ stop_iteration consume_reader(flat_mutation_reader_v2 rd, sstable_consumer& cons
     return consumer.on_end_of_sstable().get();
 }
 
-void consume_sstables(schema_ptr schema, reader_permit permit, std::vector<sstables::shared_sstable> sstables, bool merge, bool no_skips,
+void consume_sstables(schema_ptr schema, reader_permit permit, std::vector<sstables::shared_sstable> sstables, bool merge, bool use_crawling_reader,
         std::function<stop_iteration(flat_mutation_reader_v2&, sstables::sstable*)> reader_consumer) {
-    sst_log.trace("consume_sstables(): {} sstables, merge={}, no_skips={}", sstables.size(), merge, no_skips);
+    sst_log.trace("consume_sstables(): {} sstables, merge={}, use_crawling_reader={}", sstables.size(), merge, use_crawling_reader);
     if (merge) {
         std::vector<flat_mutation_reader_v2> readers;
         readers.reserve(sstables.size());
         for (const auto& sst : sstables) {
-            if (no_skips) {
+            if (use_crawling_reader) {
                 readers.emplace_back(sst->make_crawling_reader(schema, permit));
             } else {
                 readers.emplace_back(sst->make_reader(schema, permit, query::full_partition_range, schema->full_slice()));
@@ -855,7 +855,7 @@ void consume_sstables(schema_ptr schema, reader_permit permit, std::vector<sstab
         reader_consumer(rd, nullptr);
     } else {
         for (const auto& sst : sstables) {
-            auto rd = no_skips
+            auto rd = use_crawling_reader
                 ? sst->make_crawling_reader(schema, permit)
                 : sst->make_reader(schema, permit, query::full_partition_range, schema->full_slice());
 
@@ -1458,9 +1458,10 @@ void sstable_consumer_operation(schema_ptr schema, reader_permit permit, const s
     const auto merge = vm.count("merge");
     const auto no_skips = vm.count("no-skips");
     const auto partitions = get_partitions(schema, vm);
+    const auto use_crawling_reader = no_skips || partitions.empty();
     auto consumer = std::make_unique<SstableConsumer>(schema, permit, vm);
     consumer->on_start_of_stream().get();
-    consume_sstables(schema, permit, sstables, merge, no_skips || partitions.empty(), [&, &consumer = *consumer] (flat_mutation_reader_v2& rd, sstables::sstable* sst) {
+    consume_sstables(schema, permit, sstables, merge, use_crawling_reader, [&, &consumer = *consumer] (flat_mutation_reader_v2& rd, sstables::sstable* sst) {
         return consume_reader(std::move(rd), consumer, sst, partitions, no_skips);
     });
     consumer->on_end_of_stream().get();
