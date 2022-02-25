@@ -212,15 +212,9 @@ scylla-types executes so called actions on the provided values. Each action has
 a required number of arguments. The supported actions are:
 {}
 
-Examples:
-$ scylla types print -t Int32Type b34b62d4
--1286905132
+For more information about individual actions, see their specific help:
 
-$ scylla types compare -t 'ReversedType(TimeUUIDType)' b34b62d46a8d11ea0000005000237906 d00819896f6b11ea00000000001c571b
-b34b62d4-6a8d-11ea-0000-005000237906 > d0081989-6f6b-11ea-0000-0000001c571b
-
-$ scylla types print --prefix-compound -t TimeUUIDType -t Int32Type 0010d00819896f6b11ea00000000001c571b000400000010
-(d0081989-6f6b-11ea-0000-0000001c571b, 16)
+$ scylla types {action} --help
 )";
 
     if (found_ah) {
