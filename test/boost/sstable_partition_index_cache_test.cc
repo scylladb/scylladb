@@ -37,11 +37,13 @@ static void add_entry(logalloc::region& r,
 {
     logalloc::allocating_section as;
     as(r, [&] {
-        sstables::key sst_key = sstables::key::from_partition_key(s, key);
-        page._entries.push_back(make_managed<index_entry>(
-                managed_bytes(sst_key.get_bytes()),
-                position,
-                managed_ref<promoted_index>()));
+        with_allocator(r.allocator(), [&] {
+            sstables::key sst_key = sstables::key::from_partition_key(s, key);
+            page._entries.push_back(make_managed<index_entry>(
+                    managed_bytes(sst_key.get_bytes()),
+                    position,
+                    managed_ref<promoted_index>()));
+        });
     });
 }
 
