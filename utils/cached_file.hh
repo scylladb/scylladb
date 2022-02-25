@@ -326,6 +326,7 @@ public:
     }
 
     size_t evict_range(cache_type::iterator start, cache_type::iterator end) noexcept {
+      return with_allocator(standard_allocator(), [&] {
         size_t count = 0;
         auto disposer = [] (auto* p) noexcept {};
         while (start != end) {
@@ -338,6 +339,7 @@ public:
             }
         }
         return count;
+      });
     }
 public:
     /// \brief Constructs a cached_file.
@@ -464,8 +466,10 @@ public:
 inline
 void cached_file::cached_page::on_evicted() noexcept {
     parent->on_evicted(*this);
-    cached_file::cache_type::iterator it(this);
-    it.erase(page_idx_less_comparator());
+    with_allocator(standard_allocator(), [this] {
+        cached_file::cache_type::iterator it(this);
+        it.erase(page_idx_less_comparator());
+    });
 }
 
 class cached_file_impl : public file_impl {
