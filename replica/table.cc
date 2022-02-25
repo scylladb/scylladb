@@ -368,21 +368,16 @@ void table::update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable) no
 }
 
 inline void table::add_sstable_to_backlog_tracker(compaction_backlog_tracker& tracker, sstables::shared_sstable sstable) {
-    tracker.add_sstable(std::move(sstable));
+    tracker.replace_sstables({}, {std::move(sstable)});
 }
 
 inline void table::remove_sstable_from_backlog_tracker(compaction_backlog_tracker& tracker, sstables::shared_sstable sstable) {
-    tracker.remove_sstable(std::move(sstable));
+    tracker.replace_sstables({std::move(sstable)}, {});
 }
 
 void table::backlog_tracker_adjust_charges(const std::vector<sstables::shared_sstable>& old_sstables, const std::vector<sstables::shared_sstable>& new_sstables) {
     auto& tracker = _compaction_strategy.get_backlog_tracker();
-    for (auto& sst : new_sstables) {
-        tracker.add_sstable(sst);
-    }
-    for (auto& sst : old_sstables) {
-        tracker.remove_sstable(sst);
-    }
+    tracker.replace_sstables(old_sstables, new_sstables);
 }
 
 lw_shared_ptr<sstables::sstable_set>
@@ -755,6 +750,7 @@ table::stop() {
                             _sstables = make_compound_sstable_set();
                             _sstables_staging.clear();
                         })).then([this] {
+                            _compaction_strategy.get_backlog_tracker().disable();
                             _cache.refresh_snapshot();
                         });
                     });
