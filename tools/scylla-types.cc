@@ -187,7 +187,7 @@ $ scylla types print --prefix-compound -t TimeUUIDType -t Int32Type 0010d0081989
 (d0081989-6f6b-11ea-0000-0000001c571b, 16)
 )";
     app_cfg.description = format(description_template, boost::algorithm::join(action_handlers | boost::adaptors::transformed(
-                    [] (const action_handler& ah) { return format("* --{} - {}", ah.name(), ah.description()); } ), "\n"));
+                    [] (const action_handler& ah) { return format("* {} - {}", ah.name(), ah.description()); } ), "\n"));
 
     tools::utils::configure_tool_mode(app_cfg);
 
