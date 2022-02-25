@@ -120,15 +120,17 @@ using action_handler_func = void(*)(type_variant, std::vector<bytes>);
 
 class action_handler {
     std::string _name;
+    std::string _summary;
     std::string _description;
     action_handler_func _func;
 
 public:
-    action_handler(std::string name, std::string description, action_handler_func func)
-        : _name(std::move(name)), _description(std::move(description)), _func(func) {
+    action_handler(std::string name, std::string summary, action_handler_func func, std::string description)
+        : _name(std::move(name)), _summary(std::move(summary)), _description(std::move(description)), _func(func) {
     }
 
     const std::string& name() const { return _name; }
+    const std::string& summary() const { return _summary; }
     const std::string& description() const { return _description; }
 
     void operator()(type_variant type, std::vector<bytes> values) const {
@@ -137,9 +139,43 @@ public:
 };
 
 const std::vector<action_handler> action_handlers = {
-    {"print", "print the value in a human readable form, takes 1+ values", print_handler},
-    {"compare", "compare two values and print the result, takes 2 values", compare_handler},
-    {"validate", "validate the values, takes 1+ values", validate_handler},
+    {"print", "print the value(s) in a human readable form", print_handler,
+R"(
+Deserialize and print the value(s) in a human-readable form.
+
+Arguments: 1 or more serialized values.
+
+Examples:
+
+$ scylla types print -t Int32Type b34b62d4
+-1286905132
+
+$ scylla types print --prefix-compound -t TimeUUIDType -t Int32Type 0010d00819896f6b11ea00000000001c571b000400000010
+(d0081989-6f6b-11ea-0000-0000001c571b, 16)
+)"},
+    {"compare", "compare two values", compare_handler,
+R"(
+Compare two values and print the result.
+
+Arguments: 2 serialized values.
+
+Examples:
+
+$ scylla types compare -t 'ReversedType(TimeUUIDType)' b34b62d46a8d11ea0000005000237906 d00819896f6b11ea00000000001c571b
+b34b62d4-6a8d-11ea-0000-005000237906 > d0081989-6f6b-11ea-0000-0000001c571b
+)"},
+    {"validate", "validate the value(s)", validate_handler,
+R"(
+Check that the value(s) are valid for the type according to the requirements of
+the type.
+
+Arguments: 1 or more serialized values.
+
+Examples:
+
+$  scylla types validate -t Int32Type b34b62d4
+b34b62d4: VALID - -1286905132
+)"},
 };
 
 }
@@ -186,8 +222,13 @@ b34b62d4-6a8d-11ea-0000-005000237906 > d0081989-6f6b-11ea-0000-0000001c571b
 $ scylla types print --prefix-compound -t TimeUUIDType -t Int32Type 0010d00819896f6b11ea00000000001c571b000400000010
 (d0081989-6f6b-11ea-0000-0000001c571b, 16)
 )";
-    app_cfg.description = format(description_template, boost::algorithm::join(action_handlers | boost::adaptors::transformed(
-                    [] (const action_handler& ah) { return format("* {} - {}", ah.name(), ah.description()); } ), "\n"));
+
+    if (found_ah) {
+        app_cfg.description = found_ah->description();
+    } else {
+        app_cfg.description = format(description_template, boost::algorithm::join(action_handlers | boost::adaptors::transformed(
+                        [] (const action_handler& ah) { return format("* {} - {}", ah.name(), ah.summary()); } ), "\n"));
+    }
 
     tools::utils::configure_tool_mode(app_cfg);
 
