@@ -50,7 +50,7 @@ sstring to_printable_string(const type_variant& type, bytes_view value) {
 
 void print_handler(type_variant type, std::vector<bytes> values) {
     for (const auto& value : values) {
-        std::cout << to_printable_string(type, value) << std::endl;
+        fmt::print("{}\n", to_printable_string(type, value));
     }
 }
 
@@ -83,13 +83,7 @@ void compare_handler(type_variant type, std::vector<bytes> values) {
     } else {
         res_str = ">";
     }
-    std::cout
-        << to_printable_string(type, values[0])
-        << " "
-        << res_str
-        << " "
-        << to_printable_string(type, values[1])
-        << std::endl;
+    fmt::print("{} {} {}\n", to_printable_string(type, values[0]), res_str, to_printable_string(type, values[1]));
 }
 
 void validate_handler(type_variant type, std::vector<bytes> values) {
@@ -108,9 +102,6 @@ void validate_handler(type_variant type, std::vector<bytes> values) {
     };
 
     for (const auto& value : values) {
-        // Cannot convert to printable string, as it can fail for invalid values.
-        std::cout << to_hex(value) << ": ";
-
         std::exception_ptr ex;
         try {
             std::visit(validate_visitor{value}, type);
@@ -118,11 +109,10 @@ void validate_handler(type_variant type, std::vector<bytes> values) {
             ex = std::current_exception();
         }
         if (ex) {
-            std::cout << " INVALID - " << ex;
+            fmt::print("{}: INVALID - {}\n", to_hex(value), ex);
         } else {
-            std::cout << " VALID - " << to_printable_string(type, value);
+            fmt::print("{}: VALID - {}\n", to_hex(value), to_printable_string(type, value));
         }
-        std::cout << std::endl;
     }
 }
 
