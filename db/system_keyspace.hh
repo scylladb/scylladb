@@ -122,6 +122,7 @@ public:
     static constexpr auto RAFT_CONFIG = "raft_config";
     static constexpr auto REPAIR_HISTORY = "repair_history";
     static constexpr auto GROUP0_HISTORY = "group0_history";
+    static constexpr auto DISCOVERY = "discovery";
 
     struct v3 {
         static constexpr auto BATCHES = "batches";
@@ -180,7 +181,7 @@ public:
         static schema_ptr batchlog();
     };
 
-    static constexpr const char* extra_durable_tables[] = { PAXOS, SCYLLA_LOCAL, RAFT, RAFT_SNAPSHOTS, RAFT_CONFIG };
+    static constexpr const char* extra_durable_tables[] = { PAXOS, SCYLLA_LOCAL, RAFT, RAFT_SNAPSHOTS, RAFT_CONFIG, DISCOVERY };
 
     static bool is_extra_durable(const sstring& name);
 
@@ -204,6 +205,7 @@ public:
     static schema_ptr raft_snapshots();
     static schema_ptr repair_history();
     static schema_ptr group0_history();
+    static schema_ptr discovery();
 
     static table_schema_version generate_schema_version(utils::UUID table_id, uint16_t offset = 0);
 

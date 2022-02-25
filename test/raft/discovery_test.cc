@@ -20,7 +20,7 @@ run_discovery_impl(discovery_network& network) {
     while (true) {
         for (auto e : network) {
             discovery& from = *e.second;
-            auto output = from.get_output();
+            auto output = from.tick();
             if (std::holds_alternative<discovery::i_am_leader>(output)) {
                 return;
             } else if (std::holds_alternative<discovery::pause>(output)) {
@@ -34,7 +34,9 @@ run_discovery_impl(discovery_network& network) {
                     continue;
                 }
                 discovery& to = *(it->second);
-                from.response(m.first, to.request(m.second));
+                if (auto peer_list = to.request(m.second)) {
+                    from.response(m.first, std::move(*peer_list));
+                }
             }
         }
     }

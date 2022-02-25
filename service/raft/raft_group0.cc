@@ -13,6 +13,8 @@
 
 #include "message/messaging_service.hh"
 #include "cql3/query_processor.hh"
+#include "cql3/untyped_result_set.hh"
+#include "service/storage_proxy.hh"
 #include "gms/gossiper.hh"
 #include "db/system_keyspace.hh"
 
@@ -83,14 +85,21 @@ raft_group0::discover_group0(raft::server_address my_addr) {
         }
         seeds.push_back({.info = inet_addr_to_raft_addr(seed)});
     }
-    _group0 = discovery{my_addr, std::move(seeds)};
-    auto clear_discovery = defer([this] {
-        _group0 = std::monostate{};
-    });
 
+    _group0.emplace<persistent_discovery>(co_await persistent_discovery::make(my_addr, std::move(seeds), _qp));
+    co_return co_await futurize_invoke([this, my_addr = std::move(my_addr)] () mutable {
+        return do_discover_group0(std::move(my_addr));
+    }).finally(std::bind_front([] (raft_group0& self) -> future<> {
+        co_await std::get<persistent_discovery>(self._group0).stop();
+        self._group0 = std::monostate{};
+    }, std::ref(*this)));
+}
+
+future<group0_info>
+raft_group0::do_discover_group0(raft::server_address my_addr) {
     struct tracker {
-        explicit tracker(discovery::output output_arg) : output(std::move(output_arg)) {}
-        discovery::output output;
+        explicit tracker(discovery::tick_output output_arg) : output(std::move(output_arg)) {}
+        discovery::tick_output output;
         promise<std::optional<group0_info>> g0_info;
         bool is_set = false;
         void set_value(std::optional<group0_info> opt_g0_info) {
@@ -116,7 +125,7 @@ raft_group0::discover_group0(raft::server_address my_addr) {
     // creates a group and shares its group 0 id and peer address
     // with us.
     while (true) {
-        auto tracker = make_lw_shared<struct tracker>(std::get<discovery>(_group0).get_output());
+        auto tracker = make_lw_shared<struct tracker>(co_await std::get<persistent_discovery>(_group0).tick());
         if (std::holds_alternative<discovery::i_am_leader>(tracker->output)) {
             co_return group0_info{
                 // Time-based ordering for groups identifiers may be
@@ -143,7 +152,7 @@ raft_group0::discover_group0(raft::server_address my_addr) {
             try {
                 auto reply = co_await _ms.send_group0_peer_exchange(peer, timeout, std::move(req.second));
                 if (std::holds_alternative<discovery::peer_list>(reply.info)) {
-                    if (auto p_discovery = std::get_if<service::discovery>(&_group0)) {
+                    if (auto p_discovery = std::get_if<service::persistent_discovery>(&_group0)) {
                         p_discovery->response(req.first, std::move(std::get<discovery::peer_list>(reply.info)));
                     }
                 } else if (std::holds_alternative<group0_info>(reply.info)) {
@@ -291,15 +300,20 @@ future<> raft_group0::leave_group0(std::optional<gms::inet_address> node) {
 }
 
 future<group0_peer_exchange> raft_group0::peer_exchange(discovery::peer_list peers) {
-    return std::visit([this, peers = std::move(peers)] (auto&& d) -> future<group0_peer_exchange> {
+    return std::visit([this, peers = std::move(peers)] (auto&& d) mutable -> future<group0_peer_exchange> {
         using T = std::decay_t<decltype(d)>;
         if constexpr (std::is_same_v<T, std::monostate>) {
             // Discovery not started or we're persisting the
             // leader information locally.
             co_return group0_peer_exchange{std::monostate{}};
-        } else if constexpr (std::is_same_v<T, discovery>) {
+        } else if constexpr (std::is_same_v<T, persistent_discovery>) {
             // Use discovery to produce a response
-            co_return group0_peer_exchange{d.request(std::move(peers))};
+            if (auto response = co_await d.request(std::move(peers))) {
+                co_return group0_peer_exchange{std::move(*response)};
+            }
+            // We just became a leader.
+            // Eventually we'll answer with group0_info.
+            co_return group0_peer_exchange{std::monostate{}};
         } else if constexpr (std::is_same_v<T, raft::group_id>) {
             // Even if in follower state, return own address: the
             // incoming RPC will then be bounced to the leader.
@@ -309,6 +323,101 @@ future<group0_peer_exchange> raft_group0::peer_exchange(discovery::peer_list pee
             }};
         }
     }, _group0);
+}
+
+static constexpr auto DISCOVERY_KEY = "peers";
+
+static mutation make_discovery_mutation(discovery::peer_set peers) {
+    auto s = db::system_keyspace::discovery();
+    auto ts = api::new_timestamp();
+    auto raft_id_cdef = s->get_column_definition("raft_id");
+    assert(raft_id_cdef);
+
+    mutation m(s, partition_key::from_singular(*s, DISCOVERY_KEY));
+    for (auto& p: peers) {
+        auto& row = m.partition().clustered_row(*s, clustering_key::from_singular(*s, data_value(p.info)));
+        row.apply(row_marker(ts));
+        row.cells().apply(*raft_id_cdef, atomic_cell::make_live(*raft_id_cdef->type, ts, raft_id_cdef->type->decompose(p.id.id)));
+    }
+
+    return m;
+}
+
+static future<> store_discovered_peers(cql3::query_processor& qp, discovery::peer_set peers) {
+    return qp.proxy().mutate_locally({make_discovery_mutation(std::move(peers))}, tracing::trace_state_ptr{});
+}
+
+static future<discovery::peer_set> load_discovered_peers(cql3::query_processor& qp) {
+    static const auto load_cql = format(
+            "SELECT server_info, raft_id FROM system.{} WHERE key = '{}'",
+            db::system_keyspace::DISCOVERY, DISCOVERY_KEY);
+    auto rs = co_await qp.execute_internal(load_cql);
+    assert(rs);
+
+    discovery::peer_set peers;
+    for (auto& r: *rs) {
+        peers.emplace(raft::server_address {
+            .id = raft::server_id{r.get_as<utils::UUID>("raft_id")},
+            .info = r.get_as<bytes>("server_info"),
+        });
+    }
+
+    co_return peers;
+}
+
+future<persistent_discovery> persistent_discovery::make(raft::server_address self, peer_list seeds, cql3::query_processor& qp) {
+    auto peers = co_await load_discovered_peers(qp);
+    // If a peer is present both on disk and in provided list of `seeds`,
+    // we take the information from disk (which may already contain the Raft ID of this peer).
+    std::move(seeds.begin(), seeds.end(), std::inserter(peers, peers.end()));
+    co_return persistent_discovery{std::move(self), {peers.begin(), peers.end()}, qp};
+}
+
+future<std::optional<discovery::peer_list>> persistent_discovery::request(peer_list peers) {
+    for (auto& p: peers) {
+        rslog.debug("discovery: request peer: id={}, info={}", p.id, p.info);
+    }
+
+    if (_gate.is_closed()) {
+        // We stopped discovery, about to destroy it.
+        co_return std::nullopt;
+    }
+    auto holder = _gate.hold();
+
+    auto response = _discovery.request(peers);
+    co_await store_discovered_peers(_qp, _discovery.peers());
+
+    co_return response;
+}
+
+void persistent_discovery::response(raft::server_address from, const peer_list& peers) {
+    // The peers discovered here will be persisted on the next `request` or `tick`.
+    for (auto& p: peers) {
+        rslog.debug("discovery: response peer: id={}, info={}", p.id, p.info);
+    }
+    _discovery.response(std::move(from), peers);
+}
+
+future<discovery::tick_output> persistent_discovery::tick() {
+    // No need to enter `_gate`, since `stop` must be called after all calls to `tick` (and before the object is destroyed).
+
+    auto result = _discovery.tick();
+    co_await store_discovered_peers(_qp, _discovery.peers());
+
+    co_return result;
+}
+
+future<> persistent_discovery::stop() {
+    return _gate.close();
+}
+
+persistent_discovery::persistent_discovery(raft::server_address self, const peer_list& seeds, cql3::query_processor& qp)
+    : _discovery{std::move(self), seeds}
+    , _qp{qp}
+{
+    for (auto& addr: seeds) {
+        rslog.debug("discovery: seed peer: id={}, info={}", addr.id, addr.info);
+    }
 }
 
 } // end of namespace service

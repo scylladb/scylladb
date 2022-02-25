@@ -18,6 +18,44 @@ namespace service {
 
 class migration_manager;
 
+// Wrapper for `discovery` which persists the learned peers on disk.
+class persistent_discovery {
+    discovery _discovery;
+    cql3::query_processor& _qp;
+    seastar::gate _gate;
+
+public:
+    using peer_list = discovery::peer_list;
+    using tick_output = discovery::tick_output;
+
+    persistent_discovery(persistent_discovery&&) = default;
+
+    // See `discovery::discovery`.
+    // The provided seed list will be extended with already known persisted peers.
+    // `self` must be the same across restarts.
+    static future<persistent_discovery> make(raft::server_address self, peer_list seeds, cql3::query_processor&);
+
+    // See `discovery::request`.
+    future<std::optional<peer_list>> request(peer_list peers);
+
+    // See `discovery::response`.
+    void response(raft::server_address from, const peer_list& peers);
+
+    // See `discovery::tick`.
+    future<tick_output> tick();
+
+    // Must be called and waited for before destroying the object.
+    //
+    // Must be called after all calls to `tick` finish,
+    // and no new calls to `tick` must be made after calling `stop`.
+    //
+    // Can be called concurrently with `request`.
+    future<> stop();
+
+private:
+    persistent_discovery(raft::server_address, const peer_list&, cql3::query_processor&);
+};
+
 class raft_group0 {
 public:
     seastar::gate _shutdown_gate;
@@ -32,13 +70,16 @@ public:
     // bootstrap a discovery object is created, which is then
     // substituted by group0 id when a leader is discovered or
     // created.
-    std::variant<std::monostate, service::discovery, raft::group_id> _group0;
+    std::variant<std::monostate, service::persistent_discovery, raft::group_id> _group0;
 
     raft_server_for_group create_server_for_group(raft::group_id id, raft::server_address my_addr);
     future<raft::server_address> load_or_create_my_addr();
     // A helper function to discover Raft Group 0 leader in
     // absence of running group 0 server.
     future<group0_info> discover_group0(raft::server_address my_addr);
+private:
+    // Precondition: `_group0` contains `persistent_discovery`.
+    future<group0_info> do_discover_group0(raft::server_address my_addr);
 public:
     raft_group0(seastar::abort_source& abort_source,
         service::raft_group_registry& raft_gr,
