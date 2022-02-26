@@ -294,7 +294,7 @@ bool limits(managed_bytes_view lhs, oper_t op, managed_bytes_view rhs, const abs
 }
 
 /// True iff the column value is limited by rhs in the manner prescribed by op.
-bool limits(const column_value& col, oper_t op, const expression& rhs, const column_value_eval_bag& bag) {
+bool limits(const column_maybe_subscripted& col, oper_t op, const expression& rhs, const column_value_eval_bag& bag) {
     if (!is_slice(op)) { // For EQ or NEQ, use equal().
         throw std::logic_error("limits() called on non-slice op");
     }
@@ -324,7 +324,7 @@ bool limits(const tuple_constructor& columns_tuple, const oper_t op, const expre
                        columns_tuple.elements.size(), rhs.size()));
     }
     for (size_t i = 0; i < rhs.size(); ++i) {
-        auto& cv = expr::as<column_value>(columns_tuple.elements[i]);
+        column_maybe_subscripted cv = as_column_maybe_subscripted(columns_tuple.elements[i]);
         const auto cmp = get_value_comparator(cv)->compare(
                 // CQL dictates that columns_tuple.elements[i] is a clustering column and non-null.
                 *get_value(cv, bag),
@@ -544,7 +544,7 @@ bool is_satisfied_by(const binary_operator& opr, const column_value_eval_bag& ba
                 } else if (opr.op == oper_t::NEQ) {
                     return !equal(opr.rhs, &col, bag);
                 } else if (is_slice(opr.op)) {
-                    return limits(col, opr.op, opr.rhs, bag);
+                    return limits(&col, opr.op, opr.rhs, bag);
                 } else if (opr.op == oper_t::CONTAINS) {
                     constant val = evaluate(opr.rhs, bag.options);
                     return contains(col, val.view(), bag);
