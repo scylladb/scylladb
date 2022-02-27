@@ -388,11 +388,38 @@ static auto defer_verbose_shutdown(const char* what, Func&& func) {
         startlog.info("Shutting down {}", what);
         try {
             func();
+            startlog.info("Shutting down {} was successful", what);
         } catch (...) {
-            startlog.error("Unexpected error shutting down {}: {}", what, std::current_exception());
-            throw;
+            auto ex = std::current_exception();
+            bool do_abort = true;
+            try {
+                std::rethrow_exception(ex);
+            } catch (const std::system_error& e) {
+                // System error codes we consider "environmental",
+                // i.e. not scylla's fault, therefore there is no point in
+                // aborting and dumping core.
+                for (int i : {EIO, EACCES, ENOSPC}) {
+                    if (e.code() == std::error_code(i, std::system_category())) {
+                        do_abort = false;
+                        break;
+                    }
+                }
+            } catch (...) {
+            }
+            auto msg = fmt::format("Unexpected error shutting down {}: {}", what, ex);
+            if (do_abort) {
+                startlog.error("{}: aborting", msg);
+                abort();
+            } else {
+                startlog.error("{}: exiting, at {}", msg, current_backtrace());
+
+                // Call _exit() rather than exit() to exit immediately
+                // without calling exit handlers, avoiding
+                // boost::intrusive::detail::destructor_impl assert failure
+                // from ~segment_pool exit handler.
+                _exit(255);
+            }
         }
-        startlog.info("Shutting down {} was successful", what);
     };
 
     auto ret = deferred_action(std::move(vfunc));
