@@ -35,6 +35,12 @@ private:
             return {rt.start, rt.start_kind, rt.end, rt.end_kind, {rt.tomb.timestamp, {}}};
         }
     }
+    void reset_rts() {
+        _tombstones.clear();
+        _expected_tombstones.clear();
+        _rt_ck_ranges.clear();
+        _check_rts = false;
+    }
     void check_rts() {
         if (_check_rts) {
             // If any split ends of range tombstones remain, consume
@@ -46,10 +52,7 @@ private:
                 BOOST_FAIL(format("Expected {}, but got {}", _expected_tombstones, _tombstones));
             }
         }
-        _tombstones.clear();
-        _expected_tombstones.clear();
-        _rt_ck_ranges.clear();
-        _check_rts = false;
+        reset_rts();
     }
     range_tombstone trim(const range_tombstone& rt, const query::clustering_row_ranges& ck_ranges) const {
         bound_view::compare less(*_reader.schema());
@@ -121,9 +124,7 @@ public:
         if (tomb && mfopt->as_partition_start().partition_tombstone() != *tomb) {
             BOOST_FAIL(format("Expected: partition start with tombstone {}, got: {}", *tomb, mutation_fragment::printer(*_reader.schema(), *mfopt)));
         }
-        _tombstones.clear();
-        _expected_tombstones.clear();
-        _check_rts = false;
+        reset_rts();
         return *this;
     }
 
