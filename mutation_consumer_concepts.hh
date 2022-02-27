@@ -41,6 +41,14 @@ concept FlatMutationReaderConsumerV2 =
         { c(std::move(mf)) } -> std::same_as<future<stop_iteration>>;
     };
 
+template<typename Consumer>
+concept MutationConsumer =
+    requires(Consumer c, mutation m) {
+        { c(std::move(m)) } -> std::same_as<stop_iteration>;
+    } || requires(Consumer c, mutation m) {
+        { c(std::move(m)) } -> std::same_as<future<stop_iteration>>;
+    };
+
 template<typename T>
 concept FlattenedConsumerV2 =
     StreamedMutationConsumerV2<T> && requires(T obj, const dht::decorated_key& dk) {
