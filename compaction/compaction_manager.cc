@@ -269,7 +269,7 @@ future<> compaction_manager::perform_major_compaction(replica::table* t) {
     task->compaction_done = with_semaphore(_maintenance_ops_sem, 1, [this, task, t] {
         return with_lock(task->compaction_state.lock.for_write(), [this, task, t] {
             _stats.active_tasks++;
-            if (!can_proceed(task)) {
+            if (!task->can_proceed()) {
                 return make_ready_future<>();
             }
 
@@ -326,7 +326,7 @@ future<> compaction_manager::run_custom_job(replica::table* t, sstables::compact
                 return make_exception_future<>(task->make_compaction_stopped_exception());
             }
             _stats.active_tasks++;
-            if (!can_proceed(task)) {
+            if (!task->can_proceed()) {
                 return make_ready_future<>();
             }
             task->setup_new_compaction();
@@ -602,9 +602,16 @@ void compaction_manager::do_stop() noexcept {
     }
 }
 
-inline bool compaction_manager::can_proceed(const shared_ptr<task>& task) {
-    return (_state == state::enabled) && !task->stopping() && _compaction_state.contains(task->compacting_table) &&
-        !_compaction_state[task->compacting_table].compaction_disabled();
+inline bool compaction_manager::can_proceed(replica::table* t) const {
+    return (_state == state::enabled) && _compaction_state.contains(t) && !_compaction_state.at(t).compaction_disabled();
+}
+
+inline bool compaction_manager::task::can_proceed() const {
+    // Allow caller to know that task (e.g. reshape) was asked to stop while waiting for a chance to run.
+    if (stopping()) {
+        return false;
+    }
+    return cm.can_proceed(compacting_table);
 }
 
 inline future<> compaction_manager::put_task_to_sleep(shared_ptr<task>& task) {
@@ -648,7 +655,7 @@ void compaction_manager::submit(replica::table* t) {
     cmlog.debug("Compaction task {} table={}: started", fmt::ptr(task.get()), fmt::ptr(task->compacting_table));
 
     task->compaction_done = repeat([this, task, t] () mutable {
-        if (!can_proceed(task)) {
+        if (!task->can_proceed()) {
             _stats.pending_tasks--;
             return make_ready_future<stop_iteration>(stop_iteration::yes);
         }
@@ -660,7 +667,7 @@ void compaction_manager::submit(replica::table* t) {
             sstables::compaction_descriptor descriptor = cs.get_sstables_for_compaction(t.as_table_state(), get_strategy_control(), get_candidates(t));
             int weight = calculate_weight(descriptor);
 
-            if (descriptor.sstables.empty() || !can_proceed(task) || t.is_auto_compaction_disabled_by_user()) {
+            if (descriptor.sstables.empty() || !task->can_proceed() || t.is_auto_compaction_disabled_by_user()) {
                 _stats.pending_tasks--;
                 return make_ready_future<stop_iteration>(stop_iteration::yes);
             }
@@ -688,7 +695,7 @@ void compaction_manager::submit(replica::table* t) {
 
                 if (f.failed()) {
                     auto ex = f.get_exception();
-                    if (!maybe_stop_on_error(std::move(ex), can_proceed(task))) {
+                    if (!maybe_stop_on_error(std::move(ex), task->can_proceed())) {
                         _stats.pending_tasks++;
                         return put_task_to_sleep(task).then([] {
                             return make_ready_future<stop_iteration>(stop_iteration::no);
@@ -717,13 +724,13 @@ future<> compaction_manager::perform_offstrategy(replica::table* t) {
     cmlog.debug("Offstrategy compaction task {} table={}: started", fmt::ptr(task.get()), fmt::ptr(task->compacting_table));
 
     task->compaction_done = repeat([this, task, t] () mutable {
-        if (!can_proceed(task)) {
+        if (!task->can_proceed()) {
             _stats.pending_tasks--;
             return make_ready_future<stop_iteration>(stop_iteration::yes);
         }
         return with_semaphore(_maintenance_ops_sem, 1, [this, task, t] () mutable {
                 _stats.pending_tasks--;
-                if (!can_proceed(task)) {
+                if (!task->can_proceed()) {
                     return make_ready_future<stop_iteration>(stop_iteration::yes);
                 }
                 _stats.active_tasks++;
@@ -825,7 +832,7 @@ future<> compaction_manager::rewrite_sstables(replica::table* t, sstables::compa
                     ex = std::current_exception();
                 }
                 if (ex) {
-                    if (!maybe_stop_on_error(std::move(ex), can_proceed(task))) {
+                    if (!maybe_stop_on_error(std::move(ex), task->can_proceed())) {
                         _stats.pending_tasks++;
                         co_await put_task_to_sleep(task);
                         co_return stop_iteration::no;
@@ -845,7 +852,7 @@ future<> compaction_manager::rewrite_sstables(replica::table* t, sstables::compa
     shared_promise<> p;
     task->compaction_done = p.get_shared_future();
     try {
-        while (!sstables.empty() && can_proceed(task)) {
+        while (!sstables.empty() && task->can_proceed()) {
             auto sst = sstables.back();
             sstables.pop_back();
             co_await rewrite_sstable(sst);

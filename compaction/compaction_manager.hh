@@ -96,6 +96,9 @@ private:
         task(task&&) = delete;
         task(const task&) = delete;
 
+        // Return true if the task isn't stopped
+        // and the compaction manager allows proceeding.
+        inline bool can_proceed() const;
         void setup_new_compaction(utils::UUID output_run_id = utils::null_uuid());
         void finish_compaction() noexcept;
 
@@ -200,8 +203,9 @@ private:
     // throws std::out_of_range exception if not found.
     compaction_state& get_compaction_state(replica::table* t);
 
-    // Return true if compaction manager and task weren't asked to stop.
-    inline bool can_proceed(const shared_ptr<task>& task);
+    // Return true if compaction manager is enabled and
+    // table still exists and compaction is not disabled for the table.
+    inline bool can_proceed(replica::table* t) const;
 
     inline future<> put_task_to_sleep(shared_ptr<task>& task);
 
