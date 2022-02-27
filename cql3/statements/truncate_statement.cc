@@ -39,12 +39,7 @@ std::unique_ptr<prepared_statement> truncate_statement::prepare(data_dictionary:
     return std::make_unique<prepared_statement>(::make_shared<truncate_statement>(*this));
 }
 
-bool truncate_statement::depends_on_keyspace(const sstring& ks_name) const
-{
-    return false;
-}
-
-bool truncate_statement::depends_on_column_family(const sstring& cf_name) const
+bool truncate_statement::depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const
 {
     return false;
 }
