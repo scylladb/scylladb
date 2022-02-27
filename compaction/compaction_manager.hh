@@ -72,7 +72,8 @@ private:
             return compaction_disabled_counter > 0;
         }
     };
-
+public:
+    // TODO: turn task into a class
     struct task {
         compaction_manager& cm;
         replica::table* compacting_table = nullptr;
@@ -116,8 +117,11 @@ private:
         void stop(sstring reason) noexcept;
 
         sstables::compaction_stopped_exception make_compaction_stopped_exception() const;
+
+        std::string describe() const;
     };
 
+private:
     // compaction manager may have N fibers to allow parallel compaction per shard.
     std::list<shared_ptr<task>> _tasks;
 
@@ -342,3 +346,4 @@ public:
 
 bool needs_cleanup(const sstables::shared_sstable& sst, const dht::token_range_vector& owned_ranges, schema_ptr s);
 
+std::ostream& operator<<(std::ostream& os, const compaction_manager::task& task);

@@ -261,7 +261,7 @@ future<> compaction_manager::perform_major_compaction(replica::table* t) {
 
     auto task = make_shared<compaction_manager::task>(*this, t, sstables::compaction_type::Compaction);
     _tasks.push_back(task);
-    cmlog.debug("Major compaction task {} table={}: started", fmt::ptr(task.get()), fmt::ptr(t));
+    cmlog.debug("Major compaction {}: started", *task);
 
     // first take major compaction semaphore, then exclusely take compaction lock for table.
     // it cannot be the other way around, or minor compaction for this table would be
@@ -295,7 +295,7 @@ future<> compaction_manager::perform_major_compaction(replica::table* t) {
     }).then_wrapped([this, task] (future<> f) {
         _stats.active_tasks--;
         _tasks.remove(task);
-        cmlog.debug("Major compaction task {} table={}: done", fmt::ptr(task.get()), fmt::ptr(task->compacting_table));
+        cmlog.debug("Major compaction {}: done", *task);
         try {
             f.get();
             _stats.completed_tasks++;
@@ -316,7 +316,7 @@ future<> compaction_manager::run_custom_job(replica::table* t, sstables::compact
 
     auto task = make_shared<compaction_manager::task>(*this, t, type);
     _tasks.push_back(task);
-    cmlog.debug("{} task {} table={}: started", type, fmt::ptr(task.get()), fmt::ptr(task->compacting_table));
+    cmlog.debug("{} {}: started", type, *task);
 
     auto job_ptr = std::make_unique<noncopyable_function<future<>(sstables::compaction_data&)>>(std::move(job));
 
@@ -338,14 +338,14 @@ future<> compaction_manager::run_custom_job(replica::table* t, sstables::compact
     }).then_wrapped([this, task, job_ptr = std::move(job_ptr), type] (future<> f) {
         _stats.active_tasks--;
         _tasks.remove(task);
-        cmlog.debug("{} task {} table={}: done", type, fmt::ptr(task.get()), fmt::ptr(task->compacting_table));
+        cmlog.debug("{} {}: done", type, *task);
         try {
             f.get();
         } catch (sstables::compaction_stopped_exception& e) {
-            cmlog.info("{} was abruptly stopped, reason: {}", task->type, e.what());
+            cmlog.info("{} was abruptly stopped, reason: {}", *task, e.what());
             throw;
         } catch (...) {
-            cmlog.error("{} failed: {}", task->type, std::current_exception());
+            cmlog.error("{} failed: {}", *task, std::current_exception());
             throw;
         }
     });
@@ -378,6 +378,16 @@ compaction_manager::run_with_compaction_disabled(replica::table* t, std::functio
         std::rethrow_exception(err);
     }
     co_return;
+}
+
+std::ostream& operator<<(std::ostream& os, const compaction_manager::task& task) {
+    return os << task.describe();
+}
+
+std::string compaction_manager::task::describe() const {
+    auto* t = compacting_table;
+    auto s = t->schema();
+    return fmt::format("task {} for table {}.{} [{}]", fmt::ptr(this), s->ks_name(), s->cf_name(), fmt::ptr(t));
 }
 
 void compaction_manager::task::setup_new_compaction(utils::UUID output_run_id) {
@@ -516,6 +526,7 @@ future<> compaction_manager::stop_tasks(std::vector<shared_ptr<task>> tasks, sst
     // To prevent compaction from being postponed while tasks are being stopped,
     // let's stop all tasks before the deferring point below.
     for (auto& t : tasks) {
+        cmlog.debug("Stopping {}", *t);
         t->stop(reason);
     }
     co_await parallel_for_each(tasks, [this] (auto& task) -> future<> {
@@ -525,10 +536,10 @@ future<> compaction_manager::stop_tasks(std::vector<shared_ptr<task>> tasks, sst
             // swallow stop exception if a given procedure decides to propagate it to the caller,
             // as it happens with reshard and reshape.
         } catch (...) {
-            cmlog.debug("Stopping task {} table={}: task returned error: {}", fmt::ptr(task.get()), fmt::ptr(task->compacting_table), std::current_exception());
+            cmlog.debug("Stopping {}: task returned error: {}", *task, std::current_exception());
             throw;
         }
-        cmlog.debug("Stopping task {} table={}: done", fmt::ptr(task.get()), fmt::ptr(task->compacting_table));
+        cmlog.debug("Stopping {}: done", *task);
     });
 }
 
@@ -652,7 +663,7 @@ void compaction_manager::submit(replica::table* t) {
     auto task = make_shared<compaction_manager::task>(*this, t, sstables::compaction_type::Compaction);
     _tasks.push_back(task);
     _stats.pending_tasks++;
-    cmlog.debug("Compaction task {} table={}: started", fmt::ptr(task.get()), fmt::ptr(task->compacting_table));
+    cmlog.debug("Compaction {}: started", *task);
 
     task->compaction_done = repeat([this, task, t] () mutable {
         if (!task->can_proceed()) {
@@ -713,7 +724,7 @@ void compaction_manager::submit(replica::table* t) {
         });
     }).finally([this, task] {
         _tasks.remove(task);
-        cmlog.debug("Compaction task {} table={}: done", fmt::ptr(task.get()), fmt::ptr(task->compacting_table));
+        cmlog.debug("Compaction {}: done", *task);
     });
 }
 
@@ -721,7 +732,7 @@ future<> compaction_manager::perform_offstrategy(replica::table* t) {
     auto task = make_shared<compaction_manager::task>(*this, t, sstables::compaction_type::Reshape);
     _tasks.push_back(task);
     _stats.pending_tasks++;
-    cmlog.debug("Offstrategy compaction task {} table={}: started", fmt::ptr(task.get()), fmt::ptr(task->compacting_table));
+    cmlog.debug("Offstrategy compaction {}: started", *task);
 
     task->compaction_done = repeat([this, task, t] () mutable {
         if (!task->can_proceed()) {
@@ -762,7 +773,7 @@ future<> compaction_manager::perform_offstrategy(replica::table* t) {
         });
     }).finally([this, task] {
         _tasks.remove(task);
-        cmlog.debug("Offstrategy compaction task {} table={}: done", fmt::ptr(task.get()), fmt::ptr(task->compacting_table));
+        cmlog.debug("Offstrategy compaction {}: done", *task);
     });
     return task->compaction_done.get_future().finally([task] {});
 }
@@ -788,14 +799,14 @@ future<> compaction_manager::rewrite_sstables(replica::table* t, sstables::compa
 
     auto task = make_shared<compaction_manager::task>(*this, t, options.type());
     _tasks.push_back(task);
-    cmlog.debug("{} task {} table={}: started", options.type(), fmt::ptr(task.get()), fmt::ptr(task->compacting_table));
+    cmlog.debug("{} {}: started", options.type(), *task);
 
     _stats.pending_tasks += sstables.size();
 
     auto task_completion = defer([this, &task, &sstables, &options] {
         _stats.pending_tasks -= sstables.size();
         _tasks.remove(task);
-        cmlog.debug("{} task {} table={}: done", options.type(), fmt::ptr(task.get()), fmt::ptr(task->compacting_table));
+        cmlog.debug("{} {}: done", options.type(), *task);
     });
 
     auto maintenance_permit = co_await seastar::get_units(_maintenance_ops_sem, 1);
@@ -1053,7 +1064,7 @@ future<> compaction_manager::remove(replica::table* t) {
             if (!msg.empty()) {
                 msg += "\n";
             }
-            msg += format("Found compaction task {} table={} after remove", fmt::ptr(task.get()), fmt::ptr(t));
+            msg += format("Found compaction {} after remove", *task);
             found = true;
         }
     }
