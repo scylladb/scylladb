@@ -109,8 +109,17 @@ SEASTAR_TEST_CASE(test_flat_mutation_reader_consume_single_partition) {
                 BOOST_REQUIRE_EQUAL(m.partition().partition_tombstone() ? 1 : 0, result._consume_tombstone_call_count);
                 auto r2 = assert_that(make_flat_mutation_reader_from_mutations(m.schema(), semaphore.make_permit(), {m}));
                 r2.produces_partition_start(m.decorated_key(), m.partition().partition_tombstone());
+                if (result._fragments.empty()) {
+                    continue;
+                }
+                query::clustering_row_ranges ck_ranges = {};
+                if (depth > 1) {
+                    const auto& mf = result._fragments.back();
+                    auto ck_range = query::clustering_range::make_ending_with({mf.position().key(), false});
+                    ck_ranges = {ck_range};
+                }
                 for (auto& mf : result._fragments) {
-                    r2.produces(*m.schema(), mf);
+                    r2.produces(*m.schema(), mf, ck_ranges);
                 }
             }
         });

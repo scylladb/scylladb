@@ -327,7 +327,7 @@ public:
         return *this;
     }
 
-    flat_reader_assertions& produces(const schema& s, const mutation_fragment& mf) {
+    flat_reader_assertions& produces(const schema& s, const mutation_fragment& mf, const query::clustering_row_ranges& ck_ranges = {}) {
         testlog.trace("Expect {}", mutation_fragment::printer(s, mf));
         if (mf.is_range_tombstone()) {
             apply_rt(mf.as_range_tombstone());
