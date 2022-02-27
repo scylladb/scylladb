@@ -59,9 +59,7 @@ public:
 
     virtual uint32_t get_bound_terms() const override;
 
-    virtual bool depends_on_keyspace(const seastar::sstring& ks_name) const override;
-
-    virtual bool depends_on_column_family(const seastar::sstring& cf_name) const override;
+    virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
 
     virtual seastar::future<> check_access(service::storage_proxy& proxy, const service::client_state& state) const override;
 

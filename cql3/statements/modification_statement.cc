@@ -571,12 +571,8 @@ modification_statement::validate(service::storage_proxy&, const service::client_
     }
 }
 
-bool modification_statement::depends_on_keyspace(const sstring& ks_name) const {
-    return keyspace() == ks_name;
-}
-
-bool modification_statement::depends_on_column_family(const sstring& cf_name) const {
-    return column_family() == cf_name;
+bool modification_statement::depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const {
+    return keyspace() == ks_name && (!cf_name || column_family() == *cf_name);
 }
 
 void modification_statement::add_operation(::shared_ptr<operation> op) {
