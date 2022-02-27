@@ -72,46 +72,90 @@ private:
             return compaction_disabled_counter > 0;
         }
     };
-public:
-    // TODO: turn task into a class
-    struct task {
-        compaction_manager& cm;
-        replica::table* compacting_table = nullptr;
-        shared_future<> compaction_done = make_ready_future<>();
-        exponential_backoff_retry compaction_retry = exponential_backoff_retry(std::chrono::seconds(5), std::chrono::seconds(300));
-        sstables::compaction_type type = sstables::compaction_type::Compaction;
-        bool compaction_running = false;
-        utils::UUID output_run_identifier;
-        sstables::compaction_data compaction_data;
-        compaction_state& compaction_state;
-        gate::holder gate_holder;
 
-        explicit task(compaction_manager& mgr, replica::table* t, sstables::compaction_type type)
-            : cm(mgr)
-            , compacting_table(t)
-            , type(type)
-            , compaction_state(cm.get_compaction_state(t))
-            , gate_holder(compaction_state.gate.hold())
+public:
+    class task {
+    protected:
+        compaction_manager& _cm;
+        replica::table* _compacting_table = nullptr;
+        compaction_state& _compaction_state;
+        sstables::compaction_data _compaction_data;
+
+    private:
+        shared_future<> _compaction_done = make_ready_future<>();
+        exponential_backoff_retry _compaction_retry = exponential_backoff_retry(std::chrono::seconds(5), std::chrono::seconds(300));
+        sstables::compaction_type _type;
+        bool _compaction_running = false;
+        utils::UUID _output_run_identifier;
+        gate::holder _gate_holder;
+        sstring _description;
+
+        // FIXME: for now
+        friend class compaction_manager;
+    public:
+        explicit task(compaction_manager& mgr, replica::table* t, sstables::compaction_type type, sstring desc)
+            : _cm(mgr)
+            , _compacting_table(t)
+            , _compaction_state(_cm.get_compaction_state(t))
+            , _type(type)
+            , _gate_holder(_compaction_state.gate.hold())
+            , _description(std::move(desc))
         {}
 
         task(task&&) = delete;
         task(const task&) = delete;
 
+        virtual ~task() = default;
+
+    protected:
         // Return true if the task isn't stopped
         // and the compaction manager allows proceeding.
         inline bool can_proceed() const;
         void setup_new_compaction(utils::UUID output_run_id = utils::null_uuid());
         void finish_compaction() noexcept;
 
+    public:
+        const replica::table* compacting_table() const noexcept {
+            return _compacting_table;
+        }
+
+        sstables::compaction_type type() const noexcept {
+            return _type;
+        }
+
+        bool compaction_running() const noexcept {
+            return _compaction_running;
+        }
+
+        const sstables::compaction_data& compaction_data() const noexcept {
+            return _compaction_data;
+        }
+
+        sstables::compaction_data& compaction_data() noexcept {
+            return _compaction_data;
+        }
+
+        const compaction_manager::compaction_state& compaction_state() const noexcept {
+            return _compaction_state;
+        }
+
+        compaction_manager::compaction_state& compaction_state() noexcept {
+            return _compaction_state;
+        }
+
         bool generating_output_run() const noexcept {
-            return compaction_running && output_run_identifier;
+            return _compaction_running && _output_run_identifier;
         }
         const utils::UUID& output_run_id() const noexcept {
-            return output_run_identifier;
+            return _output_run_identifier;
+        }
+
+        future<> compaction_done() noexcept {
+            return _compaction_done.get_future();
         }
 
         bool stopping() const noexcept {
-            return compaction_data.abort.abort_requested();
+            return _compaction_data.abort.abort_requested();
         }
 
         void stop(sstring reason) noexcept;
@@ -120,6 +164,13 @@ public:
 
         std::string describe() const;
     };
+
+    class major_compaction_task;
+    class custom_compaction_task;
+    class regular_compaction_task;
+    class offstrategy_compaction_task;
+    class rewrite_sstables_compaction_task;
+    class compaction_manager_test_task;
 
 private:
     // compaction manager may have N fibers to allow parallel compaction per shard.
@@ -179,6 +230,8 @@ private:
     class strategy_control;
     std::unique_ptr<strategy_control> _strategy_control;
 private:
+    shared_ptr<task> register_task(shared_ptr<task>);
+
     future<> stop_tasks(std::vector<shared_ptr<task>> tasks, sstring reason);
 
     // Return the largest fan-in of currently running compactions
@@ -287,7 +340,7 @@ public:
     // parameter type is the compaction type the operation can most closely be
     //      associated with, use compaction_type::Compaction, if none apply.
     // parameter job is a function that will carry the operation
-    future<> run_custom_job(replica::table* t, sstables::compaction_type type, noncopyable_function<future<>(sstables::compaction_data&)> job);
+    future<> run_custom_job(replica::table* t, sstables::compaction_type type, const char *desc, noncopyable_function<future<>(sstables::compaction_data&)> job);
 
     // Run a function with compaction temporarily disabled for a table T.
     future<> run_with_compaction_disabled(replica::table* t, std::function<future<> ()> func);
@@ -310,7 +363,7 @@ public:
     // Returns true if table has an ongoing compaction, running on its behalf
     bool has_table_ongoing_compaction(const replica::table* t) const {
         return std::any_of(_tasks.begin(), _tasks.end(), [t] (const shared_ptr<task>& task) {
-            return task->compacting_table == t && task->compaction_running;
+            return task->compacting_table() == t && task->compaction_running();
         });
     };
 

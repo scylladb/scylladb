@@ -188,18 +188,29 @@ future<shared_sstable> test_env::reusable_sst(schema_ptr schema, sstring dir, un
     throw sst_not_found(dir, generation);
 }
 
+class compaction_manager::compaction_manager_test_task : public compaction_manager::task {
+    utils::UUID _run_id;
+    noncopyable_function<future<> (sstables::compaction_data&)> _job;
+
+public:
+    compaction_manager_test_task(compaction_manager& cm, replica::column_family* cf, utils::UUID run_id)
+        : compaction_manager::task(cm, cf, sstables::compaction_type::Compaction, "Test compaction")
+        , _run_id(run_id)
+    {
+        // FIXME: for now
+        setup_new_compaction(_run_id);
+    }
+};
+
 sstables::compaction_data& compaction_manager_test::register_compaction(utils::UUID output_run_id, replica::column_family* cf) {
-    auto task = make_shared<compaction_manager::task>(_cm, cf, sstables::compaction_type::Compaction);
-    testlog.debug("compaction_manager_test: register_compaction: {}", *task);
-    task->compaction_running = true;
-    task->compaction_data = compaction_manager::create_compaction_data();
-    task->output_run_identifier = std::move(output_run_id);
+    auto task = make_shared<compaction_manager::compaction_manager_test_task>(_cm, cf, output_run_id);
+    testlog.debug("compaction_manager_test: register_compaction uuid={}: {}", task->compaction_data().compaction_uuid, *task);
     _cm._tasks.push_back(task);
-    return task->compaction_data;
+    return task->compaction_data();
 }
 
 void compaction_manager_test::deregister_compaction(const sstables::compaction_data& c) {
-    auto it = boost::find_if(_cm._tasks, [&c] (auto& task) { return task->compaction_data.compaction_uuid == c.compaction_uuid; });
+    auto it = boost::find_if(_cm._tasks, [&c] (auto& task) { return task->compaction_data().compaction_uuid == c.compaction_uuid; });
     if (it != _cm._tasks.end()) {
         auto task = *it;
         testlog.debug("compaction_manager_test: deregister_compaction uuid={}: {}", c.compaction_uuid, *task);
