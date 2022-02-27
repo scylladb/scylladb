@@ -81,9 +81,7 @@ protected:
      */
     virtual future<> grant_permissions_to_creator(const service::client_state&) const;
 
-    virtual bool depends_on_keyspace(const sstring& ks_name) const override;
-
-    virtual bool depends_on_column_family(const sstring& cf_name) const override;
+    virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
 
     virtual uint32_t get_bound_terms() const override;
 

@@ -46,13 +46,7 @@ uint32_t cql3::statements::authorization_statement::get_bound_terms() const {
     return 0;
 }
 
-bool cql3::statements::authorization_statement::depends_on_keyspace(
-                const sstring& ks_name) const {
-    return false;
-}
-
-bool cql3::statements::authorization_statement::depends_on_column_family(
-                const sstring& cf_name) const {
+bool cql3::statements::authorization_statement::depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const {
     return false;
 }
 

@@ -943,7 +943,7 @@ bool query_processor::migration_subscriber::should_invalidate(
         sstring ks_name,
         std::optional<sstring> cf_name,
         ::shared_ptr<cql_statement> statement) {
-    return statement->depends_on_keyspace(ks_name) && (!cf_name || statement->depends_on_column_family(*cf_name));
+    return statement->depends_on(ks_name, cf_name);
 }
 
 future<> query_processor::query_internal(

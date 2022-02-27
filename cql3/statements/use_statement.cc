@@ -73,12 +73,7 @@ std::unique_ptr<prepared_statement> use_statement::prepare(database& db, cql_sta
 
 }
 
-bool use_statement::depends_on_keyspace(const sstring& ks_name) const
-{
-    return false;
-}
-
-bool use_statement::depends_on_column_family(const sstring& cf_name) const
+bool use_statement::depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const
 {
     return false;
 }
