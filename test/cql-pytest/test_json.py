@@ -130,6 +130,42 @@ def test_fromjson_int_overflow_prepared(cql, table1):
     with pytest.raises(FunctionFailure):
         cql.execute(stmt, [p, '2147483648'])
 
+# On the other hand, let's check a case of the biggest bigint (64-bit
+# integer) which should *not* overflow. Let's check that we handle it
+# correctly.
+def test_fromjson_bigint_nonoverflow(cql, table1):
+    p = unique_key_int()
+    stmt = cql.prepare(f"INSERT INTO {table1} (p, bigv) VALUES (?, fromJson(?))")
+    cql.execute(stmt, [p, '9223372036854775807'])
+    assert list(cql.execute(f"SELECT bigv from {table1} where p = {p}")) == [(9223372036854775807,)]
+
+# Test the same non-overflowing integer with scientific notation. This is the
+# same test as test_fromjson_int_scientific_notation_prepared above (so
+# reproduces #10100), just with a number higher than 2^53. This presents
+# difficult problem for a parser like the RapidJSON one we use, that decides
+# to read scientific notation numbers through a "double" variable: a double
+# only had 53 significant bits of mantissa, so may not preserve numbers higher
+# than 2^53 accurately.
+# Note that the JSON standard (RFC 8259) explains that because implementations
+# may use double-precision representation (as the Scylla-used RapidJSON does),
+# "numbers that are integers and are in the range [-(2**53)+1, (2**53)-1] are
+# interoperable in the sense that implementations will agree exactly on their
+# numeric values.". Because the number in this test is higher, the JSON
+# standard suggests it may be fine to botch it up, so it might be acceptable
+# to fail this test.
+# Reproduces #10100 and #10137.
+@pytest.mark.xfail(reason="issue #10137")
+def test_fromjson_bigint_nonoverflow_scientific(cql, table1, cassandra_bug):
+    p = unique_key_int()
+    stmt = cql.prepare(f"INSERT INTO {table1} (p, bigv) VALUES (?, fromJson(?))")
+    # 1152921504606846975 is 2^60-1, more than 2^53 but less than what a
+    # bigint can store (2^63-1). We do not use 2^63-1 in this test because
+    # an inaccuracy there in the up direction can lead us to overflowing
+    # the signed integer and UBSAN errors - while we want to detect the
+    # inaccuracy cleanly, here.
+    cql.execute(stmt, [p, '115292150460684697.5e1'])
+    assert list(cql.execute(f"SELECT bigv from {table1} where p = {p}")) == [(1152921504606846975,)]
+
 # When writing to an integer column, Cassandra's fromJson() function allows
 # not just JSON number constants, it also allows a string containing a number.
 # Strings which do not hold a number fail with a FunctionFailure. In
