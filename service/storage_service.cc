@@ -387,14 +387,10 @@ future<> storage_service::wait_for_ring_to_settle(std::chrono::milliseconds dela
     auto t = gms::gossiper::clk::now();
     while (true) {
         while (!_migration_manager.local().have_schema_agreement()) {
-            set_mode(mode::JOINING, "waiting for schema information to complete", true);
+            slogger.info("waiting for schema information to complete");
             co_await sleep_abortable(std::chrono::seconds(1), _abort_source);
         }
-        set_mode(mode::JOINING, "schema complete, ready to bootstrap", true);
-        set_mode(mode::JOINING, "waiting for pending range calculation", true);
         co_await update_pending_ranges("joining");
-        set_mode(mode::JOINING, "calculation complete, ready to bootstrap", true);
-        slogger.debug("... got ring + schema info");
 
         auto tmptr = get_token_metadata_ptr();
         if (!_db.local().get_config().consistent_rangemovement() ||
