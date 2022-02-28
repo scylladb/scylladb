@@ -384,6 +384,8 @@ future<> storage_service::wait_for_ring_to_settle(std::chrono::milliseconds dela
         co_await sleep_abortable(std::chrono::seconds(1), _abort_source);
     }
 
+    auto t = gms::gossiper::clk::now();
+  while (true) {
     while (!_migration_manager.local().have_schema_agreement()) {
         set_mode(mode::JOINING, "waiting for schema information to complete", true);
         co_await sleep_abortable(std::chrono::seconds(1), _abort_source);
@@ -394,9 +396,8 @@ future<> storage_service::wait_for_ring_to_settle(std::chrono::milliseconds dela
     set_mode(mode::JOINING, "calculation complete, ready to bootstrap", true);
     slogger.debug("... got ring + schema info");
 
-    auto t = gms::gossiper::clk::now();
     auto tmptr = get_token_metadata_ptr();
-    while (_db.local().get_config().consistent_rangemovement() &&
+    if (_db.local().get_config().consistent_rangemovement() &&
         (!tmptr->get_bootstrap_tokens().empty() ||
          !tmptr->get_leaving_endpoints().empty())) {
         auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(gms::gossiper::clk::now() - t).count();
@@ -410,15 +411,10 @@ future<> storage_service::wait_for_ring_to_settle(std::chrono::milliseconds dela
         if (gms::gossiper::clk::now() > t + std::chrono::seconds(60)) {
             throw std::runtime_error("Other bootstrapping/leaving nodes detected, cannot bootstrap while consistent_rangemovement is true");
         }
-
-        // Check the schema and pending range again
-        while (!_migration_manager.local().have_schema_agreement()) {
-            set_mode(mode::JOINING, "waiting for schema information to complete", true);
-            co_await sleep_abortable(std::chrono::seconds(1), _abort_source);
-        }
-        co_await update_pending_ranges("bootstrapping/leaving nodes while joining");
-        tmptr = get_token_metadata_ptr();
+    } else {
+        break;
     }
+ }
     slogger.info("Checking bootstrapping/leaving nodes: ok");
 }
 
