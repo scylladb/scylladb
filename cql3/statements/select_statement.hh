@@ -20,6 +20,7 @@
 #include "transport/messages/result_message.hh"
 #include "index/secondary_index_manager.hh"
 #include "exceptions/exceptions.hh"
+#include "exceptions/coordinator_result.hh"
 
 namespace service {
     class client_state;

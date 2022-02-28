@@ -22,6 +22,7 @@
 #include "cql3/restrictions/statement_restrictions.hh"
 #include "cql3/statements/statement_type.hh"
 #include "exceptions/exceptions.hh"
+#include "exceptions/coordinator_result.hh"
 
 #include <seastar/core/shared_ptr.hh>
 

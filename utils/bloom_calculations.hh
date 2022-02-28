@@ -13,6 +13,7 @@
 
 #pragma once
 
+#include <seastar/core/print.hh>
 #include "exceptions/exceptions.hh"
 
 namespace utils {

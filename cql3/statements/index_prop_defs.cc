@@ -12,6 +12,7 @@
  */
 
 #include <set>
+#include <seastar/core/print.hh>
 #include "index_prop_defs.hh"
 #include "index/secondary_index.hh"
 #include "exceptions/exceptions.hh"

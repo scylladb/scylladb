@@ -46,6 +46,7 @@
 #include <seastar/core/circular_buffer.hh>
 #include "query_ranges_to_vnodes.hh"
 #include "exceptions/exceptions.hh"
+#include "exceptions/coordinator_result.hh"
 
 class reconcilable_result;
 class frozen_mutation_and_schema;

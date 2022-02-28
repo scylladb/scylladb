@@ -30,6 +30,7 @@
 #include "cql3/query_options.hh"
 #include "transport/messages/result_message.hh"
 #include "utils/chunked_vector.hh"
+#include "exceptions/coordinator_result.hh"
 
 namespace cql3 {
 

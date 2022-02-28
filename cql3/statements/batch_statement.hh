@@ -16,6 +16,7 @@
 #include "log.hh"
 #include "service_permit.hh"
 #include "exceptions/exceptions.hh"
+#include "exceptions/coordinator_result.hh"
 
 namespace cql_transport::messages {
     class result_message;
