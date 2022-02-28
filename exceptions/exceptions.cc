@@ -47,4 +47,58 @@ const std::unordered_map<exception_code, sstring>& exception_map() {
     return map;
 }
 
+template<typename... Args>
+static inline sstring prepare_message(const char* fmt, Args&&... args) noexcept {
+    try {
+        return format(fmt, std::forward<Args>(args)...);
+    } catch (...) {
+        return sstring();
+    }
+}
+
+unavailable_exception::unavailable_exception(db::consistency_level cl, int32_t required, int32_t alive) noexcept
+    : unavailable_exception(prepare_message("Cannot achieve consistency level for cl {}. Requires {}, alive {}", cl, required, alive),
+        cl, required, alive)
+    {}
+
+request_timeout_exception::request_timeout_exception(exception_code code, const sstring& ks, const sstring& cf, db::consistency_level consistency, int32_t received, int32_t block_for) noexcept
+    : cassandra_exception{code, prepare_message("Operation timed out for {}.{} - received only {} responses from {} CL={}.", ks, cf, received, block_for, consistency)}
+    , consistency{consistency}
+    , received{received}
+    , block_for{block_for}
+    { }
+
+request_failure_exception::request_failure_exception(exception_code code, const sstring& ks, const sstring& cf, db::consistency_level consistency_, int32_t received_, int32_t failures_, int32_t block_for_) noexcept
+    : cassandra_exception{code, prepare_message("Operation failed for {}.{} - received {} responses and {} failures from {} CL={}.", ks, cf, received_, failures_, block_for_, consistency_)}
+    , consistency{consistency_}
+    , received{received_}
+    , failures{failures_}
+    , block_for{block_for_}
+    {}
+
+overloaded_exception::overloaded_exception(size_t c) noexcept
+    : cassandra_exception(exception_code::OVERLOADED, prepare_message("Too many in flight hints: {}", c))
+    {}
+
+prepared_query_not_found_exception::prepared_query_not_found_exception(bytes id) noexcept
+    : request_validation_exception{exception_code::UNPREPARED, prepare_message("No prepared statement with ID {} found.", id)}
+    , id{id}
+    { }
+
+already_exists_exception::already_exists_exception(sstring ks_name_, sstring cf_name_)
+    : already_exists_exception{ks_name_, cf_name_, format("Cannot add already existing table \"{}\" to keyspace \"{}\"", cf_name_, ks_name_)}
+    { }
+
+already_exists_exception::already_exists_exception(sstring ks_name_)
+    : already_exists_exception{ks_name_, "", format("Cannot add existing keyspace \"{}\"", ks_name_)}
+    { }
+
+function_execution_exception::function_execution_exception(sstring func_name_, sstring detail, sstring ks_name_, std::vector<sstring> args_) noexcept
+    : cassandra_exception{exception_code::FUNCTION_FAILURE,
+        format("execution of {} failed: {}", func_name_, detail)}
+    , ks_name(std::move(ks_name_))
+    , func_name(std::move(func_name_))
+    , args(std::move(args_))
+    { }
+
 }
