@@ -2,7 +2,7 @@
 #include <seastar/core/print.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/util/log.hh>
-#include "lister.hh"
+#include "utils/lister.hh"
 #include "checked-file-impl.hh"
 
 static seastar::logger llogger("lister");

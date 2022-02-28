@@ -20,7 +20,7 @@
 #include "test/lib/random_utils.hh"
 #include "test/lib/make_random_string.hh"
 
-#include "lister.hh"
+#include "utils/lister.hh"
 
 class expected_exception : public std::exception {
 public:

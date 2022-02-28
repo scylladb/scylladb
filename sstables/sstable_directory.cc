@@ -13,7 +13,7 @@
 #include "compaction/compaction_manager.hh"
 #include "log.hh"
 #include "sstable_directory.hh"
-#include "lister.hh"
+#include "utils/lister.hh"
 #include "replica/database.hh"
 
 static logging::logger dirlog("sstable_directory");

@@ -20,7 +20,7 @@
 #include "test/lib/random_utils.hh"
 
 #include "replica/database.hh"
-#include "lister.hh"
+#include "utils/lister.hh"
 #include "partition_slice_builder.hh"
 #include "frozen_mutation.hh"
 #include "test/lib/mutation_source_test.hh"
