@@ -385,33 +385,33 @@ future<> storage_service::wait_for_ring_to_settle(std::chrono::milliseconds dela
     }
 
     auto t = gms::gossiper::clk::now();
-  while (true) {
-    while (!_migration_manager.local().have_schema_agreement()) {
-        set_mode(mode::JOINING, "waiting for schema information to complete", true);
-        co_await sleep_abortable(std::chrono::seconds(1), _abort_source);
-    }
-    set_mode(mode::JOINING, "schema complete, ready to bootstrap", true);
-    set_mode(mode::JOINING, "waiting for pending range calculation", true);
-    co_await update_pending_ranges("joining");
-    set_mode(mode::JOINING, "calculation complete, ready to bootstrap", true);
-    slogger.debug("... got ring + schema info");
+    while (true) {
+        while (!_migration_manager.local().have_schema_agreement()) {
+            set_mode(mode::JOINING, "waiting for schema information to complete", true);
+            co_await sleep_abortable(std::chrono::seconds(1), _abort_source);
+        }
+        set_mode(mode::JOINING, "schema complete, ready to bootstrap", true);
+        set_mode(mode::JOINING, "waiting for pending range calculation", true);
+        co_await update_pending_ranges("joining");
+        set_mode(mode::JOINING, "calculation complete, ready to bootstrap", true);
+        slogger.debug("... got ring + schema info");
 
-    auto tmptr = get_token_metadata_ptr();
-    if (!_db.local().get_config().consistent_rangemovement() ||
-        (tmptr->get_bootstrap_tokens().empty() && tmptr->get_leaving_endpoints().empty())) {
-        break;
-    }
+        auto tmptr = get_token_metadata_ptr();
+        if (!_db.local().get_config().consistent_rangemovement() ||
+                (tmptr->get_bootstrap_tokens().empty() && tmptr->get_leaving_endpoints().empty())) {
+            break;
+        }
         auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(gms::gossiper::clk::now() - t).count();
         slogger.info("Checking bootstrapping/leaving nodes: tokens {}, leaving {}, sleep 1 second and check again ({} seconds elapsed)",
-            tmptr->get_bootstrap_tokens().size(),
-            tmptr->get_leaving_endpoints().size(),
-            elapsed);
+                tmptr->get_bootstrap_tokens().size(),
+                tmptr->get_leaving_endpoints().size(),
+                elapsed);
 
         if (gms::gossiper::clk::now() > t + std::chrono::seconds(60)) {
             throw std::runtime_error("Other bootstrapping/leaving nodes detected, cannot bootstrap while consistent_rangemovement is true");
         }
         co_await sleep_abortable(std::chrono::seconds(1), _abort_source);
- }
+    }
     slogger.info("Checking bootstrapping/leaving nodes: ok");
 }
 
