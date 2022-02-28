@@ -61,15 +61,15 @@ struct disk_data_value_view {
 };
 
 template <typename Size, typename Members>
+requires std::is_integral_v<Size>
 struct disk_array {
-    static_assert(std::is_integral<Size>::value, "Length type must be convertible to integer");
     utils::chunked_vector<Members> elements;
 };
 
 // A wrapper struct for integers to be written using variable-length encoding
 template <typename T>
+requires std::is_integral_v<T>
 struct vint {
-    static_assert(std::is_integral_v<T>, "Can only wrap integral types");
     T value;
 };
 
@@ -80,8 +80,8 @@ struct disk_array_vint_size {
 };
 
 template <typename Size, typename Members>
+requires std::is_integral_v<Size>
 struct disk_array_ref {
-    static_assert(std::is_integral<Size>::value, "Length type must be convertible to integer");
     const utils::chunked_vector<Members>& elements;
     disk_array_ref(const utils::chunked_vector<Members>& elements) : elements(elements) {}
 };

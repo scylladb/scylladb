@@ -186,16 +186,16 @@ static_assert(FragmentedView<buffer_view<bytes_ostream::fragment_iterator>>);
 using size_type = uint32_t;
 
 template<typename T, typename Input>
+requires std::is_integral_v<T>
 inline T deserialize_integral(Input& input) {
-    static_assert(std::is_integral<T>::value, "T should be integral");
     T data;
     input.read(reinterpret_cast<char*>(&data), sizeof(T));
     return le_to_cpu(data);
 }
 
 template<typename T, typename Output>
+requires std::is_integral_v<T>
 inline void serialize_integral(Output& output, T data) {
-    static_assert(std::is_integral<T>::value, "T should be integral");
     data = cpu_to_le(data);
     output.write(reinterpret_cast<const char*>(&data), sizeof(T));
 }

@@ -120,9 +120,8 @@ private:
         _prestate = next_state;
         return read_status::waiting;
     }
-    template <typename VintType, prestate ReadingVint, prestate ReadingVintWithLen, typename T>
-    inline read_status read_vint(temporary_buffer<char>& data, T& dest) {
-        static_assert(std::is_same_v<T, typename VintType::value_type>, "Destination type mismatch");
+    template <typename VintType, prestate ReadingVint, prestate ReadingVintWithLen>
+    inline read_status read_vint(temporary_buffer<char>& data, typename VintType::value_type& dest) {
         if (data.empty()) {
             _prestate = ReadingVint;
             return read_status::waiting;
@@ -145,9 +144,8 @@ private:
             }
         }
     }
-    template <typename VintType, typename T>
-    inline read_status read_vint_with_len(temporary_buffer<char>& data, T& dest) {
-        static_assert(std::is_same_v<T, typename VintType::value_type>, "Destination type mismatch");
+    template <typename VintType>
+    inline read_status read_vint_with_len(temporary_buffer<char>& data, typename VintType::value_type& dest) {
         const auto n = std::min(_read_bytes_len - _pos, data.size());
         std::copy_n(data.begin(), n, _read_bytes.front().get_write() + _pos);
         data.trim_front(n);

@@ -613,6 +613,7 @@ template <typename ResultType>
 using compact_for_result_state = compact_for_query_state<ResultType::only_live>;
 
 template <typename ResultBuilder>
+requires std::is_nothrow_move_constructible_v<typename ResultBuilder::result_type>
 struct page_consume_result {
     std::optional<clustering_key_prefix> last_ckey;
     typename ResultBuilder::result_type result;
@@ -625,7 +626,6 @@ struct page_consume_result {
         , result(std::move(result))
         , unconsumed_fragments(std::move(unconsumed_fragments))
         , compaction_state(std::move(compaction_state)) {
-        static_assert(std::is_nothrow_move_constructible_v<typename ResultBuilder::result_type>);
     }
 };
 

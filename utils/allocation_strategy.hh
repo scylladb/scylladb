@@ -61,15 +61,13 @@ size_for_allocation_strategy(const T& obj) noexcept {
 }
 
 template <typename T>
+requires std::is_nothrow_move_constructible_v<T> && std::is_nothrow_destructible_v<T>
 class standard_migrator final : public migrate_fn_type {
     friend class allocation_strategy;
     standard_migrator() : migrate_fn_type(alignof(T)) {}
 
 public:
     virtual void migrate(void* src, void* dst, size_t size) const noexcept override {
-        static_assert(std::is_nothrow_move_constructible<T>::value, "T must be nothrow move-constructible.");
-        static_assert(std::is_nothrow_destructible<T>::value, "T must be nothrow destructible.");
-
         T* src_t = static_cast<T*>(src);
         new (static_cast<T*>(dst)) T(std::move(*src_t));
         src_t->~T();

@@ -309,11 +309,10 @@ public:
     //
     // When timeout is reached first, the returned future is resolved with timed_out_error exception.
     template <typename Func>
+    // We disallow future-returning functions here, because otherwise memory may be available
+    // when we start executing it, but no longer available in the middle of the execution.
+    requires (!is_future<std::invoke_result_t<Func>>::value)
     futurize_t<std::result_of_t<Func()>> run_when_memory_available(Func&& func, db::timeout_clock::time_point timeout) {
-        // We disallow future-returning functions here, because otherwise memory may be available
-        // when we start executing it, but no longer available in the middle of the execution.
-        static_assert(!is_future<std::result_of_t<Func()>>::value, "future-returning functions are not permitted.");
-
         auto blocked_at = do_for_each_parent(this, [] (auto rg) {
             return (rg->_blocked_requests.empty() && !rg->under_pressure()) ? stop_iteration::no : stop_iteration::yes;
         });

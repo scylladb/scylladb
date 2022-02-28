@@ -226,9 +226,9 @@ public:
 // as a zero-length byte array (whereas NULL is serialized as a negative-length
 // byte array).
 template <typename T>
+requires std::is_default_constructible_v<T>
 class emptyable {
     // We don't use optional<>, to avoid lots of ifs during the copy and move constructors
-    static_assert(std::is_default_constructible<T>::value, "must be default constructible");
     bool _is_empty = false;
     T _value;
 public:
