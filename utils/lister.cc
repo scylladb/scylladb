@@ -117,10 +117,6 @@ future<std::optional<directory_entry>> directory_lister::get() {
     co_return std::nullopt;
 }
 
-void directory_lister::abort(std::exception_ptr ex) {
-    _queue.abort(std::move(ex));
-}
-
 future<> directory_lister::close() noexcept {
     if (!_opt_done_fut) {
         return make_ready_future<>();

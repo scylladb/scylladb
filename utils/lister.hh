@@ -190,12 +190,8 @@ public:
     // result has been returned results in a broken_pipe_exception.
     future<std::optional<directory_entry>> get();
 
-    // Abort the directory_lister with a given exception
-    // Further calls to get() will fail with this exception.
-    void abort(std::exception_ptr ex = std::make_exception_ptr(broken_pipe_exception()));
-
     // Close the directory_lister, ignoring any errors.
-    // Must be called after abort() or if get() did not drain the queue.
+    // Must be called after get() if not all entries were retrieved.
     //
     // Close aborts the lister, waking up get() if any is waiting,
     // and waits for all background work to complete.
