@@ -397,9 +397,10 @@ future<> storage_service::wait_for_ring_to_settle(std::chrono::milliseconds dela
     slogger.debug("... got ring + schema info");
 
     auto tmptr = get_token_metadata_ptr();
-    if (_db.local().get_config().consistent_rangemovement() &&
-        (!tmptr->get_bootstrap_tokens().empty() ||
-         !tmptr->get_leaving_endpoints().empty())) {
+    if (!_db.local().get_config().consistent_rangemovement() ||
+        (tmptr->get_bootstrap_tokens().empty() && tmptr->get_leaving_endpoints().empty())) {
+        break;
+    }
         auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(gms::gossiper::clk::now() - t).count();
         slogger.info("Checking bootstrapping/leaving nodes: tokens {}, leaving {}, sleep 1 second and check again ({} seconds elapsed)",
             tmptr->get_bootstrap_tokens().size(),
@@ -410,9 +411,6 @@ future<> storage_service::wait_for_ring_to_settle(std::chrono::milliseconds dela
             throw std::runtime_error("Other bootstrapping/leaving nodes detected, cannot bootstrap while consistent_rangemovement is true");
         }
         co_await sleep_abortable(std::chrono::seconds(1), _abort_source);
-    } else {
-        break;
-    }
  }
     slogger.info("Checking bootstrapping/leaving nodes: ok");
 }
