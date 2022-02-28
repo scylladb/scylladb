@@ -373,7 +373,7 @@ static future<> set_gossip_tokens(gms::gossiper& g,
 }
 
 // Runs inside seastar::async context
-void storage_service::join_token_ring(int delay) {
+void storage_service::join_token_ring(std::chrono::milliseconds delay) {
     // This function only gets called on shard 0, but we want to set _joined
     // on all shards, so this variable can be later read locally.
     container().invoke_on_all([] (auto&& ss) {
@@ -400,7 +400,7 @@ void storage_service::join_token_ring(int delay) {
         }
         set_mode(mode::JOINING, "waiting for ring information", true);
         // first sleep the delay to make sure we see *at least* one other node
-        for (int i = 0; i < delay && _gossiper.get_live_members().size() < 2; i += 1000) {
+        for (int i = 0; i < delay.count() && _gossiper.get_live_members().size() < 2; i += 1000) {
             sleep_abortable(std::chrono::seconds(1), _abort_source).get();
         }
         // if our schema hasn't matched yet, keep sleeping until it does
@@ -470,7 +470,7 @@ void storage_service::join_token_ring(int delay) {
                     auto existing = tmptr->get_endpoint(token);
                     if (existing) {
                         auto* eps = _gossiper.get_endpoint_state_for_endpoint_ptr(*existing);
-                        if (eps && eps->get_update_timestamp() > gms::gossiper::clk::now() - std::chrono::milliseconds(delay)) {
+                        if (eps && eps->get_update_timestamp() > gms::gossiper::clk::now() - delay) {
                             throw std::runtime_error("Cannot replace a live node...");
                         }
                     } else {
@@ -1360,7 +1360,7 @@ future<> storage_service::init_server(cql3::query_processor& qp) {
 
 future<> storage_service::join_cluster() {
     return seastar::async([this] {
-        join_token_ring(get_ring_delay().count());
+        join_token_ring(get_ring_delay());
     });
 }
 
