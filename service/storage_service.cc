@@ -406,11 +406,10 @@ future<> storage_service::wait_for_ring_to_settle(std::chrono::milliseconds dela
             tmptr->get_leaving_endpoints().size(),
             elapsed);
 
-        co_await sleep_abortable(std::chrono::seconds(1), _abort_source);
-
         if (gms::gossiper::clk::now() > t + std::chrono::seconds(60)) {
             throw std::runtime_error("Other bootstrapping/leaving nodes detected, cannot bootstrap while consistent_rangemovement is true");
         }
+        co_await sleep_abortable(std::chrono::seconds(1), _abort_source);
     } else {
         break;
     }
