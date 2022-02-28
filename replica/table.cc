@@ -178,7 +178,7 @@ table::make_reader_v2(schema_ptr s,
     // https://github.com/scylladb/scylla/issues/185
 
     for (auto&& mt : *_memtables) {
-        readers.emplace_back(upgrade_to_v2(mt->make_flat_reader(s, permit, range, slice, pc, trace_state, fwd, fwd_mr)));
+        readers.emplace_back(mt->make_flat_reader(s, permit, range, slice, pc, trace_state, fwd, fwd_mr));
     }
 
     const auto bypass_cache = slice.options.contains(query::partition_slice::option::bypass_cache);
@@ -238,7 +238,7 @@ table::make_streaming_reader(schema_ptr s, reader_permit permit,
         std::vector<flat_mutation_reader_v2> readers;
         readers.reserve(_memtables->size() + 1);
         for (auto&& mt : *_memtables) {
-            readers.emplace_back(upgrade_to_v2(mt->make_flat_reader(s, permit, range, slice, pc, trace_state, fwd, fwd_mr)));
+            readers.emplace_back(mt->make_flat_reader(s, permit, range, slice, pc, trace_state, fwd, fwd_mr));
         }
         readers.emplace_back(make_sstable_reader(s, permit, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
         return make_combined_reader(s, std::move(permit), std::move(readers), fwd, fwd_mr);
@@ -256,7 +256,7 @@ flat_mutation_reader_v2 table::make_streaming_reader(schema_ptr schema, reader_p
     std::vector<flat_mutation_reader_v2> readers;
     readers.reserve(_memtables->size() + 1);
     for (auto&& mt : *_memtables) {
-        readers.emplace_back(upgrade_to_v2(mt->make_flat_reader(schema, permit, range, slice, pc, trace_state, fwd, fwd_mr)));
+        readers.emplace_back(mt->make_flat_reader(schema, permit, range, slice, pc, trace_state, fwd, fwd_mr));
     }
     readers.emplace_back(make_sstable_reader(schema, permit, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
     return make_combined_reader(std::move(schema), std::move(permit), std::move(readers), fwd, fwd_mr);
@@ -663,17 +663,14 @@ table::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_
             co_return co_await write_memtable_to_sstable(downgrade_to_v1(std::move(reader)), *old, newtab, estimated_partitions, monitor, cfg, priority);
         });
 
-        flat_mutation_reader reader = old->make_flush_reader(
+        auto flush_reader = old->make_flush_reader(
             old->schema(),
             compaction_concurrency_semaphore().make_tracking_only_permit(old->schema().get(), "try_flush_memtable_to_sstable()", db::no_timeout),
             service::get_local_memtable_flush_priority());
-
-        if (old->has_any_tombstones()) {
-            reader = make_compacting_reader(
-                upgrade_to_v2(std::move(reader)),
-                gc_clock::now(),
-                [] (const dht::decorated_key&) { return api::min_timestamp; });
-        }
+        auto reader = (old->has_any_tombstones()
+                       ? make_compacting_reader(std::move(flush_reader), gc_clock::now(),
+                                                [] (const dht::decorated_key&) { return api::min_timestamp; })
+                       : downgrade_to_v1(std::move(flush_reader)));
 
         std::exception_ptr err;
         try {
@@ -2060,7 +2057,7 @@ write_memtable_to_sstable(reader_permit permit, memtable& mt, sstables::shared_s
                           sstables::write_monitor& monitor,
                           sstables::sstable_writer_config& cfg,
                           const io_priority_class& pc) {
-    return write_memtable_to_sstable(mt.make_flush_reader(mt.schema(), std::move(permit), pc), mt, std::move(sst), mt.partition_count(), monitor, cfg, pc);
+    return write_memtable_to_sstable(downgrade_to_v1(mt.make_flush_reader(mt.schema(), std::move(permit), pc)), mt, std::move(sst), mt.partition_count(), monitor, cfg, pc);
 }
 
 future<>
@@ -2314,7 +2311,7 @@ table::make_reader_excluding_sstables(schema_ptr s,
     readers.reserve(_memtables->size() + 1);
 
     for (auto&& mt : *_memtables) {
-        readers.emplace_back(upgrade_to_v2(mt->make_flat_reader(s, permit, range, slice, pc, trace_state, fwd, fwd_mr)));
+        readers.emplace_back(mt->make_flat_reader(s, permit, range, slice, pc, trace_state, fwd, fwd_mr));
     }
 
     auto excluded_ssts = boost::copy_range<std::unordered_set<sstables::shared_sstable>>(excluded);

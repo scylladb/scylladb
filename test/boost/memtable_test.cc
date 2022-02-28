@@ -83,9 +83,9 @@ SEASTAR_TEST_CASE(test_memtable_with_many_versions_conforms_to_mutation_source) 
     return seastar::async([] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
         lw_shared_ptr<replica::memtable> mt;
-        std::vector<flat_mutation_reader> readers;
+        std::vector<flat_mutation_reader_v2> readers;
         auto clear_readers = [&readers] {
-            parallel_for_each(readers, [] (flat_mutation_reader& rd) {
+            parallel_for_each(readers, [] (flat_mutation_reader_v2& rd) {
                 return rd.close();
             }).finally([&readers] {
                 readers.clear();
@@ -110,7 +110,7 @@ SEASTAR_TEST_CASE(test_memtable_with_many_versions_conforms_to_mutation_source) 
             for (auto&& m : muts) {
                 mt->apply(m);
                 // Create reader so that each mutation is in a separate version
-                flat_mutation_reader rd = mt->make_flat_reader(s, semaphore.make_permit(), ranges_storage.emplace_back(dht::partition_range::make_singular(m.decorated_key())));
+                auto rd = mt->make_flat_reader(s, semaphore.make_permit(), ranges_storage.emplace_back(dht::partition_range::make_singular(m.decorated_key())));
                 rd.set_max_buffer_size(1);
                 rd.fill_buffer().get();
                 readers.emplace_back(std::move(rd));
@@ -271,7 +271,7 @@ SEASTAR_TEST_CASE(test_virtual_dirty_accounting_on_flush) {
         }
 
         // Create a reader which will cause many partition versions to be created
-        flat_mutation_reader_opt rd1 = mt->make_flat_reader(s, semaphore.make_permit());
+        flat_mutation_reader_v2_opt rd1 = mt->make_flat_reader(s, semaphore.make_permit());
         auto close_rd1 = deferred_close(*rd1);
         rd1->set_max_buffer_size(1);
         rd1->fill_buffer().get();
@@ -337,17 +337,17 @@ SEASTAR_TEST_CASE(test_partition_version_consistency_after_lsa_compaction_happen
         m3.set_clustered_cell(ck3, to_bytes("col"), data_value(bytes(bytes::initialized_later(), 8)), next_timestamp());
 
         mt->apply(m1);
-        std::optional<flat_reader_assertions> rd1 = assert_that(mt->make_flat_reader(s, semaphore.make_permit()));
+        std::optional<flat_reader_assertions_v2> rd1 = assert_that(mt->make_flat_reader(s, semaphore.make_permit()));
         rd1->set_max_buffer_size(1);
         rd1->fill_buffer().get();
 
         mt->apply(m2);
-        std::optional<flat_reader_assertions> rd2 = assert_that(mt->make_flat_reader(s, semaphore.make_permit()));
+        std::optional<flat_reader_assertions_v2> rd2 = assert_that(mt->make_flat_reader(s, semaphore.make_permit()));
         rd2->set_max_buffer_size(1);
         rd2->fill_buffer().get();
 
         mt->apply(m3);
-        std::optional<flat_reader_assertions> rd3 = assert_that(mt->make_flat_reader(s, semaphore.make_permit()));
+        std::optional<flat_reader_assertions_v2> rd3 = assert_that(mt->make_flat_reader(s, semaphore.make_permit()));
         rd3->set_max_buffer_size(1);
         rd3->fill_buffer().get();
 

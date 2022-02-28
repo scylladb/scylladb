@@ -109,8 +109,17 @@ SEASTAR_TEST_CASE(test_flat_mutation_reader_consume_single_partition) {
                 BOOST_REQUIRE_EQUAL(m.partition().partition_tombstone() ? 1 : 0, result._consume_tombstone_call_count);
                 auto r2 = assert_that(make_flat_mutation_reader_from_mutations(m.schema(), semaphore.make_permit(), {m}));
                 r2.produces_partition_start(m.decorated_key(), m.partition().partition_tombstone());
+                if (result._fragments.empty()) {
+                    continue;
+                }
+                query::clustering_row_ranges ck_ranges = {};
+                if (depth > 1) {
+                    const auto& mf = result._fragments.back();
+                    auto ck_range = query::clustering_range::make_ending_with({mf.position().key(), false});
+                    ck_ranges = {ck_range};
+                }
                 for (auto& mf : result._fragments) {
-                    r2.produces(*m.schema(), mf);
+                    r2.produces(*m.schema(), mf, ck_ranges);
                 }
             }
         });
@@ -922,9 +931,9 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_reader_reads_in_native_reverse_order) {
         reverse_mt->apply(mut.build(reverse_schema));
     }
 
-    auto reversed_forward_reader = assert_that(make_reversing_reader(forward_mt->make_flat_reader(forward_schema, permit), query::max_result_size(1 << 20)));
+    auto reversed_forward_reader = assert_that(make_reversing_reader(downgrade_to_v1(forward_mt->make_flat_reader(forward_schema, permit)), query::max_result_size(1 << 20)));
 
-    auto reverse_reader = reverse_mt->make_flat_reader(reverse_schema, permit);
+    auto reverse_reader = downgrade_to_v1(reverse_mt->make_flat_reader(reverse_schema, permit));
     auto deferred_reverse_close = deferred_close(reverse_reader);
 
     while (auto mf_opt = reverse_reader().get()) {
@@ -963,8 +972,8 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_reader_is_mutation_source) {
                 reversed_slices.emplace_back(query::reverse_slice(*schema, slice));
                 // We don't want the memtable reader to read in reverse.
                 reversed_slices.back().options.remove(query::partition_slice::option::reversed);
-                rd = reverse_mt->make_flat_reader(schema, std::move(permit), range, reversed_slices.back(), pc, std::move(trace_ptr),
-                        streamed_mutation::forwarding::no, fwd_mr);
+                rd = downgrade_to_v1(reverse_mt->make_flat_reader(schema, std::move(permit), range, reversed_slices.back(), pc, std::move(trace_ptr),
+                        streamed_mutation::forwarding::no, fwd_mr));
             }
 
             rd = make_reversing_reader(std::move(rd), query::max_result_size(1 << 20));
@@ -976,4 +985,29 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_reader_is_mutation_source) {
         });
     };
     run_mutation_source_tests(populate);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_allow_reader_early_destruction) {
+    struct test_reader_impl : public flat_mutation_reader::impl {
+        using flat_mutation_reader::impl::impl;
+        virtual future<> fill_buffer() override { return make_ready_future<>(); }
+        virtual future<> next_partition() override { return make_ready_future<>(); }
+        virtual future<> fast_forward_to(const dht::partition_range&) override { return make_ready_future<>(); }
+        virtual future<> fast_forward_to(position_range) override { return make_ready_future<>(); }
+        virtual future<> close() noexcept override { return make_ready_future<>(); };
+    };
+    struct test_reader_v2_impl : public flat_mutation_reader_v2::impl {
+        using flat_mutation_reader_v2::impl::impl;
+        virtual future<> fill_buffer() override { return make_ready_future<>(); }
+        virtual future<> next_partition() override { return make_ready_future<>(); }
+        virtual future<> fast_forward_to(const dht::partition_range&) override { return make_ready_future<>(); }
+        virtual future<> fast_forward_to(position_range) override { return make_ready_future<>(); }
+        virtual future<> close() noexcept override { return make_ready_future<>(); };
+    };
+
+    simple_schema s;
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    // These readers are not closed, but didn't start any operations, so it's safe for them to be destroyed.
+    auto reader = make_flat_mutation_reader<test_reader_impl>(s.schema(), semaphore.make_permit());
+    auto reader_v2 = make_flat_mutation_reader_v2<test_reader_v2_impl>(s.schema(), semaphore.make_permit());
 }

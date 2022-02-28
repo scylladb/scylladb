@@ -32,7 +32,7 @@
 logging::logger fmr_logger("flat_mutation_reader");
 
 flat_mutation_reader& flat_mutation_reader::operator=(flat_mutation_reader&& o) noexcept {
-    if (_impl) {
+    if (_impl && _impl->is_close_required()) {
         impl* ip = _impl.get();
         // Abort to enforce calling close() before readers are closed
         // to prevent leaks and potential use-after-free due to background
@@ -45,7 +45,7 @@ flat_mutation_reader& flat_mutation_reader::operator=(flat_mutation_reader&& o) 
 }
 
 flat_mutation_reader::~flat_mutation_reader() {
-    if (_impl) {
+    if (_impl && _impl->is_close_required()) {
         impl* ip = _impl.get();
         // Abort to enforce calling close() before readers are closed
         // to prevent leaks and potential use-after-free due to background
@@ -252,6 +252,10 @@ template future<bool> flat_mutation_reader::impl::fill_buffer_from<flat_mutation
 
 flat_mutation_reader make_delegating_reader(flat_mutation_reader& r) {
     return make_flat_mutation_reader<delegating_reader>(r);
+}
+
+flat_mutation_reader_v2 make_delegating_reader_v2(flat_mutation_reader_v2& r) {
+    return make_flat_mutation_reader_v2<delegating_reader_v2>(r);
 }
 
 flat_mutation_reader make_forwardable(flat_mutation_reader m) {
@@ -1749,7 +1753,7 @@ void mutation_fragment_stream_validating_filter::on_end_of_stream() {
 }
 
 flat_mutation_reader_v2& flat_mutation_reader_v2::operator=(flat_mutation_reader_v2&& o) noexcept {
-    if (_impl) {
+    if (_impl && _impl->is_close_required()) {
         impl* ip = _impl.get();
         // Abort to enforce calling close() before readers are closed
         // to prevent leaks and potential use-after-free due to background
@@ -1762,7 +1766,7 @@ flat_mutation_reader_v2& flat_mutation_reader_v2::operator=(flat_mutation_reader
 }
 
 flat_mutation_reader_v2::~flat_mutation_reader_v2() {
-    if (_impl) {
+    if (_impl && _impl->is_close_required()) {
         impl* ip = _impl.get();
         // Abort to enforce calling close() before readers are closed
         // to prevent leaks and potential use-after-free due to background

@@ -152,28 +152,28 @@ SEASTAR_TEST_CASE(test_cache_works_after_clearing) {
     });
 }
 
-class partition_counting_reader final : public delegating_reader {
+class partition_counting_reader final : public delegating_reader_v2 {
     int& _counter;
     bool _count_fill_buffer = true;
 public:
-    partition_counting_reader(flat_mutation_reader mr, int& counter)
-        : delegating_reader(std::move(mr)), _counter(counter) { }
+    partition_counting_reader(flat_mutation_reader_v2 mr, int& counter)
+        : delegating_reader_v2(std::move(mr)), _counter(counter) { }
     virtual future<> fill_buffer() override {
         if (_count_fill_buffer) {
             ++_counter;
             _count_fill_buffer = false;
         }
-        return delegating_reader::fill_buffer();
+        return delegating_reader_v2::fill_buffer();
     }
     virtual future<> next_partition() override {
         _count_fill_buffer = false;
         ++_counter;
-        return delegating_reader::next_partition();
+        return delegating_reader_v2::next_partition();
     }
 };
 
-flat_mutation_reader make_counting_reader(flat_mutation_reader mr, int& counter) {
-    return make_flat_mutation_reader<partition_counting_reader>(std::move(mr), counter);
+flat_mutation_reader_v2 make_counting_reader(flat_mutation_reader_v2 mr, int& counter) {
+    return make_flat_mutation_reader_v2<partition_counting_reader>(std::move(mr), counter);
 }
 
 SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_empty_full_range) {
@@ -190,7 +190,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_empty_full_range)
                 const io_priority_class&,
                 tracing::trace_state_ptr,
                 streamed_mutation::forwarding fwd) {
-            return make_counting_reader(make_empty_flat_reader(s, std::move(permit)), secondary_calls_count);
+            return make_counting_reader(make_empty_flat_reader_v2(s, std::move(permit)), secondary_calls_count);
         })), tracker);
 
         assert_that(cache.make_reader(s, semaphore.make_permit(), query::full_partition_range))
@@ -222,7 +222,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_empty_single_part
                 const io_priority_class&,
                 tracing::trace_state_ptr,
                 streamed_mutation::forwarding fwd) {
-            return make_counting_reader(make_empty_flat_reader(s, std::move(permit)), secondary_calls_count);
+            return make_counting_reader(make_empty_flat_reader_v2(s, std::move(permit)), secondary_calls_count);
         })), tracker);
         auto range = make_single_partition_range(s, 100);
         assert_that(cache.make_reader(s, semaphore.make_permit(), range))
@@ -248,7 +248,7 @@ SEASTAR_TEST_CASE(test_cache_uses_continuity_info_for_single_partition_query) {
                 const io_priority_class&,
                 tracing::trace_state_ptr,
                 streamed_mutation::forwarding fwd) {
-            return make_counting_reader(make_empty_flat_reader(s, std::move(permit)), secondary_calls_count);
+            return make_counting_reader(make_empty_flat_reader_v2(s, std::move(permit)), secondary_calls_count);
         })), tracker);
 
         assert_that(cache.make_reader(s, semaphore.make_permit(), query::full_partition_range))
@@ -280,9 +280,9 @@ void test_cache_delegates_to_underlying_only_once_with_single_partition(schema_p
             streamed_mutation::forwarding fwd) {
         assert(m.schema() == s);
         if (range.contains(dht::ring_position(m.decorated_key()), dht::ring_position_comparator(*s))) {
-            return make_counting_reader(make_flat_mutation_reader_from_mutations(s, std::move(permit), {m}, std::move(fwd)), secondary_calls_count);
+            return make_counting_reader(make_flat_mutation_reader_from_mutations_v2(s, std::move(permit), {m}, std::move(fwd)), secondary_calls_count);
         } else {
-            return make_counting_reader(make_empty_flat_reader(s, std::move(permit)), secondary_calls_count);
+            return make_counting_reader(make_empty_flat_reader_v2(s, std::move(permit)), secondary_calls_count);
         }
     })), tracker);
 
@@ -1610,7 +1610,7 @@ SEASTAR_TEST_CASE(test_mvcc) {
 
             auto m12 = m1 + m2;
 
-            flat_mutation_reader_opt mt1_reader_opt;
+            flat_mutation_reader_v2_opt mt1_reader_opt;
             auto close_mt1_reader = defer([&mt1_reader_opt] {
                 if (mt1_reader_opt) {
                     mt1_reader_opt->close().get();
@@ -2511,7 +2511,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_update_from_memtable) {
 
             populate_range(cache, population_range);
             auto rd1_v1 = assert_that(make_reader(population_range));
-            flat_mutation_reader_opt snap;
+            flat_mutation_reader_v2_opt snap;
             auto close_snap = defer([&snap] {
                 if (snap) {
                     snap->close().get();

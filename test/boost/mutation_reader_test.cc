@@ -1260,14 +1260,14 @@ SEASTAR_THREAD_TEST_CASE(test_foreign_reader_as_mutation_source) {
                     mutation_reader::forwarding fwd_mr) {
                 auto remote_reader = env.db().invoke_on(remote_shard,
                         [&, s = global_schema_ptr(s), fwd_sm, fwd_mr, trace_state = tracing::global_trace_state_ptr(trace_state)] (replica::database& db) {
-                    return make_foreign(std::make_unique<flat_mutation_reader>(remote_mt->make_flat_reader(s.get(),
+                    return make_foreign(std::make_unique<flat_mutation_reader>(downgrade_to_v1(remote_mt->make_flat_reader(s.get(),
                             make_reader_permit(env),
                             range,
                             slice,
                             pc,
                             trace_state.get(),
                             fwd_sm,
-                            fwd_mr)));
+                            fwd_mr))));
                 }).get0();
                 return make_foreign_reader(s, std::move(permit), std::move(remote_reader), fwd_sm);
             };
@@ -2673,7 +2673,7 @@ SEASTAR_THREAD_TEST_CASE(test_compacting_reader_as_mutation_source) {
                 if (fwd_sm == streamed_mutation::forwarding::yes) {
                     source = make_forwardable(std::move(source));
                 }
-                auto mr = make_compacting_reader(upgrade_to_v2(std::move(source)), query_time,
+                auto mr = make_compacting_reader(std::move(source), query_time,
                         [] (const dht::decorated_key&) { return api::min_timestamp; }, fwd_sm);
                 if (single_fragment_buffer) {
                     mr.set_max_buffer_size(1);

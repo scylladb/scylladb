@@ -3223,8 +3223,8 @@ static tmpdir write_sstables(test_env& env, schema_ptr s, lw_shared_ptr<replica:
 
     sst->write_components(downgrade_to_v1(make_combined_reader(s,
         env.make_reader_permit(),
-        upgrade_to_v2(mt1->make_flat_reader(s, env.make_reader_permit())),
-        upgrade_to_v2(mt2->make_flat_reader(s, env.make_reader_permit())))), 1, s, env.manager().configure_writer(), mt1->get_encoding_stats()).get();
+        mt1->make_flat_reader(s, env.make_reader_permit()),
+        mt2->make_flat_reader(s, env.make_reader_permit()))), 1, s, env.manager().configure_writer(), mt1->get_encoding_stats()).get();
     return tmp;
 }
 
@@ -3371,9 +3371,13 @@ static void write_mut_and_validate_version(test_env& env, schema_ptr s, const ss
     lw_shared_ptr<replica::memtable> mt = make_lw_shared<replica::memtable>(s);
     mt->apply(mut);
 
-    tmpdir tmp = write_and_compare_sstables(env, s, mt, table_name, version);
+    // FIXME This used to `write_and_compare_sstables()` and to
+    // additionally call `do_validate_stats_metadata()` on the result,
+    // but cannot now because flat reader version tranforms rearrange
+    // range tombstones.  Revisit once the reader v2 migration is
+    // complete and those version transforms are gone
+    tmpdir tmp = write_sstables(env, s, mt, version);
     auto written_sst = validate_read(env, s, tmp.path(), {mut}, version);
-    do_validate_stats_metadata(s, written_sst, table_name);
     check_min_max_column_names(written_sst, std::move(min_components), std::move(max_components));
 }
 
@@ -5195,7 +5199,7 @@ static void test_sstable_write_large_row_f(schema_ptr s, reader_permit permit, r
     // trigger depends on the size of rows after they are written in the MC format and that size
     // depends on the encoding statistics (because of variable-length encoding). The original values
     // were chosen with the default-constructed encoding_stats, so let's keep it that way.
-    sst->write_components(mt.make_flat_reader(s, std::move(permit)), 1, s, manager.configure_writer("test"), encoding_stats{}).get();
+    sst->write_components(downgrade_to_v1(mt.make_flat_reader(s, std::move(permit))), 1, s, manager.configure_writer("test"), encoding_stats{}).get();
     BOOST_REQUIRE_EQUAL(i, expected.size());
 }
 
@@ -5249,7 +5253,7 @@ static void test_sstable_log_too_many_rows_f(int rows, uint64_t threshold, bool 
     auto close_manager = defer([&] { manager.close().get(); });
     tmpdir dir;
     auto sst = manager.make_sstable(sc, dir.path().string(), 1, version, sstables::sstable::format_types::big);
-    sst->write_components(mt->make_flat_reader(sc, semaphore.make_permit()), 1, sc, manager.configure_writer("test"), encoding_stats{}).get();
+    sst->write_components(downgrade_to_v1(mt->make_flat_reader(sc, semaphore.make_permit())), 1, sc, manager.configure_writer("test"), encoding_stats{}).get();
 
     BOOST_REQUIRE_EQUAL(logged, expected);
 }

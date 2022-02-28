@@ -134,6 +134,7 @@ public:
     private:
         tracked_buffer _buffer;
         size_t _buffer_size = 0;
+        bool _close_required = false;
     protected:
         size_t max_buffer_size_in_bytes = default_max_buffer_size_in_bytes();
 
@@ -175,6 +176,8 @@ public:
         bool is_end_of_stream() const { return _end_of_stream; }
         bool is_buffer_empty() const { return _buffer.empty(); }
         bool is_buffer_full() const { return _buffer_size >= max_buffer_size_in_bytes; }
+        bool is_close_required() const { return _close_required; }
+        void set_close_required() { _close_required = true; }
         static constexpr size_t default_max_buffer_size_in_bytes() { return 8 * 1024; }
 
         mutation_fragment_v2 pop_mutation_fragment() {
@@ -512,9 +515,15 @@ public:
     //
     // Can be used to skip over entire partitions if interleaved with
     // `operator()()` calls.
-    future<> next_partition() { return _impl->next_partition(); }
+    future<> next_partition() {
+        _impl->set_close_required();
+        return _impl->next_partition();
+    }
 
-    future<> fill_buffer() { return _impl->fill_buffer(); }
+    future<> fill_buffer() {
+        _impl->set_close_required();
+        return _impl->fill_buffer();
+    }
 
     // Changes the range of partitions to pr. The range can only be moved
     // forwards. pr.begin() needs to be larger than pr.end() of the previousl
@@ -523,6 +532,7 @@ public:
     // pr needs to be valid until the reader is destroyed or fast_forward_to()
     // is called again.
     future<> fast_forward_to(const dht::partition_range& pr) {
+        _impl->set_close_required();
         return _impl->fast_forward_to(pr);
     }
     // Skips to a later range of rows.
@@ -552,6 +562,7 @@ public:
     // In particular one must first enter a partition by fetching a `partition_start`
     // fragment before calling `fast_forward_to`.
     future<> fast_forward_to(position_range cr) {
+        _impl->set_close_required();
         return _impl->fast_forward_to(std::move(cr));
     }
     // Closes the reader.
@@ -737,6 +748,61 @@ flat_mutation_reader_v2 transform(flat_mutation_reader_v2 r, T t) {
     return make_flat_mutation_reader_v2<transforming_reader>(std::move(r), std::move(t));
 }
 
+class delegating_reader_v2 : public flat_mutation_reader_v2::impl {
+    flat_mutation_reader_v2_opt _underlying_holder;
+    flat_mutation_reader_v2* _underlying;
+public:
+    // when passed a lvalue reference to the reader
+    // we don't own it and the caller is responsible
+    // for evenetually closing the reader.
+    delegating_reader_v2(flat_mutation_reader_v2& r)
+        : impl(r.schema(), r.permit())
+        , _underlying_holder()
+        , _underlying(&r)
+    { }
+    // when passed a rvalue reference to the reader
+    // we assume ownership of it and will close it
+    // in close().
+    delegating_reader_v2(flat_mutation_reader_v2&& r)
+        : impl(r.schema(), r.permit())
+        , _underlying_holder(std::move(r))
+        , _underlying(&*_underlying_holder)
+    { }
+    virtual future<> fill_buffer() override {
+        if (is_buffer_full()) {
+            return make_ready_future<>();
+        }
+        return _underlying->fill_buffer().then([this] {
+            _end_of_stream = _underlying->is_end_of_stream();
+            _underlying->move_buffer_content_to(*this);
+        });
+    }
+    virtual future<> fast_forward_to(position_range pr) override {
+        _end_of_stream = false;
+        forward_buffer_to(pr.start());
+        return _underlying->fast_forward_to(std::move(pr));
+    }
+    virtual future<> next_partition() override {
+        clear_buffer_to_next_partition();
+        auto maybe_next_partition = make_ready_future<>();
+        if (is_buffer_empty()) {
+            maybe_next_partition = _underlying->next_partition();
+        }
+      return maybe_next_partition.then([this] {
+        _end_of_stream = _underlying->is_end_of_stream() && _underlying->is_buffer_empty();
+      });
+    }
+    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
+        _end_of_stream = false;
+        clear_buffer();
+        return _underlying->fast_forward_to(pr);
+    }
+    virtual future<> close() noexcept override {
+        return _underlying_holder ? _underlying_holder->close() : make_ready_future<>();
+    }
+};
+flat_mutation_reader_v2 make_delegating_reader_v2(flat_mutation_reader_v2&);
+
 // Adapts a v2 reader to v1 reader
 flat_mutation_reader downgrade_to_v1(flat_mutation_reader_v2);
 
@@ -814,6 +880,26 @@ make_flat_mutation_reader_from_fragments(schema_ptr, reader_permit, std::deque<m
 
 flat_mutation_reader_v2
 make_flat_mutation_reader_from_fragments(schema_ptr, reader_permit, std::deque<mutation_fragment_v2>, const dht::partition_range& pr, const query::partition_slice& slice);
+
+// Calls the consumer for each element of the reader's stream until end of stream
+// is reached or the consumer requests iteration to stop by returning stop_iteration::yes.
+// The consumer should accept mutation as the argument and return stop_iteration.
+// The returned future<> resolves when consumption ends.
+template <typename Consumer>
+requires MutationConsumer<Consumer>
+inline
+future<> consume_partitions(flat_mutation_reader_v2& reader, Consumer consumer) {
+    return do_with(std::move(consumer), [&reader] (Consumer& c) -> future<> {
+        return repeat([&reader, &c] () {
+            return read_mutation_from_flat_mutation_reader(reader).then([&c] (mutation_opt&& mo) -> future<stop_iteration> {
+                if (!mo) {
+                    return make_ready_future<stop_iteration>(stop_iteration::yes);
+                }
+                return futurize_invoke(c, std::move(*mo));
+            });
+        });
+    });
+}
 
 /// A cosumer function that is passed a flat_mutation_reader to be consumed from
 /// and returns a future<> resolved when the reader is fully consumed, and closed.

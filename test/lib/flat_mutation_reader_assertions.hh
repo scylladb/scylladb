@@ -35,6 +35,12 @@ private:
             return {rt.start, rt.start_kind, rt.end, rt.end_kind, {rt.tomb.timestamp, {}}};
         }
     }
+    void reset_rts() {
+        _tombstones.clear();
+        _expected_tombstones.clear();
+        _rt_ck_ranges.clear();
+        _check_rts = false;
+    }
     void check_rts() {
         if (_check_rts) {
             // If any split ends of range tombstones remain, consume
@@ -46,18 +52,18 @@ private:
                 BOOST_FAIL(format("Expected {}, but got {}", _expected_tombstones, _tombstones));
             }
         }
-        _tombstones.clear();
-        _expected_tombstones.clear();
-        _rt_ck_ranges.clear();
-        _check_rts = false;
+        reset_rts();
     }
-    range_tombstone trim(const range_tombstone& rt, const query::clustering_row_ranges& ck_ranges) const {
-        bound_view::compare less(*_reader.schema());
-        auto ret{rt};
-        for (auto& range : ck_ranges) {
-            ret.trim(*_reader.schema(), position_in_partition::for_range_start(range), position_in_partition::for_range_end(range));
+    bool trim(range_tombstone& rt, const query::clustering_row_ranges& ck_ranges) const {
+        position_in_partition::less_compare less(*_reader.schema());
+        if (ck_ranges.empty()) {
+            return true;
         }
-        return ret;
+        bool relevant = false;
+        for (auto& range : ck_ranges) {
+            relevant |= rt.trim(*_reader.schema(), position_in_partition::for_range_start(range), position_in_partition::for_range_end(range));
+        }
+        return relevant;
     }
     void apply_rt_unchecked(const range_tombstone& rt_) {
         auto rt = maybe_drop_deletion_time(rt_);
@@ -121,9 +127,7 @@ public:
         if (tomb && mfopt->as_partition_start().partition_tombstone() != *tomb) {
             BOOST_FAIL(format("Expected: partition start with tombstone {}, got: {}", *tomb, mutation_fragment::printer(*_reader.schema(), *mfopt)));
         }
-        _tombstones.clear();
-        _expected_tombstones.clear();
-        _check_rts = false;
+        reset_rts();
         return *this;
     }
 
@@ -166,8 +170,13 @@ public:
                 }
                 testlog.trace("Received range tombstone: {}", mutation_fragment::printer(*_reader.schema(), *next));
                 range = position_range(position_in_partition(next->position()), range.end());
-                auto rt = trim(maybe_drop_deletion_time(_reader().get0()->as_range_tombstone()), ck_ranges);
-                _tombstones.apply(*_reader.schema(), rt);
+                auto rt = maybe_drop_deletion_time(_reader().get0()->as_range_tombstone());
+                if (trim(rt, ck_ranges)) {
+                    testlog.trace("Applying {} to actual range tombstone list", rt);
+                    _tombstones.apply(*_reader.schema(), rt);
+                } else {
+                    testlog.trace("Not applying {}, does not overlap any of the ranges in {}", rt, ck_ranges);
+                }
             } else if (next->is_clustering_row() && next->as_clustering_row().empty()) {
                 if (!range.contains(*_reader.schema(), next->position())) {
                     break;
@@ -293,19 +302,28 @@ public:
         return *this;
     }
 
-    // If ck_ranges is passed, verifies only that information relevant for ck_ranges matches.
-    flat_reader_assertions& produces_range_tombstone(const range_tombstone& rt_, const query::clustering_row_ranges& ck_ranges = {}) {
-        testlog.trace("Expect {}, ranges={}", rt_, ck_ranges);
-        auto rt = trim(maybe_drop_deletion_time(rt_), ck_ranges);
-        _check_rts = true;
+private:
+    void apply_rt(const range_tombstone& rt_, const query::clustering_row_ranges& ck_ranges) {
+        auto rt = maybe_drop_deletion_time(rt_);
+        if (!trim(rt, ck_ranges)) {
+            testlog.trace("Refusing to expect {}, does not overlap any of the ranges in {}", rt, ck_ranges);
+            return;
+        }
         // If looking at any tombstones (which is likely), read them.
         // For finer range restriction the test should call
-        // may_produce_tombstones() before the corresponding
-        // produces_range_tombstone()
+        // may_produce_tombstones() before the relevant produces*()
         may_produce_tombstones({position_in_partition(rt.position()), position_in_partition(rt.end_position())}, ck_ranges);
         testlog.trace("Applying {} to expected range tombstone list", rt);
         _expected_tombstones.apply(*_reader.schema(), rt);
+        _check_rts = true;
         _rt_ck_ranges = ck_ranges;
+    }
+
+public:
+    // If ck_ranges is passed, verifies only that information relevant for ck_ranges matches.
+    flat_reader_assertions& produces_range_tombstone(const range_tombstone& rt, const query::clustering_row_ranges& ck_ranges = {}) {
+        testlog.trace("Expect {}, ranges={}", rt, ck_ranges);
+        apply_rt(rt, ck_ranges);
         return *this;
     }
 
@@ -322,17 +340,19 @@ public:
         return *this;
     }
 
-    flat_reader_assertions& produces(const schema& s, const mutation_fragment& mf) {
-        testlog.trace("Expect {}", mutation_fragment::printer(s, mf));
+    flat_reader_assertions& produces(const schema& s, const mutation_fragment& mf, const query::clustering_row_ranges& ck_ranges = {}) {
+        testlog.trace("Expect {}, ranges={}", mutation_fragment::printer(s, mf), ck_ranges);
+        if (mf.is_range_tombstone()) {
+            apply_rt(mf.as_range_tombstone(), ck_ranges);
+            return *this;
+        }
+
         auto mfopt = read_next();
         if (!mfopt) {
             BOOST_FAIL(format("Expected {}, but got end of stream", mutation_fragment::printer(*_reader.schema(), mf)));
         }
         if (!mfopt->equal(s, mf)) {
             BOOST_FAIL(format("Expected {}, but got {}", mutation_fragment::printer(*_reader.schema(), mf), mutation_fragment::printer(*_reader.schema(), *mfopt)));
-        }
-        if (mf.is_range_tombstone()) {
-            apply_rt_unchecked(mf.as_range_tombstone());
         }
         return *this;
     }
