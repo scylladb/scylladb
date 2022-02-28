@@ -61,15 +61,25 @@ bool should_stop_on_system_error(const std::system_error& e) {
 bool is_timeout_exception(std::exception_ptr e) {
     try {
         std::rethrow_exception(e);
-    } catch (seastar::rpc::timeout_error& unused) {
-        return true;
-    } catch (seastar::semaphore_timed_out& unused) {
-        return true;
-    } catch (seastar::timed_out_error& unused) {
-        return true;
+    } catch (const std::exception& ex) {
+        return is_timeout_exception(ex);
     } catch (const std::nested_exception& e) {
         return is_timeout_exception(e.nested_ptr());
     } catch (...) {
     }
     return false;
+}
+
+bool is_timeout_exception(const std::exception& ex) {
+    if (dynamic_cast<const seastar::rpc::timeout_error*>(&ex)) {
+        return true;
+    } else if (dynamic_cast<const seastar::semaphore_timed_out*>(&ex)) {
+        return true;
+    } else if (dynamic_cast<const seastar::timed_out_error*>(&ex)) {
+        return true;
+    } else if (auto* e = dynamic_cast<const std::nested_exception*>(&ex)) {
+        return is_timeout_exception(e->nested_ptr());
+    } else {
+        return false;
+    }
 }

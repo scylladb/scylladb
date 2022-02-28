@@ -21,6 +21,7 @@ typedef std::function<bool (const std::system_error &)> system_error_lambda_t;
 bool check_exception(system_error_lambda_t f);
 bool is_system_error_errno(int err_no);
 bool is_timeout_exception(std::exception_ptr e);
+bool is_timeout_exception(const std::exception& ex);
 
 class storage_io_error : public std::exception {
 private:
