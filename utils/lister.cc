@@ -121,6 +121,8 @@ future<> directory_lister::close() noexcept {
     if (!_opt_done_fut) {
         return make_ready_future<>();
     }
+    // The queue has to be aborted if the user didn't get()
+    // all entries.
     _queue.abort(std::make_exception_ptr(broken_pipe_exception()));
     return std::exchange(_opt_done_fut, std::make_optional<future<>>(make_ready_future<>()))->handle_exception([] (std::exception_ptr) {
         // ignore all errors

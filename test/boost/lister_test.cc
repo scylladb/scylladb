@@ -176,19 +176,6 @@ SEASTAR_TEST_CASE(test_directory_lister_close) {
         BOOST_TEST_MESSAGE("Closing directory_lister");
         co_await dl.close();
     }
-
-    {
-        auto dl = directory_lister(tmp.path());
-        auto initial = tests::random::get_int(count);
-        BOOST_TEST_MESSAGE(fmt::format("Getting {} dir entries", initial));
-        for (auto i = 0; i < initial; i++) {
-            auto de = co_await dl.get();
-            BOOST_REQUIRE(de);
-        }
-        BOOST_TEST_MESSAGE("Closing directory_lister");
-        co_await dl.close();
-        BOOST_REQUIRE_THROW(co_await dl.get(), std::exception);
-    }
 }
 
 SEASTAR_TEST_CASE(test_directory_lister_extra_get) {
