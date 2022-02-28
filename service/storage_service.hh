@@ -339,6 +339,7 @@ private:
     void run_bootstrap_ops();
 
     std::list<gms::inet_address> get_ignore_dead_nodes_for_replace();
+    future<> wait_for_ring_to_settle(std::chrono::milliseconds delay);
 
 public:
     future<bool> is_initialized();
