@@ -363,7 +363,7 @@ public:
     void consume(tombstone t) { _builder.consume(t); }
     stop_iteration consume(static_row&& sr, tombstone t, bool is_alive) { return _builder.consume(std::move(sr), t, is_alive); }
     stop_iteration consume(clustering_row&& cr, row_tombstone t, bool is_alive) { return _builder.consume(std::move(cr), t, is_alive); }
-    stop_iteration consume(range_tombstone&& rt) { return _builder.consume(std::move(rt)); }
+    stop_iteration consume(range_tombstone_change&& rtc) { return _builder.consume(std::move(rtc)); }
     stop_iteration consume_end_of_partition()  { return _builder.consume_end_of_partition(); }
     result_type consume_end_of_stream() {
         _builder.consume_end_of_stream();
@@ -1949,7 +1949,7 @@ public:
         return stop_iteration::no;
     }
 
-    stop_iteration consume(range_tombstone&&) {
+    stop_iteration consume(range_tombstone_change&&) {
         inject_failure("view_builder_consume_range_tombstone");
         return stop_iteration::no;
     }
@@ -2007,7 +2007,7 @@ public:
 // Called in the context of a seastar::thread.
 void view_builder::execute(build_step& step, exponential_backoff_retry r) {
     gc_clock::time_point now = gc_clock::now();
-    auto consumer = compact_for_query<emit_only_live_rows::yes, view_builder::consumer>(
+    auto consumer = compact_for_query_v2<emit_only_live_rows::yes, view_builder::consumer>(
             *step.reader.schema(),
             now,
             step.pslice,
