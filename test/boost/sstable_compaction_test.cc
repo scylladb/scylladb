@@ -4807,7 +4807,7 @@ SEASTAR_TEST_CASE(test_major_does_not_miss_data_in_memtable) {
 }
 
 SEASTAR_TEST_CASE(simple_backlog_controller_test) {
-    return test_env::do_with_async([] (test_env& env) {
+    auto run_controller_test = [] (sstables::compaction_strategy_type compaction_strategy_type, test_env& env) {
         /////////////
         // settings
         static constexpr float disk_memory_ratio = 78.125; /* AWS I3en is ~78.125 */
@@ -4849,7 +4849,7 @@ SEASTAR_TEST_CASE(simple_backlog_controller_test) {
             auto t = make_lw_shared<replica::table>(s, cfg, replica::table::no_commitlog(), manager, cl_stats, *tracker);
             t->mark_ready_for_writes();
             t->start();
-            t->set_compaction_strategy(sstables::compaction_strategy_type::size_tiered);
+            t->set_compaction_strategy(compaction_strategy_type);
             return t;
         };
 
@@ -4910,5 +4910,11 @@ SEASTAR_TEST_CASE(simple_backlog_controller_test) {
             // Expect 0 backlog as tiers are all perfectly compacted
             BOOST_REQUIRE(r.normalized_backlog == 0.0f);
         }
+    };
+
+    return test_env::do_with_async([run_controller_test] (test_env& env) {
+       run_controller_test(sstables::compaction_strategy_type::size_tiered, env);
+       run_controller_test(sstables::compaction_strategy_type::time_window, env);
+       run_controller_test(sstables::compaction_strategy_type::leveled, env);
     });
 }

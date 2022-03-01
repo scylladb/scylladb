@@ -263,7 +263,7 @@ public:
 
         for (auto& sst : new_ssts) {
             auto bound = lower_bound_of(sst->get_stats_metadata().max_timestamp);
-            if (_windows.contains(bound)) {
+            if (!_windows.contains(bound)) {
                 _windows.emplace(bound, size_tiered_backlog_tracker(_stcs_options));
             }
             per_window_replacement[bound].new_ssts.push_back(std::move(sst));
