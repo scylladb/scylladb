@@ -138,6 +138,10 @@ class reconcilable_result_builder {
     uint64_t _live_rows{};
     // make this the last member so it is destroyed first. #7240
     utils::chunked_vector<partition> _result;
+
+private:
+    stop_iteration consume(range_tombstone&& rt);
+
 public:
     // Expects table schema (non-reversed) and half-reversed (legacy) slice when building results for reverse query.
     reconcilable_result_builder(const schema& s, const query::partition_slice& slice,
@@ -150,7 +154,6 @@ public:
     void consume(tombstone t);
     stop_iteration consume(static_row&& sr, tombstone, bool is_alive);
     stop_iteration consume(clustering_row&& cr, row_tombstone, bool is_alive);
-    stop_iteration consume(range_tombstone&& rt);
     stop_iteration consume(range_tombstone_change&& rtc);
     stop_iteration consume_end_of_partition();
     reconcilable_result consume_end_of_stream();
