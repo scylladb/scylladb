@@ -44,8 +44,8 @@ public:
         *_last_ckey = cr.key();
         return _consumer.consume(std::move(cr), std::move(t), is_live);
     }
-    stop_iteration consume(range_tombstone&& rt) {
-        return _consumer.consume(std::move(rt));
+    stop_iteration consume(range_tombstone_change&& rtc) {
+        return _consumer.consume(std::move(rtc));
     }
     stop_iteration consume_end_of_partition() {
         return _consumer.consume_end_of_partition();
@@ -63,42 +63,9 @@ public:
 /// or std::nullopt if the last row wasn't a clustering row, and whatever the
 /// consumer's `consume_end_of_stream()` method returns.
 template <emit_only_live_rows OnlyLive, typename Consumer>
-requires CompactedFragmentsConsumer<Consumer>
-auto consume_page(flat_mutation_reader& reader,
-        lw_shared_ptr<compact_for_query_state<OnlyLive>> compaction_state,
-        const query::partition_slice& slice,
-        Consumer&& consumer,
-        uint64_t row_limit,
-        uint32_t partition_limit,
-        gc_clock::time_point query_time) {
-    return reader.peek().then([=, &reader, consumer = std::move(consumer), &slice] (
-                mutation_fragment* next_fragment) mutable {
-        const auto next_fragment_region = next_fragment ? next_fragment->position().region() : partition_region::partition_end;
-        compaction_state->start_new_page(row_limit, partition_limit, query_time, next_fragment_region, consumer);
-
-        auto last_ckey = make_lw_shared<std::optional<clustering_key_prefix>>();
-        auto reader_consumer = compact_for_query<OnlyLive, clustering_position_tracker<Consumer>>(
-                compaction_state,
-                clustering_position_tracker(std::move(consumer), last_ckey));
-
-        return reader.consume(std::move(reader_consumer)).then([last_ckey] (auto&&... results) mutable {
-            static_assert(sizeof...(results) <= 1);
-            return make_ready_future<std::tuple<std::optional<clustering_key_prefix>, std::decay_t<decltype(results)>...>>(std::tuple(std::move(*last_ckey), std::move(results)...));
-        });
-    });
-}
-
-/// Consume a page worth of data from the reader.
-///
-/// Uses `compaction_state` for compacting the fragments and `consumer` for
-/// building the results.
-/// Returns a future containing a tuple with the last consumed clustering key,
-/// or std::nullopt if the last row wasn't a clustering row, and whatever the
-/// consumer's `consume_end_of_stream()` method returns.
-template <emit_only_live_rows OnlyLive, typename Consumer>
-requires CompactedFragmentsConsumer<Consumer>
+requires CompactedFragmentsConsumerV2<Consumer>
 auto consume_page(flat_mutation_reader_v2& reader,
-        lw_shared_ptr<compact_for_query_state<OnlyLive>> compaction_state,
+        lw_shared_ptr<compact_for_query_state_v2<OnlyLive>> compaction_state,
         const query::partition_slice& slice,
         Consumer&& consumer,
         uint64_t row_limit,
@@ -110,7 +77,7 @@ auto consume_page(flat_mutation_reader_v2& reader,
         compaction_state->start_new_page(row_limit, partition_limit, query_time, next_fragment_region, consumer);
 
         auto last_ckey = make_lw_shared<std::optional<clustering_key_prefix>>();
-        auto reader_consumer = compact_for_query<OnlyLive, clustering_position_tracker<Consumer>>(
+        auto reader_consumer = compact_for_query_v2<OnlyLive, clustering_position_tracker<Consumer>>(
                 compaction_state,
                 clustering_position_tracker(std::move(consumer), last_ckey));
 
@@ -211,7 +178,7 @@ public:
 ///     instead.
 template <emit_only_live_rows OnlyLive>
 class querier : public querier_base {
-    lw_shared_ptr<compact_for_query_state<OnlyLive>> _compaction_state;
+    lw_shared_ptr<compact_for_query_state_v2<OnlyLive>> _compaction_state;
     std::optional<clustering_key_prefix> _last_ckey;
 
 public:
@@ -223,7 +190,7 @@ public:
             const io_priority_class& pc,
             tracing::trace_state_ptr trace_ptr)
         : querier_base(schema, permit, std::move(range), std::move(slice), ms, pc, std::move(trace_ptr))
-        , _compaction_state(make_lw_shared<compact_for_query_state<OnlyLive>>(*schema, gc_clock::time_point{}, *_slice, 0, 0)) {
+        , _compaction_state(make_lw_shared<compact_for_query_state_v2<OnlyLive>>(*schema, gc_clock::time_point{}, *_slice, 0, 0)) {
     }
 
     bool are_limits_reached() const {
@@ -231,7 +198,7 @@ public:
     }
 
     template <typename Consumer>
-    requires CompactedFragmentsConsumer<Consumer>
+    requires CompactedFragmentsConsumerV2<Consumer>
     auto consume_page(Consumer&& consumer,
             uint64_t row_limit,
             uint32_t partition_limit,
