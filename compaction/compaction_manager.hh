@@ -102,7 +102,6 @@ public:
         shared_future<> _compaction_done = make_ready_future<>();
         exponential_backoff_retry _compaction_retry = exponential_backoff_retry(std::chrono::seconds(5), std::chrono::seconds(300));
         sstables::compaction_type _type;
-        bool _compaction_running = false;
         utils::UUID _output_run_identifier;
         gate::holder _gate_holder;
         sstring _description;
@@ -153,7 +152,7 @@ public:
         }
 
         bool compaction_running() const noexcept {
-            return _compaction_running;
+            return _state == state::active;
         }
 
         const sstables::compaction_data& compaction_data() const noexcept {
@@ -165,7 +164,7 @@ public:
         }
 
         bool generating_output_run() const noexcept {
-            return _compaction_running && _output_run_identifier;
+            return compaction_running() && _output_run_identifier;
         }
         const utils::UUID& output_run_id() const noexcept {
             return _output_run_identifier;

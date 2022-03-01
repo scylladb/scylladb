@@ -495,14 +495,12 @@ sstables::shared_sstable compaction_manager::sstables_task::consume_sstable() {
 
 void compaction_manager::task::setup_new_compaction(utils::UUID output_run_id) {
     _compaction_data = create_compaction_data();
-    _compaction_running = true;
     _output_run_identifier = output_run_id;
     switch_state(state::active);
 }
 
 void compaction_manager::task::finish_compaction(state finish_state) noexcept {
     switch_state(finish_state);
-    _compaction_running = false;
     _output_run_identifier = utils::null_uuid();
     if (finish_state != state::failed) {
         _compaction_retry.reset();
