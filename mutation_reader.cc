@@ -2305,11 +2305,11 @@ std::pair<flat_mutation_reader_v2, queue_reader_handle_v2> make_queue_reader_v2(
 namespace {
 
 class compacting_reader : public flat_mutation_reader_v2::impl {
-    friend class compact_mutation_state<emit_only_live_rows::no, compact_for_sstables::yes, compactor_output_format::v2>;
+    friend class compact_mutation_state<emit_only_live_rows::no, compact_for_sstables::yes>;
 
 private:
     flat_mutation_reader_v2 _reader;
-    compact_mutation_state<emit_only_live_rows::no, compact_for_sstables::yes, compactor_output_format::v2> _compactor;
+    compact_mutation_state<emit_only_live_rows::no, compact_for_sstables::yes> _compactor;
     noop_compacted_fragments_consumer _gc_consumer;
 
     // Uncompacted stream
