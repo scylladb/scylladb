@@ -1990,6 +1990,7 @@ stop_iteration query::result_memory_accounter::check_local_limit() const {
 }
 
 void reconcilable_result_builder::consume_new_partition(const dht::decorated_key& dk) {
+    _rt_assembler.reset();
     _return_static_content_on_partition_with_no_rows =
         _slice.options.contains(query::partition_slice::option::always_return_static_content) ||
         !has_ck_selector(_slice.row_ranges(_schema, dk.key()));
@@ -2009,6 +2010,11 @@ stop_iteration reconcilable_result_builder::consume(static_row&& sr, tombstone, 
 }
 
 stop_iteration reconcilable_result_builder::consume(clustering_row&& cr, row_tombstone, bool is_alive) {
+    if (_rt_assembler.needs_flush()) {
+        if (auto rt_opt = _rt_assembler.flush(_schema, position_in_partition::after_key(cr.key()))) {
+            consume(std::move(*rt_opt));
+        }
+    }
     _live_rows += is_alive;
     auto stop = _memory_accounter.update_and_check(cr.memory_usage(_schema));
     if (is_alive) {
@@ -2031,7 +2037,15 @@ stop_iteration reconcilable_result_builder::consume(range_tombstone&& rt) {
     return _mutation_consumer->consume(std::move(rt));
 }
 
+stop_iteration reconcilable_result_builder::consume(range_tombstone_change&& rtc) {
+    if (auto rt_opt = _rt_assembler.consume(_schema, std::move(rtc))) {
+        return consume(std::move(*rt_opt));
+    }
+    return stop_iteration::no;
+}
+
 stop_iteration reconcilable_result_builder::consume_end_of_partition() {
+    _rt_assembler.on_end_of_stream();
     if (_live_rows == 0 && _static_row_is_alive && _return_static_content_on_partition_with_no_rows) {
         ++_live_rows;
         // Normally we count only live clustering rows, to guarantee that
