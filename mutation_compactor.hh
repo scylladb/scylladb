@@ -30,11 +30,6 @@ enum class compact_for_sstables {
     yes,
 };
 
-enum class compactor_output_format {
-    v1,
-    v2
-};
-
 template<typename T>
 concept CompactedFragmentsConsumerV2 = requires(T obj, tombstone t, const dht::decorated_key& dk, static_row sr,
         clustering_row cr, range_tombstone_change rtc, tombstone current_tombstone, row_tombstone current_row_tombstone, bool is_alive) {
@@ -142,7 +137,6 @@ struct compaction_stats {
 // emitted.
 template<emit_only_live_rows OnlyLive, compact_for_sstables SSTableCompaction>
 class compact_mutation_state {
-    constexpr static compactor_output_format OutputFormat = compactor_output_format::v2;
     const schema& _schema;
     gc_clock::time_point _query_time;
     std::function<api::timestamp_type(const dht::decorated_key&)> _get_max_purgeable;
@@ -155,7 +149,6 @@ class compact_mutation_state {
     uint64_t _partition_row_limit{};
 
     tombstone _partition_tombstone;
-    range_tombstone_assembler _rt_assembler;
 
     bool _static_row_live{};
     uint64_t _rows_in_current_partition;
@@ -183,20 +176,6 @@ class compact_mutation_state {
 private:
     template <typename Consumer, typename GCConsumer>
     requires CompactedFragmentsConsumerV2<Consumer> && CompactedFragmentsConsumerV2<GCConsumer>
-    stop_iteration do_consume(range_tombstone&& rt, Consumer& consumer, GCConsumer& gc_consumer) {
-        if (rt.tomb <= _partition_tombstone) {
-            return stop_iteration::no;
-        }
-        if (can_purge_tombstone(rt.tomb)) {
-            partition_is_not_empty_for_gc_consumer(gc_consumer);
-            return gc_consumer.consume(std::move(rt));
-        } else {
-            partition_is_not_empty(consumer);
-            return consumer.consume(std::move(rt));
-        }
-    }
-    template <typename Consumer, typename GCConsumer>
-    requires CompactedFragmentsConsumerV2<Consumer> && CompactedFragmentsConsumerV2<GCConsumer>
     stop_iteration do_consume(range_tombstone_change&& rtc, Consumer& consumer, GCConsumer& gc_consumer) {
         stop_iteration gc_consumer_stop = stop_iteration::no;
         stop_iteration consumer_stop = stop_iteration::no;
@@ -221,19 +200,6 @@ private:
             consumer_stop = consumer.consume(std::move(rtc));
         }
         return gc_consumer_stop || consumer_stop;
-    }
-    template <typename Consumer, typename GCConsumer>
-    tombstone tombstone_for_row(const clustering_key& ckey, Consumer& consumer, GCConsumer& gc_consumer) {
-        if constexpr (OutputFormat == compactor_output_format::v2) {
-            return std::max(_partition_tombstone, _effective_tombstone);
-        } else {
-            if (_rt_assembler.needs_flush()) {
-                if (auto rt_opt = _rt_assembler.flush(_schema, position_in_partition::after_key(ckey))) {
-                    do_consume(std::move(*rt_opt), consumer, gc_consumer);
-                }
-            }
-            return std::max(_partition_tombstone, _rt_assembler.get_current_tombstone());
-        }
     }
     static constexpr bool only_live() {
         return OnlyLive == emit_only_live_rows::yes;
@@ -350,7 +316,6 @@ public:
         _rows_in_current_partition = 0;
         _static_row_live = false;
         _partition_tombstone = {};
-        _rt_assembler.reset();
         _current_partition_limit = std::min(_row_limit, _partition_row_limit);
         _max_purgeable = api::missing_timestamp;
         _gc_before = std::nullopt;
@@ -417,7 +382,7 @@ public:
         if (!sstable_compaction()) {
             _last_clustering_pos = cr.position();
         }
-        auto current_tombstone = tombstone_for_row(cr.key(), consumer, gc_consumer);
+        auto current_tombstone = std::max(_partition_tombstone, _effective_tombstone);
         auto t = cr.tomb();
         t.apply(current_tombstone);
 
@@ -485,14 +450,7 @@ public:
             _last_clustering_pos = rtc.position();
         }
         ++_stats.range_tombstones;
-        if constexpr (OutputFormat == compactor_output_format::v1) {
-            _effective_tombstone = rtc.tombstone();
-            if (auto rt_opt = _rt_assembler.consume(_schema, std::move(rtc))) {
-                return do_consume(std::move(*rt_opt), consumer, gc_consumer);
-            }
-        } else {
-            do_consume(std::move(rtc), consumer, gc_consumer);
-        }
+        do_consume(std::move(rtc), consumer, gc_consumer);
         return stop_iteration::no;
     }
 
@@ -501,17 +459,10 @@ public:
     stop_iteration consume_end_of_partition(Consumer& consumer, GCConsumer& gc_consumer) {
         if (_effective_tombstone) {
             auto rtc = range_tombstone_change(position_in_partition::after_key(_last_clustering_pos), tombstone{});
-            if constexpr (OutputFormat == compactor_output_format::v1) {
-                if (auto rt_opt = _rt_assembler.consume(_schema, std::move(rtc))) {
-                    do_consume(std::move(*rt_opt), consumer, gc_consumer);
-                }
-                _rt_assembler.on_end_of_stream();
-            } else {
-                // do_consume() overwrites _effective_tombstone with {}, so save and restore it.
-                auto prev_tombstone = _effective_tombstone;
-                do_consume(std::move(rtc), consumer, gc_consumer);
-                _effective_tombstone = prev_tombstone;
-            }
+            // do_consume() overwrites _effective_tombstone with {}, so save and restore it.
+            auto prev_tombstone = _effective_tombstone;
+            do_consume(std::move(rtc), consumer, gc_consumer);
+            _effective_tombstone = prev_tombstone;
         }
         if (!_empty_partition_in_gc_consumer) {
             gc_consumer.consume_end_of_partition();
@@ -583,11 +534,7 @@ public:
         }
         if (_effective_tombstone) {
             auto rtc = range_tombstone_change(position_in_partition_view::after_key(_last_clustering_pos), _effective_tombstone);
-            if constexpr (OutputFormat == compactor_output_format::v2) {
-                do_consume(std::move(rtc), consumer, nc);
-            } else if (auto rt_opt = _rt_assembler.consume(_schema, std::move(rtc))) {
-                do_consume(std::move(*rt_opt), consumer, nc);
-            }
+            do_consume(std::move(rtc), consumer, nc);
         }
     }
 
