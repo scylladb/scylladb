@@ -281,8 +281,7 @@ future<> compaction_manager::perform_major_compaction(replica::table* t) {
             descriptor.release_exhausted = [compacting] (const std::vector<sstables::shared_sstable>& exhausted_sstables) {
                 compacting->release_compacting(exhausted_sstables);
             };
-            task->setup_new_compaction();
-            task->output_run_identifier = descriptor.run_identifier;
+            task->setup_new_compaction(descriptor.run_identifier);
 
             cmlog.info0("User initiated compaction started on behalf of {}.{}", t->schema()->ks_name(), t->schema()->cf_name());
             compaction_backlog_tracker user_initiated(std::make_unique<user_initiated_backlog_tracker>(_compaction_controller.backlog_of_shares(200), _available_memory));
@@ -384,9 +383,10 @@ compaction_manager::run_with_compaction_disabled(replica::table* t, std::functio
     co_return;
 }
 
-void compaction_manager::task::setup_new_compaction() {
+void compaction_manager::task::setup_new_compaction(utils::UUID output_run_id) {
     compaction_data = create_compaction_data();
     compaction_running = true;
+    output_run_identifier = output_run_id;
 }
 
 void compaction_manager::task::finish_compaction() noexcept {
@@ -705,8 +705,7 @@ void compaction_manager::submit(replica::table* t) {
 
             _stats.pending_tasks--;
             _stats.active_tasks++;
-            task->setup_new_compaction();
-            task->output_run_identifier = descriptor.run_identifier;
+            task->setup_new_compaction(descriptor.run_identifier);
             return t.compact_sstables(std::move(descriptor), task->compaction_data).then_wrapped([this, task, compacting = std::move(compacting), weight_r = std::move(weight_r)] (future<> f) mutable {
                 _stats.active_tasks--;
                 task->finish_compaction();
@@ -838,8 +837,7 @@ future<> compaction_manager::rewrite_sstables(replica::table* t, sstables::compa
 
             _stats.pending_tasks--;
             _stats.active_tasks++;
-            task->setup_new_compaction();
-            task->output_run_identifier = descriptor.run_identifier;
+            task->setup_new_compaction(descriptor.run_identifier);
 
             auto perform_rewrite = [this, &t, &descriptor, &task] () mutable -> future<stop_iteration> {
                 std::exception_ptr ex;

@@ -94,7 +94,7 @@ private:
         task(task&&) = delete;
         task(const task&) = delete;
 
-        void setup_new_compaction();
+        void setup_new_compaction(utils::UUID output_run_id = utils::null_uuid());
         void finish_compaction() noexcept;
 
         bool generating_output_run() const noexcept {
