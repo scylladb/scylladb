@@ -1950,7 +1950,6 @@ stop_iteration query_result_builder::consume(clustering_row&& cr, row_tombstone 
     return _stop;
 }
 stop_iteration query_result_builder::consume(range_tombstone&& rt) {
-    _stop = _mutation_consumer->consume(std::move(rt));
     return _stop;
 }
 
