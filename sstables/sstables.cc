@@ -1814,7 +1814,11 @@ bool sstable::validate_originating_host_id() const {
         return true;
     }
 
-    return *originating_host_id == local_host_id;
+    auto ret = *originating_host_id == local_host_id;
+    if (!ret) {
+        sstlog.error("Host id {} does not match local host id {} in SSTable: {}", *originating_host_id, local_host_id, get_filename());
+    }
+    return ret;
 }
 
 future<> sstable::touch_temp_dir() {

@@ -2751,6 +2751,7 @@ future<utils::UUID> system_keyspace::load_local_host_id() {
     } else {
         auto host_id = msg->one().get_as<utils::UUID>("host_id");
         co_await smp::invoke_on_all([host_id] { _local_cache.local()._cached_local_host_id = host_id; });
+        slogger.info("Loaded local host id: {}", host_id);
         co_return host_id;
     }
 }
@@ -2766,6 +2767,7 @@ future<utils::UUID> system_keyspace::set_local_host_id(utils::UUID host_id) {
     // be unrecoverable anyway, so this little infidelity shouldn't
     // matter.
     co_await smp::invoke_on_all([host_id] { _local_cache.local()._cached_local_host_id = host_id; });
+    slogger.info("Setting local host id to {}", host_id);
 
     sstring req = format("INSERT INTO system.{} (key, host_id) VALUES (?, ?)", LOCAL);
     co_await qctx->execute_cql(req, sstring(LOCAL), host_id);
