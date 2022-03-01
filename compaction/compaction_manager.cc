@@ -325,7 +325,7 @@ future<> compaction_manager::run_custom_job(replica::table* t, sstables::compact
         // take read lock for table, so major compaction and resharding can't proceed in parallel.
         return with_lock(task->compaction_state.lock.for_read(), [this, task, &job] () mutable {
             // Allow caller to know that task (e.g. reshape) was asked to stop while waiting for a chance to run.
-            if (task->stopping) {
+            if (task->stopping()) {
                 return make_exception_future<>(task->make_compaction_stopped_exception());
             }
             _stats.active_tasks++;
@@ -395,7 +395,6 @@ void compaction_manager::task::finish_compaction() noexcept {
 }
 
 void compaction_manager::task::stop(sstring reason) noexcept {
-    stopping = true;
     compaction_data.stop(std::move(reason));
 }
 
@@ -404,12 +403,10 @@ sstables::compaction_stopped_exception compaction_manager::task::make_compaction
     return sstables::compaction_stopped_exception(s->ks_name(), s->cf_name(), compaction_data.stop_requested);
 }
 
-future<> compaction_manager::task_stop(lw_shared_ptr<compaction_manager::task> task, sstring reason) {
+future<> compaction_manager::task_stop(lw_shared_ptr<compaction_manager::task> task) {
     cmlog.debug("Stopping task {} table={}", fmt::ptr(task.get()), fmt::ptr(task->compacting_table));
-    task->stop(reason);
     auto f = task->compaction_done.get_future();
     return f.then_wrapped([task] (future<> f) {
-        task->stopping = false;
         if (f.failed()) {
             auto ex = f.get_exception();
             cmlog.debug("Stopping task {} table={}: task returned error: {}", fmt::ptr(task.get()), fmt::ptr(task->compacting_table), ex);
@@ -539,14 +536,14 @@ void compaction_manager::postpone_compaction_for_table(replica::table* t) {
 }
 
 future<> compaction_manager::stop_tasks(std::vector<lw_shared_ptr<task>> tasks, sstring reason) {
-    // To prevent compaction from being postponed while tasks are being stopped, let's set all
-    // tasks as stopping before the deferring point below.
+    // To prevent compaction from being postponed while tasks are being stopped,
+    // let's stop all tasks before the deferring point below.
     for (auto& t : tasks) {
-        t->stopping = true;
+        t->stop(reason);
     }
-    return do_with(std::move(tasks), [this, reason] (std::vector<lw_shared_ptr<task>>& tasks) {
-        return parallel_for_each(tasks, [this, reason] (auto& task) {
-            return this->task_stop(task, reason).then_wrapped([](future <> f) {
+    return do_with(std::move(tasks), [this] (std::vector<lw_shared_ptr<task>>& tasks) {
+        return parallel_for_each(tasks, [this] (auto& task) {
+            return this->task_stop(task).then_wrapped([](future <> f) {
                 try {
                     f.get();
                 } catch (sstables::compaction_stopped_exception& e) {
@@ -631,7 +628,7 @@ void compaction_manager::do_stop() noexcept {
 }
 
 inline bool compaction_manager::can_proceed(const lw_shared_ptr<task>& task) {
-    return (_state == state::enabled) && !task->stopping && _compaction_state.contains(task->compacting_table) &&
+    return (_state == state::enabled) && !task->stopping() && _compaction_state.contains(task->compacting_table) &&
         !_compaction_state[task->compacting_table].compaction_disabled();
 }
 

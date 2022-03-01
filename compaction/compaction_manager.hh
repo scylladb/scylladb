@@ -77,7 +77,6 @@ private:
         replica::table* compacting_table = nullptr;
         shared_future<> compaction_done = make_ready_future<>();
         exponential_backoff_retry compaction_retry = exponential_backoff_retry(std::chrono::seconds(5), std::chrono::seconds(300));
-        bool stopping = false;
         sstables::compaction_type type = sstables::compaction_type::Compaction;
         bool compaction_running = false;
         utils::UUID output_run_identifier;
@@ -103,6 +102,10 @@ private:
         }
         const utils::UUID& output_run_id() const noexcept {
             return output_run_identifier;
+        }
+
+        bool stopping() const noexcept {
+            return compaction_data.abort.abort_requested();
         }
 
         void stop(sstring reason) noexcept;
@@ -167,7 +170,7 @@ private:
     class strategy_control;
     std::unique_ptr<strategy_control> _strategy_control;
 private:
-    future<> task_stop(lw_shared_ptr<task> task, sstring reason);
+    future<> task_stop(lw_shared_ptr<task> task);
     future<> stop_tasks(std::vector<lw_shared_ptr<task>> tasks, sstring reason);
 
     // Return the largest fan-in of currently running compactions
