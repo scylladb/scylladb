@@ -23,7 +23,7 @@
 #include "seastarx.hh"
 #include "converting_mutation_partition_applier.hh"
 #include "utils/disk-error-handler.hh"
-#include "lister.hh"
+#include "utils/lister.hh"
 #include "db/timeout_clock.hh"
 #include "service/priority_manager.hh"
 #include "replica/database.hh"

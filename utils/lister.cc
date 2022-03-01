@@ -2,7 +2,7 @@
 #include <seastar/core/print.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/util/log.hh>
-#include "lister.hh"
+#include "utils/lister.hh"
 #include "checked-file-impl.hh"
 
 static seastar::logger llogger("lister");
@@ -117,14 +117,12 @@ future<std::optional<directory_entry>> directory_lister::get() {
     co_return std::nullopt;
 }
 
-void directory_lister::abort(std::exception_ptr ex) {
-    _queue.abort(std::move(ex));
-}
-
 future<> directory_lister::close() noexcept {
     if (!_opt_done_fut) {
         return make_ready_future<>();
     }
+    // The queue has to be aborted if the user didn't get()
+    // all entries.
     _queue.abort(std::make_exception_ptr(broken_pipe_exception()));
     return std::exchange(_opt_done_fut, std::make_optional<future<>>(make_ready_future<>()))->handle_exception([] (std::exception_ptr) {
         // ignore all errors

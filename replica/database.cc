@@ -7,7 +7,7 @@
  */
 
 #include "log.hh"
-#include "lister.hh"
+#include "utils/lister.hh"
 #include "replica/database.hh"
 #include <seastar/core/future-util.hh>
 #include "db/system_keyspace.hh"

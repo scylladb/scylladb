@@ -13,7 +13,7 @@
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/schema_tables.hh"
-#include "lister.hh"
+#include "utils/lister.hh"
 #include "compaction/compaction.hh"
 #include "compaction/compaction_manager.hh"
 #include "sstables/sstables.hh"
