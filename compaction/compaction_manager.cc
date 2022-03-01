@@ -789,18 +789,8 @@ future<> compaction_manager::perform_offstrategy(replica::table* t) {
 }
 
 future<> compaction_manager::rewrite_sstables(replica::table* t, sstables::compaction_type_options options, get_candidates_func get_func, can_purge_tombstones can_purge) {
-    auto task = make_lw_shared<compaction_manager::task>(t, options.type(), get_compaction_state(t));
-    _tasks.push_back(task);
-    cmlog.debug("{} task {} table={}: started", options.type(), fmt::ptr(task.get()), fmt::ptr(task->compacting_table));
-
     std::vector<sstables::shared_sstable> sstables;
     compacting_sstable_registration compacting(*this);
-
-    auto task_completion = defer([this, &task, &sstables, &options] {
-        _stats.pending_tasks -= sstables.size();
-        _tasks.remove(task);
-        cmlog.debug("{} task {} table={}: done", options.type(), fmt::ptr(task.get()), fmt::ptr(task->compacting_table));
-    });
 
     // since we might potentially have ongoing compactions, and we
     // must ensure that all sstables created before we run are included
@@ -817,7 +807,17 @@ future<> compaction_manager::rewrite_sstables(replica::table* t, sstables::compa
         return a->data_size() > b->data_size();
     });
 
+    auto task = make_lw_shared<compaction_manager::task>(t, options.type(), get_compaction_state(t));
+    _tasks.push_back(task);
+    cmlog.debug("{} task {} table={}: started", options.type(), fmt::ptr(task.get()), fmt::ptr(task->compacting_table));
+
     _stats.pending_tasks += sstables.size();
+
+    auto task_completion = defer([this, &task, &sstables, &options] {
+        _stats.pending_tasks -= sstables.size();
+        _tasks.remove(task);
+        cmlog.debug("{} task {} table={}: done", options.type(), fmt::ptr(task.get()), fmt::ptr(task->compacting_table));
+    });
 
     auto rewrite_sstable = [this, &task, &options, &compacting, can_purge] (const sstables::shared_sstable& sst) mutable -> future<>  {
         stop_iteration completed = stop_iteration::no;
