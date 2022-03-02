@@ -521,11 +521,9 @@ future<> compaction_manager::stop_tasks(std::vector<lw_shared_ptr<task>> tasks, 
     for (auto& t : tasks) {
         t->stop(reason);
     }
-    return do_with(std::move(tasks), [this] (std::vector<lw_shared_ptr<task>>& tasks) {
-        return parallel_for_each(tasks, [this] (auto& task) {
-            return task->compaction_done.get_future().then_wrapped([&task] (future<> f) {
+    co_await parallel_for_each(tasks, [this] (auto& task) -> future<> {
                 try {
-                    f.get();
+                    co_await task->compaction_done.get_future();
                 } catch (sstables::compaction_stopped_exception& e) {
                     // swallow stop exception if a given procedure decides to propagate it to the caller,
                     // as it happens with reshard and reshape.
@@ -534,8 +532,6 @@ future<> compaction_manager::stop_tasks(std::vector<lw_shared_ptr<task>> tasks, 
                     throw;
                 }
                 cmlog.debug("Stopping task {} table={}: done", fmt::ptr(task.get()), fmt::ptr(task->compacting_table));
-            });
-        });
     });
 }
 
