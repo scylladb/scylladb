@@ -152,7 +152,6 @@ private:
     sharded<repair_service>& _repair;
     sharded<streaming::stream_manager>& _stream_manager;
     sstring _operation_in_progress;
-    bool _ms_stopped = false;
     seastar::metrics::metric_groups _metrics;
     using client_shutdown_hook = noncopyable_function<void()>;
     std::vector<protocol_server*> _protocol_servers;

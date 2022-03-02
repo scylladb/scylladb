@@ -1781,10 +1781,6 @@ future<> storage_service::stop_gossiping() {
 }
 
 future<> storage_service::do_stop_ms() {
-    if (_ms_stopped) {
-        return make_ready_future<>();
-    }
-    _ms_stopped = true;
     return _messaging.invoke_on_all([] (auto& ms) {
         return ms.shutdown();
     }).then([] {
