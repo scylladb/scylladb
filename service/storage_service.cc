@@ -659,7 +659,6 @@ void storage_service::bootstrap() {
             // When is_repair_based_node_ops_enabled is true, the bootstrap node
             // will use node_ops_cmd to bootstrap, bootstrapping gossip status is not needed for bootstrap.
             _gossiper.add_local_application_state({
-                // Order is important: both the CDC streams timestamp and tokens must be known when a node handles our status.
                 { gms::application_state::TOKENS, versioned_value::tokens(_bootstrap_tokens) },
                 { gms::application_state::CDC_GENERATION_ID, versioned_value::cdc_generation_id(_cdc_gen_id) },
                 { gms::application_state::STATUS, versioned_value::bootstrapping(_bootstrap_tokens) },
@@ -667,6 +666,11 @@ void storage_service::bootstrap() {
 
             set_mode(mode::JOINING, format("sleeping {} ms for pending range setup", get_ring_delay().count()), true);
             _gossiper.wait_for_range_setup().get();
+        } else {
+            // Even with RBNO bootstrap we need to announce the new CDC generation immediately after it's created.
+            _gossiper.add_local_application_state({
+                { gms::application_state::CDC_GENERATION_ID, versioned_value::cdc_generation_id(_cdc_gen_id) },
+            }).get();
         }
     } else {
         // Wait until we know tokens of existing node before announcing replacing status.
