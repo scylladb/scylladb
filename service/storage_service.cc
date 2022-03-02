@@ -415,7 +415,7 @@ future<> storage_service::wait_for_ring_to_settle(std::chrono::milliseconds dela
 
 // Runs inside seastar::async context
 void storage_service::join_token_ring(std::chrono::milliseconds delay) {
-    set_mode(mode::JOINING, "joining the ring", true);
+    set_mode(mode::JOINING);
 
     _group0->join_group0().get();
 
@@ -563,7 +563,7 @@ void storage_service::join_token_ring(std::chrono::milliseconds delay) {
     // start participating in the ring.
     set_gossip_tokens(_gossiper, _bootstrap_tokens, _cdc_gen_id).get();
 
-    set_mode(mode::NORMAL, "node is now in normal status", true);
+    set_mode(mode::NORMAL);
 
     if (get_token_metadata().sorted_tokens().empty()) {
         auto err = format("join_token_ring: Sorted token in token_metadata is empty");
@@ -610,7 +610,7 @@ std::list<gms::inet_address> storage_service::get_ignore_dead_nodes_for_replace(
 void storage_service::bootstrap() {
     auto bootstrap_rbno = is_repair_based_node_ops_enabled(streaming::stream_reason::bootstrap);
 
-    set_mode(mode::BOOTSTRAP, true);
+    set_mode(mode::BOOTSTRAP);
     slogger.debug("bootstrap: rbno={} replacing={}", bootstrap_rbno, is_replacing());
     if (!is_replacing()) {
         // Wait until we know tokens of existing node before announcing join status.
@@ -1305,7 +1305,7 @@ future<> storage_service::init_server(cql3::query_processor& qp) {
     assert(this_shard_id() == 0);
 
     return seastar::async([this, &qp] {
-        set_mode(mode::STARTING, "preparing to join ring", true);
+        set_mode(mode::STARTING);
 
         _group0 = std::make_unique<raft_group0>(_abort_source, _raft_gr, _messaging.local(),
             _gossiper, qp, _migration_manager.local());
@@ -1673,16 +1673,15 @@ std::ostream& operator<<(std::ostream& os, const storage_service::mode& m) {
     return os;
 }
 
-void storage_service::set_mode(mode m, bool log) {
-    set_mode(m, "", log);
-}
-
-void storage_service::set_mode(mode m, sstring msg, bool log) {
-    _operation_mode = m;
-    if (log) {
-        slogger.info("{}: {}", m, msg);
+void storage_service::set_mode(mode m) {
+    if (m != _operation_mode) {
+        slogger.info("entering {} mode", m);
+        _operation_mode = m;
     } else {
-        slogger.debug("{}: {}", m, msg);
+        // This shouldn't happen, but it's too much for an assert,
+        // so -- just emit a warning in the hope that it will be
+        // noticed, reported and fixed
+        slogger.warn("re-entering {} mode", m);
     }
 }
 
@@ -1949,7 +1948,7 @@ future<> storage_service::decommission() {
             // StageManager.shutdownNow();
             db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::DECOMMISSIONED).get();
             slogger.info("DECOMMISSIONING: set_bootstrap_state done");
-            ss.set_mode(mode::DECOMMISSIONED, true);
+            ss.set_mode(mode::DECOMMISSIONED);
             slogger.info("DECOMMISSIONING: done");
             // let op be responsible for killing the process
         });
@@ -2573,10 +2572,10 @@ future<> storage_service::drain() {
             return make_ready_future<>();
         }
 
-        ss.set_mode(mode::DRAINING, "starting drain process", true);
+        ss.set_mode(mode::DRAINING);
         return ss.do_drain().then([&ss] {
             ss._drain_finished.set_value();
-            ss.set_mode(mode::DRAINED, true);
+            ss.set_mode(mode::DRAINED);
         });
     });
 }
@@ -2727,7 +2726,7 @@ void storage_service::unbootstrap() {
             ranges_to_stream.emplace(keyspace_name, std::move(ranges_mm));
         }
 
-        set_mode(mode::LEAVING, "replaying batch log and streaming data to other nodes", true);
+        set_mode(mode::LEAVING);
 
         auto stream_success = stream_ranges(ranges_to_stream);
         // Wait for batch log to complete before streaming hints.

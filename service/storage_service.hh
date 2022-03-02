@@ -393,8 +393,7 @@ public:
     future<> rebuild(sstring source_dc);
 
 private:
-    void set_mode(mode m, bool log);
-    void set_mode(mode m, sstring msg, bool log);
+    void set_mode(mode m);
     void mark_existing_views_as_built();
 
     // Stream data for which we become a new replica.
