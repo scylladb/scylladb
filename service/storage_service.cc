@@ -140,6 +140,7 @@ static node_external_status map_operation_mode(storage_service::mode m) {
     switch (m) {
     case storage_service::mode::NONE: return node_external_status::STARTING;
     case storage_service::mode::STARTING: return node_external_status::STARTING;
+    case storage_service::mode::BOOTSTRAP: return node_external_status::JOINING;
     case storage_service::mode::JOINING: return node_external_status::JOINING;
     case storage_service::mode::NORMAL: return node_external_status::NORMAL;
     case storage_service::mode::LEAVING: return node_external_status::LEAVING;
@@ -607,10 +608,9 @@ std::list<gms::inet_address> storage_service::get_ignore_dead_nodes_for_replace(
 
 // Runs inside seastar::async context
 void storage_service::bootstrap() {
-    _is_bootstrap_mode = true;
-    auto x = seastar::defer([this] { _is_bootstrap_mode = false; });
     auto bootstrap_rbno = is_repair_based_node_ops_enabled(streaming::stream_reason::bootstrap);
 
+    set_mode(mode::BOOTSTRAP, true);
     slogger.debug("bootstrap: rbno={} replacing={}", bootstrap_rbno, is_replacing());
     if (!is_replacing()) {
         // Wait until we know tokens of existing node before announcing join status.
@@ -1660,6 +1660,7 @@ static const std::map<storage_service::mode, sstring> mode_names = {
     {storage_service::mode::STARTING,       "STARTING"},
     {storage_service::mode::NORMAL,         "NORMAL"},
     {storage_service::mode::JOINING,        "JOINING"},
+    {storage_service::mode::BOOTSTRAP,      "BOOTSTRAP"},
     {storage_service::mode::LEAVING,        "LEAVING"},
     {storage_service::mode::DECOMMISSIONED, "DECOMMISSIONED"},
     {storage_service::mode::MOVING,         "MOVING"},
@@ -3521,7 +3522,7 @@ future<bool> storage_service::is_cleanup_allowed(sstring keyspace) {
     return container().invoke_on(0, [keyspace = std::move(keyspace)] (storage_service& ss) {
         auto my_address = ss.get_broadcast_address();
         auto pending_ranges = ss.get_token_metadata().has_pending_ranges(keyspace, my_address);
-        bool is_bootstrap_mode = ss._is_bootstrap_mode;
+        bool is_bootstrap_mode = ss._operation_mode == mode::BOOTSTRAP;
         slogger.debug("is_cleanup_allowed: keyspace={}, is_bootstrap_mode={}, pending_ranges={}",
                 keyspace, is_bootstrap_mode, pending_ranges);
         return !is_bootstrap_mode && !pending_ranges;

@@ -274,11 +274,8 @@ private:
 
     std::optional<inet_address> _removing_node;
 
-    /* Are we starting this node in bootstrap mode? */
-    bool _is_bootstrap_mode = false;
-
 public:
-    enum class mode { NONE, STARTING, JOINING, NORMAL, LEAVING, DECOMMISSIONED, MOVING, DRAINING, DRAINED };
+    enum class mode { NONE, STARTING, JOINING, BOOTSTRAP, NORMAL, LEAVING, DECOMMISSIONED, MOVING, DRAINING, DRAINED };
 private:
     mode _operation_mode = mode::NONE;
     friend std::ostream& operator<<(std::ostream& os, const mode& mode);
@@ -407,10 +404,6 @@ private:
     void bootstrap();
 
 public:
-    bool is_bootstrap_mode() const {
-        return _is_bootstrap_mode;
-    }
-
     /**
      * Return the rpc address associated with an endpoint as a string.
      * @param endpoint The endpoint to get rpc address for
