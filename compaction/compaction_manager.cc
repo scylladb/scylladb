@@ -522,16 +522,16 @@ future<> compaction_manager::stop_tasks(std::vector<lw_shared_ptr<task>> tasks, 
         t->stop(reason);
     }
     co_await parallel_for_each(tasks, [this] (auto& task) -> future<> {
-                try {
-                    co_await task->compaction_done.get_future();
-                } catch (sstables::compaction_stopped_exception& e) {
-                    // swallow stop exception if a given procedure decides to propagate it to the caller,
-                    // as it happens with reshard and reshape.
-                } catch (...) {
-                    cmlog.debug("Stopping task {} table={}: task returned error: {}", fmt::ptr(task.get()), fmt::ptr(task->compacting_table), std::current_exception());
-                    throw;
-                }
-                cmlog.debug("Stopping task {} table={}: done", fmt::ptr(task.get()), fmt::ptr(task->compacting_table));
+        try {
+            co_await task->compaction_done.get_future();
+        } catch (sstables::compaction_stopped_exception&) {
+            // swallow stop exception if a given procedure decides to propagate it to the caller,
+            // as it happens with reshard and reshape.
+        } catch (...) {
+            cmlog.debug("Stopping task {} table={}: task returned error: {}", fmt::ptr(task.get()), fmt::ptr(task->compacting_table), std::current_exception());
+            throw;
+        }
+        cmlog.debug("Stopping task {} table={}: done", fmt::ptr(task.get()), fmt::ptr(task->compacting_table));
     });
 }
 
