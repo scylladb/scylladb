@@ -759,6 +759,7 @@ future<> compaction_manager::perform_offstrategy(replica::table* t) {
                 _stats.active_tasks++;
                 task->setup_new_compaction();
 
+              return with_scheduling_group(_maintenance_sg.cpu, [this, task, t] {
                 return t->run_offstrategy_compaction(task->compaction_data).then_wrapped([this, task, schema = t->schema()] (future<> f) mutable {
                     _stats.active_tasks--;
                     task->finish_compaction();
@@ -780,6 +781,7 @@ future<> compaction_manager::perform_offstrategy(replica::table* t) {
                     }
                     return make_ready_future<stop_iteration>(stop_iteration::yes);
                 });
+              });
             });
         });
     }).finally([this, task] {
