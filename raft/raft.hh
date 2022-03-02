@@ -10,6 +10,7 @@
 #include <vector>
 #include <unordered_set>
 #include <functional>
+#include <experimental/source_location>
 #include <boost/container/deque.hpp>
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/core/future.hh>
