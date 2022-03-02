@@ -372,8 +372,47 @@ static future<> set_gossip_tokens(gms::gossiper& g,
     });
 }
 
+/*
+ * The helper waits for two things
+ *  1) for schema agreement
+ *  2) there's no pending node operations
+ * before proceeding with the bootstrap or replace
+ */
+future<> storage_service::wait_for_ring_to_settle(std::chrono::milliseconds delay) {
+    // first sleep the delay to make sure we see *at least* one other node
+    for (int i = 0; i < delay.count() && _gossiper.get_live_members().size() < 2; i += 1000) {
+        co_await sleep_abortable(std::chrono::seconds(1), _abort_source);
+    }
+
+    auto t = gms::gossiper::clk::now();
+    while (true) {
+        while (!_migration_manager.local().have_schema_agreement()) {
+            slogger.info("waiting for schema information to complete");
+            co_await sleep_abortable(std::chrono::seconds(1), _abort_source);
+        }
+        co_await update_pending_ranges("joining");
+
+        auto tmptr = get_token_metadata_ptr();
+        if (!_db.local().get_config().consistent_rangemovement() ||
+                (tmptr->get_bootstrap_tokens().empty() && tmptr->get_leaving_endpoints().empty())) {
+            break;
+        }
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(gms::gossiper::clk::now() - t).count();
+        slogger.info("Checking bootstrapping/leaving nodes: tokens {}, leaving {}, sleep 1 second and check again ({} seconds elapsed)",
+                tmptr->get_bootstrap_tokens().size(),
+                tmptr->get_leaving_endpoints().size(),
+                elapsed);
+
+        if (gms::gossiper::clk::now() > t + std::chrono::seconds(60)) {
+            throw std::runtime_error("Other bootstrapping/leaving nodes detected, cannot bootstrap while consistent_rangemovement is true");
+        }
+        co_await sleep_abortable(std::chrono::seconds(1), _abort_source);
+    }
+    slogger.info("Checking bootstrapping/leaving nodes: ok");
+}
+
 // Runs inside seastar::async context
-void storage_service::join_token_ring(int delay) {
+void storage_service::join_token_ring(std::chrono::milliseconds delay) {
     // This function only gets called on shard 0, but we want to set _joined
     // on all shards, so this variable can be later read locally.
     container().invoke_on_all([] (auto&& ss) {
@@ -399,50 +438,14 @@ void storage_service::join_token_ring(int delay) {
             db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::IN_PROGRESS).get();
         }
         set_mode(mode::JOINING, "waiting for ring information", true);
-        // first sleep the delay to make sure we see *at least* one other node
-        for (int i = 0; i < delay && _gossiper.get_live_members().size() < 2; i += 1000) {
-            sleep_abortable(std::chrono::seconds(1), _abort_source).get();
-        }
+
         // if our schema hasn't matched yet, keep sleeping until it does
         // (post CASSANDRA-1391 we don't expect this to be necessary very often, but it doesn't hurt to be careful)
-        while (!_migration_manager.local().have_schema_agreement()) {
-            set_mode(mode::JOINING, "waiting for schema information to complete", true);
-            sleep_abortable(std::chrono::seconds(1), _abort_source).get();
-        }
-        set_mode(mode::JOINING, "schema complete, ready to bootstrap", true);
-        set_mode(mode::JOINING, "waiting for pending range calculation", true);
-        update_pending_ranges("joining").get();
-        set_mode(mode::JOINING, "calculation complete, ready to bootstrap", true);
-        slogger.debug("... got ring + schema info");
-
-        auto t = gms::gossiper::clk::now();
-        auto tmptr = get_token_metadata_ptr();
-        while (_db.local().get_config().consistent_rangemovement() &&
-            (!tmptr->get_bootstrap_tokens().empty() ||
-             !tmptr->get_leaving_endpoints().empty())) {
-            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(gms::gossiper::clk::now() - t).count();
-            slogger.info("Checking bootstrapping/leaving nodes: tokens {}, leaving {}, sleep 1 second and check again ({} seconds elapsed)",
-                tmptr->get_bootstrap_tokens().size(),
-                tmptr->get_leaving_endpoints().size(),
-                elapsed);
-
-            sleep_abortable(std::chrono::seconds(1), _abort_source).get();
-
-            if (gms::gossiper::clk::now() > t + std::chrono::seconds(60)) {
-                throw std::runtime_error("Other bootstrapping/leaving nodes detected, cannot bootstrap while consistent_rangemovement is true");
-            }
-
-            // Check the schema and pending range again
-            while (!_migration_manager.local().have_schema_agreement()) {
-                set_mode(mode::JOINING, "waiting for schema information to complete", true);
-                sleep_abortable(std::chrono::seconds(1), _abort_source).get();
-            }
-            update_pending_ranges("bootstrapping/leaving nodes while joining").get();
-            tmptr = get_token_metadata_ptr();
-        }
-        slogger.info("Checking bootstrapping/leaving nodes: ok");
+        wait_for_ring_to_settle(delay).get();
 
         if (!is_replacing()) {
+            auto tmptr = get_token_metadata_ptr();
+
             if (tmptr->is_member(get_broadcast_address())) {
                 throw std::runtime_error("This node is already a member of the token ring; bootstrap aborted. (If replacing a dead node, remove the old one from the ring first.)");
             }
@@ -470,7 +473,7 @@ void storage_service::join_token_ring(int delay) {
                     auto existing = tmptr->get_endpoint(token);
                     if (existing) {
                         auto* eps = _gossiper.get_endpoint_state_for_endpoint_ptr(*existing);
-                        if (eps && eps->get_update_timestamp() > gms::gossiper::clk::now() - std::chrono::milliseconds(delay)) {
+                        if (eps && eps->get_update_timestamp() > gms::gossiper::clk::now() - delay) {
                             throw std::runtime_error("Cannot replace a live node...");
                         }
                     } else {
@@ -1360,7 +1363,7 @@ future<> storage_service::init_server(cql3::query_processor& qp) {
 
 future<> storage_service::join_cluster() {
     return seastar::async([this] {
-        join_token_ring(get_ring_delay().count());
+        join_token_ring(get_ring_delay());
     });
 }
 

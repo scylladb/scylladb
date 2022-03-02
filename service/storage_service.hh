@@ -339,6 +339,7 @@ private:
     void run_bootstrap_ops();
 
     std::list<gms::inet_address> get_ignore_dead_nodes_for_replace();
+    future<> wait_for_ring_to_settle(std::chrono::milliseconds delay);
 
 public:
     future<bool> is_initialized();
@@ -394,7 +395,7 @@ private:
             std::unordered_set<gms::inet_address> initial_contact_nodes,
             std::unordered_set<gms::inet_address> loaded_endpoints,
             std::unordered_map<gms::inet_address, sstring> loaded_peer_features);
-    void join_token_ring(int delay);
+    void join_token_ring(std::chrono::milliseconds);
     void maybe_start_sys_dist_ks();
 public:
     inline bool is_joined() const {
