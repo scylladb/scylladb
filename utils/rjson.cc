@@ -234,7 +234,10 @@ future<> print(const rjson::value& value, seastar::output_stream<char>& os, size
         size_t _pos = 0;
         future<> _f = make_ready_future<>();
 
+        #pragma GCC diagnostic push
+        #pragma GCC diagnostic ignored "-Wunused-local-typedefs"
         using Ch = char;
+        #pragma GCC diagnostic pop
 
         void send(bool try_reuse = true) {
             if (_f.failed()) {
