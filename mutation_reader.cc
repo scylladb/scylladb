@@ -17,6 +17,7 @@
 
 #include "mutation_reader.hh"
 #include "flat_mutation_reader.hh"
+#include "flat_mutation_reader_v2.hh"
 #include "schema_registry.hh"
 #include "mutation_compactor.hh"
 #include "dht/sharder.hh"
@@ -2463,6 +2464,11 @@ public:
 flat_mutation_reader make_compacting_reader(flat_mutation_reader_v2 source, gc_clock::time_point compaction_time,
         std::function<api::timestamp_type(const dht::decorated_key&)> get_max_purgeable, streamed_mutation::forwarding fwd) {
     return make_flat_mutation_reader<compacting_reader>(std::move(source), compaction_time, get_max_purgeable, fwd);
+}
+
+flat_mutation_reader_v2 make_compacting_reader_v2(flat_mutation_reader_v2 source, gc_clock::time_point compaction_time,
+        std::function<api::timestamp_type(const dht::decorated_key&)> get_max_purgeable, streamed_mutation::forwarding fwd) {
+    return upgrade_to_v2(make_flat_mutation_reader<compacting_reader>(std::move(source), compaction_time, get_max_purgeable, fwd));
 }
 
 position_reader_queue::~position_reader_queue() {}

@@ -698,6 +698,10 @@ flat_mutation_reader make_compacting_reader(flat_mutation_reader_v2 source, gc_c
         std::function<api::timestamp_type(const dht::decorated_key&)> get_max_purgeable,
         streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
 
+flat_mutation_reader_v2 make_compacting_reader_v2(flat_mutation_reader_v2 source, gc_clock::time_point compaction_time,
+        std::function<api::timestamp_type(const dht::decorated_key&)> get_max_purgeable,
+        streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
+
 // A mutation reader together with an upper bound on the set of positions of fragments
 // that the reader will return. The upper bound does not need to be exact.
 struct reader_and_upper_bound {
