@@ -850,7 +850,9 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::is_joined.set(r, [&ss] (std::unique_ptr<request> req) {
-        return make_ready_future<json::json_return_type>(ss.local().is_joined());
+        return ss.local().get_operation_mode().then([] (auto mode) {
+            return make_ready_future<json::json_return_type>(mode >= service::storage_service::mode::JOINING);
+        });
     });
 
     ss::set_stream_throughput_mb_per_sec.set(r, [](std::unique_ptr<request> req) {

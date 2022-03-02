@@ -413,11 +413,7 @@ future<> storage_service::wait_for_ring_to_settle(std::chrono::milliseconds dela
 
 // Runs inside seastar::async context
 void storage_service::join_token_ring(std::chrono::milliseconds delay) {
-    // This function only gets called on shard 0, but we want to set _joined
-    // on all shards, so this variable can be later read locally.
-    container().invoke_on_all([] (auto&& ss) {
-        ss._joined = true;
-    }).get();
+    set_mode(mode::JOINING, "joining the ring", true);
 
     _group0->join_group0().get();
 
@@ -437,7 +433,7 @@ void storage_service::join_token_ring(std::chrono::milliseconds delay) {
         } else {
             db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::IN_PROGRESS).get();
         }
-        set_mode(mode::JOINING, "waiting for ring information", true);
+        slogger.info("waiting for ring information");
 
         // if our schema hasn't matched yet, keep sleeping until it does
         // (post CASSANDRA-1391 we don't expect this to be necessary very often, but it doesn't hurt to be careful)
