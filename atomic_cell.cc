@@ -88,7 +88,11 @@ compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right) {
             return left.is_live_and_has_ttl() ? std::strong_ordering::greater : std::strong_ordering::less;
         }
         if (left.is_live_and_has_ttl()) {
-            return left.expiry() <=> right.expiry();
+            if (left.expiry() != right.expiry()) {
+                return left.expiry() <=> right.expiry();
+            } else {
+                return left.ttl() <=> right.ttl();
+            }
         }
     } else {
         // Both are deleted
