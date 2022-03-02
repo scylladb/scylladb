@@ -106,12 +106,12 @@ compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right) {
     } else {
         // Both are deleted
 
-            // Origin compares big-endian serialized deletion time. That's because it
-            // delegates to AbstractCell.reconcile() which compares values after
-            // comparing timestamps, which in case of deleted cells will hold
-            // serialized expiry.
-            return (uint64_t) left.deletion_time().time_since_epoch().count()
-                   <=> (uint64_t) right.deletion_time().time_since_epoch().count();
+        // Origin compares big-endian serialized deletion time. That's because it
+        // delegates to AbstractCell.reconcile() which compares values after
+        // comparing timestamps, which in case of deleted cells will hold
+        // serialized expiry.
+        return (uint64_t) left.deletion_time().time_since_epoch().count()
+                <=> (uint64_t) right.deletion_time().time_since_epoch().count();
     }
     return std::strong_ordering::equal;
 }
