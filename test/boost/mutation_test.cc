@@ -690,6 +690,7 @@ SEASTAR_TEST_CASE(test_cell_ordering) {
     };
 
     auto assert_equal = [] (atomic_cell_view c1, atomic_cell_view c2) {
+        testlog.trace("Expected {} == {}", c1, c2);
         BOOST_REQUIRE(compare_atomic_cell_for_merge(c1, c2) == 0);
         BOOST_REQUIRE(compare_atomic_cell_for_merge(c2, c1) == 0);
     };
@@ -711,7 +712,8 @@ SEASTAR_TEST_CASE(test_cell_ordering) {
         atomic_cell::make_live(*bytes_type, 1, bytes(), expiry_2, ttl_2));
 
     // Origin doesn't compare ttl (is it wise?)
-    assert_equal(
+    // But we do. See https://github.com/scylladb/scylla/issues/10156
+    assert_order(
         atomic_cell::make_live(*bytes_type, 1, bytes("value"), expiry_1, ttl_1),
         atomic_cell::make_live(*bytes_type, 1, bytes("value"), expiry_1, ttl_2));
 
