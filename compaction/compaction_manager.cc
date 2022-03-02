@@ -403,20 +403,6 @@ sstables::compaction_stopped_exception compaction_manager::task::make_compaction
     return sstables::compaction_stopped_exception(s->ks_name(), s->cf_name(), compaction_data.stop_requested);
 }
 
-future<> compaction_manager::task_stop(lw_shared_ptr<compaction_manager::task> task) {
-    cmlog.debug("Stopping task {} table={}", fmt::ptr(task.get()), fmt::ptr(task->compacting_table));
-    auto f = task->compaction_done.get_future();
-    return f.then_wrapped([task] (future<> f) {
-        if (f.failed()) {
-            auto ex = f.get_exception();
-            cmlog.debug("Stopping task {} table={}: task returned error: {}", fmt::ptr(task.get()), fmt::ptr(task->compacting_table), ex);
-            return make_exception_future<>(std::move(ex));
-        }
-        cmlog.debug("Stopping task {} table={}: done", fmt::ptr(task.get()), fmt::ptr(task->compacting_table));
-        return make_ready_future<>();
-    });
-}
-
 compaction_manager::compaction_manager(compaction_scheduling_group csg, maintenance_scheduling_group msg, size_t available_memory, abort_source& as)
     : _compaction_controller(csg.cpu, csg.io, 250ms, [this, available_memory] () -> float {
         _last_backlog = backlog();
@@ -537,15 +523,17 @@ future<> compaction_manager::stop_tasks(std::vector<lw_shared_ptr<task>> tasks, 
     }
     return do_with(std::move(tasks), [this] (std::vector<lw_shared_ptr<task>>& tasks) {
         return parallel_for_each(tasks, [this] (auto& task) {
-            return this->task_stop(task).then_wrapped([](future <> f) {
+            return task->compaction_done.get_future().then_wrapped([&task] (future<> f) {
                 try {
                     f.get();
                 } catch (sstables::compaction_stopped_exception& e) {
                     // swallow stop exception if a given procedure decides to propagate it to the caller,
                     // as it happens with reshard and reshape.
                 } catch (...) {
+                    cmlog.debug("Stopping task {} table={}: task returned error: {}", fmt::ptr(task.get()), fmt::ptr(task->compacting_table), std::current_exception());
                     throw;
                 }
+                cmlog.debug("Stopping task {} table={}: done", fmt::ptr(task.get()), fmt::ptr(task->compacting_table));
             });
         });
     });

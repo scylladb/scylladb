@@ -170,7 +170,6 @@ private:
     class strategy_control;
     std::unique_ptr<strategy_control> _strategy_control;
 private:
-    future<> task_stop(lw_shared_ptr<task> task);
     future<> stop_tasks(std::vector<lw_shared_ptr<task>> tasks, sstring reason);
 
     // Return the largest fan-in of currently running compactions
