@@ -449,7 +449,7 @@ void storage_service::join_token_ring(std::chrono::milliseconds delay) {
             if (tmptr->is_member(get_broadcast_address())) {
                 throw std::runtime_error("This node is already a member of the token ring; bootstrap aborted. (If replacing a dead node, remove the old one from the ring first.)");
             }
-            set_mode(mode::JOINING, "getting bootstrap token", true);
+            slogger.info("getting bootstrap token");
             if (resume_bootstrap) {
                 _bootstrap_tokens = db::system_keyspace::get_saved_tokens().get0();
                 if (!_bootstrap_tokens.empty()) {
@@ -483,7 +483,7 @@ void storage_service::join_token_ring(std::chrono::milliseconds delay) {
             } else {
                 sleep_abortable(get_ring_delay(), _abort_source).get();
             }
-            set_mode(mode::JOINING, format("Replacing a node with token(s): {}", _bootstrap_tokens), true);
+            slogger.info("Replacing a node with token(s): {}", _bootstrap_tokens);
             // _bootstrap_tokens was previously set in prepare_to_join using tokens gossiped by the replaced node
         }
         maybe_start_sys_dist_ks();
@@ -667,7 +667,7 @@ void storage_service::bootstrap() {
                 { gms::application_state::STATUS, versioned_value::bootstrapping(_bootstrap_tokens) },
             }).get();
 
-            set_mode(mode::JOINING, format("sleeping {} ms for pending range setup", get_ring_delay().count()), true);
+            slogger.info("sleeping {} ms for pending range setup", get_ring_delay().count());
             _gossiper.wait_for_range_setup().get();
         } else {
             // Even with RBNO bootstrap we need to announce the new CDC generation immediately after it's created.
@@ -677,7 +677,7 @@ void storage_service::bootstrap() {
         }
     } else {
         // Wait until we know tokens of existing node before announcing replacing status.
-        set_mode(mode::JOINING, fmt::format("Wait until local node knows tokens of peer nodes"), true);
+        slogger.info("Wait until local node knows tokens of peer nodes");
         _gossiper.wait_for_range_setup().get();
         auto replace_addr = get_replace_address();
         slogger.debug("Removing replaced endpoint {} from system.peers", *replace_addr);
@@ -691,7 +691,7 @@ void storage_service::bootstrap() {
         }
     }).get();
 
-    set_mode(mode::JOINING, "Starting to bootstrap...", true);
+    slogger.info("Starting to bootstrap...");
     if (is_replacing()) {
         run_replace_ops();
     } else {
@@ -2607,10 +2607,10 @@ future<> storage_service::do_drain() {
         return bm.drain();
     });
 
-    set_mode(mode::DRAINING, "shutting down migration manager", false);
+    slogger.debug("shutting down migration manager");
     co_await _migration_manager.invoke_on_all(&service::migration_manager::drain);
 
-    set_mode(mode::DRAINING, "flushing column families", false);
+    slogger.debug("flushing column families");
     co_await _db.invoke_on_all(&replica::database::drain);
 }
 
@@ -2758,7 +2758,7 @@ void storage_service::unbootstrap() {
         // Start with BatchLog replay, which may create hints but no writes since this is no longer a valid endpoint.
         get_batchlog_manager().local().do_batch_log_replay().get();
 
-        set_mode(mode::LEAVING, "streaming hints to other nodes", true);
+        slogger.info("streaming hints to other nodes");
 
         // wait for the transfer runnables to signal the latch.
         slogger.debug("waiting for stream acks.");
