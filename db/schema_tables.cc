@@ -254,6 +254,33 @@ schema_ptr keyspaces() {
     return schema;
 }
 
+schema_ptr scylla_keyspaces() {
+    static thread_local auto schema = [] {
+        schema_builder builder(generate_legacy_id(NAME, SCYLLA_KEYSPACES), NAME, SCYLLA_KEYSPACES,
+        // partition key
+        {{"keyspace_name", utf8_type}},
+        // clustering key
+        {},
+        // regular columns
+        {
+            {"storage_type", utf8_type},
+            {"storage_options", map_type_impl::get_instance(utf8_type, utf8_type, false)},
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "scylla-specific information for keyspaces"
+        );
+        builder.set_gc_grace_seconds(schema_gc_grace);
+        builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
+        builder.with_null_sharder();
+        return builder.build();
+    }();
+    return schema;
+}
+
 schema_ptr tables() {
     static thread_local auto schema = [] {
         schema_builder builder(generate_legacy_id(NAME, TABLES), NAME, TABLES,
@@ -3147,6 +3174,9 @@ std::vector<schema_ptr> all_tables(schema_features features) {
     }
     if (features.contains<schema_feature::COMPUTED_COLUMNS>()) {
         result.emplace_back(computed_columns());
+    }
+    if (features.contains<schema_feature::SCYLLA_KEYSPACES>()) {
+        result.emplace_back(scylla_keyspaces());
     }
     return result;
 }
