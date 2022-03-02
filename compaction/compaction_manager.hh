@@ -230,9 +230,8 @@ public:
 
     void register_metrics();
 
-    // enable/disable compaction manager.
+    // enable the compaction manager.
     void enable();
-    void disable();
 
     // Stop all fibers. Ongoing compactions will be waited. Should only be called
     // once, from main teardown path.

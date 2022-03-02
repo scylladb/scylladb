@@ -493,12 +493,6 @@ void compaction_manager::enable() {
     postponed_compactions_reevaluation();
 }
 
-void compaction_manager::disable() {
-    assert(_state == state::none || _state == state::enabled);
-    _state = state::disabled;
-    _compaction_submission_timer.cancel();
-}
-
 std::function<void()> compaction_manager::compaction_submission_callback() {
     return [this] () mutable {
         for (auto& e: _compaction_state) {
