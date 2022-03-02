@@ -10,6 +10,7 @@
 
 #include "partition_version.hh"
 #include "flat_mutation_reader.hh"
+#include "flat_mutation_reader_v2.hh"
 #include "clustering_key_filter.hh"
 #include "query-request.hh"
 #include <boost/range/algorithm/heap_algorithm.hpp>
@@ -488,7 +489,7 @@ public:
 };
 
 template <bool Reversing, typename Accounter, typename... Args>
-inline flat_mutation_reader
+inline flat_mutation_reader_v2
 make_partition_snapshot_flat_reader(schema_ptr s,
                                     reader_permit permit,
                                     dht::decorated_key dk,
@@ -501,8 +502,8 @@ make_partition_snapshot_flat_reader(schema_ptr s,
                                     streamed_mutation::forwarding fwd,
                                     Args&&... args)
 {
-    auto res = make_flat_mutation_reader<partition_snapshot_flat_reader<Reversing, Accounter>>(std::move(s), std::move(permit), std::move(dk),
-            snp, std::move(crr), digest_requested, region, read_section, std::move(pointer_to_container), std::forward<Args>(args)...);
+    auto res = upgrade_to_v2(make_flat_mutation_reader<partition_snapshot_flat_reader<Reversing, Accounter>>(std::move(s), std::move(permit), std::move(dk),
+            snp, std::move(crr), digest_requested, region, read_section, std::move(pointer_to_container), std::forward<Args>(args)...));
     if (fwd) {
         return make_forwardable(std::move(res)); // FIXME: optimize
     } else {
