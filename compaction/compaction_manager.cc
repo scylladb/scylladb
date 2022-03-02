@@ -681,6 +681,7 @@ void compaction_manager::submit_offstrategy(column_family* cf) {
                 _stats.active_tasks++;
                 task->setup_new_compaction();
 
+              return with_scheduling_group(_maintenance_sg.cpu, [this, task, cf] {
                 return cf->run_offstrategy_compaction(task->compaction_data).then_wrapped([this, task] (future<> f) mutable {
                     _stats.active_tasks--;
                     task->finish_compaction();
@@ -703,6 +704,7 @@ void compaction_manager::submit_offstrategy(column_family* cf) {
                     _tasks.remove(task);
                     return make_ready_future<stop_iteration>(stop_iteration::yes);
                 });
+              });
             });
         });
     });
