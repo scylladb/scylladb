@@ -839,9 +839,13 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    ss::is_initialized.set(r, [&ss](std::unique_ptr<request> req) {
-        return ss.local().is_initialized().then([] (bool initialized) {
-            return make_ready_future<json::json_return_type>(initialized);
+    ss::is_initialized.set(r, [&ss, &g](std::unique_ptr<request> req) {
+        return ss.local().get_operation_mode().then([&g] (auto mode) {
+            bool is_initialized = mode >= service::storage_service::mode::STARTING;
+            if (mode == service::storage_service::mode::NORMAL) {
+                is_initialized = g.is_enabled();
+            }
+            return make_ready_future<json::json_return_type>(is_initialized);
         });
     });
 

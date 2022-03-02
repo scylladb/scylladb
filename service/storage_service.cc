@@ -138,6 +138,7 @@ enum class node_external_status {
 
 static node_external_status map_operation_mode(storage_service::mode m) {
     switch (m) {
+    case storage_service::mode::NONE: return node_external_status::STARTING;
     case storage_service::mode::STARTING: return node_external_status::STARTING;
     case storage_service::mode::JOINING: return node_external_status::JOINING;
     case storage_service::mode::NORMAL: return node_external_status::NORMAL;
@@ -1304,7 +1305,7 @@ future<> storage_service::init_server(cql3::query_processor& qp) {
     assert(this_shard_id() == 0);
 
     return seastar::async([this, &qp] {
-        _initialized = true;
+        set_mode(mode::STARTING, "preparing to join ring", true);
 
         _group0 = std::make_unique<raft_group0>(_abort_source, _raft_gr, _messaging.local(),
             _gossiper, qp, _migration_manager.local());
@@ -1655,6 +1656,7 @@ future<std::map<gms::inet_address, float>> storage_service::effective_ownership(
 }
 
 static const std::map<storage_service::mode, sstring> mode_names = {
+    {storage_service::mode::NONE,           "STARTING"},
     {storage_service::mode::STARTING,       "STARTING"},
     {storage_service::mode::NORMAL,         "NORMAL"},
     {storage_service::mode::JOINING,        "JOINING"},
@@ -1748,7 +1750,7 @@ future<bool> storage_service::is_gossip_running() {
 future<> storage_service::start_gossiping() {
     return run_with_api_lock(sstring("start_gossiping"), [] (storage_service& ss) {
         return seastar::async([&ss] {
-            if (!ss._initialized) {
+            if (!ss._gossiper.is_enabled()) {
                 slogger.warn("Starting gossip by operator request");
                 ss._gossiper.container().invoke_on_all(&gms::gossiper::start).get();
                 auto undo = defer([&ss] { ss._gossiper.container().invoke_on_all(&gms::gossiper::stop).get(); });
@@ -1760,9 +1762,7 @@ future<> storage_service::start_gossiping() {
                         db::system_keyspace::get_local_tokens().get0(),
                         cdc_gen_ts).get();
                 ss._gossiper.force_newer_generation();
-                ss._gossiper.start_gossiping(utils::get_generation_number()).then([&ss] {
-                    ss._initialized = true;
-                }).get();
+                ss._gossiper.start_gossiping(utils::get_generation_number()).get();
                 undo.cancel();
             }
         });
@@ -1771,11 +1771,9 @@ future<> storage_service::start_gossiping() {
 
 future<> storage_service::stop_gossiping() {
     return run_with_api_lock(sstring("stop_gossiping"), [] (storage_service& ss) {
-        if (ss._initialized) {
+        if (ss._gossiper.is_enabled()) {
             slogger.warn("Stopping gossip by operator request");
-            return ss._gossiper.container().invoke_on_all(&gms::gossiper::stop).then([&ss] {
-                ss._initialized = false;
-            });
+            return ss._gossiper.container().invoke_on_all(&gms::gossiper::stop);
         }
         return make_ready_future<>();
     });
@@ -2639,12 +2637,6 @@ int32_t storage_service::get_exception_count() {
     // the unhandled exceptions.
     //return (int)StorageMetrics.exceptions.count();
     return 0;
-}
-
-future<bool> storage_service::is_initialized() {
-    return run_with_no_api_lock([] (storage_service& ss) {
-        return ss._initialized;
-    });
 }
 
 // Runs inside seastar::async context

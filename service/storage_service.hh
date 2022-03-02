@@ -277,12 +277,10 @@ private:
     /* Are we starting this node in bootstrap mode? */
     bool _is_bootstrap_mode = false;
 
-    bool _initialized = false;
-
 public:
-    enum class mode { STARTING, JOINING, NORMAL, LEAVING, DECOMMISSIONED, MOVING, DRAINING, DRAINED };
+    enum class mode { NONE, STARTING, JOINING, NORMAL, LEAVING, DECOMMISSIONED, MOVING, DRAINING, DRAINED };
 private:
-    mode _operation_mode = mode::STARTING;
+    mode _operation_mode = mode::NONE;
     friend std::ostream& operator<<(std::ostream& os, const mode& mode);
     /* Used for tracking drain progress */
 
@@ -340,7 +338,6 @@ private:
     future<> wait_for_ring_to_settle(std::chrono::milliseconds delay);
 
 public:
-    future<bool> is_initialized();
 
     future<> check_for_endpoint_collision(std::unordered_set<gms::inet_address> initial_contact_nodes,
             const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features);
