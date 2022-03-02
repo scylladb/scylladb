@@ -100,8 +100,16 @@ compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right) {
             // prefer expiring cells.
             return left.is_live_and_has_ttl() ? 1 : -1;
         }
-        if (left.is_live_and_has_ttl() && left.expiry() != right.expiry()) {
-            return left.expiry() < right.expiry() ? -1 : 1;
+        if (left.is_live_and_has_ttl()) {
+            if (left.expiry() != right.expiry()) {
+                return left.expiry() < right.expiry() ? -1 : 1;
+            } else {
+                if (left.ttl() != right.ttl()) {
+                    return left.ttl() < right.ttl() ? -1 : 1;
+                } else {
+                    return 0;
+                }
+            }
         }
     } else {
         // Both are deleted
