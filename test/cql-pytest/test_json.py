@@ -115,7 +115,6 @@ def test_fromjson_int_scientific_notation_prepared(cql, table1, cassandra_bug):
 # assignment can overflow and should result in an error - not be silently
 # wrapped around.
 # Reproduces issue #7914
-@pytest.mark.xfail(reason="issue #7914")
 def test_fromjson_int_overflow_unprepared(cql, table1):
     p = unique_key_int()
     # The highest legal int is 2147483647 (2^31-1).2147483648 is not a legal
@@ -123,12 +122,20 @@ def test_fromjson_int_overflow_unprepared(cql, table1):
     # wraparound to -2147483648 as happened in Scylla.
     with pytest.raises(FunctionFailure):
         cql.execute(f"INSERT INTO {table1} (p, v) VALUES ({p}, fromJson('2147483648'))")
-@pytest.mark.xfail(reason="issue #7914")
+def test_fromjson_bigint_overflow_unprepared(cql, table1):
+    p = unique_key_int()
+    with pytest.raises(FunctionFailure):
+        cql.execute(f"INSERT INTO {table1} (p, bigv) VALUES ({p}, fromJson('9223372036854775808'))")
 def test_fromjson_int_overflow_prepared(cql, table1):
     p = unique_key_int()
     stmt = cql.prepare(f"INSERT INTO {table1} (p, v) VALUES (?, fromJson(?))")
     with pytest.raises(FunctionFailure):
         cql.execute(stmt, [p, '2147483648'])
+def test_fromjson_bigint_overflow_prepared(cql, table1):
+    p = unique_key_int()
+    stmt = cql.prepare(f"INSERT INTO {table1} (p, bigv) VALUES (?, fromJson(?))")
+    with pytest.raises(FunctionFailure):
+        cql.execute(stmt, [p, '9223372036854775808'])
 
 # When writing to an integer column, Cassandra's fromJson() function allows
 # not just JSON number constants, it also allows a string containing a number.

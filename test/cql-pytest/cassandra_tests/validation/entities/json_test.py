@@ -225,7 +225,7 @@ def testFromJsonFct(cql, test_keyspace):
 
             # overflow (Long.MAX_VALUE + 1)
             # Reproduces #7914
-            assert_invalid_throw_message(cql, table, "Expected a bigint value, but got a", FunctionFailure,
+            assert_invalid_throw(cql, table, FunctionFailure,
                 "INSERT INTO %s (k, bigintval) VALUES (?, fromJson(?))", 0, "9223372036854775808")
 
             # Reproduces #7911
@@ -355,7 +355,7 @@ def testFromJsonFct(cql, test_keyspace):
 
             # int overflow (2 ^ 32, or Integer.MAX_INT + 1)
             # Reproduces #7914
-            assert_invalid_throw_message(cql, table, "Expected an int value, but got a", FunctionFailure,
+            assert_invalid_throw(cql, table, FunctionFailure,
                 "INSERT INTO %s (k, intval) VALUES (?, fromJson(?))", 0, "2147483648")
 
             # Reproduces #7911
@@ -376,7 +376,7 @@ def testFromJsonFct(cql, test_keyspace):
 
             # smallint overflow (Short.MAX_VALUE + 1)
             # Reproduces #7914
-            assert_invalid_throw_message(cql, table, "Unable to make short from", FunctionFailure,
+            assert_invalid_throw(cql, table, FunctionFailure,
                 "INSERT INTO %s (k, smallintval) VALUES (?, fromJson(?))", 0, "32768")
 
             # Reproduces #7911
@@ -397,7 +397,7 @@ def testFromJsonFct(cql, test_keyspace):
 
             # tinyint overflow (Byte.MAX_VALUE + 1)
             # Reproduces #7914
-            assert_invalid_throw_message(cql, table, "Unable to make byte from", FunctionFailure,
+            assert_invalid_throw(cql, table, FunctionFailure,
                 "INSERT INTO %s (k, tinyintval) VALUES (?, fromJson(?))", 0, "128")
 
             # Reproduces #7911
