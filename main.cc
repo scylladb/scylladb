@@ -860,7 +860,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
 
             raft_gr.start(cfg->check_experimental(db::experimental_features_t::RAFT),
-                std::ref(messaging), std::ref(gossiper)).get();
+                std::ref(messaging), std::ref(gossiper), std::ref(feature_service)).get();
             // XXX: stop_raft has to happen before query_processor
             // is stopped, since some groups keep using the query
             // processor until are stopped inside stop_raft.

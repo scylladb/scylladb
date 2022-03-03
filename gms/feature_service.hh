@@ -94,8 +94,6 @@ private:
     gms::feature _tombstone_gc_options;
     gms::feature _parallelized_aggregation;
 
-    gms::feature::listener_registration _raft_support_listener;
-
 public:
 
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;
@@ -199,6 +197,10 @@ public:
 
     bool cluster_supports_parallelized_aggregation() const {
         return bool(_parallelized_aggregation);
+    }
+
+    const feature& cluster_supports_raft_cluster_mgmt() const {
+        return _supports_raft_cluster_mgmt;
     }
 
     static std::set<sstring> to_feature_set(sstring features_string);

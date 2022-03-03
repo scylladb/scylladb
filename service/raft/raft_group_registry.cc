@@ -11,6 +11,7 @@
 #include "message/messaging_service.hh"
 #include "serializer_impl.hh"
 #include "idl/raft.dist.hh"
+#include "gms/feature_service.hh"
 
 #include <seastar/core/coroutine.hh>
 
@@ -18,8 +19,16 @@ namespace service {
 
 logging::logger rslog("raft_group_registry");
 
-raft_group_registry::raft_group_registry(bool is_enabled, netw::messaging_service& ms, gms::gossiper& gossiper)
-    : _is_enabled(is_enabled), _ms(ms), _fd(make_shared<raft_gossip_failure_detector>(gossiper, _srv_address_mappings))
+raft_group_registry::raft_group_registry(bool is_enabled, netw::messaging_service& ms, gms::gossiper& gossiper, gms::feature_service& feat)
+    : _is_enabled(is_enabled)
+    , _ms(ms)
+    , _fd(make_shared<raft_gossip_failure_detector>(gossiper, _srv_address_mappings))
+    , _raft_support_listener(feat.cluster_supports_raft_cluster_mgmt().when_enabled([&feat] {
+        // When the cluster fully supports raft-based cluster management,
+        // we can re-enable support for the second gossip feature to trigger
+        // actual use of raft-based cluster management procedures.
+        feat.support(gms::features::USES_RAFT_CLUSTER_MANAGEMENT).get();
+    }))
 {
 }
 

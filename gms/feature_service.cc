@@ -97,12 +97,6 @@ feature_service::feature_service(feature_config cfg) : _config(cfg)
         , _uses_raft_cluster_mgmt(*this, features::USES_RAFT_CLUSTER_MANAGEMENT)
         , _tombstone_gc_options(*this, features::TOMBSTONE_GC_OPTIONS)
         , _parallelized_aggregation(*this, features::PARALLELIZED_AGGREGATION)
-        , _raft_support_listener(_supports_raft_cluster_mgmt.when_enabled([this] {
-            // When the cluster fully supports raft-based cluster management,
-            // we can re-enable support for the second gossip feature to trigger
-            // actual use of raft-based cluster management procedures.
-            support(features::USES_RAFT_CLUSTER_MANAGEMENT).get();
-        }))
 {}
 
 feature_config feature_config_from_db_config(db::config& cfg, std::set<sstring> disabled) {
