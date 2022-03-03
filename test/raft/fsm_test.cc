@@ -303,8 +303,6 @@ void test_election_single_node_helper(raft::fsm_config fcfg) {
     raft::log log{raft::snapshot_descriptor{.config = cfg}};
     raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fcfg);
 
-    BOOST_CHECK(fsm.is_follower());
-
     election_timeout(fsm);
 
     // Immediately converts from leader to follower if quorum=1
@@ -1150,7 +1148,6 @@ BOOST_AUTO_TEST_CASE(test_confchange_a_to_b) {
     log.emplace_back(make_lw_shared<raft::log_entry>(B.add_entry(raft::configuration({A_id}))));
     log.stable_to(log.last_idx());
     raft::fsm B_1(B_id, B.get_current_term(), B_id, std::move(log), trivial_failure_detector, fsm_cfg);
-    BOOST_CHECK(B_1.is_follower());
     election_timeout(B_1);
     communicate(A, B_1);
     BOOST_CHECK(B_1.is_follower());

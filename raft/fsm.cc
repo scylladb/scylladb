@@ -33,7 +33,11 @@ fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log,
     logger.trace("fsm[{}]: starting, current term {}, log length {}, commit index {}", _my_id, _current_term, _log.last_idx(), _commit_idx);
 
     // Init timeout settings
-    reset_election_timeout();
+    if (_log.get_configuration().current.size() == 1 && _log.get_configuration().can_vote(_my_id)) {
+        become_candidate(_config.enable_prevoting);
+    } else {
+        reset_election_timeout();
+    }
 }
 
 fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log,

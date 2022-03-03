@@ -487,7 +487,6 @@ BOOST_AUTO_TEST_CASE(test_single_node_commit) {
     raft::log log{raft::snapshot_descriptor{.config = cfg}};
     raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fsm_cfg);
 
-    make_candidate(fsm);
     BOOST_CHECK(fsm.is_leader());  // Single node skips candidate state
     output = fsm.get_output();
     BOOST_CHECK(output.log_entries.size() == 1);
@@ -670,7 +669,6 @@ BOOST_AUTO_TEST_CASE(test_single_node_pre_candidate) {
     raft::log log1{raft::snapshot_descriptor{.config = cfg}};
     raft::fsm fsm1(id1, term_t{}, server_id{}, std::move(log1), trivial_failure_detector, fsm_cfg_pre);
 
-    make_candidate(fsm1);
     BOOST_CHECK(fsm1.is_leader());
 }
 
