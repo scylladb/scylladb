@@ -1895,7 +1895,7 @@ SEASTAR_TEST_CASE(snapshot_uses_correct_term_test) {
                 });
         assert(co_await wait_for_leader<ExReg>{}(env, {id1}, timer, timer.now() + 1000_t) == id1);
 
-        auto id2 = co_await env.new_server(true,
+        auto id2 = co_await env.new_server(false,
                 raft::server::configuration{
                     .append_request_threshold = 1,
                 });
@@ -2034,7 +2034,7 @@ SEASTAR_TEST_CASE(removed_follower_with_forwarding_learns_about_removal) {
         auto id1 = co_await env.new_server(true, cfg);
         assert(co_await wait_for_leader<ExReg>{}(env, {id1}, timer, timer.now() + 1000_t) == id1);
 
-        auto id2 = co_await env.new_server(true, cfg);
+        auto id2 = co_await env.new_server(false, cfg);
         assert(std::holds_alternative<std::monostate>(
             co_await env.reconfigure(id1, {id1, id2}, timer.now() + 100_t, timer)));
 
