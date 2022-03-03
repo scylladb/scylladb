@@ -1784,10 +1784,10 @@ const bool sstable::has_component(component_type f) const {
     return _recognized_components.contains(f);
 }
 
-bool sstable::validate_originating_host_id() const {
+void sstable::validate_originating_host_id() const {
     if (_version < version_types::me) {
         // earlier formats do not store originating host id
-        return true;
+        return;
     }
 
     auto originating_host_id = get_stats_metadata().originating_host_id;
@@ -1795,8 +1795,7 @@ bool sstable::validate_originating_host_id() const {
         // Scylla always fills in originating host id when writing
         // sstables, so an ME-and-up sstable that does not have it is
         // invalid
-        sstlog.error("No originating host id in SSTable: {}", get_filename());
-        return false;
+        throw std::runtime_error(format("No originating host id in SSTable: {}. Load foreign SSTables via the upload dir instead.", get_filename()));
     }
 
     auto local_host_id = _manager.get_local_host_id();
@@ -1811,14 +1810,13 @@ bool sstable::validate_originating_host_id() const {
         } else {
             on_internal_error(sstlog, msg);
         }
-        return true;
+        return;
     }
 
-    auto ret = *originating_host_id == local_host_id;
-    if (!ret) {
-        sstlog.error("Host id {} does not match local host id {} in SSTable: {}", *originating_host_id, local_host_id, get_filename());
+    if (*originating_host_id != local_host_id) {
+        // FIXME refrain from throwing an exception because of #10148
+        sstlog.warn("Host id {} does not match local host id {} while validating SSTable: {}. Load foreign SSTables via the upload dir instead.", *originating_host_id, local_host_id, get_filename());
     }
-    return ret;
 }
 
 future<> sstable::touch_temp_dir() {
