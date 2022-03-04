@@ -768,8 +768,8 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::is_starting.set(r, [&ss](std::unique_ptr<request> req) {
-        return ss.local().is_starting().then([] (auto starting) {
-            return make_ready_future<json::json_return_type>(starting);
+        return ss.local().get_operation_mode().then([] (auto mode) {
+            return make_ready_future<json::json_return_type>(mode <= service::storage_service::mode::STARTING);
         });
     });
 

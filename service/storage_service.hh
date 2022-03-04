@@ -763,8 +763,6 @@ public:
 
     future<mode> get_operation_mode();
 
-    future<bool> is_starting();
-
     /**
      * Shuts node off to writes, empties memtables and the commit log.
      * There are two differences between drain and the normal shutdown hook:

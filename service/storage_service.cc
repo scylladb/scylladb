@@ -1743,13 +1743,6 @@ future<storage_service::mode> storage_service::get_operation_mode() {
     });
 }
 
-future<bool> storage_service::is_starting() {
-    return run_with_no_api_lock([] (storage_service& ss) {
-        auto mode = ss._operation_mode;
-        return mode == storage_service::mode::STARTING;
-    });
-}
-
 future<bool> storage_service::is_gossip_running() {
     return run_with_no_api_lock([] (storage_service& ss) {
         return ss._gossiper.is_enabled();
