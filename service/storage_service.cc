@@ -1737,10 +1737,9 @@ future<std::unordered_map<sstring, std::vector<sstring>>> storage_service::descr
     });
 };
 
-future<sstring> storage_service::get_operation_mode() {
+future<storage_service::mode> storage_service::get_operation_mode() {
     return run_with_no_api_lock([] (storage_service& ss) {
-        auto mode = ss._operation_mode;
-        return make_ready_future<sstring>(format("{}", mode));
+        return make_ready_future<mode>(ss._operation_mode);
     });
 }
 

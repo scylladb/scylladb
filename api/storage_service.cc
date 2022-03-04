@@ -763,7 +763,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
 
     ss::get_operation_mode.set(r, [&ss](std::unique_ptr<request> req) {
         return ss.local().get_operation_mode().then([] (auto mode) {
-            return make_ready_future<json::json_return_type>(mode);
+            return make_ready_future<json::json_return_type>(format("{}", mode));
         });
     });
 

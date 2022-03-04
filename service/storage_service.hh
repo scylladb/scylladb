@@ -761,7 +761,7 @@ public:
     void node_ops_cmd_check(gms::inet_address coordinator, const node_ops_cmd_request& req);
     future<> node_ops_cmd_heartbeat_updater(const node_ops_cmd& cmd, utils::UUID uuid, std::list<gms::inet_address> nodes, lw_shared_ptr<bool> heartbeat_updater_done);
 
-    future<sstring> get_operation_mode();
+    future<mode> get_operation_mode();
 
     future<bool> is_starting();
 
