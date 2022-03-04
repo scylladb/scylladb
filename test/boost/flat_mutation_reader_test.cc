@@ -124,7 +124,7 @@ SEASTAR_TEST_CASE(test_flat_mutation_reader_consume_single_partition) {
                 query::clustering_row_ranges ck_ranges = {};
                 if (depth > 1) {
                     const auto& mf = result._fragments.back();
-                    auto ck_range = query::clustering_range::make_ending_with({mf.position().key(), false});
+                    auto ck_range = query::clustering_range::make_ending_with({mf.position().key(), mf.position().get_bound_weight() >= bound_weight::equal});
                     ck_ranges = {ck_range};
                 }
                 for (auto& mf : result._fragments) {
