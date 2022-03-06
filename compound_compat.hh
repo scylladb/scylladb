@@ -81,6 +81,12 @@ public:
             , _i(v._type.end(v._packed))
         { }
 
+        // Default constructor is incorrectly needed for c++20
+        // weakly_incrementable concept requires for ranges.
+        // Will be fixed by https://wg21.link/P2325R3 but still
+        // needed for now.
+        iterator() {}
+
         value_type operator*() const {
             int32_t component_size = _i->size();
             if (_offset == -2) {
@@ -106,6 +112,12 @@ public:
                 _offset = -2;
             }
             return *this;
+        }
+
+        iterator operator++(int) {
+            iterator i(*this);
+            ++(*this);
+            return i;
         }
 
         bool operator==(const iterator& other) const {
