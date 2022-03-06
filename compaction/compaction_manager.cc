@@ -321,8 +321,6 @@ future<> compaction_manager::run_custom_job(replica::table* t, sstables::compact
     auto job_ptr = std::make_unique<noncopyable_function<future<>(sstables::compaction_data&)>>(std::move(job));
 
     task->compaction_done = with_semaphore(_maintenance_ops_sem, 1, [this, task, &job = *job_ptr] () mutable {
-        // take read lock for table, so major compaction and resharding can't proceed in parallel.
-        return with_lock(task->compaction_state.lock.for_read(), [this, task, &job] () mutable {
             // Allow caller to know that task (e.g. reshape) was asked to stop while waiting for a chance to run.
             if (task->stopping()) {
                 return make_exception_future<>(task->make_compaction_stopped_exception());
@@ -337,7 +335,6 @@ future<> compaction_manager::run_custom_job(replica::table* t, sstables::compact
             // no need to register shared sstables because they're excluded from non-resharding
             // compaction and some of them may not even belong to current shard.
             return job(task->compaction_data);
-        });
     }).then_wrapped([this, task, job_ptr = std::move(job_ptr), type] (future<> f) {
         _stats.active_tasks--;
         _tasks.remove(task);
@@ -655,6 +652,7 @@ void compaction_manager::submit(replica::table* t) {
             _stats.pending_tasks--;
             return make_ready_future<stop_iteration>(stop_iteration::yes);
         }
+        // take read lock for table, so major and regular compaction can't proceed in parallel.
         return with_lock(task->compaction_state.lock.for_read(), [this, task] () mutable {
           return with_scheduling_group(_compaction_controller.sg(), [this, task = std::move(task)] () mutable {
             replica::table& t = *task->compacting_table;
@@ -724,7 +722,6 @@ future<> compaction_manager::perform_offstrategy(replica::table* t) {
             return make_ready_future<stop_iteration>(stop_iteration::yes);
         }
         return with_semaphore(_maintenance_ops_sem, 1, [this, task, t] () mutable {
-            return with_lock(task->compaction_state.lock.for_read(), [this, task, t] () mutable {
                 _stats.pending_tasks--;
                 if (!can_proceed(task)) {
                     return make_ready_future<stop_iteration>(stop_iteration::yes);
@@ -755,7 +752,6 @@ future<> compaction_manager::perform_offstrategy(replica::table* t) {
                     return make_ready_future<stop_iteration>(stop_iteration::yes);
                 });
               });
-            });
         });
     }).finally([this, task] {
         _tasks.remove(task);
@@ -812,9 +808,6 @@ future<> compaction_manager::rewrite_sstables(replica::table* t, sstables::compa
             };
 
             auto maintenance_permit = co_await seastar::get_units(_maintenance_ops_sem, 1);
-            // FIXME: acquiring the read lock is not needed after acquiring the _maintenance_ops_sem
-            // only major compaction needs to acquire the write lock to synchronize with regular compaction.
-            auto lock_holder = co_await _compaction_state[&t].lock.hold_read_lock();
 
             _stats.pending_tasks--;
             _stats.active_tasks++;
