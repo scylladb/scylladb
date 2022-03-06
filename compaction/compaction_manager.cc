@@ -298,7 +298,6 @@ protected:
         co_await coroutine::switch_to(_cm._compaction_controller->sg());
 
         switch_state(state::pending);
-        auto units = co_await get_units(_cm._maintenance_ops_sem, 1);
         auto lock_holder = co_await _compaction_state.lock.hold_write_lock();
         if (!can_proceed()) {
             co_return;
@@ -346,12 +345,7 @@ protected:
         if (!can_proceed(throw_if_stopping::yes)) {
             co_return;
         }
-        switch_state(state::pending);
-        auto units = co_await get_units(_cm._maintenance_ops_sem, 1);
 
-        if (!can_proceed(throw_if_stopping::yes)) {
-            co_return;
-        }
         setup_new_compaction();
 
         // NOTE:
@@ -891,11 +885,7 @@ protected:
             if (!can_proceed()) {
                 co_return;
             }
-            switch_state(state::pending);
-            auto units = co_await get_units(_cm._maintenance_ops_sem, 1);
-            if (!can_proceed()) {
-                co_return;
-            }
+
             setup_new_compaction();
 
             std::exception_ptr ex;
@@ -937,9 +927,6 @@ public:
 
 protected:
     virtual future<> do_run() override {
-        switch_state(state::pending);
-        auto maintenance_permit = co_await seastar::get_units(_cm._maintenance_ops_sem, 1);
-
         while (!_sstables.empty() && can_proceed()) {
             auto sst = consume_sstable();
             co_await rewrite_sstable(std::move(sst));

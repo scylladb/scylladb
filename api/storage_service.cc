@@ -603,7 +603,10 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         if (column_families.empty()) {
             column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
         }
-        return ctx.db.invoke_on_all([keyspace, column_families] (replica::database& db) -> future<> {
+        return ctx.db.invoke_on_all([keyspace, column_families] (replica::database& db) {
+          auto& ks = db.find_keyspace(keyspace);
+          auto& cm = db.get_compaction_manager();
+          return cm.serialize_maintenance_operation(&ks, [&db, keyspace, column_families] () -> future<> {
             auto table_ids = boost::copy_range<std::vector<utils::UUID>>(column_families | boost::adaptors::transformed([&] (auto& cf_name) {
                 return db.find_uuid(keyspace, cf_name);
             }));
@@ -616,6 +619,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                 co_await db.find_column_family(id).compact_all_sstables();
             }
             co_return;
+          });
         }).then([]{
                 return make_ready_future<json::json_return_type>(json_void());
         });
@@ -634,6 +638,9 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                         std::runtime_error("Can not perform cleanup operation when topology changes"));
             }
             return ctx.db.invoke_on_all([keyspace, column_families] (replica::database& db) -> future<> {
+              auto& ks = db.find_keyspace(keyspace);
+              auto& cm = db.get_compaction_manager();
+              return cm.serialize_maintenance_operation(&ks, [&db, &cm, keyspace, column_families] () -> future<> {
                 auto table_ids = boost::copy_range<std::vector<utils::UUID>>(column_families | boost::adaptors::transformed([&] (auto& table_name) {
                     return db.find_uuid(keyspace, table_name);
                 }));
@@ -641,13 +648,13 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                 std::ranges::sort(table_ids, std::less<>(), [&] (const utils::UUID& id) {
                     return db.find_column_family(id).get_stats().live_disk_space_used;
                 });
-                auto& cm = db.get_compaction_manager();
                 // as a table can be dropped during loop below, let's find it before issuing the cleanup request.
                 for (auto& id : table_ids) {
                     replica::table& t = db.find_column_family(id);
                     co_await cm.perform_cleanup(db, &t);
                 }
                 co_return;
+              });
             }).then([]{
                 return make_ready_future<json::json_return_type>(0);
             });
@@ -656,12 +663,16 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
 
     ss::perform_keyspace_offstrategy_compaction.set(r, wrap_ks_cf(ctx, [] (http_context& ctx, std::unique_ptr<request> req, sstring keyspace, std::vector<sstring> tables) -> future<json::json_return_type> {
         co_return co_await ctx.db.map_reduce0([&keyspace, &tables] (replica::database& db) -> future<bool> {
+          auto& ks = db.find_keyspace(keyspace);
+          auto& cm = db.get_compaction_manager();
+          return cm.serialize_maintenance_operation(&ks, [&db, &keyspace, &tables] () -> future<bool> {
             bool needed = false;
             for (const auto& table : tables) {
                 auto& t = db.find_column_family(keyspace, table);
                 needed |= co_await t.perform_offstrategy_compaction();
             }
             co_return needed;
+          });
         }, false, std::plus<bool>());
     }));
 
@@ -669,11 +680,14 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         bool exclude_current_version = req_param<bool>(*req, "exclude_current_version", false);
 
         return ctx.db.invoke_on_all([=] (replica::database& db) {
-            return do_for_each(column_families, [=, &db](sstring cfname) {
-                auto& cm = db.get_compaction_manager();
+          auto& ks = db.find_keyspace(keyspace);
+          auto& cm = db.get_compaction_manager();
+          return cm.serialize_maintenance_operation(&ks, [=, &db, &cm] {
+            return do_for_each(column_families, [=, &db, &cm](sstring cfname) {
                 auto& cf = db.find_column_family(keyspace, cfname);
                 return cm.perform_sstable_upgrade(db, &cf, exclude_current_version);
             });
+          });
         }).then([]{
             return make_ready_future<json::json_return_type>(0);
         });
@@ -1401,11 +1415,14 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         }
         return f.then([&ctx, keyspace, column_families, opts] {
             return ctx.db.invoke_on_all([=] (replica::database& db) {
-                return do_for_each(column_families, [=, &db](sstring cfname) {
-                    auto& cm = db.get_compaction_manager();
+              auto& cm = db.get_compaction_manager();
+              auto& ks = db.find_keyspace(keyspace);
+              return cm.serialize_maintenance_operation(&ks, [=, &db, &cm] {
+                return do_for_each(column_families, [=, &db, &cm] (sstring cfname) {
                     auto& cf = db.find_column_family(keyspace, cfname);
                     return cm.perform_sstable_scrub(&cf, opts);
                 });
+              });
             });
         }).then([]{
             return make_ready_future<json::json_return_type>(0);

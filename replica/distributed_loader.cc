@@ -196,14 +196,17 @@ future<> run_resharding_jobs(sharded<sstables::sstable_directory>& dir, std::vec
         dblog.info("{}", fmt::format("Resharding {} for {}.{}", sstables::pretty_printed_data_size(total_size), ks_name, table_name));
 
         return dir.invoke_on_all([&dir, &db, &reshard_jobs, ks_name, table_name, creator] (sstables::sstable_directory& d) mutable {
+          auto& cm = db.local().get_compaction_manager();
+          auto& ks = db.local().find_keyspace(ks_name);
+          return cm.serialize_maintenance_operation(&ks, [&dir, &db, &reshard_jobs, &d, &cm, ks_name, table_name, creator] {
             auto& table = db.local().find_column_family(ks_name, table_name);
             auto info_vec = std::move(reshard_jobs[this_shard_id()].info_vec);
-            auto& cm = table.get_compaction_manager();
             auto max_threshold = table.schema()->max_compaction_threshold();
             auto& iop = service::get_local_streaming_priority();
             return d.reshard(std::move(info_vec), cm, table, max_threshold, creator, iop).then([&d, &dir] {
                 return d.move_foreign_sstables(dir);
             });
+          });
         }).then([start, total_size, ks_name, table_name] {
             auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - start);
             dblog.info("{}", fmt::format("Resharded {} for {}.{} in {:.2f} seconds, {}", sstables::pretty_printed_data_size(total_size), ks_name, table_name, duration.count(), sstables::pretty_printed_throughput(total_size, duration)));
@@ -248,10 +251,13 @@ distributed_loader::reshape(sharded<sstables::sstable_directory>& dir, sharded<r
 
     auto start = std::chrono::steady_clock::now();
     return dir.map_reduce0([&dir, &db, ks_name = std::move(ks_name), table_name = std::move(table_name), creator = std::move(creator), mode, filter] (sstables::sstable_directory& d) {
+      auto& cm = db.local().get_compaction_manager();
+      auto& ks = db.local().find_keyspace(ks_name);
+      return cm.serialize_maintenance_operation(&ks, [&dir, &db, &d, &cm, ks_name, table_name, creator, mode, filter] {
         auto& table = db.local().find_column_family(ks_name, table_name);
-        auto& cm = table.get_compaction_manager();
         auto& iop = service::get_local_streaming_priority();
         return d.reshape(cm, table, creator, iop, mode, filter);
+      });
     }, uint64_t(0), std::plus<uint64_t>()).then([start] (uint64_t total_size) {
         if (total_size > 0) {
             auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - start);

@@ -18,6 +18,7 @@
 #include "db/data_listeners.hh"
 #include "storage_service.hh"
 #include "unimplemented.hh"
+#include "compaction/compaction_manager.hh"
 
 extern logging::logger apilog;
 
@@ -1000,8 +1001,16 @@ void set_column_family(http_context& ctx, routes& r) {
         if (req->get_query_param("split_output") != "") {
             fail(unimplemented::cause::API);
         }
-        return foreach_column_family(ctx, req->param["name"], [](replica::column_family &cf) {
-            return cf.compact_all_sstables();
+
+        auto [ks_name, cf_name] = parse_fully_qualified_cf_name(req->param["name"]);
+        auto uuid = get_uuid(ks_name, cf_name, ctx.db.local());
+
+        return ctx.db.invoke_on_all([ks_name = std::move(ks_name), uuid] (replica::database& db) {
+            auto& ks = db.find_keyspace(ks_name);
+            auto& cm = db.get_compaction_manager();
+            return cm.serialize_maintenance_operation(&ks, [&db, uuid] {
+                return db.find_column_family(uuid).compact_all_sstables();
+            });
         }).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
