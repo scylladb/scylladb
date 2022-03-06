@@ -904,6 +904,9 @@ prepare_expression(const expression& expr, data_dictionary::database db, const s
         [&] (const column_value&) -> expression {
             on_internal_error(expr_logger, "column_values are not yet reachable via prepare_expression()");
         },
+        [&] (const subscript&) -> expression {
+            on_internal_error(expr_logger, "subscripts are not yet reachable via prepare_expression()");
+        },
         [&] (const token&) -> expression {
             on_internal_error(expr_logger, "tokens are not yet reachable via prepare_expression()");
         },
@@ -991,6 +994,9 @@ test_assignment(const expression& expr, data_dictionary::database db, const sstr
         },
         [&] (const column_value&) -> test_result {
             on_internal_error(expr_logger, "column_values are not yet reachable via test_assignment()");
+        },
+        [&] (const subscript&) -> test_result {
+            on_internal_error(expr_logger, "subscripts are not yet reachable via test_assignment()");
         },
         [&] (const token&) -> test_result {
             on_internal_error(expr_logger, "tokens are not yet reachable via test_assignment()");

@@ -65,6 +65,7 @@ using allow_local_index = bool_class<allow_local_index_tag>;
 struct binary_operator;
 struct conjunction;
 struct column_value;
+struct subscript;
 struct token;
 struct unresolved_identifier;
 struct column_mutation_attribute;
@@ -84,6 +85,7 @@ concept ExpressionElement
         = std::same_as<T, conjunction>
         || std::same_as<T, binary_operator>
         || std::same_as<T, column_value>
+        || std::same_as<T, subscript>
         || std::same_as<T, token>
         || std::same_as<T, unresolved_identifier>
         || std::same_as<T, column_mutation_attribute>
@@ -104,6 +106,7 @@ concept invocable_on_expression
         = std::invocable<Func, conjunction>
         && std::invocable<Func, binary_operator>
         && std::invocable<Func, column_value>
+        && std::invocable<Func, subscript>
         && std::invocable<Func, token>
         && std::invocable<Func, unresolved_identifier>
         && std::invocable<Func, column_mutation_attribute>
@@ -124,6 +127,7 @@ concept invocable_on_expression_ref
         = std::invocable<Func, conjunction&>
         && std::invocable<Func, binary_operator&>
         && std::invocable<Func, column_value&>
+        && std::invocable<Func, subscript&>
         && std::invocable<Func, token&>
         && std::invocable<Func, unresolved_identifier&>
         && std::invocable<Func, column_mutation_attribute&>
@@ -181,17 +185,32 @@ concept LeafExpression
         || std::same_as<bind_variable, E> 
         || std::same_as<untyped_constant, E> 
         || std::same_as<constant, E>
+        || std::same_as<column_value, E>
         ;
 
-/// A column, optionally subscripted by a value (eg, c1 or c2['abc']).
+/// A column, usually encountered on the left side of a restriction.
+/// An expression like `mycol < 5` would be expressed as a binary_operator
+/// with column_value on the left hand side.
 struct column_value {
     const column_definition* col;
-    std::optional<expression> sub; ///< If present, this LHS is col[sub], otherwise just col.
-    /// For easy creation of vector<column_value> from vector<column_definition*>.
+
     column_value(const column_definition* col) : col(col) {}
-    /// The compiler doesn't auto-generate this due to the other constructor's existence.
-    column_value(const column_definition* col, expr::expression sub) : col(col), sub(std::move(sub)) {}
 };
+
+/// A subscripted value, eg list_colum[2], val[sub]
+struct subscript {
+    expression val;
+    expression sub;
+};
+
+/// Gets the subscripted column_value out of the subscript.
+/// Only columns can be subscripted in CQL, so we can expect that the subscripted expression is a column_value.
+const column_value& get_subscripted_column(const subscript&);
+
+/// Gets the column_definition* out of expression that can be a column_value or subscript
+/// Only columns can be subscripted in CQL, so we can expect that the subscripted expression is a column_value.
+const column_value& get_subscripted_column(const expression&);
+
 
 /// Represents token function on LHS of an operator relation.  No need to list column definitions
 /// here -- token takes exactly the partition key as its argument.
@@ -361,7 +380,7 @@ struct expression::impl final {
             conjunction, binary_operator, column_value, token, unresolved_identifier,
             column_mutation_attribute, function_call, cast, field_selection, null,
             bind_variable, untyped_constant, constant, tuple_constructor, collection_constructor,
-            usertype_constructor>;
+            usertype_constructor, subscript>;
     variant_type v;
     impl(variant_type v) : v(std::move(v)) {}
 };

@@ -190,6 +190,21 @@ static std::vector<expr::expression> extract_partition_range(
             // Partition key columns are not legal in tuples, so ignore tuples.
         }
 
+        void operator()(const subscript& sub) {
+            const column_value& cval = get_subscripted_column(sub.val);
+
+            with_current_binary_operator(*this, [&] (const binary_operator& b) {
+                if (cval.col->is_partition_key() && (b.op == oper_t::EQ || b.op == oper_t::IN)) {
+                    const auto found = single_column.find(cval.col);
+                    if (found == single_column.end()) {
+                        single_column[cval.col] = b;
+                    } else {
+                        found->second = make_conjunction(std::move(found->second), b);
+                    }
+                }
+            });
+        }
+
         void operator()(const constant&) {}
 
         void operator()(const unresolved_identifier&) {
@@ -289,6 +304,21 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
                     const auto found = single.find(s->col);
                     if (found == single.end()) {
                         single[s->col] = b;
+                    } else {
+                        found->second = make_conjunction(std::move(found->second), b);
+                    }
+                }
+            });
+        }
+
+        void operator()(const subscript& sub) {
+            const column_value& cval = get_subscripted_column(sub.val);
+
+            with_current_binary_operator(*this, [&] (const binary_operator& b) {
+                if (cval.col->is_clustering_key()) {
+                    const auto found = single.find(cval.col);
+                    if (found == single.end()) {
+                        single[cval.col] = b;
                     } else {
                         found->second = make_conjunction(std::move(found->second), b);
                     }
@@ -788,7 +818,7 @@ dht::partition_range_vector partition_ranges_from_EQs(
         const std::vector<expr::expression>& eq_expressions, const query_options& options, const schema& schema) {
     std::vector<managed_bytes> pk_value(schema.partition_key_size());
     for (const auto& e : eq_expressions) {
-        const auto col = expr::as<column_value>(find(e, oper_t::EQ)->lhs).col;
+        const auto col = expr::get_subscripted_column(find(e, oper_t::EQ)->lhs).col;
         const auto vals = std::get<value_list>(possible_lhs_values(col, e, options));
         if (vals.empty()) { // Case of C=1 AND C=2.
             return {};
@@ -1009,6 +1039,10 @@ struct multi_column_range_accumulator {
 
     void operator()(const column_value&) {
         on_internal_error(rlogger, "Column encountered outside binary operator");
+    }
+
+    void operator()(const subscript&) {
+        on_internal_error(rlogger, "Subscript encountered outside binary operator");
     }
 
     void operator()(const token&) {

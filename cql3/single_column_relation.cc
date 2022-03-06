@@ -57,7 +57,7 @@ single_column_relation::new_EQ_restriction(data_dictionary::database db, schema_
     auto&& entry_value = to_expression({receivers[1]}, *_value, db, schema->ks_name(), ctx);
     auto r = make_shared<restrictions::single_column_restriction>(column_def);
     r->expression = binary_operator{
-        column_value(&column_def, std::move(entry_key)), oper_t::EQ, std::move(entry_value)};
+        subscript{.val = column_value(&column_def), .sub = std::move(entry_key)}, oper_t::EQ, std::move(entry_value)};
     return r;
 }
 
