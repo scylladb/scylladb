@@ -104,8 +104,10 @@ compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right) {
             if (left.expiry() != right.expiry()) {
                 return left.expiry() < right.expiry() ? -1 : 1;
             } else {
+                // prefer the cell that was written later,
+                // so it survives longer after it expires, until purged.
                 if (left.ttl() != right.ttl()) {
-                    return left.ttl() < right.ttl() ? -1 : 1;
+                    return left.ttl() < right.ttl() ? 1 : -1;
                 } else {
                     return 0;
                 }
