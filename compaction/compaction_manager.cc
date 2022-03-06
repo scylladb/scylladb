@@ -812,8 +812,9 @@ future<> compaction_manager::rewrite_sstables(replica::table* t, sstables::compa
             };
 
             auto maintenance_permit = co_await seastar::get_units(_maintenance_ops_sem, 1);
-            // Take write lock for table to serialize cleanup/upgrade sstables/scrub with major compaction/reshape/reshard.
-            auto write_lock_holder = co_await _compaction_state[&t].lock.hold_write_lock();
+            // FIXME: acquiring the read lock is not needed after acquiring the _maintenance_ops_sem
+            // only major compaction needs to acquire the write lock to synchronize with regular compaction.
+            auto lock_holder = co_await _compaction_state[&t].lock.hold_read_lock();
 
             _stats.pending_tasks--;
             _stats.active_tasks++;
