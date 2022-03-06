@@ -713,9 +713,10 @@ SEASTAR_TEST_CASE(test_cell_ordering) {
 
     // Origin doesn't compare ttl (is it wise?)
     // But we do. See https://github.com/scylladb/scylla/issues/10156
+    // and https://github.com/scylladb/scylla/issues/10173
     assert_order(
-        atomic_cell::make_live(*bytes_type, 1, bytes("value"), expiry_1, ttl_1),
-        atomic_cell::make_live(*bytes_type, 1, bytes("value"), expiry_1, ttl_2));
+        atomic_cell::make_live(*bytes_type, 1, bytes("value"), expiry_1, ttl_2),
+        atomic_cell::make_live(*bytes_type, 1, bytes("value"), expiry_1, ttl_1));
 
     assert_order(
         atomic_cell::make_live(*bytes_type, 0, bytes("value1")),
