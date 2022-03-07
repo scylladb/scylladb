@@ -832,3 +832,43 @@ SEASTAR_TEST_CASE(test_skipping_in_compressed_stream) {
         expect_eof(in);
     });
 }
+
+// Test that sstables::key_view::tri_compare(const schema& s, partition_key_view other)
+// should correctly compare empty keys. The fact we did this incorrectly was
+// noticed while fixing #9375, and a separate issue on it is #10178.
+BOOST_AUTO_TEST_CASE(test_empty_key_view_comparison) {
+    auto s_ptr = schema_builder("", "")
+            .with_column("p", bytes_type, column_kind::partition_key)
+            .build();
+    const schema& s = *s_ptr;
+
+    sstables::key empty_sstable_key = sstables::key::from_deeply_exploded(s, {data_value(bytes(""))});
+    sstables::key_view empty_sstable_key_view = empty_sstable_key;
+    partition_key empty_partition_key = partition_key::from_deeply_exploded(s, {data_value(bytes(""))});
+    partition_key_view empty_partition_key_view = empty_partition_key;
+
+    // Two empty keys should be equal (this check failed in #10178)
+    BOOST_CHECK_EQUAL(std::strong_ordering::equal,
+        empty_sstable_key_view.tri_compare(s, empty_partition_key_view));
+
+    // For completeness, compare also an empty key to a non-empty key, and
+    // two equal non-empty keys. An empty key is supposed to be less-than
+    // a non-empty key.
+    sstables::key hello_sstable_key = sstables::key::from_deeply_exploded(s, {data_value(bytes("hello"))});
+    sstables::key_view hello_sstable_key_view = hello_sstable_key;
+    partition_key hello_partition_key = partition_key::from_deeply_exploded(s, {data_value(bytes("hello"))});
+    partition_key_view hello_partition_key_view = hello_partition_key;
+    BOOST_CHECK_EQUAL(std::strong_ordering::less,
+        empty_sstable_key_view.tri_compare(s, hello_partition_key_view));
+    BOOST_CHECK_EQUAL(std::strong_ordering::greater,
+        hello_sstable_key_view.tri_compare(s, empty_partition_key_view));
+    BOOST_CHECK_EQUAL(std::strong_ordering::equal,
+        hello_sstable_key_view.tri_compare(s, hello_partition_key_view));
+
+    // The underlying cause of #10178 was that legacy_form() returned
+    // a legacy_compound_view<> which, despite being empty, did not
+    // have begin()==end(). So let's reproduce that directly:
+    auto lf = empty_partition_key_view.legacy_form(s);
+    BOOST_CHECK_EQUAL(0, lf.size());
+    BOOST_CHECK(lf.begin() == lf.end());
+}
