@@ -641,16 +641,16 @@ void storage_service::bootstrap() {
 
         // Update pending ranges now, so we correctly count ourselves as a pending replica
         // when inserting the new CDC generation.
-      if (!bootstrap_rbno) {
-        // When is_repair_based_node_ops_enabled is true, the bootstrap node
-        // will use node_ops_cmd to bootstrap, node_ops_cmd will update the pending ranges.
-        slogger.debug("bootstrap: update pending ranges: endpoint={} bootstrap_tokens={}", get_broadcast_address(), _bootstrap_tokens);
-        mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) {
-            auto endpoint = get_broadcast_address();
-            tmptr->add_bootstrap_tokens(_bootstrap_tokens, endpoint);
-            return update_pending_ranges(std::move(tmptr), format("bootstrapping node {}", endpoint));
-        }).get();
-      }
+        if (!bootstrap_rbno) {
+            // When is_repair_based_node_ops_enabled is true, the bootstrap node
+            // will use node_ops_cmd to bootstrap, node_ops_cmd will update the pending ranges.
+            slogger.debug("bootstrap: update pending ranges: endpoint={} bootstrap_tokens={}", get_broadcast_address(), _bootstrap_tokens);
+            mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) {
+                auto endpoint = get_broadcast_address();
+                tmptr->add_bootstrap_tokens(_bootstrap_tokens, endpoint);
+                return update_pending_ranges(std::move(tmptr), format("bootstrapping node {}", endpoint));
+            }).get();
+        }
 
         // After we pick a generation timestamp, we start gossiping it, and we stick with it.
         // We don't do any other generation switches (unless we crash before complecting bootstrap).
@@ -658,19 +658,23 @@ void storage_service::bootstrap() {
 
         _cdc_gen_id = _cdc_gen_service.local().make_new_generation(_bootstrap_tokens, !is_first_node()).get0();
 
-      if (!bootstrap_rbno) {
-        // When is_repair_based_node_ops_enabled is true, the bootstrap node
-        // will use node_ops_cmd to bootstrap, bootstrapping gossip status is not needed for bootstrap.
-        _gossiper.add_local_application_state({
-            // Order is important: both the CDC streams timestamp and tokens must be known when a node handles our status.
-            { gms::application_state::TOKENS, versioned_value::tokens(_bootstrap_tokens) },
-            { gms::application_state::CDC_GENERATION_ID, versioned_value::cdc_generation_id(_cdc_gen_id) },
-            { gms::application_state::STATUS, versioned_value::bootstrapping(_bootstrap_tokens) },
-        }).get();
+        if (!bootstrap_rbno) {
+            // When is_repair_based_node_ops_enabled is true, the bootstrap node
+            // will use node_ops_cmd to bootstrap, bootstrapping gossip status is not needed for bootstrap.
+            _gossiper.add_local_application_state({
+                { gms::application_state::TOKENS, versioned_value::tokens(_bootstrap_tokens) },
+                { gms::application_state::CDC_GENERATION_ID, versioned_value::cdc_generation_id(_cdc_gen_id) },
+                { gms::application_state::STATUS, versioned_value::bootstrapping(_bootstrap_tokens) },
+            }).get();
 
-        set_mode(mode::JOINING, format("sleeping {} ms for pending range setup", get_ring_delay().count()), true);
-        _gossiper.wait_for_range_setup().get();
-     }
+            set_mode(mode::JOINING, format("sleeping {} ms for pending range setup", get_ring_delay().count()), true);
+            _gossiper.wait_for_range_setup().get();
+        } else {
+            // Even with RBNO bootstrap we need to announce the new CDC generation immediately after it's created.
+            _gossiper.add_local_application_state({
+                { gms::application_state::CDC_GENERATION_ID, versioned_value::cdc_generation_id(_cdc_gen_id) },
+            }).get();
+        }
     } else {
         // Wait until we know tokens of existing node before announcing replacing status.
         set_mode(mode::JOINING, fmt::format("Wait until local node knows tokens of peer nodes"), true);
