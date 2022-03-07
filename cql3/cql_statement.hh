@@ -98,9 +98,7 @@ public:
         return execute(qp, state, options);
     }
 
-    virtual bool depends_on_keyspace(const seastar::sstring& ks_name) const = 0;
-
-    virtual bool depends_on_column_family(const seastar::sstring& cf_name) const = 0;
+    virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const = 0;
 
     virtual seastar::shared_ptr<const metadata> get_result_metadata() const = 0;
 
