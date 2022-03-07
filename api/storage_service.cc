@@ -763,13 +763,13 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
 
     ss::get_operation_mode.set(r, [&ss](std::unique_ptr<request> req) {
         return ss.local().get_operation_mode().then([] (auto mode) {
-            return make_ready_future<json::json_return_type>(mode);
+            return make_ready_future<json::json_return_type>(format("{}", mode));
         });
     });
 
     ss::is_starting.set(r, [&ss](std::unique_ptr<request> req) {
-        return ss.local().is_starting().then([] (auto starting) {
-            return make_ready_future<json::json_return_type>(starting);
+        return ss.local().get_operation_mode().then([] (auto mode) {
+            return make_ready_future<json::json_return_type>(mode <= service::storage_service::mode::STARTING);
         });
     });
 
@@ -839,9 +839,13 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    ss::is_initialized.set(r, [&ss](std::unique_ptr<request> req) {
-        return ss.local().is_initialized().then([] (bool initialized) {
-            return make_ready_future<json::json_return_type>(initialized);
+    ss::is_initialized.set(r, [&ss, &g](std::unique_ptr<request> req) {
+        return ss.local().get_operation_mode().then([&g] (auto mode) {
+            bool is_initialized = mode >= service::storage_service::mode::STARTING;
+            if (mode == service::storage_service::mode::NORMAL) {
+                is_initialized = g.is_enabled();
+            }
+            return make_ready_future<json::json_return_type>(is_initialized);
         });
     });
 
@@ -850,7 +854,9 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::is_joined.set(r, [&ss] (std::unique_ptr<request> req) {
-        return make_ready_future<json::json_return_type>(ss.local().is_joined());
+        return ss.local().get_operation_mode().then([] (auto mode) {
+            return make_ready_future<json::json_return_type>(mode >= service::storage_service::mode::JOINING);
+        });
     });
 
     ss::set_stream_throughput_mb_per_sec.set(r, [](std::unique_ptr<request> req) {
