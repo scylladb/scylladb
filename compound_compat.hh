@@ -72,13 +72,20 @@ public:
         iterator(const legacy_compound_view& v)
             : _singular(v._type.is_singular())
             , _offset(_singular ? 0 : -2)
-            , _i(v._type.begin(v._packed))
+            , _i(_singular && !v._type.begin(v._packed)->size() ?
+                    v._type.end(v._packed) : v._type.begin(v._packed))
         { }
 
         iterator(const legacy_compound_view& v, end_tag)
-            : _offset(-2)
+            : _offset(v._type.is_singular() && !v._type.begin(v._packed)->size() ? 0 : -2)
             , _i(v._type.end(v._packed))
         { }
+
+        // Default constructor is incorrectly needed for c++20
+        // weakly_incrementable concept requires for ranges.
+        // Will be fixed by https://wg21.link/P2325R3 but still
+        // needed for now.
+        iterator() {}
 
         value_type operator*() const {
             int32_t component_size = _i->size();
@@ -105,6 +112,12 @@ public:
                 _offset = -2;
             }
             return *this;
+        }
+
+        iterator operator++(int) {
+            iterator i(*this);
+            ++(*this);
+            return i;
         }
 
         bool operator==(const iterator& other) const {

@@ -276,7 +276,6 @@ def test_multi_column_with_regular_index(cql, test_keyspace):
 # wrong or unusual about an empty string, and it should be supported just
 # like any other string.
 # Reproduces issue #9364
-@pytest.mark.xfail(reason="issue #9364")
 def test_index_empty_string(cql, test_keyspace):
     schema = 'p int, v text, primary key (p)'
     # Searching for v='' without an index (with ALLOW FILTERING), works

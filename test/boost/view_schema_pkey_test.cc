@@ -714,55 +714,5 @@ SEASTAR_TEST_CASE(test_base_non_pk_columns_in_view_partition_key_are_non_emtpy) 
                             {utf8_type->decompose(data_value(""))},
                     });
         }
-
-        auto views_not_matching = {
-                "create materialized view {} as select * from cf "
-                "where p1 is not null and p2 is not null and c is not null and v is not null "
-                "primary key (c, p1, p2, v)",
-
-                "create materialized view {} as select * from cf "
-                "where p1 is not null and p2 is not null and c is not null and v is not null "
-                "primary key (p2, p1, c, v)"
-        };
-        for (auto&& view : views_not_matching) {
-            auto name = make_view_name();
-            auto f = e.local_view_builder().wait_until_built("ks", name);
-            e.execute_cql(fmt::format(fmt::runtime(view), name)).get();
-            f.get();
-            auto msg = e.execute_cql(format("select p1, p2, c, v from {}", name)).get0();
-            assert_that(msg).is_rows().is_empty();
-        }
-        auto name = make_view_name();
-        auto f = e.local_view_builder().wait_until_built("ks", name);
-        e.execute_cql(fmt::format("create materialized view {} as select * from cf "
-                             "where p1 is not null and p2 is not null and c is not null and v is not null "
-                             "primary key (v, p1, p2, c)", name)).get();
-        f.get();
-        auto msg = e.execute_cql(format("select p1, p2, c, v from {}", name)).get0();
-        assert_that(msg).is_rows().is_empty();
-
-        e.local_db().flush_all_memtables().get();
-        e.execute_cql("update cf set v = 'a' where p1 = 1 and p2 = '' and c = ''").get();
-        eventually([&] {
-            auto msg = e.execute_cql(format("select p1, p2, c, v from {}", name)).get0();
-            assert_that(msg).is_rows()
-                    .with_size(1)
-                    .with_row({
-                            {int32_type->decompose(1)},
-                            {utf8_type->decompose(data_value(""))},
-                            {utf8_type->decompose(data_value(""))},
-                            {utf8_type->decompose("a")},
-                    });
-        });
-        e.execute_cql("update cf set v = '' where p1 = 1 and p2 = '' and c = ''").get();
-        eventually([&] {
-            auto msg = e.execute_cql(format("select p1, p2, c, v from {}", name)).get0();
-            assert_that(msg).is_rows().is_empty();
-        });
-        e.execute_cql("delete v from cf where p1 = 1 and p2 = '' and c = ''").get();
-        eventually([&] {
-            auto msg = e.execute_cql(format("select p1, p2, c, v from {}", name)).get0();
-            assert_that(msg).is_rows().is_empty();
-        });
     });
 }
