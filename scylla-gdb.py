@@ -4281,7 +4281,7 @@ class scylla_compaction_tasks(gdb.Command):
 
     def invoke(self, arg, from_tty):
         db = find_db()
-        cm = std_unique_ptr(db['_compaction_manager']).get().dereference()
+        cm = db['_compaction_manager']
         task_hist = histogram(print_indicators=False)
 
         task_list = list(std_list(cm['_tasks']))

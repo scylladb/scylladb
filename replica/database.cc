@@ -80,12 +80,6 @@ make_flush_controller(const db::config& cfg, seastar::scheduling_group sg, const
     return flush_controller(sg, iop, 50ms, cfg.virtual_dirty_soft_limit(), std::move(fn));
 }
 
-inline
-std::unique_ptr<compaction_manager>
-make_compaction_manager(const db::config& cfg, database_config& dbcfg, abort_source& as) {
-    return std::make_unique<compaction_manager>(cfg, dbcfg, as);
-}
-
 keyspace::keyspace(lw_shared_ptr<keyspace_metadata> metadata, config cfg, locator::effective_replication_map_factory& erm_factory)
     : _metadata(std::move(metadata))
     , _config(std::move(cfg))
@@ -286,7 +280,7 @@ void database::setup_scylla_memory_diagnostics_producer() {
 }
 
 database::database(const db::config& cfg, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::shared_token_metadata& stm,
-        abort_source& as, sharded<semaphore>& sst_dir_sem, utils::cross_shard_barrier barrier)
+        compaction_manager& cm, sharded<semaphore>& sst_dir_sem, utils::cross_shard_barrier barrier)
     : _stats(make_lw_shared<db_stats>())
     , _cl_stats(std::make_unique<cell_locker_stats>())
     , _cfg(cfg)
@@ -323,7 +317,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _row_cache_tracker(cache_tracker::register_metrics::yes)
     , _apply_stage("db_apply", &database::do_apply)
     , _version(empty_version)
-    , _compaction_manager(make_compaction_manager(_cfg, dbcfg, as))
+    , _compaction_manager(cm)
     , _enable_incremental_backups(cfg.incremental_backups())
     , _large_data_handler(std::make_unique<db::cql_table_large_data_handler>(_cfg.compaction_large_partition_warning_threshold_mb()*1024*1024,
               _cfg.compaction_large_row_warning_threshold_mb()*1024*1024,
@@ -850,9 +844,9 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
 
     lw_shared_ptr<column_family> cf;
     if (cfg.enable_commitlog && _commitlog) {
-       cf = make_lw_shared<column_family>(schema, std::move(cfg), *_commitlog, *_compaction_manager, *_cl_stats, _row_cache_tracker);
+       cf = make_lw_shared<column_family>(schema, std::move(cfg), *_commitlog, _compaction_manager, *_cl_stats, _row_cache_tracker);
     } else {
-       cf = make_lw_shared<column_family>(schema, std::move(cfg), column_family::no_commitlog(), *_compaction_manager, *_cl_stats, _row_cache_tracker);
+       cf = make_lw_shared<column_family>(schema, std::move(cfg), column_family::no_commitlog(), _compaction_manager, *_cl_stats, _row_cache_tracker);
     }
     cf->set_durable_writes(ks.metadata()->durable_writes());
 
@@ -1963,13 +1957,12 @@ void database::revert_initial_system_read_concurrency_boost() {
 future<> database::start() {
     _large_data_handler->start();
     // We need the compaction manager ready early so we can reshard.
-    _compaction_manager->enable();
+    _compaction_manager.enable();
     co_await init_commitlog();
 }
 
 future<> database::shutdown() {
     _shutdown = true;
-    co_await _compaction_manager->stop();
     co_await _stop_barrier.arrive_and_wait();
     // Closing a table can cause us to find a large partition. Since we want to record that, we have to close
     // system.large_partitions after the regular tables.
@@ -2043,7 +2036,7 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
 
         const auto uuid = cf.schema()->id();
 
-        return _compaction_manager->run_with_compaction_disabled(&cf, [this, &cf, should_flush, auto_snapshot, tsf = std::move(tsf), low_mark]() mutable {
+        return _compaction_manager.run_with_compaction_disabled(&cf, [this, &cf, should_flush, auto_snapshot, tsf = std::move(tsf), low_mark]() mutable {
             future<> f = make_ready_future<>();
             bool did_flush = false;
             if (should_flush && cf.can_flush()) {
@@ -2096,7 +2089,7 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
 future<> database::truncate_views(const column_family& base, db_clock::time_point truncated_at, bool should_flush) {
     return parallel_for_each(base.views(), [this, truncated_at, should_flush] (view_ptr v) {
         auto& vcf = find_column_family(v);
-        return _compaction_manager->run_with_compaction_disabled(&vcf, [&vcf, truncated_at, should_flush] {
+        return _compaction_manager.run_with_compaction_disabled(&vcf, [&vcf, truncated_at, should_flush] {
             return (should_flush ? vcf.flush() : vcf.clear()).then([&vcf, truncated_at, should_flush] {
                 return vcf.discard_sstables(truncated_at).then([&vcf, truncated_at, should_flush](db::replay_position rp) {
                     return db::system_keyspace::save_truncation_record(vcf, truncated_at, rp);
@@ -2298,7 +2291,7 @@ future<> database::flush_system_column_families() {
 
 future<> database::drain() {
     // Interrupt on going compaction and shutdown to prevent further compaction
-    co_await _compaction_manager->drain();
+    co_await _compaction_manager.drain();
 
     // flush the system ones after all the rest are done, just in case flushing modifies any system state
     // like CASSANDRA-5151. don't bother with progress tracking since system data is tiny.
