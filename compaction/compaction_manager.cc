@@ -791,6 +791,8 @@ future<> compaction_manager::rewrite_sstables(replica::table* t, sstables::compa
         cmlog.debug("{} task {} table={}: done", options.type(), fmt::ptr(task.get()), fmt::ptr(task->compacting_table));
     });
 
+    auto maintenance_permit = co_await seastar::get_units(_maintenance_ops_sem, 1);
+
     auto rewrite_sstable = [this, &task, &options, &compacting, can_purge] (const sstables::shared_sstable& sst) mutable -> future<>  {
         stop_iteration completed = stop_iteration::no;
         do {
@@ -806,8 +808,6 @@ future<> compaction_manager::rewrite_sstables(replica::table* t, sstables::compa
             descriptor.release_exhausted = [&compacting] (const std::vector<sstables::shared_sstable>& exhausted_sstables) {
                 compacting.release_compacting(exhausted_sstables);
             };
-
-            auto maintenance_permit = co_await seastar::get_units(_maintenance_ops_sem, 1);
 
             _stats.pending_tasks--;
             _stats.active_tasks++;
