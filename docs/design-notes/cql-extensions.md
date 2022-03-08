@@ -70,3 +70,38 @@ explicitly defined or provided as a marker:
 ```cql
 	INSERT INTO t(a,b,c) VALUES (?,?,?) USING TIMESTAMP 42 AND TIMEOUT 50ms;
 ```
+
+## Keyspace storage options
+
+Storage options allows specifying the storage format assigned to a keyspace.
+The default storage format is `LOCAL`, which simply means storing all the sstables
+in a local directory.
+Experimental support for `S3` storage format is also added. This option is not fully
+implemented yet, but it will allow storing sstables in a shared, S3-compatible object store.
+
+Storage options can be specified via `CREATE KEYSPACE` or `ALTER KEYSPACE` statement
+and it's formatted as a map of options - similarly to how replication strategy is handled.
+
+Examples:
+```cql
+CREATE KEYSPACE ks
+    WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 3 }
+    AND STORAGE = { 'type' : 'S3', 'bucket' : '/tmp/b1', 'endpoint' : 'localhost' } ;
+```
+
+```cql
+ALTER KEYSPACE ks WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 3 }
+    AND STORAGE = { 'type' : 'S3', 'bucket': '/tmp/b2', 'endpoint' : 'localhost' } ;
+```
+
+Storage options can be inspected by checking the new system schema table: `system_schema.scylla_keyspaces`:
+
+```cql
+    cassandra@cqlsh> select * from system_schema.scylla_keyspaces;
+    
+     keyspace_name | storage_options                                | storage_type
+    ---------------+------------------------------------------------+--------------
+               ksx | {'bucket': '/tmp/xx', 'endpoint': 'localhost'} |           S3
+    ```
+
+```
