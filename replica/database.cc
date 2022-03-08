@@ -83,19 +83,7 @@ make_flush_controller(const db::config& cfg, seastar::scheduling_group sg, const
 inline
 std::unique_ptr<compaction_manager>
 make_compaction_manager(const db::config& cfg, database_config& dbcfg, abort_source& as) {
-    if (cfg.compaction_static_shares() > 0) {
-        return std::make_unique<compaction_manager>(
-                compaction_manager::compaction_scheduling_group{dbcfg.compaction_scheduling_group, service::get_local_compaction_priority()},
-                compaction_manager::maintenance_scheduling_group{dbcfg.streaming_scheduling_group, service::get_local_streaming_priority()},
-                dbcfg.available_memory,
-                cfg.compaction_static_shares(),
-                as);
-    }
-    return std::make_unique<compaction_manager>(
-            compaction_manager::compaction_scheduling_group{dbcfg.compaction_scheduling_group, service::get_local_compaction_priority()},
-            compaction_manager::maintenance_scheduling_group{dbcfg.streaming_scheduling_group, service::get_local_streaming_priority()},
-            dbcfg.available_memory,
-            as);
+    return std::make_unique<compaction_manager>(cfg, dbcfg, as);
 }
 
 keyspace::keyspace(lw_shared_ptr<keyspace_metadata> metadata, config cfg, locator::effective_replication_map_factory& erm_factory)

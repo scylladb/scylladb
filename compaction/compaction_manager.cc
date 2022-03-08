@@ -21,6 +21,7 @@
 #include "utils/UUID_gen.hh"
 #include <cmath>
 #include <boost/algorithm/cxx11/any_of.hpp>
+#include "db/config.hh"
 
 static logging::logger cmlog("compaction_manager");
 using namespace std::chrono_literals;
@@ -516,6 +517,33 @@ void compaction_manager::task::stop(sstring reason) noexcept {
 sstables::compaction_stopped_exception compaction_manager::task::make_compaction_stopped_exception() const {
     auto s = _compacting_table->schema();
     return sstables::compaction_stopped_exception(s->ks_name(), s->cf_name(), _compaction_data.stop_requested);
+}
+
+compaction_manager::compaction_manager(const db::config& cfg, replica::database_config& dbcfg, abort_source& as)
+    : _compaction_controller(cfg.compaction_static_shares() > 0
+            ? std::make_unique<compaction_controller>(dbcfg.compaction_scheduling_group, service::get_local_compaction_priority(), 250ms, [this, available_memory = dbcfg.available_memory] () -> float {
+                _last_backlog = backlog();
+                auto b = _last_backlog / available_memory;
+                // This means we are using an unimplemented strategy
+                if (compaction_controller::backlog_disabled(b)) {
+                    // returning the normalization factor means that we'll return the maximum
+                    // output in the _control_points. We can get rid of this when we implement
+                    // all strategies.
+                    return compaction_controller::normalization_factor;
+                }
+                return b;
+            })
+            : std::make_unique<compaction_controller>(dbcfg.compaction_scheduling_group, service::get_local_compaction_priority(), cfg.compaction_static_shares())
+        )
+    , _backlog_manager(*_compaction_controller)
+    , _maintenance_sg(maintenance_scheduling_group{dbcfg.streaming_scheduling_group, service::get_local_streaming_priority()})
+    , _available_memory(dbcfg.available_memory)
+    , _early_abort_subscription(as.subscribe([this] () noexcept {
+        do_stop();
+    }))
+    , _strategy_control(std::make_unique<strategy_control>(*this))
+{
+    register_metrics();
 }
 
 compaction_manager::compaction_manager(compaction_scheduling_group csg, maintenance_scheduling_group msg, size_t available_memory, abort_source& as)
