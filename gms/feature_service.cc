@@ -145,6 +145,9 @@ feature_config feature_config_from_db_config(db::config& cfg, std::set<sstring> 
         // advertised via gossip ahead of time.
         fcfg._masked_features.insert(sstring(gms::features::USES_RAFT_CLUSTER_MANAGEMENT));
     }
+    if (!cfg.check_experimental(db::experimental_features_t::KEYSPACE_STORAGE_OPTIONS)) {
+        fcfg._disabled_features.insert(sstring(gms::features::KEYSPACE_STORAGE_OPTIONS));
+    }
 
     return fcfg;
 }

@@ -221,6 +221,7 @@ def run_scylla_cmd(pid, dir):
         # Note that Alternator-specific experimental features are listed in
         # test/alternator/run.
         '--experimental-features=udf',
+        '--experimental-features=keyspace-storage-options',
         '--enable-user-defined-functions', '1',
         # Set up authentication in order to allow testing this module
         # and other modules dependent on it: e.g. service levels
