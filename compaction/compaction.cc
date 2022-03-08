@@ -460,6 +460,7 @@ protected:
     // Garbage collected sstables that were added to SSTable set and should be eventually removed from it.
     std::vector<shared_sstable> _used_garbage_collected_sstables;
     utils::observable<> _stop_request_observable;
+    std::function<future<semaphore_units<>>(const sstables::sstable_list&)> _throttle_func;
 private:
     compaction_data& init_compaction_data(compaction_data& cdata, const compaction_descriptor& descriptor) const {
         cdata.compaction_fan_in = descriptor.fan_in();
@@ -482,6 +483,7 @@ protected:
         , _sstable_set(std::move(descriptor.all_sstables_snapshot))
         , _selector(_sstable_set ? _sstable_set->make_incremental_selector() : std::optional<sstable_set::incremental_selector>{})
         , _compacting_for_max_purgeable_func(std::unordered_set<shared_sstable>(_sstables.begin(), _sstables.end()))
+        , _throttle_func(descriptor.throttle)
     {
         for (auto& sst : _sstables) {
             _stats_collector.update(sst->get_encoding_stats_for_compaction());
@@ -662,6 +664,16 @@ private:
 
         _ms_metadata.min_timestamp = timestamp_tracker.min();
         _ms_metadata.max_timestamp = timestamp_tracker.max();
+    }
+
+    future<std::optional<semaphore_units<>>> throttle() {
+        if (_throttle_func) {
+            return _throttle_func(*_compacting->all()).then([] (auto&& units) {
+                return std::make_optional<semaphore_units<>>(std::move(units));
+            });
+        } else {
+            return make_ready_future<std::optional<semaphore_units<>>>();
+        }
     }
 
     // This consumer will perform mutation compaction on producer side using
@@ -1566,6 +1578,9 @@ public:
 future<compaction_result> compaction::run(std::unique_ptr<compaction> c) {
     return seastar::async([c = std::move(c)] () mutable {
         c->setup();
+
+        auto units = c->throttle().get();
+
         auto consumer = c->consume();
 
         auto start_time = db_clock::now();

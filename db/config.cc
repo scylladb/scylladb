@@ -282,6 +282,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "If set to higher than 0, ignore the controller's output and set the compaction shares statically. Do not set this unless you know what you are doing and suspect a problem in the controller. This option will be retired when the controller reaches more maturity")
     , compaction_enforce_min_threshold(this, "compaction_enforce_min_threshold", liveness::LiveUpdate, value_status::Used, false,
         "If set to true, enforce the min_threshold option for compactions strictly. If false (default), Scylla may decide to compact even if below min_threshold")
+    , max_concurrent_sstable_compactions(this, "max_concurrent_sstable_compactions", liveness::LiveUpdate, value_status::Used, 32,
+        "If set to a positive value, limits the total number of sstables compacted concurrently in a shard, across all compaction jobs.")
     /* Initialization properties */
     /* The minimal properties needed for configuring a cluster. */
     , cluster_name(this, "cluster_name", value_status::Used, "",

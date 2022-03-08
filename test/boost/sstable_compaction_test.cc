@@ -4822,7 +4822,7 @@ SEASTAR_TEST_CASE(simple_backlog_controller_test) {
         auto as = abort_source();
         compaction_manager::compaction_scheduling_group csg = { default_scheduling_group(), default_priority_class() };
         compaction_manager::maintenance_scheduling_group msg = { default_scheduling_group(), default_priority_class() };
-        auto manager = compaction_manager(csg, msg, available_memory, as);
+        auto manager = compaction_manager(csg, msg, available_memory, 0, as);
 
         auto add_sstable = [&env, &manager, gen = make_lw_shared<unsigned>(1)] (replica::table& t, uint64_t data_size) {
             auto sst = env.make_sstable(t.schema(), "", (*gen)++, la, big);

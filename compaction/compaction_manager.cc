@@ -309,6 +309,9 @@ protected:
         sstables::compaction_strategy cs = t->get_compaction_strategy();
         sstables::compaction_descriptor descriptor = cs.get_major_compaction_job(t->as_table_state(), _cm.get_candidates(*t));
         auto compacting = compacting_sstable_registration(_cm, descriptor.sstables);
+        descriptor.throttle = [this] (const sstables::sstable_list& sstables) {
+            return throttle(sstables);
+        };
         descriptor.release_exhausted = [&compacting] (const std::vector<sstables::shared_sstable>& exhausted_sstables) {
             compacting.release_compacting(exhausted_sstables);
         };
@@ -535,12 +538,14 @@ compaction_manager::compaction_manager(const db::config& cfg, replica::database_
     , _early_abort_subscription(as.subscribe([this] () noexcept {
         do_stop();
     }))
+    , _max_concurrent_sstable_compactions(cfg.max_concurrent_sstable_compactions() ? cfg.max_concurrent_sstable_compactions() : _concurrency_semaphore.max_counter())
+    , _concurrency_semaphore(_max_concurrent_sstable_compactions)
     , _strategy_control(std::make_unique<strategy_control>(*this))
 {
     register_metrics();
 }
 
-compaction_manager::compaction_manager(compaction_scheduling_group csg, maintenance_scheduling_group msg, size_t available_memory, abort_source& as)
+compaction_manager::compaction_manager(compaction_scheduling_group csg, maintenance_scheduling_group msg, size_t available_memory, size_t max_concurrent_sstable_compactions, abort_source& as)
     : _compaction_controller(std::make_unique<compaction_controller>(csg.cpu, csg.io, 250ms, [this, available_memory] () -> float {
         _last_backlog = backlog();
         auto b = _last_backlog / available_memory;
@@ -559,12 +564,14 @@ compaction_manager::compaction_manager(compaction_scheduling_group csg, maintena
     , _early_abort_subscription(as.subscribe([this] () noexcept {
         do_stop();
     }))
+    , _max_concurrent_sstable_compactions(max_concurrent_sstable_compactions ? max_concurrent_sstable_compactions : _concurrency_semaphore.max_counter())
+    , _concurrency_semaphore(_max_concurrent_sstable_compactions)
     , _strategy_control(std::make_unique<strategy_control>(*this))
 {
     register_metrics();
 }
 
-compaction_manager::compaction_manager(compaction_scheduling_group csg, maintenance_scheduling_group msg, size_t available_memory, uint64_t shares, abort_source& as)
+compaction_manager::compaction_manager(compaction_scheduling_group csg, maintenance_scheduling_group msg, size_t available_memory, size_t max_concurrent_sstable_compactions, uint64_t shares, abort_source& as)
     : _compaction_controller(std::make_unique<compaction_controller>(csg.cpu, csg.io, shares))
     , _backlog_manager(*_compaction_controller)
     , _maintenance_sg(msg)
@@ -572,6 +579,8 @@ compaction_manager::compaction_manager(compaction_scheduling_group csg, maintena
     , _early_abort_subscription(as.subscribe([this] () noexcept {
         do_stop();
     }))
+    , _max_concurrent_sstable_compactions(max_concurrent_sstable_compactions ? max_concurrent_sstable_compactions : _concurrency_semaphore.max_counter())
+    , _concurrency_semaphore(_max_concurrent_sstable_compactions)
     , _strategy_control(std::make_unique<strategy_control>(*this))
 {
     register_metrics();
@@ -582,6 +591,8 @@ compaction_manager::compaction_manager()
     , _backlog_manager(*_compaction_controller)
     , _maintenance_sg(maintenance_scheduling_group{default_scheduling_group(), default_priority_class()})
     , _available_memory(1)
+    , _max_concurrent_sstable_compactions(_concurrency_semaphore.max_counter())
+    , _concurrency_semaphore(_max_concurrent_sstable_compactions)
     , _strategy_control(std::make_unique<strategy_control>(*this))
 {
     // No metric registration because this constructor is supposed to be used only by the testing
@@ -796,6 +807,19 @@ future<stop_iteration> compaction_manager::task::maybe_retry(std::exception_ptr 
     return make_ready_future<stop_iteration>(true);
 }
 
+future<semaphore_units<>> compaction_manager::throttle(const sstables::sstable_list& sstables) {
+    auto concurrency = std::min(sstables.size(), _max_concurrent_sstable_compactions);
+    return get_units(_concurrency_semaphore, concurrency);
+}
+
+future<semaphore_units<>> compaction_manager::task::throttle(const sstables::sstable_list& sstables) {
+    switch_state(state::pending);
+    return _cm.throttle(sstables).then([this] (auto&& units) {
+        switch_state(state::active);
+        return std::move(units);
+    });
+}
+
 class compaction_manager::regular_compaction_task : public compaction_manager::task {
 public:
     regular_compaction_task(compaction_manager& mgr, replica::table* t)
@@ -835,6 +859,9 @@ protected:
             }
             auto compacting = compacting_sstable_registration(_cm, descriptor.sstables);
             auto weight_r = compaction_weight_registration(&_cm, weight);
+            descriptor.throttle = [this] (const sstables::sstable_list& sstables) {
+                return throttle(sstables);
+            };
             descriptor.release_exhausted = [&compacting] (const std::vector<sstables::shared_sstable>& exhausted_sstables) {
                 compacting.release_compacting(exhausted_sstables);
             };
@@ -938,7 +965,6 @@ private:
         co_await coroutine::switch_to(_cm._compaction_controller->sg());
 
         for (;;) {
-            switch_state(state::active);
             replica::table& t = *_compacting_table;
             auto sstable_level = sst->get_sstable_level();
             auto run_identifier = sst->run_identifier();
@@ -946,7 +972,9 @@ private:
             // FIXME: this compaction should run with maintenance priority.
             auto descriptor = sstables::compaction_descriptor({ sst }, std::move(sstable_set_snapshot), service::get_local_compaction_priority(),
                 sstable_level, sstables::compaction_descriptor::default_max_sstable_bytes, run_identifier, _options);
-
+            descriptor.throttle = [this] (const sstables::sstable_list& sstables) {
+                return throttle(sstables);
+            };
             // Releases reference to cleaned sstable such that respective used disk space can be freed.
             descriptor.release_exhausted = [this] (const std::vector<sstables::shared_sstable>& exhausted_sstables) {
                 _compacting.release_compacting(exhausted_sstables);
@@ -1017,7 +1045,6 @@ private:
     future<> validate_sstable(const sstables::shared_sstable& sst) {
         co_await coroutine::switch_to(_cm._maintenance_sg.cpu);
 
-        switch_state(state::active);
         std::exception_ptr ex;
         try {
             auto desc = sstables::compaction_descriptor(
@@ -1028,6 +1055,9 @@ private:
                     sstables::compaction_descriptor::default_max_sstable_bytes,
                     sst->run_identifier(),
                     sstables::compaction_type_options::make_scrub(sstables::compaction_type_options::scrub::mode::validate));
+            desc.throttle = [this] (const sstables::sstable_list& sstables) {
+                return throttle(sstables);
+            };
             co_await compact_sstables(std::move(desc), _compaction_data, _compacting_table->as_table_state());
         } catch (sstables::compaction_stopped_exception&) {
             // ignore, will be handled by can_proceed()

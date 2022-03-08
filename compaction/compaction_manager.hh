@@ -189,6 +189,8 @@ public:
         sstables::compaction_stopped_exception make_compaction_stopped_exception() const;
 
         std::string describe() const;
+
+        future<semaphore_units<>> throttle(const sstables::sstable_list& sstables);
     };
 
     class sstables_task : public task {
@@ -271,6 +273,9 @@ private:
     size_t _available_memory;
     optimized_optional<abort_source::subscription> _early_abort_subscription;
 
+    size_t _max_concurrent_sstable_compactions;
+    semaphore _concurrency_semaphore;
+
     class strategy_control;
     std::unique_ptr<strategy_control> _strategy_control;
 private:
@@ -321,10 +326,12 @@ private:
     using can_purge_tombstones = bool_class<can_purge_tombstones_tag>;
 
     future<> rewrite_sstables(replica::table* t, sstables::compaction_type_options options, get_candidates_func, can_purge_tombstones can_purge = can_purge_tombstones::yes);
+
+    future<semaphore_units<>> throttle(const sstables::sstable_list& sstables);
 public:
     compaction_manager(const db::config& cfg, replica::database_config& dbcfg, abort_source& as);
-    compaction_manager(compaction_scheduling_group csg, maintenance_scheduling_group msg, size_t available_memory, abort_source& as);
-    compaction_manager(compaction_scheduling_group csg, maintenance_scheduling_group msg, size_t available_memory, uint64_t shares, abort_source& as);
+    compaction_manager(compaction_scheduling_group csg, maintenance_scheduling_group msg, size_t available_memory, size_t max_concurrent_sstable_compactions, abort_source& as);
+    compaction_manager(compaction_scheduling_group csg, maintenance_scheduling_group msg, size_t available_memory, size_t max_concurrent_sstable_compactions, uint64_t shares, abort_source& as);
     compaction_manager();
     ~compaction_manager();
 
