@@ -203,23 +203,23 @@ def test_fromjson_varint_empty_string_prepared(cql, table1):
         cql.execute(stmt, [p, '""'])
 
 # Cassandra allows the strings "true" and "false", not just the JSON constants
-# true and false, to be assigned to a boolean column. However, very strangely,
-# it only allows this for prepared statements, and *not* for unprepared
-# statements - which result in an InvalidRequest!
-# Reproduces #7915.
+# true and false, to be assigned to a boolean column.
+# Reproduces issue #7915
 def test_fromjson_boolean_string_unprepared(cql, table1):
     p = unique_key_int()
-    with pytest.raises(InvalidRequest):
-        cql.execute(f"INSERT INTO {table1} (p, b) VALUES ({p}, '\"true\"')")
-    with pytest.raises(InvalidRequest):
-        cql.execute(f"INSERT INTO {table1} (p, b) VALUES ({p}, '\"false\"')")
-@pytest.mark.xfail(reason="issue #7915")
+    cql.execute(f"INSERT INTO {table1} (p, b) VALUES ({p}, fromJson('\"true\"'))")
+    assert list(cql.execute(f"SELECT p, b from {table1} where p = {p}")) == [(p, True)]
+    cql.execute(f"INSERT INTO {table1} (p, b) VALUES ({p}, fromJson('\"false\"'))")
+    assert list(cql.execute(f"SELECT p, b from {table1} where p = {p}")) == [(p, False)]
+# Reproduces issue #7915
 def test_fromjson_boolean_string_prepared(cql, table1):
     p = unique_key_int()
     stmt = cql.prepare(f"INSERT INTO {table1} (p, b) VALUES (?, fromJson(?))")
     cql.execute(stmt, [p, '"true"'])
     assert list(cql.execute(f"SELECT p, b from {table1} where p = {p}")) == [(p, True)]
     cql.execute(stmt, [p, '"false"'])
+    assert list(cql.execute(f"SELECT p, b from {table1} where p = {p}")) == [(p, False)]
+    cql.execute(stmt, [p, '"fALSe"'])
     assert list(cql.execute(f"SELECT p, b from {table1} where p = {p}")) == [(p, False)]
 
 # Test that null argument is allowed for fromJson(), with unprepared statement

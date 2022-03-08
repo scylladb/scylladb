@@ -20,6 +20,8 @@
 #include "exceptions/exceptions.hh"
 #include <limits>
 #include <utility>
+#include <boost/algorithm/string/trim_all.hpp>
+#include <boost/algorithm/string.hpp>
 
 static inline bool is_control_char(char c) {
     return c >= 0 && c <= 0x1F;
@@ -253,6 +255,17 @@ struct from_json_object_visitor {
     }
     bytes operator()(const boolean_type_impl& t) {
         if (!value.IsBool()) {
+            if (value.IsString()) {
+                std::string str(rjson::to_string_view(value));
+                boost::trim_all(str);
+                boost::to_lower(str);
+
+                if (str == "true") {
+                    return t.decompose(true);
+                } else if (str == "false") {
+                    return t.decompose(false);
+                }
+            }
             throw marshal_exception(format("Invalid JSON object {}", value));
         }
         return t.decompose(value.GetBool());
