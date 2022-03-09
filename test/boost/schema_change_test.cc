@@ -678,7 +678,7 @@ future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_
             // which makes it less likely that this test case would need to be needlessly regenerated.
             auto actual = calculate_schema_digest(service::get_storage_proxy(), sf, std::not_fn(&is_internal_keyspace)).get0();
             if (regenerate) {
-                std::cout << "Digest is " << actual << "\n";
+                std::cout << format("        utils::UUID(\"{}\"),", actual) << "\n";
             } else {
                 BOOST_REQUIRE_EQUAL(actual, expected);
             }
@@ -687,7 +687,7 @@ future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_
         auto expect_version = [&] (sstring ks_name, sstring cf_name, utils::UUID expected) {
             auto actual = e.local_db().find_column_family(ks_name, cf_name).schema()->version();
             if (regenerate) {
-                std::cout << "Version of " << ks_name << "." << cf_name << " is " << actual << "\n";
+                std::cout << format("        utils::UUID(\"{}\"),", actual) << "\n";
             } else {
                 BOOST_REQUIRE_EQUAL(actual, expected);
             }
