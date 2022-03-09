@@ -859,13 +859,13 @@ struct remote_fill_buffer_result_v2 {
 }
 
 /// See make_foreign_reader() for description.
-class foreign_reader : public flat_mutation_reader::impl {
+class foreign_reader : public flat_mutation_reader_v2::impl {
     template <typename T>
     using foreign_unique_ptr = foreign_ptr<std::unique_ptr<T>>;
 
-    using fragment_buffer = flat_mutation_reader::tracked_buffer;
+    using fragment_buffer = flat_mutation_reader_v2::tracked_buffer;
 
-    foreign_unique_ptr<flat_mutation_reader> _reader;
+    foreign_unique_ptr<flat_mutation_reader_v2> _reader;
     foreign_unique_ptr<future<>> _read_ahead_future;
     streamed_mutation::forwarding _fwd_sm;
 
@@ -909,7 +909,7 @@ class foreign_reader : public flat_mutation_reader::impl {
 public:
     foreign_reader(schema_ptr schema,
             reader_permit permit,
-            foreign_unique_ptr<flat_mutation_reader> reader,
+            foreign_unique_ptr<flat_mutation_reader_v2> reader,
             streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no);
 
     // this is captured.
@@ -927,7 +927,7 @@ public:
 
 foreign_reader::foreign_reader(schema_ptr schema,
         reader_permit permit,
-        foreign_unique_ptr<flat_mutation_reader> reader,
+        foreign_unique_ptr<flat_mutation_reader_v2> reader,
         streamed_mutation::forwarding fwd_sm)
     : impl(std::move(schema), std::move(permit))
     , _reader(std::move(reader))
@@ -942,13 +942,13 @@ future<> foreign_reader::fill_buffer() {
     return forward_operation([reader = _reader.get()] () {
         auto f = reader->is_buffer_empty() ? reader->fill_buffer() : make_ready_future<>();
         return f.then([=] {
-            return make_ready_future<remote_fill_buffer_result>(remote_fill_buffer_result(reader->detach_buffer(), reader->is_end_of_stream()));
+            return make_ready_future<remote_fill_buffer_result_v2>(remote_fill_buffer_result_v2(reader->detach_buffer(), reader->is_end_of_stream()));
         });
-    }).then([this] (remote_fill_buffer_result res) mutable {
+    }).then([this] (remote_fill_buffer_result_v2 res) mutable {
         _end_of_stream = res.end_of_stream;
         for (const auto& mf : *res.buffer) {
             // Need a copy since the mf is on the remote shard.
-            push_mutation_fragment(mutation_fragment(*_schema, _permit, mf));
+            push_mutation_fragment(mutation_fragment_v2(*_schema, _permit, mf));
         }
     });
 }
@@ -1005,14 +1005,14 @@ future<> foreign_reader::close() noexcept {
     });
 }
 
-flat_mutation_reader make_foreign_reader(schema_ptr schema,
+flat_mutation_reader_v2 make_foreign_reader(schema_ptr schema,
             reader_permit permit,
-            foreign_ptr<std::unique_ptr<flat_mutation_reader>> reader,
+            foreign_ptr<std::unique_ptr<flat_mutation_reader_v2>> reader,
             streamed_mutation::forwarding fwd_sm) {
     if (reader.get_owner_shard() == this_shard_id()) {
         return std::move(*reader);
     }
-    return make_flat_mutation_reader<foreign_reader>(std::move(schema), std::move(permit), std::move(reader), fwd_sm);
+    return make_flat_mutation_reader_v2<foreign_reader>(std::move(schema), std::move(permit), std::move(reader), fwd_sm);
 }
 
 template <typename... Arg>

@@ -405,9 +405,9 @@ using mutation_source_opt = optimized_optional<mutation_source>;
 /// If the reader resides on this shard (the shard where make_foreign_reader()
 /// is called) there is no need to wrap it in foreign_reader, just return it as
 /// is.
-flat_mutation_reader make_foreign_reader(schema_ptr schema,
+flat_mutation_reader_v2 make_foreign_reader(schema_ptr schema,
         reader_permit permit,
-        foreign_ptr<std::unique_ptr<flat_mutation_reader>> reader,
+        foreign_ptr<std::unique_ptr<flat_mutation_reader_v2>> reader,
         streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no);
 
 /// Make an auto-paused evictable reader.

@@ -58,20 +58,20 @@ SEASTAR_TEST_CASE(test_multishard_writer) {
                     auto shard = s->get_sharder().shard_of(m.token());
                     shards_before[shard]++;
                 }
-                auto source_reader = partition_nr > 0 ? make_flat_mutation_reader_from_mutations(gen.schema(), make_reader_permit(e), muts) : make_empty_flat_reader(s, make_reader_permit(e));
+                auto source_reader = partition_nr > 0 ? make_flat_mutation_reader_from_mutations_v2(gen.schema(), make_reader_permit(e), muts) : make_empty_flat_reader_v2(s, make_reader_permit(e));
                 auto close_source_reader = deferred_close(source_reader);
                 auto& sharder = s->get_sharder();
                 size_t partitions_received = distribute_reader_and_consume_on_shards(s,
                     std::move(source_reader),
-                    [&sharder, &shards_after, error] (flat_mutation_reader reader) mutable {
+                    [&sharder, &shards_after, error] (flat_mutation_reader_v2 reader) mutable {
                         if (error) {
                           return reader.close().then([] {
                             return make_exception_future<>(std::runtime_error("Failed to write"));
                           });
                         }
-                        return with_closeable(std::move(reader), [&sharder, &shards_after, error] (flat_mutation_reader& reader) {
+                        return with_closeable(std::move(reader), [&sharder, &shards_after, error] (flat_mutation_reader_v2& reader) {
                           return repeat([&sharder, &shards_after, &reader, error] () mutable {
-                            return reader().then([&sharder, &shards_after, error] (mutation_fragment_opt mf_opt) mutable {
+                            return reader().then([&sharder, &shards_after, error] (mutation_fragment_v2_opt mf_opt) mutable {
                                 if (mf_opt) {
                                     if (mf_opt->is_partition_start()) {
                                         auto shard = sharder.shard_of(mf_opt->as_partition_start().key().token());
@@ -120,12 +120,12 @@ SEASTAR_TEST_CASE(test_multishard_writer_producer_aborts) {
         auto test_random_streams = [&e] (random_mutation_generator&& gen, size_t partition_nr, generate_error error = generate_error::no) {
             auto muts = gen(partition_nr);
             schema_ptr s = gen.schema();
-            auto source_reader = partition_nr > 0 ? make_flat_mutation_reader_from_mutations(s, make_reader_permit(e), muts) : make_empty_flat_reader(s, make_reader_permit(e));
+            auto source_reader = partition_nr > 0 ? make_flat_mutation_reader_from_mutations_v2(s, make_reader_permit(e), muts) : make_empty_flat_reader_v2(s, make_reader_permit(e));
             auto close_source_reader = deferred_close(source_reader);
             int mf_produced = 0;
             auto get_next_mutation_fragment = [&source_reader, &mf_produced] () mutable {
                 if (mf_produced++ > 800) {
-                    return make_exception_future<mutation_fragment_opt>(std::runtime_error("the producer failed"));
+                    return make_exception_future<mutation_fragment_v2_opt>(std::runtime_error("the producer failed"));
                 } else {
                     return source_reader();
                 }
@@ -134,15 +134,15 @@ SEASTAR_TEST_CASE(test_multishard_writer_producer_aborts) {
             try {
                 distribute_reader_and_consume_on_shards(s,
                     make_generating_reader(s, make_reader_permit(e), std::move(get_next_mutation_fragment)),
-                    [&sharder, error] (flat_mutation_reader reader) mutable {
+                    [&sharder, error] (flat_mutation_reader_v2 reader) mutable {
                         if (error) {
                           return reader.close().then([] {
                             return make_exception_future<>(std::runtime_error("Failed to write"));
                           });
                         }
-                        return with_closeable(std::move(reader), [&sharder, error] (flat_mutation_reader& reader) {
+                        return with_closeable(std::move(reader), [&sharder, error] (flat_mutation_reader_v2& reader) {
                           return repeat([&sharder, &reader, error] () mutable {
-                            return reader().then([&sharder,  error] (mutation_fragment_opt mf_opt) mutable {
+                            return reader().then([&sharder,  error] (mutation_fragment_v2_opt mf_opt) mutable {
                                 if (mf_opt) {
                                     if (mf_opt->is_partition_start()) {
                                         auto shard = sharder.shard_of(mf_opt->as_partition_start().key().token());

@@ -901,6 +901,9 @@ future<> consume_partitions(flat_mutation_reader_v2& reader, Consumer consumer) 
     });
 }
 
+flat_mutation_reader_v2
+make_generating_reader(schema_ptr s, reader_permit permit, std::function<future<mutation_fragment_v2_opt> ()> get_next_fragment);
+
 /// A cosumer function that is passed a flat_mutation_reader to be consumed from
 /// and returns a future<> resolved when the reader is fully consumed, and closed.
 /// Note: the function assumes ownership of the reader and must close it in all cases.

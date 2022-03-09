@@ -22,7 +22,7 @@ class view_update_generator;
 
 namespace streaming {
 
-std::function<future<>(flat_mutation_reader)> make_streaming_consumer(sstring origin,
+std::function<future<>(flat_mutation_reader_v2)> make_streaming_consumer(sstring origin,
     sharded<replica::database>& db,
     sharded<db::system_distributed_keyspace>& sys_dist_ks,
     sharded<db::view::view_update_generator>& vug,

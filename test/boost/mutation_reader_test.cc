@@ -1260,14 +1260,14 @@ SEASTAR_THREAD_TEST_CASE(test_foreign_reader_as_mutation_source) {
                     mutation_reader::forwarding fwd_mr) {
                 auto remote_reader = env.db().invoke_on(remote_shard,
                         [&, s = global_schema_ptr(s), fwd_sm, fwd_mr, trace_state = tracing::global_trace_state_ptr(trace_state)] (replica::database& db) {
-                    return make_foreign(std::make_unique<flat_mutation_reader>(downgrade_to_v1(remote_mt->make_flat_reader(s.get(),
+                    return make_foreign(std::make_unique<flat_mutation_reader_v2>(remote_mt->make_flat_reader(s.get(),
                             make_reader_permit(env),
                             range,
                             slice,
                             pc,
                             trace_state.get(),
                             fwd_sm,
-                            fwd_mr))));
+                            fwd_mr)));
                 }).get0();
                 return make_foreign_reader(s, std::move(permit), std::move(remote_reader), fwd_sm);
             };
@@ -1900,14 +1900,14 @@ SEASTAR_THREAD_TEST_CASE(test_stopping_reader_with_pending_read_ahead) {
         const auto shard_of_interest = (this_shard_id() + 1) % smp::count;
         auto s = simple_schema();
         auto remote_control_remote_reader = smp::submit_to(shard_of_interest, [&env, gs = global_simple_schema(s)] {
-            using control_type = foreign_ptr<std::unique_ptr<puppet_reader::control>>;
-            using reader_type = foreign_ptr<std::unique_ptr<flat_mutation_reader>>;
+            using control_type = foreign_ptr<std::unique_ptr<puppet_reader_v2::control>>;
+            using reader_type = foreign_ptr<std::unique_ptr<flat_mutation_reader_v2>>;
 
-            auto control = make_foreign(std::make_unique<puppet_reader::control>());
-            auto reader = make_foreign(std::make_unique<flat_mutation_reader>(make_flat_mutation_reader<puppet_reader>(gs.get(),
+            auto control = make_foreign(std::make_unique<puppet_reader_v2::control>());
+            auto reader = make_foreign(std::make_unique<flat_mutation_reader_v2>(make_flat_mutation_reader_v2<puppet_reader_v2>(gs.get(),
                     make_reader_permit(env),
                     *control,
-                    std::vector{puppet_reader::fill_buffer_action::fill, puppet_reader::fill_buffer_action::block},
+                    std::vector{puppet_reader_v2::fill_buffer_action::fill, puppet_reader_v2::fill_buffer_action::block},
                     std::vector<uint32_t>{0, 1})));
 
             return make_ready_future<std::tuple<control_type, reader_type>>(std::tuple(std::move(control), std::move(reader)));

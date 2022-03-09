@@ -8,7 +8,7 @@
 
 #include "mutation_writer/multishard_writer.hh"
 #include "mutation_reader.hh"
-#include "mutation_fragment.hh"
+#include "mutation_fragment_v2.hh"
 #include "schema_registry.hh"
 #include <vector>
 #include <seastar/core/future-util.hh>
@@ -21,13 +21,13 @@ class shard_writer {
 private:
     schema_ptr _s;
     std::unique_ptr<reader_concurrency_semaphore> _semaphore;
-    flat_mutation_reader _reader;
-    std::function<future<> (flat_mutation_reader reader)> _consumer;
+    flat_mutation_reader_v2 _reader;
+    std::function<future<> (flat_mutation_reader_v2 reader)> _consumer;
 public:
     shard_writer(schema_ptr s,
         std::unique_ptr<reader_concurrency_semaphore> semaphore,
-        flat_mutation_reader reader,
-        std::function<future<> (flat_mutation_reader reader)> consumer);
+        flat_mutation_reader_v2 reader,
+        std::function<future<> (flat_mutation_reader_v2 reader)> consumer);
     future<> consume();
     future<> close() noexcept;
 };
@@ -43,17 +43,17 @@ private:
     schema_ptr _s;
     std::vector<foreign_ptr<std::unique_ptr<shard_writer>>> _shard_writers;
     std::vector<future<>> _pending_consumers;
-    std::vector<std::optional<queue_reader_handle>> _queue_reader_handles;
+    std::vector<std::optional<queue_reader_handle_v2>> _queue_reader_handles;
     unsigned _current_shard = -1;
     uint64_t _consumed_partitions = 0;
-    flat_mutation_reader _producer;
-    std::function<future<> (flat_mutation_reader)> _consumer;
+    flat_mutation_reader_v2 _producer;
+    std::function<future<> (flat_mutation_reader_v2)> _consumer;
 private:
-    unsigned shard_for_mf(const mutation_fragment& mf) {
+    unsigned shard_for_mf(const mutation_fragment_v2& mf) {
         return _s->get_sharder().shard_of(mf.as_partition_start().key().token());
     }
     future<> make_shard_writer(unsigned shard);
-    future<stop_iteration> handle_mutation_fragment(mutation_fragment mf);
+    future<stop_iteration> handle_mutation_fragment(mutation_fragment_v2 mf);
     future<stop_iteration> handle_end_of_stream();
     future<> consume(unsigned shard);
     future<> wait_pending_consumers();
@@ -61,16 +61,16 @@ private:
 public:
     multishard_writer(
         schema_ptr s,
-        flat_mutation_reader producer,
-        std::function<future<> (flat_mutation_reader)> consumer);
+        flat_mutation_reader_v2 producer,
+        std::function<future<> (flat_mutation_reader_v2)> consumer);
     future<uint64_t> operator()();
     future<> close() noexcept;
 };
 
 shard_writer::shard_writer(schema_ptr s,
     std::unique_ptr<reader_concurrency_semaphore> semaphore,
-    flat_mutation_reader reader,
-    std::function<future<> (flat_mutation_reader reader)> consumer)
+    flat_mutation_reader_v2 reader,
+    std::function<future<> (flat_mutation_reader_v2 reader)> consumer)
     : _s(s)
     , _semaphore(std::move(semaphore))
     , _reader(std::move(reader))
@@ -78,7 +78,7 @@ shard_writer::shard_writer(schema_ptr s,
 }
 
 future<> shard_writer::consume() {
-    return _reader.peek().then([this] (mutation_fragment* mf_ptr) {
+    return _reader.peek().then([this] (mutation_fragment_v2* mf_ptr) {
         if (mf_ptr) {
             return _consumer(std::move(_reader));
         }
@@ -94,8 +94,8 @@ future<> shard_writer::close() noexcept {
 
 multishard_writer::multishard_writer(
     schema_ptr s,
-    flat_mutation_reader producer,
-    std::function<future<> (flat_mutation_reader)> consumer)
+    flat_mutation_reader_v2 producer,
+    std::function<future<> (flat_mutation_reader_v2)> consumer)
     : _s(std::move(s))
     , _queue_reader_handles(_s->get_sharder().shard_count())
     , _producer(std::move(producer))
@@ -104,11 +104,11 @@ multishard_writer::multishard_writer(
 }
 
 future<> multishard_writer::make_shard_writer(unsigned shard) {
-    auto [reader, handle] = make_queue_reader(_s, _producer.permit());
+    auto [reader, handle] = make_queue_reader_v2(_s, _producer.permit());
     _queue_reader_handles[shard] = std::move(handle);
     return smp::submit_to(shard, [gs = global_schema_ptr(_s),
             consumer = _consumer,
-            reader = make_foreign(std::make_unique<flat_mutation_reader>(std::move(reader)))] () mutable {
+            reader = make_foreign(std::make_unique<flat_mutation_reader_v2>(std::move(reader)))] () mutable {
         auto s = gs.get();
         auto semaphore = std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{}, "shard_writer");
         auto permit = semaphore->make_tracking_only_permit(s.get(), "multishard-writer", db::no_timeout);
@@ -120,7 +120,7 @@ future<> multishard_writer::make_shard_writer(unsigned shard) {
     });
 }
 
-future<stop_iteration> multishard_writer::handle_mutation_fragment(mutation_fragment mf) {
+future<stop_iteration> multishard_writer::handle_mutation_fragment(mutation_fragment_v2 mf) {
     auto f = make_ready_future<>();
     if (mf.is_partition_start()) {
         _consumed_partitions++;
@@ -169,7 +169,7 @@ future<> multishard_writer::wait_pending_consumers() {
 
 future<> multishard_writer::distribute_mutation_fragments() {
     return repeat([this] () mutable {
-        return _producer().then([this] (mutation_fragment_opt mf_opt) mutable {
+        return _producer().then([this] (mutation_fragment_v2_opt mf_opt) mutable {
             if (mf_opt) {
                 return handle_mutation_fragment(std::move(*mf_opt));
             } else {
@@ -195,8 +195,8 @@ future<uint64_t> multishard_writer::operator()() {
 }
 
 future<uint64_t> distribute_reader_and_consume_on_shards(schema_ptr s,
-    flat_mutation_reader producer,
-    std::function<future<> (flat_mutation_reader)> consumer,
+    flat_mutation_reader_v2 producer,
+    std::function<future<> (flat_mutation_reader_v2)> consumer,
     utils::phased_barrier::operation&& op) {
     return do_with(multishard_writer(std::move(s), std::move(producer), std::move(consumer)), std::move(op), [] (multishard_writer& writer, utils::phased_barrier::operation&) {
         return writer().finally([&writer] {

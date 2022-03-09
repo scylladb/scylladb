@@ -1517,6 +1517,46 @@ flat_mutation_reader make_generating_reader(schema_ptr s, reader_permit permit, 
     return make_flat_mutation_reader<generating_reader>(std::move(s), std::move(permit), std::move(get_next_fragment));
 }
 
+
+/*
+ * This reader takes a get_next_fragment generator that produces mutation_fragment_opt which is returned by
+ * generating_reader.
+ */
+class generating_reader_v2 final : public flat_mutation_reader_v2::impl {
+    std::function<future<mutation_fragment_v2_opt> ()> _get_next_fragment;
+public:
+    generating_reader_v2(schema_ptr s, reader_permit permit, std::function<future<mutation_fragment_v2_opt> ()> get_next_fragment)
+        : impl(std::move(s), std::move(permit)), _get_next_fragment(std::move(get_next_fragment))
+    { }
+    virtual future<> fill_buffer() override {
+        return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this] {
+            return _get_next_fragment().then([this] (mutation_fragment_v2_opt mopt) {
+                if (!mopt) {
+                    _end_of_stream = true;
+                } else {
+                    push_mutation_fragment(std::move(*mopt));
+                }
+            });
+        });
+    }
+    virtual future<> next_partition() override {
+        return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
+    }
+    virtual future<> fast_forward_to(const dht::partition_range&) override {
+        return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
+    }
+    virtual future<> fast_forward_to(position_range) override {
+        return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
+    }
+    virtual future<> close() noexcept override {
+        return make_ready_future<>();
+    }
+};
+
+flat_mutation_reader_v2 make_generating_reader(schema_ptr s, reader_permit permit, std::function<future<mutation_fragment_v2_opt> ()> get_next_fragment) {
+    return make_flat_mutation_reader_v2<generating_reader_v2>(std::move(s), std::move(permit), std::move(get_next_fragment));
+}
+
 void flat_mutation_reader::do_upgrade_schema(const schema_ptr& s) {
     *this = transform(std::move(*this), schema_upgrader(s));
 }
