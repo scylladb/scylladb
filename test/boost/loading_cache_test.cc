@@ -449,3 +449,87 @@ SEASTAR_TEST_CASE(test_loading_cache_reload_during_eviction) {
         BOOST_REQUIRE_EQUAL(loading_cache.size(), 1);
     });
 }
+
+SEASTAR_THREAD_TEST_CASE(test_loading_cache_remove_leaves_no_old_entries_behind) {
+    using namespace std::chrono;
+    load_count = 0;
+
+    auto load_v1 = [] (auto key) { return make_ready_future<sstring>("v1"); };
+    auto load_v2 = [] (auto key) { return make_ready_future<sstring>("v2"); };
+    auto load_v3 = [] (auto key) { return make_ready_future<sstring>("v3"); };
+
+    {
+        utils::loading_cache<int, sstring> loading_cache(num_loaders, 100s, testlog);
+        auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
+
+        //
+        // Test remove() concurrent with loading
+        //
+
+        auto f = loading_cache.get_ptr(0, [&](auto key) {
+            return yield().then([&] {
+                return load_v1(key);
+            });
+        });
+
+        loading_cache.remove(0);
+
+        BOOST_REQUIRE_EQUAL(loading_cache.find(0), nullptr);
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 0);
+
+        auto ptr1 = f.get0();
+        BOOST_REQUIRE_EQUAL(*ptr1, "v1");
+
+        BOOST_REQUIRE_EQUAL(loading_cache.find(0), nullptr);
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 0);
+
+        ptr1 = loading_cache.get_ptr(0, load_v2).get0();
+        loading_cache.remove(0);
+        BOOST_REQUIRE_EQUAL(*ptr1, "v2");
+
+        //
+        // Test that live ptr1, removed from cache, does not prevent reload of new value
+        //
+        auto ptr2 = loading_cache.get_ptr(0, load_v3).get0();
+        ptr1 = nullptr;
+        BOOST_REQUIRE_EQUAL(*ptr2, "v3");
+    }
+
+    // Test remove_if()
+    {
+        utils::loading_cache<int, sstring> loading_cache(num_loaders, 100s, testlog);
+        auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
+
+        //
+        // Test remove_if() concurrent with loading
+        //
+        auto f = loading_cache.get_ptr(0, [&](auto key) {
+            return yield().then([&] {
+                return load_v1(key);
+            });
+        });
+
+        loading_cache.remove_if([] (auto&& v) { return v == "v1"; });
+
+        BOOST_REQUIRE_EQUAL(loading_cache.find(0), nullptr);
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 0);
+
+        auto ptr1 = f.get0();
+        BOOST_REQUIRE_EQUAL(*ptr1, "v1");
+
+        BOOST_REQUIRE_EQUAL(loading_cache.find(0), nullptr);
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 0);
+
+        ptr1 = loading_cache.get_ptr(0, load_v2).get0();
+        loading_cache.remove_if([] (auto&& v) { return v == "v2"; });
+        BOOST_REQUIRE_EQUAL(*ptr1, "v2");
+
+        //
+        // Test that live ptr1, removed from cache, does not prevent reload of new value
+        //
+        auto ptr2 = loading_cache.get_ptr(0, load_v3).get0();
+        ptr1 = nullptr;
+        BOOST_REQUIRE_EQUAL(*ptr2, "v3");
+        ptr2 = nullptr;
+    }
+}
