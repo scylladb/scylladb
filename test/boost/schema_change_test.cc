@@ -640,7 +640,7 @@ future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_
     auto db_cfg_ptr = ::make_shared<db::config>(std::move(extensions));
     auto& db_cfg = *db_cfg_ptr;
     db_cfg.enable_user_defined_functions({true}, db::config::config_source::CommandLine);
-    db_cfg.experimental_features({experimental_features_t::UDF}, db::config::config_source::CommandLine);
+    db_cfg.experimental_features({experimental_features_t::UDF, experimental_features_t::KEYSPACE_STORAGE_OPTIONS}, db::config::config_source::CommandLine);
     if (regenerate) {
         db_cfg.data_file_directories({data_dir}, db::config::config_source::CommandLine);
     } else {
@@ -703,14 +703,16 @@ future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_
         sf.set<schema_feature::VIEW_VIRTUAL_COLUMNS>();
         expect_digest(sf, expected_digests[2]);
 
-        expect_digest(schema_features::full(), expected_digests[3]);
+        sf = schema_features::full();
+        sf.remove<schema_feature::SCYLLA_KEYSPACES>();
+        expect_digest(sf, expected_digests[3]);
 
         // Causes tombstones to become expired
         // This is in order to test that schema disagreement doesn't form due to expired tombstones being collected
         // Refs https://github.com/scylladb/scylla/issues/4485
         forward_jump_clocks(std::chrono::seconds(60*60*24*31));
 
-        expect_digest(schema_features::full(), expected_digests[4]);
+        expect_digest(sf, expected_digests[4]);
 
         // FIXME: schema_mutations::digest() is still sensitive to expiry, so we can check versions only after forward_jump_clocks()
         // otherwise the results would not be stable.
@@ -718,6 +720,11 @@ future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_
         expect_version("ks", "tbl", expected_digests[6]);
         expect_version("ks", "tbl_view", expected_digests[7]);
         expect_version("ks", "tbl_view_2", expected_digests[8]);
+
+        // Check that system_schema.scylla_keyspaces info is taken into account
+        sf = schema_features::full();
+        expect_digest(sf, expected_digests[9]);
+
     }, cfg_in).then([tmp = std::move(tmp)] {});
 }
 
@@ -732,8 +739,10 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change) {
         utils::UUID("0db2a3f8-6779-388f-951d-de6a537789a7"),
         utils::UUID("21a89984-ffc6-325d-b818-66fc29da51e7"),
         utils::UUID("e69a05e8-80a6-3e8f-bd34-1b5837374c79"),
+        utils::UUID("de49e92f-a00d-3f24-8779-d07de26708cb"),
     };
-    return test_schema_digest_does_not_change_with_disabled_features("./test/resource/sstables/schema_digest_test", std::set<sstring>{"COMPUTED_COLUMNS", "CDC"}, std::move(expected_digests), [] (cql_test_env& e) {});
+    return test_schema_digest_does_not_change_with_disabled_features("./test/resource/sstables/schema_digest_test",
+            std::set<sstring>{"COMPUTED_COLUMNS", "CDC", "KEYSPACE_STORAGE_OPTIONS"}, std::move(expected_digests), [] (cql_test_env& e) {});
 }
 
 SEASTAR_TEST_CASE(test_schema_digest_does_not_change_after_computed_columns) {
@@ -747,8 +756,10 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_after_computed_columns) {
         utils::UUID("75808956-93e2-331a-96cc-8dc9cdea79ca"),
         utils::UUID("7eccb793-c6f4-3e84-ae35-788d03188baf"),
         utils::UUID("467deb84-d7de-36cb-a1fa-f3672cb66340"),
+        utils::UUID("94606636-ae43-3e0a-b238-e7f0e33ef600"),
     };
-    return test_schema_digest_does_not_change_with_disabled_features("./test/resource/sstables/schema_digest_test_computed_columns", std::set<sstring>{"CDC"}, std::move(expected_digests), [] (cql_test_env& e) {});
+    return test_schema_digest_does_not_change_with_disabled_features("./test/resource/sstables/schema_digest_test_computed_columns",
+            std::set<sstring>{"CDC", "KEYSPACE_STORAGE_OPTIONS"}, std::move(expected_digests), [] (cql_test_env& e) {});
 }
 
 SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_functions) {
@@ -762,10 +773,11 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_functions) {
         utils::UUID("cb23910d-ced8-35e5-99f3-57f362860f3c"),
         utils::UUID("b0ecf791-0637-34a5-a940-bc217517f1aa"),
         utils::UUID("47b87dfc-3c18-324b-b280-58300ac5d3ca"),
+        utils::UUID("48fd0c1b-9777-34be-8c16-187c6ab55cfc"),
     };
     return test_schema_digest_does_not_change_with_disabled_features(
         "./test/resource/sstables/schema_digest_with_functions_test",
-        std::set<sstring>{"CDC"},
+        std::set<sstring>{"CDC", "KEYSPACE_STORAGE_OPTIONS"},
         std::move(expected_digests),
         [] (cql_test_env& e) {
             e.execute_cql("create function twice(val int) called on null input returns int language lua as 'return 2 * val';").get();
@@ -786,15 +798,40 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_cdc_options) {
         utils::UUID("c604f5c9-988e-393f-b9d8-2ed55b9a540c"),
         utils::UUID("45d9f25d-58a1-3f1e-85a1-f09d82c52588"),
         utils::UUID("7ef45dd2-aab9-38f1-bcc6-ba9c94666e36"),
+        utils::UUID("09899769-4e7f-3119-9769-e3db3d99455b"),
     };
     return test_schema_digest_does_not_change_with_disabled_features(
         "./test/resource/sstables/schema_digest_test_cdc_options",
-        std::set<sstring>{},
+        std::set<sstring>{"KEYSPACE_STORAGE_OPTIONS"},
         std::move(expected_digests),
         [] (cql_test_env& e) {
             e.execute_cql("create table tests.table_cdc (pk int primary key, c1 int, c2 int) with cdc = {'enabled':'true'};").get();
         },
         std::move(ext));
+}
+
+SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_keyspace_storage_options) {
+    std::vector<utils::UUID> expected_digests{
+        utils::UUID("d9f78213-ff9f-3208-9083-47e18cebf06f"),
+        utils::UUID("30e2cf99-389d-381f-82b9-3fcdcf66a1fb"),
+        utils::UUID("30e2cf99-389d-381f-82b9-3fcdcf66a1fb"),
+        utils::UUID("98d63879-6633-3708-880e-8716fcbadda0"),
+        utils::UUID("98d63879-6633-3708-880e-8716fcbadda0"),
+        utils::UUID("f4ca70f9-170c-3a69-a274-76e711d2841e"),
+        utils::UUID("cbf9aa1e-2488-3485-8c28-e42bf42a2dcf"),
+        utils::UUID("67c0db2d-8fd6-30f4-beee-f15a80a889fd"),
+        utils::UUID("9c5c996a-6b27-346e-96d4-26d545d4601a"),
+        utils::UUID("3fc03c97-8010-3746-8cea-e8b9ac27fe4e"),
+    };
+    return test_schema_digest_does_not_change_with_disabled_features(
+        "./test/resource/sstables/schema_digest_test_keyspace_storage_options",
+        std::set<sstring>{},
+        std::move(expected_digests),
+        [] (cql_test_env& e) {
+            e.execute_cql("create keyspace tests_s3 with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 }"
+                    " and storage = { 'type': 'S3', 'bucket': 'b1', 'endpoint': 'localhost' };").get();
+            e.execute_cql("create table tests_s3.table1 (pk int primary key, c1 int, c2 int)").get();
+        });
 }
 
 // Regression test, ensuring people don't forget to set the null sharder
