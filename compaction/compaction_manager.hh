@@ -272,7 +272,7 @@ private:
     inline bool maybe_stop_on_error(std::exception_ptr err, bool can_retry);
 
     void postponed_compactions_reevaluation();
-    void reevaluate_postponed_compactions();
+    void reevaluate_postponed_compactions() noexcept;
     // Postpone compaction for a table that couldn't be executed due to ongoing
     // similar-sized compaction.
     void postpone_compaction_for_table(replica::table* t);

@@ -536,7 +536,7 @@ void compaction_manager::postponed_compactions_reevaluation() {
     });
 }
 
-void compaction_manager::reevaluate_postponed_compactions() {
+void compaction_manager::reevaluate_postponed_compactions() noexcept {
     _postponed_reevaluation.signal();
 }
 
