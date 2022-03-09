@@ -20,6 +20,8 @@
 
 namespace query {
 
+static logging::logger qlogger("query");
+
 constexpr size_t result_memory_limiter::minimum_result_size;
 constexpr size_t result_memory_limiter::maximum_result_size;
 constexpr size_t result_memory_limiter::unlimited_result_size;
@@ -404,8 +406,16 @@ void forward_result::merge(const forward_result& other, const std::vector<forwar
         query_results.resize(other.query_results.size());
     }
 
-    assert(query_results.size() == other.query_results.size());
-    assert(query_results.size() == reduction_types.size());
+    if (query_results.size() != other.query_results.size() || query_results.size() != reduction_types.size()) {
+        on_internal_error(
+            qlogger,
+            format("forward_result::merge(): operation cannot be completed due to invalid argument sizes. "
+                    "this.query_results.size(): {} "
+                    "other.query_results.size(): {} "
+                    "reduction_types.size(): {}",
+                    query_results.size(), other.query_results.size(), reduction_types.size())
+        );
+    }
 
     for (size_t i = 0; i < query_results.size(); i++) {
         query_results[i] = merge_singular_results(query_results[i], other.query_results[i], reduction_types[i]);
@@ -413,7 +423,10 @@ void forward_result::merge(const forward_result& other, const std::vector<forwar
 }
 
 std::ostream& operator<<(std::ostream& out, const query::forward_result::printer& p) {
-    assert(p.types.size() == p.res.query_results.size());
+    if (p.types.size() != p.res.query_results.size()) {
+        return out << "[malformed forward_result (" << p.res.query_results.size()
+            << " results, " << p.types.size() << " reduction types)]";
+    }
 
     out << "[";
     for (size_t i = 0; i < p.types.size(); i++) {
