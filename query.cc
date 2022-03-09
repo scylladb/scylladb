@@ -423,7 +423,10 @@ void forward_result::merge(const forward_result& other, const std::vector<forwar
 }
 
 std::ostream& operator<<(std::ostream& out, const query::forward_result::printer& p) {
-    assert(p.types.size() == p.res.query_results.size());
+    if (p.types.size() != p.res.query_results.size()) {
+        return out << "[malformed forward_result (" << p.res.query_results.size()
+            << " results, " << p.types.size() << " reduction types)]";
+    }
 
     out << "[";
     for (size_t i = 0; i < p.types.size(); i++) {
