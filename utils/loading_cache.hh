@@ -174,9 +174,10 @@ class loading_cache {
 
     private:
         void touch() noexcept {
-            assert(_lru_entry_ptr);
             _last_read = loading_cache_clock_type::now();
-            _lru_entry_ptr->touch();
+            if (_lru_entry_ptr) {
+                _lru_entry_ptr->touch();
+            }
         }
 
         void set_anchor_back_reference(lru_entry* lru_entry_ptr) noexcept {
@@ -265,7 +266,7 @@ public:
             });
         }).then([this, k] (timestamped_val_ptr ts_val_ptr) {
             // check again since it could have already been inserted and initialized
-            if (!ts_val_ptr->ready()) {
+            if (!ts_val_ptr->ready() && !ts_val_ptr.orphaned()) {
                 _logger.trace("{}: storing the value for the first time", k);
 
                 if (ts_val_ptr->size() > _max_size) {
@@ -331,6 +332,11 @@ public:
         return set_find(k);
     }
 
+    // Removes all values matching a given predicate and values which are currently loading.
+    // Guarantees that no values which match the predicate and whose loading was initiated
+    // before this call will be present after this call (or appear at any time later).
+    // The predicate may be invoked multiple times on the same value.
+    // It must return the same result for a given value (it must be a pure function).
     template <typename Pred>
     requires std::is_invocable_r_v<bool, Pred, const value_type&>
     void remove_if(Pred&& pred) {
@@ -343,15 +349,29 @@ public:
 
         _unprivileged_lru_list.remove_and_dispose_if(cond_pred, value_destroyer);
         _lru_list.remove_and_dispose_if(cond_pred, value_destroyer);
+        _loading_values.remove_if([&pred] (const timestamped_val& v) {
+            return pred(v.value());
+        });
     }
 
+    // Removes a given key from the cache.
+    // The key is removed immediately.
+    // After this, get_ptr() is guaranteed to reload the value before returning it.
+    // As a consequence of the above, if there is a concurrent get_ptr() in progress with this,
+    // its value will not populate the cache. It will still succeed.
     void remove(const Key& k) {
         remove_ts_value(set_find(k));
+        // set_find() returns nullptr for a key which is currently loading, which we want to remove too.
+        _loading_values.remove(k);
     }
 
+    // Removes a given key from the cache.
+    // Same guarantees as with remove(key).
     template<typename KeyType, typename KeyHasher, typename KeyEqual>
     void remove(const KeyType& key, KeyHasher key_hasher_func, KeyEqual key_equal_func) noexcept {
-        remove_ts_value(set_find(key, std::move(key_hasher_func), std::move(key_equal_func)));
+        remove_ts_value(set_find(key, key_hasher_func, key_equal_func));
+        // set_find() returns nullptr for a key which is currently loading, which we want to remove too.
+        _loading_values.remove(key, key_hasher_func, key_equal_func);
     }
 
     size_t size() const {

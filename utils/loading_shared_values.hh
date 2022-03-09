@@ -83,6 +83,10 @@ private:
             _val.emplace(std::move(new_val));
         }
 
+        bool orphaned() const {
+            return !is_linked();
+        }
+
         shared_promise<>& loaded() {
             return _loaded;
         }
@@ -95,7 +99,9 @@ private:
                 : _parent(parent), _key(std::move(k)) {}
 
         ~entry() {
-            _parent._set.erase(_parent._set.iterator_to(*this));
+            if (is_linked()) {
+                _parent._set.erase(_parent._set.iterator_to(*this));
+            }
             Stats::inc_evictions();
         }
 
@@ -151,6 +157,18 @@ public:
             auto res = _e.owned() ? _e->release() : _e->value();
             _e = nullptr;
             return res;
+        }
+
+        // Returns the key this entry is associated with.
+        // Valid if bool(*this).
+        const key_type& key() const {
+            return _e->key();
+        }
+
+        // Returns true iff the entry is not linked in the set.
+        // Call only when bool(*this).
+        bool orphaned() const {
+            return _e->orphaned();
         }
 
         friend class loading_shared_values;
@@ -264,6 +282,50 @@ public:
         }
         return entry_ptr(it->shared_from_this());
     };
+
+    // Removes a given key from this container.
+    // If a given key is currently loading, the loading will succeed and will return entry_ptr
+    // to the caller, but the value will not be present in the container. It will be removed
+    // when the last entry_ptr dies, as usual.
+    //
+    // Post-condition: !find(key)
+    template<typename KeyType, typename KeyHasher, typename KeyEqual>
+    void remove(const KeyType& key, KeyHasher key_hasher_func, KeyEqual key_equal_func) {
+        set_iterator it = _set.find(key, std::move(key_hasher_func), key_eq<KeyType, KeyEqual>());
+        if (it != _set.end()) {
+            _set.erase(it);
+        }
+    }
+
+    // Removes a given key from this container.
+    // If a given key is currently loading, the loading will succeed and will return entry_ptr
+    // to the caller, but the value will not be present in the container. It will be removed
+    // when the last entry_ptr dies, as usual.
+    //
+    // Post-condition: !find(key)
+    template<typename KeyType>
+    void remove(const KeyType& key) {
+        remove(key, Hash(), EqualPred());
+    }
+
+    // Removes all values which match a given predicate or are currently loading.
+    // Guarantees that no values which match the predicate and whose loading was initiated
+    // before this call will be present after this call (or appear at any time later).
+    // Same effects as if remove(e.key()) was called on each matching entry.
+    template<typename Pred>
+    requires std::is_invocable_r_v<bool, Pred, const Tp&>
+    void remove_if(const Pred& pred) {
+        auto it = _set.begin();
+        while (it != _set.end()) {
+            if (!it->ready() || pred(it->value())) {
+                auto next = std::next(it);
+                _set.erase(it);
+                it = next;
+            } else {
+                ++it;
+            }
+        }
+    }
 
     // keep the default non-templated overloads to ease on the compiler for specifications
     // that do not require the templated find().
