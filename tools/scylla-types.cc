@@ -50,7 +50,7 @@ sstring to_printable_string(const type_variant& type, bytes_view value) {
 
 void print_handler(type_variant type, std::vector<bytes> values) {
     for (const auto& value : values) {
-        std::cout << to_printable_string(type, value) << std::endl;
+        fmt::print("{}\n", to_printable_string(type, value));
     }
 }
 
@@ -83,13 +83,7 @@ void compare_handler(type_variant type, std::vector<bytes> values) {
     } else {
         res_str = ">";
     }
-    std::cout
-        << to_printable_string(type, values[0])
-        << " "
-        << res_str
-        << " "
-        << to_printable_string(type, values[1])
-        << std::endl;
+    fmt::print("{} {} {}\n", to_printable_string(type, values[0]), res_str, to_printable_string(type, values[1]));
 }
 
 void validate_handler(type_variant type, std::vector<bytes> values) {
@@ -108,9 +102,6 @@ void validate_handler(type_variant type, std::vector<bytes> values) {
     };
 
     for (const auto& value : values) {
-        // Cannot convert to printable string, as it can fail for invalid values.
-        std::cout << to_hex(value) << ": ";
-
         std::exception_ptr ex;
         try {
             std::visit(validate_visitor{value}, type);
@@ -118,11 +109,10 @@ void validate_handler(type_variant type, std::vector<bytes> values) {
             ex = std::current_exception();
         }
         if (ex) {
-            std::cout << " INVALID - " << ex;
+            fmt::print("{}: INVALID - {}\n", to_hex(value), ex);
         } else {
-            std::cout << " VALID - " << to_printable_string(type, value);
+            fmt::print("{}: VALID - {}\n", to_hex(value), to_printable_string(type, value));
         }
-        std::cout << std::endl;
     }
 }
 
@@ -130,15 +120,17 @@ using action_handler_func = void(*)(type_variant, std::vector<bytes>);
 
 class action_handler {
     std::string _name;
+    std::string _summary;
     std::string _description;
     action_handler_func _func;
 
 public:
-    action_handler(std::string name, std::string description, action_handler_func func)
-        : _name(std::move(name)), _description(std::move(description)), _func(func) {
+    action_handler(std::string name, std::string summary, action_handler_func func, std::string description)
+        : _name(std::move(name)), _summary(std::move(summary)), _description(std::move(description)), _func(func) {
     }
 
     const std::string& name() const { return _name; }
+    const std::string& summary() const { return _summary; }
     const std::string& description() const { return _description; }
 
     void operator()(type_variant type, std::vector<bytes> values) const {
@@ -147,9 +139,43 @@ public:
 };
 
 const std::vector<action_handler> action_handlers = {
-    {"print", "print the value in a human readable form, takes 1+ values", print_handler},
-    {"compare", "compare two values and print the result, takes 2 values", compare_handler},
-    {"validate", "validate the values, takes 1+ values", validate_handler},
+    {"print", "print the value(s) in a human readable form", print_handler,
+R"(
+Deserialize and print the value(s) in a human-readable form.
+
+Arguments: 1 or more serialized values.
+
+Examples:
+
+$ scylla types print -t Int32Type b34b62d4
+-1286905132
+
+$ scylla types print --prefix-compound -t TimeUUIDType -t Int32Type 0010d00819896f6b11ea00000000001c571b000400000010
+(d0081989-6f6b-11ea-0000-0000001c571b, 16)
+)"},
+    {"compare", "compare two values", compare_handler,
+R"(
+Compare two values and print the result.
+
+Arguments: 2 serialized values.
+
+Examples:
+
+$ scylla types compare -t 'ReversedType(TimeUUIDType)' b34b62d46a8d11ea0000005000237906 d00819896f6b11ea00000000001c571b
+b34b62d4-6a8d-11ea-0000-005000237906 > d0081989-6f6b-11ea-0000-0000001c571b
+)"},
+    {"validate", "validate the value(s)", validate_handler,
+R"(
+Check that the value(s) are valid for the type according to the requirements of
+the type.
+
+Arguments: 1 or more serialized values.
+
+Examples:
+
+$  scylla types validate -t Int32Type b34b62d4
+b34b62d4: VALID - -1286905132
+)"},
 };
 
 }
@@ -186,18 +212,17 @@ scylla-types executes so called actions on the provided values. Each action has
 a required number of arguments. The supported actions are:
 {}
 
-Examples:
-$ scylla types print -t Int32Type b34b62d4
--1286905132
+For more information about individual actions, see their specific help:
 
-$ scylla types compare -t 'ReversedType(TimeUUIDType)' b34b62d46a8d11ea0000005000237906 d00819896f6b11ea00000000001c571b
-b34b62d4-6a8d-11ea-0000-005000237906 > d0081989-6f6b-11ea-0000-0000001c571b
-
-$ scylla types print --prefix-compound -t TimeUUIDType -t Int32Type 0010d00819896f6b11ea00000000001c571b000400000010
-(d0081989-6f6b-11ea-0000-0000001c571b, 16)
+$ scylla types {action} --help
 )";
-    app_cfg.description = format(description_template, boost::algorithm::join(action_handlers | boost::adaptors::transformed(
-                    [] (const action_handler& ah) { return format("* --{} - {}", ah.name(), ah.description()); } ), "\n"));
+
+    if (found_ah) {
+        app_cfg.description = found_ah->description();
+    } else {
+        app_cfg.description = format(description_template, boost::algorithm::join(action_handlers | boost::adaptors::transformed(
+                        [] (const action_handler& ah) { return format("* {} - {}", ah.name(), ah.summary()); } ), "\n"));
+    }
 
     tools::utils::configure_tool_mode(app_cfg);
 
