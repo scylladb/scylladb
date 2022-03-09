@@ -791,6 +791,7 @@ bool abstract_type::is_native() const { return !is_collection() && !is_tuple(); 
 bool abstract_type::is_string() const {
     struct visitor {
         bool operator()(const abstract_type&) { return false; }
+        bool operator()(const reversed_type_impl& t) { return t.underlying_type()->is_string(); }
         bool operator()(const string_type_impl&) { return true; }
     };
     return visit(*this, visitor{});
