@@ -1336,7 +1336,12 @@ table::sstables_as_snapshot_source() {
                 tracing::trace_state_ptr trace_state,
                 streamed_mutation::forwarding fwd,
                 mutation_reader::forwarding fwd_mr) {
-            return make_sstable_reader(std::move(s), std::move(permit), sst_set, r, slice, pc, std::move(trace_state), fwd, fwd_mr);
+            auto reader = make_sstable_reader(std::move(s), std::move(permit), sst_set, r, slice, pc, std::move(trace_state), fwd, fwd_mr);
+            return make_compacting_reader(
+                std::move(reader),
+                gc_clock::now(),
+                [](const dht::decorated_key&) { return api::min_timestamp; },
+                fwd);
         }, [this, sst_set] {
             return make_partition_presence_checker(sst_set);
         });

@@ -25,6 +25,8 @@
 #include <seastar/core/thread.hh>
 #include "replica/memtable.hh"
 #include "partition_slice_builder.hh"
+#include "service/migration_manager.hh"
+#include "test/lib/cql_test_env.hh"
 #include "test/lib/memtable_snapshot_source.hh"
 #include "test/lib/log.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
@@ -3929,5 +3931,61 @@ SEASTAR_TEST_CASE(test_scans_erase_dummies) {
             .produces_end_of_stream();
 
         BOOST_REQUIRE_EQUAL(tracker.get_stats().rows, 2);
+    });
+}
+
+
+SEASTAR_TEST_CASE(row_cache_is_populated_using_compacting_sstable_reader) {
+    return do_with_cql_env_thread([](cql_test_env& env) {
+        replica::database& db = env.local_db();
+        service::migration_manager& mm = env.migration_manager().local();
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+
+        sstring ks_name = "ks";
+        sstring table_name = "table_name";
+
+        schema_ptr s = schema_builder(ks_name, table_name)
+            .with_column(to_bytes("pk"), int32_type, column_kind::partition_key)
+            .with_column(to_bytes("ck"), int32_type, column_kind::clustering_key)
+            .with_column(to_bytes("id"), int32_type)
+            .build();
+        mm.announce(
+            mm.prepare_new_column_family_announcement(s, api::new_timestamp()).get(),
+            mm.start_group0_operation().get()
+        ).get();
+
+        replica::table& t = db.find_column_family(ks_name, table_name);
+
+        dht::decorated_key pk = dht::decorate_key(*s, partition_key::from_single_value(*s, serialized(1)));
+        clustering_key ck = clustering_key::from_single_value(*s, serialized(2));
+
+        // Create two separate sstables that will contain only a tombstone after compaction
+        mutation m_insert = mutation(s, pk);
+        m_insert.set_clustered_cell(ck, to_bytes("id"), data_value(3), api::new_timestamp());
+        t.apply(m_insert);
+        t.flush().get();
+
+        mutation m_delete = mutation(s, pk);
+        m_delete.partition().apply(tombstone{api::new_timestamp(), gc_clock::now()});
+        t.apply(m_delete);
+        t.flush().get();
+
+        // Clear the cache and repopulate it by reading sstables
+        t.get_row_cache().evict();
+
+        flat_mutation_reader reader = t.get_row_cache().make_reader(s, semaphore.make_permit());
+        deferred_close dc{reader};
+        reader.consume_pausable([s](mutation_fragment&& mf) {
+            return stop_iteration::no;
+        }).get();
+
+        // We should have the cache entry, but it can only contain the dummy
+        // row, necessary to denote the tombstone. If we have more than one
+        // row, then cache contains both the original row and the tombstone
+        // meaning the input from sstables wasn't compacted and we put
+        // unnecessary pressure on the cache.
+        cache_entry& entry = t.get_row_cache().lookup(pk);
+        const utils::immutable_collection<mutation_partition::rows_type>& rt = entry.partition().version()->partition().clustered_rows();
+        BOOST_ASSERT(rt.calculate_size() == 1);
     });
 }
