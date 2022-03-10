@@ -396,6 +396,22 @@ compaction_manager::run_with_compaction_disabled(replica::table* t, std::functio
     co_return;
 }
 
+std::string_view compaction_manager::task::to_string(state s) {
+    switch (s) {
+    case state::none: return "none";
+    case state::pending: return "pending";
+    case state::active: return "active";
+    case state::done: return "done";
+    case state::postponed: return "postponed";
+    case state::failed: return "failed";
+    }
+    __builtin_unreachable();
+}
+
+std::ostream& operator<<(std::ostream& os, compaction_manager::task::state s) {
+    return os << compaction_manager::task::to_string(s);
+}
+
 std::ostream& operator<<(std::ostream& os, const compaction_manager::task& task) {
     return os << task.describe();
 }
@@ -404,6 +420,45 @@ std::string compaction_manager::task::describe() const {
     auto* t = _compacting_table;
     auto s = t->schema();
     return fmt::format("{} task {} for table {}.{} [{}]", _description, fmt::ptr(this), s->ks_name(), s->cf_name(), fmt::ptr(t));
+}
+
+compaction_manager::task::~task() {
+    switch_state(state::none);
+}
+
+compaction_manager::task::state compaction_manager::task::switch_state(state new_state) {
+    auto old_state = std::exchange(_state, new_state);
+    switch (old_state) {
+    case state::none:
+    case state::done:
+    case state::postponed:
+    case state::failed:
+        break;
+    case state::pending:
+        --_cm._stats.pending_tasks;
+        break;
+    case state::active:
+        --_cm._stats.active_tasks;
+        break;
+    }
+    switch (new_state) {
+    case state::none:
+    case state::postponed:
+    case state::failed:
+        break;
+    case state::pending:
+        ++_cm._stats.pending_tasks;
+        break;
+    case state::active:
+        ++_cm._stats.active_tasks;
+        break;
+    case state::done:
+        ++_cm._stats.completed_tasks;
+        break;
+    }
+    cmlog.debug("{}: switch_state: {} -> {}: pending={} active={} done={} errors={}", *this, old_state, new_state,
+            _cm._stats.pending_tasks, _cm._stats.active_tasks, _cm._stats.completed_tasks, _cm._stats.errors);
+    return old_state;
 }
 
 void compaction_manager::task::setup_new_compaction(utils::UUID output_run_id) {

@@ -75,11 +75,28 @@ private:
 
 public:
     class task {
+    public:
+        enum class state {
+            none,       // initial and final state
+            pending,    // task is blocked on a lock, may alternate with active
+                        // counted in compaction_manager::stats::pending_tasks
+            active,     // task initiated active compaction, may alternate with pending
+                        // counted in compaction_manager::stats::active_tasks
+            done,       // task completed successfully (may transition only to state::none)
+                        // counted in compaction_manager::stats::completed_tasks
+            postponed,  // task was postponed (may transition only to state::none)
+                        // represented by the postponed_compactions metric
+            failed,     // task failed (may transition only to state::none)
+                        // counted in compaction_manager::stats::errors
+        };
+        static std::string_view to_string(state);
+
     protected:
         compaction_manager& _cm;
         replica::table* _compacting_table = nullptr;
         compaction_state& _compaction_state;
         sstables::compaction_data _compaction_data;
+        state _state = state::none;
 
     private:
         shared_future<> _compaction_done = make_ready_future<>();
@@ -105,9 +122,11 @@ public:
         task(task&&) = delete;
         task(const task&) = delete;
 
-        virtual ~task() = default;
+        virtual ~task();
 
     protected:
+        state switch_state(state new_state);
+
         // Return true if the task isn't stopped
         // and the compaction manager allows proceeding.
         inline bool can_proceed() const;
