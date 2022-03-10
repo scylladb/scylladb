@@ -41,8 +41,18 @@ public:
     friend std::ostream& operator<<(std::ostream&, pretty_printed_throughput);
 };
 
+// Return the name of the compaction type
+// as used over the REST api, e.g. "COMPACTION" or "CLEANUP".
 sstring compaction_name(compaction_type type);
+
+// Reverse map the name of the compaction type
+// as used over the REST api, e.g. "COMPACTION" or "CLEANUP",
+// to the compaction_type enum code.
 compaction_type to_compaction_type(sstring type_name);
+
+// Return a string respresenting the compaction type
+// as a verb for logging purposes, e.g. "Compact" or "Cleanup".
+std::string_view to_string(compaction_type type);
 
 struct compaction_info {
     utils::UUID compaction_uuid;

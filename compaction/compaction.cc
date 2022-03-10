@@ -86,7 +86,7 @@ compaction_type to_compaction_type(sstring type_name) {
     throw std::runtime_error("Invalid Compaction Type Name");
 }
 
-static std::string_view to_string(compaction_type type) {
+std::string_view to_string(compaction_type type) {
     switch (type) {
     case compaction_type::Compaction: return "Compact";
     case compaction_type::Cleanup: return "Cleanup";
