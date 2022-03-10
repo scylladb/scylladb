@@ -208,11 +208,10 @@ future<query::forward_result> forward_service::execute_on_this_shard(
 
     schema_ptr schema = local_schema_registry().get(req.cmd.schema_version);
 
-    auto reduction_types = std::move(req.reduction_types);
     auto timeout = req.timeout;
     auto now = gc_clock::now();
 
-    auto selection = mock_selection(reduction_types, schema, _db.local());
+    auto selection = mock_selection(req.reduction_types, schema, _db.local());
     auto query_state = make_lw_shared<service::query_state>(
         client_state::for_internal_calls(),
         tr_state,
@@ -248,7 +247,8 @@ future<query::forward_result> forward_service::execute_on_this_shard(
     while (!pager->is_exhausted()) {
         co_await pager->fetch_page(rs_builder, DEFAULT_INTERNAL_PAGING_SIZE, now, timeout);
     }
-    co_return co_await rs_builder.with_thread_if_needed([&] {
+
+    co_return co_await rs_builder.with_thread_if_needed([&rs_builder, reduction_types = std::move(req.reduction_types), tr_state = std::move(tr_state)] {
         auto rs = rs_builder.build();
         auto& rows = rs->rows();
         if (rows.size() != 1) {
