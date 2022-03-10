@@ -107,8 +107,6 @@ public:
         gate::holder _gate_holder;
         sstring _description;
 
-        // FIXME: for now
-        friend class compaction_manager;
     public:
         explicit task(compaction_manager& mgr, replica::table* t, sstables::compaction_type type, sstring desc)
             : _cm(mgr)
@@ -125,13 +123,17 @@ public:
         virtual ~task();
 
     protected:
+        virtual future<> do_run() = 0;
+
+        using throw_if_stopping = bool_class<struct throw_if_stopping_tag>;
+
         state switch_state(state new_state);
 
         // Return true if the task isn't stopped
         // and the compaction manager allows proceeding.
-        inline bool can_proceed() const;
+        inline bool can_proceed(throw_if_stopping do_throw_if_stopping = throw_if_stopping::no) const;
         void setup_new_compaction(utils::UUID output_run_id = utils::null_uuid());
-        void finish_compaction() noexcept;
+        void finish_compaction(state finish_state = state::done) noexcept;
 
         // Compaction manager stop itself if it finds an storage I/O error which results in
         // stop of transportation services. It cannot make progress anyway.
@@ -140,6 +142,8 @@ public:
         future<stop_iteration> maybe_retry(std::exception_ptr err);
 
     public:
+        future<> run() noexcept;
+
         const replica::table* compacting_table() const noexcept {
             return _compacting_table;
         }
@@ -160,19 +164,15 @@ public:
             return _compaction_data;
         }
 
-        const compaction_manager::compaction_state& compaction_state() const noexcept {
-            return _compaction_state;
-        }
-
-        compaction_manager::compaction_state& compaction_state() noexcept {
-            return _compaction_state;
-        }
-
         bool generating_output_run() const noexcept {
             return _compaction_running && _output_run_identifier;
         }
         const utils::UUID& output_run_id() const noexcept {
             return _output_run_identifier;
+        }
+
+        const sstring& description() const noexcept {
+            return _description;
         }
 
         future<> compaction_done() noexcept {
@@ -190,11 +190,29 @@ public:
         std::string describe() const;
     };
 
+    class sstables_task : public task {
+    protected:
+        std::vector<sstables::shared_sstable> _sstables;
+
+        void set_sstables(std::vector<sstables::shared_sstable> new_sstables);
+        sstables::shared_sstable consume_sstable();
+
+    public:
+        explicit sstables_task(compaction_manager& mgr, replica::table* t, sstables::compaction_type compaction_type, sstring desc, std::vector<sstables::shared_sstable> sstables)
+            : task(mgr, t, compaction_type, std::move(desc))
+        {
+            set_sstables(std::move(sstables));
+        }
+
+        virtual ~sstables_task();
+    };
+
     class major_compaction_task;
     class custom_compaction_task;
     class regular_compaction_task;
     class offstrategy_compaction_task;
     class rewrite_sstables_compaction_task;
+    class validate_sstables_compaction_task;
     class compaction_manager_test_task;
 
 private:
@@ -255,7 +273,7 @@ private:
     class strategy_control;
     std::unique_ptr<strategy_control> _strategy_control;
 private:
-    shared_ptr<task> register_task(shared_ptr<task>);
+    future<> perform_task(shared_ptr<task>);
 
     future<> stop_tasks(std::vector<shared_ptr<task>> tasks, sstring reason);
 
@@ -417,4 +435,5 @@ public:
 
 bool needs_cleanup(const sstables::shared_sstable& sst, const dht::token_range_vector& owned_ranges, schema_ptr s);
 
+std::ostream& operator<<(std::ostream& os, compaction_manager::task::state s);
 std::ostream& operator<<(std::ostream& os, const compaction_manager::task& task);

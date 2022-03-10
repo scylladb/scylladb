@@ -161,13 +161,14 @@ future<compaction_result> compact_sstables(sstables::compaction_descriptor descr
         return creator();
     };
     descriptor.replacer = std::move(replacer);
-    auto& cm = cf.get_compaction_manager();
-    auto& cdata = compaction_manager_test(cm).register_compaction(descriptor.run_identifier, &cf);
-    return sstables::compact_sstables(std::move(descriptor), cdata, cf.as_table_state()).then([&cdata, &cm] (sstables::compaction_result res) {
-        return res;
-    }).finally([&cm, &cdata] {
-        compaction_manager_test(cm).deregister_compaction(cdata);
+    auto cmt = compaction_manager_test(cf.get_compaction_manager());
+    sstables::compaction_result ret;
+    co_await cmt.run(descriptor.run_identifier, &cf, [&] (sstables::compaction_data& cdata) {
+        return sstables::compact_sstables(std::move(descriptor), cdata, cf.as_table_state()).then([&] (sstables::compaction_result res) {
+            ret = std::move(res);
+        });
     });
+    co_return ret;
 }
 
 std::vector<std::pair<sstring, dht::token>> token_generation_for_current_shard(unsigned tokens_to_generate) {
@@ -193,17 +194,28 @@ class compaction_manager::compaction_manager_test_task : public compaction_manag
     noncopyable_function<future<> (sstables::compaction_data&)> _job;
 
 public:
-    compaction_manager_test_task(compaction_manager& cm, replica::column_family* cf, utils::UUID run_id)
+    compaction_manager_test_task(compaction_manager& cm, replica::column_family* cf, utils::UUID run_id, noncopyable_function<future<> (sstables::compaction_data&)> job)
         : compaction_manager::task(cm, cf, sstables::compaction_type::Compaction, "Test compaction")
         , _run_id(run_id)
-    {
-        // FIXME: for now
+        , _job(std::move(job))
+    { }
+
+protected:
+    virtual future<> do_run() override {
         setup_new_compaction(_run_id);
+        return _job(_compaction_data);
     }
 };
 
-sstables::compaction_data& compaction_manager_test::register_compaction(utils::UUID output_run_id, replica::column_family* cf) {
-    auto task = make_shared<compaction_manager::compaction_manager_test_task>(_cm, cf, output_run_id);
+future<> compaction_manager_test::run(utils::UUID output_run_id, replica::column_family* cf, noncopyable_function<future<> (sstables::compaction_data&)> job) {
+    auto task = make_shared<compaction_manager::compaction_manager_test_task>(_cm, cf, output_run_id, std::move(job));
+    auto& cdata = register_compaction(task);
+    return task->run().finally([this, &cdata] {
+        deregister_compaction(cdata);
+    });
+}
+
+sstables::compaction_data& compaction_manager_test::register_compaction(shared_ptr<compaction_manager::task> task) {
     testlog.debug("compaction_manager_test: register_compaction uuid={}: {}", task->compaction_data().compaction_uuid, *task);
     _cm._tasks.push_back(task);
     return task->compaction_data();
@@ -216,6 +228,6 @@ void compaction_manager_test::deregister_compaction(const sstables::compaction_d
         testlog.debug("compaction_manager_test: deregister_compaction uuid={}: {}", c.compaction_uuid, *task);
         _cm._tasks.erase(it);
     } else {
-        testlog.debug("compaction_manager_test: deregister_compaction uuid={}: task not found", c.compaction_uuid);
+        testlog.error("compaction_manager_test: deregister_compaction uuid={}: task not found", c.compaction_uuid);
     }
 }

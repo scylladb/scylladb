@@ -3278,15 +3278,9 @@ SEASTAR_TEST_CASE(partial_sstable_run_filtered_out_test) {
 
         // register partial sstable run
         auto cm_test = compaction_manager_test(*cm);
-        auto& cdata = cm_test.register_compaction(partial_sstable_run_identifier, cf.get());
-        auto deregister_compaction = defer([&] () noexcept {
-            cm_test.deregister_compaction(cdata);
-        });
-
-        cf->compact_all_sstables().get();
-
-        deregister_compaction.cancel();
-        cm_test.deregister_compaction(cdata);
+        cm_test.run(partial_sstable_run_identifier, cf.get(), [cf] (sstables::compaction_data&) {
+            return cf->compact_all_sstables();
+        }).get();
 
         // make sure partial sstable run has none of its fragments compacted.
         BOOST_REQUIRE(generation_exists(partial_sstable_run_sst->generation()));
@@ -3676,7 +3670,7 @@ SEASTAR_TEST_CASE(autocompaction_control_test) {
 
         // no compactions done yet
         auto& ss = cm.get_stats();
-        BOOST_REQUIRE(ss.pending_tasks == 0 && ss.active_tasks == 0 && ss.completed_tasks == 0);
+        BOOST_REQUIRE(cm.get_stats().pending_tasks == 0 && cm.get_stats().active_tasks == 0 && ss.completed_tasks == 0);
         // auto compaction is enabled by default
         BOOST_REQUIRE(!cf->is_auto_compaction_disabled_by_user());
         // disable auto compaction by user
@@ -3707,7 +3701,7 @@ SEASTAR_TEST_CASE(autocompaction_control_test) {
         auto stop_cf = deferred_stop(*cf);
         cf->trigger_compaction();
         cf->get_compaction_manager().submit(cf.get());
-        BOOST_REQUIRE(ss.pending_tasks == 0 && ss.active_tasks == 0 && ss.completed_tasks == 0);
+        BOOST_REQUIRE(cm.get_stats().pending_tasks == 0 && cm.get_stats().active_tasks == 0 && ss.completed_tasks == 0);
         // enable auto compaction
         cf->enable_auto_compaction();
         // check enabled
@@ -3715,7 +3709,7 @@ SEASTAR_TEST_CASE(autocompaction_control_test) {
         // trigger background compaction
         cf->trigger_compaction();
         // wait until compaction finished
-        do_until([&ss] { return ss.pending_tasks == 0 && ss.active_tasks == 0; }, [] {
+        do_until([&cm] { return cm.get_stats().pending_tasks == 0 && cm.get_stats().active_tasks == 0; }, [] {
             return sleep(std::chrono::milliseconds(100));
         }).wait();
         // test compaction successfully finished
