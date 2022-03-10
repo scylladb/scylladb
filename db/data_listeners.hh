@@ -15,7 +15,7 @@
 
 #include "utils/hash.hh"
 #include "schema_fwd.hh"
-#include "flat_mutation_reader_v2.hh"
+#include "readers/flat_mutation_reader_v2.hh"
 #include "mutation_reader.hh"
 #include "utils/top_k.hh"
 #include "schema_registry.hh"

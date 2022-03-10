@@ -10,23 +10,16 @@
 
 #include <seastar/util/bool_class.hh>
 #include <seastar/core/future.hh>
+#include <seastar/core/circular_buffer.hh>
 
 #include "dht/i_partitioner.hh"
-#include "position_in_partition.hh"
-#include "flat_mutation_reader.hh"
 #include "mutation_fragment_v2.hh"
-#include "tracing/trace_state.hh"
 #include "mutation.hh"
-#include "query_class_config.hh"
 #include "mutation_consumer_concepts.hh"
-
-#include <seastar/core/thread.hh>
-#include <seastar/core/file.hh>
 #include "reader_permit.hh"
 
-#include <deque>
-
 using seastar::future;
+class flat_mutation_reader;
 
 /// \brief Represents a stream of mutation fragments.
 ///
@@ -413,10 +406,6 @@ private:
     friend flat_mutation_reader downgrade_to_v1(flat_mutation_reader_v2);
     friend flat_mutation_reader_v2 upgrade_to_v2(flat_mutation_reader);
 public:
-    // Documented in mutation_reader::forwarding.
-    class partition_range_forwarding_tag;
-    using partition_range_forwarding = bool_class<partition_range_forwarding_tag>;
-
     flat_mutation_reader_v2(std::unique_ptr<impl> impl) noexcept : _impl(std::move(impl)) {}
     flat_mutation_reader_v2(const flat_mutation_reader_v2&) = delete;
     flat_mutation_reader_v2(flat_mutation_reader_v2&&) = default;
@@ -748,138 +737,9 @@ flat_mutation_reader_v2 transform(flat_mutation_reader_v2 r, T t) {
     return make_flat_mutation_reader_v2<transforming_reader>(std::move(r), std::move(t));
 }
 
-class delegating_reader_v2 : public flat_mutation_reader_v2::impl {
-    flat_mutation_reader_v2_opt _underlying_holder;
-    flat_mutation_reader_v2* _underlying;
-public:
-    // when passed a lvalue reference to the reader
-    // we don't own it and the caller is responsible
-    // for evenetually closing the reader.
-    delegating_reader_v2(flat_mutation_reader_v2& r)
-        : impl(r.schema(), r.permit())
-        , _underlying_holder()
-        , _underlying(&r)
-    { }
-    // when passed a rvalue reference to the reader
-    // we assume ownership of it and will close it
-    // in close().
-    delegating_reader_v2(flat_mutation_reader_v2&& r)
-        : impl(r.schema(), r.permit())
-        , _underlying_holder(std::move(r))
-        , _underlying(&*_underlying_holder)
-    { }
-    virtual future<> fill_buffer() override {
-        if (is_buffer_full()) {
-            return make_ready_future<>();
-        }
-        return _underlying->fill_buffer().then([this] {
-            _end_of_stream = _underlying->is_end_of_stream();
-            _underlying->move_buffer_content_to(*this);
-        });
-    }
-    virtual future<> fast_forward_to(position_range pr) override {
-        _end_of_stream = false;
-        forward_buffer_to(pr.start());
-        return _underlying->fast_forward_to(std::move(pr));
-    }
-    virtual future<> next_partition() override {
-        clear_buffer_to_next_partition();
-        auto maybe_next_partition = make_ready_future<>();
-        if (is_buffer_empty()) {
-            maybe_next_partition = _underlying->next_partition();
-        }
-      return maybe_next_partition.then([this] {
-        _end_of_stream = _underlying->is_end_of_stream() && _underlying->is_buffer_empty();
-      });
-    }
-    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
-        _end_of_stream = false;
-        clear_buffer();
-        return _underlying->fast_forward_to(pr);
-    }
-    virtual future<> close() noexcept override {
-        return _underlying_holder ? _underlying_holder->close() : make_ready_future<>();
-    }
-};
-flat_mutation_reader_v2 make_delegating_reader_v2(flat_mutation_reader_v2&);
-
-// Adapts a v2 reader to v1 reader
-flat_mutation_reader downgrade_to_v1(flat_mutation_reader_v2);
-
-// Adapts a v1 reader to v2 reader
-flat_mutation_reader_v2 upgrade_to_v2(flat_mutation_reader);
 
 // Reads a single partition from a reader. Returns empty optional if there are no more partitions to be read.
 future<mutation_opt> read_mutation_from_flat_mutation_reader(flat_mutation_reader_v2&);
-
-flat_mutation_reader_v2 make_forwardable(flat_mutation_reader_v2 m);
-
-flat_mutation_reader_v2 make_empty_flat_reader_v2(schema_ptr s, reader_permit permit);
-
-// All mutations should have the same schema.
-flat_mutation_reader_v2 make_flat_mutation_reader_from_mutations_v2(schema_ptr schema, reader_permit permit, std::vector<mutation>,
-        const dht::partition_range& pr = query::full_partition_range, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
-
-// All mutations should have the same schema.
-inline flat_mutation_reader_v2 make_flat_mutation_reader_from_mutations_v2(schema_ptr schema, reader_permit permit, std::vector<mutation> ms, streamed_mutation::forwarding fwd) {
-    return make_flat_mutation_reader_from_mutations_v2(std::move(schema), std::move(permit), std::move(ms), query::full_partition_range, fwd);
-}
-
-// All mutations should have the same schema.
-flat_mutation_reader_v2
-make_flat_mutation_reader_from_mutations_v2(schema_ptr schema,
-                                    reader_permit permit,
-                                    std::vector<mutation> ms,
-                                    const query::partition_slice& slice,
-                                    streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
-
-// All mutations should have the same schema.
-flat_mutation_reader_v2
-make_flat_mutation_reader_from_mutations_v2(schema_ptr schema,
-                                    reader_permit permit,
-                                    std::vector<mutation> ms,
-                                    const dht::partition_range& pr,
-                                    const query::partition_slice& slice,
-                                    streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
-
-/// Make a reader that enables the wrapped reader to work with multiple ranges.
-///
-/// \param ranges An range vector that has to contain strictly monotonic
-///     partition ranges, such that successively calling
-///     `flat_mutation_reader::fast_forward_to()` with each one is valid.
-///     An range vector range with 0 or 1 elements is also valid.
-/// \param fwd_mr It is only respected when `ranges` contains 0 or 1 partition
-///     ranges. Otherwise the reader is created with
-///     mutation_reader::forwarding::yes.
-flat_mutation_reader_v2
-make_flat_multi_range_reader(schema_ptr s, reader_permit permit, mutation_source source, const dht::partition_range_vector& ranges,
-                             const query::partition_slice& slice, const io_priority_class& pc = default_priority_class(),
-                             tracing::trace_state_ptr trace_state = nullptr,
-                             flat_mutation_reader::partition_range_forwarding fwd_mr = flat_mutation_reader::partition_range_forwarding::yes);
-
-/// Make a reader that enables the wrapped reader to work with multiple ranges.
-///
-/// Generator overload. The ranges returned by the generator have to satisfy the
-/// same requirements as the `ranges` param of the vector overload.
-flat_mutation_reader_v2
-make_flat_multi_range_reader(
-        schema_ptr s,
-        reader_permit permit,
-        mutation_source source,
-        std::function<std::optional<dht::partition_range>()> generator,
-        const query::partition_slice& slice,
-        const io_priority_class& pc = default_priority_class(),
-        tracing::trace_state_ptr trace_state = nullptr,
-        flat_mutation_reader::partition_range_forwarding fwd_mr = flat_mutation_reader::partition_range_forwarding::yes);
-
-flat_mutation_reader_v2
-make_flat_mutation_reader_from_fragments(schema_ptr, reader_permit, std::deque<mutation_fragment_v2>);
-
-flat_mutation_reader_v2
-make_flat_mutation_reader_from_fragments(schema_ptr, reader_permit, std::deque<mutation_fragment_v2>, const dht::partition_range& pr);
-
-flat_mutation_reader_v2
-make_flat_mutation_reader_from_fragments(schema_ptr, reader_permit, std::deque<mutation_fragment_v2>, const dht::partition_range& pr, const query::partition_slice& slice);
 
 // Calls the consumer for each element of the reader's stream until end of stream
 // is reached or the consumer requests iteration to stop by returning stop_iteration::yes.
@@ -900,9 +760,6 @@ future<> consume_partitions(flat_mutation_reader_v2& reader, Consumer consumer) 
         });
     });
 }
-
-flat_mutation_reader_v2
-make_generating_reader(schema_ptr s, reader_permit permit, std::function<future<mutation_fragment_v2_opt> ()> get_next_fragment);
 
 /// A cosumer function that is passed a flat_mutation_reader to be consumed from
 /// and returns a future<> resolved when the reader is fully consumed, and closed.

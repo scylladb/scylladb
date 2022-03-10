@@ -28,6 +28,7 @@
 #include "range.hh"
 #include "sstables/sstables.hh"
 #include "schema_builder.hh"
+#include "readers/forwardable.hh"
 
 class enormous_table_reader final : public flat_mutation_reader::impl {
 // Reader for a table with 4.5 billion rows, all with partition key 0 and an incrementing clustering key

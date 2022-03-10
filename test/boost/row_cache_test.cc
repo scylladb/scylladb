@@ -33,6 +33,11 @@
 #include "test/lib/random_utils.hh"
 
 #include <boost/range/algorithm/min_element.hpp>
+#include "readers/from_mutations.hh"
+#include "readers/from_mutations_v2.hh"
+#include "readers/delegating.hh"
+#include "readers/delegating_v2.hh"
+#include "readers/empty_v2.hh"
 
 using namespace std::chrono_literals;
 
@@ -1308,7 +1313,6 @@ public:
         });
     }
 };
-
 static std::vector<mutation> updated_ring(std::vector<mutation>& mutations) {
     std::vector<mutation> result;
     for (auto&& m : mutations) {
@@ -1582,7 +1586,6 @@ SEASTAR_TEST_CASE(test_cache_population_and_clear_race) {
                 .produces_end_of_stream();
     });
 }
-
 
 SEASTAR_TEST_CASE(test_mvcc) {
     return seastar::async([] {

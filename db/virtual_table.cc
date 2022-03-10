@@ -12,6 +12,8 @@
 
 #include "db/virtual_table.hh"
 #include "db/chained_delegating_reader.hh"
+#include "readers/reversing.hh"
+#include "readers/forwardable.hh"
 
 namespace db {
 

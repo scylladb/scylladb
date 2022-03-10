@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "flat_mutation_reader.hh"
+#include "readers/flat_mutation_reader.hh"
 #include "mutation_reader.hh"
 #include "seastar/core/coroutine.hh"
 

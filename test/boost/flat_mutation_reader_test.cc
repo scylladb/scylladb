@@ -15,7 +15,13 @@
 #include "mutation.hh"
 #include "mutation_fragment.hh"
 #include "test/lib/mutation_source_test.hh"
-#include "flat_mutation_reader.hh"
+#include "readers/flat_mutation_reader.hh"
+#include "readers/reversing.hh"
+#include "readers/forwardable.hh"
+#include "readers/delegating.hh"
+#include "readers/multi_range.hh"
+#include "readers/from_mutations.hh"
+#include "readers/from_fragments.hh"
 #include "mutation_reader.hh"
 #include "schema_builder.hh"
 #include "replica/memtable.hh"
@@ -32,6 +38,9 @@
 #include "test/lib/random_schema.hh"
 
 #include <boost/range/adaptor/map.hpp>
+#include "readers/from_mutations_v2.hh"
+#include "readers/from_fragments_v2.hh"
+#include "readers/forwardable_v2.hh"
 
 struct mock_consumer {
     struct result {
@@ -560,7 +569,7 @@ void test_flat_stream(schema_ptr s, std::vector<mutation> muts, reversed_partiti
             return fmr.consume_in_thread(std::move(fsc));
         } else {
             if (reversed) {
-                return with_closeable(make_reversing_reader(make_flat_mutation_reader<delegating_reader>(fmr), query::max_result_size(size_t(1) << 20)),
+                return with_closeable(make_reversing_reader(make_delegating_reader(fmr), query::max_result_size(size_t(1) << 20)),
                         [fsc = std::move(fsc)] (flat_mutation_reader& reverse_reader) mutable {
                     return reverse_reader.consume(std::move(fsc));
                 }).get0();

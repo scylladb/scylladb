@@ -21,6 +21,8 @@
 #include "sstable_set_impl.hh"
 
 #include "replica/database.hh"
+#include "readers/from_mutations.hh"
+#include "readers/empty_v2.hh"
 
 namespace sstables {
 

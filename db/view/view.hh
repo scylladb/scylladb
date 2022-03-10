@@ -12,7 +12,7 @@
 #include "gc_clock.hh"
 #include "query-request.hh"
 #include "schema_fwd.hh"
-#include "flat_mutation_reader.hh"
+#include "readers/flat_mutation_reader.hh"
 #include "frozen_mutation.hh"
 
 class frozen_mutation_and_schema;

@@ -17,7 +17,9 @@
 #include "test/perf/perf.hh"
 
 #include "mutation_reader.hh"
-#include "flat_mutation_reader.hh"
+#include "readers/flat_mutation_reader.hh"
+#include "readers/from_mutations.hh"
+#include "readers/empty_v2.hh"
 #include "replica/memtable.hh"
 
 namespace tests {

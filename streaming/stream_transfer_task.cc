@@ -16,7 +16,7 @@
 #include "streaming/stream_reason.hh"
 #include "streaming/stream_mutation_fragments_cmd.hh"
 #include "mutation_reader.hh"
-#include "flat_mutation_reader.hh"
+#include "readers/flat_mutation_reader.hh"
 #include "mutation_fragment_stream_validator.hh"
 #include "frozen_mutation.hh"
 #include "mutation.hh"

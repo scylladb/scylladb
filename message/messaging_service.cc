@@ -88,7 +88,7 @@
 #include <boost/range/adaptor/filtered.hpp>
 #include <boost/range/adaptor/indirected.hpp>
 #include "frozen_mutation.hh"
-#include "flat_mutation_reader.hh"
+#include "readers/flat_mutation_reader.hh"
 #include "streaming/stream_manager.hh"
 #include "streaming/stream_mutation_fragments_cmd.hh"
 #include "locator/snitch_base.hh"

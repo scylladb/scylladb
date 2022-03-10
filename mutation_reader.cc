@@ -16,10 +16,12 @@
 #include <seastar/util/closeable.hh>
 
 #include "mutation_reader.hh"
-#include "flat_mutation_reader.hh"
+#include "readers/flat_mutation_reader.hh"
+#include "readers/empty.hh"
 #include "schema_registry.hh"
 #include "mutation_compactor.hh"
 #include "dht/sharder.hh"
+#include "readers/empty_v2.hh"
 
 logging::logger mrlog("mutation_reader");
 

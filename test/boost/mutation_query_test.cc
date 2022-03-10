@@ -27,6 +27,7 @@
 #include <seastar/core/thread.hh>
 #include "schema_builder.hh"
 #include "partition_slice_builder.hh"
+#include "readers/from_mutations.hh"
 
 using namespace std::literals::chrono_literals;
 

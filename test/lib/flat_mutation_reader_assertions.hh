@@ -10,7 +10,8 @@
 
 #include <boost/test/unit_test.hpp>
 #include <seastar/util/backtrace.hh>
-#include "flat_mutation_reader_v2.hh"
+#include "readers/flat_mutation_reader.hh"
+#include "readers/flat_mutation_reader_v2.hh"
 #include "mutation_assertions.hh"
 #include "schema.hh"
 #include "test/lib/log.hh"

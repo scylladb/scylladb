@@ -10,7 +10,7 @@
 
 #include <seastar/core/shared_future.hh>
 
-#include "flat_mutation_reader_v2.hh"
+#include "readers/flat_mutation_reader_v2.hh"
 
 // A reader which allows to insert a deferring operation before reading.
 // All calls will first wait for a future to resolve, then forward to a given underlying reader.

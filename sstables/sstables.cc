@@ -73,6 +73,8 @@
 #include "utils/bit_cast.hh"
 #include "utils/cached_file.hh"
 #include "tombstone_gc.hh"
+#include "readers/reversing.hh"
+#include "readers/forwardable.hh"
 
 thread_local disk_error_signal_type sstable_read_error;
 thread_local disk_error_signal_type sstable_write_error;

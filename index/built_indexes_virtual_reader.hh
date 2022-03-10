@@ -8,7 +8,7 @@
 
 #include "replica/database.hh"
 #include "db/system_keyspace.hh"
-#include "flat_mutation_reader_v2.hh"
+#include "readers/flat_mutation_reader_v2.hh"
 #include "mutation_fragment_v2.hh"
 #include "mutation_reader.hh"
 #include "query-request.hh"

@@ -9,7 +9,7 @@
 #pragma once
 
 #include "schema_fwd.hh"
-#include "flat_mutation_reader.hh"
+#include "readers/flat_mutation_reader.hh"
 #include "dht/i_partitioner.hh"
 #include "utils/phased_barrier.hh"
 
