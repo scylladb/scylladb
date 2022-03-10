@@ -1709,10 +1709,12 @@ void run_mutation_source_tests(populate_fn_ex populate, bool with_partition_rang
 }
 
 void run_mutation_source_tests_plain(populate_fn_ex populate, bool with_partition_range_forwarding) {
+    testlog.info(__PRETTY_FUNCTION__);
     run_mutation_reader_tests(populate, with_partition_range_forwarding);
 }
 
 void run_mutation_source_tests_downgrade(populate_fn_ex populate, bool with_partition_range_forwarding) {
+    testlog.info(__PRETTY_FUNCTION__);
     // ? -> v2 -> v1 -> *
     run_mutation_reader_tests([populate] (schema_ptr s, const std::vector<mutation>& m, gc_clock::time_point t) -> mutation_source {
         return mutation_source([ms = populate(s, m, t)] (schema_ptr s,
@@ -1730,6 +1732,7 @@ void run_mutation_source_tests_downgrade(populate_fn_ex populate, bool with_part
 }
 
 void run_mutation_source_tests_upgrade(populate_fn_ex populate, bool with_partition_range_forwarding) {
+    testlog.info(__PRETTY_FUNCTION__);
     // ? -> v1 -> v2 -> *
     run_mutation_reader_tests([populate] (schema_ptr s, const std::vector<mutation>& m, gc_clock::time_point t) -> mutation_source {
         return mutation_source([ms = populate(s, m, t)] (schema_ptr s,
@@ -1747,6 +1750,7 @@ void run_mutation_source_tests_upgrade(populate_fn_ex populate, bool with_partit
 }
 
 void run_mutation_source_tests_reverse(populate_fn_ex populate, bool with_partition_range_forwarding) {
+    testlog.info(__PRETTY_FUNCTION__);
     // read in reverse
     run_mutation_reader_tests([populate] (schema_ptr s, const std::vector<mutation>& m, gc_clock::time_point t) -> mutation_source {
         auto table_schema = s->make_reversed();

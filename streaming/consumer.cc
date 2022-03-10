@@ -55,7 +55,7 @@ std::function<future<> (flat_mutation_reader_v2)> make_streaming_consumer(sstrin
                 schema_ptr s = reader.schema();
                 auto& pc = service::get_local_streaming_priority();
 
-                return sst->write_components(downgrade_to_v1(std::move(reader)), adjusted_estimated_partitions, s,
+                return sst->write_components(std::move(reader), adjusted_estimated_partitions, s,
                                              cf->get_sstables_manager().configure_writer(origin),
                                              encoding_stats{}, pc).then([sst] {
                     return sst->open_data();

@@ -1657,7 +1657,7 @@ void sstable::assert_large_data_handler_is_running() {
 }
 
 future<> sstable::write_components(
-        flat_mutation_reader mr,
+        flat_mutation_reader_v2 mr,
         uint64_t estimated_partitions,
         schema_ptr schema,
         const sstable_writer_config& cfg,

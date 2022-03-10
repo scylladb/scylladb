@@ -1931,7 +1931,7 @@ SEASTAR_TEST_CASE(test_repeated_tombstone_skipping) {
         for (auto&& mf : fragments) {
             mut.apply(mf);
         }
-        auto sst = make_sstable_easy(env, dir.path(), make_flat_mutation_reader_from_mutations(table.schema(), std::move(permit), { std::move(mut) }), cfg, 1, version);
+        auto sst = make_sstable_easy(env, dir.path(), make_flat_mutation_reader_from_mutations_v2(table.schema(), std::move(permit), { std::move(mut) }), cfg, 1, version);
         auto ms = as_mutation_source(sst);
 
         for (uint32_t i = 3; i < seq; i++) {
@@ -1980,7 +1980,7 @@ SEASTAR_TEST_CASE(test_skipping_using_index) {
         tmpdir dir;
         sstable_writer_config cfg = env.manager().configure_writer();
         cfg.promoted_index_block_size = 1; // So that every fragment is indexed
-        auto sst = make_sstable_easy(env, dir.path(), make_flat_mutation_reader_from_mutations(table.schema(), env.make_reader_permit(), partitions), cfg, 1, version);
+        auto sst = make_sstable_easy(env, dir.path(), make_flat_mutation_reader_from_mutations_v2(table.schema(), env.make_reader_permit(), partitions), cfg, 1, version);
 
         auto ms = as_mutation_source(sst);
         auto rd = ms.make_reader(table.schema(),
@@ -2697,7 +2697,7 @@ SEASTAR_TEST_CASE(sstable_run_identifier_correctness) {
         auto tmp = tmpdir();
         sstable_writer_config cfg = env.manager().configure_writer();
         cfg.run_identifier = utils::make_random_uuid();
-        auto sst = make_sstable_easy(env, tmp.path(),  make_flat_mutation_reader_from_mutations(s, env.make_reader_permit(), { std::move(mut) }), cfg);
+        auto sst = make_sstable_easy(env, tmp.path(),  make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), { std::move(mut) }), cfg);
 
         BOOST_REQUIRE(sst->run_identifier() == cfg.run_identifier);
     });
@@ -2789,7 +2789,7 @@ SEASTAR_TEST_CASE(test_zero_estimated_partitions) {
         for (const auto version : writable_sstable_versions) {
             testlog.info("version={}", sstables::to_string(version));
 
-            auto mr = make_flat_mutation_reader_from_mutations(ss.schema(), env.make_reader_permit(), {mut});
+            auto mr = make_flat_mutation_reader_from_mutations_v2(ss.schema(), env.make_reader_permit(), {mut});
             sstable_writer_config cfg = env.manager().configure_writer();
             auto sst = make_sstable_easy(env, tmp, std::move(mr), cfg, 0, version, 0);
 
@@ -2859,13 +2859,13 @@ SEASTAR_TEST_CASE(test_missing_partition_end_fragment) {
         for (const auto version : writable_sstable_versions) {
             testlog.info("version={}", sstables::to_string(version));
 
-            std::deque<mutation_fragment> frags;
-            frags.push_back(mutation_fragment(*s, env.make_reader_permit(), partition_start(pkeys[0], tombstone())));
-            frags.push_back(mutation_fragment(*s, env.make_reader_permit(), clustering_row(ss.make_ckey(0))));
+            std::deque<mutation_fragment_v2> frags;
+            frags.push_back(mutation_fragment_v2(*s, env.make_reader_permit(), partition_start(pkeys[0], tombstone())));
+            frags.push_back(mutation_fragment_v2(*s, env.make_reader_permit(), clustering_row(ss.make_ckey(0))));
             // partition_end is missing
-            frags.push_back(mutation_fragment(*s, env.make_reader_permit(), partition_start(pkeys[1], tombstone())));
-            frags.push_back(mutation_fragment(*s, env.make_reader_permit(), clustering_row(ss.make_ckey(0))));
-            frags.push_back(mutation_fragment(*s, env.make_reader_permit(), partition_end()));
+            frags.push_back(mutation_fragment_v2(*s, env.make_reader_permit(), partition_start(pkeys[1], tombstone())));
+            frags.push_back(mutation_fragment_v2(*s, env.make_reader_permit(), clustering_row(ss.make_ckey(0))));
+            frags.push_back(mutation_fragment_v2(*s, env.make_reader_permit(), partition_end()));
 
             auto mr = make_flat_mutation_reader_from_fragments(s, env.make_reader_permit(), std::move(frags));
             auto close_mr = deferred_close(mr);
@@ -2903,13 +2903,13 @@ SEASTAR_TEST_CASE(test_sstable_origin) {
             }
 
             // Test empty sstable_origin.
-            auto mr = make_flat_mutation_reader_from_mutations(s, env.make_reader_permit(), {mut});
+            auto mr = make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), {mut});
             sstable_writer_config cfg = env.manager().configure_writer("");
             auto sst = make_sstable_easy(env, tmp, std::move(mr), cfg, gen++, version, 0);
             BOOST_REQUIRE_EQUAL(sst->get_origin(), "");
 
             // Test that a random sstable_origin is stored and retrieved properly.
-            mr = make_flat_mutation_reader_from_mutations(s, env.make_reader_permit(), {mut});
+            mr = make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), {mut});
             sstring origin = fmt::format("test-{}", tests::random::get_sstring());
             cfg = env.manager().configure_writer(origin);
             sst = make_sstable_easy(env, tmp, std::move(mr), cfg, gen++, version, 0);

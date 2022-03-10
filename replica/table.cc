@@ -660,21 +660,24 @@ table::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_
             auto monitor = database_sstable_write_monitor(permit, newtab, _compaction_strategy,
                 old->get_max_timestamp());
 
-            co_return co_await write_memtable_to_sstable(downgrade_to_v1(std::move(reader)), *old, newtab, estimated_partitions, monitor, cfg, priority);
+            co_return co_await write_memtable_to_sstable(std::move(reader), *old, newtab, estimated_partitions, monitor, cfg, priority);
         });
 
-        auto flush_reader = old->make_flush_reader(
+        auto reader = old->make_flush_reader(
             old->schema(),
             compaction_concurrency_semaphore().make_tracking_only_permit(old->schema().get(), "try_flush_memtable_to_sstable()", db::no_timeout),
             service::get_local_memtable_flush_priority());
-        auto reader = (old->has_any_tombstones()
-                       ? make_compacting_reader(std::move(flush_reader), gc_clock::now(),
-                                                [] (const dht::decorated_key&) { return api::min_timestamp; })
-                       : downgrade_to_v1(std::move(flush_reader)));
+
+        if (old->has_any_tombstones()) {
+            reader = make_compacting_reader(
+                std::move(reader),
+                gc_clock::now(),
+                [] (const dht::decorated_key&) { return api::min_timestamp; });
+        }
 
         std::exception_ptr err;
         try {
-            mutation_fragment* fragment = co_await reader.peek();
+            auto* fragment = co_await reader.peek();
             if (!fragment) {
                 co_await reader.close();
                 _memtables->erase(old);
@@ -689,7 +692,7 @@ table::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_
             co_return stop_iteration(_async_gate.is_closed());
         }
 
-        auto f = consumer(upgrade_to_v2(std::move(reader)));
+        auto f = consumer(std::move(reader));
 
         // Switch back to default scheduling group for post-flush actions, to avoid them being staved by the memtable flush
         // controller. Cache update does not affect the input of the memtable cpu controller, so it can be subject to
@@ -2039,7 +2042,7 @@ future<> table::apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_hand
 template void table::do_apply(db::rp_handle&&, const frozen_mutation&, const schema_ptr&);
 
 future<>
-write_memtable_to_sstable(flat_mutation_reader reader,
+write_memtable_to_sstable(flat_mutation_reader_v2 reader,
                           memtable& mt, sstables::shared_sstable sst,
                           size_t estimated_partitions,
                           sstables::write_monitor& monitor,
@@ -2057,7 +2060,7 @@ write_memtable_to_sstable(reader_permit permit, memtable& mt, sstables::shared_s
                           sstables::write_monitor& monitor,
                           sstables::sstable_writer_config& cfg,
                           const io_priority_class& pc) {
-    return write_memtable_to_sstable(downgrade_to_v1(mt.make_flush_reader(mt.schema(), std::move(permit), pc)), mt, std::move(sst), mt.partition_count(), monitor, cfg, pc);
+    return write_memtable_to_sstable(mt.make_flush_reader(mt.schema(), std::move(permit), pc), mt, std::move(sst), mt.partition_count(), monitor, cfg, pc);
 }
 
 future<>

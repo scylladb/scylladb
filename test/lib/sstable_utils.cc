@@ -108,7 +108,7 @@ shared_sstable make_sstable(sstables::test_env& env, schema_ptr s, sstring dir, 
     return make_sstable_easy(env, dir_path, mt, cfg, 1, version, mutations.size(), query_time);
 }
 
-shared_sstable make_sstable_easy(test_env& env, const fs::path& path, flat_mutation_reader rd, sstable_writer_config cfg,
+shared_sstable make_sstable_easy(test_env& env, const fs::path& path, flat_mutation_reader_v2 rd, sstable_writer_config cfg,
         int64_t generation, const sstables::sstable::version_types version, int expected_partition) {
     auto s = rd.schema();
     auto sst = env.make_sstable(s, path.string(), generation, version, sstable_format_types::big);
@@ -122,7 +122,7 @@ shared_sstable make_sstable_easy(test_env& env, const fs::path& path, lw_shared_
     schema_ptr s = mt->schema();
     auto sst = env.make_sstable(s, path.string(), gen, v, sstable_format_types::big, default_sstable_buffer_size, query_time);
     auto mr = mt->make_flat_reader(s, env.make_reader_permit());
-    sst->write_components(downgrade_to_v1(std::move(mr)), estimated_partitions, s, cfg, mt->get_encoding_stats()).get();
+    sst->write_components(std::move(mr), estimated_partitions, s, cfg, mt->get_encoding_stats()).get();
     sst->load().get();
     return sst;
 }

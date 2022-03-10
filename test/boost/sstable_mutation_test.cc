@@ -1207,8 +1207,8 @@ SEASTAR_TEST_CASE(test_writing_combined_stream_with_tombstones_at_the_same_posit
         auto mt2 = make_lw_shared<replica::memtable>(s);
         mt2->apply(m2);
         auto combined_permit = env.make_reader_permit();
-        auto mr = downgrade_to_v1(make_combined_reader(s, combined_permit,
-            mt1->make_flat_reader(s, combined_permit), mt2->make_flat_reader(s, combined_permit)));
+        auto mr = make_combined_reader(s, combined_permit,
+            mt1->make_flat_reader(s, combined_permit), mt2->make_flat_reader(s, combined_permit));
         auto sst = make_sstable_easy(env, dir.path(), std::move(mr), env.manager().configure_writer(), 1, version);
 
         assert_that(sst->as_mutation_source().make_reader(s, env.make_reader_permit()))
@@ -1446,7 +1446,7 @@ SEASTAR_TEST_CASE(test_reading_serialization_header) {
         // writting parts. Let's use a separate objects for writing and reading to ensure that nothing
         // carries over that wouldn't normally be read from disk.
         auto sst = env.make_sstable(s, dir.path().string(), 1, sstable::version_types::mc, sstables::sstable::format_types::big);
-        sst->write_components(downgrade_to_v1(mt->make_flat_reader(s, env.make_reader_permit())), 2, s, env.manager().configure_writer(), mt->get_encoding_stats()).get();
+        sst->write_components(mt->make_flat_reader(s, env.make_reader_permit()), 2, s, env.manager().configure_writer(), mt->get_encoding_stats()).get();
     }
 
     auto sst = env.make_sstable(s, dir.path().string(), 1, sstable::version_types::mc, sstables::sstable::format_types::big);

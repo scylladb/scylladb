@@ -70,6 +70,7 @@ namespace fs = std::filesystem;
 extern logging::logger sstlog;
 class key;
 class sstable_writer;
+class sstable_writer_v2;
 class sstables_manager;
 class metadata_collector;
 
@@ -252,7 +253,7 @@ public:
     // The mutation_source shares ownership of this sstable.
     mutation_source as_mutation_source();
 
-    future<> write_components(flat_mutation_reader mr,
+    future<> write_components(flat_mutation_reader_v2 mr,
             uint64_t estimated_partitions,
             schema_ptr schema,
             const sstable_writer_config&,

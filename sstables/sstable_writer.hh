@@ -13,6 +13,7 @@
 #include <seastar/core/smp.hh>
 #include "schema_fwd.hh"
 #include "mutation_fragment.hh"
+#include "mutation_fragment_v2.hh"
 
 struct encoding_stats;
 
@@ -40,7 +41,7 @@ public:
     void consume(tombstone t);
     stop_iteration consume(static_row&& sr);
     stop_iteration consume(clustering_row&& cr);
-    stop_iteration consume(range_tombstone&& rt);
+    stop_iteration consume(range_tombstone_change&& rtc);
     stop_iteration consume_end_of_partition();
     void consume_end_of_stream();
 };
