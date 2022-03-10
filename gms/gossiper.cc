@@ -60,16 +60,12 @@ const sstring& gossiper::get_cluster_name() const noexcept {
     return _gcfg.cluster_name;
 }
 
-const sstring& gossiper::get_partitioner_name() const noexcept {
-    return _cfg.partitioner();
-}
-
 const std::set<inet_address>& gossiper::get_seeds() const noexcept {
     return _gcfg.seeds;
 }
 
 std::chrono::milliseconds gossiper::quarantine_delay() const noexcept {
-    auto delay = std::max(unsigned(30000), _cfg.ring_delay_ms());
+    auto delay = std::max(unsigned(30000), _gcfg.ring_delay_ms);
     auto ring_delay = std::chrono::milliseconds(delay);
     return ring_delay * 2;
 }
@@ -94,13 +90,14 @@ public:
     future<> on_restart(inet_address, endpoint_state) override { return make_ready_future(); }
 };
 
-gossiper::gossiper(abort_source& as, feature_service& features, const locator::shared_token_metadata& stm, netw::messaging_service& ms, db::config& cfg, gossip_config gcfg)
+gossiper::gossiper(abort_source& as, feature_service& features, const locator::shared_token_metadata& stm, netw::messaging_service& ms, const db::config& cfg, gossip_config gcfg)
         : _abort_source(as)
         , _feature_service(features)
         , _shared_token_metadata(stm)
         , _messaging(ms)
-        , _cfg(cfg)
-        , _gcfg(gcfg) {
+        , _failure_detector_timeout_ms(cfg.failure_detector_timeout_in_ms)
+        , _force_gossip_generation(cfg.force_gossip_generation)
+        , _gcfg(std::move(gcfg)) {
     // Gossiper's stuff below runs only on CPU0
     if (this_shard_id() != 0) {
         return;
@@ -742,7 +739,7 @@ future<> gossiper::failure_detector_loop_for_node(gms::inet_address node, int64_
     auto last = gossiper::clk::now();
     auto diff = gossiper::clk::duration(0);
     auto echo_interval = std::chrono::milliseconds(2000);
-    auto max_duration = echo_interval + std::chrono::milliseconds(_cfg.failure_detector_timeout_in_ms());
+    auto max_duration = echo_interval + std::chrono::milliseconds(_failure_detector_timeout_ms());
     while (is_enabled()) {
         bool failed = false;
         try {
@@ -1160,7 +1157,7 @@ future<> gossiper::advertise_removing(inet_address endpoint, utils::UUID host_id
     // remember this node's generation
     int generation = state.get_heart_beat_state().get_generation();
     logger.info("Removing host: {}", host_id);
-    auto ring_delay = std::chrono::milliseconds(_cfg.ring_delay_ms());
+    auto ring_delay = std::chrono::milliseconds(_gcfg.ring_delay_ms);
     logger.info("Sleeping for {}ms to ensure {} does not change", ring_delay.count(), endpoint);
     co_await sleep_abortable(ring_delay, _abort_source);
     // make sure it did not change
@@ -1219,7 +1216,7 @@ future<> gossiper::assassinate_endpoint(sstring address) {
 
                 int generation = ep_state.get_heart_beat_state().get_generation();
                 int heartbeat = ep_state.get_heart_beat_state().get_heart_beat_version();
-                auto ring_delay = std::chrono::milliseconds(gossiper._cfg.ring_delay_ms());
+                auto ring_delay = std::chrono::milliseconds(gossiper._gcfg.ring_delay_ms);
                 logger.info("Sleeping for {} ms to ensure {} does not change", ring_delay.count(), endpoint);
                 // make sure it did not change
                 sleep_abortable(ring_delay, gossiper._abort_source).get();
@@ -1811,8 +1808,8 @@ future<> gossiper::start_gossiping(int generation_nbr, std::map<application_stat
     });
 
     build_seeds_list();
-    if (_cfg.force_gossip_generation() > 0) {
-        generation_nbr = _cfg.force_gossip_generation();
+    if (_force_gossip_generation() > 0) {
+        generation_nbr = _force_gossip_generation();
         logger.warn("Use the generation number provided by user: generation = {}", generation_nbr);
     }
     endpoint_state& local_state = endpoint_state_map[get_broadcast_address()];
@@ -1908,7 +1905,7 @@ future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes) 
             if (fall_back_to_syn_msg) {
                 break;
             }
-            if (clk::now() > start_time + std::chrono::milliseconds(_cfg.shadow_round_ms())) {
+            if (clk::now() > start_time + std::chrono::milliseconds(_gcfg.shadow_round_ms)) {
                 throw std::runtime_error(format("Unable to gossip with any nodes={} (ShadowRound).", nodes));
             }
             sleep_abortable(std::chrono::seconds(1), _abort_source).get();
@@ -1933,7 +1930,7 @@ future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes) 
                 }
                 sleep_abortable(std::chrono::seconds(1), _abort_source).get();
                 if (is_in_shadow_round()) {
-                    if (clk::now() > t + std::chrono::milliseconds(_cfg.shadow_round_ms())) {
+                    if (clk::now() > t + std::chrono::milliseconds(_gcfg.shadow_round_ms)) {
                         throw std::runtime_error(format("Unable to gossip with any nodes={} (ShadowRound),", nodes));
                     }
                     logger.info("Connect nodes={} again ... ({} seconds passed)",
@@ -2108,7 +2105,7 @@ future<> gossiper::do_stop_gossiping() {
                     return make_ready_future<>();
                 }).get();
             }
-            sleep(std::chrono::milliseconds(_cfg.shutdown_announce_in_ms())).get();
+            sleep(std::chrono::milliseconds(_gcfg.shutdown_announce_ms)).get();
         } else {
             logger.warn("No local state or state is in silent shutdown, not announcing shutdown");
         }
@@ -2334,7 +2331,7 @@ future<> gossiper::wait_for_gossip(std::chrono::milliseconds initial_delay, std:
 
 future<> gossiper::wait_for_gossip_to_settle() {
     static constexpr std::chrono::milliseconds GOSSIP_SETTLE_MIN_WAIT_MS{5000};
-    auto force_after = _cfg.skip_wait_for_gossip_to_settle();
+    auto force_after = _gcfg.skip_wait_for_gossip_to_settle;
     auto do_enable_features = [this] {
         return async([this] {
             if (!std::exchange(_gossip_settled, true)) {
@@ -2352,8 +2349,8 @@ future<> gossiper::wait_for_gossip_to_settle() {
 
 future<> gossiper::wait_for_range_setup() {
     logger.info("Waiting for pending range setup...");
-    auto ring_delay = std::chrono::milliseconds(_cfg.ring_delay_ms());
-    auto force_after = _cfg.skip_wait_for_gossip_to_settle();
+    auto ring_delay = std::chrono::milliseconds(_gcfg.ring_delay_ms);
+    auto force_after = _gcfg.skip_wait_for_gossip_to_settle;
     return wait_for_gossip(ring_delay, force_after);
 }
 

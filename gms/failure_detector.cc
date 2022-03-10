@@ -16,7 +16,6 @@
 #include "gms/application_state.hh"
 #include "gms/inet_address.hh"
 #include "log.hh"
-#include "db/config.hh"
 #include <iostream>
 #include <chrono>
 #include "replica/database.hh"

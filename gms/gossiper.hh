@@ -27,6 +27,7 @@
 #include "gms/gossip_digest_syn.hh"
 #include "gms/gossip_digest.hh"
 #include "utils/loading_shared_values.hh"
+#include "utils/updateable_value.hh"
 #include "utils/in.hh"
 #include "message/messaging_service_fwd.hh"
 #include <optional>
@@ -72,6 +73,11 @@ struct gossip_config {
     seastar::scheduling_group gossip_scheduling_group = seastar::scheduling_group();
     sstring cluster_name;
     std::set<inet_address> seeds;
+    sstring partitioner;
+    uint32_t ring_delay_ms = 30 * 1000;
+    uint32_t shadow_round_ms = 300 * 1000;
+    uint32_t shutdown_announce_ms = 2 * 1000;
+    uint32_t skip_wait_for_gossip_to_settle = -1;
 };
 
 /**
@@ -129,7 +135,11 @@ public:
     // Only respond echo message listed in nodes with the generation number
     future<> advertise_to_nodes(std::unordered_map<gms::inet_address, int32_t> advertise_to_nodes = {});
     const sstring& get_cluster_name() const noexcept;
-    const sstring& get_partitioner_name() const noexcept;
+
+    const sstring& get_partitioner_name() const noexcept {
+        return _gcfg.partitioner;
+    }
+
     inet_address get_broadcast_address() const noexcept {
         return utils::fb_utilities::get_broadcast_address();
     }
@@ -223,7 +233,7 @@ private:
     // The value must be kept alive until completes and not change.
     future<> replicate(inet_address, application_state key, const versioned_value& value);
 public:
-    explicit gossiper(abort_source& as, feature_service& features, const locator::shared_token_metadata& stm, netw::messaging_service& ms, db::config& cfg, gossip_config gcfg);
+    explicit gossiper(abort_source& as, feature_service& features, const locator::shared_token_metadata& stm, netw::messaging_service& ms, const db::config& cfg, gossip_config gcfg);
 
     void check_seen_seeds();
 
@@ -575,7 +585,8 @@ private:
     feature_service& _feature_service;
     const locator::shared_token_metadata& _shared_token_metadata;
     netw::messaging_service& _messaging;
-    db::config& _cfg;
+    utils::updateable_value<uint32_t> _failure_detector_timeout_ms;
+    utils::updateable_value<int32_t> _force_gossip_generation;
     gossip_config _gcfg;
     // Get features supported by a particular node
     std::set<sstring> get_supported_features(inet_address endpoint) const;
