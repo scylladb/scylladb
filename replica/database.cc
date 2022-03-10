@@ -59,6 +59,7 @@
 #include "tombstone_gc.hh"
 
 #include "data_dictionary/impl.hh"
+#include "readers/multi_range.hh"
 
 using namespace std::chrono_literals;
 using namespace db;

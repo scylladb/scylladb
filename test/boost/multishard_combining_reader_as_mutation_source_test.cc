@@ -27,6 +27,7 @@
 #include "mutation_reader.hh"
 #include "schema_registry.hh"
 #include "service/priority_manager.hh"
+#include "readers/forwardable_v2.hh"
 
 // It has to be a container that does not invalidate pointers
 static std::list<dummy_sharder> keep_alive_sharder;

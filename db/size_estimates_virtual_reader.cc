@@ -25,6 +25,7 @@
 #include "replica/database.hh"
 
 #include "db/size_estimates_virtual_reader.hh"
+#include "readers/from_mutations.hh"
 
 namespace db {
 

@@ -354,9 +354,6 @@ private:
 
 std::ostream& operator<<(std::ostream&, mutation_fragment_v2::kind);
 
-using mutation_fragment_v2_opt = optimized_optional<mutation_fragment_v2>;
-
-
 // F gets a stream element as an argument and returns the new value which replaces that element
 // in the transformed stream.
 template<typename F>

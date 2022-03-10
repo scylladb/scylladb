@@ -31,6 +31,8 @@
 #include "test/lib/random_utils.hh"
 #include "utils/ranges.hh"
 
+#include "readers/from_mutations_v2.hh"
+
 using namespace std::literals::chrono_literals;
 
 schema_ptr test_table_schema() {

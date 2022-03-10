@@ -12,6 +12,8 @@
 #include "partition_snapshot_reader.hh"
 #include "partition_builder.hh"
 #include "mutation_partition_view.hh"
+#include "readers/empty_v2.hh"
+#include "readers/forwardable_v2.hh"
 
 namespace replica {
 

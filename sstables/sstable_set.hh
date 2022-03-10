@@ -8,12 +8,13 @@
 
 #pragma once
 
-#include "flat_mutation_reader.hh"
-#include "flat_mutation_reader_v2.hh"
+#include "readers/flat_mutation_reader.hh"
+#include "readers/flat_mutation_reader_v2.hh"
 #include "sstables/progress_monitor.hh"
 #include "shared_sstable.hh"
 #include "dht/i_partitioner.hh"
 #include <seastar/core/shared_ptr.hh>
+#include <seastar/core/io_priority_class.hh>
 #include <vector>
 
 namespace utils {

@@ -14,22 +14,11 @@
 
 #include "dht/i_partitioner.hh"
 #include "mutation_fragment.hh"
-#include "tracing/trace_state.hh"
 #include "mutation.hh"
 #include "mutation_consumer_concepts.hh"
 
-#include <seastar/core/thread.hh>
-#include <seastar/core/file.hh>
 #include "reader_permit.hh"
-
-#include <deque>
-
-using seastar::future;
-
-class mutation_source;
-class position_in_partition;
-
-class flat_mutation_reader_v2;
+#include "readers/flat_mutation_reader_fwd.hh"
 
 /// \brief Represents a stream of mutation fragments.
 ///
@@ -405,9 +394,6 @@ private:
     friend flat_mutation_reader downgrade_to_v1(flat_mutation_reader_v2);
     friend flat_mutation_reader_v2 upgrade_to_v2(flat_mutation_reader);
 public:
-    // Documented in mutation_reader::forwarding.
-    class partition_range_forwarding_tag;
-    using partition_range_forwarding = bool_class<partition_range_forwarding_tag>;
 
     flat_mutation_reader(std::unique_ptr<impl> impl) noexcept : _impl(std::move(impl)) {}
     flat_mutation_reader(const flat_mutation_reader&) = delete;
@@ -666,7 +652,33 @@ namespace mutation_reader {
     // from streamed_mutation::forwarding - the former is about skipping to
     // a different partition range, while the latter is about skipping
     // inside a large partition.
-    using forwarding = flat_mutation_reader::partition_range_forwarding;
+    class partition_range_forwarding_tag;
+    using forwarding = bool_class<partition_range_forwarding_tag>;
+}
+
+namespace streamed_mutation {
+    // Determines whether streamed_mutation is in forwarding mode or not.
+    //
+    // In forwarding mode the stream does not return all fragments right away,
+    // but only those belonging to the current clustering range. Initially
+    // current range only covers the static row. The stream can be forwarded
+    // (even before end-of- stream) to a later range with fast_forward_to().
+    // Forwarding doesn't change initial restrictions of the stream, it can
+    // only be used to skip over data.
+    //
+    // Monotonicity of positions is preserved by forwarding. That is fragments
+    // emitted after forwarding will have greater positions than any fragments
+    // emitted before forwarding.
+    //
+    // For any range, all range tombstones relevant for that range which are
+    // present in the original stream will be emitted. Range tombstones
+    // emitted before forwarding which overlap with the new range are not
+    // necessarily re-emitted.
+    //
+    // When streamed_mutation is not in forwarding mode, fast_forward_to()
+    // cannot be used.
+    class forwarding_tag;
+    using forwarding = bool_class<forwarding_tag>;
 }
 
 // Consumes mutation fragments until StopCondition is true.
@@ -752,102 +764,6 @@ flat_mutation_reader transform(flat_mutation_reader r, T t) {
     return make_flat_mutation_reader<transforming_reader>(std::move(r), std::move(t));
 }
 
-class delegating_reader : public flat_mutation_reader::impl {
-    flat_mutation_reader_opt _underlying_holder;
-    flat_mutation_reader* _underlying;
-public:
-    // when passed a lvalue reference to the reader
-    // we don't own it and the caller is responsible
-    // for evenetually closing the reader.
-    delegating_reader(flat_mutation_reader& r)
-        : impl(r.schema(), r.permit())
-        , _underlying_holder()
-        , _underlying(&r)
-    { }
-    // when passed a rvalue reference to the reader
-    // we assume ownership of it and will close it
-    // in close().
-    delegating_reader(flat_mutation_reader&& r)
-        : impl(r.schema(), r.permit())
-        , _underlying_holder(std::move(r))
-        , _underlying(&*_underlying_holder)
-    { }
-    virtual future<> fill_buffer() override {
-        if (is_buffer_full()) {
-            return make_ready_future<>();
-        }
-        return _underlying->fill_buffer().then([this] {
-            _end_of_stream = _underlying->is_end_of_stream();
-            _underlying->move_buffer_content_to(*this);
-        });
-    }
-    virtual future<> fast_forward_to(position_range pr) override {
-        _end_of_stream = false;
-        forward_buffer_to(pr.start());
-        return _underlying->fast_forward_to(std::move(pr));
-    }
-    virtual future<> next_partition() override {
-        clear_buffer_to_next_partition();
-        auto maybe_next_partition = make_ready_future<>();
-        if (is_buffer_empty()) {
-            maybe_next_partition = _underlying->next_partition();
-        }
-      return maybe_next_partition.then([this] {
-        _end_of_stream = _underlying->is_end_of_stream() && _underlying->is_buffer_empty();
-      });
-    }
-    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
-        _end_of_stream = false;
-        clear_buffer();
-        return _underlying->fast_forward_to(pr);
-    }
-    virtual future<> close() noexcept override {
-        return _underlying_holder ? _underlying_holder->close() : make_ready_future<>();
-    }
-};
-flat_mutation_reader make_delegating_reader(flat_mutation_reader&);
-
-flat_mutation_reader make_forwardable(flat_mutation_reader m);
-
-flat_mutation_reader make_nonforwardable(flat_mutation_reader, bool);
-
-flat_mutation_reader make_empty_flat_reader(schema_ptr s, reader_permit permit);
-
-// All mutations should have the same schema.
-flat_mutation_reader make_flat_mutation_reader_from_mutations(schema_ptr schema, reader_permit permit, std::vector<mutation>,
-        const dht::partition_range& pr = query::full_partition_range, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
-
-// All mutations should have the same schema.
-inline flat_mutation_reader make_flat_mutation_reader_from_mutations(schema_ptr schema, reader_permit permit, std::vector<mutation> ms, streamed_mutation::forwarding fwd) {
-    return make_flat_mutation_reader_from_mutations(std::move(schema), std::move(permit), std::move(ms), query::full_partition_range, fwd);
-}
-
-// All mutations should have the same schema.
-flat_mutation_reader
-make_flat_mutation_reader_from_mutations(schema_ptr schema,
-                                    reader_permit permit,
-                                    std::vector<mutation> ms,
-                                    const query::partition_slice& slice,
-                                    streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
-
-// All mutations should have the same schema.
-flat_mutation_reader
-make_flat_mutation_reader_from_mutations(schema_ptr schema,
-                                    reader_permit permit,
-                                    std::vector<mutation> ms,
-                                    const dht::partition_range& pr,
-                                    const query::partition_slice& slice,
-                                    streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
-
-flat_mutation_reader
-make_flat_mutation_reader_from_fragments(schema_ptr, reader_permit, std::deque<mutation_fragment>);
-
-flat_mutation_reader
-make_flat_mutation_reader_from_fragments(schema_ptr, reader_permit, std::deque<mutation_fragment>, const dht::partition_range& pr);
-
-flat_mutation_reader
-make_flat_mutation_reader_from_fragments(schema_ptr, reader_permit, std::deque<mutation_fragment>, const dht::partition_range& pr, const query::partition_slice& slice);
-
 // Calls the consumer for each element of the reader's stream until end of stream
 // is reached or the consumer requests iteration to stop by returning stop_iteration::yes.
 // The consumer should accept mutation as the argument and return stop_iteration.
@@ -867,40 +783,6 @@ future<> consume_partitions(flat_mutation_reader& reader, Consumer consumer) {
         });
     });
 }
-
-flat_mutation_reader
-make_generating_reader(schema_ptr s, reader_permit permit, std::function<future<mutation_fragment_opt> ()> get_next_fragment);
-
-/// A reader that emits partitions in native reverse order.
-///
-/// 1. The reader's schema() method will return a reversed schema (see
-///    \ref schema::make_reversed()).
-/// 2. Static row is still emitted first.
-/// 3. Range tombstones' bounds are reversed (see \ref range_tombstone::reverse()).
-/// 4. Clustered rows and range tombstones are emitted in descending order.
-/// Because of 3 and 4 the guarantee that a range tombstone is emitted before
-/// any mutation fragment affected by it still holds.
-/// Ordering of partitions themselves remains unchanged.
-/// For more details see docs/design-notes/reverse-reads.md.
-///
-/// The reader's schema (returned by `schema()`) is the reverse of `original`'s schema.
-///
-/// \param original the reader to be reversed.
-/// \param max_size the maximum amount of memory the reader is allowed to use
-///     for reversing and conversely the maximum size of the results. The
-///     reverse reader reads entire partitions into memory, before reversing
-///     them. Since partitions can be larger than the available memory, we need
-///     to enforce a limit on memory consumption. When reaching the soft limit
-///     a warning will be logged. When reaching the hard limit the read will be
-///     aborted.
-/// \param slice serves as a convenience slice storage for reads that have to
-///     store an edited slice somewhere. This is common for reads that work
-///     with a native-reversed slice and so have to convert the one used in the
-///     query -- which is in half-reversed format.
-///
-/// FIXME: reversing should be done in the sstable layer, see #1413.
-flat_mutation_reader
-make_reversing_reader(flat_mutation_reader original, query::max_result_size max_size, std::unique_ptr<query::partition_slice> slice = {});
 
 /// A cosumer function that is passed a flat_mutation_reader to be consumed from
 /// and returns a future<> resolved when the reader is fully consumed, and closed.

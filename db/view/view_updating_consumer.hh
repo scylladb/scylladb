@@ -19,6 +19,7 @@
 #include "mutation_rebuilder.hh"
 
 class evictable_reader_handle;
+class evictable_reader_handle_v2;
 
 namespace db::view {
 

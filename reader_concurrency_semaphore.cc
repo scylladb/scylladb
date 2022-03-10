@@ -8,6 +8,7 @@
 
 #include <seastar/core/seastar.hh>
 #include <seastar/core/print.hh>
+#include <seastar/core/file.hh>
 #include <seastar/util/lazy.hh>
 #include <seastar/util/log.hh>
 #include <seastar/core/coroutine.hh>

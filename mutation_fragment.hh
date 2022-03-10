@@ -18,6 +18,7 @@
 
 #include "db/timeout_clock.hh"
 #include "reader_permit.hh"
+#include "mutation_fragment_fwd.hh"
 
 // mutation_fragments are the objects that streamed_mutation are going to
 // stream. They can represent:
@@ -525,32 +526,6 @@ inline position_in_partition_view partition_end::position() const
 std::ostream& operator<<(std::ostream&, partition_region);
 std::ostream& operator<<(std::ostream&, mutation_fragment::kind);
 
-using mutation_fragment_opt = optimized_optional<mutation_fragment>;
-
-namespace streamed_mutation {
-    // Determines whether streamed_mutation is in forwarding mode or not.
-    //
-    // In forwarding mode the stream does not return all fragments right away,
-    // but only those belonging to the current clustering range. Initially
-    // current range only covers the static row. The stream can be forwarded
-    // (even before end-of- stream) to a later range with fast_forward_to().
-    // Forwarding doesn't change initial restrictions of the stream, it can
-    // only be used to skip over data.
-    //
-    // Monotonicity of positions is preserved by forwarding. That is fragments
-    // emitted after forwarding will have greater positions than any fragments
-    // emitted before forwarding.
-    //
-    // For any range, all range tombstones relevant for that range which are
-    // present in the original stream will be emitted. Range tombstones
-    // emitted before forwarding which overlap with the new range are not
-    // necessarily re-emitted.
-    //
-    // When streamed_mutation is not in forwarding mode, fast_forward_to()
-    // cannot be used.
-    class forwarding_tag;
-    using forwarding = bool_class<forwarding_tag>;
-}
 
 // range_tombstone_stream is a helper object that simplifies producing a stream
 // of range tombstones and merging it with a stream of clustering rows.

@@ -13,6 +13,7 @@
 #include "sstables/sstable_set.hh"
 #include "sstables/sstables.hh"
 #include "test/lib/simple_schema.hh"
+#include "readers/from_mutations_v2.hh"
 
 static sstables::sstable_set make_sstable_set(schema_ptr schema, lw_shared_ptr<sstable_list> all = {}, bool use_level_metadata = true) {
     return sstables::sstable_set(std::make_unique<partitioned_sstable_set>(schema, std::move(all), use_level_metadata), schema);

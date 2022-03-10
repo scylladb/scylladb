@@ -26,7 +26,7 @@
 #include "idl/uuid.dist.impl.hh"
 #include "idl/keys.dist.impl.hh"
 #include "idl/mutation.dist.impl.hh"
-#include "flat_mutation_reader.hh"
+#include "readers/flat_mutation_reader.hh"
 #include "converting_mutation_partition_applier.hh"
 #include "mutation_partition_view.hh"
 

@@ -36,6 +36,7 @@
 #include "mutation_source_metadata.hh"
 #include "streaming/stream_mutation_fragments_cmd.hh"
 #include "consumer.hh"
+#include "readers/generating.hh"
 
 namespace streaming {
 

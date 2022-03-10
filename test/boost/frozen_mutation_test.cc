@@ -20,6 +20,7 @@
 #include "test/lib/mutation_source_test.hh"
 
 #include <seastar/core/thread.hh>
+#include "readers/from_mutations.hh"
 
 static schema_builder new_table() {
     return { "some_keyspace", "some_table" };

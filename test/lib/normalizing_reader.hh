@@ -10,7 +10,7 @@
 
 #include "mutation_reader.hh"
 #include <seastar/core/future.hh>
-#include "flat_mutation_reader.hh"
+#include "readers/flat_mutation_reader.hh"
 
 /*
  * A helper class that wraps another flat_mutation_reader

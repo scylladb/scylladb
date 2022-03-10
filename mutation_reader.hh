@@ -14,9 +14,10 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/core/do_with.hh>
 #include "tracing/trace_state.hh"
-#include "flat_mutation_reader.hh"
-#include "flat_mutation_reader_v2.hh"
+#include "readers/flat_mutation_reader.hh"
+#include "readers/flat_mutation_reader_v2.hh"
 #include "reader_concurrency_semaphore.hh"
+#include <seastar/core/io_priority_class.hh>
 
 class reader_selector {
 protected:

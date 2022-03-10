@@ -8,7 +8,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include "flat_mutation_reader_v2.hh"
+#include "readers/flat_mutation_reader_v2.hh"
+#include "readers/flat_mutation_reader.hh"
 #include "db/system_keyspace.hh"
 
 namespace replica {

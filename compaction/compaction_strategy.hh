@@ -16,7 +16,7 @@
 #include "sstables/shared_sstable.hh"
 #include "exceptions/exceptions.hh"
 #include "compaction_strategy_type.hh"
-#include "flat_mutation_reader.hh"
+#include "readers/flat_mutation_reader.hh"
 #include "table_state.hh"
 #include "strategy_control.hh"
 

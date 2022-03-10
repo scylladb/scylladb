@@ -9,8 +9,8 @@
 #pragma once
 
 #include "partition_version.hh"
-#include "flat_mutation_reader.hh"
-#include "flat_mutation_reader_v2.hh"
+#include "readers/flat_mutation_reader.hh"
+#include "readers/flat_mutation_reader_v2.hh"
 #include "clustering_key_filter.hh"
 #include "query-request.hh"
 #include <boost/range/algorithm/heap_algorithm.hpp>

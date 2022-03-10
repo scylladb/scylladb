@@ -43,6 +43,10 @@
 #include <boost/range/algorithm/remove_if.hpp>
 #include <boost/range/algorithm.hpp>
 #include "utils/error_injection.hh"
+#include "readers/reversing.hh"
+#include "readers/from_mutations.hh"
+#include "readers/empty_v2.hh"
+#include "readers/multi_range.hh"
 
 namespace replica {
 

@@ -26,6 +26,7 @@
 #include "test/lib/simple_schema.hh"
 
 #include <boost/range/algorithm/transform.hpp>
+#include "readers/from_mutations.hh"
 
 // A StreamedMutationConsumer which distributes fragments randomly into several mutations.
 class fragment_scatterer {

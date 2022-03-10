@@ -56,6 +56,7 @@
 #include "utils/exponential_backoff_retry.hh"
 #include "utils/fb_utilities.hh"
 #include "query-result-writer.hh"
+#include "readers/from_fragments.hh"
 
 using namespace std::chrono_literals;
 

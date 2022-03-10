@@ -46,6 +46,7 @@
 #include "db/batchlog_manager.hh"
 #include "cql3/untyped_result_set.hh"
 #include "idl/partition_checksum.dist.hh"
+#include "readers/empty.hh"
 
 extern logging::logger rlogger;
 
