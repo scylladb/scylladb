@@ -647,34 +647,34 @@ inline bool compaction_manager::task::can_proceed() const {
     return _cm.can_proceed(_compacting_table);
 }
 
-inline future<> compaction_manager::put_task_to_sleep(shared_ptr<task>& task) {
-    cmlog.info("compaction task handler sleeping for {} seconds",
-        std::chrono::duration_cast<std::chrono::seconds>(task->_compaction_retry.sleep_time()).count());
-    return task->_compaction_retry.retry(task->compaction_data().abort).handle_exception_type([task] (sleep_aborted&) {
-        return make_exception_future<>(task->make_compaction_stopped_exception());
-    });
-}
-
-inline bool compaction_manager::maybe_stop_on_error(std::exception_ptr err, bool can_retry) {
-    bool requires_stop = true;
-
+future<stop_iteration> compaction_manager::task::maybe_retry(std::exception_ptr err) {
     try {
         std::rethrow_exception(err);
     } catch (sstables::compaction_stopped_exception& e) {
-        cmlog.info("compaction info: {}: stopping", e.what());
+        cmlog.info("{}: {}: stopping", *this, e.what());
     } catch (sstables::compaction_aborted_exception& e) {
-        cmlog.error("compaction info: {}: stopping", e.what());
-        _stats.errors++;
+        cmlog.error("{}: {}: stopping", *this, e.what());
+        _cm._stats.errors++;
     } catch (storage_io_error& e) {
-        _stats.errors++;
-        cmlog.error("compaction failed due to storage io error: {}: stopping", e.what());
-        do_stop();
+        cmlog.error("{}: failed due to storage io error: {}: stopping", *this, e.what());
+        _cm._stats.errors++;
+        _cm.do_stop();
+        throw;
     } catch (...) {
-        _stats.errors++;
-        requires_stop = !can_retry;
-        cmlog.error("compaction failed: {}: {}", std::current_exception(), requires_stop ? "stopping" : "retrying");
+        if (can_proceed()) {
+            _cm._stats.errors++;
+            cmlog.error("{}: failed: {}. Will retry in {} seconds", *this, std::current_exception(),
+                    std::chrono::duration_cast<std::chrono::seconds>(_compaction_retry.sleep_time()).count());
+            _cm._stats.pending_tasks++;
+            return _compaction_retry.retry(_compaction_data.abort).handle_exception_type([this] (sleep_aborted&) {
+                return make_exception_future<>(make_compaction_stopped_exception());
+            }).then([] {
+                return make_ready_future<stop_iteration>(false);
+            });
+        }
+        throw;
     }
-    return requires_stop;
+    return make_ready_future<stop_iteration>(true);
 }
 
 class compaction_manager::regular_compaction_task : public compaction_manager::task {
@@ -732,14 +732,7 @@ void compaction_manager::submit(replica::table* t) {
                 task->finish_compaction();
 
                 if (f.failed()) {
-                    auto ex = f.get_exception();
-                    if (!maybe_stop_on_error(std::move(ex), task->can_proceed())) {
-                        _stats.pending_tasks++;
-                        return put_task_to_sleep(task).then([] {
-                            return make_ready_future<stop_iteration>(stop_iteration::no);
-                        });
-                    }
-                    return make_ready_future<stop_iteration>(stop_iteration::yes);
+                    return task->maybe_retry(f.get_exception());
                 }
                 _stats.pending_tasks++;
                 _stats.completed_tasks++;
@@ -783,23 +776,11 @@ future<> compaction_manager::perform_offstrategy(replica::table* t) {
                 return t->run_offstrategy_compaction(task->compaction_data()).then_wrapped([this, task, schema = t->schema()] (future<> f) mutable {
                     _stats.active_tasks--;
                     task->finish_compaction();
-                    try {
-                        f.get();
+                    if (!f.failed()) {
                         _stats.completed_tasks++;
-                    } catch (sstables::compaction_stopped_exception& e) {
-                        cmlog.info("off-strategy compaction of {}.{} was stopped: {}", schema->ks_name(), schema->cf_name(), e.what());
-                    } catch (sstables::compaction_aborted_exception& e) {
-                        _stats.errors++;
-                        cmlog.error("off-strategy compaction of {}.{} was aborted: {}", schema->ks_name(), schema->cf_name(), e.what());
-                    } catch (...) {
-                        _stats.errors++;
-                        _stats.pending_tasks++;
-                        cmlog.error("off-strategy compaction of {}.{} failed due to {}, retrying...", schema->ks_name(), schema->cf_name(), std::current_exception());
-                        return put_task_to_sleep(task).then([] {
-                            return make_ready_future<stop_iteration>(stop_iteration::no);
-                        });
+                        return make_ready_future<stop_iteration>(stop_iteration::yes);
                     }
-                    return make_ready_future<stop_iteration>(stop_iteration::yes);
+                    return task->maybe_retry(f.get_exception());
                 });
               });
         });
@@ -880,12 +861,7 @@ future<> compaction_manager::rewrite_sstables(replica::table* t, sstables::compa
                     ex = std::current_exception();
                 }
                 if (ex) {
-                    if (!maybe_stop_on_error(std::move(ex), task->can_proceed())) {
-                        _stats.pending_tasks++;
-                        co_await put_task_to_sleep(task);
-                        co_return stop_iteration::no;
-                    }
-                    co_return stop_iteration::yes;
+                    co_return co_await task->maybe_retry(std::move(ex));
                 }
                 _stats.completed_tasks++;
                 reevaluate_postponed_compactions();

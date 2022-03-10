@@ -114,6 +114,12 @@ public:
         void setup_new_compaction(utils::UUID output_run_id = utils::null_uuid());
         void finish_compaction() noexcept;
 
+        // Compaction manager stop itself if it finds an storage I/O error which results in
+        // stop of transportation services. It cannot make progress anyway.
+        // Returns exception if error is judged fatal, and compaction task must be stopped,
+        // otherwise, returns stop_iteration::no after sleep for exponential retry.
+        future<stop_iteration> maybe_retry(std::exception_ptr err);
+
     public:
         const replica::table* compacting_table() const noexcept {
             return _compacting_table;
@@ -263,13 +269,6 @@ private:
     // Return true if compaction manager is enabled and
     // table still exists and compaction is not disabled for the table.
     inline bool can_proceed(replica::table* t) const;
-
-    inline future<> put_task_to_sleep(shared_ptr<task>& task);
-
-    // Compaction manager stop itself if it finds an storage I/O error which results in
-    // stop of transportation services. It cannot make progress anyway.
-    // Returns true if error is judged fatal, and compaction task must be stopped
-    inline bool maybe_stop_on_error(std::exception_ptr err, bool can_retry);
 
     void postponed_compactions_reevaluation();
     void reevaluate_postponed_compactions() noexcept;
