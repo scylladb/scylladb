@@ -1330,22 +1330,6 @@ future<> system_keyspace::build_bootstrap_info() {
     });
 }
 
-future<> system_keyspace::init_local_cache() {
-    return _local_cache.start().then([] {
-
-        // Do not stop _local_cache here. See #2721.
-        /*
-        engine().at_exit([] {
-            return _local_cache.stop();
-        });
-        */
-    });
-}
-
-future<> system_keyspace::deinit_local_cache() {
-    return _local_cache.stop();
-}
-
 future<> system_keyspace::setup(distributed<replica::database>& db,
                distributed<cql3::query_processor>& qp,
                sharded<netw::messaging_service>& ms) {
@@ -3241,6 +3225,7 @@ sstring system_keyspace_name() {
 system_keyspace::system_keyspace(sharded<cql3::query_processor>& qp, sharded<replica::database>& db) noexcept
         : _qp(qp)
         , _db(db)
+        , _cache(_local_cache)
 {
 }
 
@@ -3249,12 +3234,17 @@ future<> system_keyspace::start() {
 
     if (this_shard_id() == 0) {
         qctx = std::make_unique<query_context>(_qp);
+        co_await _cache.start();
     }
 
     co_return;
 }
 
 future<> system_keyspace::stop() {
+    if (this_shard_id() == 0) {
+        co_await _cache.stop();
+    }
+
     co_return;
 }
 

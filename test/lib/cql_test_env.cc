@@ -711,9 +711,6 @@ public:
                 view_update_generator.stop().get();
             });
 
-            db::system_keyspace::init_local_cache().get();
-            auto stop_local_cache = defer([] { db::system_keyspace::deinit_local_cache().get(); });
-
             sys_dist_ks.start(std::ref(qp), std::ref(mm), std::ref(proxy)).get();
 
             sl_controller.invoke_on_all([&sys_dist_ks, &sl_controller] (qos::service_level_controller& service) {

@@ -68,6 +68,7 @@ namespace db {
 sstring system_keyspace_name();
 
 class config;
+struct local_cache;
 
 using system_keyspace_view_name = std::pair<sstring, sstring>;
 class system_keyspace_view_build_progress;
@@ -78,6 +79,7 @@ typedef std::vector<db::replay_position> replay_positions;
 class system_keyspace {
     sharded<cql3::query_processor>& _qp;
     sharded<replica::database>& _db;
+    sharded<local_cache>& _cache;
 
     static schema_ptr raft_config();
     static schema_ptr local();
@@ -212,8 +214,6 @@ public:
 
     static table_schema_version generate_schema_version(utils::UUID table_id, uint16_t offset = 0);
 
-    static future<> init_local_cache();
-    static future<> deinit_local_cache();
     static future<> setup(distributed<replica::database>& db,
                 distributed<cql3::query_processor>& qp,
                 sharded<netw::messaging_service>& ms);
