@@ -749,7 +749,7 @@ private:
         return ret;
     }
 
-    void interrupt(std::exception_ptr ex) {
+    void on_interrupt(std::exception_ptr ex) {
         log_info("{} of {} sstables interrupted due to: {}", report_start_desc(), _input_sstable_generations.size(), ex);
         delete_sstables_for_interrupted_compaction();
     }
@@ -1572,7 +1572,7 @@ future<compaction_result> compaction::run(std::unique_ptr<compaction> c) {
         try {
            consumer.get();
         } catch (...) {
-            c->interrupt(std::current_exception());
+            c->on_interrupt(std::current_exception());
             c = nullptr; // make sure writers are stopped while running in thread context. This is because of calls to file.close().get();
             throw;
         }
