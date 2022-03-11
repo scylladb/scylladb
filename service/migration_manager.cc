@@ -54,8 +54,10 @@ using namespace std::chrono_literals;
 const std::chrono::milliseconds migration_manager::migration_delay = 60000ms;
 static future<schema_ptr> get_schema_definition(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms, service::storage_proxy& sp);
 
-migration_manager::migration_manager(migration_notifier& notifier, gms::feature_service& feat, netw::messaging_service& ms, service::storage_proxy& storage_proxy, gms::gossiper& gossiper, service::raft_group_registry& raft_gr) :
+migration_manager::migration_manager(migration_notifier& notifier, gms::feature_service& feat, netw::messaging_service& ms,
+            service::storage_proxy& storage_proxy, gms::gossiper& gossiper, service::raft_group_registry& raft_gr, sharded<db::system_keyspace>& sysks) :
         _notifier(notifier), _feat(feat), _messaging(ms), _storage_proxy(storage_proxy), _gossiper(gossiper), _raft_gr(raft_gr)
+        , _sys_ks(sysks)
         , _schema_push([this] { return passive_announce(); })
         , _group0_read_apply_mutex{1}, _group0_operation_mutex{1}
         , _group0_history_gc_duration{std::chrono::duration_cast<gc_clock::duration>(std::chrono::weeks{1})}
