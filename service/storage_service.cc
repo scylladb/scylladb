@@ -1315,7 +1315,7 @@ future<> storage_service::init_server(cql3::query_processor& qp) {
         std::unordered_set<inet_address> loaded_endpoints;
         if (_db.local().get_config().load_ring_state()) {
             slogger.info("Loading persisted ring state");
-            auto loaded_tokens = db::system_keyspace::load_tokens().get0();
+            auto loaded_tokens = _sys_ks.local().load_tokens().get0();
             auto loaded_host_ids = db::system_keyspace::load_host_ids().get0();
 
             for (auto& x : loaded_tokens) {

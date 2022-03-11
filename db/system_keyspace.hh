@@ -310,7 +310,7 @@ public:
      * Return a map of stored tokens to IP addresses
      *
      */
-    static future<std::unordered_map<gms::inet_address, std::unordered_set<dht::token>>> load_tokens();
+    future<std::unordered_map<gms::inet_address, std::unordered_set<dht::token>>> load_tokens();
 
     /**
      * Return a map of store host_ids to IP addresses
