@@ -594,10 +594,10 @@ private:
     future<>
     update_sstable_lists_on_off_strategy_completion(const std::vector<sstables::shared_sstable>& old_maintenance_sstables,
                                                     const std::vector<sstables::shared_sstable>& new_main_sstables);
-
+public:
     // Rebuild sstable set, delete input sstables right away, and update row cache and statistics.
     void on_compaction_completion(sstables::compaction_completion_desc& desc);
-
+private:
     void rebuild_statistics();
 
     // Called on schema change.
@@ -838,8 +838,6 @@ public:
     // Active memtable is flushed first to guarantee that data like tombstone,
     // sitting in the memtable, will be compacted with shadowed data.
     future<> compact_all_sstables();
-    // Compact all sstables provided in the vector.
-    future<> compact_sstables(sstables::compaction_descriptor descriptor, sstables::compaction_data& cdata);
 
     future<bool> snapshot_exists(sstring name);
 

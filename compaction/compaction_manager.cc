@@ -283,6 +283,38 @@ future<> compaction_manager::perform_task(shared_ptr<compaction_manager::task> t
     }
 }
 
+future<> compaction_manager::task::compact_sstables(sstables::compaction_descriptor descriptor, sstables::compaction_data& cdata) {
+    if (!descriptor.sstables.size()) {
+        // if there is nothing to compact, just return.
+        co_return;
+    }
+
+    replica::table& t = *_compacting_table;
+    descriptor.creator = [&t] (shard_id dummy) {
+        auto sst = t.make_sstable();
+        return sst;
+    };
+    descriptor.replacer = [this, &t, release_exhausted = descriptor.release_exhausted] (sstables::compaction_completion_desc desc) {
+        t.get_compaction_strategy().notify_completion(desc.old_sstables, desc.new_sstables);
+        _cm.propagate_replacement(&t, desc.old_sstables, desc.new_sstables);
+        t.on_compaction_completion(desc);
+        if (release_exhausted) {
+            release_exhausted(desc.old_sstables);
+        }
+    };
+    auto compaction_type = descriptor.options.type();
+    auto start_size = boost::accumulate(descriptor.sstables | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::data_size)), uint64_t(0));
+
+    sstables::compaction_result res = co_await sstables::compact_sstables(std::move(descriptor), cdata, t.as_table_state());
+    if (compaction_type != sstables::compaction_type::Compaction) {
+        co_return;
+    }
+    auto ended_at = std::chrono::duration_cast<std::chrono::milliseconds>(res.ended_at.time_since_epoch());
+
+    co_return co_await t.as_table_state().update_compaction_history(cdata.compaction_uuid, t.schema()->ks_name(), t.schema()->cf_name(), ended_at,
+                                                                    start_size, res.end_size);
+}
+
 class compaction_manager::major_compaction_task : public compaction_manager::task {
 public:
     major_compaction_task(compaction_manager& mgr, replica::table* t)
@@ -318,7 +350,7 @@ protected:
         compaction_backlog_tracker bt(std::make_unique<user_initiated_backlog_tracker>(_cm._compaction_controller.backlog_of_shares(200), _cm._available_memory));
         _cm.register_backlog_tracker(bt);
 
-        co_await t->compact_sstables(std::move(descriptor), _compaction_data);
+        co_await compact_sstables(std::move(descriptor), _compaction_data);
 
         finish_compaction();
     }
@@ -779,7 +811,6 @@ public:
     regular_compaction_task(compaction_manager& mgr, replica::table* t)
         : task(mgr, t, sstables::compaction_type::Compaction, "Compaction")
     {}
-
 protected:
     virtual future<> do_run() override {
         co_await coroutine::switch_to(_cm._compaction_controller.sg());
@@ -823,7 +854,7 @@ protected:
             std::exception_ptr ex;
 
             try {
-                co_await t.compact_sstables(std::move(descriptor), _compaction_data);
+                co_await compact_sstables(std::move(descriptor), _compaction_data);
                 finish_compaction();
                 _cm.reevaluate_postponed_compactions();
                 continue;
@@ -944,7 +975,7 @@ private:
 
             std::exception_ptr ex;
             try {
-                co_await _compacting_table->compact_sstables(std::move(descriptor), _compaction_data);
+                co_await compact_sstables(std::move(descriptor), _compaction_data);
                 finish_compaction();
                 _cm.reevaluate_postponed_compactions();
                 co_return;  // done with current sstable
@@ -1013,7 +1044,7 @@ private:
                     sstables::compaction_descriptor::default_max_sstable_bytes,
                     sst->run_identifier(),
                     sstables::compaction_type_options::make_scrub(sstables::compaction_type_options::scrub::mode::validate));
-            co_await compact_sstables(std::move(desc), _compaction_data, _compacting_table->as_table_state());
+            co_await sstables::compact_sstables(std::move(desc), _compaction_data, _compacting_table->as_table_state());
         } catch (sstables::compaction_stopped_exception&) {
             // ignore, will be handled by can_proceed()
         } catch (storage_io_error& e) {

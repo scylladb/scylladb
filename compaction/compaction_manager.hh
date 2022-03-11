@@ -140,6 +140,8 @@ public:
         // otherwise, returns stop_iteration::no after sleep for exponential retry.
         future<stop_iteration> maybe_retry(std::exception_ptr err);
 
+        // Compacts set of SSTables according to the descriptor.
+        future<> compact_sstables(sstables::compaction_descriptor descriptor, sstables::compaction_data& cdata);
     public:
         future<> run() noexcept;
 
