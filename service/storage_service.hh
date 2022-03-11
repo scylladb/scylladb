@@ -65,6 +65,7 @@ class stream_manager;
 
 namespace db {
 class system_distributed_keyspace;
+class system_keyspace;
 class batchlog_manager;
 }
 
@@ -171,6 +172,7 @@ public:
     storage_service(abort_source& as, distributed<replica::database>& db,
         gms::gossiper& gossiper,
         sharded<db::system_distributed_keyspace>&,
+        sharded<db::system_keyspace>&,
         gms::feature_service& feature_service,
         storage_service_config config,
         sharded<service::migration_manager>& mm,
@@ -524,6 +526,7 @@ private:
     // Should be serialized under token_metadata_lock.
     future<> replicate_to_all_cores(mutable_token_metadata_ptr tmptr) noexcept;
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
+    sharded<db::system_keyspace>& _sys_ks;
     locator::snitch_signal_slot_t _snitch_reconfigure;
     std::unordered_set<gms::inet_address> _replacing_nodes_pending_ranges_updater;
 private:
