@@ -1291,8 +1291,8 @@ struct local_cache {
 static distributed<local_cache> _local_cache;
 
 future<> system_keyspace::build_dc_rack_info() {
-    return qctx->execute_cql(format("SELECT peer, data_center, rack from system.{}", PEERS)).then([] (::shared_ptr<cql3::untyped_result_set> msg) {
-        return do_for_each(*msg, [] (auto& row) {
+    return execute_cql(format("SELECT peer, data_center, rack from system.{}", PEERS)).then([this] (::shared_ptr<cql3::untyped_result_set> msg) {
+        return do_for_each(*msg, [this] (auto& row) {
             net::inet_address peer = row.template get_as<net::inet_address>("peer");
             if (!row.has("data_center") || !row.has("rack")) {
                 return make_ready_future<>();
@@ -1302,7 +1302,7 @@ future<> system_keyspace::build_dc_rack_info() {
             sstring rack = row.template get_as<sstring>("rack");
 
             locator::endpoint_dc_rack  element = { dc, rack };
-            return _local_cache.invoke_on_all([gms_addr = std::move(gms_addr), element = std::move(element)] (local_cache& lc) {
+            return _cache.invoke_on_all([gms_addr = std::move(gms_addr), element = std::move(element)] (local_cache& lc) {
                 lc._cached_dc_rack_info.emplace(gms_addr, element);
             });
         }).then([msg] {

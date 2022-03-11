@@ -97,7 +97,7 @@ class system_keyspace {
     future<> setup_version(sharded<netw::messaging_service>& ms);
     static future<> check_health(const sstring& cluster_name);
     static future<> force_blocking_flush(sstring cfname);
-    static future<> build_dc_rack_info();
+    future<> build_dc_rack_info();
     static future<> build_bootstrap_info();
     static future<> cache_truncation_record(distributed<replica::database>& db);
     template <typename Value>
