@@ -1313,7 +1313,7 @@ future<> system_keyspace::build_dc_rack_info() {
 
 future<> system_keyspace::build_bootstrap_info() {
     sstring req = format("SELECT bootstrapped FROM system.{} WHERE key = ? ", LOCAL);
-    return qctx->execute_cql(req, sstring(LOCAL)).then([] (auto msg) {
+    return execute_cql(req, sstring(LOCAL)).then([this] (auto msg) {
         static auto state_map = std::unordered_map<sstring, bootstrap_state>({
             { "NEEDS_BOOTSTRAP", bootstrap_state::NEEDS_BOOTSTRAP },
             { "COMPLETED", bootstrap_state::COMPLETED },
@@ -1325,7 +1325,7 @@ future<> system_keyspace::build_bootstrap_info() {
         if (!msg->empty() && msg->one().has("bootstrapped")) {
             state = state_map.at(msg->one().template get_as<sstring>("bootstrapped"));
         }
-        return _local_cache.invoke_on_all([state] (local_cache& lc) {
+        return _cache.invoke_on_all([state] (local_cache& lc) {
             lc._state = state;
         });
     });
