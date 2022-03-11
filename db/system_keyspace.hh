@@ -214,9 +214,7 @@ public:
 
     static table_schema_version generate_schema_version(utils::UUID table_id, uint16_t offset = 0);
 
-    static future<> setup(distributed<replica::database>& db,
-                distributed<cql3::query_processor>& qp,
-                sharded<netw::messaging_service>& ms);
+    future<> setup(sharded<netw::messaging_service>& ms);
     static future<> update_schema_version(utils::UUID version);
 
     /*

@@ -1036,7 +1036,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             view_update_generator.start(std::ref(db)).get();
 
             supervisor::notify("setting up system keyspace");
-            db::system_keyspace::setup(db, qp, messaging).get();
+            // FIXME -- should happen in start(), but
+            // 1. messaging is on the way with its preferred ip cache
+            // 2. cql_test_env() doesn't do it
+            // 3. need to check if it depends on any of the above steps
+            sys_ks.local().setup(messaging).get();
 
             // Re-enable previously enabled features on node startup.
             // This should be done before commitlog starts replaying

@@ -1330,9 +1330,11 @@ future<> system_keyspace::build_bootstrap_info() {
     });
 }
 
-future<> system_keyspace::setup(distributed<replica::database>& db,
-               distributed<cql3::query_processor>& qp,
-               sharded<netw::messaging_service>& ms) {
+future<> system_keyspace::setup(sharded<netw::messaging_service>& ms) {
+    assert(this_shard_id() == 0);
+    auto& db = _db;
+    auto& qp = _qp;
+
     const db::config& cfg = db.local().get_config();
     co_await setup_version(ms, cfg);
     co_await update_schema_version(db.local().get_version());
