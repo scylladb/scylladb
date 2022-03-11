@@ -1617,14 +1617,12 @@ future<> system_keyspace::update_schema_version(utils::UUID version) {
  * Remove stored tokens being used by another node
  */
 future<> system_keyspace::remove_endpoint(gms::inet_address ep) {
-    return _local_cache.invoke_on_all([ep] (local_cache& lc) {
+    co_await _local_cache.invoke_on_all([ep] (local_cache& lc) {
         lc._cached_dc_rack_info.erase(ep);
-    }).then([ep] {
-        sstring req = format("DELETE FROM system.{} WHERE peer = ?", PEERS);
-        return qctx->execute_cql(req, ep.addr()).discard_result();
-    }).then([] {
-        return force_blocking_flush(PEERS);
     });
+    sstring req = format("DELETE FROM system.{} WHERE peer = ?", PEERS);
+    co_await qctx->execute_cql(req, ep.addr()).discard_result();
+    co_await force_blocking_flush(PEERS);
 }
 
 future<> system_keyspace::update_tokens(const std::unordered_set<dht::token>& tokens) {
