@@ -860,7 +860,7 @@ static future<> with_merge_lock(noncopyable_function<future<> ()> func) {
 static
 future<> update_schema_version_and_announce(sharded<db::system_keyspace>& sys_ks, distributed<service::storage_proxy>& proxy, schema_features features) {
     auto uuid = co_await calculate_schema_digest(proxy, features);
-    co_await db::system_keyspace::update_schema_version(uuid);
+    co_await sys_ks.local().update_schema_version(uuid);
     co_await proxy.local().get_db().invoke_on_all([uuid] (replica::database& db) {
         db.update_version(uuid);
     });

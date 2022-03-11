@@ -1333,10 +1333,9 @@ future<> system_keyspace::build_bootstrap_info() {
 
 future<> system_keyspace::setup(sharded<netw::messaging_service>& ms) {
     assert(this_shard_id() == 0);
-    auto& db = _db;
 
     co_await setup_version(ms);
-    co_await update_schema_version(db.local().get_version());
+    co_await update_schema_version(_db.local().get_version());
     co_await build_dc_rack_info();
     co_await build_bootstrap_info();
     co_await check_health();
@@ -1612,7 +1611,7 @@ future<std::optional<sstring>> system_keyspace::get_scylla_local_param(const sst
 
 future<> system_keyspace::update_schema_version(utils::UUID version) {
     sstring req = format("INSERT INTO system.{} (key, schema_version) VALUES (?, ?)", LOCAL);
-    return qctx->execute_cql(req, sstring(LOCAL), version).discard_result();
+    return execute_cql(req, sstring(LOCAL), version).discard_result();
 }
 
 /**
