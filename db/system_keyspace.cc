@@ -1336,12 +1336,11 @@ future<> system_keyspace::setup(sharded<netw::messaging_service>& ms) {
     auto& db = _db;
     auto& qp = _qp;
 
-    const db::config& cfg = db.local().get_config();
     co_await setup_version(ms);
     co_await update_schema_version(db.local().get_version());
     co_await build_dc_rack_info();
     co_await build_bootstrap_info();
-    co_await check_health(cfg.cluster_name());
+    co_await check_health();
     co_await db::schema_tables::save_system_keyspace_schema(qp.local());
     // #2514 - make sure "system" is written to system_schema.keyspaces.
     co_await db::schema_tables::save_system_schema(qp.local(), NAME);
@@ -1657,15 +1656,17 @@ future<> system_keyspace::force_blocking_flush(sstring cfname) {
  * 2. no files are there: great (new node is assumed)
  * 3. files are present but you can't read them: bad
  */
-future<> system_keyspace::check_health(const sstring& cluster_name) {
+future<> system_keyspace::check_health() {
     using namespace cql_transport::messages;
     sstring req = format("SELECT cluster_name FROM system.{} WHERE key=?", LOCAL);
-    return qctx->execute_cql(req, sstring(LOCAL)).then([&cluster_name] (::shared_ptr<cql3::untyped_result_set> msg) {
+    return execute_cql(req, sstring(LOCAL)).then([this] (::shared_ptr<cql3::untyped_result_set> msg) {
         if (msg->empty() || !msg->one().has("cluster_name")) {
             // this is a brand new node
             sstring ins_req = format("INSERT INTO system.{} (key, cluster_name) VALUES (?, ?)", LOCAL);
-            return qctx->execute_cql(ins_req, sstring(LOCAL), cluster_name).discard_result();
+            auto cluster_name = _db.local().get_config().cluster_name();
+            return execute_cql(ins_req, sstring(LOCAL), cluster_name).discard_result();
         } else {
+            auto cluster_name = _db.local().get_config().cluster_name();
             auto saved_cluster_name = msg->one().get_as<sstring>("cluster_name");
 
             if (cluster_name != saved_cluster_name) {

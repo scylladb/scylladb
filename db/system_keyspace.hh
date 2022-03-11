@@ -95,7 +95,7 @@ class system_keyspace {
     static schema_ptr large_cells();
     static schema_ptr scylla_local();
     future<> setup_version(sharded<netw::messaging_service>& ms);
-    static future<> check_health(const sstring& cluster_name);
+    future<> check_health();
     static future<> force_blocking_flush(sstring cfname);
     future<> build_dc_rack_info();
     future<> build_bootstrap_info();
