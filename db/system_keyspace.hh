@@ -229,8 +229,10 @@ public:
     static future<> update_tokens(gms::inet_address ep, const std::unordered_set<dht::token>& tokens);
 
     static future<> update_preferred_ip(gms::inet_address ep, gms::inet_address preferred_ip);
-    static future<std::unordered_map<gms::inet_address, gms::inet_address>> get_preferred_ips();
+private:
+    future<std::unordered_map<gms::inet_address, gms::inet_address>> get_preferred_ips();
 
+public:
     template <typename Value>
     static future<> update_peer_info(gms::inet_address ep, sstring column_name, Value value);
 

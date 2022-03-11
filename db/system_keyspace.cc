@@ -1533,7 +1533,7 @@ future<> system_keyspace::update_preferred_ip(gms::inet_address ep, gms::inet_ad
 
 future<std::unordered_map<gms::inet_address, gms::inet_address>> system_keyspace::get_preferred_ips() {
     sstring req = format("SELECT peer, preferred_ip FROM system.{}", PEERS);
-    return qctx->execute_cql(req).then([] (::shared_ptr<cql3::untyped_result_set> cql_res_set) {
+    return execute_cql(req).then([] (::shared_ptr<cql3::untyped_result_set> cql_res_set) {
         std::unordered_map<gms::inet_address, gms::inet_address> res;
 
         for (auto& r : *cql_res_set) {
