@@ -56,6 +56,7 @@ class feature_service;
 
 namespace db {
 
+class system_keyspace;
 class extensions;
 class config;
 
@@ -170,14 +171,14 @@ future<mutation> read_keyspace_mutation(distributed<service::storage_proxy>&, co
 // Must be called on shard 0.
 future<semaphore_units<>> hold_merge_lock() noexcept;
 
-future<> merge_schema(distributed<service::storage_proxy>& proxy, gms::feature_service& feat, std::vector<mutation> mutations);
+future<> merge_schema(sharded<db::system_keyspace>& sys_ks, distributed<service::storage_proxy>& proxy, gms::feature_service& feat, std::vector<mutation> mutations);
 
 // Recalculates the local schema version.
 //
 // It is safe to call concurrently with recalculate_schema_version() and merge_schema() in which case it
 // is guaranteed that the schema version we end up with after all calls will reflect the most recent state
 // of feature_service and schema tables.
-future<> recalculate_schema_version(distributed<service::storage_proxy>& proxy, gms::feature_service& feat);
+future<> recalculate_schema_version(sharded<db::system_keyspace>& sys_ks, distributed<service::storage_proxy>& proxy, gms::feature_service& feat);
 
 future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& proxy, schema_result&& before, schema_result&& after);
 

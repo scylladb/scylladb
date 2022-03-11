@@ -320,7 +320,7 @@ void storage_service::prepare_to_join(
     auto broadcast_rpc_address = utils::fb_utilities::get_broadcast_rpc_address();
     auto& proxy = service::get_storage_proxy();
     // Ensure we know our own actual Schema UUID in preparation for updates
-    db::schema_tables::recalculate_schema_version(proxy, _feature_service).get0();
+    db::schema_tables::recalculate_schema_version(_sys_ks, proxy, _feature_service).get0();
     app_states.emplace(gms::application_state::NET_VERSION, versioned_value::network_version());
     app_states.emplace(gms::application_state::HOST_ID, versioned_value::host_id(local_host_id));
     app_states.emplace(gms::application_state::RPC_ADDRESS, versioned_value::rpcaddress(broadcast_rpc_address));
