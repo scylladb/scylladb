@@ -1567,13 +1567,12 @@ future<> system_keyspace::update_cached_values(gms::inet_address ep, sstring col
 template <typename Value>
 future<> system_keyspace::update_peer_info(gms::inet_address ep, sstring column_name, Value value) {
     if (ep == utils::fb_utilities::get_broadcast_address()) {
-        return make_ready_future<>();
+        co_return;
     }
 
-    return update_cached_values(ep, column_name, value).then([ep, column_name, value] {
-        sstring req = format("INSERT INTO system.{} (peer, {}) VALUES (?, ?)", PEERS, column_name);
-        return qctx->execute_cql(req, ep.addr(), value).discard_result();
-    });
+    co_await update_cached_values(ep, column_name, value);
+    sstring req = format("INSERT INTO system.{} (peer, {}) VALUES (?, ?)", PEERS, column_name);
+    co_await qctx->execute_cql(req, ep.addr(), value).discard_result();
 }
 // sets are not needed, since tokens are updated by another method
 template future<> system_keyspace::update_peer_info<sstring>(gms::inet_address ep, sstring column_name, sstring);
