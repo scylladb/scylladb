@@ -1244,13 +1244,14 @@ schema_ptr system_keyspace::legacy::aggregates() {
     return schema;
 }
 
-future<> system_keyspace::setup_version(sharded<netw::messaging_service>& ms, const db::config& cfg) {
-    return utils::resolve(cfg.rpc_address).then([&ms, &cfg](gms::inet_address a) {
+future<> system_keyspace::setup_version(sharded<netw::messaging_service>& ms) {
+    auto& cfg = _db.local().get_config();
+    return utils::resolve(cfg.rpc_address).then([this, &cfg, &ms](gms::inet_address a) {
         sstring req = fmt::format("INSERT INTO system.{} (key, release_version, cql_version, thrift_version, native_protocol_version, data_center, rack, partitioner, rpc_address, broadcast_address, listen_address) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                         , db::system_keyspace::LOCAL);
         auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
 
-        return qctx->execute_cql(req, sstring(db::system_keyspace::LOCAL),
+        return execute_cql(req, sstring(db::system_keyspace::LOCAL),
                              version::release(),
                              cql3::query_processor::CQL_VERSION,
                              ::cassandra::thrift_version,
@@ -1336,7 +1337,7 @@ future<> system_keyspace::setup(sharded<netw::messaging_service>& ms) {
     auto& qp = _qp;
 
     const db::config& cfg = db.local().get_config();
-    co_await setup_version(ms, cfg);
+    co_await setup_version(ms);
     co_await update_schema_version(db.local().get_version());
     co_await build_dc_rack_info();
     co_await build_bootstrap_info();
