@@ -145,8 +145,6 @@ struct compaction_descriptor {
     uint64_t max_sstable_bytes;
     // Run identifier of output sstables.
     utils::UUID run_identifier;
-    // Calls compaction manager's task for this compaction to release reference to exhausted sstables.
-    std::function<void(const std::vector<shared_sstable>& exhausted_sstables)> release_exhausted;
     // The options passed down to the compaction code.
     // This also selects the kind of compaction to do.
     compaction_type_options options = compaction_type_options::make_regular();

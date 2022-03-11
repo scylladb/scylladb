@@ -141,7 +141,8 @@ public:
         future<stop_iteration> maybe_retry(std::exception_ptr err);
 
         // Compacts set of SSTables according to the descriptor.
-        future<> compact_sstables(sstables::compaction_descriptor descriptor, sstables::compaction_data& cdata);
+        using release_exhausted_func_t = std::function<void(const std::vector<sstables::shared_sstable>& exhausted_sstables)>;
+        future<> compact_sstables(sstables::compaction_descriptor descriptor, sstables::compaction_data& cdata, release_exhausted_func_t release_exhausted);
     public:
         future<> run() noexcept;
 

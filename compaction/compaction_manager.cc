@@ -283,7 +283,7 @@ future<> compaction_manager::perform_task(shared_ptr<compaction_manager::task> t
     }
 }
 
-future<> compaction_manager::task::compact_sstables(sstables::compaction_descriptor descriptor, sstables::compaction_data& cdata) {
+future<> compaction_manager::task::compact_sstables(sstables::compaction_descriptor descriptor, sstables::compaction_data& cdata, release_exhausted_func_t release_exhausted) {
     if (!descriptor.sstables.size()) {
         // if there is nothing to compact, just return.
         co_return;
@@ -294,10 +294,11 @@ future<> compaction_manager::task::compact_sstables(sstables::compaction_descrip
         auto sst = t.make_sstable();
         return sst;
     };
-    descriptor.replacer = [this, &t, release_exhausted = descriptor.release_exhausted] (sstables::compaction_completion_desc desc) {
+    descriptor.replacer = [this, &t, release_exhausted] (sstables::compaction_completion_desc desc) {
         t.get_compaction_strategy().notify_completion(desc.old_sstables, desc.new_sstables);
         _cm.propagate_replacement(&t, desc.old_sstables, desc.new_sstables);
         t.on_compaction_completion(desc);
+        // Calls compaction manager's task for this compaction to release reference to exhausted SSTables.
         if (release_exhausted) {
             release_exhausted(desc.old_sstables);
         }
@@ -341,7 +342,7 @@ protected:
         sstables::compaction_strategy cs = t->get_compaction_strategy();
         sstables::compaction_descriptor descriptor = cs.get_major_compaction_job(t->as_table_state(), _cm.get_candidates(*t));
         auto compacting = compacting_sstable_registration(_cm, descriptor.sstables);
-        descriptor.release_exhausted = [&compacting] (const std::vector<sstables::shared_sstable>& exhausted_sstables) {
+        auto release_exhausted = [&compacting] (const std::vector<sstables::shared_sstable>& exhausted_sstables) {
             compacting.release_compacting(exhausted_sstables);
         };
         setup_new_compaction(descriptor.run_identifier);
@@ -350,7 +351,7 @@ protected:
         compaction_backlog_tracker bt(std::make_unique<user_initiated_backlog_tracker>(_cm._compaction_controller.backlog_of_shares(200), _cm._available_memory));
         _cm.register_backlog_tracker(bt);
 
-        co_await compact_sstables(std::move(descriptor), _compaction_data);
+        co_await compact_sstables(std::move(descriptor), _compaction_data, std::move(release_exhausted));
 
         finish_compaction();
     }
@@ -844,7 +845,7 @@ protected:
             }
             auto compacting = compacting_sstable_registration(_cm, descriptor.sstables);
             auto weight_r = compaction_weight_registration(&_cm, weight);
-            descriptor.release_exhausted = [&compacting] (const std::vector<sstables::shared_sstable>& exhausted_sstables) {
+            auto release_exhausted = [&compacting] (const std::vector<sstables::shared_sstable>& exhausted_sstables) {
                 compacting.release_compacting(exhausted_sstables);
             };
             cmlog.debug("Accepted compaction job: task={} ({} sstable(s)) of weight {} for {}.{}",
@@ -854,7 +855,7 @@ protected:
             std::exception_ptr ex;
 
             try {
-                co_await compact_sstables(std::move(descriptor), _compaction_data);
+                co_await compact_sstables(std::move(descriptor), _compaction_data, std::move(release_exhausted));
                 finish_compaction();
                 _cm.reevaluate_postponed_compactions();
                 continue;
@@ -964,7 +965,7 @@ private:
                 sstable_level, sstables::compaction_descriptor::default_max_sstable_bytes, run_identifier, _options);
 
             // Releases reference to cleaned sstable such that respective used disk space can be freed.
-            descriptor.release_exhausted = [this] (const std::vector<sstables::shared_sstable>& exhausted_sstables) {
+            auto release_exhausted = [this] (const std::vector<sstables::shared_sstable>& exhausted_sstables) {
                 _compacting.release_compacting(exhausted_sstables);
             };
 
@@ -975,7 +976,7 @@ private:
 
             std::exception_ptr ex;
             try {
-                co_await compact_sstables(std::move(descriptor), _compaction_data);
+                co_await compact_sstables(std::move(descriptor), _compaction_data, std::move(release_exhausted));
                 finish_compaction();
                 _cm.reevaluate_postponed_compactions();
                 co_return;  // done with current sstable
