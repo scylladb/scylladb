@@ -3250,4 +3250,8 @@ future<> system_keyspace::stop() {
     co_return;
 }
 
+future<::shared_ptr<cql3::untyped_result_set>> system_keyspace::execute_cql(const sstring& query_string, const std::initializer_list<data_value>& values) {
+    return _qp.local().execute_internal(query_string, values);
+}
+
 } // namespace db

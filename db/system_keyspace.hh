@@ -46,6 +46,7 @@ namespace netw {
 
 namespace cql3 {
     class query_processor;
+    class untyped_result_set;
 }
 
 namespace gms {
@@ -435,6 +436,14 @@ public:
     system_keyspace(sharded<cql3::query_processor>& qp, sharded<replica::database>& db) noexcept;
     future<> start();
     future<> stop();
+
+private:
+    future<::shared_ptr<cql3::untyped_result_set>> execute_cql(const sstring& query_string, const std::initializer_list<data_value>& values);
+
+    template <typename... Args>
+    future<::shared_ptr<cql3::untyped_result_set>> execute_cql(sstring req, Args&&... args) {
+        return execute_cql(req, { data_value(std::forward<Args>(args))... });
+    }
 }; // class system_keyspace
 
 future<> system_keyspace_make(distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g);
