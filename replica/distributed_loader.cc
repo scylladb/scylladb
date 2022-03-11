@@ -624,10 +624,10 @@ future<> distributed_loader::ensure_system_table_directories(distributed<replica
 }
 
 future<> distributed_loader::init_non_system_keyspaces(distributed<replica::database>& db,
-        distributed<service::storage_proxy>& proxy) {
-    return seastar::async([&db, &proxy] {
-        db.invoke_on_all([&proxy] (replica::database& db) {
-            return db.parse_system_tables(proxy);
+        distributed<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks) {
+    return seastar::async([&db, &proxy, &sys_ks] {
+        db.invoke_on_all([&proxy, &sys_ks] (replica::database& db) {
+            return db.parse_system_tables(proxy, sys_ks);
         }).get();
 
         const auto& cfg = db.local().get_config();

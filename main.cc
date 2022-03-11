@@ -1030,7 +1030,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             api::set_server_compaction_manager(ctx).get();
 
             supervisor::notify("loading non-system sstables");
-            replica::distributed_loader::init_non_system_keyspaces(db, proxy).get();
+            replica::distributed_loader::init_non_system_keyspaces(db, proxy, sys_ks).get();
 
             supervisor::notify("starting view update generator");
             view_update_generator.start(std::ref(db)).get();
