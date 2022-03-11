@@ -1114,6 +1114,7 @@ indexed_table_select_statement::do_execute(query_processor& qp,
                 };
 
                 if (whole_partitions || partition_slices) {
+                    tracing::trace(state.get_trace_state(), "Consulting index {} for a single slice of keys, aggregation query", _index.metadata().name());
                     return find_index_partition_ranges(qp, state, *internal_options).then(utils::result_wrap_unpack(
                             [this, now, &state, &internal_options, &qp, consume_results = std::move(consume_results)] (dht::partition_range_vector partition_ranges, lw_shared_ptr<const service::pager::paging_state> paging_state) {
                         return do_execute_base_query(qp, std::move(partition_ranges), state, *internal_options, now, paging_state)
@@ -1122,6 +1123,7 @@ indexed_table_select_statement::do_execute(query_processor& qp,
                         }));
                     }));
                 } else {
+                    tracing::trace(state.get_trace_state(), "Consulting index {} for a list of rows containing keys, aggregation query", _index.metadata().name());
                     return find_index_clustering_rows(qp, state, *internal_options).then(utils::result_wrap_unpack(
                             [this, now, &state, &internal_options, &qp, consume_results = std::move(consume_results)] (std::vector<primary_key> primary_keys, lw_shared_ptr<const service::pager::paging_state> paging_state) {
                         return this->do_execute_base_query(qp, std::move(primary_keys), state, *internal_options, now, paging_state)
