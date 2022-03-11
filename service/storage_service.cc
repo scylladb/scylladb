@@ -1316,7 +1316,7 @@ future<> storage_service::init_server(cql3::query_processor& qp) {
         if (_db.local().get_config().load_ring_state()) {
             slogger.info("Loading persisted ring state");
             auto loaded_tokens = _sys_ks.local().load_tokens().get0();
-            auto loaded_host_ids = db::system_keyspace::load_host_ids().get0();
+            auto loaded_host_ids = _sys_ks.local().load_host_ids().get0();
 
             for (auto& x : loaded_tokens) {
                 slogger.debug("Loaded tokens: endpoint={}, tokens={}", x.first, x.second);

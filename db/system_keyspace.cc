@@ -1495,7 +1495,7 @@ future<std::unordered_map<gms::inet_address, std::unordered_set<dht::token>>> sy
 
 future<std::unordered_map<gms::inet_address, utils::UUID>> system_keyspace::load_host_ids() {
     sstring req = format("SELECT peer, host_id FROM system.{}", PEERS);
-    return qctx->execute_cql(req).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
+    return execute_cql(req).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
         std::unordered_map<gms::inet_address, utils::UUID> ret;
         for (auto& row : *cql_result) {
             auto peer = gms::inet_address(row.get_as<net::inet_address>("peer"));

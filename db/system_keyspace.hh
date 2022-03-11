@@ -316,7 +316,7 @@ public:
      * Return a map of store host_ids to IP addresses
      *
      */
-    static future<std::unordered_map<gms::inet_address, utils::UUID>> load_host_ids();
+    future<std::unordered_map<gms::inet_address, utils::UUID>> load_host_ids();
 
     /*
      * Read this node's tokens stored in the LOCAL table.
