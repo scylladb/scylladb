@@ -221,12 +221,12 @@ public:
     /*
     * Save tokens used by this node in the LOCAL table.
     */
-    static future<> update_tokens(const std::unordered_set<dht::token>& tokens);
+    future<> update_tokens(const std::unordered_set<dht::token>& tokens);
 
     /**
      * Record tokens being used by another node in the PEERS table.
      */
-    static future<> update_tokens(gms::inet_address ep, const std::unordered_set<dht::token>& tokens);
+    future<> update_tokens(gms::inet_address ep, const std::unordered_set<dht::token>& tokens);
 
     static future<> update_preferred_ip(gms::inet_address ep, gms::inet_address preferred_ip);
 private:
@@ -236,7 +236,7 @@ public:
     template <typename Value>
     future<> update_peer_info(gms::inet_address ep, sstring column_name, Value value);
 
-    static future<> remove_endpoint(gms::inet_address ep);
+    future<> remove_endpoint(gms::inet_address ep);
 
     static future<> set_scylla_local_param(const sstring& key, const sstring& value);
     static future<std::optional<sstring>> get_scylla_local_param(const sstring& key);

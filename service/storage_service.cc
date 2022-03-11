@@ -488,14 +488,14 @@ void storage_service::join_token_ring(std::chrono::milliseconds delay) {
         }
         maybe_start_sys_dist_ks();
         mark_existing_views_as_built();
-        db::system_keyspace::update_tokens(_bootstrap_tokens).get();
+        _sys_ks.local().update_tokens(_bootstrap_tokens).get();
         bootstrap(); // blocks until finished
     } else {
         maybe_start_sys_dist_ks();
         _bootstrap_tokens = db::system_keyspace::get_saved_tokens().get0();
         if (_bootstrap_tokens.empty()) {
             _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(get_token_metadata_ptr(), _db.local().get_config(), dht::check_token_endpoint::no);
-            db::system_keyspace::update_tokens(_bootstrap_tokens).get();
+            _sys_ks.local().update_tokens(_bootstrap_tokens).get();
         } else {
             size_t num_tokens = _db.local().get_config().num_tokens();
             if (_bootstrap_tokens.size() != num_tokens) {
@@ -680,7 +680,7 @@ void storage_service::bootstrap() {
         _gossiper.wait_for_range_setup().get();
         auto replace_addr = get_replace_address();
         slogger.debug("Removing replaced endpoint {} from system.peers", *replace_addr);
-        db::system_keyspace::remove_endpoint(*replace_addr).get();
+        _sys_ks.local().remove_endpoint(*replace_addr).get();
         _group0->leave_group0(replace_addr).get();
     }
 
@@ -940,7 +940,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint) {
     if (!owned_tokens.empty() && !endpoints_to_remove.count(endpoint)) {
         co_await update_peer_info(endpoint);
         try {
-            co_await db::system_keyspace::update_tokens(endpoint, owned_tokens);
+            co_await _sys_ks.local().update_tokens(endpoint, owned_tokens);
         } catch (...) {
             slogger.error("handle_state_normal: fail to update tokens for {}: {}", endpoint, std::current_exception());
         }
@@ -1333,7 +1333,7 @@ future<> storage_service::init_server(cql3::query_processor& qp) {
                 auto tokens = x.second;
                 if (ep == get_broadcast_address()) {
                     // entry has been mistakenly added, delete it
-                    db::system_keyspace::remove_endpoint(ep).get();
+                    _sys_ks.local().remove_endpoint(ep).get();
                 } else {
                     tmptr->update_normal_tokens(tokens, ep).get();
                     if (loaded_host_ids.contains(ep)) {
@@ -1519,7 +1519,7 @@ future<> storage_service::check_for_endpoint_collision(std::unordered_set<gms::i
 future<> storage_service::remove_endpoint(inet_address endpoint) {
     co_await _gossiper.remove_endpoint(endpoint);
     try {
-        co_await db::system_keyspace::remove_endpoint(endpoint);
+        co_await _sys_ks.local().remove_endpoint(endpoint);
     } catch (...) {
         slogger.error("fail to remove endpoint={}: {}", endpoint, std::current_exception());
     }

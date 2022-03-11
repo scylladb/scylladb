@@ -1470,7 +1470,7 @@ future<> system_keyspace::update_tokens(gms::inet_address ep, const std::unorder
 
     sstring req = format("INSERT INTO system.{} (peer, tokens) VALUES (?, ?)", PEERS);
     auto set_type = set_type_impl::get_instance(utf8_type, true);
-    co_await qctx->execute_cql(req, ep.addr(), make_set_value(set_type, prepare_tokens(tokens))).discard_result();
+    co_await execute_cql(req, ep.addr(), make_set_value(set_type, prepare_tokens(tokens))).discard_result();
     co_await force_blocking_flush(PEERS);
 }
 
@@ -1616,11 +1616,11 @@ future<> system_keyspace::update_schema_version(utils::UUID version) {
  * Remove stored tokens being used by another node
  */
 future<> system_keyspace::remove_endpoint(gms::inet_address ep) {
-    co_await _local_cache.invoke_on_all([ep] (local_cache& lc) {
+    co_await _cache.invoke_on_all([ep] (local_cache& lc) {
         lc._cached_dc_rack_info.erase(ep);
     });
     sstring req = format("DELETE FROM system.{} WHERE peer = ?", PEERS);
-    co_await qctx->execute_cql(req, ep.addr()).discard_result();
+    co_await execute_cql(req, ep.addr()).discard_result();
     co_await force_blocking_flush(PEERS);
 }
 
@@ -1631,7 +1631,7 @@ future<> system_keyspace::update_tokens(const std::unordered_set<dht::token>& to
 
     sstring req = format("INSERT INTO system.{} (key, tokens) VALUES (?, ?)", LOCAL);
     auto set_type = set_type_impl::get_instance(utf8_type, true);
-    return qctx->execute_cql(req, sstring(LOCAL), make_set_value(set_type, prepare_tokens(tokens))).discard_result().then([] {
+    return execute_cql(req, sstring(LOCAL), make_set_value(set_type, prepare_tokens(tokens))).discard_result().then([] {
         return force_blocking_flush(LOCAL);
     });
 }
