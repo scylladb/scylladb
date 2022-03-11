@@ -99,7 +99,7 @@ class system_keyspace {
     static future<> force_blocking_flush(sstring cfname);
     future<> build_dc_rack_info();
     future<> build_bootstrap_info();
-    static future<> cache_truncation_record(distributed<replica::database>& db);
+    future<> cache_truncation_record();
     template <typename Value>
     static future<> update_cached_values(gms::inet_address ep, sstring column_name, Value value);
 public:

@@ -1344,7 +1344,7 @@ future<> system_keyspace::setup(sharded<netw::messaging_service>& ms) {
     co_await db::schema_tables::save_system_keyspace_schema(qp.local());
     // #2514 - make sure "system" is written to system_schema.keyspaces.
     co_await db::schema_tables::save_system_schema(qp.local(), NAME);
-    co_await cache_truncation_record(db);
+    co_await cache_truncation_record();
     auto preferred_ips = co_await get_preferred_ips();
     co_await ms.invoke_on_all([&preferred_ips] (auto& ms) {
         return ms.init_local_preferred_ip_cache(preferred_ips);
@@ -1393,14 +1393,14 @@ future<truncation_record> system_keyspace::get_truncation_record(utils::UUID cf_
 }
 
 // Read system.truncate table and cache last truncation time in `table` object for each table on every shard
-future<> system_keyspace::cache_truncation_record(distributed<replica::database>& db) {
+future<> system_keyspace::cache_truncation_record() {
     sstring req = format("SELECT DISTINCT table_uuid, truncated_at from system.{}", TRUNCATED);
-    return qctx->qp().execute_internal(req).then([&db] (::shared_ptr<cql3::untyped_result_set> rs) {
-        return parallel_for_each(rs->begin(), rs->end(), [&db] (const cql3::untyped_result_set_row& row) {
+    return execute_cql(req).then([this] (::shared_ptr<cql3::untyped_result_set> rs) {
+        return parallel_for_each(rs->begin(), rs->end(), [this] (const cql3::untyped_result_set_row& row) {
             auto table_uuid = row.get_as<utils::UUID>("table_uuid");
             auto ts = row.get_as<db_clock::time_point>("truncated_at");
 
-            return db.invoke_on_all([table_uuid, ts] (replica::database& db) mutable {
+            return _db.invoke_on_all([table_uuid, ts] (replica::database& db) mutable {
                 try {
                     replica::table& cf = db.find_column_family(table_uuid);
                     cf.cache_truncation_record(ts);
