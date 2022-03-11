@@ -212,9 +212,6 @@ public:
 
     static table_schema_version generate_schema_version(utils::UUID table_id, uint16_t offset = 0);
 
-    // Only for testing.
-    static void minimal_setup(distributed<cql3::query_processor>& qp);
-
     static future<> init_local_cache();
     static future<> deinit_local_cache();
     static future<> setup(distributed<replica::database>& db,

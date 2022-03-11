@@ -1346,10 +1346,6 @@ future<> system_keyspace::deinit_local_cache() {
     return _local_cache.stop();
 }
 
-void system_keyspace::minimal_setup(distributed<cql3::query_processor>& qp) {
-    qctx = std::make_unique<query_context>(qp);
-}
-
 future<> system_keyspace::setup(distributed<replica::database>& db,
                distributed<cql3::query_processor>& qp,
                sharded<netw::messaging_service>& ms) {
@@ -3250,6 +3246,10 @@ system_keyspace::system_keyspace(sharded<cql3::query_processor>& qp, sharded<rep
 
 future<> system_keyspace::start() {
     assert(_qp.local_is_initialized() && _db.local_is_initialized());
+
+    if (this_shard_id() == 0) {
+        qctx = std::make_unique<query_context>(_qp);
+    }
 
     co_return;
 }

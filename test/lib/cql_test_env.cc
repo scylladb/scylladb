@@ -650,10 +650,7 @@ public:
             qp.start(std::ref(proxy), std::ref(forward_service), std::move(local_data_dict), std::ref(mm_notif), std::ref(mm), qp_mcfg, std::ref(cql_config)).get();
             auto stop_qp = defer([&qp] { qp.stop().get(); });
 
-            // In main.cc we call db::system_keyspace::setup which calls
-            // minimal_setup and init_local_cache
             sys_ks.invoke_on_all(&db::system_keyspace::start).get();
-            db::system_keyspace::minimal_setup(qp);
 
             db::batchlog_manager_config bmcfg;
             bmcfg.replay_rate = 100000000;
