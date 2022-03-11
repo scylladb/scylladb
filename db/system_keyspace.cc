@@ -1334,16 +1334,15 @@ future<> system_keyspace::build_bootstrap_info() {
 future<> system_keyspace::setup(sharded<netw::messaging_service>& ms) {
     assert(this_shard_id() == 0);
     auto& db = _db;
-    auto& qp = _qp;
 
     co_await setup_version(ms);
     co_await update_schema_version(db.local().get_version());
     co_await build_dc_rack_info();
     co_await build_bootstrap_info();
     co_await check_health();
-    co_await db::schema_tables::save_system_keyspace_schema(qp.local());
+    co_await db::schema_tables::save_system_keyspace_schema(_qp.local());
     // #2514 - make sure "system" is written to system_schema.keyspaces.
-    co_await db::schema_tables::save_system_schema(qp.local(), NAME);
+    co_await db::schema_tables::save_system_schema(_qp.local(), NAME);
     co_await cache_truncation_record();
     auto preferred_ips = co_await get_preferred_ips();
     co_await ms.invoke_on_all([&preferred_ips] (auto& ms) {
