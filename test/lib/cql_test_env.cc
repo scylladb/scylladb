@@ -518,6 +518,11 @@ public:
             sl_controller.start(std::ref(auth_service), qos::service_level_options{}).get();
             auto stop_sl_controller = defer([&sl_controller] { sl_controller.stop().get(); });
             sl_controller.invoke_on_all(&qos::service_level_controller::start).get();
+            sharded<cql3::query_processor> qp;
+
+            auto sys_ks = seastar::sharded<db::system_keyspace>();
+            sys_ks.start(std::ref(qp), std::ref(db)).get();
+            auto stop_sys_kd = defer([&sys_ks] { sys_ks.stop().get(); });
 
             sharded<netw::messaging_service> ms;
             // don't start listening so tests can be run in parallel
@@ -574,7 +579,6 @@ public:
             sharded<db::view::view_update_generator> view_update_generator;
             sharded<cdc::generation_service> cdc_generation_service;
             sharded<repair_service> repair;
-            sharded<cql3::query_processor> qp;
             sharded<service::raft_group_registry> raft_gr;
             sharded<streaming::stream_manager> stream_manager;
             sharded<service::forward_service> forward_service;
@@ -648,6 +652,7 @@ public:
 
             // In main.cc we call db::system_keyspace::setup which calls
             // minimal_setup and init_local_cache
+            sys_ks.invoke_on_all(&db::system_keyspace::start).get();
             db::system_keyspace::minimal_setup(qp);
 
             db::batchlog_manager_config bmcfg;

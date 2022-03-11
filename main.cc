@@ -830,10 +830,20 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             static sharded<db::system_distributed_keyspace> sys_dist_ks;
+            static sharded<db::system_keyspace> sys_ks;
             static sharded<db::view::view_update_generator> view_update_generator;
             static sharded<cql3::cql_config> cql_config;
             static sharded<cdc::generation_service> cdc_generation_service;
             cql_config.start(std::ref(*cfg)).get();
+
+            supervisor::notify("starting system keyspace");
+            // FIXME -- the query processor is not started yet and is thus not usable. It starts later
+            // on (look up the qp.start() thing) and cannot be started earlier, before proxy does. The
+            // plan is to equip system keyspace with its own instance of the query processor that doesn't
+            // need storage proxy to work, but uses some other local replica access mechanism. Similar
+            // thing for database -- it's not yet started and should be replaced with the aforementioned
+            // replica accessor.
+            sys_ks.start(std::ref(qp), std::ref(db)).get();
 
             supervisor::notify("starting gossiper");
             gms::gossip_config gcfg;
@@ -997,6 +1007,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             sstables::init_metrics().get();
 
+            // FIXME -- this sys_ks start should really be up above, where its instance
+            // start, but we only have query processor started that late
+            sys_ks.invoke_on_all(&db::system_keyspace::start).get();
             db::system_keyspace::minimal_setup(qp);
             db::system_keyspace::init_local_cache().get();
             cfg->host_id = db::system_keyspace::load_local_host_id().get0();

@@ -76,6 +76,9 @@ struct truncation_record;
 typedef std::vector<db::replay_position> replay_positions;
 
 class system_keyspace {
+    sharded<cql3::query_processor>& _qp;
+    sharded<replica::database>& _db;
+
     static schema_ptr raft_config();
     static schema_ptr local();
     static schema_ptr peers();
@@ -433,6 +436,10 @@ public:
     // Obtain the contents of the group 0 history table in mutation form.
     // Assumes that the history table exists, i.e. Raft experimental feature is enabled.
     static future<mutation> get_group0_history(distributed<service::storage_proxy>&);
+
+    system_keyspace(sharded<cql3::query_processor>& qp, sharded<replica::database>& db) noexcept;
+    future<> start();
+    future<> stop();
 }; // class system_keyspace
 
 future<> system_keyspace_make(distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g);

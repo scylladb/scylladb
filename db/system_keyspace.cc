@@ -3242,4 +3242,20 @@ sstring system_keyspace_name() {
     return system_keyspace::NAME;
 }
 
+system_keyspace::system_keyspace(sharded<cql3::query_processor>& qp, sharded<replica::database>& db) noexcept
+        : _qp(qp)
+        , _db(db)
+{
+}
+
+future<> system_keyspace::start() {
+    assert(_qp.local_is_initialized() && _db.local_is_initialized());
+
+    co_return;
+}
+
+future<> system_keyspace::stop() {
+    co_return;
+}
+
 } // namespace db
