@@ -326,6 +326,11 @@ future<> compaction_manager::run_custom_job(column_family* cf, sstables::compact
     task->compaction_done = with_semaphore(_custom_job_sem, 1, [this, task, cf, &job = *job_ptr] () mutable {
         // take read lock for cf, so major compaction and resharding can't proceed in parallel.
         return with_lock(_compaction_locks[cf].for_read(), [this, task, cf, &job] () mutable {
+            // Allow caller to know that task (e.g. reshape) was asked to stop while waiting for a chance to run.
+            if (task->compaction_data.is_stop_requested()) {
+                throw sstables::compaction_stopped_exception(task->compacting_cf->schema()->ks_name(), task->compacting_cf->schema()->cf_name(),
+                    task->compaction_data.stop_requested);
+            }
             _stats.active_tasks++;
             if (!can_proceed(task)) {
                 return make_ready_future<>();
@@ -980,7 +985,7 @@ void compaction_manager::stop_compaction(sstring type) {
     }
     // FIXME: switch to task_stop(), and wait for their termination, so API user can know when compactions actually stopped.
     for (auto& task : _tasks) {
-        if (task->compaction_running && target_type == task->type) {
+        if (target_type == task->type) {
             task->compaction_data.stop("user request");
         }
     }
