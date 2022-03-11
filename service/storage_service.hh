@@ -518,6 +518,8 @@ public:
     virtual void on_drop_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {}
     virtual void on_drop_view(const sstring& ks_name, const sstring& view_name) override {}
 private:
+    template <typename T>
+    future<> update_table(gms::inet_address endpoint, sstring col, T value);
     future<> update_peer_info(inet_address endpoint);
     future<> do_update_system_peers_table(gms::inet_address endpoint, const application_state& state, const versioned_value& value);
 

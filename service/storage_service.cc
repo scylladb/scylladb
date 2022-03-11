@@ -1191,9 +1191,9 @@ future<> storage_service::on_restart(gms::inet_address endpoint, gms::endpoint_s
 }
 
 template <typename T>
-static future<> update_table(gms::inet_address endpoint, sstring col, T value) {
+future<> storage_service::update_table(gms::inet_address endpoint, sstring col, T value) {
     try {
-        co_await db::system_keyspace::update_peer_info(endpoint, col, value);
+        co_await _sys_ks.local().update_peer_info(endpoint, col, value);
     } catch (...) {
         slogger.error("fail to update {} for {}: {}", col, endpoint, std::current_exception());
     }

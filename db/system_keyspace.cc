@@ -1552,7 +1552,7 @@ future<> system_keyspace::update_cached_values(gms::inet_address ep, sstring col
 
 template <>
 future<> system_keyspace::update_cached_values(gms::inet_address ep, sstring column_name, sstring value) {
-    return _local_cache.invoke_on_all([ep = std::move(ep),
+    return _cache.invoke_on_all([ep = std::move(ep),
                                        column_name = std::move(column_name),
                                        value = std::move(value)] (local_cache& lc) {
         if (column_name == "data_center") {
@@ -1572,7 +1572,7 @@ future<> system_keyspace::update_peer_info(gms::inet_address ep, sstring column_
 
     co_await update_cached_values(ep, column_name, value);
     sstring req = format("INSERT INTO system.{} (peer, {}) VALUES (?, ?)", PEERS, column_name);
-    co_await qctx->execute_cql(req, ep.addr(), value).discard_result();
+    co_await execute_cql(req, ep.addr(), value).discard_result();
 }
 // sets are not needed, since tokens are updated by another method
 template future<> system_keyspace::update_peer_info<sstring>(gms::inet_address ep, sstring column_name, sstring);

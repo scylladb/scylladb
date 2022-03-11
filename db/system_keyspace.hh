@@ -101,7 +101,7 @@ class system_keyspace {
     future<> build_bootstrap_info();
     future<> cache_truncation_record();
     template <typename Value>
-    static future<> update_cached_values(gms::inet_address ep, sstring column_name, Value value);
+    future<> update_cached_values(gms::inet_address ep, sstring column_name, Value value);
 public:
     static schema_ptr size_estimates();
 public:
@@ -234,7 +234,7 @@ private:
 
 public:
     template <typename Value>
-    static future<> update_peer_info(gms::inet_address ep, sstring column_name, Value value);
+    future<> update_peer_info(gms::inet_address ep, sstring column_name, Value value);
 
     static future<> remove_endpoint(gms::inet_address ep);
 
