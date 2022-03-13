@@ -51,7 +51,7 @@ public:
     struct config {
         scheduling_group compaction_sched_group;
         scheduling_group maintenance_sched_group;
-        size_t available_memory;
+        size_t available_memory = 0;
         utils::updateable_value<float> static_shares = utils::updateable_value<float>(0);
         utils::updateable_value<uint32_t> throughput_mb_per_sec = utils::updateable_value<uint32_t>(0);
     };

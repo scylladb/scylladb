@@ -470,6 +470,7 @@ public:
             sharded<abort_source> abort_sources;
             abort_sources.start().get();
             auto stop_abort_sources = defer([&] { abort_sources.stop().get(); });
+            sharded<compaction_manager> cm;
             sharded<replica::database> db;
             debug::the_database = &db;
             auto reset_db_ptr = defer([] {
@@ -647,7 +648,21 @@ public:
             dbcfg.gossip_scheduling_group = scheduling_groups.gossip_scheduling_group;
             dbcfg.sstables_format = sstables::from_string(cfg->sstable_format());
 
-            db.start(std::ref(*cfg), dbcfg, std::ref(mm_notif), std::ref(feature_service), std::ref(token_metadata), std::ref(abort_sources), std::ref(sst_dir_semaphore), utils::cross_shard_barrier()).get();
+            // get_cm_cfg is called on each shard when starting a sharded<compaction_manager>
+            // we need the getter since updateable_value is not shard-safe (#7316)
+            auto get_cm_cfg = sharded_parameter([&] {
+                return compaction_manager::config {
+                    .compaction_sched_group = compaction_manager::scheduling_group{dbcfg.compaction_scheduling_group, service::get_local_compaction_priority()},
+                    .maintenance_sched_group = compaction_manager::scheduling_group{dbcfg.streaming_scheduling_group, service::get_local_streaming_priority()},
+                    .available_memory = dbcfg.available_memory,
+                    .static_shares = cfg->compaction_static_shares,
+                    .throughput_mb_per_sec = cfg->compaction_throughput_mb_per_sec,
+                };
+            });
+            cm.start(std::move(get_cm_cfg), std::ref(abort_sources)).get();
+            auto stop_cm = deferred_stop(cm);
+
+            db.start(std::ref(*cfg), dbcfg, std::ref(mm_notif), std::ref(feature_service), std::ref(token_metadata), std::ref(cm), std::ref(sst_dir_semaphore), utils::cross_shard_barrier()).get();
             auto stop_db = defer([&db] {
                 db.stop().get();
             });

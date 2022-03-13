@@ -89,16 +89,6 @@ make_flush_controller(const db::config& cfg, backlog_controller::scheduling_grou
     return flush_controller(sg, cfg.memtable_flush_static_shares(), 50ms, cfg.virtual_dirty_soft_limit(), std::move(fn));
 }
 
-inline compaction_manager::config make_compaction_manager_config(const db::config& cfg, database_config& dbcfg) {
-    return compaction_manager::config {
-        .compaction_sched_group = compaction_manager::scheduling_group{dbcfg.compaction_scheduling_group, service::get_local_compaction_priority()},
-        .maintenance_sched_group = compaction_manager::scheduling_group{dbcfg.streaming_scheduling_group, service::get_local_streaming_priority()},
-        .available_memory = dbcfg.available_memory,
-        .static_shares = cfg.compaction_static_shares,
-        .throughput_mb_per_sec = cfg.compaction_throughput_mb_per_sec,
-    };
-}
-
 keyspace::keyspace(lw_shared_ptr<keyspace_metadata> metadata, config cfg, locator::effective_replication_map_factory& erm_factory)
     : _metadata(std::move(metadata))
     , _config(std::move(cfg))
@@ -317,7 +307,7 @@ public:
 };
 
 database::database(const db::config& cfg, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::shared_token_metadata& stm,
-        abort_source& as, sharded<semaphore>& sst_dir_sem, utils::cross_shard_barrier barrier)
+        compaction_manager& cm, sharded<semaphore>& sst_dir_sem, utils::cross_shard_barrier barrier)
     : _stats(make_lw_shared<db_stats>())
     , _user_types(std::make_shared<db_user_types_storage>(*this))
     , _cl_stats(std::make_unique<cell_locker_stats>())
@@ -356,7 +346,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _row_cache_tracker(cache_tracker::register_metrics::yes)
     , _apply_stage("db_apply", &database::do_apply)
     , _version(empty_version)
-    , _compaction_manager(std::make_unique<compaction_manager>(make_compaction_manager_config(_cfg, dbcfg), as))
+    , _compaction_manager(cm)
     , _enable_incremental_backups(cfg.incremental_backups())
     , _large_data_handler(std::make_unique<db::cql_table_large_data_handler>(_cfg.compaction_large_partition_warning_threshold_mb()*1024*1024,
               _cfg.compaction_large_row_warning_threshold_mb()*1024*1024,
@@ -950,9 +940,9 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
         db::commitlog& cl = schema->ks_name() == db::schema_tables::NAME && _uses_schema_commitlog
                 ? *_schema_commitlog
                 : *_commitlog;
-        cf = make_lw_shared<column_family>(schema, std::move(cfg), cl, *_compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker);
+        cf = make_lw_shared<column_family>(schema, std::move(cfg), cl, _compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker);
     } else {
-       cf = make_lw_shared<column_family>(schema, std::move(cfg), column_family::no_commitlog(), *_compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker);
+       cf = make_lw_shared<column_family>(schema, std::move(cfg), column_family::no_commitlog(), _compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker);
     }
     cf->set_durable_writes(ks.metadata()->durable_writes());
 
@@ -2216,14 +2206,13 @@ void database::revert_initial_system_read_concurrency_boost() {
 future<> database::start() {
     _large_data_handler->start();
     // We need the compaction manager ready early so we can reshard.
-    _compaction_manager->enable();
+    _compaction_manager.enable();
     co_await init_commitlog();
 }
 
 future<> database::shutdown() {
     _shutdown = true;
     auto b = defer([this] { _stop_barrier.abort(); });
-    co_await _compaction_manager->stop();
     co_await _stop_barrier.arrive_and_wait();
     b.cancel();
 
@@ -2364,10 +2353,10 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
     std::vector<compaction_manager::compaction_reenabler> cres;
     cres.reserve(1 + cf.views().size());
 
-    cres.emplace_back(co_await _compaction_manager->stop_and_disable_compaction(cf.as_table_state()));
+    cres.emplace_back(co_await _compaction_manager.stop_and_disable_compaction(cf.as_table_state()));
     co_await coroutine::parallel_for_each(cf.views(), [&, this] (view_ptr v) -> future<> {
         auto& vcf = find_column_family(v);
-        cres.emplace_back(co_await _compaction_manager->stop_and_disable_compaction(vcf.as_table_state()));
+        cres.emplace_back(co_await _compaction_manager.stop_and_disable_compaction(vcf.as_table_state()));
     });
 
     bool did_flush = false;
@@ -2650,7 +2639,7 @@ future<> database::flush_system_column_families() {
 future<> database::drain() {
     auto b = defer([this] { _stop_barrier.abort(); });
     // Interrupt on going compaction and shutdown to prevent further compaction
-    co_await _compaction_manager->drain();
+    co_await _compaction_manager.drain();
 
     // flush the system ones after all the rest are done, just in case flushing modifies any system state
     // like CASSANDRA-5151. don't bother with progress tracking since system data is tiny.

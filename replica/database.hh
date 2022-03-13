@@ -1327,7 +1327,7 @@ private:
     utils::updateable_value_source<utils::UUID> _version;
     uint32_t _schema_change_count = 0;
     // compaction_manager object is referenced by all column families of a database.
-    std::unique_ptr<compaction_manager> _compaction_manager;
+    compaction_manager& _compaction_manager;
     seastar::metrics::metric_groups _metrics;
     bool _enable_incremental_backups = false;
     bool _shutdown = false;
@@ -1432,7 +1432,7 @@ public:
 
     future<> parse_system_tables(distributed<service::storage_proxy>&, sharded<db::system_keyspace>&);
     database(const db::config&, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::shared_token_metadata& stm,
-            abort_source& as, sharded<semaphore>& sst_dir_sem, utils::cross_shard_barrier barrier = utils::cross_shard_barrier(utils::cross_shard_barrier::solo{}) /* for single-shard usage */);
+            compaction_manager& cm, sharded<semaphore>& sst_dir_sem, utils::cross_shard_barrier barrier = utils::cross_shard_barrier(utils::cross_shard_barrier::solo{}) /* for single-shard usage */);
     database(database&&) = delete;
     ~database();
 
@@ -1458,10 +1458,10 @@ public:
     seastar::scheduling_group get_streaming_scheduling_group() const { return _dbcfg.streaming_scheduling_group; }
 
     compaction_manager& get_compaction_manager() {
-        return *_compaction_manager;
+        return _compaction_manager;
     }
     const compaction_manager& get_compaction_manager() const {
-        return *_compaction_manager;
+        return _compaction_manager;
     }
 
     const locator::shared_token_metadata& get_shared_token_metadata() const { return _shared_token_metadata; }
