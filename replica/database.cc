@@ -2043,7 +2043,8 @@ future<> database::truncate(sstring ksname, sstring cfname, timestamp_func tsf) 
 
 future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_func tsf, bool with_snapshot) {
     dblog.debug("Truncating {}.{}", cf.schema()->ks_name(), cf.schema()->cf_name());
-    return with_gate(cf.async_gate(), [this, &ks, &cf, tsf = std::move(tsf), with_snapshot] () mutable -> future<> {
+    auto holder = cf.async_gate().hold();
+
         const auto auto_snapshot = with_snapshot && get_config().auto_snapshot();
         const auto should_flush = auto_snapshot;
 
@@ -2056,7 +2057,7 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
 
         const auto uuid = cf.schema()->id();
 
-        return _compaction_manager->run_with_compaction_disabled(&cf, [this, &cf, should_flush, auto_snapshot, tsf = std::move(tsf), low_mark]() mutable {
+        co_await _compaction_manager->run_with_compaction_disabled(&cf, [this, &cf, should_flush, auto_snapshot, tsf = std::move(tsf), low_mark]() mutable {
             future<> f = make_ready_future<>();
             bool did_flush = false;
             if (should_flush && cf.can_flush()) {
@@ -2100,10 +2101,8 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
                     });
                 });
             });
-        }).then([this, uuid] {
-            drop_repair_history_map_for_table(uuid);
         });
-    });
+            drop_repair_history_map_for_table(uuid);
 }
 
 future<> database::truncate_views(const column_family& base, db_clock::time_point truncated_at, bool should_flush) {
