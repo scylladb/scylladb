@@ -1580,7 +1580,6 @@ public:
     /** Truncates the given column family */
     future<> truncate(sstring ksname, sstring cfname, timestamp_func);
     future<> truncate(const keyspace& ks, column_family& cf, timestamp_func, bool with_snapshot = true);
-    future<> truncate_views(const column_family& base, db_clock::time_point truncated_at, bool should_flush);
 
     bool update_column_family(schema_ptr s);
     future<> drop_column_family(const sstring& ks_name, const sstring& cf_name, timestamp_func, bool with_snapshot = true);

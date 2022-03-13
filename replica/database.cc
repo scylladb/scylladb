@@ -2089,7 +2089,16 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
                             // creating the sstables that would create them.
                             assert(!did_flush || low_mark <= rp || rp == db::replay_position());
                             rp = std::max(low_mark, rp);
-                    co_await truncate_views(cf, truncated_at, should_flush);
+                    co_await parallel_for_each(cf.views(), [this, truncated_at, should_flush] (view_ptr v) {
+                        auto& vcf = find_column_family(v);
+                        return _compaction_manager->run_with_compaction_disabled(&vcf, [&vcf, truncated_at, should_flush] {
+                            return (should_flush ? vcf.flush() : vcf.clear()).then([&vcf, truncated_at, should_flush] {
+                                return vcf.discard_sstables(truncated_at).then([&vcf, truncated_at, should_flush](db::replay_position rp) {
+                                    return db::system_keyspace::save_truncation_record(vcf, truncated_at, rp);
+                                });
+                            });
+                        });
+                    });
                                 // save_truncation_record() may actually fail after we cached the truncation time
                                 // but this is not be worse that if failing without caching: at least the correct time
                                 // will be available until next reboot and a client will have to retry truncation anyway.
@@ -2097,19 +2106,6 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
                     co_await db::system_keyspace::save_truncation_record(cf, truncated_at, rp);
         });
             drop_repair_history_map_for_table(uuid);
-}
-
-future<> database::truncate_views(const column_family& base, db_clock::time_point truncated_at, bool should_flush) {
-    return parallel_for_each(base.views(), [this, truncated_at, should_flush] (view_ptr v) {
-        auto& vcf = find_column_family(v);
-        return _compaction_manager->run_with_compaction_disabled(&vcf, [&vcf, truncated_at, should_flush] {
-            return (should_flush ? vcf.flush() : vcf.clear()).then([&vcf, truncated_at, should_flush] {
-                return vcf.discard_sstables(truncated_at).then([&vcf, truncated_at, should_flush](db::replay_position rp) {
-                    return db::system_keyspace::save_truncation_record(vcf, truncated_at, rp);
-                });
-            });
-        });
-    });
 }
 
 const sstring& database::get_snitch_name() const {
