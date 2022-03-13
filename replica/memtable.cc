@@ -693,8 +693,8 @@ partition_snapshot_ptr memtable_entry::snapshot(memtable& mtbl) {
     return _pe.read(mtbl.region(), mtbl.cleaner(), _schema, no_cache_tracker);
 }
 
-flat_mutation_reader_v2
-memtable::make_flat_reader(schema_ptr s,
+flat_mutation_reader_v2_opt
+memtable::make_flat_reader_opt(schema_ptr s,
                       reader_permit permit,
                       const dht::partition_range& range,
                       const query::partition_slice& slice,
@@ -715,7 +715,7 @@ memtable::make_flat_reader(schema_ptr s,
             }
         });
         if (!snp) {
-            return make_empty_flat_reader_v2(std::move(s), std::move(permit));
+            return {};
         }
         auto dk = pos.as_decorated_key();
 
