@@ -11,6 +11,7 @@
 #include <seastar/core/timed_out_error.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/future-util.hh>
+#include <seastar/core/sleep.hh>
 
 #include "raft/logical_clock.hh"
 #include "raft/raft.hh"
@@ -24,23 +25,9 @@ constexpr raft::logical_clock::duration operator "" _t(unsigned long long ticks)
 // A wrapper around `raft::logical_clock` that allows scheduling events to happen after a certain number of ticks.
 class logical_timer {
     struct scheduled_impl {
-    private:
-        bool _resolved = false;
-
-        virtual void do_resolve() = 0;
-
     public:
         virtual ~scheduled_impl() { }
-
-        void resolve() {
-            if (!_resolved) {
-                do_resolve();
-                _resolved = true;
-            }
-        }
-
-        void mark_resolved() { _resolved = true; }
-        bool resolved() { return _resolved; }
+        virtual void resolve() = 0;
     };
 
     struct scheduled {
@@ -48,7 +35,6 @@ class logical_timer {
         seastar::shared_ptr<scheduled_impl> _impl;
 
         void resolve() { _impl->resolve(); }
-        bool resolved() { return _impl->resolved(); }
     };
 
     raft::logical_clock _clock;
@@ -130,12 +116,16 @@ public:
             // 1. if `f` resolves before timeout, it will resolve `res`,
             // 2. otherwise it will resolve the future we return inside `timed_out` which is returned through `res`.
             promise<T...> _p;
+            bool _resolved = false;
 
             virtual ~sched() override { }
-            virtual void do_resolve() override {
-                promise<T...> new_p;
-                _p.set_exception(timed_out<T...>{new_p.get_future()});
-                std::swap(new_p, _p);
+            virtual void resolve() override {
+                if (!_resolved) {
+                    promise<T...> new_p;
+                    _p.set_exception(timed_out<T...>{new_p.get_future()});
+                    std::swap(new_p, _p);
+                    _resolved = true;
+                }
             }
         };
 
@@ -152,7 +142,7 @@ public:
             // If we're before timeout, `s->_p` is connected to `res` so we're returning the result of `f` to our caller.
             // Otherwise `s->_p` is connected to a future which was previously returned to our caller inside `timed_out`.
             f.forward_to(std::move(s->_p));
-            s->mark_resolved();
+            s->_resolved = true;
             // tick() will (eventually) clear the `_scheduled` entry
             // (unless we're already past timeout, in which case the entry has already been cleared).
         });
@@ -164,31 +154,19 @@ public:
     // Note: analogous remark applies as for `with_timeout`, i.e. make sure to call at least one `tick`
     // per one `sleep_until` call on average.
     future<> sleep_until(raft::logical_clock::time_point tp) {
-        if (tp <= now()) {
-            return make_ready_future<>();
-        }
+        return sleep_until(tp, nullptr);
+    }
 
-        struct sched : public scheduled_impl {
-            promise<> _p;
-            virtual ~sched() override {}
-            virtual void do_resolve() override { _p.set_value(); }
-        };
-
-        auto s = make_shared<sched>();
-        auto f = s->_p.get_future();
-        _scheduled.push_back(scheduled{
-            ._at = tp,
-            ._impl = std::move(s)
-        });
-        std::push_heap(_scheduled.begin(), _scheduled.end(), cmp);
-
-        return f;
+    // Returns a future that resolves at logical time point `tp` (according to this timer's clock),
+    // or when `as` is aborted (in which case `sleep_aborted` is thrown).
+    // Note: see note above.
+    future<> sleep_until(raft::logical_clock::time_point tp, abort_source& as) {
+        return sleep_until(tp, &as);
     }
 
     // Returns a future that resolves after a number of `tick()`s represented by `d`.
     // Example usage: `sleep(20_t)` resolves after 20 `tick()`s.
-    // Note: analogous remark applies as for `with_timeout`, i.e. make sure to call at least one `tick`
-    // per one `sleep` call on average.
+    // Note: see note above.
     future<> sleep(raft::logical_clock::duration d) {
         return sleep_until(now() + d);
     }
@@ -204,7 +182,7 @@ public:
         struct sched : public scheduled_impl {
             sched(F f) : _f(std::move(f)) {}
             virtual ~sched() override {}
-            virtual void do_resolve() override { _f(); }
+            virtual void resolve() override { _f(); }
 
             F _f;
         };
@@ -214,6 +192,50 @@ public:
             ._impl = make_shared<sched>(std::move(f))
         });
         std::push_heap(_scheduled.begin(), _scheduled.end(), cmp);
+    }
+
+private:
+    future<> sleep_until(raft::logical_clock::time_point tp, abort_source* as) {
+        if (tp <= now()) {
+            co_return;
+        }
+
+        struct sched : public scheduled_impl {
+            promise<> _p;
+            bool _resolved = false;
+            virtual ~sched() override {}
+            virtual void resolve() override {
+                if (!_resolved) {
+                    _p.set_value();
+                    _resolved = true;
+                }
+            }
+        };
+
+        auto s = make_shared<sched>();
+
+        optimized_optional<abort_source::subscription> sub;
+        if (as) {
+            sub = as->subscribe([s] () noexcept {
+                if (!s->_resolved) {
+                    s->_p.set_exception(std::make_exception_ptr(sleep_aborted{}));
+                    s->_resolved = true;
+                }
+            });
+
+            if (!sub) {
+                throw sleep_aborted{};
+            }
+        }
+
+        auto f = s->_p.get_future();
+        _scheduled.push_back(scheduled{
+            ._at = tp,
+            ._impl = std::move(s)
+        });
+        std::push_heap(_scheduled.begin(), _scheduled.end(), cmp);
+
+        co_await std::move(f);
     }
 };
 
