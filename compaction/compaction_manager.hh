@@ -380,6 +380,31 @@ public:
     // parameter job is a function that will carry the operation
     future<> run_custom_job(replica::table* t, sstables::compaction_type type, const char *desc, noncopyable_function<future<>(sstables::compaction_data&)> job);
 
+    class compaction_reenabler {
+        compaction_manager& _cm;
+        replica::table* _table;
+        compaction_state& _compaction_state;
+        gate::holder _holder;
+
+    public:
+        compaction_reenabler(compaction_manager&, replica::table*);
+        compaction_reenabler(compaction_reenabler&&) noexcept;
+
+        ~compaction_reenabler();
+
+        replica::table* compacting_table() const noexcept {
+            return _table;
+        }
+
+        const compaction_state& compaction_state() const noexcept {
+            return _compaction_state;
+        }
+    };
+
+    // Disable compaction temporarily for a table t.
+    // Caller should call the compaction_reenabler::reenable
+    future<compaction_reenabler> stop_and_disable_compaction(replica::table* t);
+
     // Run a function with compaction temporarily disabled for a table T.
     future<> run_with_compaction_disabled(replica::table* t, std::function<future<> ()> func);
 

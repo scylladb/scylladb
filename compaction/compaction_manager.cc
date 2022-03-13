@@ -402,32 +402,50 @@ future<> compaction_manager::run_custom_job(replica::table* t, sstables::compact
     return perform_task(make_shared<custom_compaction_task>(*this, t, type, desc, std::move(job)));
 }
 
+compaction_manager::compaction_reenabler::compaction_reenabler(compaction_manager& cm, replica::table* t)
+    : _cm(cm)
+    , _table(t)
+    , _compaction_state(cm.get_compaction_state(_table))
+    , _holder(_compaction_state.gate.hold())
+{
+    _compaction_state.compaction_disabled_counter++;
+    cmlog.debug("Temporarily disabled compaction for {}.{}. compaction_disabled_counter={}",
+            _table->schema()->ks_name(), _table->schema()->cf_name(), _compaction_state.compaction_disabled_counter);
+}
+
+compaction_manager::compaction_reenabler::compaction_reenabler(compaction_reenabler&& o) noexcept
+    : _cm(o._cm)
+    , _table(std::exchange(o._table, nullptr))
+    , _compaction_state(o._compaction_state)
+    , _holder(std::move(o._holder))
+{}
+
+compaction_manager::compaction_reenabler::~compaction_reenabler() {
+    // submit compaction request if we're the last holder of the gate which is still opened.
+    if (_table && --_compaction_state.compaction_disabled_counter == 0 && !_compaction_state.gate.is_closed()) {
+        cmlog.debug("Reenabling compaction for {}.{}",
+                _table->schema()->ks_name(), _table->schema()->cf_name());
+        try {
+            _cm.submit(_table);
+        } catch (...) {
+            cmlog.warn("compaction_reenabler could not reenable compaction for {}.{}: {}",
+                    _table->schema()->ks_name(), _table->schema()->cf_name(), std::current_exception());
+        }
+    }
+}
+
+future<compaction_manager::compaction_reenabler>
+compaction_manager::stop_and_disable_compaction(replica::table* t) {
+    compaction_reenabler cre(*this, t);
+    co_await stop_ongoing_compactions("user-triggered operation", t);
+    co_return cre;
+}
+
 future<>
 compaction_manager::run_with_compaction_disabled(replica::table* t, std::function<future<> ()> func) {
-    auto& c_state = _compaction_state[t];
-    auto holder = c_state.gate.hold();
+    compaction_reenabler cre = co_await stop_and_disable_compaction(t);
 
-    c_state.compaction_disabled_counter++;
-
-    std::exception_ptr err;
-    try {
-        co_await stop_ongoing_compactions("user-triggered operation", t);
-        co_await func();
-    } catch (...) {
-        err = std::current_exception();
-    }
-
-#ifdef DEBUG
-    assert(_compaction_state.contains(t));
-#endif
-    // submit compaction request if we're the last holder of the gate which is still opened.
-    if (--c_state.compaction_disabled_counter == 0 && !c_state.gate.is_closed()) {
-        submit(t);
-    }
-    if (err) {
-        std::rethrow_exception(err);
-    }
-    co_return;
+    co_await func();
 }
 
 std::string_view compaction_manager::task::to_string(state s) {
