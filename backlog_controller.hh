@@ -58,7 +58,6 @@ protected:
     };
 
     scheduling_group& _scheduling_group;
-    std::chrono::milliseconds _interval;
     timer<> _update_timer;
 
     std::vector<control_point> _control_points;
@@ -83,7 +82,6 @@ protected:
                        std::vector<control_point> control_points, std::function<float()> backlog,
                        float static_shares = 0)
         : _scheduling_group(sg)
-        , _interval(interval)
         , _update_timer([this] { adjust(); })
         , _control_points()
         , _current_backlog(std::move(backlog))
@@ -91,7 +89,7 @@ protected:
         , _static_shares(static_shares)
     {
         _control_points.insert(_control_points.end(), control_points.begin(), control_points.end());
-        _update_timer.arm_periodic(_interval);
+        _update_timer.arm_periodic(interval);
     }
 
     virtual ~backlog_controller() {}
