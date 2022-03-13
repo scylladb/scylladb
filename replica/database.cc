@@ -2057,7 +2057,15 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
 
         const auto uuid = cf.schema()->id();
 
-        co_await _compaction_manager->run_with_compaction_disabled(&cf, [this, &cf, should_flush, auto_snapshot, tsf = std::move(tsf), low_mark]() mutable -> future<> {
+    std::vector<compaction_manager::compaction_reenabler> cres;
+    cres.reserve(1 + cf.views().size());
+
+    cres.emplace_back(co_await _compaction_manager->stop_and_disable_compaction(&cf));
+    co_await parallel_for_each(cf.views(), [&, this] (view_ptr v) -> future<> {
+        auto& vcf = find_column_family(v);
+        cres.emplace_back(co_await _compaction_manager->stop_and_disable_compaction(&vcf));
+    });
+
             bool did_flush = false;
             if (should_flush && cf.can_flush()) {
                 // TODO:
@@ -2091,7 +2099,6 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
                             rp = std::max(low_mark, rp);
                     co_await parallel_for_each(cf.views(), [this, truncated_at, should_flush] (view_ptr v) -> future<> {
                         auto& vcf = find_column_family(v);
-                        co_await _compaction_manager->run_with_compaction_disabled(&vcf, [&vcf, truncated_at, should_flush] () -> future<> {
                             if (should_flush) {
                                 co_await vcf.flush();
                             } else {
@@ -2099,14 +2106,13 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
                             }
                             db::replay_position rp = co_await vcf.discard_sstables(truncated_at);
                             co_await db::system_keyspace::save_truncation_record(vcf, truncated_at, rp);
-                        });
                     });
                                 // save_truncation_record() may actually fail after we cached the truncation time
                                 // but this is not be worse that if failing without caching: at least the correct time
                                 // will be available until next reboot and a client will have to retry truncation anyway.
                                 cf.cache_truncation_record(truncated_at);
                     co_await db::system_keyspace::save_truncation_record(cf, truncated_at, rp);
-        });
+
             drop_repair_history_map_for_table(uuid);
 }
 
