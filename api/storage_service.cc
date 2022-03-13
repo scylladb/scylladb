@@ -597,28 +597,37 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         });
     });
 
-    ss::force_keyspace_compaction.set(r, [&ctx](std::unique_ptr<request> req) {
+    ss::force_keyspace_compaction.set(r, [&ctx](std::unique_ptr<request> req) -> future<json::json_return_type> {
         auto keyspace = validate_keyspace(ctx, req->param);
         auto column_families = parse_tables(keyspace, ctx, req->query_parameters, "cf");
         if (column_families.empty()) {
             column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
         }
-        return ctx.db.invoke_on_all([keyspace, column_families] (replica::database& db) -> future<> {
-            auto table_ids = boost::copy_range<std::vector<utils::UUID>>(column_families | boost::adaptors::transformed([&] (auto& cf_name) {
-                return db.find_uuid(keyspace, cf_name);
-            }));
-            // major compact smaller tables first, to increase chances of success if low on space.
-            std::ranges::sort(table_ids, std::less<>(), [&] (const utils::UUID& id) {
+
+        auto table_ids = boost::copy_range<std::vector<utils::UUID>>(column_families | boost::adaptors::transformed([&] (auto& cf_name) {
+            return ctx.db.local().find_uuid(keyspace, cf_name);
+        }));
+
+        std::unordered_map<utils::UUID, uint64_t> table_sizes;
+        co_await parallel_for_each(table_ids, [&] (const utils::UUID& id) -> future<> {
+            table_sizes[id] = co_await ctx.db.map_reduce0([&id] (replica::database& db) {
                 return db.find_column_family(id).get_stats().live_disk_space_used;
-            });
-            // as a table can be dropped during loop below, let's find it before issuing major compaction request.
-            for (auto& id : table_ids) {
-                co_await db.find_column_family(id).compact_all_sstables();
-            }
-            co_return;
-        }).then([]{
-                return make_ready_future<json::json_return_type>(json_void());
+            }, 0.0, std::plus<double>());
         });
+
+        // major compact smaller tables first, to increase chances of success if low on space.
+        std::ranges::sort(table_ids, std::less<>(), [&] (const utils::UUID& uuid) {
+            return table_sizes[uuid];
+        });
+
+        // run major compaction on all shards in parallel, one table at a time.
+        for (const auto& id : table_ids) {
+            co_await ctx.db.invoke_on_all([&id] (replica::database& db) {
+                return db.find_column_family(id).compact_all_sstables();
+            });
+        }
+
+        co_return json_void();
     });
 
     ss::force_keyspace_cleanup.set(r, [&ctx, &ss](std::unique_ptr<request> req) {
