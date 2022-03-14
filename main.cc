@@ -879,6 +879,18 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // #293 - do not stop anything (unless snitch.on_all(start) fails)
             stop_snitch->cancel();
 
+            static direct_fd_clock fd_clock;
+            static sharded<direct_failure_detector::failure_detector> fd;
+            supervisor::notify("starting direct failure detector service");
+            fd.start(
+                sharded_parameter([] (gms::gossiper& g) { return std::ref(g.get_direct_fd_pinger()); }, std::ref(gossiper)),
+                std::ref(fd_clock),
+                direct_fd_clock::base::duration{std::chrono::milliseconds{100}}.count()).get();
+
+            auto stop_fd = defer_verbose_shutdown("direct_failure_detector", [] {
+                fd.stop().get();
+            });
+
             raft_gr.start(cfg->check_experimental(db::experimental_features_t::RAFT),
                 std::ref(messaging), std::ref(gossiper), std::ref(feature_service)).get();
             // XXX: stop_raft has to happen before query_processor

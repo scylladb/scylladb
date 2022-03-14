@@ -592,6 +592,17 @@ public:
             sharded<service::raft_group_registry> raft_gr;
             sharded<streaming::stream_manager> stream_manager;
             sharded<service::forward_service> forward_service;
+            sharded<direct_failure_detector::failure_detector> fd;
+
+            direct_fd_clock fd_clock;
+            fd.start(
+                sharded_parameter([] (gms::gossiper& g) { return std::ref(g.get_direct_fd_pinger()); }, std::ref(gossiper)),
+                std::ref(fd_clock),
+                direct_fd_clock::base::duration{std::chrono::milliseconds{100}}.count()).get();
+
+            auto stop_fd = defer([&fd] {
+                fd.stop().get();
+            });
 
             raft_gr.start(cfg->check_experimental(db::experimental_features_t::RAFT),
                 std::ref(ms), std::ref(gossiper), std::ref(feature_service)).get();
