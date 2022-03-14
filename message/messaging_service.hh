@@ -412,6 +412,7 @@ public:
     void register_gossip_echo(std::function<future<> (const rpc::client_info& cinfo, rpc::optional<int64_t> generation_number)>&& func);
     future<> unregister_gossip_echo();
     future<> send_gossip_echo(msg_addr id, int64_t generation_number, std::chrono::milliseconds timeout);
+    future<> send_gossip_echo(msg_addr id, int64_t generation_number, abort_source&);
 
     // Wrapper for GOSSIP_SHUTDOWN
     void register_gossip_shutdown(std::function<rpc::no_wait_type (inet_address from, rpc::optional<int64_t> generation_number)>&& func);
