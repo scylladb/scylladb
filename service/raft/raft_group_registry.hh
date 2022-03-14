@@ -49,8 +49,6 @@ class raft_group_registry : public seastar::peering_sharded_service<raft_group_r
 private:
     // True if the feature is enabled
     bool _is_enabled;
-    // Protect concurrent configuration changes from races/retries
-    seastar::gate _shutdown_gate;
     netw::messaging_service& _ms;
     // Raft servers along with the corresponding timers to tick each instance.
     // Currently ticking every 100ms.
@@ -62,7 +60,7 @@ private:
 
     void init_rpc_verbs();
     seastar::future<> uninit_rpc_verbs();
-    seastar::future<> stop_servers();
+    seastar::future<> stop_servers() noexcept;
 
     raft_server_for_group& server_for_group(raft::group_id id);
 
@@ -75,6 +73,10 @@ public:
     seastar::future<> start();
     // Called by sharded<>::stop()
     seastar::future<> stop();
+
+    // Called by before stopping the database.
+    // May be called multiple times.
+    seastar::future<> drain_on_shutdown() noexcept;
 
     raft_rpc& get_rpc(raft::group_id gid);
 
