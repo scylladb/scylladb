@@ -20,10 +20,56 @@ namespace service {
 
 logging::logger rslog("raft_group_registry");
 
-raft_group_registry::raft_group_registry(bool is_enabled, netw::messaging_service& ms, gms::gossiper& gossiper, gms::feature_service& feat)
+class raft_group_registry::direct_fd_proxy : public raft::failure_detector, public direct_failure_detector::listener {
+    gms::gossiper::direct_fd_pinger _fd_pinger;
+    raft_address_map<>& _address_map;
+
+    std::unordered_set<gms::inet_address> _alive_set;
+
+public:
+    direct_fd_proxy(gms::gossiper::direct_fd_pinger fd_pinger, raft_address_map<>& address_map)
+            : _fd_pinger(fd_pinger), _address_map(address_map) {
+    }
+
+    future<> mark_alive(direct_failure_detector::pinger::endpoint_id id) override {
+        static const auto msg = "marking address {} as alive for raft groups";
+
+        auto addr = co_await _fd_pinger.get_address(id);
+        _alive_set.insert(addr);
+
+        // The listener should be registered on every shard.
+        // Write the message on INFO level only on shard 0 so we don't spam the logs.
+        if (this_shard_id() == 0) {
+            rslog.info(msg, addr);
+        } else {
+            rslog.debug(msg, addr);
+        }
+    }
+    future<> mark_dead(direct_failure_detector::pinger::endpoint_id id) override {
+        static const auto msg = "marking address {} as dead for raft groups";
+
+        auto addr = co_await _fd_pinger.get_address(id);
+        _alive_set.erase(addr);
+
+        // As above.
+        if (this_shard_id() == 0) {
+            rslog.info(msg, addr);
+        } else {
+            rslog.debug(msg, addr);
+        }
+    }
+
+    bool is_alive(raft::server_id srv) override {
+        return _alive_set.contains(_address_map.get_inet_address(srv));
+    }
+};
+
+raft_group_registry::raft_group_registry(bool is_enabled, netw::messaging_service& ms,
+        gms::gossiper& gossiper, gms::feature_service& feat, direct_failure_detector::failure_detector& fd)
     : _is_enabled(is_enabled)
     , _ms(ms)
     , _fd(make_shared<raft_gossip_failure_detector>(gossiper, _srv_address_mappings))
+    , _direct_fd(fd)
     , _raft_support_listener(feat.uses_raft_cluster_mgmt.when_enabled([] {
         // TODO: join group 0 on upgrade
     }))

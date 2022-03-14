@@ -19,8 +19,11 @@ namespace service {
 
 static seastar::logger rlogger("raft_rpc");
 
-raft_rpc::raft_rpc(raft_state_machine& sm, netw::messaging_service& ms, raft_address_map<>& address_map, raft::group_id gid, raft::server_id srv_id)
-    : _sm(sm), _group_id(std::move(gid)), _server_id(srv_id), _messaging(ms), _address_map(address_map)
+raft_rpc::raft_rpc(raft_state_machine& sm, netw::messaging_service& ms,
+        raft_address_map<>& address_map, raft::group_id gid, raft::server_id srv_id,
+        noncopyable_function<void(gms::inet_address, bool)> on_server_update)
+    : _sm(sm), _group_id(std::move(gid)), _server_id(srv_id), _messaging(ms)
+    , _address_map(address_map), _on_server_update(std::move(on_server_update))
 {}
 
 future<raft::snapshot_reply> raft_rpc::send_snapshot(raft::server_id id, const raft::install_snapshot& snap, seastar::abort_source& as) {
@@ -136,13 +139,17 @@ future<raft::read_barrier_reply> raft_rpc::execute_read_barrier_on_leader(raft::
 void raft_rpc::add_server(raft::server_id id, raft::server_info info) {
     // Parse gms::inet_address from server_info
     auto in = ser::as_input_stream(bytes_view(info));
+    auto addr = ser::deserialize(in, boost::type<gms::inet_address>());
     // Entries explicitly managed via `rpc::add_server` and `rpc::remove_server` should never expire
     // while entries learnt upon receiving an rpc message should be expirable.
-    _address_map.set(id, ser::deserialize(in, boost::type<gms::inet_address>()), false);
+    _address_map.set(id, addr, false);
+    _on_server_update(addr, true);
 }
 
 void raft_rpc::remove_server(raft::server_id id) {
-    _address_map.erase(id);
+    if (auto addr = _address_map.erase(id)) {
+        _on_server_update(*addr, false);
+    }
 }
 
 future<> raft_rpc::abort() {

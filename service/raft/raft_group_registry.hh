@@ -19,6 +19,10 @@
 
 namespace gms { class gossiper; class feature_service; }
 
+namespace direct_failure_detector {
+class failure_detector;
+}
+
 namespace service {
 
 class raft_rpc;
@@ -59,6 +63,8 @@ private:
     // Shard-local failure detector instance shared among all raft groups
     seastar::shared_ptr<raft_gossip_failure_detector> _fd;
 
+    direct_failure_detector::failure_detector& _direct_fd;
+
     void init_rpc_verbs();
     seastar::future<> uninit_rpc_verbs();
     seastar::future<> stop_servers() noexcept;
@@ -71,7 +77,8 @@ private:
     gms::feature::listener_registration _raft_support_listener;
 
 public:
-    raft_group_registry(bool is_enabled, netw::messaging_service& ms, gms::gossiper& gs, gms::feature_service& feat);
+    raft_group_registry(bool is_enabled, netw::messaging_service& ms, gms::gossiper& gs,
+            gms::feature_service& feat, direct_failure_detector::failure_detector& fd);
 
     // Called manually at start
     seastar::future<> start();
@@ -98,6 +105,7 @@ public:
     unsigned shard_for_group(const raft::group_id& gid) const;
     shared_ptr<raft_gossip_failure_detector>& failure_detector() { return _fd; }
     raft_address_map<>& address_map() { return _srv_address_mappings; }
+    direct_failure_detector::failure_detector& direct_fd() { return _direct_fd; }
 
     bool is_enabled() const { return _is_enabled; }
 };

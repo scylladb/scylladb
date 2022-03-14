@@ -605,7 +605,7 @@ public:
             });
 
             raft_gr.start(cfg->check_experimental(db::experimental_features_t::RAFT),
-                std::ref(ms), std::ref(gossiper), std::ref(feature_service)).get();
+                std::ref(ms), std::ref(gossiper), std::ref(feature_service), std::ref(fd)).get();
             auto stop_raft_gr = deferred_stop(raft_gr);
             raft_gr.invoke_on_all(&service::raft_group_registry::start).get();
 
