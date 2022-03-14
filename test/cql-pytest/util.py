@@ -9,6 +9,8 @@
 import string
 import random
 import time
+import socket
+import os
 from contextlib import contextmanager
 
 def random_string(length=10, chars=string.ascii_uppercase + string.digits):
@@ -108,3 +110,50 @@ def new_materialized_view(cql, table, select, pk, where):
 def project(column_name_string, rows):
     """Returns a list of column values from each of the rows."""
     return [getattr(r, column_name_string) for r in rows]
+
+# Utility function for trying to find a local process which is listening to
+# the address and port to which our our CQL connection is connected. If such a
+# process exists, return its process id (as a string). Otherwise, return None.
+# Note that the local process needs to belong to the same user running this
+# test, or it cannot be found.
+def local_process_id(cql):
+    ip = socket.gethostbyname(cql.cluster.contact_points[0])
+    port = cql.cluster.port
+    # Implement something like the shell "lsof -Pni @{ip}:{port}", just
+    # using /proc without any external shell command.
+    # First, we look in /proc/net/tcp for a LISTEN socket (state 0x0A) at the
+    # desired local address. The address is specially-formatted hex of the ip
+    # and port, with 0100007F:2352 for 127.0.0.1:9042. We check for two
+    # listening addresses: one is the specific IP address given, and the
+    # other is listening on address 0 (INADDR_ANY).
+    ip2hex = lambda ip: ''.join([f'{int(x):02X}' for x in reversed(ip.split('.'))])
+    port2hex = lambda port: f'{int(port):04X}'
+    addr1 = ip2hex(ip) + ':' + port2hex(port)
+    addr2 = ip2hex('0.0.0.0') + ':' + port2hex(port)
+    LISTEN = '0A'
+    with open('/proc/net/tcp', 'r') as f:
+        for line in f:
+            cols = line.split()
+            if cols[3] == LISTEN and (cols[1] == addr1 or cols[1] == addr2):
+                inode = cols[9]
+                break
+        else:
+            # Didn't find a process listening on the given address
+            return None
+    # Now look in /proc/*/fd/* for processes that have this socket "inode"
+    # as one of its open files. We can only find a process that belongs to
+    # the same user.
+    target = f'socket:[{inode}]'
+    for proc in os.listdir('/proc'):
+        if not proc.isnumeric():
+            continue
+        dir = f'/proc/{proc}/fd/'
+        try:
+            for fd in os.listdir(dir):
+                if os.readlink(dir + fd) == target:
+                    # Found the process!
+                    return proc
+        except:
+            # Ignore errors. We can't check processes we don't own.
+            pass
+    return None
