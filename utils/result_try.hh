@@ -191,10 +191,15 @@ public:
 
     template<ExceptionContainerResult R, typename Converter, typename Continuation>
     auto wrap_in_catch(Continuation&& cont) {
-        return [this, cont = std::forward<Continuation>(cont)] () mutable -> typename Converter::template wrapped_type<R> {
+        return [this, cont = std::forward<Continuation>(cont)] (bool& already_caught) mutable -> typename Converter::template wrapped_type<R> {
             try {
-                return std::invoke(std::forward<Continuation>(cont));
+                return std::invoke(std::forward<Continuation>(cont), already_caught);
             } catch (const Ex& ex) {
+                if (already_caught) {
+                    throw;
+                }
+                already_caught = true;
+
                 if constexpr (std::is_invocable_v<Cb, const Ex&, exception_ptr_handle<R>>) {
                     // Invoke with exception reference and handle
                     return Converter::template invoke(_cb, ex, exception_ptr_handle<R>(std::current_exception()));
@@ -260,10 +265,15 @@ public:
 
     template<ExceptionContainerResult R, typename Converter, typename Continuation>
     auto wrap_in_catch(Continuation&& cont) {
-        return [this, cont = std::forward<Continuation>(cont)] () mutable -> typename Converter::template wrapped_type<R> {
+        return [this, cont = std::forward<Continuation>(cont)] (bool& already_caught) mutable -> typename Converter::template wrapped_type<R> {
             try {
-                return std::invoke(std::forward<Continuation>(cont));
+                return std::invoke(std::forward<Continuation>(cont), already_caught);
             } catch (...) {
+                if (already_caught) {
+                    throw;
+                }
+                already_caught = true;
+
                 if constexpr (std::is_invocable_v<Cb, exception_ptr_handle<R>>) {
                     // Invoke with handle
                     return Converter::template invoke(_cb, exception_ptr_handle<R>(std::current_exception()));
@@ -326,7 +336,8 @@ struct try_catch_chain_impl<R, Converter> {
     typename Converter::template wrapped_type<R>
     invoke_in_try_catch(Continuation&& cont) {
         // Not using an invoker as we always want it to throw
-        return std::invoke(std::forward<Continuation>(cont));
+        bool already_caught = false;
+        return std::invoke(std::forward<Continuation>(cont), already_caught);
     }
 };
 
@@ -409,7 +420,7 @@ result_handle_available_future(seastar::future<Result>&& f, Handlers&... handler
         // by any of the provided handlers.
         return seastar::futurize_invoke([&] {
             return try_catch_chain_type::invoke_in_try_catch(
-                    [&f] () mutable -> seastar::future<Result> { std::rethrow_exception(std::move(f).get_exception()); },
+                    [&f] (bool&) mutable -> seastar::future<Result> { std::rethrow_exception(std::move(f).get_exception()); },
                     handlers...);
         });
     }
@@ -504,7 +515,7 @@ result_try(Fun&& fun, Handlers&&... handlers) {
     using try_catch_chain_type = internal::try_catch_chain_impl<result_type, internal::noop_converter, Handlers...>;
 
     // Invoke `fun` and catch C++ exceptions if any occur
-    result_type res = try_catch_chain_type::template invoke_in_try_catch<>(std::forward<Fun>(fun), handlers...);
+    result_type res = try_catch_chain_type::template invoke_in_try_catch<>([&fun] (bool&) { return fun(); }, handlers...);
     if (res) {
         return res;
     }
@@ -546,7 +557,7 @@ result_futurize_try(Fun&& fun, Handlers&&... handlers) {
     // Try to invoke the function and handle C++ exceptions if there are any
     bool no_exceptions = false;
     future_type f = seastar::futurize_invoke([&] () {
-        return try_catch_chain_type::template invoke_in_try_catch<>([&no_exceptions, &fun] {
+        return try_catch_chain_type::template invoke_in_try_catch<>([&no_exceptions, &fun] (bool&) {
             // If `fun` didn't throw, we can set the `no_exceptions` flag
             // so that we know that there was a throw and we shouldn't
             // run the exception handling logic again.
