@@ -2858,6 +2858,7 @@ protected:
         // The exception container was created on the same shard,
         // so it should be cheap to clone and not throw
         _done_promise.set_value(ex.clone());
+        _timeout.cancel();
         on_failure(std::move(ex));
     }
 public:
