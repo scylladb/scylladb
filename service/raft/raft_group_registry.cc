@@ -7,8 +7,8 @@
  */
 #include "service/raft/raft_group_registry.hh"
 #include "service/raft/raft_rpc.hh"
-#include "service/raft/raft_gossip_failure_detector.hh"
 #include "message/messaging_service.hh"
+#include "gms/gossiper.hh"
 #include "serializer_impl.hh"
 #include "idl/raft.dist.hh"
 #include "gms/feature_service.hh"
@@ -68,8 +68,8 @@ raft_group_registry::raft_group_registry(bool is_enabled, netw::messaging_servic
         gms::gossiper& gossiper, gms::feature_service& feat, direct_failure_detector::failure_detector& fd)
     : _is_enabled(is_enabled)
     , _ms(ms)
-    , _fd(make_shared<raft_gossip_failure_detector>(gossiper, _srv_address_mappings))
     , _direct_fd(fd)
+    , _direct_fd_proxy(make_shared<direct_fd_proxy>(gossiper.get_direct_fd_pinger(), _srv_address_mappings))
     , _raft_support_listener(feat.uses_raft_cluster_mgmt.when_enabled([] {
         // TODO: join group 0 on upgrade
     }))
@@ -216,7 +216,10 @@ seastar::future<> raft_group_registry::start() {
     // Once a Raft server starts, it soon times out
     // and starts an election, so RPC must be ready by
     // then to send VoteRequest messages.
-    co_return init_rpc_verbs();
+    init_rpc_verbs();
+
+    _direct_fd_subscription.emplace(co_await _direct_fd.register_listener(*_direct_fd_proxy,
+        direct_fd_clock::base::duration{std::chrono::seconds{1}}.count()));
 }
 
 seastar::future<> raft_group_registry::stop() {
@@ -291,5 +294,11 @@ future<> raft_group_registry::start_server_for_group(raft_server_for_group new_g
 unsigned raft_group_registry::shard_for_group(const raft::group_id& gid) const {
     return 0; // schema raft server is always owned by shard 0
 }
+
+shared_ptr<raft::failure_detector> raft_group_registry::failure_detector() {
+    return _direct_fd_proxy;
+}
+
+raft_group_registry::~raft_group_registry() = default;
 
 } // end of namespace service
