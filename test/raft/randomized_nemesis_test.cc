@@ -1838,6 +1838,16 @@ struct wait_for_leader {
     }
 };
 
+future<> ping_shards() {
+    if (smp::count == 1) {
+        return seastar::yield();
+    }
+
+    return parallel_for_each(boost::irange(0u, smp::count), [] (shard_id s) {
+        return smp::submit_to(s, [](){});
+    });
+}
+
 SEASTAR_TEST_CASE(basic_test) {
     logical_timer timer;
     environment_config cfg {
@@ -1848,12 +1858,13 @@ SEASTAR_TEST_CASE(basic_test) {
     co_await with_env_and_ticker<ExReg>(cfg, [&timer] (environment<ExReg>& env, ticker& t) -> future<> {
         using output_t = typename ExReg::output_t;
 
-        t.start([&] (uint64_t tick) {
+        t.start([&] (uint64_t tick) -> future<> {
             env.tick_network();
             timer.tick();
             if (tick % 10 == 0) {
                 env.tick_servers();
             }
+            return ping_shards();
         }, 10'000);
 
         auto leader_id = co_await env.new_server(true);
@@ -1924,6 +1935,7 @@ SEASTAR_TEST_CASE(snapshot_uses_correct_term_test) {
             if (tick % 10 == 0) {
                 env.tick_servers();
             }
+            return ping_shards();
         }, 10'000);
 
         auto id1 = co_await env.new_server(true,
@@ -2003,6 +2015,7 @@ SEASTAR_TEST_CASE(snapshotting_preserves_config_test) {
             if (tick % 10 == 0) {
                 env.tick_servers();
             }
+            return ping_shards();
         }, 10'000);
 
         auto id1 = co_await env.new_server(true,
@@ -2063,6 +2076,7 @@ SEASTAR_TEST_CASE(removed_follower_with_forwarding_learns_about_removal) {
             if (tick % 10 == 0) {
                 env.tick_servers();
             }
+            return ping_shards();
         }, 10'000);
 
         raft::server::configuration cfg {
@@ -2680,6 +2694,7 @@ SEASTAR_TEST_CASE(basic_generator_test) {
                 }
             });
             env.tick_crashing_servers();
+            return ping_shards();
         }, 200'000);
 
         std::bernoulli_distribution bdist{0.5};

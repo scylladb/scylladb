@@ -14,7 +14,7 @@
 
 using namespace seastar;
 
-// Calls the given function as fast as the Seastar reactor allows and yields between each call.
+// Calls the given function as fast as the Seastar reactor allows and waits on each call.
 // The function is passed an incrementing integer (incremented by one for each call, starting at 0).
 // The number of ticks can be limited. We crash if the ticker reaches the limit before it's `abort()`ed.
 // Call `start()` to start the ticking.
@@ -32,7 +32,7 @@ public:
         assert(!_ticker);
     }
 
-    using on_tick_t = noncopyable_function<void(uint64_t)>;
+    using on_tick_t = noncopyable_function<future<>(uint64_t)>;
 
     void start(on_tick_t fun, uint64_t limit = std::numeric_limits<uint64_t>::max()) {
         assert(!_ticker);
@@ -54,9 +54,7 @@ private:
                 co_return;
             }
 
-            fun(tick);
-
-            co_await seastar::yield();
+            co_await fun(tick);
         }
 
         _logger.error("ticker: limit reached");
