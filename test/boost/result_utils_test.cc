@@ -471,6 +471,42 @@ SEASTAR_THREAD_TEST_CASE(test_result_try_rethrow_exception) {
     });
 }
 
+SEASTAR_THREAD_TEST_CASE(test_result_try_rethrow_exception_and_do_not_catch_again) {
+    // https://github.com/scylladb/scylla/issues/10211
+    // Makes sure that an exception rethrown in a handler won't be accidentally
+    // caught by another handler, even if the type matches. This is necessary
+    // for consistency with `try` blocks with multiple `catch` handlers.
+    test_result_try_with_policies([] (auto policy) {
+        int handle_count = 0;
+
+        auto handle = [&] (auto f) {
+            handle_count = 0;
+            return policy.do_try(
+                std::move(f),
+                utils::result_catch<foo_exception>([&] (const auto& ex, auto&& handle) {
+                    ++handle_count;
+                    return policy.rethrow(std::move(handle));
+                }),
+                utils::result_catch_dots([&] (auto&& handle) {
+                    ++handle_count;
+                    return policy.rethrow(std::move(handle));
+                })
+            );
+        };
+
+        BOOST_CHECK_EQUAL(handle([&] { return policy.value("success"); }).value(), "success");
+        BOOST_CHECK_EQUAL(handle_count, 0);
+        BOOST_CHECK_EQUAL(handle([&] { return policy.error(foo_exception()); }).error(), exc_container(foo_exception()));
+        BOOST_CHECK_EQUAL(handle_count, 1);
+        BOOST_CHECK_EQUAL(handle([&] { return policy.error(bar_exception()); }).error(), exc_container(bar_exception()));
+        BOOST_CHECK_EQUAL(handle_count, 1);
+        BOOST_CHECK_THROW((void)handle([&] { return policy.exception(foo_exception()); }), foo_exception);
+        BOOST_CHECK_EQUAL(handle_count, 1);
+        BOOST_CHECK_THROW((void)handle([&] { return policy.exception(bar_exception()); }), bar_exception);
+        BOOST_CHECK_EQUAL(handle_count, 1);
+    });
+}
+
 SEASTAR_THREAD_TEST_CASE(test_result_try_handler_precedence) {
     test_result_try_with_policies([] (auto policy) {
         auto handle = [&] (auto f) {
