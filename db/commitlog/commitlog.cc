@@ -268,6 +268,11 @@ public:
     class named_file : public seastar::file {
         sstring _name;
         uint64_t _known_size = 0;
+
+        template<typename Func, typename... Args>
+        auto make_awaiter(future<Args...>, Func func);
+        template<typename Func, typename... Args>
+        struct myawait;
     public:
         named_file(std::string_view name)
             : _name(name)
@@ -279,12 +284,12 @@ public:
 
         // NOT overrides. Nothing virtual. Will rely on exact type
         template <typename CharType>
-        future<size_t> dma_write(uint64_t pos, const CharType* buffer, size_t len, const io_priority_class& pc = default_priority_class(), io_intent* intent = nullptr) noexcept;
-        future<size_t> dma_write(uint64_t pos, std::vector<iovec> iov, const io_priority_class& pc = default_priority_class(), io_intent* intent = nullptr) noexcept;
+        auto dma_write(uint64_t pos, const CharType* buffer, size_t len, const io_priority_class& pc = default_priority_class(), io_intent* intent = nullptr) noexcept;
+        auto dma_write(uint64_t pos, std::vector<iovec> iov, const io_priority_class& pc = default_priority_class(), io_intent* intent = nullptr) noexcept;
 
-        future<> truncate(uint64_t length) noexcept;
-        future<> allocate(uint64_t position, uint64_t length) noexcept;
-        future<> remove_file() noexcept;
+        auto truncate(uint64_t length) noexcept;
+        auto allocate(uint64_t position, uint64_t length) noexcept;
+        auto remove_file() noexcept;
 
         void assign(file&& f, uint64_t size) {
             this->file::operator=(std::move(f));
@@ -484,35 +489,69 @@ future<> db::commitlog::segment_manager::named_file::rename(std::string_view to)
     }
 }
 
+/**
+ * Special awaiter for chaining a callee-continuation (essentially "then") into calling
+ * co-routine frame, by storing the continuation not as a chained task, but a func 
+ * in the returned awaiter. The function is only executed iff we don't except
+ * the base call.
+ * This is a very explicit way to optimize away a then or coroutine frame, the latter
+ * which the compiler really should be able to coalesque, but...
+ */
+template<typename Func, typename... Args>
+struct db::commitlog::segment_manager::named_file::myawait : public seastar::internal::awaiter<true, Args...> {
+    using mybase = seastar::internal::awaiter<true, Args...>;
+    using resume_type = decltype(std::declval<mybase>().await_resume());
+
+    Func _func;
+
+    myawait(future<Args...> f, Func func)
+        : mybase(std::move(f))
+        , _func(std::move(func))
+    {}
+    resume_type await_resume() {
+        if constexpr (std::is_same_v<resume_type, void>) {
+            mybase::await_resume();
+            _func();
+        } else {
+            return _func(mybase::await_resume());
+        }
+    }
+};
+
+template<typename Func, typename... Args>
+auto db::commitlog::segment_manager::named_file::make_awaiter(future<Args...> f, Func func) {
+    return myawait<Func, Args...>(std::move(f), std::move(func));
+}
+
 template <typename CharType>
-future<size_t> db::commitlog::segment_manager::named_file::dma_write(uint64_t pos, const CharType* buffer, size_t len, const io_priority_class& pc, io_intent* intent) noexcept {
-    return file::dma_write(pos, buffer, len, pc, intent).then([this, pos](size_t res) {
+auto db::commitlog::segment_manager::named_file::dma_write(uint64_t pos, const CharType* buffer, size_t len, const io_priority_class& pc, io_intent* intent) noexcept {
+    return make_awaiter(file::dma_write(pos, buffer, len, pc, intent), [this, pos](size_t res) {
         maybe_update_size(pos + res);
         return res;
     });
 }
 
-future<size_t> db::commitlog::segment_manager::named_file::dma_write(uint64_t pos, std::vector<iovec> iov, const io_priority_class& pc, io_intent* intent) noexcept {
-    return file::dma_write(pos, std::move(iov), pc, intent).then([this, pos](size_t res) {
+auto db::commitlog::segment_manager::named_file::dma_write(uint64_t pos, std::vector<iovec> iov, const io_priority_class& pc, io_intent* intent) noexcept {
+    return make_awaiter(file::dma_write(pos, std::move(iov), pc, intent), [this, pos](size_t res) {
         maybe_update_size(pos + res);
         return res;
     });
 }
 
-future<> db::commitlog::segment_manager::named_file::truncate(uint64_t length) noexcept {
-    return file::truncate(length).then([this, length] {
+auto db::commitlog::segment_manager::named_file::truncate(uint64_t length) noexcept {
+    return make_awaiter(file::truncate(length), [this, length] {
         _known_size = length;
     });
 }
 
-future<> db::commitlog::segment_manager::named_file::allocate(uint64_t position, uint64_t length) noexcept {
-    return file::allocate(position, length).then([this, position, length] {
+auto db::commitlog::segment_manager::named_file::allocate(uint64_t position, uint64_t length) noexcept {
+    return make_awaiter(file::allocate(position, length), [this, position, length] {
         _known_size = position + length;
     });
 }
 
-future<> db::commitlog::segment_manager::named_file::remove_file() noexcept {
-    return seastar::remove_file(name()).then([this] {
+auto db::commitlog::segment_manager::named_file::remove_file() noexcept {
+    return make_awaiter(seastar::remove_file(name()), [this] {
         _known_size = 0;
     });
 }
