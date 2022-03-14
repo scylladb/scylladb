@@ -749,8 +749,7 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compa
             };
 
             return with_semaphore(_rewrite_sstables_sem, 1, [this, task, &cf, descriptor = std::move(descriptor), compacting] () mutable {
-              // Take write lock for cf to serialize cleanup/upgrade sstables/scrub with major compaction/reshape/reshard.
-              return with_lock(_compaction_locks[&cf].for_write(), [this, task, &cf, descriptor = std::move(descriptor), compacting] () mutable {
+              return with_lock(_compaction_locks[&cf].for_read(), [this, task, &cf, descriptor = std::move(descriptor), compacting] () mutable {
                 _stats.pending_tasks--;
                 _stats.active_tasks++;
                 task->setup_new_compaction();
