@@ -374,7 +374,7 @@ class background_reclaimer {
 private:
     bool have_work() const {
 #ifndef SEASTAR_DEFAULT_ALLOCATOR
-        return memory::stats().free_memory() < free_memory_threshold;
+        return memory::free_memory() < free_memory_threshold;
 #else
         return false;
 #endif
@@ -400,14 +400,14 @@ private:
             if (_stopping) {
                 break;
             }
-            _reclaim(free_memory_threshold - memory::stats().free_memory());
+            _reclaim(free_memory_threshold - memory::free_memory());
             co_await coroutine::maybe_yield();
         }
         llogger.debug("background_reclaimer::main_loop: exit");
     }
     void adjust_shares() {
         if (have_work()) {
-            auto shares = 1 + (1000 * (free_memory_threshold - memory::stats().free_memory())) / free_memory_threshold;
+            auto shares = 1 + (1000 * (free_memory_threshold - memory::free_memory())) / free_memory_threshold;
             _sg.set_shares(shares);
             llogger.trace("background_reclaimer::adjust_shares: {}", shares);
             if (_main_loop_wait) {
@@ -721,7 +721,7 @@ public:
         return (_layout.end - _segments_base) / segment::size;
     }
     bool can_allocate_more_segments() const noexcept {
-        return memory::stats().free_memory() >= non_lsa_reserve + segment::size;
+        return memory::free_memory() >= non_lsa_reserve + segment::size;
     }
 };
 #else
@@ -2669,7 +2669,7 @@ void allocating_section::reserve(tracker::impl& tracker) {
     pool.refill_emergency_reserve();
 
     while (true) {
-        size_t free = memory::stats().free_memory();
+        size_t free = memory::free_memory();
         if (free >= _std_reserve) {
             break;
         }
