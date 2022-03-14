@@ -14,6 +14,45 @@ import pytest
 import subprocess
 import util
 
+# To run the Scylla tools, we need to run Scylla executable itself, so we
+# need to find the path of the executable that was used to run Scylla for
+# this test. We do this by trying to find a local process which is listening
+# to the address and port to which our our CQL connection is connected.
+# If such a process exists, we verify that it is Scylla, and return the
+# executable's path. If we can't find the Scylla executable we use
+# pytest.skip() to skip tests relying on this executable.
+@pytest.fixture(scope="module")
+def scylla_path(cql):
+    pid = util.local_process_id(cql)
+    if not pid:
+        pytest.skip("Can't find local Scylla process")
+    # Now that we know the process id, use /proc to find the executable.
+    try:
+        path = os.readlink(f'/proc/{pid}/exe')
+    except:
+        pytest.skip("Can't find local Scylla executable")
+    # Confirm that this executable is a real tool-providing Scylla by trying
+    # to run it with the "--list-tools" option
+    try:
+        subprocess.check_output([path, '--list-tools'])
+    except:
+        pytest.skip("Local server isn't Scylla")
+    return path
+
+# A fixture for finding Scylla's data directory. We get it using the CQL
+# interface to Scylla's configuration. Note that if the server is remote,
+# the directory retrieved this way may be irrelevant, whether or not it
+# exists on the local machine... However, if the same test that uses this
+# fixture also uses the scylla_path fixture, the test will anyway be skipped
+# if the running Scylla is not on the local machine local.
+@pytest.fixture(scope="module")
+def scylla_data_dir(cql):
+    try:
+        dir = json.loads(cql.execute("SELECT value FROM system.config WHERE name = 'data_file_directories'").one().value)[0]
+        return dir
+    except:
+        pytest.skip("Can't find Scylla sstable directory")
+
 
 def simple_no_clustering_table(cql, keyspace):
     table = util.unique_name()
@@ -100,19 +139,14 @@ def table_with_counters(cql, keyspace):
         clustering_table_with_udt,
         table_with_counters,
 ])
-def scylla_sstable(request, tmp_path_factory, cql, test_keyspace, scylla_only):
-    workdir = request.config.getoption('workdir')
-    scylla_path = request.config.getoption('scylla_path')
-    if not workdir or not scylla_path:
-        pytest.skip('Cannot run tool tests: workdir and/or scylla_path not provided')
-
+def scylla_sstable(request, tmp_path_factory, cql, test_keyspace, scylla_path, scylla_data_dir):
     table, schema = request.param(cql, test_keyspace)
 
     schema_file = os.path.join(tmp_path_factory.getbasetemp(), "schema.cql")
     with open(schema_file, "w") as f:
         f.write(schema)
 
-    sstables = glob.glob(os.path.join(workdir, 'data', test_keyspace, table + '-*', '*-Data.db'))
+    sstables = glob.glob(os.path.join(scylla_data_dir, test_keyspace, table + '-*', '*-Data.db'))
 
     try:
         yield (scylla_path, schema_file, sstables)
