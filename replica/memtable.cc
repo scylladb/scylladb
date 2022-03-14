@@ -695,8 +695,8 @@ partition_snapshot_ptr memtable_entry::snapshot(memtable& mtbl) {
     return _pe.read(mtbl.region(), mtbl.cleaner(), _schema, no_cache_tracker);
 }
 
-flat_mutation_reader_v2
-memtable::make_flat_reader(schema_ptr s,
+flat_mutation_reader_v2_opt
+memtable::make_flat_reader_opt(schema_ptr s,
                       reader_permit permit,
                       const dht::partition_range& range,
                       const query::partition_slice& slice,
@@ -717,7 +717,7 @@ memtable::make_flat_reader(schema_ptr s,
             }
         });
         if (!snp) {
-            return make_empty_flat_reader_v2(std::move(s), std::move(permit));
+            return {};
         }
         auto dk = pos.as_decorated_key();
 
@@ -761,12 +761,15 @@ memtable::update(db::rp_handle&& h) {
 
 future<>
 memtable::apply(memtable& mt, reader_permit permit) {
-    return with_closeable(mt.make_flat_reader(_schema, std::move(permit)), [this] (auto&& rd) mutable {
-        return consume_partitions(rd, [self = this->shared_from_this(), &rd] (mutation&& m) {
-            self->apply(m);
-            return stop_iteration::no;
+    if (auto reader_opt = mt.make_flat_reader_opt(_schema, std::move(permit), query::full_partition_range, _schema->full_slice())) {
+        return with_closeable(std::move(*reader_opt), [this] (auto&& rd) mutable {
+            return consume_partitions(rd, [self = this->shared_from_this(), &rd] (mutation&& m) {
+                self->apply(m);
+                return stop_iteration::no;
+            });
         });
-    });
+    }
+    [[unlikely]] return make_ready_future<>();
 }
 
 void

@@ -25,6 +25,7 @@
 #include "mutation_cleaner.hh"
 #include "utils/double-decker.hh"
 #include "db/cache_tracker.hh"
+#include "readers/empty.hh"
 
 namespace bi = boost::intrusive;
 
@@ -361,7 +362,22 @@ public:
     // User needs to ensure that the row_cache object stays alive
     // as long as the reader is used.
     // The range must not wrap around.
-    flat_mutation_reader make_reader(schema_ptr,
+    flat_mutation_reader make_reader(schema_ptr s,
+                                     reader_permit permit,
+                                     const dht::partition_range& range,
+                                     const query::partition_slice& slice,
+                                     const io_priority_class& pc = default_priority_class(),
+                                     tracing::trace_state_ptr trace_state = nullptr,
+                                     streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
+                                     mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no) {
+        if (auto reader_opt = make_reader_opt(s, permit, range, slice, pc, std::move(trace_state), fwd, fwd_mr)) {
+            return std::move(*reader_opt);
+        }
+        [[unlikely]] return make_empty_flat_reader(std::move(s), std::move(permit));
+    }
+    // Same as make_reader, but returns an empty optional instead of a no-op reader when there is nothing to
+    // read. This is an optimization.
+    flat_mutation_reader_opt make_reader_opt(schema_ptr,
                                      reader_permit permit,
                                      const dht::partition_range&,
                                      const query::partition_slice&,
