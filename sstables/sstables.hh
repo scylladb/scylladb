@@ -642,8 +642,12 @@ public:
     // of bytes to be read using this stream, we can make better choices
     // about the buffer size to read, and where exactly to stop reading
     // (even when a large buffer size is used).
+    //
+    // When created with `raw_stream::yes`, the sstable data file will be
+    // streamed as-is, without decompressing (if compressed).
+    using raw_stream = bool_class<class raw_stream_tag>;
     input_stream<char> data_stream(uint64_t pos, size_t len, const io_priority_class& pc,
-            reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history);
+            reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history, raw_stream raw = raw_stream::no);
 
     // Read exactly the specific byte range from the data file (after
     // uncompression, if the file is compressed). This can be used to read

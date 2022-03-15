@@ -2306,7 +2306,7 @@ component_type sstable::component_from_sstring(version_types v, sstring &s) {
 }
 
 input_stream<char> sstable::data_stream(uint64_t pos, size_t len, const io_priority_class& pc,
-        reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history) {
+        reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history, raw_stream raw) {
     file_input_stream_options options;
     options.buffer_size = sstable_buffer_size;
     options.io_priority_class = pc;
@@ -2319,7 +2319,7 @@ input_stream<char> sstable::data_stream(uint64_t pos, size_t len, const io_prior
     }
 
     input_stream<char> stream;
-    if (_components->compression) {
+    if (_components->compression && raw == raw_stream::no) {
         if (_version >= sstable_version_types::mc) {
              return make_compressed_file_m_format_input_stream(f, &_components->compression,
                 pos, len, std::move(options));
