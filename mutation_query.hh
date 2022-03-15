@@ -14,6 +14,7 @@
 #include "db/timeout_clock.hh"
 #include "mutation.hh"
 #include "utils/chunked_vector.hh"
+#include "range_tombstone_assembler.hh"
 
 class reconcilable_result;
 class frozen_reconcilable_result;
@@ -132,10 +133,15 @@ class reconcilable_result_builder {
     query::result_memory_accounter _memory_accounter;
     stop_iteration _stop;
     std::optional<streamed_mutation_freezer> _mutation_consumer;
+    range_tombstone_assembler _rt_assembler;
 
     uint64_t _live_rows{};
     // make this the last member so it is destroyed first. #7240
     utils::chunked_vector<partition> _result;
+
+private:
+    stop_iteration consume(range_tombstone&& rt);
+
 public:
     // Expects table schema (non-reversed) and half-reversed (legacy) slice when building results for reverse query.
     reconcilable_result_builder(const schema& s, const query::partition_slice& slice,
@@ -148,7 +154,7 @@ public:
     void consume(tombstone t);
     stop_iteration consume(static_row&& sr, tombstone, bool is_alive);
     stop_iteration consume(clustering_row&& cr, row_tombstone, bool is_alive);
-    stop_iteration consume(range_tombstone&& rt);
+    stop_iteration consume(range_tombstone_change&& rtc);
     stop_iteration consume_end_of_partition();
     reconcilable_result consume_end_of_stream();
 };

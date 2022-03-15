@@ -610,7 +610,7 @@ future<> read_context::save_readers(flat_mutation_reader_v2::tracked_buffer unco
 namespace {
 
 template <typename ResultType>
-using compact_for_result_state = compact_for_query_state<ResultType::only_live>;
+using compact_for_result_state = compact_for_query_state_v2<ResultType::only_live>;
 
 template <typename ResultBuilder>
 requires std::is_nothrow_move_constructible_v<typename ResultBuilder::result_type>
@@ -821,7 +821,7 @@ public:
     void consume(tombstone t) { _builder.consume(t); }
     stop_iteration consume(static_row&& sr, tombstone t, bool is_alive) { return _builder.consume(std::move(sr), t, is_alive); }
     stop_iteration consume(clustering_row&& cr, row_tombstone t, bool is_alive) { return _builder.consume(std::move(cr), t, is_alive); }
-    stop_iteration consume(range_tombstone&& rt) { return _builder.consume(std::move(rt)); }
+    stop_iteration consume(range_tombstone_change&& rtc) { return _builder.consume(std::move(rtc)); }
     stop_iteration consume_end_of_partition()  { return _builder.consume_end_of_partition(); }
     result_type consume_end_of_stream() { return _builder.consume_end_of_stream(); }
 };
@@ -844,7 +844,7 @@ public:
     void consume(tombstone t) { _builder.consume(t); }
     stop_iteration consume(static_row&& sr, tombstone t, bool is_alive) { return _builder.consume(std::move(sr), t, is_alive); }
     stop_iteration consume(clustering_row&& cr, row_tombstone t, bool is_alive) { return _builder.consume(std::move(cr), t, is_alive); }
-    stop_iteration consume(range_tombstone&& rt) { return _builder.consume(std::move(rt)); }
+    stop_iteration consume(range_tombstone_change&& rtc) { return _builder.consume(std::move(rtc)); }
     stop_iteration consume_end_of_partition()  { return _builder.consume_end_of_partition(); }
     result_type consume_end_of_stream() {
         _builder.consume_end_of_stream();

@@ -185,7 +185,7 @@ public:
 class row;
 class static_row;
 class clustering_row;
-class range_tombstone;
+class range_tombstone_change;
 
 // Adds mutation to query::result.
 class mutation_querier {
@@ -207,7 +207,7 @@ public:
     stop_iteration consume(static_row&& sr, tombstone current_tombstone);
     // Requires that cr.has_any_live_data()
     stop_iteration consume(clustering_row&& cr, row_tombstone current_tombstone);
-    stop_iteration consume(range_tombstone&&) { return stop_iteration::no; }
+    stop_iteration consume(range_tombstone_change&&) { return stop_iteration::no; }
     uint64_t consume_end_of_stream();
 };
 
@@ -223,7 +223,7 @@ public:
     void consume(tombstone t);
     stop_iteration consume(static_row&& sr, tombstone t, bool);
     stop_iteration consume(clustering_row&& cr, row_tombstone t, bool);
-    stop_iteration consume(range_tombstone&& rt);
+    stop_iteration consume(range_tombstone_change&& rtc);
     stop_iteration consume_end_of_partition();
     void consume_end_of_stream();
 };
