@@ -779,8 +779,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             mscfg.rpc_memory_limit = std::max<size_t>(0.08 * memory::stats().total_memory(), mscfg.rpc_memory_limit);
 
             const auto& seo = cfg->server_encryption_options();
+            auto encrypt = utils::get_or_default(seo, "internode_encryption", "none");
+
             if (utils::is_true(utils::get_or_default(seo, "require_client_auth", "false"))) {
-                auto encrypt = utils::get_or_default(seo, "internode_encryption", "none");
                 if (encrypt == "dc" || encrypt == "rack") {
                     startlog.warn("Setting require_client_auth is incompatible with 'rack' and 'dc' internode_encryption values."
                         " To ensure that mutual TLS authentication is enforced, please set internode_encryption to 'all'. Continuing with"
@@ -794,6 +795,14 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 mscfg.compress = netw::messaging_service::compress_what::all;
             } else if (compress_what == "dc") {
                 mscfg.compress = netw::messaging_service::compress_what::dc;
+            }
+
+            if (encrypt == "all") {
+                mscfg.encrypt = netw::messaging_service::encrypt_what::all;
+            } else if (encrypt == "dc") {
+                mscfg.encrypt = netw::messaging_service::encrypt_what::dc;
+            } else if (encrypt == "rack") {
+                mscfg.encrypt = netw::messaging_service::encrypt_what::rack;
             }
 
             if (!cfg->inter_dc_tcp_nodelay()) {
@@ -821,9 +830,17 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             scfg.gossip = dbcfg.gossip_scheduling_group;
 
             debug::the_messaging_service = &messaging;
-            netw::init_messaging_service(messaging, std::move(mscfg), std::move(scfg), *cfg);
+
+            std::shared_ptr<seastar::tls::credentials_builder> creds;
+            if (mscfg.encrypt != netw::messaging_service::encrypt_what::none) {
+                creds = std::make_shared<seastar::tls::credentials_builder>();
+                utils::configure_tls_creds_builder(*creds, cfg->server_encryption_options()).get();
+            }
+
+            // Delay listening messaging_service until gossip message handlers are registered
+            messaging.start(mscfg, scfg, creds).get();
             auto stop_ms = defer_verbose_shutdown("messaging service", [&messaging] {
-                netw::uninit_messaging_service(messaging).get();
+                messaging.invoke_on_all(&netw::messaging_service::stop).get();
             });
 
             static sharded<db::system_distributed_keyspace> sys_dist_ks;

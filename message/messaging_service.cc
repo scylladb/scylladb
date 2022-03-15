@@ -1252,38 +1252,4 @@ future<node_ops_cmd_response> messaging_service::send_node_ops_cmd(msg_addr id, 
     return send_message<future<node_ops_cmd_response>>(this, messaging_verb::NODE_OPS_CMD, std::move(id), std::move(req));
 }
 
-void init_messaging_service(sharded<messaging_service>& ms,
-                messaging_service::config mscfg, netw::messaging_service::scheduling_config scfg, const db::config& db_config) {
-    using encrypt_what = messaging_service::encrypt_what;
-    using namespace seastar::tls;
-
-    const auto& ssl_opts = db_config.server_encryption_options();
-    auto encrypt = utils::get_or_default(ssl_opts, "internode_encryption", "none");
-
-    if (encrypt == "all") {
-        mscfg.encrypt = encrypt_what::all;
-    } else if (encrypt == "dc") {
-        mscfg.encrypt = encrypt_what::dc;
-    } else if (encrypt == "rack") {
-        mscfg.encrypt = encrypt_what::rack;
-    }
-
-    std::shared_ptr<credentials_builder> creds;
-
-    if (mscfg.encrypt != encrypt_what::none) {
-        creds = std::make_shared<credentials_builder>();
-        utils::configure_tls_creds_builder(*creds, std::move(ssl_opts)).get();
-    }
-
-    // Init messaging_service
-    // Delay listening messaging_service until gossip message handlers are registered
-
-    ms.start(mscfg, scfg, creds).get();
-}
-
-future<> uninit_messaging_service(sharded<messaging_service>& ms) {
-    // Do not destroy instances for real, as other services need them, just call .stop()
-    return ms.invoke_on_all(&messaging_service::stop);
-}
-
 } // namespace net

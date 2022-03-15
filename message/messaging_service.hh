@@ -520,8 +520,4 @@ public:
     unsigned get_rpc_client_idx(messaging_verb verb) const;
 };
 
-void init_messaging_service(sharded<messaging_service>& ms,
-        messaging_service::config cfg, messaging_service::scheduling_config scheduling_config, const db::config& db_config);
-future<> uninit_messaging_service(sharded<messaging_service>& ms);
-
 } // namespace netw
