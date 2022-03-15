@@ -20,6 +20,6 @@ class mutation_fragment;
 
 using mutation_fragment_opt = optimized_optional<mutation_fragment>;
 
-flat_mutation_reader
+flat_mutation_reader_v2
 make_generating_reader(schema_ptr s, reader_permit permit, std::function<future<mutation_fragment_opt> ()> get_next_fragment);
 

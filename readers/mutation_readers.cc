@@ -908,8 +908,8 @@ public:
     }
 };
 
-flat_mutation_reader make_generating_reader(schema_ptr s, reader_permit permit, std::function<future<mutation_fragment_opt> ()> get_next_fragment) {
-    return make_flat_mutation_reader<generating_reader>(std::move(s), std::move(permit), std::move(get_next_fragment));
+flat_mutation_reader_v2 make_generating_reader(schema_ptr s, reader_permit permit, std::function<future<mutation_fragment_opt> ()> get_next_fragment) {
+    return upgrade_to_v2(make_flat_mutation_reader<generating_reader>(std::move(s), std::move(permit), std::move(get_next_fragment)));
 }
 
 flat_mutation_reader_v2
