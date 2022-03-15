@@ -54,7 +54,6 @@
 #include "concrete_types.hh"
 #include "mutation_rebuilder.hh"
 #include "readers/from_mutations_v2.hh"
-#include "readers/from_mutations.hh"
 #include "readers/from_fragments_v2.hh"
 
 using namespace std::chrono_literals;

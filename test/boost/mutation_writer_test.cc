@@ -17,7 +17,7 @@
 #include "mutation_rebuilder.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "readers/flat_mutation_reader.hh"
-#include "readers/from_mutations.hh"
+#include "readers/from_mutations_v2.hh"
 #include "mutation_writer/multishard_writer.hh"
 #include "mutation_writer/timestamp_based_splitting_writer.hh"
 #include "mutation_writer/partition_based_splitting_writer.hh"
@@ -366,7 +366,7 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer) {
 
     auto permit = semaphore.make_permit();
     auto bucket_readers = boost::copy_range<std::vector<flat_mutation_reader_v2>>(buckets | boost::adaptors::map_values |
-            boost::adaptors::transformed([&random_schema, &permit] (std::vector<mutation> muts) { return upgrade_to_v2(make_flat_mutation_reader_from_mutations(random_schema.schema(), permit, std::move(muts))); }));
+            boost::adaptors::transformed([&random_schema, &permit] (std::vector<mutation> muts) { return make_flat_mutation_reader_from_mutations_v2(random_schema.schema(), permit, std::move(muts)); }));
     auto reader = downgrade_to_v1(make_combined_reader(random_schema.schema(), permit, std::move(bucket_readers), streamed_mutation::forwarding::no,
             mutation_reader::forwarding::no));
     auto close_reader = deferred_close(reader);
@@ -501,7 +501,7 @@ SEASTAR_THREAD_TEST_CASE(test_partition_based_splitting_mutation_writer) {
             }
         });
         for (auto muts : output_mutations) {
-            readers.emplace_back(upgrade_to_v2(make_flat_mutation_reader_from_mutations(random_schema.schema(), semaphore.make_permit(), std::move(muts))));
+            readers.emplace_back(make_flat_mutation_reader_from_mutations_v2(random_schema.schema(), semaphore.make_permit(), std::move(muts)));
         }
         auto rd = assert_that(make_combined_reader(random_schema.schema(), semaphore.make_permit(), std::move(readers)));
         for (const auto& mut : input_mutations) {

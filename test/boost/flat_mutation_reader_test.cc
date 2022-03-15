@@ -820,7 +820,7 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_reader_from_fragments_v2_as_mutation_sour
                 mutation_reader::forwarding) mutable {
             auto get_fragments = [&schema, &permit, &muts] {
                 std::deque<mutation_fragment_v2> fragments;
-                auto rd = upgrade_to_v2(make_flat_mutation_reader_from_mutations(muts.front().schema(), permit, squash_mutations(muts)));
+                auto rd = make_flat_mutation_reader_from_mutations_v2(muts.front().schema(), permit, squash_mutations(muts));
                 auto close_rd = deferred_close(rd);
                 while (auto mfopt = rd().get()) {
                     fragments.emplace_back(std::move(*mfopt));
