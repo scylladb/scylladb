@@ -1240,7 +1240,10 @@ future<flat_mutation_reader> evictable_reader::resume_or_create_reader() {
     if (auto reader_opt = try_resume()) {
         co_return std::move(*reader_opt);
     }
-    co_await _permit.maybe_wait_readmission();
+    // See evictable_reader_v2::resume_or_create_reader()
+    if (_permit.needs_readmission()) {
+        co_await _permit.wait_readmission();
+    }
     co_return recreate_reader();
 }
 
@@ -1773,7 +1776,18 @@ future<flat_mutation_reader_v2> evictable_reader_v2::resume_or_create_reader() {
     if (auto reader_opt = try_resume()) {
         co_return std::move(*reader_opt);
     }
-    co_await _permit.maybe_wait_readmission();
+    // When the reader is created the first time and we are actually resuming a
+    // saved reader in `recreate_reader()`, we have two cases here:
+    // * the reader is still alive (in inactive state)
+    // * the reader was evicted
+    // We check for this below with `needs_readmission()` and it is very
+    // important to not allow for preemption between said check and
+    // `recreate_reader()`, otherwise the reader might be evicted between the
+    // check and `recreate_reader()` and the latter will recreate it without
+    // waiting for re-admission.
+    if (_permit.needs_readmission()) {
+        co_await _permit.wait_readmission();
+    }
     co_return recreate_reader();
 }
 

@@ -134,13 +134,18 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_readmission_preserves
             const auto consumed_resources = semaphore.available_resources();
             semaphore.consume(consumed_resources);
 
-            auto fut = permit->maybe_wait_readmission();
+            auto fut = make_ready_future<>();
+            if (permit->needs_readmission()) {
+                fut = permit->wait_readmission();
+            }
             BOOST_REQUIRE(!fut.available());
 
             semaphore.signal(consumed_resources);
             fut.get();
         } else {
-            permit->maybe_wait_readmission().get();
+            if (permit->needs_readmission()) {
+                permit->wait_readmission().get();
+            }
         }
 
         BOOST_REQUIRE_EQUAL(permit->consumed_resources(), residue_units->resources() + base_resources);
@@ -223,7 +228,9 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_forward_progress) {
             if (auto reader = _permit->semaphore().unregister_inactive_read(std::move(handle)); reader) {
                 _reader = downgrade_to_v1(std::move(*reader));
             } else {
-                co_await _permit->maybe_wait_readmission();
+                if (_permit->needs_readmission()) {
+                    co_await _permit->wait_readmission();
+                }
                 make_reader();
             }
             co_await tick(std::get<flat_mutation_reader>(_reader));
@@ -690,7 +697,10 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
 
         const auto stats_before = semaphore.get_stats();
 
-        auto wait_fut = permit.maybe_wait_readmission();
+        auto wait_fut = make_ready_future<>();
+        if (permit.needs_readmission()) {
+            wait_fut = permit.wait_readmission();
+        }
         wait_fut.wait();
         BOOST_REQUIRE(!wait_fut.failed());
 

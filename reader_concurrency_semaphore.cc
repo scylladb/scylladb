@@ -294,10 +294,11 @@ public:
         }
     }
 
-    future<> maybe_wait_readmission() {
-        if (_state != reader_permit::state::evicted) {
-            return make_ready_future<>();
-        }
+    bool needs_readmission() const {
+        return _state == reader_permit::state::evicted;
+    }
+
+    future<> wait_readmission() {
         return _semaphore.do_wait_admission(shared_from_this());
     }
 
@@ -360,8 +361,12 @@ reader_concurrency_semaphore& reader_permit::semaphore() {
     return _impl->semaphore();
 }
 
-future<> reader_permit::maybe_wait_readmission() {
-    return _impl->maybe_wait_readmission();
+bool reader_permit::needs_readmission() const {
+    return _impl->needs_readmission();
+}
+
+future<> reader_permit::wait_readmission() {
+    return _impl->wait_readmission();
 }
 
 void reader_permit::consume(reader_resources res) {
