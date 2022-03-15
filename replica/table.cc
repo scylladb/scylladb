@@ -1193,6 +1193,10 @@ const sstables::sstable_set& table::get_sstable_set() const {
     return *_main_sstables;
 }
 
+const sstables::sstable_set& table::maintenance_sstable_set() const {
+    return *_maintenance_sstables;
+}
+
 lw_shared_ptr<const sstable_list> table::get_sstables() const {
     return _sstables->all();
 }
