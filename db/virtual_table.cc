@@ -104,21 +104,21 @@ mutation_source streaming_virtual_table::as_mutation_source() {
         // We achieve safety by mediating access through query_restrictions. When the reader
         // dies, pr is cleared and execute() will get an exception.
         struct my_result_collector : public result_collector, public query_restrictions {
-            queue_reader_handle handle;
+            queue_reader_handle_v2 handle;
 
             // Valid until handle.is_terminated(), which is set to true when the
             // queue_reader dies.
             const dht::partition_range* pr;
             mutation_reader::forwarding fwd_mr;
 
-            my_result_collector(schema_ptr s, reader_permit p, const dht::partition_range* pr, queue_reader_handle&& handle)
+            my_result_collector(schema_ptr s, reader_permit p, const dht::partition_range* pr, queue_reader_handle_v2&& handle)
                 : result_collector(s, p)
                 , handle(std::move(handle))
                 , pr(pr)
             { }
 
             // result_collector
-            future<> take(mutation_fragment fragment) override {
+            future<> take(mutation_fragment_v2 fragment) override {
                 return handle.push(std::move(fragment));
             }
 
@@ -131,7 +131,7 @@ mutation_source streaming_virtual_table::as_mutation_source() {
             }
         };
 
-        auto reader_and_handle = make_queue_reader(s, permit);
+        auto reader_and_handle = make_queue_reader_v2(s, permit);
         auto consumer = std::make_unique<my_result_collector>(s, permit, &pr, std::move(reader_and_handle.second));
         auto f = execute(permit, *consumer, *consumer);
 
@@ -146,7 +146,7 @@ mutation_source streaming_virtual_table::as_mutation_source() {
             }
         });
 
-        auto rd = make_slicing_filtering_reader(std::move(reader_and_handle.first), pr, slice);
+        auto rd = make_slicing_filtering_reader(downgrade_to_v1(std::move(reader_and_handle.first)), pr, slice);
 
         if (!_shard_aware) {
             rd = downgrade_to_v1(make_filtering_reader(upgrade_to_v2(std::move(rd)), [this] (const dht::decorated_key& dk) -> bool {
@@ -167,15 +167,15 @@ mutation_source streaming_virtual_table::as_mutation_source() {
 }
 
 future<> result_collector::emit_partition_start(dht::decorated_key dk) {
-        return take(mutation_fragment(*_schema, _permit, partition_start(std::move(dk), {})));
+        return take(mutation_fragment_v2(*_schema, _permit, partition_start(std::move(dk), {})));
 }
 
 future<> result_collector::emit_partition_end() {
-    return take(mutation_fragment(*_schema, _permit, partition_end()));
+    return take(mutation_fragment_v2(*_schema, _permit, partition_end()));
 }
 
 future<> result_collector::emit_row(clustering_row&& cr) {
-    return take(mutation_fragment(*_schema, _permit, std::move(cr)));
+    return take(mutation_fragment_v2(*_schema, _permit, std::move(cr)));
 }
 
 future<> virtual_table::apply(const frozen_mutation&) {

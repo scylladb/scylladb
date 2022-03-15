@@ -72,7 +72,7 @@ public:
 
     // Subsequent calls should pass fragments which form a valid mutation fragment stream (see mutation_fragment.hh).
     // Concurrent calls not allowed.
-    virtual future<> take(mutation_fragment) = 0;
+    virtual future<> take(mutation_fragment_v2) = 0;
 
 public: // helpers
     future<> emit_partition_start(dht::decorated_key dk);
