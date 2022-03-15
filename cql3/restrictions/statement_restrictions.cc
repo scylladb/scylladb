@@ -1164,8 +1164,8 @@ std::vector<query::clustering_range> get_single_column_clustering_bounds(
             if (list->empty()) { // Impossible condition -- no rows can possibly match.
                 return {};
             }
-            prior_column_values.push_back(*list);
             product_size *= list->size();
+            prior_column_values.push_back(std::move(*list));
             error_if_exceeds(product_size, size_limit);
         } else if (auto last_range = std::get_if<nonwrapping_interval<managed_bytes>>(&values)) {
             // Must be the last column in the prefix, since it's neither EQ nor IN.
