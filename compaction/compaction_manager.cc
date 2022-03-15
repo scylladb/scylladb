@@ -1012,10 +1012,12 @@ class compaction_manager::rewrite_sstables_compaction_task : public compaction_m
     can_purge_tombstones _can_purge;
 
 public:
-    rewrite_sstables_compaction_task(compaction_manager& mgr, replica::table* t, sstables::compaction_type_options options, std::vector<sstables::shared_sstable> sstables, can_purge_tombstones can_purge)
+    rewrite_sstables_compaction_task(compaction_manager& mgr, replica::table* t, sstables::compaction_type_options options,
+                                     std::vector<sstables::shared_sstable> sstables, compacting_sstable_registration compacting,
+                                     can_purge_tombstones can_purge)
         : sstables_task(mgr, t, options.type(), sstring(sstables::to_string(options.type())), std::move(sstables))
         , _options(std::move(options))
-        , _compacting(mgr, _sstables)
+        , _compacting(std::move(compacting))
         , _can_purge(can_purge)
     {}
 
@@ -1083,8 +1085,12 @@ future<> compaction_manager::rewrite_sstables(replica::table* t, sstables::compa
     // in the re-write, we need to barrier out any previously running
     // compaction.
     std::vector<sstables::shared_sstable> sstables;
-    co_await run_with_compaction_disabled(t, [this, &sstables, get_func = std::move(get_func)] () -> future<> {
+    compacting_sstable_registration compacting(*this);
+    co_await run_with_compaction_disabled(t, [this, &sstables, &compacting, get_func = std::move(get_func)] () -> future<> {
+        // Getting sstables and registering them as compacting must be atomic, to avoid a race condition where
+        // regular compaction runs in between and picks the same files.
         sstables = co_await get_func();
+        compacting.register_compacting(sstables);
 
         // sort sstables by size in descending order, such that the smallest files will be rewritten first
         // (as sstable to be rewritten is popped off from the back of container), so rewrite will have higher
@@ -1093,7 +1099,7 @@ future<> compaction_manager::rewrite_sstables(replica::table* t, sstables::compa
             return a->data_size() > b->data_size();
         });
     });
-    co_await perform_task(seastar::make_shared<rewrite_sstables_compaction_task>(*this, t, std::move(options), std::move(sstables), can_purge));
+    co_await perform_task(seastar::make_shared<rewrite_sstables_compaction_task>(*this, t, std::move(options), std::move(sstables), std::move(compacting), can_purge));
 }
 
 class compaction_manager::validate_sstables_compaction_task : public compaction_manager::sstables_task {
