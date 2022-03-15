@@ -2710,6 +2710,35 @@ void compare_readers(const schema& s, flat_mutation_reader authority, flat_mutat
     }
 }
 
+static bool compare_readers(const schema& s, flat_mutation_reader_v2& authority, flat_reader_assertions_v2& tested) {
+    bool empty = true;
+    while (auto expected = authority().get()) {
+        tested.produces(s, *expected);
+        empty = false;
+    }
+    tested.produces_end_of_stream();
+    return !empty;
+}
+
+void compare_readers(const schema& s, flat_mutation_reader_v2 authority, flat_mutation_reader_v2 tested) {
+    auto close_authority = deferred_close(authority);
+    auto assertions = assert_that(std::move(tested));
+    compare_readers(s, authority, assertions);
+}
+
+// Assumes that the readers return fragments from (at most) a single (and the same) partition.
+void compare_readers(const schema& s, flat_mutation_reader_v2 authority, flat_mutation_reader_v2 tested, const std::vector<position_range>& fwd_ranges) {
+    auto close_authority = deferred_close(authority);
+    auto assertions = assert_that(std::move(tested));
+    if (compare_readers(s, authority, assertions)) {
+        for (auto& r: fwd_ranges) {
+            authority.fast_forward_to(r).get();
+            assertions.fast_forward_to(r);
+            compare_readers(s, authority, assertions);
+        }
+    }
+}
+
 mutation forwardable_reader_to_mutation(flat_mutation_reader r, const std::vector<position_range>& fwd_ranges) {
     auto close_reader = deferred_close(r);
 
