@@ -7,7 +7,6 @@
  */
 #include "service/raft/raft_group0.hh"
 #include "service/raft/raft_rpc.hh"
-#include "service/raft/raft_gossip_failure_detector.hh"
 #include "service/raft/raft_sys_table_storage.hh"
 #include "service/raft/group0_state_machine.hh"
 
