@@ -41,9 +41,9 @@ public:
             do_for_each(_mutations, [mt] (const mutation& m) {
                 mt->apply(m);
             }).get();
-            auto rdr = downgrade_to_v1(mt->make_flat_reader(_s, permit));
+            auto rdr = mt->make_flat_reader(_s, permit);
             auto close_rdr = deferred_close(rdr);
-            rdr.consume_pausable([&rc] (mutation_fragment mf) {
+            rdr.consume_pausable([&rc] (mutation_fragment_v2 mf) {
                 return rc.take(std::move(mf)).then([] { return stop_iteration::no; });
             }).get();
         });
