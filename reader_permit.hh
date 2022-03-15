@@ -134,7 +134,10 @@ public:
 
     reader_concurrency_semaphore& semaphore();
 
-    future<> maybe_wait_readmission();
+    bool needs_readmission() const;
+
+    // Call only when needs_readmission() = true.
+    future<> wait_readmission();
 
     void consume(reader_resources res);
 
