@@ -439,9 +439,6 @@ private:
     // sstables deleted by compaction in parallel, a race condition which could
     // easily result in failure.
     seastar::named_semaphore _sstable_deletion_sem = {1, named_semaphore_exception_factory{"sstable deletion"}};
-    // This semaphore ensures that off-strategy compaction will be serialized and also
-    // protects against candidates being picked more than once.
-    seastar::named_semaphore _off_strategy_sem = {1, named_semaphore_exception_factory{"off-strategy compaction"}};
     // Ensures that concurrent updates to sstable set will work correctly
     seastar::named_semaphore _sstable_set_mutation_sem = {1, named_semaphore_exception_factory{"sstable set mutation"}};
     mutable row_cache _cache; // Cache covers only sstables.
@@ -590,11 +587,14 @@ private:
     static int64_t calculate_shard_from_sstable_generation(int64_t sstable_generation) {
         return sstable_generation % smp::count;
     }
-
+public:
+    // This will update sstable lists on behalf of off-strategy compaction, where
+    // input files will be removed from the maintenance set and output files will
+    // be inserted into the main set.
     future<>
     update_sstable_lists_on_off_strategy_completion(const std::vector<sstables::shared_sstable>& old_maintenance_sstables,
                                                     const std::vector<sstables::shared_sstable>& new_main_sstables);
-public:
+
     // Rebuild sstable set, delete input sstables right away, and update row cache and statistics.
     void on_compaction_completion(sstables::compaction_completion_desc& desc);
 private:
@@ -900,7 +900,6 @@ public:
     // a future<bool> that is resolved when offstrategy_compaction completes.
     // The future value is true iff offstrategy compaction was required.
     future<bool> perform_offstrategy_compaction();
-    future<> run_offstrategy_compaction(sstables::compaction_data& info);
     void set_compaction_strategy(sstables::compaction_strategy_type strategy);
     const sstables::compaction_strategy& get_compaction_strategy() const {
         return _compaction_strategy;

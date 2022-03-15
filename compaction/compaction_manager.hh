@@ -68,6 +68,10 @@ private:
         // Raised by any function running under run_with_compaction_disabled();
         long compaction_disabled_counter = 0;
 
+        // This semaphore ensures that off-strategy compaction will be serialized for
+        // a given table, protecting against candidates being picked more than once.
+        seastar::named_semaphore off_strategy_sem = {1, named_semaphore_exception_factory{"off-strategy compaction"}};
+
         bool compaction_disabled() const noexcept {
             return compaction_disabled_counter > 0;
         }

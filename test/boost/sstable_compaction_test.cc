@@ -4158,8 +4158,7 @@ SEASTAR_TEST_CASE(test_offstrategy_sstable_compaction) {
                 auto sst = make_sstable_containing(sst_gen, {mut});
                 cf->add_sstable_and_update_cache(std::move(sst), sstables::offstrategy::yes).get();
             }
-            auto info = make_lw_shared<sstables::compaction_data>();
-            cf->run_offstrategy_compaction(*info).get();
+            BOOST_REQUIRE(cf->perform_offstrategy_compaction().get0());
         }
     });
 }

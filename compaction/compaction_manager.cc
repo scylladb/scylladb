@@ -21,6 +21,7 @@
 #include "utils/UUID_gen.hh"
 #include <cmath>
 #include <boost/algorithm/cxx11/any_of.hpp>
+#include <boost/range/algorithm/remove_if.hpp>
 
 static logging::logger cmlog("compaction_manager");
 using namespace std::chrono_literals;
@@ -887,6 +888,85 @@ public:
         : task(mgr, t, sstables::compaction_type::Reshape, "Offstrategy compaction")
     {}
 
+    future<> run_offstrategy_compaction(sstables::compaction_data& cdata) {
+        // This procedure will reshape sstables in maintenance set until it's ready for
+        // integration into main set.
+        // It may require N reshape rounds before the set satisfies the strategy invariant.
+        // This procedure also only updates maintenance set at the end, on success.
+        // Otherwise, some overlapping could be introduced in the set after each reshape
+        // round, progressively degrading read amplification until integration happens.
+        // The drawback of this approach is the 2x space requirement as the old sstables
+        // will only be deleted at the end. The impact of this space requirement is reduced
+        // by the fact that off-strategy is serialized across all tables, meaning that the
+        // actual requirement is the size of the largest table's maintenance set.
+
+        auto sem_unit = co_await seastar::get_units(_compaction_state.off_strategy_sem, 1);
+
+        replica::table& t = *_compacting_table;
+        const auto& maintenance_sstables = t.maintenance_sstable_set();
+
+        cmlog.info("Starting off-strategy compaction for {}.{}, {} candidates were found",
+                     t.schema()->ks_name(), t.schema()->cf_name(), maintenance_sstables.all()->size());
+
+        const auto old_sstables = boost::copy_range<std::vector<sstables::shared_sstable>>(*maintenance_sstables.all());
+        std::vector<sstables::shared_sstable> reshape_candidates = old_sstables;
+        std::vector<sstables::shared_sstable> sstables_to_remove;
+        std::unordered_set<sstables::shared_sstable> new_unused_sstables;
+
+        auto cleanup_new_unused_sstables_on_failure = defer([&new_unused_sstables] {
+            for (auto& sst : new_unused_sstables) {
+                sst->mark_for_deletion();
+            }
+        });
+
+        for (;;) {
+            auto& iop = service::get_local_streaming_priority(); // run reshape in maintenance mode
+            auto desc = t.get_compaction_strategy().get_reshaping_job(reshape_candidates, t.schema(), iop, sstables::reshape_mode::strict);
+            if (desc.sstables.empty()) {
+                // at this moment reshape_candidates contains a set of sstables ready for integration into main set
+                co_await t.update_sstable_lists_on_off_strategy_completion(old_sstables, reshape_candidates);
+                break;
+            }
+
+            desc.creator = [this, &new_unused_sstables, &t] (shard_id dummy) {
+                auto sst = t.make_sstable();
+                new_unused_sstables.insert(sst);
+                return sst;
+            };
+            auto input = boost::copy_range<std::unordered_set<sstables::shared_sstable>>(desc.sstables);
+
+            auto ret = co_await sstables::compact_sstables(std::move(desc), cdata, t.as_table_state());
+
+            // update list of reshape candidates without input but with output added to it
+            auto it = boost::remove_if(reshape_candidates, [&] (auto& s) { return input.contains(s); });
+            reshape_candidates.erase(it, reshape_candidates.end());
+            std::move(ret.new_sstables.begin(), ret.new_sstables.end(), std::back_inserter(reshape_candidates));
+
+            // If compaction strategy is unable to reshape input data in a single round, it may happen that a SSTable A
+            // created in round 1 will be compacted in a next round producing SSTable B. As SSTable A is no longer needed,
+            // it can be removed immediately. Let's remove all such SSTables immediately to reduce off-strategy space requirement.
+            // Input SSTables from maintenance set can only be removed later, as SSTable sets are only updated on completion.
+            auto can_remove_now = [&] (const sstables::shared_sstable& s) { return new_unused_sstables.contains(s); };
+            for (auto&& sst : input) {
+                if (can_remove_now(sst)) {
+                    co_await sst->unlink();
+                    new_unused_sstables.erase(std::move(sst));
+                } else {
+                    sstables_to_remove.push_back(std::move(sst));
+                }
+            }
+        }
+
+        cleanup_new_unused_sstables_on_failure.cancel();
+        // By marking input sstables for deletion instead, the ones which require view building will stay in the staging
+        // directory until they're moved to the main dir when the time comes. Also, that allows view building to resume
+        // on restart if there's a crash midway.
+        for (auto& sst : sstables_to_remove) {
+            sst->mark_for_deletion();
+        }
+
+        cmlog.info("Done with off-strategy compaction for {}.{}", t.schema()->ks_name(), t.schema()->cf_name());
+    }
 protected:
     virtual future<> do_run() override {
         co_await coroutine::switch_to(_cm._maintenance_sg.cpu);
@@ -904,7 +984,7 @@ protected:
 
             std::exception_ptr ex;
             try {
-                co_await _compacting_table->run_offstrategy_compaction(_compaction_data);
+                co_await run_offstrategy_compaction(_compaction_data);
                 finish_compaction();
                 co_return;
             } catch (...) {
