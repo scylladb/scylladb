@@ -1001,12 +1001,8 @@ bool is_supported_by(const expression& expr, const secondary_index::index& idx) 
                         },
                         [&] (const token&) { return false; },
                         [&] (const subscript& s) -> bool {
-                            // FIXME: This seems wrong, should probably just return false.
                             // We don't support indexes on map entries yet.
-                            // For now behaviour copied from column_value& handler to preserve behaviour.
-                            // Fill be fixed soon in a separate patch.
-                            const column_value& col = get_subscripted_column(s);
-                            return idx.supports_expression(*col.col, oper.op);
+                            return false;
                         },
                         [&] (const binary_operator&) -> bool {
                             on_internal_error(expr_logger, "is_supported_by: nested binary operators are not supported");
