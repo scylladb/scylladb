@@ -367,8 +367,8 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer) {
     auto permit = semaphore.make_permit();
     auto bucket_readers = boost::copy_range<std::vector<flat_mutation_reader_v2>>(buckets | boost::adaptors::map_values |
             boost::adaptors::transformed([&random_schema, &permit] (std::vector<mutation> muts) { return make_flat_mutation_reader_from_mutations_v2(random_schema.schema(), permit, std::move(muts)); }));
-    auto reader = downgrade_to_v1(make_combined_reader(random_schema.schema(), permit, std::move(bucket_readers), streamed_mutation::forwarding::no,
-            mutation_reader::forwarding::no));
+    auto reader = make_combined_reader(random_schema.schema(), permit, std::move(bucket_readers), streamed_mutation::forwarding::no,
+            mutation_reader::forwarding::no);
     auto close_reader = deferred_close(reader);
 
     const auto now = gc_clock::now();
