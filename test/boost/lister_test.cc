@@ -148,7 +148,7 @@ SEASTAR_TEST_CASE(test_directory_lister) {
             break;
         }
         default:
-            BOOST_FAIL(fmt::format("Unexpected directory_entry_type: {}", *de->type));
+            BOOST_FAIL(fmt::format("Unexpected directory_entry_type: {}", static_cast<int>(*de->type)));
         }
     }
 

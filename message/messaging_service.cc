@@ -411,7 +411,7 @@ future<> messaging_service::stop() {
             for (auto verb = messaging_verb::MUTATION; verb < messaging_verb::LAST;
                     verb = messaging_verb(int(verb) + 1)) {
                 if (_rpc->has_handler(verb)) {
-                    mlogger.error(" - {}", verb);
+                    mlogger.error(" - {}", static_cast<int>(verb));
                 }
             }
 
