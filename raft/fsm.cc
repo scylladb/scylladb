@@ -44,10 +44,10 @@ fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log,
         failure_detector& failure_detector, fsm_config config) :
         fsm(id, current_term, voted_for, std::move(log), index_t{0}, failure_detector, config) {}
 
-future<> fsm::wait_max_log_size() {
+future<> fsm::wait_max_log_size(seastar::abort_source* as) {
     check_is_leader();
 
-   return leader_state().log_limiter_semaphore->wait();
+    return as ? leader_state().log_limiter_semaphore->wait(*as) : leader_state().log_limiter_semaphore->wait();
 }
 
 const configuration& fsm::get_configuration() const {

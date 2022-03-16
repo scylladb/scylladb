@@ -178,7 +178,7 @@ void raft_rpc::read_quorum_reply(raft::server_id from, raft::read_quorum_reply c
 }
 
 future<raft::read_barrier_reply> raft_rpc::execute_read_barrier(raft::server_id from) {
-    return _client->execute_read_barrier(from);
+    return _client->execute_read_barrier(from, nullptr);
 }
 
 future<raft::snapshot_reply> raft_rpc::apply_snapshot(raft::server_id from, raft::install_snapshot snp) {
@@ -190,13 +190,13 @@ future<raft::snapshot_reply> raft_rpc::apply_snapshot(raft::server_id from, raft
 }
 
 future<raft::add_entry_reply> raft_rpc::execute_add_entry(raft::server_id from, raft::command cmd) {
-    return _client->execute_add_entry(from, std::move(cmd));
+    return _client->execute_add_entry(from, std::move(cmd), nullptr);
 }
 
 future<raft::add_entry_reply> raft_rpc::execute_modify_config(raft::server_id from,
     std::vector<raft::server_address> add,
     std::vector<raft::server_id> del) {
-    return _client->execute_modify_config(from, std::move(add), std::move(del));
+    return _client->execute_modify_config(from, std::move(add), std::move(del), nullptr);
 }
 
 } // end of namespace service

@@ -466,7 +466,7 @@ public:
             ++_read_barrier_executions;
             (void)[] (rpc& self, raft::server_id src, execute_barrier_on_leader m, gate::holder holder) -> future<> {
                 try {
-                    auto reply = co_await self._client->execute_read_barrier(src);
+                    auto reply = co_await self._client->execute_read_barrier(src, nullptr);
 
                     self._send(src, execute_barrier_on_leader_reply{
                         .reply = std::move(reply),
@@ -498,7 +498,7 @@ public:
             ++_add_entry_executions;
             (void)[] (rpc& self, raft::server_id src, add_entry_message m, gate::holder holder) -> future<> {
                 try {
-                    auto reply = co_await self._client->execute_add_entry(src, std::move(m.cmd));
+                    auto reply = co_await self._client->execute_add_entry(src, std::move(m.cmd), nullptr);
 
                     self._send(src, add_entry_reply_message{
                         .reply = std::move(reply),
@@ -530,7 +530,7 @@ public:
             ++_modify_config_executions;
             (void)[] (rpc& self, raft::server_id src, modify_config_message m, gate::holder holder) -> future<> {
                 try {
-                    auto reply = co_await self._client->execute_modify_config(src, std::move(m.add), std::move(m.del));
+                    auto reply = co_await self._client->execute_modify_config(src, std::move(m.add), std::move(m.del), nullptr);
 
                     self._send(src, add_entry_reply_message{
                         .reply = std::move(reply),

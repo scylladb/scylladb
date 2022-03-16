@@ -257,6 +257,10 @@ struct no_other_voting_member : public error {
     no_other_voting_member() : error("Cannot stepdown because there is no other voting member") {}
 };
 
+struct request_aborted : public error {
+    request_aborted() : error("Request is aborted by a caller") {}
+};
+
 // True if a failure to execute a Raft operation can be re-tried,
 // perhaps with a different server.
 inline bool is_transient_error(const std::exception& e) {
@@ -580,18 +584,18 @@ public:
     virtual future<snapshot_reply> apply_snapshot(server_id from, install_snapshot snp) = 0;
 
     // Try to execute read barrier, future resolves when the barrier is completed or error happens
-    virtual future<read_barrier_reply> execute_read_barrier(server_id from) = 0;
+    virtual future<read_barrier_reply> execute_read_barrier(server_id from, seastar::abort_source* as) = 0;
 
     // An endpoint on the leader to add an entry to the raft log,
     // as requested by a remote follower.
-    virtual future<add_entry_reply> execute_add_entry(server_id from, command cmd) = 0;
+    virtual future<add_entry_reply> execute_add_entry(server_id from, command cmd, seastar::abort_source* as) = 0;
 
     // An endpoint on the leader to change configuration,
     // as requested by a remote follower.
     // If the future resolves successfully, a dummy entry was committed after the configuration change.
     virtual future<add_entry_reply> execute_modify_config(server_id from,
         std::vector<server_address> add,
-        std::vector<server_id> del) = 0;
+        std::vector<server_id> del, seastar::abort_source* as) = 0;
 
     // Update RPC implementation with this client as
     // the receiver of RPC input.

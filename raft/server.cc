@@ -32,6 +32,7 @@ struct active_read {
     read_id id;
     index_t idx;
     seastar::promise<read_barrier_reply> promise;
+    optimized_optional<abort_source::subscription> abort;
 };
 
 static const seastar::metrics::label server_id_label("id");
@@ -56,21 +57,21 @@ public:
     void timeout_now_request(server_id from, timeout_now timeout_now) override;
     void read_quorum_request(server_id from, struct read_quorum read_quorum) override;
     void read_quorum_reply(server_id from, struct read_quorum_reply read_quorum_reply) override;
-    future<read_barrier_reply> execute_read_barrier(server_id) override;
-    future<add_entry_reply> execute_add_entry(server_id from, command cmd) override;
+    future<read_barrier_reply> execute_read_barrier(server_id, seastar::abort_source* as) override;
+    future<add_entry_reply> execute_add_entry(server_id from, command cmd, seastar::abort_source* as) override;
     future<add_entry_reply> execute_modify_config(server_id from,
-        std::vector<server_address> add, std::vector<server_id> del) override;
+        std::vector<server_address> add, std::vector<server_id> del, seastar::abort_source* as) override;
     future<snapshot_reply> apply_snapshot(server_id from, install_snapshot snp) override;
 
 
     // server interface
-    future<> add_entry(command command, wait_type type) override;
-    future<> set_configuration(server_address_set c_new) override;
+    future<> add_entry(command command, wait_type type, seastar::abort_source* as = nullptr) override;
+    future<> set_configuration(server_address_set c_new, seastar::abort_source* as = nullptr) override;
     raft::configuration get_configuration() const override;
     future<> start() override;
     future<> abort() override;
     term_t get_current_term() const override;
-    future<> read_barrier() override;
+    future<> read_barrier(seastar::abort_source* as = nullptr) override;
     void wait_until_candidate() override;
     future<> wait_election_done() override;
     future<> wait_log_idx_term(std::pair<index_t, term_t> idx_log) override;
@@ -80,8 +81,8 @@ public:
     void tick() override;
     raft::server_id id() const override;
     future<> stepdown(logical_clock::duration timeout) override;
-    future<> modify_config(std::vector<server_address> add, std::vector<server_id> del) override;
-    future<entry_id> add_entry_on_leader(command command);
+    future<> modify_config(std::vector<server_address> add, std::vector<server_id> del, seastar::abort_source* as = nullptr) override;
+    future<entry_id> add_entry_on_leader(command command, seastar::abort_source* as);
     void register_metrics() override;
 private:
     std::unique_ptr<rpc> _rpc;
@@ -145,6 +146,7 @@ private:
     struct op_status {
         term_t term; // term the entry was added with
         promise<> done; // notify when done here
+        optimized_optional<seastar::abort_source::subscription> abort; // abort subscription
     };
 
     // Entries that have a waiter that needs to be notified when the
@@ -205,7 +207,7 @@ private:
     // in-memory log. This allows to avoid deadlocks when
     // automatically appending a non-joint configuration
     // and makes set_configuration() safe from preemption.
-    template <typename T> future<> add_entry_internal(T command, wait_type type);
+    template <typename T> future<> add_entry_internal(T command, wait_type type, seastar::abort_source* as);
     template <typename Message> void send_message(server_id id, Message m);
 
     // Abort all snapshot transfer.
@@ -248,20 +250,20 @@ private:
     void remove_from_rpc_config(const server_address& srv);
 
     // A helper to wait for a leader to get elected
-    future<> wait_for_leader();
+    future<> wait_for_leader(seastar::abort_source* as);
 
     // Get "safe to read" index from a leader
-    future<read_barrier_reply> get_read_idx(server_id leader);
+    future<read_barrier_reply> get_read_idx(server_id leader, seastar::abort_source* as);
     // Wait for an entry with a specific term to get committed or
     // applied locally.
-    future<> wait_for_entry(entry_id eid, wait_type type);
+    future<> wait_for_entry(entry_id eid, wait_type type, seastar::abort_source* as);
     // Wait for a read barrier index to be applied. The index
     // is typically already committed, so we don't worry about the
     // term.
     future<> wait_for_apply(index_t idx);
     // Set configuration but don't wait for transition joint ->
     // non_joint.
-    future<> enter_joint_configuration(server_address_set c_new);
+    future<> enter_joint_configuration(server_address_set c_new, seastar::abort_source* as);
 
     friend std::ostream& operator<<(std::ostream& os, const server_impl& s);
 };
@@ -329,14 +331,14 @@ future<> server_impl::start() {
     co_return;
 }
 
-future<> server_impl::wait_for_leader() {
+future<> server_impl::wait_for_leader(seastar::abort_source* as) {
     if (!_leader_promise) {
         _leader_promise.emplace();
     }
-    return _leader_promise->get_shared_future();
+    return as ? _leader_promise->get_shared_future(*as) : _leader_promise->get_shared_future();
 }
 
-future<> server_impl::wait_for_entry(entry_id eid, wait_type type) {
+future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abort_source* as) {
     // The entry may have been already committed and even applied
     // in case it was forwarded to the leader. In this case
     // waiting for it is futile.
@@ -359,6 +361,10 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type) {
 
     if (_aborted) {
         throw stopped_error();
+    }
+
+    if (as && as->abort_requested()) {
+        throw request_aborted();
     }
 
     auto& container = type == wait_type::committed ? _awaited_commits : _awaited_applies;
@@ -405,22 +411,29 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type) {
         }
     }
     assert(inserted);
+    if (as) {
+        it->second.abort = as->subscribe([it = it, &container] () noexcept {
+            it->second.done.set_exception(request_aborted());
+            container.erase(it);
+        });
+        assert(it->second.abort);
+    }
     co_await it->second.done.get_future();
     logger.trace("[{}] done waiting for {}.{}", id(), eid.term, eid.idx);
     co_return;
 }
 
 template <typename T>
-future<> server_impl::add_entry_internal(T command, wait_type type) {
+future<> server_impl::add_entry_internal(T command, wait_type type, seastar::abort_source* as) {
     // Must not preempt before adding entry, the caller, such as
     // set_configuration(), relies on it.
     const log_entry& e = _fsm->add_entry(std::move(command));
-    co_return co_await wait_for_entry({.term = e.term, .idx = e.idx}, type);
+    co_return co_await wait_for_entry({.term = e.term, .idx = e.idx}, type, as);
 }
 
-future<entry_id> server_impl::add_entry_on_leader(command cmd) {
+future<entry_id> server_impl::add_entry_on_leader(command cmd, seastar::abort_source* as) {
     // Wait for a new slot to become available
-    co_await _fsm->wait_max_log_size();
+    co_await _fsm->wait_max_log_size(as);
     logger.trace("[{}] adding entry after log size limit check", id());
 
     const log_entry& e = _fsm->add_entry(std::move(cmd));
@@ -428,7 +441,7 @@ future<entry_id> server_impl::add_entry_on_leader(command cmd) {
     co_return entry_id{.term = e.term, .idx = e.idx};
 }
 
-future<add_entry_reply> server_impl::execute_add_entry(server_id from, command cmd) {
+future<add_entry_reply> server_impl::execute_add_entry(server_id from, command cmd, seastar::abort_source* as) {
     if (from != _id && !_fsm->get_configuration().contains(from)) {
         // Do not accept entries from servers removed from the
         // configuration.
@@ -436,13 +449,13 @@ future<add_entry_reply> server_impl::execute_add_entry(server_id from, command c
     }
     logger.trace("[{}] adding a forwarded entry from {}", id(), from);
     try {
-        co_return add_entry_reply{co_await add_entry_on_leader(std::move(cmd))};
+        co_return add_entry_reply{co_await add_entry_on_leader(std::move(cmd), as)};
     } catch (raft::not_a_leader& e) {
         co_return add_entry_reply{e};
     }
 }
 
-future<> server_impl::add_entry(command command, wait_type type) {
+future<> server_impl::add_entry(command command, wait_type type, seastar::abort_source* as) {
     _stats.add_command++;
     server_id leader = _fsm->current_leader();
     logger.trace("[{}] an entry is submitted", id());
@@ -450,13 +463,16 @@ future<> server_impl::add_entry(command command, wait_type type) {
         if (leader != _id) {
             throw not_a_leader{leader};
         }
-        auto eid = co_await add_entry_on_leader(std::move(command));
-        co_return co_await wait_for_entry(eid, type);
+        auto eid = co_await add_entry_on_leader(std::move(command), as);
+        co_return co_await wait_for_entry(eid, type, as);
     }
     while (true) {
+        if (as && as->abort_requested()) {
+            throw request_aborted();
+        }
         if (leader == server_id{}) {
             logger.trace("[{}] the leader is unknown, waiting through uncertainty", id());
-            co_await wait_for_leader();
+            co_await wait_for_leader(as);
             leader = _fsm->current_leader();
         } else {
             auto reply = co_await [&] {
@@ -464,14 +480,14 @@ future<> server_impl::add_entry(command command, wait_type type) {
                     logger.trace("[{}] an entry proceeds on a leader", id());
                     // Make a copy of the command since we may still
                     // retry and forward it.
-                    return execute_add_entry(leader, command);
+                    return execute_add_entry(leader, command, as);
                 } else {
                     logger.trace("[{}] forwarding the entry to {}", id(), leader);
                     return _rpc->send_add_entry(leader, command);
                 }
             }();
             if (std::holds_alternative<raft::entry_id>(reply)) {
-                co_return co_await wait_for_entry(std::get<raft::entry_id>(reply), type);
+                co_return co_await wait_for_entry(std::get<raft::entry_id>(reply), type, as);
             }
             leader = std::get<raft::not_a_leader>(reply).leader;
         }
@@ -479,7 +495,7 @@ future<> server_impl::add_entry(command command, wait_type type) {
 }
 
 future<add_entry_reply> server_impl::execute_modify_config(server_id from,
-    std::vector<server_address> add, std::vector<server_id> del) {
+    std::vector<server_address> add, std::vector<server_id> del, seastar::abort_source* as) {
 
     if (from != _id && !_fsm->get_configuration().contains(from)) {
         // Do not accept entries from servers removed from the
@@ -509,10 +525,10 @@ future<add_entry_reply> server_impl::execute_modify_config(server_id from,
             logger.trace("[{}] removing server {}", id(), to_remove);
             cfg.erase(server_address{.id = to_remove});
         }
-        co_await enter_joint_configuration(cfg);
+        co_await enter_joint_configuration(cfg, as);
         const log_entry& e = _fsm->add_entry(log_entry::dummy());
         auto eid = entry_id{.term = e.term, .idx = e.idx};
-        co_await wait_for_entry(eid, wait_type::committed);
+        co_await wait_for_entry(eid, wait_type::committed, as);
         // `modify_config` doesn't actually need the entry id for anything
         // but we reuse the `add_entry` RPC verb which requires it.
         co_return add_entry_reply{eid};
@@ -530,28 +546,31 @@ future<add_entry_reply> server_impl::execute_modify_config(server_id from,
     co_return add_entry_reply{not_a_leader{_fsm->current_leader()}};
 }
 
-future<> server_impl::modify_config(std::vector<server_address> add, std::vector<server_id> del) {
+future<> server_impl::modify_config(std::vector<server_address> add, std::vector<server_id> del, seastar::abort_source* as) {
     server_id leader = _fsm->current_leader();
     if (!_config.enable_forwarding) {
         if (leader != _id) {
             throw not_a_leader{leader};
         }
-        auto reply = co_await execute_modify_config(leader, std::move(add), std::move(del));
+        auto reply = co_await execute_modify_config(leader, std::move(add), std::move(del), as);
         if (std::holds_alternative<raft::entry_id>(reply)) {
             co_return;
         }
         throw raft::not_a_leader{_fsm->current_leader()};
     }
     while (true) {
+        if (as && as->abort_requested()) {
+            throw request_aborted();
+        }
         if (leader == server_id{}) {
-            co_await wait_for_leader();
+            co_await wait_for_leader(as);
             leader = _fsm->current_leader();
         } else {
             auto reply = co_await [&] {
                 if (leader == _id) {
                     // Make a copy since of the params since we may
                     // still retry and forward them.
-                    return execute_modify_config(leader, add, del);
+                    return execute_modify_config(leader, add, del, as);
                 } else {
                     logger.trace("[{}] forwarding the entry to {}", id(), leader);
                     return _rpc->send_modify_config(leader, add, del);
@@ -1025,7 +1044,7 @@ future<> server_impl::wait_for_apply(index_t idx) {
     }
 }
 
-future<read_barrier_reply> server_impl::execute_read_barrier(server_id from) {
+future<read_barrier_reply> server_impl::execute_read_barrier(server_id from, seastar::abort_source* as) {
     logger.trace("[{}] execute_read_barrier start", _id);
 
     std::optional<std::pair<read_id, index_t>> rid;
@@ -1040,32 +1059,46 @@ future<read_barrier_reply> server_impl::execute_read_barrier(server_id from) {
     }
     logger.trace("[{}] execute_read_barrier read id is {} for commit idx {}",
         _id, rid->first, rid->second);
-    _reads.push_back({rid->first, rid->second, {}});
-    return _reads.back().promise.get_future();
+    if (as && as->abort_requested()) {
+        return make_exception_future<read_barrier_reply>(request_aborted());
+    }
+    _reads.push_back({rid->first, rid->second, {}, {}});
+    auto read = --_reads.end();
+    if (as) {
+        read->abort = as->subscribe([this, read] () noexcept {
+            read->promise.set_exception(request_aborted());
+            _reads.erase(read);
+        });
+        assert(read->abort);
+    }
+    return read->promise.get_future();
 }
 
-future<read_barrier_reply> server_impl::get_read_idx(server_id leader) {
+future<read_barrier_reply> server_impl::get_read_idx(server_id leader, seastar::abort_source* as) {
     if (_id == leader) {
-        return execute_read_barrier(_id);
+        return execute_read_barrier(_id, as);
     } else {
         return _rpc->execute_read_barrier_on_leader(leader);
     }
 }
 
-future<> server_impl::read_barrier() {
+future<> server_impl::read_barrier(seastar::abort_source* as) {
     server_id leader = _fsm->current_leader();
 
     logger.trace("[{}] read_barrier start", _id);
     index_t read_idx;
 
     while (read_idx == index_t{}) {
+        if (as && as->abort_requested()) {
+            throw request_aborted();
+        }
         logger.trace("[{}] read_barrier forward to  {}", _id, leader);
         if (leader == server_id{}) {
-            co_await wait_for_leader();
+            co_await wait_for_leader(as);
             leader = _fsm->current_leader();
         } else {
             auto applied = _applied_idx;
-            auto res = co_await get_read_idx(leader);
+            auto res = co_await get_read_idx(leader, as);
             if (std::holds_alternative<std::monostate>(res)) {
                 // the leader is not ready to answer because it did not
                 // committed any entries yet, so wait for any entry to be
@@ -1163,7 +1196,7 @@ future<> server_impl::abort() {
     co_await seastar::when_all_succeed(all_futures.begin(), all_futures.end()).discard_result();
 }
 
-future<> server_impl::enter_joint_configuration(server_address_set c_new) {
+future<> server_impl::enter_joint_configuration(server_address_set c_new, seastar::abort_source* as) {
     const auto& cfg = _fsm->get_configuration();
     // 4.1 Cluster membership changes. Safety.
     // When the leader receives a request to add or remove a server
@@ -1175,11 +1208,11 @@ future<> server_impl::enter_joint_configuration(server_address_set c_new) {
         co_return;
     }
     _stats.add_config++;
-    co_await add_entry_internal(raft::configuration{std::move(c_new)}, wait_type::committed);
+    co_await add_entry_internal(raft::configuration{std::move(c_new)}, wait_type::committed, as);
 }
 
-future<> server_impl::set_configuration(server_address_set c_new) {
-    co_await enter_joint_configuration(std::move(c_new));
+future<> server_impl::set_configuration(server_address_set c_new, seastar::abort_source* as) {
+    co_await enter_joint_configuration(std::move(c_new), as);
     // Above we co_wait that the joint configuration is committed.
     // Immediately, without yield, once the FSM discovers
     // this, it appends non-joint entry. Hence,
@@ -1187,7 +1220,7 @@ future<> server_impl::set_configuration(server_address_set c_new) {
     // By waiting for a follow up dummy to get committed, we
     // automatically wait for the non-joint entry to get
     // committed.
-    co_await add_entry_internal(log_entry::dummy(), wait_type::committed);
+    co_await add_entry_internal(log_entry::dummy(), wait_type::committed, as);
 }
 
 raft::configuration

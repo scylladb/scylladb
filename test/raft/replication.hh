@@ -707,7 +707,7 @@ public:
         if (!(*_connected)(id, _id)) {
             return make_exception_future<raft::read_barrier_reply>(std::runtime_error("cannot send append since nodes are disconnected"));
         }
-        return _net[id]->_client->execute_read_barrier(_id);
+        return _net[id]->_client->execute_read_barrier(_id, nullptr);
     }
     void check_known_and_connected(raft::server_id id) {
         if (!_net.count(id)) {
@@ -719,13 +719,13 @@ public:
     }
     future<raft::add_entry_reply> send_add_entry(raft::server_id id, const raft::command& cmd) override {
         check_known_and_connected(id);
-        return _net[id]->_client->execute_add_entry(_id, cmd);
+        return _net[id]->_client->execute_add_entry(_id, cmd, nullptr);
     }
     future<raft::add_entry_reply> send_modify_config(raft::server_id id,
         const std::vector<raft::server_address>& add,
         const std::vector<raft::server_id>& del) override {
         check_known_and_connected(id);
-        return _net[id]->_client->execute_modify_config(_id, add, del);
+        return _net[id]->_client->execute_modify_config(_id, add, del, nullptr);
     }
 
     void add_server(raft::server_id id, bytes node_info) override {

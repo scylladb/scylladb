@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 #pragma once
+#include <seastar/core/abort_source.hh>
 #include "raft.hh"
 
 namespace raft {
@@ -55,7 +56,7 @@ public:
     // this means that the entry is committed/applied locally (depending on the wait type).
     // Applied locally means the local state machine replica applied this command;
     // committed locally means simply that the commit index is beyond this entry's index.
-    virtual future<> add_entry(command command, wait_type type) = 0;
+    virtual future<> add_entry(command command, wait_type type, seastar::abort_source* as = nullptr) = 0;
 
     // Set a new cluster configuration. If the configuration is
     // identical to the previous one does nothing.
@@ -79,7 +80,9 @@ public:
     // Note: committing a dummy entry extends the opportunity for
     // uncertainty, thus commit_status_unknown exception may be
     // returned even in case of a successful config change.
-    virtual future<> set_configuration(server_address_set c_new) = 0;
+    //
+    // A caller may pass a pointer to an abort_source to make operation abortable.
+    virtual future<> set_configuration(server_address_set c_new, seastar::abort_source* as = nullptr) = 0;
 
     // A simplified wrapper around set_configuration() which adds
     // and deletes servers. Unlike set_configuration(),
@@ -99,8 +102,9 @@ public:
     // The local commit index is not necessarily up-to-date yet and the state of the local state machine
     // replica may still come from before the configuration entry.
     // (exception: if no server was actually added or removed, then nothing gets committed and the leader responds immediately).
+    // A caller may pass a pointer to an abort_source to make operation abortable.
     virtual future<> modify_config(std::vector<server_address> add,
-        std::vector<server_id> del) = 0;
+        std::vector<server_id> del, seastar::abort_source* as = nullptr) = 0;
 
     // Return the currently known configuration
     virtual raft::configuration get_configuration() const = 0;
@@ -123,7 +127,8 @@ public:
     // May be called before attempting a read from the local state
     // machine. The read should proceed only after the returned
     // future has resolved successfully.
-    virtual future<> read_barrier() = 0;
+    // A caller may pass a pointer to an abort_source to make operation abortable.
+    virtual future<> read_barrier(seastar::abort_source* as = nullptr) = 0;
 
     // Initiate leader stepdown process.
     // If the node is not a leader returns not_a_leader exception.
