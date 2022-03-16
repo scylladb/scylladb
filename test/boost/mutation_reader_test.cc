@@ -49,12 +49,13 @@
 #include <boost/range/algorithm/sort.hpp>
 #include "readers/from_mutations_v2.hh"
 #include "readers/from_mutations.hh"
-#include "readers/from_mutations_v2.hh"
 #include "readers/forwardable_v2.hh"
 #include "readers/forwardable.hh"
 #include "readers/from_fragments_v2.hh"
+#include "readers/generating_v2.hh"
 #include "readers/empty.hh"
 #include "readers/empty_v2.hh"
+#include "readers/next_partition_adaptor.hh"
 
 static schema_ptr make_schema() {
     return schema_builder("ks", "cf")
@@ -4163,4 +4164,58 @@ SEASTAR_THREAD_TEST_CASE(test_clustering_combining_of_empty_readers) {
     if (mf) {
         BOOST_FAIL(format("reader combined of empty readers returned fragment {}", mutation_fragment::printer(*s, *mf)));
     }
+}
+
+template <typename Reader>
+class closing_holder {
+    Reader _rd;
+public:
+    closing_holder(Reader&& rd) : _rd(std::move(rd)) { }
+    closing_holder(closing_holder&&) = default;
+    ~closing_holder() { _rd.close().get(); }
+    auto operator()() { return _rd(); }
+};
+
+SEASTAR_THREAD_TEST_CASE(test_generating_reader_v1) {
+    auto populator_v1 = [] (schema_ptr s, const std::vector<mutation>& muts) {
+        return mutation_source([muts] (
+                schema_ptr schema,
+                reader_permit permit,
+                const dht::partition_range& range,
+                const query::partition_slice& slice,
+                const io_priority_class& pc,
+                tracing::trace_state_ptr trace_state,
+                streamed_mutation::forwarding fwd_sm,
+                mutation_reader::forwarding fwd_mr) {
+            auto underlying = make_flat_mutation_reader_from_mutations(schema, permit, squash_mutations(muts), range, slice);
+            auto rd = make_next_partition_adaptor(make_generating_reader_v1(schema, permit, closing_holder(std::move(underlying))));
+            if (fwd_sm == streamed_mutation::forwarding::yes) {
+                return make_forwardable(std::move(rd));
+            }
+            return rd;
+        });
+    };
+    run_mutation_source_tests(populator_v1, false);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_generating_reader_v2) {
+    auto populator_v2 = [] (schema_ptr s, const std::vector<mutation>& muts) {
+        return mutation_source([muts] (
+                schema_ptr schema,
+                reader_permit permit,
+                const dht::partition_range& range,
+                const query::partition_slice& slice,
+                const io_priority_class& pc,
+                tracing::trace_state_ptr trace_state,
+                streamed_mutation::forwarding fwd_sm,
+                mutation_reader::forwarding fwd_mr) {
+            auto underlying = make_flat_mutation_reader_from_mutations_v2(schema, permit, squash_mutations(muts), range, slice);
+            auto rd = make_next_partition_adaptor(make_generating_reader_v2(schema, permit, closing_holder(std::move(underlying))));
+            if (fwd_sm == streamed_mutation::forwarding::yes) {
+                return make_forwardable(std::move(rd));
+            }
+            return rd;
+        });
+    };
+    run_mutation_source_tests(populator_v2, false);
 }
