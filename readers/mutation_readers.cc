@@ -31,6 +31,7 @@
 #include "readers/nonforwardable.hh"
 #include "readers/reversing.hh"
 #include "readers/slice_mutations.hh"
+#include "readers/upgrading_consumer.hh"
 #include <seastar/core/coroutine.hh>
 #include <stack>
 
@@ -1664,58 +1665,25 @@ flat_mutation_reader_v2 upgrade_to_v2(flat_mutation_reader r) {
         struct consumer {
             transforming_reader* _owner;
             stop_iteration operator()(mutation_fragment&& mf) {
-                std::move(mf).consume(*_owner);
+                std::move(mf).consume(_owner->_upgrading_consumer);
                 return stop_iteration(_owner->is_buffer_full());
             }
         };
-        range_tombstone_change_generator _rt_gen;
-        tombstone _current_rt;
-        std::optional<position_range> _pr;
+        struct mutation_fragment_pusher {
+            transforming_reader* owner;
+            void operator()(mutation_fragment_v2&& mf) {
+                owner->push_mutation_fragment(std::move(mf));
+            }
+        };
+        upgrading_consumer<mutation_fragment_pusher> _upgrading_consumer;
     public:
-        void flush_tombstones(position_in_partition_view pos) {
-            _rt_gen.flush(pos, [&] (range_tombstone_change rt) {
-                _current_rt = rt.tombstone();
-                push_mutation_fragment(*_schema, _permit, std::move(rt));
-            });
-        }
-        void consume(static_row mf) {
-            push_mutation_fragment(*_schema, _permit, std::move(mf));
-        }
-        void consume(clustering_row mf) {
-            flush_tombstones(mf.position());
-            push_mutation_fragment(*_schema, _permit, std::move(mf));
-        }
-        void consume(range_tombstone rt) {
-            if (_pr) {
-                if (!rt.trim_front(*_schema, _pr->start())) {
-                    return;
-                }
-            }
-            flush_tombstones(rt.position());
-            _rt_gen.consume(std::move(rt));
-        }
-        void consume(partition_start mf) {
-            _rt_gen.reset();
-            _current_rt = {};
-            _pr = std::nullopt;
-            push_mutation_fragment(*_schema, _permit, std::move(mf));
-        }
-        void consume(partition_end mf) {
-            flush_tombstones(position_in_partition::after_all_clustered_rows());
-            if (_current_rt) {
-                assert(!_pr);
-                push_mutation_fragment(*_schema, _permit, range_tombstone_change(
-                        position_in_partition::after_all_clustered_rows(), {}));
-            }
-            push_mutation_fragment(*_schema, _permit, std::move(mf));
-        }
-        transforming_reader(flat_mutation_reader&& r)
-                : impl(r.schema(), r.permit())
-                , _reader(std::move(r))
-                , _rt_gen(*_schema)
-        {}
+        explicit transforming_reader(flat_mutation_reader&& reader)
+            : impl(reader.schema(), reader.permit())
+            , _reader(std::move(reader))
+            , _upgrading_consumer(*_schema, _permit, mutation_fragment_pusher{this})
+        { }
         virtual flat_mutation_reader* get_original() override {
-            if (is_buffer_empty() && _rt_gen.discardable() && !_current_rt) {
+            if (is_buffer_empty() && _upgrading_consumer.discardable()) {
                 return &_reader;
             }
             return nullptr;
@@ -1726,13 +1694,7 @@ flat_mutation_reader_v2 upgrade_to_v2(flat_mutation_reader r) {
             }
             return _reader.consume_pausable(consumer{this}).then([this] {
                 if (_reader.is_end_of_stream() && _reader.is_buffer_empty()) {
-                    if (_pr) {
-                        // If !_pr we should flush on partition_end
-                        flush_tombstones(_pr->end());
-                        if (_current_rt) {
-                            push_mutation_fragment(*_schema, _permit, range_tombstone_change(_pr->end(), {}));
-                        }
-                    }
+                    _upgrading_consumer.on_end_of_stream();
                     _end_of_stream = true;
                 }
             });
@@ -1761,9 +1723,7 @@ flat_mutation_reader_v2 upgrade_to_v2(flat_mutation_reader r) {
             if (pr.end().is_clustering_row()) {
                 pr.set_end(position_in_partition::before_key(pr.end().key()));
             }
-            _rt_gen.trim(pr.start());
-            _current_rt = {};
-            _pr = pr;
+            _upgrading_consumer.set_position_range(pr);
             _end_of_stream = false;
             return _reader.fast_forward_to(std::move(pr));
         }
