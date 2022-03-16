@@ -24,6 +24,7 @@
 #include <seastar/core/reactor.hh>
 #include <seastar/util/file.hh>
 #include <seastar/util/closeable.hh>
+#include <seastar/util/short_streams.hh>
 #include <iterator>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
@@ -2308,7 +2309,7 @@ component_type sstable::component_from_sstring(version_types v, sstring &s) {
 }
 
 input_stream<char> sstable::data_stream(uint64_t pos, size_t len, const io_priority_class& pc,
-        reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history) {
+        reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history, raw_stream raw) {
     file_input_stream_options options;
     options.buffer_size = sstable_buffer_size;
     options.io_priority_class = pc;
@@ -2321,7 +2322,7 @@ input_stream<char> sstable::data_stream(uint64_t pos, size_t len, const io_prior
     }
 
     input_stream<char> stream;
-    if (_components->compression) {
+    if (_components->compression && raw == raw_stream::no) {
         if (_version >= sstable_version_types::mc) {
              return make_compressed_file_m_format_input_stream(f, &_components->compression,
                 pos, len, std::move(options));
@@ -2340,6 +2341,183 @@ future<temporary_buffer<char>> sstable::data_read(uint64_t pos, size_t len, cons
             return stream.close();
         });
     });
+}
+
+template <typename ChecksumType>
+static future<bool> do_validate_compressed(input_stream<char>& stream, const sstables::compression& c, bool checksum_all, uint32_t expected_digest) {
+    bool valid = true;
+    uint64_t offset = 0;
+    uint32_t actual_full_checksum = ChecksumType::init_checksum();
+
+    for (auto it = c.offsets.begin(); it != c.offsets.end(); ++it) {
+        auto next_it = std::next(it);
+        auto current_pos = *it;
+        auto next_pos = next_it == c.offsets.end() ? c.compressed_file_length() : *next_it;
+        auto chunk_len = next_pos - current_pos;
+        auto buf = co_await stream.read_exactly(chunk_len);
+
+        if (!chunk_len) {
+            sstlog.error("Found unexpected chunk of length 0 at offset {}", offset);
+            valid = false;
+            break;
+        }
+
+        if (buf.size() < chunk_len) {
+            sstlog.error("Truncated file at offset {}: expected to get chunk of size {}, got {}", offset, chunk_len, buf.size());
+            valid = false;
+            break;
+        }
+
+        auto compressed_len = chunk_len - 4;
+        auto expected_checksum = read_be<uint32_t>(buf.get() + compressed_len);
+        auto actual_checksum = ChecksumType::checksum(buf.get(), compressed_len);
+        if (actual_checksum != expected_checksum) {
+            sstlog.error("Compressed chunk checksum mismatch at offset {}, for chunk of size {}: expected={}, actual={}", offset, chunk_len, expected_checksum, actual_checksum);
+            valid = false;
+        }
+
+        actual_full_checksum = checksum_combine_or_feed<ChecksumType>(actual_full_checksum, actual_checksum, buf.get(), compressed_len);
+        if (checksum_all) {
+            uint32_t be_actual_checksum = cpu_to_be(actual_checksum);
+            actual_full_checksum = ChecksumType::checksum(actual_full_checksum,
+                    reinterpret_cast<const char*>(&be_actual_checksum), sizeof(be_actual_checksum));
+        }
+
+        offset += chunk_len;
+    }
+
+    if (actual_full_checksum != expected_digest) {
+        sstlog.error("Full checksum mismatch: expected={}, actual={}", expected_digest, actual_full_checksum);
+        valid = false;
+    }
+
+    co_return valid;
+}
+
+template <typename ChecksumType>
+static future<bool> do_validate_uncompressed(input_stream<char>& stream, const checksum& checksum, uint32_t expected_digest) {
+    bool valid = true;
+    uint64_t offset = 0;
+    uint32_t actual_full_checksum = ChecksumType::init_checksum();
+
+    for (const auto expected_checksum : checksum.checksums) {
+        auto buf = co_await stream.read_exactly(checksum.chunk_size);
+
+        if (buf.empty()) {
+            sstlog.error("Chunk count mismatch between CRC.db and Data.db at offset {}: expected {} chunks but data file has less", offset, checksum.checksums.size());
+            valid = false;
+            break;
+        }
+
+        auto actual_checksum = ChecksumType::checksum(buf.get(), buf.size());
+
+        if (actual_checksum != expected_checksum) {
+            sstlog.error("Chunk checksum mismatch at offset {}, for chunk of size {}: expected={}, actual={}", offset, checksum.chunk_size, expected_checksum, actual_checksum);
+            valid = false;
+        }
+
+        actual_full_checksum = checksum_combine_or_feed<ChecksumType>(actual_full_checksum, actual_checksum, buf.begin(), buf.size());
+
+        offset += buf.size();
+    }
+
+    if (!stream.eof()) {
+        sstlog.error("Chunk count mismatch between CRC.db and Data.db at offset {}: expected {} chunks but data file has more", offset, checksum.checksums.size());
+        valid = false;
+    }
+
+    if (actual_full_checksum != expected_digest) {
+        sstlog.error("Full checksum mismatch: expected={}, actual={}", expected_digest, actual_full_checksum);
+        valid = false;
+    }
+
+    co_return valid;
+}
+
+static future<uint32_t> read_digest(sstring filename, file_input_stream_options options) {
+    auto digest_file = co_await open_file_dma(filename, open_flags::ro);
+    auto digest_stream = make_file_input_stream(std::move(digest_file), options);
+
+    std::exception_ptr ex;
+
+    sstring digest_str;
+    try {
+        digest_str = co_await util::read_entire_stream_contiguous(digest_stream);
+    } catch (...) {
+        ex = std::current_exception();
+    }
+
+    co_await digest_stream.close();
+    maybe_rethrow_exception(std::move(ex));
+
+    co_return boost::lexical_cast<uint32_t>(digest_str);
+}
+
+static future<checksum> read_checksum(sstring filename, file_input_stream_options options) {
+    auto crc_file = co_await open_file_dma(filename, open_flags::ro);
+    auto crc_stream = make_file_input_stream(std::move(crc_file), options);
+
+    checksum checksum;
+    std::exception_ptr ex;
+
+    try {
+        const auto size = sizeof(uint32_t);
+
+        auto buf = co_await crc_stream.read_exactly(size);
+        check_buf_size(buf, size);
+        checksum.chunk_size = net::ntoh(read_unaligned<uint32_t>(buf.get()));
+
+        buf = co_await crc_stream.read_exactly(size);
+        while (!buf.empty()) {
+            check_buf_size(buf, size);
+            checksum.checksums.push_back(net::ntoh(read_unaligned<uint32_t>(buf.get())));
+            buf = co_await crc_stream.read_exactly(size);
+        }
+    } catch (...) {
+        ex = std::current_exception();
+    }
+
+    co_await crc_stream.close();
+    maybe_rethrow_exception(std::move(ex));
+
+    co_return checksum;
+}
+
+future<bool> validate_checksums(shared_sstable sst, reader_permit permit, const io_priority_class& pc) {
+    file_input_stream_options options;
+    options.buffer_size = 4096;
+    options.io_priority_class = pc;
+
+    const auto digest = co_await read_digest(sst->filename(component_type::Digest), options);
+
+    auto data_stream = sst->data_stream(0, sst->ondisk_data_size(), pc, permit, nullptr, nullptr, sstable::raw_stream::yes);
+
+    auto valid = true;
+    std::exception_ptr ex;
+
+    try {
+        if (sst->get_compression()) {
+            if (sst->get_version() >= sstable_version_types::mc) {
+                valid = co_await do_validate_compressed<crc32_utils>(data_stream, sst->get_compression(), true, digest);
+            } else {
+                valid = co_await do_validate_compressed<adler32_utils>(data_stream, sst->get_compression(), false, digest);
+            }
+        } else {
+            auto checksum = co_await read_checksum(sst->filename(component_type::CRC), options);
+            if (sst->get_version() >= sstable_version_types::mc) {
+                valid = co_await do_validate_uncompressed<crc32_utils>(data_stream, checksum, digest);
+            } else {
+                valid = co_await do_validate_uncompressed<adler32_utils>(data_stream, checksum, digest);
+            }
+        }
+    } catch (...) {
+        ex = std::current_exception();
+    }
+
+    co_await data_stream.close();
+    maybe_rethrow_exception(std::move(ex));
+
+    co_return valid;
 }
 
 void sstable::set_first_and_last_keys() {

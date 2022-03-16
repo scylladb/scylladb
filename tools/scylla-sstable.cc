@@ -837,14 +837,14 @@ stop_iteration consume_reader(flat_mutation_reader_v2 rd, sstable_consumer& cons
     return consumer.on_end_of_sstable().get();
 }
 
-void consume_sstables(schema_ptr schema, reader_permit permit, std::vector<sstables::shared_sstable> sstables, bool merge, bool no_skips,
+void consume_sstables(schema_ptr schema, reader_permit permit, std::vector<sstables::shared_sstable> sstables, bool merge, bool use_crawling_reader,
         std::function<stop_iteration(flat_mutation_reader_v2&, sstables::sstable*)> reader_consumer) {
-    sst_log.trace("consume_sstables(): {} sstables, merge={}, no_skips={}", sstables.size(), merge, no_skips);
+    sst_log.trace("consume_sstables(): {} sstables, merge={}, use_crawling_reader={}", sstables.size(), merge, use_crawling_reader);
     if (merge) {
         std::vector<flat_mutation_reader_v2> readers;
         readers.reserve(sstables.size());
         for (const auto& sst : sstables) {
-            if (no_skips) {
+            if (use_crawling_reader) {
                 readers.emplace_back(sst->make_crawling_reader(schema, permit));
             } else {
                 readers.emplace_back(sst->make_reader(schema, permit, query::full_partition_range, schema->full_slice()));
@@ -855,7 +855,7 @@ void consume_sstables(schema_ptr schema, reader_permit permit, std::vector<sstab
         reader_consumer(rd, nullptr);
     } else {
         for (const auto& sst : sstables) {
-            auto rd = no_skips
+            auto rd = use_crawling_reader
                 ? sst->make_crawling_reader(schema, permit)
                 : sst->make_reader(schema, permit, query::full_partition_range, schema->full_slice());
 
@@ -1416,14 +1416,52 @@ void dump_scylla_metadata_operation(schema_ptr schema, reader_permit permit, con
     writer.EndStream();
 }
 
+void validate_checksums_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map&) {
+    for (auto& sst : sstables) {
+        const auto valid = sstables::validate_checksums(sst, permit, default_priority_class()).get();
+        sst_log.info("validated the checksums of {}: {}", sst->get_filename(), valid ? "valid" : "invalid");
+    }
+}
+
+void decompress_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map& vm) {
+    for (const auto& sst : sstables) {
+        if (!sst->get_compression()) {
+            sst_log.info("Sstable {} is not compressed, nothing to do", sst->get_filename());
+            continue;
+        }
+
+        auto output_filename = sst->get_filename();
+        output_filename += ".decompressed";
+
+        auto ofile = open_file_dma(output_filename, open_flags::wo | open_flags::create).get();
+        file_output_stream_options options;
+        options.buffer_size = 4096;
+        auto ostream = make_file_output_stream(std::move(ofile), options).get();
+        auto close_ostream = defer([&ostream] { ostream.close().get(); });
+
+        auto istream = sst->data_stream(0, sst->data_size(), default_priority_class(), permit, nullptr, nullptr);
+        auto close_istream = defer([&istream] { istream.close().get(); });
+
+        istream.consume([&] (temporary_buffer<char> buf) {
+            return ostream.write(buf.get(), buf.size()).then([] {
+                return consumption_result<char>(continue_consuming{});
+            });
+        }).get();
+        ostream.flush().get();
+
+        sst_log.info("Sstable {} decompressed into {}", sst->get_filename(), output_filename);
+    }
+}
+
 template <typename SstableConsumer>
 void sstable_consumer_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map& vm) {
     const auto merge = vm.count("merge");
     const auto no_skips = vm.count("no-skips");
     const auto partitions = get_partitions(schema, vm);
+    const auto use_crawling_reader = no_skips || partitions.empty();
     auto consumer = std::make_unique<SstableConsumer>(schema, permit, vm);
     consumer->on_start_of_stream().get();
-    consume_sstables(schema, permit, sstables, merge, no_skips || partitions.empty(), [&, &consumer = *consumer] (flat_mutation_reader_v2& rd, sstables::sstable* sst) {
+    consume_sstables(schema, permit, sstables, merge, use_crawling_reader, [&, &consumer = *consumer] (flat_mutation_reader_v2& rd, sstables::sstable* sst) {
         return consume_reader(std::move(rd), consumer, sst, partitions, no_skips);
     });
     consumer->on_end_of_stream().get();
@@ -1935,6 +1973,43 @@ well defined internal order.
 )",
             {"merge"},
             validate_operation},
+    {"validate-checksums",
+            "Validate the checksums of the sstable(s)",
+R"(
+There are two kinds of checksums for sstable data files:
+* The digest (full checksum), stored in the Digest.crc32 file. This is calculated
+  over the entire content of Data.db.
+* The per-chunk checksum. For uncompressed sstables, this is stored in CRC.db,
+  for compressed sstables it is stored inline after each compressed chunk in
+  Data.db.
+
+During normal reads Scylla validates the per-chunk checksum for compressed
+sstables. The digest and the per-chunk checksum of uncompressed sstables are not
+checked on any code-paths currently.
+
+This operation reads the entire Data.db and validates both kind of checksums
+against the data. Errors found are logged to stderr. The output just contains a
+bool for each sstable that is true if the sstable matches all checksums.
+
+The content is dumped in JSON, using the following schema:
+
+$ROOT := { "$sstable_path": Bool, ... }
+
+)",
+            validate_checksums_operation},
+    {"decompress",
+            "Decompress sstable(s)",
+R"(
+Decompress Data.db if compressed. Noop if not compressed. The decompressed data
+is written to Data.db.decompressed. E.g. for an sstable:
+
+    md-12311-big-Data.db
+
+the output will be:
+
+    md-12311-big-Data.db.decompressed
+)",
+            decompress_operation},
 };
 
 } // anonymous namespace

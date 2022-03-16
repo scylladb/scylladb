@@ -633,6 +633,7 @@ private:
 
     future<> create_data() noexcept;
 
+public:
     // Return an input_stream which reads exactly the specified byte range
     // from the data file (after uncompression, if the file is compressed).
     // Unlike data_read() below, this method does not read the entire byte
@@ -641,8 +642,12 @@ private:
     // of bytes to be read using this stream, we can make better choices
     // about the buffer size to read, and where exactly to stop reading
     // (even when a large buffer size is used).
+    //
+    // When created with `raw_stream::yes`, the sstable data file will be
+    // streamed as-is, without decompressing (if compressed).
+    using raw_stream = bool_class<class raw_stream_tag>;
     input_stream<char> data_stream(uint64_t pos, size_t len, const io_priority_class& pc,
-            reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history);
+            reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history, raw_stream raw = raw_stream::no);
 
     // Read exactly the specific byte range from the data file (after
     // uncompression, if the file is compressed). This can be used to read
@@ -652,6 +657,7 @@ private:
     // for iteration through all the rows.
     future<temporary_buffer<char>> data_read(uint64_t pos, size_t len, const io_priority_class& pc, reader_permit permit);
 
+private:
     future<summary_entry&> read_summary_entry(size_t i);
 
     // FIXME: pending on Bloom filter implementation
@@ -904,6 +910,31 @@ public:
 // This function only solves the second problem for now.
 future<> delete_atomically(std::vector<shared_sstable> ssts);
 future<> replay_pending_delete_log(sstring log_file);
+
+// Validate checksums
+//
+// Sstables have two kind of checksums: per-chunk checksums and a
+// full-checksum (digest) calculated over the entire content of Data.db.
+//
+// The full-checksum (digest) is stored in Digest.crc (component_type::Digest).
+//
+// When compression is used, the per-chunk checksum is stored directly inside
+// Data.db, after each compressed chunk. These are validated on read, when
+// decompressing the respective chunks.
+// When no compression is used, the per-chunk checksum is stored separately
+// in CRC.db (component_type::CRC). Chunk size is defined and stored in said
+// component as well.
+//
+// In both compressed and uncompressed sstables, checksums are calculated
+// on the data that is actually written to disk, so in case of compressed
+// data, on the compressed data.
+//
+// This method validates both the full checksum and the per-chunk checksum
+// for the entire Data.db.
+//
+// Returns true if all checksums are valid.
+// Validation errors are logged individually.
+future<bool> validate_checksums(shared_sstable sst, reader_permit permit, const io_priority_class& pc);
 
 struct index_sampling_state {
     static constexpr size_t default_summary_byte_cost = 2000;

@@ -38,3 +38,25 @@ public:
 
     const std::error_code& code() const { return _code; }
 };
+
+// Rethrow exception if not null
+//
+// Helps with the common coroutine exception-handling idiom:
+//
+//  std::exception_ptr ex;
+//  try {
+//      ...
+//  } catch (...) {
+//      ex = std::current_exception();
+//  }
+//
+//  // release resource(s)
+//  maybe_rethrow_exception(std::move(ex));
+//
+//  return result;
+//
+inline void maybe_rethrow_exception(std::exception_ptr ex) {
+    if (ex) {
+        std::rethrow_exception(std::move(ex));
+    }
+}
