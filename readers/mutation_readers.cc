@@ -26,7 +26,6 @@
 #include "readers/from_fragments_v2.hh"
 #include "readers/from_mutations.hh"
 #include "readers/from_mutations_v2.hh"
-#include "readers/generating.hh"
 #include "readers/generating_v2.hh"
 #include "readers/multi_range.hh"
 #include "readers/nonforwardable.hh"

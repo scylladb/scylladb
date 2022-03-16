@@ -19,3 +19,6 @@ class reader_permit;
 
 flat_mutation_reader_v2
 make_generating_reader(schema_ptr s, reader_permit permit, std::function<future<mutation_fragment_v2_opt> ()> get_next_fragment);
+
+flat_mutation_reader_v2
+make_generating_reader(schema_ptr s, reader_permit permit, std::function<future<mutation_fragment_opt> ()> get_next_fragment);
