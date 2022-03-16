@@ -1465,14 +1465,13 @@ std::unordered_set<dht::token> decode_tokens(set_type_impl::native_type& tokens)
 future<> system_keyspace::update_tokens(gms::inet_address ep, const std::unordered_set<dht::token>& tokens)
 {
     if (ep == utils::fb_utilities::get_broadcast_address()) {
-        return remove_endpoint(ep);
+        co_return co_await remove_endpoint(ep);
     }
 
     sstring req = format("INSERT INTO system.{} (peer, tokens) VALUES (?, ?)", PEERS);
     auto set_type = set_type_impl::get_instance(utf8_type, true);
-    return qctx->execute_cql(req, ep.addr(), make_set_value(set_type, prepare_tokens(tokens))).discard_result().then([] {
-        return force_blocking_flush(PEERS);
-    });
+    co_await qctx->execute_cql(req, ep.addr(), make_set_value(set_type, prepare_tokens(tokens))).discard_result();
+    co_await force_blocking_flush(PEERS);
 }
 
 
