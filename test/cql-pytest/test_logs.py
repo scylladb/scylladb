@@ -30,7 +30,10 @@ import io
 import time
 import re
 
+from cassandra import InvalidRequest
+
 from util import new_test_table, local_process_id
+from test_batch import generate_big_batch
 
 # A fixture to find the Scylla log file, returning the log file's path.
 # If the log file cannot be found, or it's not Scylla, the fixture calls
@@ -113,3 +116,29 @@ def test_log_table_operations(cql, test_keyspace, logfile):
     with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY') as table:
         wait_for_log(logfile, f'Creating {table}')
     wait_for_log(logfile, f'Dropping {table}')
+
+
+@pytest.fixture(scope="module")
+def table_batch(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "k int primary key, t text") as table:
+        yield table
+
+
+def test_warning_message_for_batch_exceeding_warning_threshold(cql, table_batch, logfile):
+    """Batch size above threshold should add warning message to scylla logs"""
+    warning_pattern = r"WARN .+BatchStatement - Batch modifying [\d]+ partitions in [_\w.]+ is of size [\d]+ bytes, "\
+                      r"exceeding specified WARN threshold of"
+    cql.execute(generate_big_batch(table_batch, 256))
+    wait_for_log(logfile, warning_pattern, timeout=1)
+
+
+def test_error_message_for_batch_exceeding_fail_threshold(cql, table_batch, logfile):
+    """Batch size above threshold should add error message to scylla logs"""
+    try:
+        cql.execute(generate_big_batch(table_batch, 1025))
+    except InvalidRequest:
+        err_pattern = r"ERROR .+ BatchStatement - Batch modifying [\d]+ partitions in [_\w.]+ is of size [\d]+ bytes, "\
+                          r"exceeding specified FAIL threshold of"
+        wait_for_log(logfile, err_pattern, timeout=1)
+    else:
+        pytest.fail("Oversized batch didn't fail.")
