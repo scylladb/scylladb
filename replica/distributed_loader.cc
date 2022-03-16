@@ -452,12 +452,13 @@ future<> distributed_loader::handle_sstables_pending_delete(sstring pending_dele
     });
 }
 
-future<> distributed_loader::populate_column_family(distributed<replica::database>& db, sstring sstdir, sstring ks, sstring cf, bool must_exist) {
-    return async([&db, sstdir = std::move(sstdir), ks = std::move(ks), cf = std::move(cf), must_exist] {
+future<> distributed_loader::populate_column_family(distributed<replica::database>& db, sstring sstdir, sstring ks, sstring cf, allow_offstrategy_compaction do_allow_offstrategy_compaction, must_exist dir_must_exist) {
+    dblog.debug("Populating {}/{}/{} allow_offstrategy_compaction={} must_exist={}", ks, cf, sstdir, do_allow_offstrategy_compaction, dir_must_exist);
+    return async([&db, sstdir = std::move(sstdir), ks = std::move(ks), cf = std::move(cf), do_allow_offstrategy_compaction, dir_must_exist] {
         assert(this_shard_id() == 0);
 
         if (!file_exists(sstdir).get0()) {
-            if (must_exist) {
+            if (dir_must_exist) {
                 throw std::runtime_error(format("Populating {}/{} failed: {} does not exist", ks, cf, sstdir));
             }
             return;
@@ -527,12 +528,14 @@ future<> distributed_loader::populate_column_family(distributed<replica::databas
             return global_table->make_sstable(sstdir, gen, sst_version, sstables::sstable::format_types::big);
         }, eligible_for_reshape_on_boot).get();
 
-        directory.invoke_on_all([global_table, &eligible_for_reshape_on_boot] (sstables::sstable_directory& dir) {
-            return dir.do_for_each_sstable([&global_table, &eligible_for_reshape_on_boot] (sstables::shared_sstable sst) {
-                auto requires_offstrategy = sstables::offstrategy(!eligible_for_reshape_on_boot(sst));
+        directory.invoke_on_all([global_table, &eligible_for_reshape_on_boot, do_allow_offstrategy_compaction] (sstables::sstable_directory& dir) {
+            return dir.do_for_each_sstable([&global_table, &eligible_for_reshape_on_boot, do_allow_offstrategy_compaction] (sstables::shared_sstable sst) {
+                auto requires_offstrategy = sstables::offstrategy(do_allow_offstrategy_compaction && !eligible_for_reshape_on_boot(sst));
                 return global_table->add_sstable_and_update_cache(sst, requires_offstrategy);
-            }).then([&global_table] {
+            }).then([&global_table, do_allow_offstrategy_compaction] {
+              if (do_allow_offstrategy_compaction) {
                 global_table->trigger_offstrategy_compaction();
+              }
             });
         }).get();
     });
@@ -558,11 +561,11 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
                 auto sstdir = ks.column_family_directory(ksdir, cfname, uuid);
                 dblog.info("Keyspace {}: Reading CF {} id={} version={}", ks_name, cfname, uuid, s->version());
                 return ks.make_directory_for_column_family(cfname, uuid).then([&db, sstdir, uuid, ks_name, cfname] {
-                    return distributed_loader::populate_column_family(db, sstdir + "/" + sstables::staging_dir, ks_name, cfname);
+                    return distributed_loader::populate_column_family(db, sstdir + "/" + sstables::staging_dir, ks_name, cfname, allow_offstrategy_compaction::no);
                 }).then([&db, sstdir, ks_name, cfname] {
-                    return distributed_loader::populate_column_family(db, sstdir + "/" + sstables::quarantine_dir, ks_name, cfname, false /* must_exist */);
+                    return distributed_loader::populate_column_family(db, sstdir + "/" + sstables::quarantine_dir, ks_name, cfname, allow_offstrategy_compaction::no, must_exist::no);
                 }).then([&db, sstdir, uuid, ks_name, cfname] {
-                    return distributed_loader::populate_column_family(db, sstdir, ks_name, cfname);
+                    return distributed_loader::populate_column_family(db, sstdir, ks_name, cfname, allow_offstrategy_compaction::yes);
                 }).handle_exception([ks_name, cfname, sstdir](std::exception_ptr eptr) {
                     std::string msg =
                         format("Exception while populating keyspace '{}' with column family '{}' from file '{}': {}",
