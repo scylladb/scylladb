@@ -16,7 +16,7 @@ namespace sstables {
 sstable_writer::sstable_writer(sstable& sst, const schema& s, uint64_t estimated_partitions,
         const sstable_writer_config& cfg, encoding_stats enc_stats, const io_priority_class& pc, shard_id shard) {
     if (sst.get_version() < oldest_writable_sstable_format) {
-        on_internal_error(sstlog, format("writing sstables with too old format: {}", sst.get_version()));
+        on_internal_error(sstlog, format("writing sstables with too old format: {}", static_cast<int>(sst.get_version())));
     }
     _impl = mc::make_writer(sst, s, estimated_partitions, cfg, enc_stats, pc, shard);
     if (cfg.replay_position) {

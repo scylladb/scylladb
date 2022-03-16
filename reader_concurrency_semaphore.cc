@@ -781,7 +781,7 @@ flat_mutation_reader_v2 reader_concurrency_semaphore::detach_inactive_reader(ina
             ir.notify_handler(reason);
         }
     } catch (...) {
-        rcslog.error("[semaphore {}] evict(): notify handler failed for inactive read evicted due to {}: {}", _name, reason, std::current_exception());
+        rcslog.error("[semaphore {}] evict(): notify handler failed for inactive read evicted due to {}: {}", _name, static_cast<int>(reason), std::current_exception());
     }
     switch (reason) {
         case evict_reason::permit:

@@ -975,7 +975,7 @@ public:
         if (!cur_bsearch) {
             on_internal_error(sstlog, format(
                 "index {}: expected the cursor type to be bsearch_clustered_cursor, but it's not;"
-                " sstable version (expected >= mc): {}", fmt::ptr(this), _sstable->get_version()));
+                " sstable version (expected >= mc): {}", fmt::ptr(this), static_cast<int>(_sstable->get_version())));
         }
 
         index_entry& e = current_partition_entry(*_upper_bound);
@@ -1015,7 +1015,7 @@ public:
         if (!cur_bsearch) {
             on_internal_error(sstlog, format(
                 "index {}: expected the cursor type to be bsearch_clustered_cursor, but it's not;"
-                " sstable version (expected >= mc): {}", fmt::ptr(this), _sstable->get_version()));
+                " sstable version (expected >= mc): {}", fmt::ptr(this), static_cast<int>(_sstable->get_version())));
         }
 
         return cur_bsearch->last_block_offset();

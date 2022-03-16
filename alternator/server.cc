@@ -611,7 +611,7 @@ future<> server::json_parser::stop() {
 
 const char* api_error::what() const noexcept {
     if (_what_string.empty()) {
-        _what_string = format("{} {}: {}", _http_code, _type, _msg);
+        _what_string = format("{} {}: {}", static_cast<int>(_http_code), _type, _msg);
     }
     return _what_string.c_str();
 }
