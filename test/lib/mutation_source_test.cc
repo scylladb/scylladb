@@ -7,6 +7,7 @@
  */
 
 #include <set>
+#include <boost/range/adaptor/map.hpp>
 #include <boost/test/unit_test.hpp>
 #include "partition_slice_builder.hh"
 #include "schema_builder.hh"
@@ -2796,4 +2797,19 @@ mutation forwardable_reader_to_mutation(flat_mutation_reader r, const std::vecto
     BOOST_REQUIRE(m);
 
     return std::move(*m);
+}
+
+std::vector<mutation> squash_mutations(std::vector<mutation> mutations) {
+    if (mutations.empty()) {
+        return {};
+    }
+    std::map<dht::decorated_key, mutation, dht::ring_position_less_comparator> merged_muts{
+            dht::ring_position_less_comparator{*mutations.front().schema()}};
+    for (const auto& mut : mutations) {
+        auto [it, inserted] = merged_muts.try_emplace(mut.decorated_key(), mut);
+        if (!inserted) {
+            it->second.apply(mut);
+        }
+    }
+    return boost::copy_range<std::vector<mutation>>(merged_muts | boost::adaptors::map_values);
 }

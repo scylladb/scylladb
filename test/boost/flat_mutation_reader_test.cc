@@ -37,7 +37,6 @@
 #include "test/lib/random_utils.hh"
 #include "test/lib/random_schema.hh"
 
-#include <boost/range/adaptor/map.hpp>
 #include "readers/from_mutations_v2.hh"
 #include "readers/from_fragments_v2.hh"
 #include "readers/forwardable_v2.hh"
@@ -722,21 +721,6 @@ SEASTAR_TEST_CASE(test_abandoned_flat_mutation_reader_from_mutation) {
             // We rely on AddressSanitizer telling us if nothing was leaked.
         });
     });
-}
-
-static std::vector<mutation> squash_mutations(std::vector<mutation> mutations) {
-    if (mutations.empty()) {
-        return {};
-    }
-    std::map<dht::decorated_key, mutation, dht::ring_position_less_comparator> merged_muts{
-            dht::ring_position_less_comparator{*mutations.front().schema()}};
-    for (const auto& mut : mutations) {
-        auto [it, inserted] = merged_muts.try_emplace(mut.decorated_key(), mut);
-        if (!inserted) {
-            it->second.apply(mut);
-        }
-    }
-    return boost::copy_range<std::vector<mutation>>(merged_muts | boost::adaptors::map_values);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_mutation_reader_from_mutations_as_mutation_source) {
