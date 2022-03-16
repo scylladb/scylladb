@@ -6,18 +6,22 @@
 #############################################################################
 # Tests for batch operations
 #############################################################################
+from cassandra import InvalidRequest
 
-from util import unique_name
+from util import new_test_table
 
 import pytest
 
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
-    table = test_keyspace + "." + unique_name()
-    cql.execute(f"CREATE TABLE {table} (k int primary key, t text)")
-    yield table
-    cql.execute("DROP TABLE " + table)
+    with new_test_table(cql, test_keyspace, "k int primary key, t text") as table:
+        yield table
+
+
+def generate_big_batch(table, size_in_kb):
+    statements = [f"INSERT INTO {table} (k, t) VALUES ({idx}, '{'x' * 743}')" for idx in range(size_in_kb)]
+    return "BEGIN BATCH\n" + "\n".join(statements) + "\n APPLY BATCH\n"
 
 
 @pytest.mark.xfail(reason="Scylla does not send warnings for batch: https://github.com/scylladb/scylla/issues/10196")
@@ -27,8 +31,7 @@ def test_warnings_are_returned_in_response(cql, table1):
     test tries several sizes until warning appears.
     """
     for size_in_kb in [10, 129, 256]:
-        statements = [f"INSERT INTO {table1} (k, t) VALUES ({idx}, '{'x' * 743}')" for idx in range(size_in_kb)]
-        over_sized_batch = "BEGIN BATCH\n" + "\n".join(statements) + "\n APPLY BATCH\n"
+        over_sized_batch = generate_big_batch(table1, size_in_kb)
         response_future = cql.execute_async(over_sized_batch)
         response_future.result()
         if response_future.warnings:
@@ -40,3 +43,10 @@ def test_warnings_are_returned_in_response(cql, table1):
     # 'Batch for [cql_test_1647006065554.cql_test_1647006065623] is of size 7590,
     # exceeding specified threshold of 5120 by 2470.'
     assert "exceeding specified" in response_future.warnings[0]
+
+
+def test_error_is_raised_for_batch_size_above_threshold(cql, table1):
+    """Verifies cql returns error for batch that exceeds size provided in batch_size_fail_threshold_in_kb setting
+    from scylla.yaml."""
+    with pytest.raises(InvalidRequest, match="Batch too large"):
+        cql.execute(generate_big_batch(table1, 1025))
