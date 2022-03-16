@@ -1736,3 +1736,38 @@ flat_mutation_reader_v2 upgrade_to_v2(flat_mutation_reader r) {
         return make_flat_mutation_reader_v2<transforming_reader>(std::move(r));
     }
 }
+
+flat_mutation_reader_v2 make_next_partition_adaptor(flat_mutation_reader_v2&& rd) {
+    class adaptor : public flat_mutation_reader_v2::impl {
+        flat_mutation_reader_v2 _underlying;
+    public:
+        adaptor(flat_mutation_reader_v2 underlying) : impl(underlying.schema(), underlying.permit()), _underlying(std::move(underlying))
+        { }
+        virtual future<> fill_buffer() override {
+            co_await _underlying.fill_buffer();
+            _underlying.move_buffer_content_to(*this);
+            _end_of_stream = _underlying.is_end_of_stream();
+        }
+        virtual future<> next_partition() override {
+            clear_buffer_to_next_partition();
+            if (!is_buffer_empty()) {
+                co_return;
+            }
+            auto* next = co_await _underlying.peek();
+            while (next && !next->is_partition_start()) {
+                co_await _underlying();
+                next = co_await _underlying.peek();
+            }
+        }
+        virtual future<> fast_forward_to(const dht::partition_range&) override {
+            return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
+        }
+        virtual future<> fast_forward_to(position_range) override {
+            return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
+        }
+        virtual future<> close() noexcept override {
+            return _underlying.close();
+        }
+    };
+    return make_flat_mutation_reader_v2<adaptor>(std::move(rd));
+}
