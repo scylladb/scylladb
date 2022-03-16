@@ -142,7 +142,7 @@ static const dht::sharder& get_sharder(unsigned shard_count, unsigned ignore_msb
     auto it = sharders.find({shard_count, ignore_msb});
     if (it == sharders.end()) {
         auto sharder = std::make_unique<dht::sharder>(shard_count, ignore_msb);
-        it = sharders.insert({{shard_count, ignore_msb}, std::move(sharder)}).first;
+        it = sharders.emplace(std::make_pair(shard_count, ignore_msb), std::move(sharder)).first;
     }
     return *it->second;
 }
