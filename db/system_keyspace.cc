@@ -2733,7 +2733,7 @@ future<utils::UUID> system_keyspace::set_local_host_id(utils::UUID host_id) {
 
 std::unordered_map<gms::inet_address, locator::endpoint_dc_rack>
 system_keyspace::load_dc_rack_info() {
-    return _local_cache.local()._cached_dc_rack_info;
+    return _cache.local()._cached_dc_rack_info;
 }
 
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>

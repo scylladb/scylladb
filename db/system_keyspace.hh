@@ -270,8 +270,7 @@ public:
     /**
      * Return a map of IP addresses containing a map of dc and rack info
      */
-    static std::unordered_map<gms::inet_address, locator::endpoint_dc_rack>
-    load_dc_rack_info();
+    std::unordered_map<gms::inet_address, locator::endpoint_dc_rack> load_dc_rack_info();
 
     enum class bootstrap_state {
         NEEDS_BOOTSTRAP,

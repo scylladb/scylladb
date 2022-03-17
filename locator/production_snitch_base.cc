@@ -73,12 +73,14 @@ void production_snitch_base::reset_io_state() {
 sstring production_snitch_base::get_endpoint_info(inet_address endpoint, gms::application_state key,
                                                   const sstring& default_val) {
     auto val = snitch_base::get_endpoint_info(endpoint, key);
+    auto& gossiper = gms::get_local_gossiper();
+
     if (val) {
         return *val;
     }
     // ...if not found - look in the SystemTable...
     if (!_saved_endpoints) {
-        _saved_endpoints = db::system_keyspace::load_dc_rack_info();
+        _saved_endpoints = gossiper.get_system_keyspace().local().load_dc_rack_info();
     }
 
     auto it = _saved_endpoints->find(endpoint);
@@ -91,7 +93,7 @@ sstring production_snitch_base::get_endpoint_info(inet_address endpoint, gms::ap
         }
     }
 
-    auto resolved = gms::get_local_gossiper().get_local_messaging().get_public_endpoint_for(endpoint);
+    auto resolved = gossiper.get_local_messaging().get_public_endpoint_for(endpoint);
     if (resolved != endpoint) {
         return get_endpoint_info(resolved, key, default_val);
     }
