@@ -1789,12 +1789,10 @@ future<> system_keyspace::set_bootstrap_state(bootstrap_state state) {
     sstring state_name = state_to_name.at(state);
 
     sstring req = format("INSERT INTO system.{} (key, bootstrapped) VALUES (?, ?)", LOCAL);
-    return qctx->execute_cql(req, sstring(LOCAL), state_name).discard_result().then([state] {
-        return force_blocking_flush(LOCAL).then([state] {
-            return _local_cache.invoke_on_all([state] (local_cache& lc) {
-                lc._state = state;
-            });
-        });
+    co_await qctx->execute_cql(req, sstring(LOCAL), state_name).discard_result();
+    co_await force_blocking_flush(LOCAL);
+    co_await _local_cache.invoke_on_all([state] (local_cache& lc) {
+        lc._state = state;
     });
 }
 
