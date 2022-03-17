@@ -25,6 +25,8 @@ namespace wasm {
 context::context(wasm::engine* engine_ptr, std::string name) : engine_ptr(engine_ptr), function_name(name) {
 }
 
+static constexpr size_t WASM_PAGE_SIZE = 64 * 1024;
+
 static std::pair<wasmtime::Instance, wasmtime::Func> create_instance_and_func(context& ctx, wasmtime::Store& store) {
     auto instance_res = wasmtime::Instance::create(store, *ctx.module, {});
     if (!instance_res) {
@@ -105,7 +107,7 @@ struct init_arg_visitor {
         }
         auto memory = std::get<wasmtime::Memory>(*memory_export);
         uint8_t* data = memory.data(store).data();
-        size_t mem_size = memory.size(store);
+        size_t mem_size = memory.size(store) * WASM_PAGE_SIZE;
         if (!param) {
             on_internal_error(wasm_logger, "init_arg_visitor does not accept null values");
         }
@@ -113,7 +115,7 @@ struct init_arg_visitor {
         if (serialized_size > std::numeric_limits<int32_t>::max()) {
             throw wasm::exception(format("Serialized parameter is too large: {} > {}", serialized_size, std::numeric_limits<int32_t>::max()));
         }
-        auto grown = memory.grow(store, sizeof(int32_t) + serialized_size); // for fitting serialized size + the buffer itself
+        auto grown = memory.grow(store, 1 + (sizeof(int32_t) + serialized_size - 1) / WASM_PAGE_SIZE); // for fitting serialized size + the buffer itself
         if (!grown) {
             throw wasm::exception(format("Failed to grow wasm memory to {}: {}", serialized_size, grown.err().message()));
         }
@@ -142,12 +144,12 @@ struct init_nullable_arg_visitor {
         }
         auto memory = std::get<wasmtime::Memory>(*memory_export);
         uint8_t* data = memory.data(store).data();
-        size_t mem_size = memory.size(store);
+        size_t mem_size = memory.size(store) * WASM_PAGE_SIZE;
         const int32_t serialized_size = param ? param->size() : 0;
         if (serialized_size > std::numeric_limits<int32_t>::max()) {
             throw wasm::exception(format("Serialized parameter is too large: {} > {}", param->size(), std::numeric_limits<int32_t>::max()));
         }
-        auto grown = memory.grow(store, sizeof(int32_t) + serialized_size); // for fitting the serialized size + the buffer itself
+        auto grown = memory.grow(store, 1 + (sizeof(int32_t) + serialized_size - 1) / WASM_PAGE_SIZE); // for fitting the serialized size + the buffer itself
         if (!grown) {
             throw wasm::exception(format("Failed to grow wasm memory to {}: {}", serialized_size, grown.err().message()));
         }
