@@ -44,9 +44,10 @@
 #include <boost/range/algorithm.hpp>
 #include "utils/error_injection.hh"
 #include "readers/reversing.hh"
-#include "readers/from_mutations.hh"
+#include "readers/from_mutations_v2.hh"
 #include "readers/empty_v2.hh"
 #include "readers/multi_range.hh"
+#include "readers/conversion.hh"
 
 namespace replica {
 
@@ -1680,8 +1681,8 @@ future<> table::generate_and_propagate_view_updates(const schema_ptr& base,
     db::view::view_update_builder builder = co_await db::view::make_view_update_builder(
             base,
             std::move(views),
-            make_flat_mutation_reader_from_mutations(m.schema(), std::move(permit), {std::move(m)}),
-            std::move(existings),
+            make_flat_mutation_reader_from_mutations_v2(m.schema(), std::move(permit), {std::move(m)}),
+            existings ? upgrade_to_v2(std::move(*existings)) : flat_mutation_reader_v2_opt{},
             now);
 
     std::exception_ptr err = nullptr;
@@ -1815,7 +1816,7 @@ future<> table::populate_views(
     db::view::view_update_builder builder = co_await db::view::make_view_update_builder(
             schema,
             std::move(views),
-            std::move(reader),
+            upgrade_to_v2(std::move(reader)),
             { },
             now);
 

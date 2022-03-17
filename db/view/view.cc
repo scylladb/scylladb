@@ -1053,8 +1053,8 @@ future<stop_iteration> view_update_builder::on_results() {
 future<view_update_builder> make_view_update_builder(
         const schema_ptr& base,
         std::vector<view_and_base>&& views_to_update,
-        flat_mutation_reader&& updates,
-        flat_mutation_reader_opt&& existings,
+        flat_mutation_reader_v2&& updates,
+        flat_mutation_reader_v2_opt&& existings,
         gc_clock::time_point now) {
     auto vs = boost::copy_range<std::vector<view_updates>>(views_to_update | boost::adaptors::transformed([&] (view_and_base v) {
         if (base->version() != v.base->base_schema()->version()) {

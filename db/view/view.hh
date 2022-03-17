@@ -12,9 +12,7 @@
 #include "gc_clock.hh"
 #include "query-request.hh"
 #include "schema_fwd.hh"
-#include "readers/flat_mutation_reader.hh"
 #include "readers/flat_mutation_reader_v2.hh"
-#include "readers/conversion.hh"
 #include "frozen_mutation.hh"
 
 class frozen_mutation_and_schema;
@@ -179,13 +177,13 @@ public:
 
     view_update_builder(schema_ptr s,
         std::vector<view_updates>&& views_to_update,
-        flat_mutation_reader&& updates,
-        flat_mutation_reader_opt&& existings,
+        flat_mutation_reader_v2&& updates,
+        flat_mutation_reader_v2_opt&& existings,
         gc_clock::time_point now)
             : _schema(std::move(s))
             , _view_updates(std::move(views_to_update))
-            , _updates(upgrade_to_v2(std::move(updates)))
-            , _existings(existings ? upgrade_to_v2(std::move(*existings)) : flat_mutation_reader_v2_opt{})
+            , _updates(std::move(updates))
+            , _existings(std::move(existings))
             , _now(now) {
     }
     view_update_builder(view_update_builder&& other) noexcept = default;
@@ -208,8 +206,8 @@ private:
 future<view_update_builder> make_view_update_builder(
         const schema_ptr& base,
         std::vector<view_and_base>&& views_to_update,
-        flat_mutation_reader&& updates,
-        flat_mutation_reader_opt&& existings,
+        flat_mutation_reader_v2&& updates,
+        flat_mutation_reader_v2_opt&& existings,
         gc_clock::time_point now);
 
 future<query::clustering_row_ranges> calculate_affected_clustering_ranges(
