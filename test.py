@@ -28,6 +28,7 @@ import xml.etree.ElementTree as ET
 import yaml
 
 from abc import ABC, abstractmethod
+from io import StringIO
 from scripts import coverage
 from test.pylib.artifact_registry import ArtifactRegistry
 from test.pylib.pool import Pool
@@ -63,6 +64,10 @@ class palette:
     diff_mark = create_formatter(colorama.Fore.MAGENTA)
     warn = create_formatter(colorama.Fore.YELLOW)
     crit = create_formatter(colorama.Fore.RED, colorama.Style.BRIGHT)
+    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    @staticmethod
+    def nocolor(text: str) -> str:
+        return palette.ansi_escape.sub('', text)
 
 
 class TestSuite(ABC):
@@ -138,7 +143,15 @@ class TestSuite(ABC):
             kind = cfg.get("type")
             if kind is None:
                 raise RuntimeError("Failed to load tests in {}: suite.yaml has no suite type".format(path))
-            SpecificTestSuite = globals().get(kind.title() + "TestSuite")
+
+            def suite_type_to_class_name(suite_type: str) -> str:
+                if suite_type.casefold() == "Approval".casefold():
+                    suite_type = "CQLApproval"
+                else:
+                    suite_type = suite_type.title()
+                return suite_type + "TestSuite"
+
+            SpecificTestSuite = globals().get(suite_type_to_class_name(kind))
             if not SpecificTestSuite:
                 raise RuntimeError("Failed to load tests in {}: suite type '{}' not found".format(path, kind))
             suite = SpecificTestSuite(path, cfg, options, mode)
@@ -362,6 +375,21 @@ class PythonTestSuite(TestSuite):
         return "test_*.py"
 
 
+class CQLApprovalTestSuite(PythonTestSuite):
+    """Run CQL commands against a single Scylla instance"""
+
+    def __init__(self, path, cfg, options, mode):
+        super().__init__(path, cfg, options, mode)
+
+    async def add_test(self, shortname):
+        test = CQLApprovalTest(self.next_id, shortname, self)
+        self.tests.append(test)
+
+    @property
+    def pattern(self):
+        return "*test.cql"
+
+
 class RunTestSuite(TestSuite):
     """TestSuite for test directory with a 'run' script """
 
@@ -555,6 +583,109 @@ class CqlTest(Test):
                                        self.summary))
         if self.is_equal_result is False:
             print_unidiff(self.result, self.reject)
+
+
+class CQLApprovalTest(Test):
+    """Run a sequence of CQL commands against a standlone Scylla"""
+
+    def __init__(self, test_no, shortname, suite):
+        super().__init__(test_no, shortname, suite)
+        # Path to cql_repl driver, in the given build mode
+        self.path = "pytest"
+        self.cql = os.path.join(suite.path, self.shortname + ".cql")
+        self.result = os.path.join(suite.path, self.shortname + ".result")
+        self.tmpfile = os.path.join(suite.options.tmpdir, self.mode, self.uname + ".reject")
+        self.reject = os.path.join(suite.path, self.shortname + ".reject")
+        self.args = [
+            "test/pylib/cql_repl/cql_repl.py",
+            "--input={}".format(self.cql),
+            "--output={}".format(self.tmpfile),
+        ]
+        self.is_before_test_ok = False
+        self.is_executed_ok = False
+        self.is_new = False
+        self.is_after_test_ok = False
+        self.is_equal_result = None
+        self.summary = "not run"
+        self.unidiff = None
+        self.server_log = None
+        self.env = dict()
+
+    async def run(self, options):
+        self.success = False
+        self.summary = "failed"
+
+        def set_summary(summary):
+            self.summary = summary
+            logging.info("Test %d %s", self.id, summary)
+            if self.server_log:
+                logging.info("Server log:\n%s", self.server_log)
+
+        async with self.suite.clusters.instance() as cluster:
+            self.args.insert(1, "--host={}".format(cluster[0].host))
+            # If pre-check fails, e.g. because Scylla failed to start
+            # or crashed between two tests, fail entire test.py
+            try:
+                cluster.before_test(self.uname)
+                self.is_before_test_ok = True
+                cluster[0].take_log_savepoint()
+                self.is_executed_ok = await run_test(self, options, env=self.env)
+                cluster.after_test(self.uname)
+                self.is_after_test_ok = True
+
+                if self.is_executed_ok is False:
+                    set_summary("""returned non-zero return status.\n
+Check test log at {}.""".format(self.log_filename))
+                elif not os.path.isfile(self.tmpfile):
+                    set_summary("failed: no output file")
+                elif not os.path.isfile(self.result):
+                    set_summary("failed: no result file")
+                    self.is_new = True
+                else:
+                    self.is_equal_result = filecmp.cmp(self.result, self.tmpfile)
+                    if self.is_equal_result is False:
+                        self.unidiff = format_unidiff(self.result, self.tmpfile)
+                        set_summary("failed: test output does not match expected result")
+                        logging.info("\n{}".format(palette.nocolor(self.unidiff)))
+                    else:
+                        self.success = True
+                        set_summary("succeeded")
+            except Exception as e:
+                # Server log bloats the output if we produce it in all
+                # cases. So only grab it when it's relevant:
+                # 1) failed pre-check, e.g. start failure
+                # 2) failed test execution.
+                if self.is_executed_ok is False:
+                    self.server_log = cluster[0].read_log()
+                    if self.is_before_test_ok is False:
+                        set_summary("pre-check failed: {}".format(e))
+                        print("Test {} {}".format(self.name, self.summary))
+                        print("Server log  of the first server:\n{}".format(self.server_log))
+                        # Don't try to continue if the cluster is broken
+                        raise
+                set_summary("failed: {}".format(e))
+            finally:
+                if self.is_new or self.is_equal_result is False:
+                    # Put a copy of the .reject file close to the .result file
+                    # so that it's easy to analyze the diff or overwrite .result
+                    # with .reject. Preserve the original .reject file: in
+                    # multiple modes the copy .reject file may be overwritten.
+                    shutil.copyfile(self.tmpfile, self.reject)
+                elif os.path.exists(self.tmpfile):
+                    pathlib.Path(self.tmpfile).unlink()
+
+        return self
+
+    def print_summary(self):
+        print("Test {} ({}) {}".format(palette.path(self.name), self.mode,
+                                       self.summary))
+        if self.is_executed_ok is False:
+            print(read_log(self.log_filename))
+            if self.server_log:
+                print("Server log of the first server:")
+                print(self.server_log)
+        elif self.is_equal_result is False and self.unidiff:
+            print(self.unidiff)
 
 
 class RunTest(Test):
@@ -957,8 +1088,9 @@ def print_summary(failed_tests):
             len(failed_tests), TestSuite.test_count()))
 
 
-def print_unidiff(fromfile, tofile):
+def format_unidiff(fromfile, tofile):
     with open(fromfile, "r") as frm, open(tofile, "r") as to:
+        buf = StringIO()
         diff = difflib.unified_diff(
             frm.readlines(),
             to.readlines(),
@@ -977,7 +1109,12 @@ def print_unidiff(fromfile, tofile):
                 line = palette.diff_out(line)
             elif line.startswith('@'):
                 line = palette.diff_mark(line)
-            sys.stdout.write(line)
+            buf.write(line)
+        return buf.getvalue()
+
+
+def print_unidiff(fromfile, tofile):
+    print(format_unidiff(fromfile, tofile))
 
 
 def write_junit_report(tmpdir, mode):
