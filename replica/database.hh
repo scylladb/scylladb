@@ -1027,7 +1027,7 @@ public:
     future<> populate_views(
             std::vector<db::view::view_and_base>,
             dht::token base_token,
-            flat_mutation_reader&&,
+            flat_mutation_reader_v2&&,
             gc_clock::time_point);
 
     reader_concurrency_semaphore& streaming_read_concurrency_semaphore() {

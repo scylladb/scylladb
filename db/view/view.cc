@@ -56,7 +56,7 @@
 #include "utils/exponential_backoff_retry.hh"
 #include "utils/fb_utilities.hh"
 #include "query-result-writer.hh"
-#include "readers/from_fragments.hh"
+#include "readers/from_fragments_v2.hh"
 
 using namespace std::chrono_literals;
 
@@ -1854,7 +1854,7 @@ private:
     built_views _built_views;
     gc_clock::time_point _now;
     std::vector<view_ptr> _views_to_build;
-    std::deque<mutation_fragment> _fragments;
+    std::deque<mutation_fragment_v2> _fragments;
     // The compact_for_query<> that feeds this consumer is already configured
     // to feed us up to view_builder::batchsize (128) rows and not an entire
     // partition. Still, if rows contain large blobs, saving 128 of them in

@@ -1810,13 +1810,13 @@ table::local_base_lock(
 future<> table::populate_views(
         std::vector<db::view::view_and_base> views,
         dht::token base_token,
-        flat_mutation_reader&& reader,
+        flat_mutation_reader_v2&& reader,
         gc_clock::time_point now) {
     auto schema = reader.schema();
     db::view::view_update_builder builder = co_await db::view::make_view_update_builder(
             schema,
             std::move(views),
-            upgrade_to_v2(std::move(reader)),
+            std::move(reader),
             { },
             now);
 
