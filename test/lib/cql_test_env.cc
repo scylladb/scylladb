@@ -564,7 +564,7 @@ public:
             gms::gossip_config gcfg;
             gcfg.cluster_name = "Test Cluster";
             gcfg.seeds = std::move(seeds);
-            gossiper.start(std::ref(abort_sources), std::ref(feature_service), std::ref(token_metadata), std::ref(ms), std::ref(*cfg), std::move(gcfg)).get();
+            gossiper.start(std::ref(abort_sources), std::ref(feature_service), std::ref(token_metadata), std::ref(ms), std::ref(sys_ks), std::ref(*cfg), std::move(gcfg)).get();
             auto stop_ms_fd_gossiper = defer([&gossiper] {
                 gossiper.stop().get();
             });

@@ -42,6 +42,7 @@
 
 namespace db {
 class config;
+class system_keyspace;
 }
 
 namespace gms {
@@ -146,6 +147,7 @@ public:
     const std::set<inet_address>& get_seeds() const noexcept;
 
     netw::messaging_service& get_local_messaging() const noexcept { return _messaging; }
+    sharded<db::system_keyspace>& get_system_keyspace() const noexcept { return _sys_ks; }
 public:
     static clk::time_point inline now() noexcept { return clk::now(); }
 public:
@@ -233,7 +235,7 @@ private:
     // The value must be kept alive until completes and not change.
     future<> replicate(inet_address, application_state key, const versioned_value& value);
 public:
-    explicit gossiper(abort_source& as, feature_service& features, const locator::shared_token_metadata& stm, netw::messaging_service& ms, const db::config& cfg, gossip_config gcfg);
+    explicit gossiper(abort_source& as, feature_service& features, const locator::shared_token_metadata& stm, netw::messaging_service& ms, sharded<db::system_keyspace>& sys_ks, const db::config& cfg, gossip_config gcfg);
 
     void check_seen_seeds();
 
@@ -585,6 +587,7 @@ private:
     feature_service& _feature_service;
     const locator::shared_token_metadata& _shared_token_metadata;
     netw::messaging_service& _messaging;
+    sharded<db::system_keyspace>& _sys_ks;
     utils::updateable_value<uint32_t> _failure_detector_timeout_ms;
     utils::updateable_value<int32_t> _force_gossip_generation;
     gossip_config _gcfg;
