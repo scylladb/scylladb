@@ -333,11 +333,11 @@ public:
     static future<std::unordered_map<gms::inet_address, sstring>> load_peer_features();
 
     static future<int> increment_and_get_generation();
-    static bool bootstrap_complete();
-    static bool bootstrap_in_progress();
-    static bootstrap_state get_bootstrap_state();
-    static bool was_decommissioned();
-    static future<> set_bootstrap_state(bootstrap_state state);
+    bool bootstrap_complete();
+    bool bootstrap_in_progress();
+    bootstrap_state get_bootstrap_state();
+    bool was_decommissioned();
+    future<> set_bootstrap_state(bootstrap_state state);
 
     /**
      * Read the host ID from the system keyspace, creating (and storing) one if

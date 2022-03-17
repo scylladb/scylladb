@@ -187,7 +187,7 @@ std::optional<gms::inet_address> storage_service::get_replace_address() {
 
 bool storage_service::is_replacing() {
     sstring replace_address_first_boot = _db.local().get_config().replace_address_first_boot();
-    if (!replace_address_first_boot.empty() && db::system_keyspace::bootstrap_complete()) {
+    if (!replace_address_first_boot.empty() && _sys_ks.local().bootstrap_complete()) {
         slogger.info("Replace address on first boot requested; this node is already bootstrapped");
         return false;
     }
@@ -215,7 +215,7 @@ bool storage_service::is_first_node() {
 }
 
 bool storage_service::should_bootstrap() {
-    return !db::system_keyspace::bootstrap_complete() && !is_first_node();
+    return !_sys_ks.local().bootstrap_complete() && !is_first_node();
 }
 
 future<> storage_service::snitch_reconfigured() {
@@ -228,10 +228,10 @@ void storage_service::prepare_to_join(
         std::unordered_set<gms::inet_address> loaded_endpoints,
         std::unordered_map<gms::inet_address, sstring> loaded_peer_features) {
     std::map<gms::application_state, gms::versioned_value> app_states;
-    if (db::system_keyspace::was_decommissioned()) {
+    if (_sys_ks.local().was_decommissioned()) {
         if (_db.local().get_config().override_decommission()) {
             slogger.warn("This node was decommissioned, but overriding by operator request.");
-            db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED).get();
+            _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED).get();
         } else {
             auto msg = sstring("This node was decommissioned and will not rejoin the ring unless override_decommission=true has been set,"
                                "or all existing data is removed and the node is bootstrapped again");
@@ -245,7 +245,7 @@ void storage_service::prepare_to_join(
     auto tmlock = std::make_unique<token_metadata_lock>(get_token_metadata_lock().get0());
     auto tmptr = get_mutable_token_metadata_ptr().get0();
     if (is_replacing()) {
-        if (db::system_keyspace::bootstrap_complete()) {
+        if (_sys_ks.local().bootstrap_complete()) {
             throw std::runtime_error("Cannot replace address with a node that is already bootstrapped");
         }
         _bootstrap_tokens = prepare_replacement_info(initial_contact_nodes, loaded_peer_features).get0();
@@ -279,7 +279,7 @@ void storage_service::prepare_to_join(
 
     // If this is a restarting node, we should update tokens before gossip starts
     auto my_tokens = db::system_keyspace::get_saved_tokens().get0();
-    bool restarting_normal_node = db::system_keyspace::bootstrap_complete() && !is_replacing() && !my_tokens.empty();
+    bool restarting_normal_node = _sys_ks.local().bootstrap_complete() && !is_replacing() && !my_tokens.empty();
     if (restarting_normal_node) {
         slogger.info("Restarting a node in NORMAL status");
         // This node must know about its chosen tokens before other nodes do
@@ -431,11 +431,11 @@ void storage_service::join_token_ring(std::chrono::milliseconds delay) {
     // We attempted to replace this with a schema-presence check, but you need a meaningful sleep
     // to get schema info from gossip which defeats the purpose.  See CASSANDRA-4427 for the gory details.
     if (should_bootstrap()) {
-        bool resume_bootstrap = db::system_keyspace::bootstrap_in_progress();
+        bool resume_bootstrap = _sys_ks.local().bootstrap_in_progress();
         if (resume_bootstrap) {
             slogger.warn("Detected previous bootstrap failure; retrying");
         } else {
-            db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::IN_PROGRESS).get();
+            _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::IN_PROGRESS).get();
         }
         slogger.info("waiting for ring information");
 
@@ -514,7 +514,7 @@ void storage_service::join_token_ring(std::chrono::milliseconds delay) {
         return tmptr->update_normal_tokens(_bootstrap_tokens, get_broadcast_address());
     }).get();
 
-    if (!db::system_keyspace::bootstrap_complete()) {
+    if (!_sys_ks.local().bootstrap_complete()) {
         // If we're not bootstrapping then we shouldn't have chosen a CDC streams timestamp yet.
         assert(should_bootstrap() || !_cdc_gen_id);
 
@@ -538,7 +538,7 @@ void storage_service::join_token_ring(std::chrono::milliseconds delay) {
         // Finally, if we're the first node, we'll create the first generation.
 
         if (!is_replacing()
-                && (!db::system_keyspace::bootstrap_complete()
+                && (!_sys_ks.local().bootstrap_complete()
                     || cdc::should_propose_first_generation(get_broadcast_address(), _gossiper))) {
             try {
                 _cdc_gen_id = _cdc_gen_service.local().make_new_generation(_bootstrap_tokens, !is_first_node()).get0();
@@ -557,7 +557,7 @@ void storage_service::join_token_ring(std::chrono::milliseconds delay) {
     // If we crash now, we will choose a new CDC streams timestamp anyway (because we will also choose a new set of tokens).
     // But if we crash after setting bootstrap_state = COMPLETED, we will keep using the persisted CDC streams timestamp after restarting.
 
-    db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED).get();
+    _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED).get();
     // At this point our local tokens and CDC streams timestamp are chosen (_bootstrap_tokens, _cdc_gen_id) and will not be changed.
 
     _group0->become_voter().get();
@@ -1946,7 +1946,7 @@ future<> storage_service::decommission() {
             slogger.info("DECOMMISSIONING: stop batchlog_manager done");
 
             // StageManager.shutdownNow();
-            db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::DECOMMISSIONED).get();
+            ss._sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::DECOMMISSIONED).get();
             slogger.info("DECOMMISSIONING: set_bootstrap_state done");
             ss.set_mode(mode::DECOMMISSIONED);
             slogger.info("DECOMMISSIONING: done");
@@ -2932,7 +2932,7 @@ future<> storage_service::confirm_replication(inet_address node) {
 }
 
 future<> storage_service::leave_ring() {
-    co_await db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::NEEDS_BOOTSTRAP);
+    co_await _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::NEEDS_BOOTSTRAP);
     co_await mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) {
         auto endpoint = get_broadcast_address();
         tmptr->remove_endpoint(endpoint);

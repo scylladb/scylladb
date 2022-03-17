@@ -1775,7 +1775,7 @@ bool system_keyspace::was_decommissioned() {
 }
 
 system_keyspace::bootstrap_state system_keyspace::get_bootstrap_state() {
-    return _local_cache.local()._state;
+    return _cache.local()._state;
 }
 
 future<> system_keyspace::set_bootstrap_state(bootstrap_state state) {
@@ -1789,9 +1789,9 @@ future<> system_keyspace::set_bootstrap_state(bootstrap_state state) {
     sstring state_name = state_to_name.at(state);
 
     sstring req = format("INSERT INTO system.{} (key, bootstrapped) VALUES (?, ?)", LOCAL);
-    co_await qctx->execute_cql(req, sstring(LOCAL), state_name).discard_result();
+    co_await execute_cql(req, sstring(LOCAL), state_name).discard_result();
     co_await force_blocking_flush(LOCAL);
-    co_await _local_cache.invoke_on_all([state] (local_cache& lc) {
+    co_await _cache.invoke_on_all([state] (local_cache& lc) {
         lc._state = state;
     });
 }

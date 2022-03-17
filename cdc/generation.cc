@@ -682,7 +682,6 @@ generation_service::generation_service(
         , _feature_service(f)
         , _db(db)
 {
-    (void)_sys_ks; // FIXME -- temporary
 }
 
 future<> generation_service::stop() {
@@ -705,7 +704,7 @@ generation_service::~generation_service() {
 
 future<> generation_service::after_join(std::optional<cdc::generation_id>&& startup_gen_id) {
     assert_shard_zero(__PRETTY_FUNCTION__);
-    assert(db::system_keyspace::bootstrap_complete());
+    assert(_sys_ks.local().bootstrap_complete());
 
     _gen_id = std::move(startup_gen_id);
     _gossiper.register_(shared_from_this());
@@ -881,7 +880,7 @@ future<> generation_service::handle_cdc_generation(std::optional<cdc::generation
         co_return;
     }
 
-    if (!db::system_keyspace::bootstrap_complete() || !_sys_dist_ks.local_is_initialized()
+    if (!_sys_ks.local().bootstrap_complete() || !_sys_dist_ks.local_is_initialized()
             || !_sys_dist_ks.local().started()) {
         // The service should not be listening for generation changes until after the node
         // is bootstrapped. Therefore we would previously assume that this condition
