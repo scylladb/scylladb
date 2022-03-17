@@ -44,6 +44,10 @@ class versioned_value;
 
 }
 
+namespace db {
+class system_keyspace;
+}
+
 namespace service {
 
 class storage_proxy;
@@ -95,6 +99,7 @@ private:
     gms::gossiper& _gossiper;
     seastar::abort_source _as;
     service::raft_group_registry& _raft_gr;
+    sharded<db::system_keyspace>& _sys_ks;
     serialized_action _schema_push;
     utils::UUID _schema_version_to_publish;
 
@@ -107,7 +112,7 @@ private:
 
     size_t _concurrent_ddl_retries;
 public:
-    migration_manager(migration_notifier&, gms::feature_service&, netw::messaging_service& ms, service::storage_proxy&, gms::gossiper& gossiper, service::raft_group_registry& raft_gr);
+    migration_manager(migration_notifier&, gms::feature_service&, netw::messaging_service& ms, service::storage_proxy&, gms::gossiper& gossiper, service::raft_group_registry& raft_gr, sharded<db::system_keyspace>& sysks);
 
     migration_notifier& get_notifier() { return _notifier; }
     const migration_notifier& get_notifier() const { return _notifier; }

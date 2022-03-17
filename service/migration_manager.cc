@@ -54,8 +54,10 @@ using namespace std::chrono_literals;
 const std::chrono::milliseconds migration_manager::migration_delay = 60000ms;
 static future<schema_ptr> get_schema_definition(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms, service::storage_proxy& sp);
 
-migration_manager::migration_manager(migration_notifier& notifier, gms::feature_service& feat, netw::messaging_service& ms, service::storage_proxy& storage_proxy, gms::gossiper& gossiper, service::raft_group_registry& raft_gr) :
+migration_manager::migration_manager(migration_notifier& notifier, gms::feature_service& feat, netw::messaging_service& ms,
+            service::storage_proxy& storage_proxy, gms::gossiper& gossiper, service::raft_group_registry& raft_gr, sharded<db::system_keyspace>& sysks) :
         _notifier(notifier), _feat(feat), _messaging(ms), _storage_proxy(storage_proxy), _gossiper(gossiper), _raft_gr(raft_gr)
+        , _sys_ks(sysks)
         , _schema_push([this] { return passive_announce(); })
         , _group0_read_apply_mutex{1}, _group0_operation_mutex{1}
         , _group0_history_gc_duration{std::chrono::duration_cast<gc_clock::duration>(std::chrono::weeks{1})}
@@ -96,7 +98,7 @@ void migration_manager::init_messaging_service()
         //FIXME: future discarded.
         (void)with_gate(_background_tasks, [this] {
             mlogger.debug("features changed, recalculating schema version");
-            return db::schema_tables::recalculate_schema_version(_storage_proxy.container(), _feat);
+            return db::schema_tables::recalculate_schema_version(_sys_ks, _storage_proxy.container(), _feat);
         });
     };
 
@@ -346,7 +348,7 @@ future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr 
         return make_exception_future<>(std::make_exception_ptr<std::runtime_error>(
                     std::runtime_error(fmt::format("Error while applying schema mutations: {}", e))));
     }
-    return db::schema_tables::merge_schema(proxy.container(), _feat, std::move(mutations));
+    return db::schema_tables::merge_schema(_sys_ks, proxy.container(), _feat, std::move(mutations));
 }
 
 future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr src, const std::vector<frozen_mutation>& mutations)
@@ -362,7 +364,7 @@ future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr 
         all.emplace_back(std::move(m));
         return std::move(all);
     }).then([this](std::vector<mutation> schema) {
-        return db::schema_tables::merge_schema(_storage_proxy.container(), _feat, std::move(schema));
+        return db::schema_tables::merge_schema(_sys_ks, _storage_proxy.container(), _feat, std::move(schema));
     });
 }
 
@@ -1041,7 +1043,7 @@ future<> migration_manager::announce_with_raft(std::vector<mutation> schema, gro
 }
 
 future<> migration_manager::announce_without_raft(std::vector<mutation> schema) {
-    auto f = db::schema_tables::merge_schema(_storage_proxy.container(), _feat, schema);
+    auto f = db::schema_tables::merge_schema(_sys_ks, _storage_proxy.container(), _feat, schema);
 
     try {
         using namespace std::placeholders;

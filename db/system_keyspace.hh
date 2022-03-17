@@ -46,6 +46,7 @@ namespace netw {
 
 namespace cql3 {
     class query_processor;
+    class untyped_result_set;
 }
 
 namespace gms {
@@ -68,6 +69,7 @@ namespace db {
 sstring system_keyspace_name();
 
 class config;
+struct local_cache;
 
 using system_keyspace_view_name = std::pair<sstring, sstring>;
 class system_keyspace_view_build_progress;
@@ -76,6 +78,10 @@ struct truncation_record;
 typedef std::vector<db::replay_position> replay_positions;
 
 class system_keyspace {
+    sharded<cql3::query_processor>& _qp;
+    sharded<replica::database>& _db;
+    sharded<local_cache>& _cache;
+
     static schema_ptr raft_config();
     static schema_ptr local();
     static schema_ptr peers();
@@ -88,14 +94,14 @@ class system_keyspace {
     static schema_ptr large_rows();
     static schema_ptr large_cells();
     static schema_ptr scylla_local();
-    static future<> setup_version(sharded<netw::messaging_service>& ms, const db::config& cfg);
-    static future<> check_health(const sstring& cluster_name);
+    future<> setup_version(sharded<netw::messaging_service>& ms);
+    future<> check_health();
     static future<> force_blocking_flush(sstring cfname);
-    static future<> build_dc_rack_info();
-    static future<> build_bootstrap_info();
-    static future<> cache_truncation_record(distributed<replica::database>& db);
+    future<> build_dc_rack_info();
+    future<> build_bootstrap_info();
+    future<> cache_truncation_record();
     template <typename Value>
-    static future<> update_cached_values(gms::inet_address ep, sstring column_name, Value value);
+    future<> update_cached_values(gms::inet_address ep, sstring column_name, Value value);
 public:
     static schema_ptr size_estimates();
 public:
@@ -209,33 +215,28 @@ public:
 
     static table_schema_version generate_schema_version(utils::UUID table_id, uint16_t offset = 0);
 
-    // Only for testing.
-    static void minimal_setup(distributed<cql3::query_processor>& qp);
-
-    static future<> init_local_cache();
-    static future<> deinit_local_cache();
-    static future<> setup(distributed<replica::database>& db,
-                distributed<cql3::query_processor>& qp,
-                sharded<netw::messaging_service>& ms);
-    static future<> update_schema_version(utils::UUID version);
+    future<> setup(sharded<netw::messaging_service>& ms);
+    future<> update_schema_version(utils::UUID version);
 
     /*
     * Save tokens used by this node in the LOCAL table.
     */
-    static future<> update_tokens(const std::unordered_set<dht::token>& tokens);
+    future<> update_tokens(const std::unordered_set<dht::token>& tokens);
 
     /**
      * Record tokens being used by another node in the PEERS table.
      */
-    static future<> update_tokens(gms::inet_address ep, const std::unordered_set<dht::token>& tokens);
+    future<> update_tokens(gms::inet_address ep, const std::unordered_set<dht::token>& tokens);
 
     static future<> update_preferred_ip(gms::inet_address ep, gms::inet_address preferred_ip);
-    static future<std::unordered_map<gms::inet_address, gms::inet_address>> get_preferred_ips();
+private:
+    future<std::unordered_map<gms::inet_address, gms::inet_address>> get_preferred_ips();
 
+public:
     template <typename Value>
-    static future<> update_peer_info(gms::inet_address ep, sstring column_name, Value value);
+    future<> update_peer_info(gms::inet_address ep, sstring column_name, Value value);
 
-    static future<> remove_endpoint(gms::inet_address ep);
+    future<> remove_endpoint(gms::inet_address ep);
 
     static future<> set_scylla_local_param(const sstring& key, const sstring& value);
     static future<std::optional<sstring>> get_scylla_local_param(const sstring& key);
@@ -309,13 +310,13 @@ public:
      * Return a map of stored tokens to IP addresses
      *
      */
-    static future<std::unordered_map<gms::inet_address, std::unordered_set<dht::token>>> load_tokens();
+    future<std::unordered_map<gms::inet_address, std::unordered_set<dht::token>>> load_tokens();
 
     /**
      * Return a map of store host_ids to IP addresses
      *
      */
-    static future<std::unordered_map<gms::inet_address, utils::UUID>> load_host_ids();
+    future<std::unordered_map<gms::inet_address, utils::UUID>> load_host_ids();
 
     /*
      * Read this node's tokens stored in the LOCAL table.
@@ -433,6 +434,18 @@ public:
     // Obtain the contents of the group 0 history table in mutation form.
     // Assumes that the history table exists, i.e. Raft experimental feature is enabled.
     static future<mutation> get_group0_history(distributed<service::storage_proxy>&);
+
+    system_keyspace(sharded<cql3::query_processor>& qp, sharded<replica::database>& db) noexcept;
+    future<> start();
+    future<> stop();
+
+private:
+    future<::shared_ptr<cql3::untyped_result_set>> execute_cql(const sstring& query_string, const std::initializer_list<data_value>& values);
+
+    template <typename... Args>
+    future<::shared_ptr<cql3::untyped_result_set>> execute_cql(sstring req, Args&&... args) {
+        return execute_cql(req, { data_value(std::forward<Args>(args))... });
+    }
 }; // class system_keyspace
 
 future<> system_keyspace_make(distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g);

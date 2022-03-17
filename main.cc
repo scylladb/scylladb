@@ -830,10 +830,20 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             static sharded<db::system_distributed_keyspace> sys_dist_ks;
+            static sharded<db::system_keyspace> sys_ks;
             static sharded<db::view::view_update_generator> view_update_generator;
             static sharded<cql3::cql_config> cql_config;
             static sharded<cdc::generation_service> cdc_generation_service;
             cql_config.start(std::ref(*cfg)).get();
+
+            supervisor::notify("starting system keyspace");
+            // FIXME -- the query processor is not started yet and is thus not usable. It starts later
+            // on (look up the qp.start() thing) and cannot be started earlier, before proxy does. The
+            // plan is to equip system keyspace with its own instance of the query processor that doesn't
+            // need storage proxy to work, but uses some other local replica access mechanism. Similar
+            // thing for database -- it's not yet started and should be replaced with the aforementioned
+            // replica accessor.
+            sys_ks.start(std::ref(qp), std::ref(db)).get();
 
             supervisor::notify("starting gossiper");
             gms::gossip_config gcfg;
@@ -877,7 +887,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             sscfg.available_memory = memory::stats().total_memory();
             debug::the_storage_service = &ss;
             ss.start(std::ref(stop_signal.as_sharded_abort_source()),
-                std::ref(db), std::ref(gossiper), std::ref(sys_dist_ks),
+                std::ref(db), std::ref(gossiper), std::ref(sys_dist_ks), std::ref(sys_ks),
                 std::ref(feature_service), sscfg, std::ref(mm), std::ref(token_metadata), std::ref(erm_factory),
                 std::ref(messaging), std::ref(cdc_generation_service), std::ref(repair),
                 std::ref(stream_manager), std::ref(raft_gr), std::ref(lifecycle_notifier), std::ref(bm)).get();
@@ -976,7 +986,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // engine().at_exit([&proxy] { return proxy.stop(); });
             supervisor::notify("starting migration manager");
             debug::the_migration_manager = &mm;
-            mm.start(std::ref(mm_notifier), std::ref(feature_service), std::ref(messaging), std::ref(proxy), std::ref(gossiper), std::ref(raft_gr)).get();
+            mm.start(std::ref(mm_notifier), std::ref(feature_service), std::ref(messaging), std::ref(proxy), std::ref(gossiper), std::ref(raft_gr), std::ref(sys_ks)).get();
             auto stop_migration_manager = defer_verbose_shutdown("migration manager", [&mm] {
                 mm.stop().get();
             });
@@ -997,8 +1007,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             sstables::init_metrics().get();
 
-            db::system_keyspace::minimal_setup(qp);
-            db::system_keyspace::init_local_cache().get();
+            // FIXME -- this sys_ks start should really be up above, where its instance
+            // start, but we only have query processor started that late
+            sys_ks.invoke_on_all(&db::system_keyspace::start).get();
             cfg->host_id = db::system_keyspace::load_local_host_id().get0();
 
             db::sstables_format_selector sst_format_selector(gossiper.local(), feature_service, db);
@@ -1019,13 +1030,17 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             api::set_server_compaction_manager(ctx).get();
 
             supervisor::notify("loading non-system sstables");
-            replica::distributed_loader::init_non_system_keyspaces(db, proxy).get();
+            replica::distributed_loader::init_non_system_keyspaces(db, proxy, sys_ks).get();
 
             supervisor::notify("starting view update generator");
             view_update_generator.start(std::ref(db)).get();
 
             supervisor::notify("setting up system keyspace");
-            db::system_keyspace::setup(db, qp, messaging).get();
+            // FIXME -- should happen in start(), but
+            // 1. messaging is on the way with its preferred ip cache
+            // 2. cql_test_env() doesn't do it
+            // 3. need to check if it depends on any of the above steps
+            sys_ks.local().setup(messaging).get();
 
             // Re-enable previously enabled features on node startup.
             // This should be done before commitlog starts replaying
@@ -1178,7 +1193,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_messaging_api = defer_verbose_shutdown("messaging service API", [&ctx] {
                 api::unset_server_messaging_service(ctx).get();
             });
-            api::set_server_storage_service(ctx, ss, gossiper, cdc_generation_service).get();
+            api::set_server_storage_service(ctx, ss, gossiper, cdc_generation_service, sys_ks).get();
             api::set_server_repair(ctx, repair).get();
             auto stop_repair_api = defer_verbose_shutdown("repair API", [&ctx] {
                 api::unset_server_repair(ctx).get();

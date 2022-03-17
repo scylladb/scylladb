@@ -858,9 +858,9 @@ static future<> with_merge_lock(noncopyable_function<future<> ()> func) {
 }
 
 static
-future<> update_schema_version_and_announce(distributed<service::storage_proxy>& proxy, schema_features features) {
+future<> update_schema_version_and_announce(sharded<db::system_keyspace>& sys_ks, distributed<service::storage_proxy>& proxy, schema_features features) {
     auto uuid = co_await calculate_schema_digest(proxy, features);
-    co_await db::system_keyspace::update_schema_version(uuid);
+    co_await sys_ks.local().update_schema_version(uuid);
     co_await proxy.local().get_db().invoke_on_all([uuid] (replica::database& db) {
         db.update_version(uuid);
     });
@@ -876,18 +876,18 @@ future<> update_schema_version_and_announce(distributed<service::storage_proxy>&
  * @throws ConfigurationException If one of metadata attributes has invalid value
  * @throws IOException If data was corrupted during transportation or failed to apply fs operations
  */
-future<> merge_schema(distributed<service::storage_proxy>& proxy, gms::feature_service& feat, std::vector<mutation> mutations)
+future<> merge_schema(sharded<db::system_keyspace>& sys_ks, distributed<service::storage_proxy>& proxy, gms::feature_service& feat, std::vector<mutation> mutations)
 {
     co_await with_merge_lock([&] () mutable -> future<> {
         bool flush_schema = proxy.local().get_db().local().get_config().flush_schema_tables_after_modification();
         co_await do_merge_schema(proxy, std::move(mutations), flush_schema);
-        co_await update_schema_version_and_announce(proxy, feat.cluster_schema_features());
+        co_await update_schema_version_and_announce(sys_ks, proxy, feat.cluster_schema_features());
     });
 }
 
-future<> recalculate_schema_version(distributed<service::storage_proxy>& proxy, gms::feature_service& feat) {
+future<> recalculate_schema_version(sharded<db::system_keyspace>& sys_ks, distributed<service::storage_proxy>& proxy, gms::feature_service& feat) {
     co_await with_merge_lock([&] () -> future<> {
-        co_await update_schema_version_and_announce(proxy, feat.cluster_schema_features());
+        co_await update_schema_version_and_announce(sys_ks, proxy, feat.cluster_schema_features());
     });
 }
 

@@ -81,6 +81,7 @@ static logging::logger slogger("storage_service");
 storage_service::storage_service(abort_source& abort_source,
     distributed<replica::database>& db, gms::gossiper& gossiper,
     sharded<db::system_distributed_keyspace>& sys_dist_ks,
+    sharded<db::system_keyspace>& sys_ks,
     gms::feature_service& feature_service,
     storage_service_config config,
     sharded<service::migration_manager>& mm,
@@ -109,6 +110,7 @@ storage_service::storage_service(abort_source& abort_source,
         , _lifecycle_notifier(elc_notif)
         , _batchlog_manager(bm)
         , _sys_dist_ks(sys_dist_ks)
+        , _sys_ks(sys_ks)
         , _snitch_reconfigure([this] { return snitch_reconfigured(); })
 {
     register_metrics();
@@ -318,7 +320,7 @@ void storage_service::prepare_to_join(
     auto broadcast_rpc_address = utils::fb_utilities::get_broadcast_rpc_address();
     auto& proxy = service::get_storage_proxy();
     // Ensure we know our own actual Schema UUID in preparation for updates
-    db::schema_tables::recalculate_schema_version(proxy, _feature_service).get0();
+    db::schema_tables::recalculate_schema_version(_sys_ks, proxy, _feature_service).get0();
     app_states.emplace(gms::application_state::NET_VERSION, versioned_value::network_version());
     app_states.emplace(gms::application_state::HOST_ID, versioned_value::host_id(local_host_id));
     app_states.emplace(gms::application_state::RPC_ADDRESS, versioned_value::rpcaddress(broadcast_rpc_address));
@@ -486,14 +488,14 @@ void storage_service::join_token_ring(std::chrono::milliseconds delay) {
         }
         maybe_start_sys_dist_ks();
         mark_existing_views_as_built();
-        db::system_keyspace::update_tokens(_bootstrap_tokens).get();
+        _sys_ks.local().update_tokens(_bootstrap_tokens).get();
         bootstrap(); // blocks until finished
     } else {
         maybe_start_sys_dist_ks();
         _bootstrap_tokens = db::system_keyspace::get_saved_tokens().get0();
         if (_bootstrap_tokens.empty()) {
             _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(get_token_metadata_ptr(), _db.local().get_config(), dht::check_token_endpoint::no);
-            db::system_keyspace::update_tokens(_bootstrap_tokens).get();
+            _sys_ks.local().update_tokens(_bootstrap_tokens).get();
         } else {
             size_t num_tokens = _db.local().get_config().num_tokens();
             if (_bootstrap_tokens.size() != num_tokens) {
@@ -678,7 +680,7 @@ void storage_service::bootstrap() {
         _gossiper.wait_for_range_setup().get();
         auto replace_addr = get_replace_address();
         slogger.debug("Removing replaced endpoint {} from system.peers", *replace_addr);
-        db::system_keyspace::remove_endpoint(*replace_addr).get();
+        _sys_ks.local().remove_endpoint(*replace_addr).get();
         _group0->leave_group0(replace_addr).get();
     }
 
@@ -938,7 +940,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint) {
     if (!owned_tokens.empty() && !endpoints_to_remove.count(endpoint)) {
         co_await update_peer_info(endpoint);
         try {
-            co_await db::system_keyspace::update_tokens(endpoint, owned_tokens);
+            co_await _sys_ks.local().update_tokens(endpoint, owned_tokens);
         } catch (...) {
             slogger.error("handle_state_normal: fail to update tokens for {}: {}", endpoint, std::current_exception());
         }
@@ -1189,9 +1191,9 @@ future<> storage_service::on_restart(gms::inet_address endpoint, gms::endpoint_s
 }
 
 template <typename T>
-static future<> update_table(gms::inet_address endpoint, sstring col, T value) {
+future<> storage_service::update_table(gms::inet_address endpoint, sstring col, T value) {
     try {
-        co_await db::system_keyspace::update_peer_info(endpoint, col, value);
+        co_await _sys_ks.local().update_peer_info(endpoint, col, value);
     } catch (...) {
         slogger.error("fail to update {} for {}: {}", col, endpoint, std::current_exception());
     }
@@ -1313,8 +1315,8 @@ future<> storage_service::init_server(cql3::query_processor& qp) {
         std::unordered_set<inet_address> loaded_endpoints;
         if (_db.local().get_config().load_ring_state()) {
             slogger.info("Loading persisted ring state");
-            auto loaded_tokens = db::system_keyspace::load_tokens().get0();
-            auto loaded_host_ids = db::system_keyspace::load_host_ids().get0();
+            auto loaded_tokens = _sys_ks.local().load_tokens().get0();
+            auto loaded_host_ids = _sys_ks.local().load_host_ids().get0();
 
             for (auto& x : loaded_tokens) {
                 slogger.debug("Loaded tokens: endpoint={}, tokens={}", x.first, x.second);
@@ -1331,7 +1333,7 @@ future<> storage_service::init_server(cql3::query_processor& qp) {
                 auto tokens = x.second;
                 if (ep == get_broadcast_address()) {
                     // entry has been mistakenly added, delete it
-                    db::system_keyspace::remove_endpoint(ep).get();
+                    _sys_ks.local().remove_endpoint(ep).get();
                 } else {
                     tmptr->update_normal_tokens(tokens, ep).get();
                     if (loaded_host_ids.contains(ep)) {
@@ -1517,7 +1519,7 @@ future<> storage_service::check_for_endpoint_collision(std::unordered_set<gms::i
 future<> storage_service::remove_endpoint(inet_address endpoint) {
     co_await _gossiper.remove_endpoint(endpoint);
     try {
-        co_await db::system_keyspace::remove_endpoint(endpoint);
+        co_await _sys_ks.local().remove_endpoint(endpoint);
     } catch (...) {
         slogger.error("fail to remove endpoint={}: {}", endpoint, std::current_exception());
     }

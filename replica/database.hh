@@ -117,6 +117,7 @@ class extensions;
 class rp_handle;
 class data_listeners;
 class large_data_handler;
+class system_keyspace;
 
 future<> system_keyspace_make(distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, db::config& cfg);
 
@@ -1403,7 +1404,7 @@ public:
         }
     };
 
-    future<> parse_system_tables(distributed<service::storage_proxy>&);
+    future<> parse_system_tables(distributed<service::storage_proxy>&, sharded<db::system_keyspace>&);
     database(const db::config&, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::shared_token_metadata& stm,
             abort_source& as, sharded<semaphore>& sst_dir_sem, utils::cross_shard_barrier barrier = utils::cross_shard_barrier(utils::cross_shard_barrier::solo{}) /* for single-shard usage */);
     database(database&&) = delete;

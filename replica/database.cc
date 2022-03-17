@@ -745,7 +745,7 @@ do_parse_schema_tables(distributed<service::storage_proxy>& proxy, const sstring
     });
 }
 
-future<> database::parse_system_tables(distributed<service::storage_proxy>& proxy) {
+future<> database::parse_system_tables(distributed<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks) {
     using namespace db::schema_tables;
     co_await do_parse_schema_tables(proxy, db::schema_tables::KEYSPACES, [&] (schema_result_value_type &v) -> future<> {
         auto ksm = create_keyspace_from_schema_partition(v);
@@ -792,7 +792,7 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
                 v_to_add = fixed_v;
                 auto&& keyspace = find_keyspace(v->ks_name()).metadata();
                 auto mutations = db::schema_tables::make_update_view_mutations(keyspace, view_ptr(v), fixed_v, api::new_timestamp(), true);
-                co_await db::schema_tables::merge_schema(proxy, _feat, std::move(mutations));
+                co_await db::schema_tables::merge_schema(sys_ks, proxy, _feat, std::move(mutations));
             }
         });
     });
