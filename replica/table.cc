@@ -1674,7 +1674,7 @@ future<> table::generate_and_propagate_view_updates(const schema_ptr& base,
         reader_permit permit,
         std::vector<db::view::view_and_base>&& views,
         mutation&& m,
-        flat_mutation_reader_opt existings,
+        flat_mutation_reader_v2_opt existings,
         tracing::trace_state_ptr tr_state,
         gc_clock::time_point now) const {
     auto base_token = m.token();
@@ -1682,7 +1682,7 @@ future<> table::generate_and_propagate_view_updates(const schema_ptr& base,
             base,
             std::move(views),
             make_flat_mutation_reader_from_mutations_v2(m.schema(), std::move(permit), {std::move(m)}),
-            existings ? upgrade_to_v2(std::move(*existings)) : flat_mutation_reader_v2_opt{},
+            std::move(existings),
             now);
 
     std::exception_ptr err = nullptr;
@@ -2321,7 +2321,7 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(schema_ptr s
     auto lock = co_await std::move(lockf);
     auto pk = dht::partition_range::make_singular(m.decorated_key());
     auto permit = sem.make_tracking_only_permit(base.get(), "push-view-updates-2", timeout);
-    auto reader = source.make_reader(base, permit, pk, slice, io_priority, tr_state, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
+    auto reader = source.make_reader_v2(base, permit, pk, slice, io_priority, tr_state, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
     co_await this->generate_and_propagate_view_updates(base, std::move(permit), std::move(views), std::move(m), std::move(reader), tr_state, now);
     tracing::trace(tr_state, "View updates for {}.{} were generated and propagated", base->ks_name(), base->cf_name());
     // return the local partition/row lock we have taken so it
