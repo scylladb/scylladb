@@ -13,6 +13,8 @@
 #include "query-request.hh"
 #include "schema_fwd.hh"
 #include "readers/flat_mutation_reader.hh"
+#include "readers/flat_mutation_reader_v2.hh"
+#include "readers/conversion.hh"
 #include "frozen_mutation.hh"
 
 class frozen_mutation_and_schema;
@@ -163,12 +165,14 @@ private:
 class view_update_builder {
     schema_ptr _schema; // The base schema
     std::vector<view_updates> _view_updates;
-    flat_mutation_reader _updates;
-    flat_mutation_reader_opt _existings;
-    range_tombstone_accumulator _update_tombstone_tracker;
-    range_tombstone_accumulator _existing_tombstone_tracker;
-    mutation_fragment_opt _update;
-    mutation_fragment_opt _existing;
+    flat_mutation_reader_v2 _updates;
+    flat_mutation_reader_v2_opt _existings;
+    tombstone _update_partition_tombstone;
+    tombstone _update_current_tombstone;
+    tombstone _existing_partition_tombstone;
+    tombstone _existing_current_tombstone;
+    mutation_fragment_v2_opt _update;
+    mutation_fragment_v2_opt _existing;
     gc_clock::time_point _now;
     partition_key _key = partition_key::make_empty();
 public:
@@ -180,10 +184,8 @@ public:
         gc_clock::time_point now)
             : _schema(std::move(s))
             , _view_updates(std::move(views_to_update))
-            , _updates(std::move(updates))
-            , _existings(std::move(existings))
-            , _update_tombstone_tracker(*_schema)
-            , _existing_tombstone_tracker(*_schema)
+            , _updates(upgrade_to_v2(std::move(updates)))
+            , _existings(existings ? upgrade_to_v2(std::move(*existings)) : flat_mutation_reader_v2_opt{})
             , _now(now) {
     }
     view_update_builder(view_update_builder&& other) noexcept = default;
