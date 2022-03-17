@@ -363,6 +363,21 @@ class PythonTestSuite(TestSuite):
         return "test_*.py"
 
 
+class ApprovalTestSuite(PythonTestSuite):
+    """Run CQL commands against a single Scylla instance"""
+
+    def __init__(self, path, cfg, options, mode):
+        super().__init__(path, cfg, options, mode)
+
+    async def add_test(self, shortname):
+        test = ApprovalTest(self.next_id, shortname, self)
+        self.tests.append(test)
+
+    @property
+    def pattern(self):
+        return "*test.cql"
+
+
 class RunTestSuite(TestSuite):
     """TestSuite for test directory with a 'run' script """
 
@@ -517,6 +532,73 @@ class CqlTest(Test):
 
     async def run(self, options):
         self.is_executed_ok = await run_test(self, options, env=self.env)
+
+        self.success = False
+        self.summary = "failed"
+
+        def set_summary(summary):
+            self.summary = summary
+            logging.info("Test %d %s", self.id, summary)
+
+        if not os.path.isfile(self.tmpfile):
+            set_summary("failed: no output file")
+        elif not os.path.isfile(self.result):
+            set_summary("failed: no result file")
+            self.is_new = True
+        else:
+            self.is_equal_result = filecmp.cmp(self.result, self.tmpfile)
+            if self.is_equal_result is False:
+                set_summary("failed: test output does not match expected result")
+            elif self.is_executed_ok:
+                self.success = True
+                set_summary("succeeded")
+            else:
+                set_summary("failed: correct output but non-zero return status.\nCheck test log.")
+
+        if self.is_new or self.is_equal_result is False:
+            # Put a copy of the .reject file close to the .result file
+            # so that it's easy to analyze the diff or overwrite .result
+            # with .reject. Preserve the original .reject file: in
+            # multiple modes the copy .reject file may be overwritten.
+            shutil.copyfile(self.tmpfile, self.reject)
+        elif os.path.exists(self.tmpfile):
+            pathlib.Path(self.tmpfile).unlink()
+
+        return self
+
+    def print_summary(self):
+        print("Test {} ({}) {}".format(palette.path(self.name), self.mode,
+                                       self.summary))
+        if self.is_equal_result is False:
+            print_unidiff(self.result, self.reject)
+
+
+class ApprovalTest(Test):
+    """Run a sequence of CQL commands against a standlone Scylla"""
+
+    def __init__(self, test_no, shortname, suite):
+        super().__init__(test_no, shortname, suite)
+        # Path to cql_repl driver, in the given build mode
+        self.path = "pytest"
+        self.cql = os.path.join(suite.path, self.shortname + ".cql")
+        self.result = os.path.join(suite.path, self.shortname + ".result")
+        self.tmpfile = os.path.join(suite.options.tmpdir, self.mode, self.uname + ".reject")
+        self.reject = os.path.join(suite.path, self.shortname + ".reject")
+        self.args = [
+            "test/pylib/cql_repl/cql_repl.py",
+            "--input={}".format(self.cql),
+            "--output={}".format(self.tmpfile),
+        ]
+        self.is_executed_ok = False
+        self.is_new = False
+        self.is_equal_result = None
+        self.summary = "not run"
+        self.env = dict()
+
+    async def run(self, options):
+        async with self.suite.clusters.instance() as cluster:
+            self.args.insert(1, "--host={}".format(cluster[0].host))
+            self.is_executed_ok = await run_test(self, options, env=self.env)
 
         self.success = False
         self.summary = "failed"
