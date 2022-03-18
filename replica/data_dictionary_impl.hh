@@ -17,7 +17,8 @@ schema_ptr get_base_table(const replica::database& db, const schema& s);
 
 namespace replica {
 
-class database::data_dictionary_impl : public data_dictionary::impl {
+class data_dictionary_impl : public data_dictionary::impl {
+public:
     const data_dictionary::database wrap(const replica::database& db) const {
         return make_database(this, &db);
     }
@@ -36,7 +37,6 @@ class database::data_dictionary_impl : public data_dictionary::impl {
     static const replica::table& unwrap(data_dictionary::table t) {
         return *static_cast<const replica::table*>(extract(t));
     }
-    friend class database;
 public:
     virtual std::optional<data_dictionary::keyspace> try_find_keyspace(data_dictionary::database db, std::string_view name) const override {
         try {
