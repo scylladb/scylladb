@@ -503,6 +503,8 @@ private:
     class table_state;
     std::unique_ptr<table_state> _table_state;
 public:
+    data_dictionary::table as_data_dictionary() const;
+
     future<> add_sstable_and_update_cache(sstables::shared_sstable sst,
                                           sstables::offstrategy offstrategy = sstables::offstrategy::no);
     future<> add_sstables_and_update_cache(const std::vector<sstables::shared_sstable>& ssts);

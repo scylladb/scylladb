@@ -12,6 +12,7 @@
 #include <seastar/util/closeable.hh>
 
 #include "replica/database.hh"
+#include "replica/data_dictionary_impl.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include "service/priority_manager.hh"
@@ -2424,6 +2425,12 @@ public:
 
 compaction::table_state& table::as_table_state() const noexcept {
     return *_table_state;
+}
+
+data_dictionary::table
+table::as_data_dictionary() const {
+    static constinit data_dictionary_impl _impl;
+    return _impl.wrap(*this);
 }
 
 } // namespace replica
