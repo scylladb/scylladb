@@ -618,7 +618,9 @@ public:
             db.invoke_on_all(&replica::database::start).get();
 
             feature_service.invoke_on_all([] (auto& fs) {
-                fs.enable(fs.known_feature_set());
+                return seastar::async([&fs] {
+                    fs.enable(fs.known_feature_set());
+                });
             }).get();
 
             smp::invoke_on_all([blocked_reactor_notify_ms] {
