@@ -12,9 +12,9 @@ is_privileged() {
 
 execsudo() {
     if is_nonroot; then
-        exec "$@"
-    else
         exec sudo -u scylla -g scylla "$@"
+    else
+        exec "$@"
     fi
 }
 scriptsdir="$scylladir/scripts"
