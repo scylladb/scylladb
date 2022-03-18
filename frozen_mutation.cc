@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include <seastar/util/closeable.hh>
+#include <seastar/core/coroutine.hh>
 #include "frozen_mutation.hh"
 #include "mutation_partition.hh"
 #include "mutation.hh"
@@ -257,17 +257,18 @@ public:
 
 future<> fragment_and_freeze(flat_mutation_reader mr, frozen_mutation_consumer_fn c, size_t fragment_size)
 {
-  return with_closeable(std::move(mr), [c = std::move(c), fragment_size] (flat_mutation_reader& mr) mutable {
-    fragmenting_mutation_freezer freezer(*mr.schema(), c, fragment_size);
-    return do_with(std::move(freezer), [&mr] (auto& freezer) {
-        return repeat([&] {
-            return mr().then([&] (auto mfopt) {
-                if (!mfopt) {
-                    return make_ready_future<stop_iteration>(stop_iteration::yes);
-                }
-                return std::move(*mfopt).consume(freezer);
-            });
-        });
-    });
-  });
+    std::exception_ptr ex;
+    try {
+        fragmenting_mutation_freezer freezer(*mr.schema(), c, fragment_size);
+        mutation_fragment_opt mfopt;
+        while ((mfopt = co_await mr()) && (co_await std::move(*mfopt).consume(freezer) == stop_iteration::no));
+    } catch (...) {
+        ex = std::current_exception();
+    }
+
+    co_await mr.close();
+
+    if (ex) {
+        std::rethrow_exception(std::move(ex));
+    }
 }
