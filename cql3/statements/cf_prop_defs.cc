@@ -131,7 +131,7 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
     }
 
     auto tombstone_gc_options = get_tombstone_gc_options(schema_extensions);
-    validate_tombstone_gc_options(tombstone_gc_options, db.real_database(), ks_name);
+    validate_tombstone_gc_options(tombstone_gc_options, db, ks_name);
 
     validate_minimum_int(KW_DEFAULT_TIME_TO_LIVE, 0, DEFAULT_DEFAULT_TIME_TO_LIVE);
     validate_minimum_int(KW_PAXOSGRACESECONDS, 0, DEFAULT_GC_GRACE_SECONDS);
