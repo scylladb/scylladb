@@ -15,8 +15,9 @@
 #include "raft/raft.hh"
 #include "raft/server.hh"
 #include "service/raft/raft_address_map.hh"
+#include "gms/feature.hh"
 
-namespace gms { class gossiper; }
+namespace gms { class gossiper; class feature_service; }
 
 namespace service {
 
@@ -66,8 +67,11 @@ private:
 
     // Group 0 id, valid only on shard 0 after boot is over
     std::optional<raft::group_id> _group0_id;
+
+    gms::feature::listener_registration _raft_support_listener;
+
 public:
-    raft_group_registry(bool is_enabled, netw::messaging_service& ms, gms::gossiper& gs);
+    raft_group_registry(bool is_enabled, netw::messaging_service& ms, gms::gossiper& gs, gms::feature_service& feat);
 
     // Called manually at start
     seastar::future<> start();

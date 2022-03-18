@@ -58,7 +58,7 @@ public:
     future<> stop();
     // Has to run inside seastar::async context
     void enable(const sstring& name);
-    void support(const std::string_view& name);
+    future<> support(const std::string_view& name);
     void enable(const std::set<std::string_view>& list);
     db::schema_features cluster_schema_features() const;
     std::set<std::string_view> known_feature_set();
@@ -93,8 +93,6 @@ private:
     gms::feature _uses_raft_cluster_mgmt;
     gms::feature _tombstone_gc_options;
     gms::feature _parallelized_aggregation;
-
-    gms::feature::listener_registration _raft_support_listener;
 
 public:
 
@@ -199,6 +197,10 @@ public:
 
     bool cluster_supports_parallelized_aggregation() const {
         return bool(_parallelized_aggregation);
+    }
+
+    const feature& cluster_supports_raft_cluster_mgmt() const {
+        return _supports_raft_cluster_mgmt;
     }
 
     static std::set<sstring> to_feature_set(sstring features_string);

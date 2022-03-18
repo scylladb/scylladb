@@ -584,7 +584,7 @@ public:
             sharded<service::forward_service> forward_service;
 
             raft_gr.start(cfg->check_experimental(db::experimental_features_t::RAFT),
-                std::ref(ms), std::ref(gossiper)).get();
+                std::ref(ms), std::ref(gossiper), std::ref(feature_service)).get();
             auto stop_raft_gr = deferred_stop(raft_gr);
             raft_gr.invoke_on_all(&service::raft_group_registry::start).get();
 
@@ -622,7 +622,9 @@ public:
             db.invoke_on_all(&replica::database::start).get();
 
             feature_service.invoke_on_all([] (auto& fs) {
-                fs.enable(fs.known_feature_set());
+                return seastar::async([&fs] {
+                    fs.enable(fs.known_feature_set());
+                });
             }).get();
 
             smp::invoke_on_all([blocked_reactor_notify_ms] {
