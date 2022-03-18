@@ -206,7 +206,7 @@ SEASTAR_TEST_CASE(test_fragmenting_and_freezing) {
         for_each_mutation([&] (const mutation& m) {
             std::vector<frozen_mutation> fms;
 
-            fragment_and_freeze(make_flat_mutation_reader_from_mutations(m.schema(), semaphore.make_permit(), { mutation(m) }), [&] (auto fm, bool frag) {
+            fragment_and_freeze(make_flat_mutation_reader_from_mutations_v2(m.schema(), semaphore.make_permit(), { mutation(m) }), [&] (auto fm, bool frag) {
                 BOOST_REQUIRE(!frag);
                 fms.emplace_back(std::move(fm));
                 return make_ready_future<stop_iteration>(stop_iteration::no);
@@ -220,7 +220,7 @@ SEASTAR_TEST_CASE(test_fragmenting_and_freezing) {
             fms.clear();
 
             std::optional<bool> fragmented;
-            fragment_and_freeze(make_flat_mutation_reader_from_mutations(m.schema(), semaphore.make_permit(), { mutation(m) }), [&] (auto fm, bool frag) {
+            fragment_and_freeze(make_flat_mutation_reader_from_mutations_v2(m.schema(), semaphore.make_permit(), { mutation(m) }), [&] (auto fm, bool frag) {
                 BOOST_REQUIRE(!fragmented || *fragmented == frag);
                 *fragmented = frag;
                 fms.emplace_back(std::move(fm));
@@ -252,7 +252,7 @@ SEASTAR_TEST_CASE(test_fragmenting_and_freezing) {
                 std::vector<frozen_mutation> frozen;
 
                 // Freeze all
-                fragment_and_freeze(make_flat_mutation_reader_from_mutations(gen.schema(), semaphore.make_permit(), muts), [&] (auto fm, bool frag) {
+                fragment_and_freeze(make_flat_mutation_reader_from_mutations_v2(gen.schema(), semaphore.make_permit(), muts), [&] (auto fm, bool frag) {
                     BOOST_REQUIRE(!frag);
                     frozen.emplace_back(fm);
                     return make_ready_future<stop_iteration>(stop_iteration::no);
@@ -264,7 +264,7 @@ SEASTAR_TEST_CASE(test_fragmenting_and_freezing) {
 
                 // Freeze first
                 frozen.clear();
-                fragment_and_freeze(make_flat_mutation_reader_from_mutations(gen.schema(), semaphore.make_permit(), muts), [&] (auto fm, bool frag) {
+                fragment_and_freeze(make_flat_mutation_reader_from_mutations_v2(gen.schema(), semaphore.make_permit(), muts), [&] (auto fm, bool frag) {
                     BOOST_REQUIRE(!frag);
                     frozen.emplace_back(fm);
                     return make_ready_future<stop_iteration>(stop_iteration::yes);
@@ -274,7 +274,7 @@ SEASTAR_TEST_CASE(test_fragmenting_and_freezing) {
 
                 // Fragment and freeze all
                 frozen.clear();
-                fragment_and_freeze(make_flat_mutation_reader_from_mutations(gen.schema(), semaphore.make_permit(), muts), [&] (auto fm, bool frag) {
+                fragment_and_freeze(make_flat_mutation_reader_from_mutations_v2(gen.schema(), semaphore.make_permit(), muts), [&] (auto fm, bool frag) {
                     frozen.emplace_back(fm);
                     return make_ready_future<stop_iteration>(stop_iteration::no);
                 }, 1).get0();
