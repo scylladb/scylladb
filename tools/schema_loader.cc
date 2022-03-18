@@ -20,15 +20,148 @@
 #include "cql3/statements/update_statement.hh"
 #include "db/cql_type_parser.hh"
 #include "db/config.hh"
+#include "db/extensions.hh"
 #include "db/schema_tables.hh"
+#include "db/system_keyspace.hh"
 #include "replica/database.hh"
+#include "data_dictionary/impl.hh"
+#include "data_dictionary/data_dictionary.hh"
 #include "gms/feature_service.hh"
 #include "locator/abstract_replication_strategy.hh"
-#include "locator/snitch_base.hh"
 #include "tools/schema_loader.hh"
-#include "utils/fb_utilities.hh"
 
 namespace {
+
+class data_dictionary_impl;
+struct keyspace;
+struct table;
+
+struct database {
+    db::extensions extensions;
+    db::config& cfg;
+    gms::feature_service& features;
+    std::list<keyspace> keyspaces;
+    std::list<table> tables;
+
+    database(db::config& cfg, gms::feature_service& features) : cfg(cfg), features(features)
+    { }
+};
+
+struct keyspace {
+    lw_shared_ptr<keyspace_metadata> metadata;
+
+    explicit keyspace(lw_shared_ptr<keyspace_metadata> metadata) : metadata(std::move(metadata))
+    { }
+};
+
+struct table {
+    keyspace& ks;
+    schema_ptr schema;
+    secondary_index::secondary_index_manager secondary_idx_man;
+
+    table(data_dictionary_impl& impl, keyspace& ks, schema_ptr schema);
+};
+
+class data_dictionary_impl : public data_dictionary::impl {
+public:
+    const data_dictionary::database wrap(const database& db) const {
+        return make_database(this, &db);
+    }
+    data_dictionary::keyspace wrap(const keyspace& ks) const {
+        return make_keyspace(this, &ks);
+    }
+    data_dictionary::table wrap(const table& t) const {
+        return make_table(this, &t);
+    }
+    static const database& unwrap(data_dictionary::database db) {
+        return *static_cast<const database*>(extract(db));
+    }
+    static const keyspace& unwrap(data_dictionary::keyspace ks) {
+        return *static_cast<const keyspace*>(extract(ks));
+    }
+    static const table& unwrap(data_dictionary::table t) {
+        return *static_cast<const table*>(extract(t));
+    }
+
+private:
+    virtual std::optional<data_dictionary::keyspace> try_find_keyspace(data_dictionary::database db, std::string_view name) const override {
+        auto& keyspaces = unwrap(db).keyspaces;
+        auto it = std::find_if(keyspaces.begin(), keyspaces.end(), [name] (const keyspace& ks) { return ks.metadata->name() == name; });
+        if (it == keyspaces.end()) {
+            return {};
+        }
+        return wrap(*it);
+    }
+    virtual std::vector<data_dictionary::keyspace> get_keyspaces(data_dictionary::database db) const override {
+        return boost::copy_range<std::vector<data_dictionary::keyspace>>(unwrap(db).keyspaces | boost::adaptors::transformed([this] (const keyspace& ks) { return wrap(ks); }));
+    }
+    virtual std::vector<data_dictionary::table> get_tables(data_dictionary::database db) const override {
+        return boost::copy_range<std::vector<data_dictionary::table>>(unwrap(db).tables | boost::adaptors::transformed([this] (const table& ks) { return wrap(ks); }));
+    }
+    virtual std::optional<data_dictionary::table> try_find_table(data_dictionary::database db, std::string_view ks, std::string_view tab) const override {
+        auto& tables = unwrap(db).tables;
+        auto it = std::find_if(tables.begin(), tables.end(), [tab] (const table& tbl) { return tbl.schema->cf_name() == tab; });
+        if (it == tables.end()) {
+            return {};
+        }
+        return wrap(*it);
+    }
+    virtual std::optional<data_dictionary::table> try_find_table(data_dictionary::database db, utils::UUID id) const override {
+        auto& tables = unwrap(db).tables;
+        auto it = std::find_if(tables.begin(), tables.end(), [id] (const table& tbl) { return tbl.schema->id() == id; });
+        if (it == tables.end()) {
+            return {};
+        }
+        return wrap(*it);
+    }
+    virtual const secondary_index::secondary_index_manager& get_index_manager(data_dictionary::table t) const override {
+        return unwrap(t).secondary_idx_man;
+    }
+    virtual schema_ptr get_table_schema(data_dictionary::table t) const override {
+        return unwrap(t).schema;
+    }
+    virtual lw_shared_ptr<keyspace_metadata> get_keyspace_metadata(data_dictionary::keyspace ks) const override {
+        return unwrap(ks).metadata;
+    }
+    virtual bool is_internal(data_dictionary::keyspace ks) const override {
+        return is_system_keyspace(unwrap(ks).metadata->name());
+    }
+    virtual const locator::abstract_replication_strategy& get_replication_strategy(data_dictionary::keyspace ks) const override {
+        throw std::bad_function_call();
+    }
+    virtual const std::vector<view_ptr>& get_table_views(data_dictionary::table t) const override {
+        return {};
+    }
+    virtual sstring get_available_index_name(data_dictionary::database db, std::string_view ks_name, std::string_view table_name,
+            std::optional<sstring> index_name_root) const override {
+        throw std::bad_function_call();
+    }
+    virtual std::set<sstring> existing_index_names(data_dictionary::database db, std::string_view ks_name, std::string_view cf_to_exclude = {}) const override {
+        return {};
+    }
+    virtual schema_ptr find_indexed_table(data_dictionary::database db, std::string_view ks_name, std::string_view index_name) const override {
+        return {};
+    }
+    virtual schema_ptr get_cdc_base_table(data_dictionary::database db, const schema&) const override {
+        return {};
+    }
+    virtual const db::config& get_config(data_dictionary::database db) const override {
+        return unwrap(db).cfg;
+    }
+    virtual const db::extensions& get_extensions(data_dictionary::database db) const override {
+        return unwrap(db).extensions;
+    }
+    virtual const gms::feature_service& get_features(data_dictionary::database db) const override {
+        return unwrap(db).features;
+    }
+    virtual replica::database& real_database(data_dictionary::database db) const override {
+        throw std::bad_function_call();
+    }
+};
+
+table::table(data_dictionary_impl& impl, keyspace& ks, schema_ptr schema) :
+    ks(ks), schema(std::move(schema)), secondary_idx_man(impl.wrap(*this))
+{ }
 
 sstring read_file(std::filesystem::path path) {
     auto file = open_file_dma(path.native(), open_flags::ro).get();
@@ -43,46 +176,29 @@ std::vector<schema_ptr> do_load_schemas(std::string_view schema_str) {
     cfg.enable_cache(false);
     cfg.volatile_system_keyspace_for_testing(true);
 
-    replica::database_config dbcfg;
-    dbcfg.available_memory = 1'000'000'000; // 1G
-    service::migration_notifier migration_notifier;
     gms::feature_service feature_service(gms::feature_config_from_db_config(cfg));
     feature_service.enable(feature_service.known_feature_set());
     sharded<locator::shared_token_metadata> token_metadata;
-    sharded<locator::effective_replication_map_factory> erm_factory;
-    abort_source as;
-    sharded<semaphore> sst_dir_sem;
 
     token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }).get();
     auto stop_token_metadata = deferred_stop(token_metadata);
 
-    erm_factory.start().get();
-    auto stop_erm_factory = deferred_stop(erm_factory);
-
-    sst_dir_sem.start(1).get();
-    auto sst_dir_sem_stop = deferred_stop(sst_dir_sem);
-
-    utils::fb_utilities::set_broadcast_address(gms::inet_address(0x7f000001)); // 127.0.0.1
-    if (!locator::i_endpoint_snitch::snitch_instance().local_is_initialized()) {
-        locator::i_endpoint_snitch::create_snitch(cfg.endpoint_snitch()).get();
-    }
-
-    replica::database db(cfg, dbcfg, migration_notifier, feature_service, token_metadata.local(), as, sst_dir_sem);
-    auto stop_db = deferred_stop(db);
+    data_dictionary_impl dd_impl;
+    database real_db(cfg, feature_service);
+    auto db = dd_impl.wrap(real_db);
 
     // Mock system_schema keyspace to be able to parse modification statements
     // against system_schema.dropped_columns.
-    db.create_keyspace(make_lw_shared<keyspace_metadata>(
+    real_db.keyspaces.emplace_back(make_lw_shared<keyspace_metadata>(
                 db::schema_tables::NAME,
                 "org.apache.cassandra.locator.LocalStrategy",
                 std::map<sstring, sstring>{},
-                false),
-                erm_factory.local()).get();
-    db.add_column_family(db.find_keyspace(db::schema_tables::NAME), db::schema_tables::dropped_columns(), {});
+                false));
+    real_db.tables.emplace_back(dd_impl, real_db.keyspaces.back(), db::schema_tables::dropped_columns());
 
     std::vector<schema_ptr> schemas;
 
-    auto find_or_create_keyspace = [&] (const sstring& name) -> replica::keyspace& {
+    auto find_or_create_keyspace = [&] (const sstring& name) -> data_dictionary::keyspace {
         try {
             return db.find_keyspace(name);
         } catch (replica::no_such_keyspace&) {
@@ -90,11 +206,11 @@ std::vector<schema_ptr> do_load_schemas(std::string_view schema_str) {
         }
         auto raw_statement = cql3::query_processor::parse_statement(
                 fmt::format("CREATE KEYSPACE {} WITH replication = {{'class': 'SimpleStrategy', 'replication_factor': '1'}}", name));
-        auto prepared_statement = raw_statement->prepare(db.as_data_dictionary(), cql_stats);
+        auto prepared_statement = raw_statement->prepare(db, cql_stats);
         auto* statement = prepared_statement->statement.get();
         auto p = dynamic_cast<cql3::statements::create_keyspace_statement*>(statement);
         assert(p);
-        db.create_keyspace(p->get_keyspace_metadata(*token_metadata.local().get()), erm_factory.local()).get();
+        real_db.keyspaces.emplace_back(p->get_keyspace_metadata(*token_metadata.local().get()));
         return db.find_keyspace(name);
     };
 
@@ -110,17 +226,16 @@ std::vector<schema_ptr> do_load_schemas(std::string_view schema_str) {
         if (!cf_statement) {
             continue; // we don't support any non-cf statements here
         }
-        auto& ks = find_or_create_keyspace(cf_statement->keyspace());
-        auto prepared_statement = cf_statement->prepare(db.as_data_dictionary(), cql_stats);
+        auto ks = find_or_create_keyspace(cf_statement->keyspace());
+        auto prepared_statement = cf_statement->prepare(db, cql_stats);
         auto* statement = prepared_statement->statement.get();
 
         if (auto p = dynamic_cast<cql3::statements::create_keyspace_statement*>(statement)) {
-            db.create_keyspace(p->get_keyspace_metadata(*token_metadata.local().get()), erm_factory.local()).get();
+            real_db.keyspaces.emplace_back(p->get_keyspace_metadata(*token_metadata.local().get()));
         } else if (auto p = dynamic_cast<cql3::statements::create_type_statement*>(statement)) {
-            auto type = p->create_type(db.as_data_dictionary());
-            ks.add_user_type(std::move(type));
+            dd_impl.unwrap(ks).metadata->add_user_type(p->create_type(db));
         } else if (auto p = dynamic_cast<cql3::statements::create_table_statement*>(statement)) {
-            schemas.push_back(p->get_cf_meta_data(db.as_data_dictionary()));
+            schemas.push_back(p->get_cf_meta_data(db));
         } else if (auto p = dynamic_cast<cql3::statements::update_statement*>(statement)) {
             if (p->keyspace() != db::schema_tables::NAME && p->column_family() != db::schema_tables::DROPPED_COLUMNS) {
                 throw std::runtime_error(fmt::format("tools::do_load_schemas(): expected modification statement to be against {}.{}, but it is against {}.{}",
