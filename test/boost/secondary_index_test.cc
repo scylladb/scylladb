@@ -220,13 +220,9 @@ SEASTAR_TEST_CASE(test_secondary_index_name) {
         e.execute_cql("create index on \"TableName2\" (\"Foo Bar\")").get();
         e.execute_cql("insert into \"TableName2\" (abc, \"Foo Bar\") VALUES (1, 2)").get();
         e.execute_cql("select * from \"TableName2\" WHERE \"Foo Bar\" = 2").get();
-        // To be 100% compatible with Cassandra, we should drop non-alpha numeric
-        // from the default index name. But we don't, yet. This is issue #3403:
-#if 0
+        // Characters outside [A-Za-z0-9_], like a space, are dropped from the
+        // default index name. This reproduced issue #3403:
         e.execute_cql("drop index \"TableName2_FooBar_idx\"").get(); // note no space
-#else
-        e.execute_cql("drop index \"TableName2_Foo Bar_idx\"").get(); // note space
-#endif
         // User-chosen name
         e.execute_cql("create table cf2 (abc int primary key, xyz int)").get();
         e.execute_cql("create index \"IndexName\" on cf2 (xyz)").get();

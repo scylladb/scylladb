@@ -4,16 +4,23 @@ Secondary indexes can currently be either global (default) or local. Global inde
 The distinction is stored in index target, which is a string kept in index's options map under the key "target".
 Example of a global and local indexes on the same table and column:
 
+```
 SELECT * FROM system\_schema.indexes;
  keyspace\_name | table\_name | index\_name | kind       | options
 ----------------+-------------+-------------+------------+----------------------
          demodb |           t |  local_t_v1 | COMPOSITES | {'target': '{"pk":["p"],"ck":["v1"]}'}
          demodb |           t |    t_v1_idx | COMPOSITES | {'target': 'v1'}
+```
 
 
 ## Default naming
 
-By default, index names are generated from table name, column name and "_idx" postfix. If the name is taken (e.g. because somebody already created a named index with the exact same name),
+By default, index names are generated from table name, column name and "_idx"
+postfix. Because index names, like table names, must be _word characters_
+(letters, digits, or underscore), any characters in the column name which
+aren't word characters are dropped before constructing the index name.
+
+If the name is taken (e.g. because somebody already created a named index with the exact same name),
 "_X" is appended, where X is the smallest number that ensures name uniqueness.
 
 Default name for an index created on table t and column v1 is thus t\_v1\_idx, but it can also become t\_v1\_idx\_1 if the first one was already taken.

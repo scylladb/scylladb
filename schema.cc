@@ -576,7 +576,16 @@ bool index_metadata::local() const {
 sstring index_metadata::get_default_index_name(const sstring& cf_name,
                                                std::optional<sstring> root) {
     if (root) {
-        return cf_name + "_" + root.value() + "_idx";
+        // As noted in issue #3403, because table names in CQL only use word
+        // characters [A-Za-z0-9_], the default index name should drop other
+        // characters from the column name ("root").
+        sstring name = root.value();
+        name.erase(std::remove_if(name.begin(), name.end(), [](char c) {
+            return !((c >= 'A' && c <= 'Z') ||
+                     (c >= 'a' && c <= 'z') ||
+                     (c >= '0' && c <= '9') ||
+                     (c == '_')); }), name.end());
+        return cf_name + "_" + name + "_idx";
     }
     return cf_name + "_idx";
 }
@@ -937,6 +946,22 @@ schema_builder::schema_builder(std::string_view ks_name, std::string_view cf_nam
         std::optional<utils::UUID> id, data_type rct)
         : _raw(id ? *id : utils::UUID_gen::get_time_UUID())
 {
+    // Various schema-creation commands (creating tables, indexes, etc.)
+    // usually place limits on which characters are allowed in keyspace or
+    // table names. But in case we have a hole in those defences (see issue
+    // #3403, for example), let's prevent at least the characters "/" and
+    // null from being in the keyspace or table name, because those will
+    // surely cause serious problems when materialized to directory names.
+    // We throw a logic_error because we expect earlier defences to have
+    // avoided this case in the first place.
+    if (ks_name.find_first_of('/') != std::string_view::npos ||
+        ks_name.find_first_of('\0') != std::string_view::npos) {
+        throw std::logic_error(format("Tried to create a schema with illegal characters in keyspace name: {}", ks_name));
+    }
+    if (cf_name.find_first_of('/') != std::string_view::npos ||
+        cf_name.find_first_of('\0') != std::string_view::npos) {
+        throw std::logic_error(format("Tried to create a schema with illegal characters in table name: {}", cf_name));
+    }
     _raw._ks_name = sstring(ks_name);
     _raw._cf_name = sstring(cf_name);
     _raw._regular_column_name_type = rct;

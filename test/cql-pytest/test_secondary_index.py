@@ -5,7 +5,9 @@
 # Tests for secondary indexes
 
 import time
+import tempfile
 import pytest
+import os
 from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException, ReadFailure, WriteFailure
 from cassandra.query import SimpleStatement
 from cassandra_tests.porting import assert_rows, assert_row_count
@@ -314,3 +316,31 @@ def test_try_deleting_based_on_index_column(cql, test_keyspace):
         with pytest.raises(InvalidRequest):
             cql.execute(f"DELETE FROM {table} WHERE p = 0 AND c2 = 1500")
         assert_row_count(cql.execute(f"SELECT v FROM {table}"), 10)
+
+# Reproducer for issue #3403: A column name may contain all sorts of
+# non-alphanumeric characters, including even "/". When an index is created,
+# its default name - composed from the column name - may contain these
+# characters and lead to problems - or at worst access to unintended file
+# by using things like "../../.." in the column name.
+def test_index_weird_chars_in_col_name(cql, test_keyspace):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # When issue #3403 exists, column name ../../...../tmpdir/x_yz will
+        # cause Scylla to create the new index in tmpdir!
+        # Of course a more sinister attacker can cause Scylla to create
+        # directories anywhere in the file system - or to crash if the
+        # directory creation fails - e.g., if magic_path ends in
+        # /dev/null/hello, and /dev/null is not a directory
+        magic_path='/..'*20 + tmpdir + '/x_yz'
+        schema = f'pk int PRIMARY KEY, "{magic_path}" int'
+        with new_test_table(cql, test_keyspace, schema) as table:
+            cql.execute(f'CREATE INDEX ON {table}("{magic_path}")')
+            # Creating the index should not have miraculously created
+            # something in tmpdir! If it has, we have issue #3403.
+            assert os.listdir(tmpdir) == []
+            # Check that the expected index name was chosen - based on
+            # only the alphanumeric/underscore characters of the column name.
+            ks, cf = table.split('.')
+            index_name = list(cql.execute(f"SELECT index_name FROM system_schema.indexes WHERE keyspace_name = '{ks}' AND table_name = '{cf}'"))[0].index_name
+            iswordchar = lambda x: str.isalnum(x) or x == '_'
+            cleaned_up_column_name = ''.join(filter(iswordchar, magic_path))
+            assert index_name == cf + '_' + cleaned_up_column_name + '_idx'
