@@ -143,7 +143,7 @@ static inline int calculate_weight(const sstables::compaction_descriptor& descri
     if (descriptor.sstables.empty() || descriptor.has_only_fully_expired) {
         return 0;
     }
-    return calculate_weight(boost::accumulate(descriptor.sstables | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::data_size)), uint64_t(0)));
+    return calculate_weight(descriptor.sstables_size());
 }
 
 unsigned compaction_manager::current_compaction_fan_in_threshold() const {
