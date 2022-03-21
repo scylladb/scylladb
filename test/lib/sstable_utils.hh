@@ -13,6 +13,7 @@
 #include "sstables/index_reader.hh"
 #include "sstables/binary_search.hh"
 #include "sstables/writer.hh"
+#include "compaction/compaction_manager.hh"
 #include "replica/memtable-sstable.hh"
 #include "dht/i_partitioner.hh"
 #include "test/lib/test_services.hh"
@@ -352,8 +353,10 @@ private:
     void deregister_compaction(const sstables::compaction_data& c);
 };
 
+using can_purge_tombstones = compaction_manager::can_purge_tombstones;
 future<compaction_result> compact_sstables(sstables::compaction_descriptor descriptor, replica::column_family& cf,
-        std::function<shared_sstable()> creator, sstables::compaction_sstable_replacer_fn replacer = sstables::replacer_fn_no_op());
+        std::function<shared_sstable()> creator, sstables::compaction_sstable_replacer_fn replacer = sstables::replacer_fn_no_op(),
+        can_purge_tombstones can_purge = can_purge_tombstones::yes);
 
 shared_sstable make_sstable_easy(test_env& env, const fs::path& path, flat_mutation_reader_v2 rd, sstable_writer_config cfg,
         int64_t generation = 1, const sstables::sstable::version_types version = sstables::get_highest_sstable_version(), int expected_partition = 1);

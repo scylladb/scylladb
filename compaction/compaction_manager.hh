@@ -78,6 +78,9 @@ private:
     };
 
 public:
+    class can_purge_tombstones_tag;
+    using can_purge_tombstones = bool_class<can_purge_tombstones_tag>;
+
     class task {
     public:
         enum class state {
@@ -146,7 +149,8 @@ public:
 
         // Compacts set of SSTables according to the descriptor.
         using release_exhausted_func_t = std::function<void(const std::vector<sstables::shared_sstable>& exhausted_sstables)>;
-        future<> compact_sstables(sstables::compaction_descriptor descriptor, sstables::compaction_data& cdata, release_exhausted_func_t release_exhausted);
+        future<> compact_sstables(sstables::compaction_descriptor descriptor, sstables::compaction_data& cdata, release_exhausted_func_t release_exhausted,
+                                  can_purge_tombstones can_purge = can_purge_tombstones::yes);
     public:
         future<> run() noexcept;
 
@@ -322,8 +326,6 @@ private:
     future<> perform_sstable_scrub_validate_mode(replica::table* t);
 
     using get_candidates_func = std::function<future<std::vector<sstables::shared_sstable>>()>;
-    class can_purge_tombstones_tag;
-    using can_purge_tombstones = bool_class<can_purge_tombstones_tag>;
 
     future<> rewrite_sstables(replica::table* t, sstables::compaction_type_options options, get_candidates_func, can_purge_tombstones can_purge = can_purge_tombstones::yes);
 public:

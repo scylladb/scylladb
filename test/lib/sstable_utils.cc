@@ -156,11 +156,15 @@ token_generation_for_shard(unsigned tokens_to_generate, unsigned shard,
     return key_and_token_pair;
 }
 
-future<compaction_result> compact_sstables(sstables::compaction_descriptor descriptor, replica::column_family& cf, std::function<shared_sstable()> creator, compaction_sstable_replacer_fn replacer) {
+future<compaction_result> compact_sstables(sstables::compaction_descriptor descriptor, replica::column_family& cf, std::function<shared_sstable()> creator, compaction_sstable_replacer_fn replacer,
+                                           can_purge_tombstones can_purge) {
     descriptor.creator = [creator = std::move(creator)] (shard_id dummy) mutable {
         return creator();
     };
     descriptor.replacer = std::move(replacer);
+    if (can_purge) {
+        descriptor.enable_garbage_collection(cf.get_sstable_set());
+    }
     auto cmt = compaction_manager_test(cf.get_compaction_manager());
     sstables::compaction_result ret;
     co_await cmt.run(descriptor.run_identifier, &cf, [&] (sstables::compaction_data& cdata) {

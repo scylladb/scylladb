@@ -284,13 +284,16 @@ future<> compaction_manager::perform_task(shared_ptr<compaction_manager::task> t
     }
 }
 
-future<> compaction_manager::task::compact_sstables(sstables::compaction_descriptor descriptor, sstables::compaction_data& cdata, release_exhausted_func_t release_exhausted) {
+future<> compaction_manager::task::compact_sstables(sstables::compaction_descriptor descriptor, sstables::compaction_data& cdata, release_exhausted_func_t release_exhausted, can_purge_tombstones can_purge) {
     if (!descriptor.sstables.size()) {
         // if there is nothing to compact, just return.
         co_return;
     }
 
     replica::table& t = *_compacting_table;
+    if (can_purge) {
+        descriptor.enable_garbage_collection(t.get_sstable_set());
+    }
     descriptor.creator = [&t] (shard_id dummy) {
         auto sst = t.make_sstable();
         return sst;
@@ -1059,9 +1062,8 @@ private:
             replica::table& t = *_compacting_table;
             auto sstable_level = sst->get_sstable_level();
             auto run_identifier = sst->run_identifier();
-            auto sstable_set_snapshot = _can_purge ? std::make_optional(t.get_sstable_set()) : std::nullopt;
             // FIXME: this compaction should run with maintenance priority.
-            auto descriptor = sstables::compaction_descriptor({ sst }, std::move(sstable_set_snapshot), service::get_local_compaction_priority(),
+            auto descriptor = sstables::compaction_descriptor({ sst }, service::get_local_compaction_priority(),
                 sstable_level, sstables::compaction_descriptor::default_max_sstable_bytes, run_identifier, _options);
 
             // Releases reference to cleaned sstable such that respective used disk space can be freed.
@@ -1076,7 +1078,7 @@ private:
 
             std::exception_ptr ex;
             try {
-                co_await compact_sstables(std::move(descriptor), _compaction_data, std::move(release_exhausted));
+                co_await compact_sstables(std::move(descriptor), _compaction_data, std::move(release_exhausted), _can_purge);
                 finish_compaction();
                 _cm.reevaluate_postponed_compactions();
                 co_return;  // done with current sstable
@@ -1143,7 +1145,6 @@ private:
         try {
             auto desc = sstables::compaction_descriptor(
                     { sst },
-                    {},
                     _cm._maintenance_sg.io,
                     sst->get_sstable_level(),
                     sstables::compaction_descriptor::default_max_sstable_bytes,

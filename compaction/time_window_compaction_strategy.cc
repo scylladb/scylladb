@@ -178,7 +178,7 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
             });
             multi_window.resize(max_sstables);
         }
-        compaction_descriptor desc(std::move(multi_window), std::optional<sstables::sstable_set>(), iop);
+        compaction_descriptor desc(std::move(multi_window), iop);
         desc.options = compaction_type_options::make_reshape();
         return desc;
     }
@@ -204,7 +204,7 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
         }
     }
     if (!single_window.empty()) {
-        compaction_descriptor desc(std::move(single_window), std::optional<sstables::sstable_set>(), iop);
+        compaction_descriptor desc(std::move(single_window), iop);
         desc.options = compaction_type_options::make_reshape();
         return desc;
     }
@@ -233,11 +233,11 @@ time_window_compaction_strategy::get_sstables_for_compaction(table_state& table_
 
     if (!expired.empty()) {
         clogger.debug("Going to compact {} expired sstables", expired.size());
-        return compaction_descriptor(has_only_fully_expired::yes, std::vector<shared_sstable>(expired.begin(), expired.end()), table_s.get_sstable_set(), service::get_local_compaction_priority());
+        return compaction_descriptor(has_only_fully_expired::yes, std::vector<shared_sstable>(expired.begin(), expired.end()), service::get_local_compaction_priority());
     }
 
     auto compaction_candidates = get_next_non_expired_sstables(table_s, control, std::move(candidates), compaction_time);
-    return compaction_descriptor(std::move(compaction_candidates), table_s.get_sstable_set(), service::get_local_compaction_priority());
+    return compaction_descriptor(std::move(compaction_candidates), service::get_local_compaction_priority());
 }
 
 time_window_compaction_strategy::bucket_compaction_mode
