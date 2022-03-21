@@ -222,6 +222,7 @@ public:
     class regular_compaction_task;
     class offstrategy_compaction_task;
     class rewrite_sstables_compaction_task;
+    class cleanup_sstables_compaction_task;
     class validate_sstables_compaction_task;
     class compaction_manager_test_task;
 
@@ -326,6 +327,12 @@ private:
     future<> perform_sstable_scrub_validate_mode(replica::table* t);
 
     using get_candidates_func = std::function<future<std::vector<sstables::shared_sstable>>()>;
+
+    // Guarantees that a maintenance task, e.g. cleanup, will be performed on all files available at the time
+    // by retrieving set of candidates only after all compactions for table T were stopped, if any.
+    template<typename TaskType, typename... Args>
+    requires std::derived_from<TaskType, task>
+    future<> perform_task_on_all_files(replica::table* t, sstables::compaction_type_options options, get_candidates_func, Args... args);
 
     future<> rewrite_sstables(replica::table* t, sstables::compaction_type_options options, get_candidates_func, can_purge_tombstones can_purge = can_purge_tombstones::yes);
 public:
