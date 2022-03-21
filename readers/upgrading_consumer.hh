@@ -56,7 +56,11 @@ public:
         do_consume(std::move(mf));
     }
     void consume(clustering_row mf) {
-        flush_tombstones(mf.position());
+        // FIXME: Avoid a miscompilation on aarch64, where `mf` is moved before
+        // `flush_tombstones()` can finish, causing the latter to observe a view
+        // pointing at a moved-from position-in-partition.
+        position_in_partition pos = position_in_partition(mf.position());
+        flush_tombstones(pos);
         do_consume(std::move(mf));
     }
     void consume(range_tombstone rt) {
