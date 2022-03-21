@@ -21,7 +21,6 @@
 #include "readers/delegating.hh"
 #include "readers/multi_range.hh"
 #include "readers/from_mutations.hh"
-#include "readers/from_fragments.hh"
 #include "mutation_reader.hh"
 #include "schema_builder.hh"
 #include "replica/memtable.hh"
@@ -752,39 +751,6 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_reader_from_mutations_v2_as_mutation_sour
                 streamed_mutation::forwarding fwd_sm,
                 mutation_reader::forwarding) mutable {
             return make_flat_mutation_reader_from_mutations_v2(schema, std::move(permit), squash_mutations(muts), range, slice, fwd_sm);
-        });
-    };
-    run_mutation_source_tests(populate);
-}
-
-SEASTAR_THREAD_TEST_CASE(test_mutation_reader_from_fragments_as_mutation_source) {
-    tests::reader_concurrency_semaphore_wrapper semaphore;
-    auto populate = [] (schema_ptr, const std::vector<mutation> &muts) {
-        return mutation_source([=] (
-                schema_ptr schema,
-                reader_permit permit,
-                const dht::partition_range& range,
-                const query::partition_slice& slice,
-                const io_priority_class&,
-                tracing::trace_state_ptr,
-                streamed_mutation::forwarding fwd_sm,
-                mutation_reader::forwarding) mutable {
-            auto get_fragments = [&schema, &permit, &muts] {
-                std::deque<mutation_fragment> fragments;
-                auto rd = make_flat_mutation_reader_from_mutations(muts.front().schema(), permit, squash_mutations(muts));
-                auto close_rd = deferred_close(rd);
-                rd.consume_pausable([&fragments] (mutation_fragment mf) {
-                    fragments.emplace_back(std::move(mf));
-                    return stop_iteration::no;
-                }).get();
-                return fragments;
-            };
-
-            auto rd = make_flat_mutation_reader_from_fragments(schema, permit, get_fragments(), range, slice);
-            if (fwd_sm) {
-                return make_forwardable(std::move(rd));
-            }
-            return rd;
         });
     };
     run_mutation_source_tests(populate);
