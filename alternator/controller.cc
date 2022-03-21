@@ -78,6 +78,11 @@ future<> controller::start_server() {
 
         _executor.start(std::ref(_gossiper), std::ref(_proxy), std::ref(_mm), std::ref(_sys_dist_ks), sharded_parameter(get_cdc_metadata, std::ref(_cdc_gen_svc)), _ssg.value()).get();
         _server.start(std::ref(_executor), std::ref(_proxy), std::ref(_gossiper)).get();
+        // Note: from this point on, if start_server() throws for any reason,
+        // it must first call stop_server() to stop the executor and server
+        // services we just started - or Scylla will cause an assertion
+        // failure when the controller object is destroyed in the exception
+        // unwinding.
         std::optional<uint16_t> alternator_port;
         if (_config.alternator_port()) {
             alternator_port = _config.alternator_port();
@@ -104,7 +109,13 @@ future<> controller::start_server() {
             }
             opts.erase("require_client_auth");
             opts.erase("truststore");
-            utils::configure_tls_creds_builder(creds.value(), std::move(opts)).get();
+            try {
+                utils::configure_tls_creds_builder(creds.value(), std::move(opts)).get();
+            } catch(...) {
+                logger.error("Failed to set up Alternator TLS credentials: {}", std::current_exception());
+                stop_server().get();
+                std::throw_with_nested(std::runtime_error("Failed to set up Alternator TLS credentials"));
+            }
         }
         bool alternator_enforce_authorization = _config.alternator_enforce_authorization();
         _server.invoke_on_all(
