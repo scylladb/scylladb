@@ -17,6 +17,7 @@
 #include "test/lib/mutation_source_test.hh"
 #include "readers/flat_mutation_reader.hh"
 #include "readers/reversing.hh"
+#include "readers/reversing_v2.hh"
 #include "readers/forwardable.hh"
 #include "readers/delegating.hh"
 #include "readers/multi_range.hh"
@@ -818,7 +819,7 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_reader_memory_limit) {
         }
 
         const uint64_t hard_limit = size_t(1) << 18;
-        auto reverse_reader = make_reversing_reader(make_flat_mutation_reader_from_mutations(schema.schema(), semaphore.make_permit(), {mut}),
+        auto reverse_reader = make_reversing_reader(make_flat_mutation_reader_from_mutations_v2(schema.schema(), semaphore.make_permit(), {mut}),
                 query::max_result_size(size_t(1) << 10, hard_limit));
         auto close_reverse_reader = deferred_close(reverse_reader);
 
@@ -890,9 +891,9 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_reader_reads_in_native_reverse_order) {
         reverse_mt->apply(mut.build(reverse_schema));
     }
 
-    auto reversed_forward_reader = assert_that(make_reversing_reader(downgrade_to_v1(forward_mt->make_flat_reader(forward_schema, permit)), query::max_result_size(1 << 20)));
+    auto reversed_forward_reader = assert_that(make_reversing_reader(forward_mt->make_flat_reader(forward_schema, permit), query::max_result_size(1 << 20)));
 
-    auto reverse_reader = downgrade_to_v1(reverse_mt->make_flat_reader(reverse_schema, permit));
+    auto reverse_reader = reverse_mt->make_flat_reader(reverse_schema, permit);
     auto deferred_reverse_close = deferred_close(reverse_reader);
 
     while (auto mf_opt = reverse_reader().get()) {
@@ -936,6 +937,52 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_reader_is_mutation_source) {
             }
 
             rd = make_reversing_reader(std::move(rd), query::max_result_size(1 << 20));
+
+            if (fwd_sm) {
+                return make_forwardable(std::move(rd));
+            }
+            return rd;
+        });
+    };
+    run_mutation_source_tests(populate);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_reverse_reader_v2_is_mutation_source) {
+    auto populate = [] (schema_ptr s, const std::vector<mutation> &muts) {
+        auto reverse_schema = s->make_reversed();
+        auto reverse_muts = std::vector<mutation>();
+        reverse_muts.reserve(muts.size());
+        for (const auto& mut : muts) {
+            reverse_muts.emplace_back(reverse(mut));
+        }
+
+        return mutation_source([muts = squash_mutations(muts), reverse_muts = squash_mutations(reverse_muts)] (
+                schema_ptr schema,
+                reader_permit permit,
+                const dht::partition_range& range,
+                const query::partition_slice& slice,
+                const io_priority_class& pc,
+                tracing::trace_state_ptr trace_ptr,
+                streamed_mutation::forwarding fwd_sm,
+                mutation_reader::forwarding fwd_mr) mutable {
+            flat_mutation_reader_v2 rd(nullptr);
+            std::unique_ptr<query::partition_slice> reversed_slice;
+            std::vector<mutation>* selected_muts;
+
+            schema = schema->make_reversed();
+            const auto reversed = slice.options.contains(query::partition_slice::option::reversed);
+            if (reversed) {
+                reversed_slice = std::make_unique<query::partition_slice>(query::half_reverse_slice(*schema, slice));
+                selected_muts = &muts;
+            } else {
+                reversed_slice = std::make_unique<query::partition_slice>(query::reverse_slice(*schema, slice));
+                // We don't want the memtable reader to read in reverse.
+                reversed_slice->options.remove(query::partition_slice::option::reversed);
+                selected_muts = &reverse_muts;
+            }
+
+            rd = make_flat_mutation_reader_from_mutations_v2(schema, std::move(permit), *selected_muts, range, *reversed_slice);
+            rd = make_reversing_reader(std::move(rd), query::max_result_size(1 << 20), std::move(reversed_slice));
 
             if (fwd_sm) {
                 return make_forwardable(std::move(rd));

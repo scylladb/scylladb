@@ -29,6 +29,7 @@
 #include "readers/multi_range.hh"
 #include "readers/nonforwardable.hh"
 #include "readers/reversing.hh"
+#include "readers/reversing_v2.hh"
 #include "readers/slice_mutations.hh"
 #include "readers/upgrading_consumer.hh"
 #include <seastar/core/coroutine.hh>
@@ -539,6 +540,117 @@ flat_mutation_reader make_reversing_reader(flat_mutation_reader original, query:
     };
 
     return make_flat_mutation_reader<partition_reversing_mutation_reader>(std::move(original), max_size, std::move(slice));
+}
+
+flat_mutation_reader_v2 make_reversing_reader(flat_mutation_reader_v2 original, query::max_result_size max_size, std::unique_ptr<query::partition_slice> slice) {
+    class partition_reversing_mutation_reader final : public flat_mutation_reader_v2::impl {
+        flat_mutation_reader_v2 _source;
+        tombstone _current_tombstone;
+        query::max_result_size _max_size;
+        bool _below_soft_limit = true;
+        std::unique_ptr<query::partition_slice> _slice; // only stored, not used
+    private:
+        void check_buffer_size(const partition_key& key) {
+            const auto sz = buffer_size();
+            if (sz > _max_size.hard_limit || (sz > _max_size.soft_limit && _below_soft_limit)) [[unlikely]] {
+                if (buffer_size() > _max_size.hard_limit) {
+                    throw std::runtime_error(fmt::format(
+                            "Memory usage of reversed read exceeds hard limit of {} (configured via max_memory_for_unlimited_query_hard_limit), while reading partition {}",
+                            _max_size.hard_limit,
+                            key.with_schema(*_schema)));
+                } else {
+                    fmr_logger.warn(
+                            "Memory usage of reversed read exceeds soft limit of {} (configured via max_memory_for_unlimited_query_soft_limit), while reading partition {}",
+                            _max_size.soft_limit,
+                            key.with_schema(*_schema));
+                    _below_soft_limit = false;
+                }
+            }
+        }
+        void push_front(mutation_fragment_v2&& mf) {
+            unpop_mutation_fragment(std::move(mf));
+        }
+        void push_back(mutation_fragment_v2&& mf) {
+            push_mutation_fragment(std::move(mf));
+        }
+    public:
+        explicit partition_reversing_mutation_reader(flat_mutation_reader_v2 mr, query::max_result_size max_size, std::unique_ptr<query::partition_slice> slice)
+            : flat_mutation_reader_v2::impl(mr.schema()->make_reversed(), mr.permit())
+            , _source(std::move(mr))
+            , _max_size(max_size)
+            , _slice(std::move(slice))
+        { }
+
+        virtual future<> fill_buffer() override {
+            if (!is_buffer_empty()) {
+                co_return;
+            }
+            mutation_fragment_v2_opt ps, sr, pe;
+            const partition_key* pk = nullptr;
+            bool have_partition = false;
+
+            while (!have_partition) {
+                auto mf_opt = co_await _source();
+                if (!mf_opt) {
+                    break;
+                }
+                switch (mf_opt->mutation_fragment_kind()) {
+                    case mutation_fragment_v2::kind::partition_start:
+                        ps = std::move(mf_opt);
+                        pk = &ps->as_partition_start().key().key();
+                        break;
+                    case mutation_fragment_v2::kind::partition_end:
+                        pe = std::move(mf_opt);
+                        have_partition = true;
+                        break;
+                    case mutation_fragment_v2::kind::static_row:
+                        sr = std::move(mf_opt);
+                        break;
+                    case mutation_fragment_v2::kind::range_tombstone_change:
+                        mf_opt->mutate_as_range_tombstone_change(*_schema, [this] (range_tombstone_change& rtc) {
+                            rtc.set_position(std::move(rtc).position().reversed());
+                            rtc.set_tombstone(std::exchange(_current_tombstone, rtc.tombstone()));
+                        });
+                        [[fallthrough]];
+                    case mutation_fragment_v2::kind::clustering_row:
+                        push_front(std::move(*mf_opt));
+                        check_buffer_size(*pk);
+                        break;
+                }
+            }
+
+            if (have_partition) {
+                if (sr) {
+                    push_front(std::move(*sr));
+                }
+                push_front(std::move(*ps));
+                push_back(std::move(*pe));
+            }
+            _end_of_stream = _source.is_end_of_stream();
+        }
+
+        virtual future<> next_partition() override {
+            clear_buffer_to_next_partition();
+            _end_of_stream = false;
+            return _source.next_partition();
+        }
+
+        virtual future<> fast_forward_to(const dht::partition_range& pr) override {
+            clear_buffer();
+            _end_of_stream = false;
+            return _source.fast_forward_to(pr);
+        }
+
+        virtual future<> fast_forward_to(position_range) override {
+            return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
+        }
+
+        virtual future<> close() noexcept override {
+            return _source.close();
+        }
+    };
+
+    return make_flat_mutation_reader_v2<partition_reversing_mutation_reader>(std::move(original), max_size, std::move(slice));
 }
 
 flat_mutation_reader make_nonforwardable(flat_mutation_reader r, bool single_partition) {
