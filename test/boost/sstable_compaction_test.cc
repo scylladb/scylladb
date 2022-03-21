@@ -4921,3 +4921,68 @@ SEASTAR_TEST_CASE(simple_backlog_controller_test) {
        run_controller_test(sstables::compaction_strategy_type::leveled, env);
     });
 }
+
+SEASTAR_TEST_CASE(test_compaction_strategy_cleanup_method) {
+    return test_env::do_with_async([] (test_env& env) {
+        constexpr size_t all_files = 64;
+
+        auto get_cleanup_jobs = [&env, &all_files] (sstables::compaction_strategy_type compaction_strategy_type) {
+            auto builder = schema_builder("tests", "test_compaction_strategy_cleanup_method")
+                    .with_column("id", utf8_type, column_kind::partition_key)
+                    .with_column("cl", int32_type, column_kind::clustering_key)
+                    .with_column("value", int32_type);
+            builder.set_compaction_strategy(compaction_strategy_type);
+            auto s = builder.build();
+
+            auto tmp = tmpdir();
+            auto tokens = token_generation_for_shard(all_files, this_shard_id(), test_db_config.murmur3_partitioner_ignore_msb_bits(), smp::count);
+
+            column_family_for_tests cf(env.manager(), s, tmp.path().string());
+            auto close_cf = deferred_stop(cf);
+            auto sst_gen = [&env, &cf, s, &tmp]() mutable {
+                return env.make_sstable(s, tmp.path().string(), column_family_test::calculate_generation_for_new_table(*cf),
+                                        sstables::get_highest_sstable_version(), big);
+            };
+
+            auto make_mutation = [&](unsigned pkey_idx) {
+                auto pkey = partition_key::from_exploded(*s, {to_bytes(tokens[pkey_idx].first)});
+                mutation m(s, pkey);
+                auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(1)});
+                m.set_clustered_cell(c_key, bytes("value"), data_value(int32_t(1)), gc_clock::now().time_since_epoch().count());
+                return m;
+            };
+
+            std::vector<sstables::shared_sstable> candidates;
+            candidates.reserve(all_files);
+            for (auto i = 0; i < all_files; i++) {
+                candidates.push_back(make_sstable_containing(sst_gen, {make_mutation(i)}));
+            }
+
+            auto strategy = cf->get_compaction_strategy();
+            auto jobs = strategy.get_cleanup_compaction_jobs(cf->as_table_state(), candidates);
+            return std::make_pair(std::move(candidates), std::move(jobs));
+        };
+
+        auto run_cleanup_strategy_test = [&] (sstables::compaction_strategy_type compaction_strategy_type, size_t per_job_files) {
+            size_t target_job_count = all_files / per_job_files;
+            auto [candidates, descriptors] = get_cleanup_jobs(compaction_strategy_type);
+            BOOST_REQUIRE(descriptors.size() == target_job_count);
+            auto generations = boost::copy_range<std::unordered_set<unsigned>>(candidates | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::generation)));
+            auto check_desc = [&] (const auto& desc) {
+                BOOST_REQUIRE(desc.sstables.size() == per_job_files);
+                for (auto& sst: desc.sstables) {
+                    BOOST_REQUIRE(generations.erase(sst->generation()));
+                }
+            };
+            for (auto& desc : descriptors) {
+                check_desc(desc);
+            }
+        };
+
+        // STCS: Check that 2 jobs are returned for a size tier containing 2x more files than max threshold.
+        run_cleanup_strategy_test(sstables::compaction_strategy_type::size_tiered, 32);
+
+        // Default implementation: check that it will return one job for each file
+        run_cleanup_strategy_test(sstables::compaction_strategy_type::null, 1);
+    });
+}
