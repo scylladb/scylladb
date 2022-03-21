@@ -383,6 +383,40 @@ Open the link printed at the end. Be horrified. Go and write more tests.
 
 For more details see `./scripts/coverage.py --help`.
 
+### Resolving stack backtraces
+
+Scylla may print stack backtraces to the log for several reasons.
+For example:
+- When aborting (e.g. due to assertion failure, internal error, or segfault)
+- When detecting seastar reactor stalls (where a seastar task runs for a long time without yielding the cpu to other tasks on that shard)
+
+The backtraces contain code pointers so they are not very helpful without resolving into code locations.
+To resolve the backtraces, one needs the scylla relocatable package that contains the scylla binary (with debug information),
+as well as the dynamic libraries it is linked against.
+
+Builds from our automated build system are uploaded to the cloud
+and can be searched on http://backtrace.scylladb.com/
+
+Make sure you have the scylla server exact `build-id` to locate
+its respective relocatable package, required for decoding backtraces it prints.
+
+The build-id is printed to the system log when scylla starts.
+It can also be found by executing `scylla --build-id`, or
+by using the `file` utility, for example:
+```
+$ scylla --build-id
+4cba12e6eb290a406bfa4930918db23941fd4be3
+
+$ file scylla
+scylla: ELF 64-bit LSB executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////lib64/ld-linux-x86-64.so.2, for GNU/Linux 3.2.0, BuildID[sha1]=4cba12e6eb290a406bfa4930918db23941fd4be3, with debug_info, not stripped, too many notes (256)
+```
+
+To find the build-id of a coredump, use the `eu-unstrip` utility as follows:
+```
+$ eu-unstrip -n --core <coredump> | awk '/scylla$/ { s=$2; sub(/@.*$/, "", s); print s; exit(0); }'
+4cba12e6eb290a406bfa4930918db23941fd4be3
+```
+
 ### Core dump debugging
 
 See [debugging.md](debugging.md).
