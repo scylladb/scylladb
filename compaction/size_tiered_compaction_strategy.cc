@@ -267,4 +267,30 @@ size_tiered_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
     return compaction_descriptor();
 }
 
+std::vector<compaction_descriptor>
+size_tiered_compaction_strategy::get_cleanup_compaction_jobs(table_state& table_s, const std::vector<shared_sstable>& candidates) const {
+    std::vector<compaction_descriptor> ret;
+    const auto& schema = table_s.schema();
+    unsigned max_threshold = schema->max_compaction_threshold();
+
+    for (auto& bucket : get_buckets(candidates)) {
+        if (bucket.size() > max_threshold) {
+            // preserve token contiguity
+            std::ranges::sort(bucket, [&schema] (const shared_sstable& a, const shared_sstable& b) {
+                return a->get_first_decorated_key().tri_compare(*schema, b->get_first_decorated_key()) < 0;
+            });
+        }
+        auto it = bucket.begin();
+        while (it != bucket.end()) {
+            unsigned remaining = std::distance(it, bucket.end());
+            unsigned needed = std::min(remaining, max_threshold);
+            std::vector<shared_sstable> sstables;
+            std::move(it, it + needed, std::back_inserter(sstables));
+            ret.push_back(compaction_descriptor(std::move(sstables), service::get_local_compaction_priority()));
+            std::advance(it, needed);
+        }
+    }
+    return ret;
+}
+
 }
