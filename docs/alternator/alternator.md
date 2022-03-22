@@ -75,10 +75,10 @@ So Alternator supports four _write isolation policies_, which can be chosen
 on a per-table basis and may make sense for certain workloads as explained
 below.
 
-A default write isolation policy **must** be chosen using the
-`--alternator-write-isolation` configuration option. Additionally, the write
-isolation policy for a specific table can be overridden by tagging the table
-(at CreateTable time, or any time later with TagResource) with the key
+A default write isolation policy is `always_use_lwt`, and it can be overwritten
+using the `--alternator-write-isolation` configuration option. Additionally,
+the write isolation policy for a specific table can be overridden by tagging
+the table (at CreateTable time, or any time later with TagResource) with the key
 `system:write_isolation`, and one of the following values:
 
   * `a`, `always`, or `always_use_lwt` - This mode performs every write

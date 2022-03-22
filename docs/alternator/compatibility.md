@@ -46,13 +46,14 @@ non-LWT write. Furthermore, if Alternator is told that a certain workload
 does have do both write-only and read-modify-write, but to *different* items,
 it could use LWT only for the read-modify-write operations.
 
-Therefore, Alternator must be explicitly configured to tell it which of the
+Therefore, Alternator can be explicitly configured to tell it which of the
 above assumptions it may make on the write workload. This configuration is
-mandatory, and described in the "Write isolation policies" section of
-alternator.md. One of the options, `always_use_lwt`, is always safe, but the
-other options result in significantly better write performance and should be
-considered when the workload involves pure writes (e.g., ingestion of new
-data) or if pure writes and read-modify-writes go to distinct items.
+optional, defaults to `always_use_lwt`, and is described in the
+"Write isolation policies" section of alternator.md. One of the options,
+`always_use_lwt`, is always safe, but the other options result in significantly
+better write performance and should be considered when the workload involves
+pure writes (e.g., ingestion of new data) or if pure writes and read-modify-writes
+go to distinct items.
 
 ## Authorization
 
