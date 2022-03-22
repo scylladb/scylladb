@@ -17,6 +17,7 @@
 #include "db/config.hh"
 #include "db/large_data_handler.hh"
 #include "gms/feature_service.hh"
+#include "readers/combined.hh"
 #include "schema_builder.hh"
 #include "sstables/index_reader.hh"
 #include "sstables/sstables_manager.hh"

@@ -18,6 +18,7 @@
 #include "row_cache.hh"
 #include "log.hh"
 #include "schema_builder.hh"
+#include "readers/combined.hh"
 #include "replica/memtable.hh"
 #include "test/perf/perf.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"

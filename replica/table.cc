@@ -49,6 +49,7 @@
 #include "readers/empty_v2.hh"
 #include "readers/multi_range.hh"
 #include "readers/conversion.hh"
+#include "readers/combined.hh"
 
 namespace replica {
 

@@ -25,6 +25,7 @@
 #include "test/lib/mutation_source_test.hh"
 #include "partition_slice_builder.hh"
 #include "test/lib/tmpdir.hh"
+#include "readers/combined.hh"
 #include "replica/memtable-sstable.hh"
 #include "test/lib/index_reader_assertions.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"

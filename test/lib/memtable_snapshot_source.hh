@@ -8,7 +8,8 @@
 
 #pragma once
 
-#include "mutation_reader.hh"
+#include "readers/combined.hh"
+#include "readers/flat_mutation_reader_v2.hh"
 #include "replica/memtable.hh"
 #include "utils/phased_barrier.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"

@@ -69,6 +69,7 @@
 #include "test/lib/random_utils.hh"
 #include "readers/from_mutations_v2.hh"
 #include "readers/from_fragments_v2.hh"
+#include "readers/combined.hh"
 
 namespace fs = std::filesystem;
 

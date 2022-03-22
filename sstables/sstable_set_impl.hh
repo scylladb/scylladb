@@ -12,7 +12,7 @@
 
 #include "compatible_ring_position.hh"
 #include "sstable_set.hh"
-#include "mutation_reader.hh"
+#include "readers/clustering_combined.hh"
 
 namespace sstables {
 
