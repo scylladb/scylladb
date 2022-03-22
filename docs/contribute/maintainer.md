@@ -167,6 +167,13 @@ latest submodules.
     imformation. For example, amend the message with `Fixes` tags.
  4. Use `git push` to publish your work.
 
+By default refresh-submodules.sh will refresh all submodules from their
+master branches. It's possible to specify submodules and branches as command
+line arguments. Each is treated by the script as `name[:branch]`, so for
+example the `refresh-submodules.sh seastar` will only refresh the seastar
+submodule and `refresh-submodules.sh seastar:foo` will do it fetching from
+the remote `foo` branch.
+
 ## Backporting patches
 
 To backport a patch, check out the next branch of the relevant
@@ -223,3 +230,14 @@ After this is done, backporting seastar patches can proceed:
     step 8.
  10. Publish using `git push`.
 
+Alternatively
+ * In the `scylla-seastar` repository
+ 1. Check out the relevant branch (the `branch-3.2` from the example above) 
+ 2. Apply all the necessary patches (by cherry-picking them or doing any
+    other relevant manipulations)
+ 3. Push the udpated branch.
+ * In the `scylla` repository
+ 1. Check out the relevant next branch (e.g. `next-3.2` one)
+ 2. Use the refreshing script specifying the `seastar:<branch>` as its
+    first argument (`refresh-submodules.sh seastar:branch-3.2`)
+ 3. Publish with `git push`.
