@@ -1466,12 +1466,17 @@ class seastar_lw_shared_ptr():
         self.ref = ref
         self.elem_type = ref.type.template_argument(0)
 
+    def _no_esft_type(self):
+        try:
+            return gdb.lookup_type('seastar::lw_shared_ptr_no_esft<%s>' % remove_prefix(str(self.elem_type.unqualified()), 'class ')).pointer()
+        except:
+            return gdb.lookup_type('seastar::shared_ptr_no_esft<%s>' % remove_prefix(str(self.elem_type.unqualified()), 'class ')).pointer()
+
     def get(self):
         if has_enable_lw_shared_from_this(self.elem_type):
             return self.ref['_p'].cast(self.elem_type.pointer())
         else:
-            type = gdb.lookup_type('seastar::shared_ptr_no_esft<%s>' % remove_prefix(str(self.elem_type.unqualified()), 'class ')).pointer()
-            return self.ref['_p'].cast(type)['_value'].address
+            return self.ref['_p'].cast(self._no_esft_type())['_value'].address
 
 
 def all_tables(db):
