@@ -1017,7 +1017,7 @@ future<> migration_manager::announce_with_raft(std::vector<mutation> schema, gro
     do {
         retry = false;
         try {
-            co_await _raft_gr.group0().add_entry(cmd, raft::wait_type::applied);
+            co_await _raft_gr.group0().add_entry(cmd, raft::wait_type::applied, &_as);
         } catch (const raft::dropped_entry& e) {
             mlogger.warn("`announce_with_raft`: `add_entry` returned \"{}\". Retrying the command (prev_state_id: {}, new_state_id: {})",
                     e, group0_cmd.prev_state_id, group0_cmd.new_state_id);
@@ -1103,7 +1103,7 @@ future<group0_guard> migration_manager::start_group0_operation() {
         }
 
         auto operation_holder = co_await get_units(_group0_operation_mutex, 1);
-        co_await _raft_gr.group0().read_barrier();
+        co_await _raft_gr.group0().read_barrier(&_as);
 
         // Take `_group0_read_apply_mutex` *after* read barrier.
         // Read barrier may wait for `group0_state_machine::apply` which also takes this mutex.
