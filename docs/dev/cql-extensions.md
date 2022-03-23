@@ -133,6 +133,47 @@ token ranges.
 
 ## Expressions
 
+## REDUCEFUNC for UDA
+
+REDUCEFUNC extension adds optional reduction function to user-defined aggregate.
+This allows to speed up aggregation query execution by distributing the calculations
+to other nodes and reducing partial results into final one.
+Specification of this function is it has to be scalar function with two arguments,
+both of the same type as UDA's state, also returing the state type.
+
+```cql
+CREATE FUNCTION row_fct(acc tuple<bigint, int>, val int)
+RETURNS NULL ON NULL INPUT
+RETURNS tuple<bigint, int>
+LANGUAGE lua
+AS $$
+  return { acc[1]+val, acc[2]+1 }
+$$;
+
+CREATE FUNCTION reduce_fct(acc tuple<bigint, int>, acc2 tuple<bigint, int>)
+RETURNS NULL ON NULL INPUT
+RETURNS tuple<bigint, int>
+LANGUAGE lua
+AS $$
+  return { acc[1]+acc2[1], acc[2]+acc2[2] }
+$$;
+
+CREATE FUNCTION final_fct(acc tuple<bigint, int>)
+RETURNS NULL ON NULL INPUT
+RETURNS double
+LANGUAGE lua
+AS $$
+  return acc[1]/acc[2]
+$$;
+
+CREATE AGGREGATE custom_avg(int)
+SFUNC row_fct
+STYPE tuple<bigint, int>
+REDUCEFUNC reduce_fct
+FINALFUNC final_fct
+INITCOND (0, 0);
+```
+
 ### Lists elements for filtering
 
 Subscripting a list in a WHERE clause is supported as are maps.

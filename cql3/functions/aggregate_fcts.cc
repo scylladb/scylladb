@@ -482,10 +482,11 @@ static data_type uda_return_type(const ::shared_ptr<scalar_function>& ffunc, con
     return ffunc ? ffunc->return_type() : sfunc->return_type();
 }
 
-user_aggregate::user_aggregate(function_name fname, bytes_opt initcond, ::shared_ptr<scalar_function> sfunc, ::shared_ptr<scalar_function> finalfunc)
+user_aggregate::user_aggregate(function_name fname, bytes_opt initcond, ::shared_ptr<scalar_function> sfunc, ::shared_ptr<scalar_function> reducefunc, ::shared_ptr<scalar_function> finalfunc)
         : abstract_function(std::move(fname), state_arg_types_to_uda_arg_types(sfunc->arg_types()), uda_return_type(finalfunc, sfunc))
         , _initcond(std::move(initcond))
         , _sfunc(std::move(sfunc))
+        , _reducefunc(std::move(reducefunc))
         , _finalfunc(std::move(finalfunc))
 {}
 

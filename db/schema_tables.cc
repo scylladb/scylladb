@@ -1650,7 +1650,7 @@ static shared_ptr<cql3::functions::user_aggregate> create_aggregate(replica::dat
         initcond = state_type->from_string(initcond_str.value());
     }
 
-    return ::make_shared<cql3::functions::user_aggregate>(name, initcond, std::move(state_func), std::move(final_func));
+    return ::make_shared<cql3::functions::user_aggregate>(name, initcond, std::move(state_func), nullptr, std::move(final_func));
 
 }
 

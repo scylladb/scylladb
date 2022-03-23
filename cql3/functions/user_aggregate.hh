@@ -18,9 +18,10 @@ namespace functions {
 class user_aggregate : public abstract_function, public aggregate_function{
     bytes_opt _initcond;
     ::shared_ptr<scalar_function> _sfunc;
+    ::shared_ptr<scalar_function> _reducefunc;
     ::shared_ptr<scalar_function> _finalfunc;
 public:
-    user_aggregate(function_name fname, bytes_opt initcond, ::shared_ptr<scalar_function> sfunc, ::shared_ptr<scalar_function> finalfunc);
+    user_aggregate(function_name fname, bytes_opt initcond, ::shared_ptr<scalar_function> sfunc, ::shared_ptr<scalar_function> reducefunc, ::shared_ptr<scalar_function> finalfunc);
     virtual std::unique_ptr<aggregate_function::aggregate> new_aggregate() override;
     virtual bool is_pure() const override;
     virtual bool is_native() const override;
