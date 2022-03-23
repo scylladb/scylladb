@@ -163,6 +163,9 @@ def find_scylla():
     return max(scyllas, key=os.path.getmtime)
 
 scylla = os.path.abspath(os.getenv('SCYLLA') or find_scylla())
+if not os.access(scylla, os.X_OK):
+    print("Cannot execute '{}'.\nPlease set SCYLLA to the path of a Scylla executable.".format(scylla))
+    exit(1)
 
 def run_scylla_cmd(pid, dir):
     ip = pid_to_ip(pid)
