@@ -5,6 +5,8 @@
 import pytest
 import sys
 import requests
+import threading
+import time
 
 # Use the util.py library from ../cql-pytest:
 sys.path.insert(1, sys.path[0] + '/../cql-pytest')
@@ -152,3 +154,58 @@ def test_storage_service_keyspace_bad_param(cql, this_dc, rest_api):
         resp = rest_api.send("GET", f"storage_service/keyspace_scrub/{keyspace}", { "foo": "bar" })
         assert resp.status_code == requests.codes.bad_request
 
+# Unfortunately by default Python threads print their exceptions
+# (e.g., assertion failures) but don't propagate them to the join(),
+# so the overall test doesn't fail. The following Thread wrapper
+# causes join() to rethrow the exception, so the test will fail.
+class ThreadWrapper(threading.Thread):
+    def run(self):
+        try:
+            self.ret = self._target(*self._args, **self._kwargs)
+        except BaseException as e:
+            self.exception = e
+    def join(self, timeout=None):
+        super().join(timeout)
+        if hasattr(self, 'exception'):
+            raise self.exception
+        return self.ret
+
+# Reproduce issue #9061, where if we have a partition key with characters
+# that need escaping in JSON, the toppartitions response failed to escape
+# them. The underlying bug was a Seastar bug in JSON in the HTTP server:
+# https://github.com/scylladb/seastar/issues/460
+def test_toppartitions_pk_needs_escaping(cql, this_dc, rest_api):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
+        with new_test_table(cql, keyspace, "p text PRIMARY KEY") as table:
+            # Use a newline character as part of the partition key pk. When
+            # toppartitions later returns it, it must escape it (as pk_json)
+            # or yield an invalid JSON with a literal newline in a string.
+            pk = 'hi\nhello'
+            pk_json = r'hi\nhello'
+            # Unfortunately, the toppartitions API doesn't let us mark the
+            # beginning and end of the sampling period. Instead we need to
+            # start the toppartitions for a predefined period, and in
+            # parallel, make the request. Sad.
+            def toppartitions():
+                ks, cf = table.split('.')
+                resp = rest_api.send('GET', 'storage_service/toppartitions', {'table_filters': f'{ks}:{cf}', 'duration': '1000'})
+                assert resp.ok
+                # resp.json() will raise an error if not valid JSON
+                resp.json()
+                assert pk_json in resp.text
+            def insert():
+                # We need to wait enough time for the toppartitions request
+                # to have been sent, but unfortunately we don't know when
+                # this happens because the request doesn't return until the
+                # "duration" ends. So we hope 0.5 seconds is enough.
+                # TODO: we can use the log to check when the toppartitions
+                # request was received.
+                time.sleep(0.5)
+                stmt = cql.prepare(f"INSERT INTO {table} (p) VALUES (?)")
+                cql.execute(stmt, [pk])
+            t1 = ThreadWrapper(target=toppartitions)
+            t2 = ThreadWrapper(target=insert)
+            t1.start()
+            t2.start()
+            t1.join()
+            t2.join()
