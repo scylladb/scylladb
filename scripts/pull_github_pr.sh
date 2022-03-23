@@ -63,3 +63,13 @@ else
 	git merge --no-ff --log=1000 FETCH_HEAD -m "Merge '$PR_TITLE' from $USER_NAME" -m "${PR_DESCR}${closes}"
 fi
 git commit --amend # for a manual double-check
+
+# Check PR tests status
+PR_HEAD_SHA=$(jq -r .head.sha <<< $PR_DATA)
+PR_TESTS_STATUS=$(curl -s "https://api.github.com/repos/$PROJECT/commits/$PR_HEAD_SHA/status" | jq -r .state)
+if [ "$PR_TESTS_STATUS" != "success" ]; then
+  ORANGE='\033[0;33m'
+  NC='\033[0m'
+  echo -e "${ORANGE}\nWARNING:${NC} Some of the tests that ran for this PR were not completed successfully,\n" \
+        "please make sure all tests are done successfully before merge this PR.\n"
+fi
