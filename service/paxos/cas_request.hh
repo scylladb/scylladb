@@ -10,6 +10,7 @@
 #include <optional>
 
 #include "timestamp.hh"
+#include <seastar/core/sharded.hh>
 
 class mutation;
 

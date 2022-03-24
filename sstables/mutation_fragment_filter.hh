@@ -11,6 +11,7 @@
 #include "mutation_fragment.hh"
 #include "clustering_ranges_walker.hh"
 #include "clustering_key_filter.hh"
+#include "readers/flat_mutation_reader_fwd.hh"
 
 namespace sstables {
 

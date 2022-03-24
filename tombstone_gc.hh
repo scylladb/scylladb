@@ -12,6 +12,7 @@
 #include "gc_clock.hh"
 #include "dht/token.hh"
 #include "schema_fwd.hh"
+#include "range.hh"
 
 namespace dht {
 
@@ -21,11 +22,17 @@ using token_range = nonwrapping_range<token>;
 
 }
 
+class tombstone_gc_options;
+
 struct get_gc_before_for_range_result {
     gc_clock::time_point min_gc_before;
     gc_clock::time_point max_gc_before;
     bool knows_entire_range;
 };
+
+namespace replica {
+    class database;
+}
 
 void drop_repair_history_map_for_table(const utils::UUID& id);
 

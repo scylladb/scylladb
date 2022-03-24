@@ -14,6 +14,7 @@
 #include "m_format_read_helpers.hh"
 #include "sstables/mx/parsers.hh"
 #include "sstables/index_entry.hh"
+#include <seastar/core/circular_buffer.hh>
 
 namespace sstables {
 
