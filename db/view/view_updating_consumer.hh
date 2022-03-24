@@ -15,6 +15,7 @@
 #include "reader_permit.hh"
 #include "db/view/row_locking.hh"
 #include <seastar/core/abort_source.hh>
+#include <seastar/core/circular_buffer.hh>
 #include "mutation.hh"
 #include "mutation_rebuilder.hh"
 

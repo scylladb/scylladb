@@ -13,6 +13,7 @@
 #include <seastar/core/future-util.hh>
 
 #include "raft/logical_clock.hh"
+#include "raft/raft.hh"
 
 using namespace seastar;
 

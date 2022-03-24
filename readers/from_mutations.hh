@@ -11,6 +11,7 @@
 #include "dht/i_partitioner_fwd.hh"
 #include <vector>
 #include "mutation_fragment_fwd.hh"
+#include "readers/flat_mutation_reader_fwd.hh"
 
 class flat_mutation_reader;
 class reader_permit;
