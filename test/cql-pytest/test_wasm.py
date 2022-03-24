@@ -64,9 +64,9 @@ def test_fib(cql, test_keyspace, table1, scylla_with_wasm_only):
         res = [row for row in cql.execute(f"SELECT {test_keyspace}.{fib_name}(p) AS result FROM {table} WHERE p = 14")]
         assert len(res) == 1 and res[0].result == 377
 
-        # This function cannot be called on null values
-        with pytest.raises(InvalidRequest, match="null value"):
-            cql.execute(f"SELECT {test_keyspace}.{fib_name}(p2) AS result FROM {table} WHERE p = 14")
+        # This function returns null on null values
+        res = [row for row in cql.execute(f"SELECT {test_keyspace}.{fib_name}(p2) AS result FROM {table} WHERE p = 14")]
+        assert len(res) == 1 and res[0].result is None
 
         cql.execute(f"INSERT INTO {table} (p) VALUES (997)")
         # The call request takes too much time and resources, and should therefore fail
