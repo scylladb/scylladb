@@ -40,6 +40,11 @@ bytes_opt user_function::execute(cql_serialization_format sf, const std::vector<
     if (!seastar::thread::running_in_thread()) {
         on_internal_error(log, "User function cannot be executed in this context");
     }
+    for (auto& param : parameters) {
+        if (!param && !_called_on_null_input) {
+            return std::nullopt;
+        }
+    }
     return seastar::visit(_ctx,
         [&] (lua_context& ctx) -> bytes_opt {
             std::vector<data_value> values;
@@ -47,9 +52,6 @@ bytes_opt user_function::execute(cql_serialization_format sf, const std::vector<
             for (int i = 0, n = types.size(); i != n; ++i) {
                 const data_type& type = types[i];
                 const bytes_opt& bytes = parameters[i];
-                if (!bytes && !_called_on_null_input) {
-                    return std::nullopt;
-                }
                 values.push_back(bytes ? type->deserialize(*bytes) : data_value::make_null(type));
             }
             return lua::run_script(lua::bitcode_view{ctx.bitcode}, values, return_type(), ctx.cfg).get0();
