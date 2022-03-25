@@ -1283,7 +1283,6 @@ future<> system_keyspace::save_local_supported_features(const std::set<std::stri
 struct local_cache {
     std::unordered_map<gms::inet_address, locator::endpoint_dc_rack> _cached_dc_rack_info;
     system_keyspace::bootstrap_state _state;
-    std::optional<utils::UUID> _cached_local_host_id;
     future<> stop() {
         return make_ready_future<>();
     }
@@ -2720,23 +2719,12 @@ future<utils::UUID> system_keyspace::load_local_host_id() {
         co_return co_await set_local_host_id(utils::make_random_uuid());
     } else {
         auto host_id = msg->one().get_as<utils::UUID>("host_id");
-        co_await smp::invoke_on_all([host_id] { _local_cache.local()._cached_local_host_id = host_id; });
         slogger.info("Loaded local host id: {}", host_id);
         co_return host_id;
     }
 }
 
 future<utils::UUID> system_keyspace::set_local_host_id(utils::UUID host_id) {
-    // Order of operations is important here: we need to cache the
-    // host id _before_ flushing system.local to prevent a cycle (the
-    // alternative would be checking "is this system.local" when
-    // setting host id in sstable metadata).
-    //
-    // Caching optimistically before commiting to disk is, strictly
-    // speaking, not nice -- but any failure during bootstrap should
-    // be unrecoverable anyway, so this little infidelity shouldn't
-    // matter.
-    co_await smp::invoke_on_all([host_id] { _local_cache.local()._cached_local_host_id = host_id; });
     slogger.info("Setting local host id to {}", host_id);
 
     sstring req = format("INSERT INTO system.{} (key, host_id) VALUES (?, ?)", LOCAL);
