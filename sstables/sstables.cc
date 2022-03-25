@@ -2188,19 +2188,6 @@ sstable::make_crawling_reader(
     return upgrade_to_v2(kl::make_crawling_reader(shared_from_this(), std::move(schema), std::move(permit), pc, std::move(trace_state), monitor));
 }
 
-flat_mutation_reader
-sstable::make_crawling_reader_v1(
-        schema_ptr schema,
-        reader_permit permit,
-        const io_priority_class& pc,
-        tracing::trace_state_ptr trace_state,
-        read_monitor& monitor) {
-    if (_version >= version_types::mc) {
-        return downgrade_to_v1(mx::make_crawling_reader(shared_from_this(), std::move(schema), std::move(permit), pc, std::move(trace_state), monitor));
-    }
-    return kl::make_crawling_reader(shared_from_this(), std::move(schema), std::move(permit), pc, std::move(trace_state), monitor);
-}
-
 static entry_descriptor make_entry_descriptor(sstring sstdir, sstring fname, sstring* const provided_ks, sstring* const provided_cf) {
     static std::regex la_mx("(la|m[cde])-(\\d+)-(\\w+)-(.*)");
     static std::regex ka("(\\w+)-(\\w+)-ka-(\\d+)-(.*)");
