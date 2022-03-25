@@ -1542,7 +1542,7 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
 
     // make magic happen
     slogger.info("Checking remote features with gossip");
-    return _gossiper.do_shadow_round(initial_contact_nodes).then([this, loaded_peer_features, replace_address] {
+    co_await _gossiper.do_shadow_round(initial_contact_nodes);
         auto local_features = _feature_service.known_feature_set();
         _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
 
@@ -1565,14 +1565,11 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
 
         replacement_info ret {std::move(tokens)};
 
-        // use the replacee's host Id as our own so we receive hints, etc
-        auto host_id = _gossiper.get_host_id(replace_address);
-        return db::system_keyspace::set_local_host_id(host_id).discard_result().then([this, ret = std::move(ret)] () mutable {
-            return _gossiper.reset_endpoint_state_map().then([ret = std::move(ret)] () mutable { // clean up since we have what we need
-                return make_ready_future<replacement_info>(std::move(ret));
-            });
-        });
-    });
+    // use the replacee's host Id as our own so we receive hints, etc
+    auto host_id = _gossiper.get_host_id(replace_address);
+    co_await db::system_keyspace::set_local_host_id(host_id).discard_result();
+    co_await _gossiper.reset_endpoint_state_map();
+    co_return ret;
 }
 
 future<std::map<gms::inet_address, float>> storage_service::get_ownership() {
