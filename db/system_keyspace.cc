@@ -2672,7 +2672,7 @@ static void install_virtual_readers(replica::database& db) {
     }
 }
 
-static bool maybe_write_in_user_memory(schema_ptr s, replica::database& db) {
+static bool maybe_write_in_user_memory(schema_ptr s) {
     return (s.get() == system_keyspace::batchlog().get()) || (s.get() == system_keyspace::paxos().get())
             || s == system_keyspace::v3::scylla_views_builds_in_progress()
             || s == system_keyspace::raft();
@@ -2697,7 +2697,7 @@ future<> system_keyspace_make(distributed<replica::database>& dist_db, distribut
         }
         auto& ks = db.find_keyspace(ks_name);
         auto cfg = ks.make_column_family_config(*table, db);
-        if (maybe_write_in_user_memory(table, db)) {
+        if (maybe_write_in_user_memory(table)) {
             cfg.dirty_memory_manager = &db._dirty_memory_manager;
         } else {
             cfg.memtable_scheduling_group = default_scheduling_group();
