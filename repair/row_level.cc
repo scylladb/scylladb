@@ -48,6 +48,7 @@
 #include "idl/partition_checksum.dist.hh"
 #include "readers/empty.hh"
 #include "readers/evictable.hh"
+#include "readers/queue.hh"
 
 extern logging::logger rlogger;
 

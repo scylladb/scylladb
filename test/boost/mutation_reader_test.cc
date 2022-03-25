@@ -60,6 +60,7 @@
 #include "readers/foreign.hh"
 #include "readers/filtering.hh"
 #include "readers/evictable.hh"
+#include "readers/queue.hh"
 
 static schema_ptr make_schema() {
     return schema_builder("ks", "cf")
