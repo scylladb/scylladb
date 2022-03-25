@@ -21,6 +21,7 @@
 #include "cql3/query_processor.hh"
 #include "service/storage_proxy.hh"
 #include "service/migration_manager.hh"
+#include "db/config.hh"
 
 #include <seastar/core/seastar.hh>
 #include <seastar/core/shared_ptr.hh>
@@ -351,25 +352,23 @@ future<std::unordered_map<utils::UUID, sstring>> system_distributed_keyspace::vi
 }
 
 future<> system_distributed_keyspace::start_view_build(sstring ks_name, sstring view_name) const {
-    return db::system_keyspace::load_local_host_id().then([this, ks_name = std::move(ks_name), view_name = std::move(view_name)] (utils::UUID host_id) {
+    auto host_id = _sp.local_db().get_config().host_id;
         return _qp.execute_internal(
                 format("INSERT INTO {}.{} (keyspace_name, view_name, host_id, status) VALUES (?, ?, ?, ?)", NAME, VIEW_BUILD_STATUS),
                 db::consistency_level::ONE,
                 internal_distributed_query_state(),
                 { std::move(ks_name), std::move(view_name), std::move(host_id), "STARTED" },
                 false).discard_result();
-    });
 }
 
 future<> system_distributed_keyspace::finish_view_build(sstring ks_name, sstring view_name) const {
-    return db::system_keyspace::load_local_host_id().then([this, ks_name = std::move(ks_name), view_name = std::move(view_name)] (utils::UUID host_id) {
+    auto host_id = _sp.local_db().get_config().host_id;
         return _qp.execute_internal(
                 format("UPDATE {}.{} SET status = ? WHERE keyspace_name = ? AND view_name = ? AND host_id = ?", NAME, VIEW_BUILD_STATUS),
                 db::consistency_level::ONE,
                 internal_distributed_query_state(),
                 { "SUCCESS", std::move(ks_name), std::move(view_name), std::move(host_id) },
                 false).discard_result();
-    });
 }
 
 future<> system_distributed_keyspace::remove_view(sstring ks_name, sstring view_name) const {

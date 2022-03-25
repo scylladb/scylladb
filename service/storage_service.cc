@@ -303,7 +303,7 @@ void storage_service::prepare_to_join(
     // for bootstrap to get the load info it needs.
     // (we won't be part of the storage ring though until we add a counterId to our state, below.)
     // Seed the host ID-to-endpoint map with our own ID.
-    auto local_host_id = db::system_keyspace::load_local_host_id().get0();
+    auto local_host_id = _db.local().get_config().host_id;
     if (!replacing_a_node_with_diff_ip) {
         // Replacing node with a different ip should own the host_id only after
         // the replacing node becomes NORMAL status. It is updated in
