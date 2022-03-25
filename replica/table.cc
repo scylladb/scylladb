@@ -44,7 +44,7 @@
 #include <boost/range/algorithm/remove_if.hpp>
 #include <boost/range/algorithm.hpp>
 #include "utils/error_injection.hh"
-#include "readers/reversing.hh"
+#include "readers/reversing_v2.hh"
 #include "readers/from_mutations_v2.hh"
 #include "readers/empty_v2.hh"
 #include "readers/multi_range.hh"
@@ -205,7 +205,7 @@ table::make_reader_v2(schema_ptr s,
     }
 
     if (unreversed_slice) [[unlikely]] {
-        return upgrade_to_v2(make_reversing_reader(downgrade_to_v1(std::move(rd)), permit.max_result_size(), std::move(unreversed_slice)));
+        return make_reversing_reader(std::move(rd), permit.max_result_size(), std::move(unreversed_slice));
     }
 
     return rd;
