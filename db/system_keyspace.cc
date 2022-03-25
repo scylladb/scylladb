@@ -2708,7 +2708,7 @@ future<> system_keyspace::make(distributed<replica::database>& db, distributed<s
 
 future<utils::UUID> system_keyspace::load_local_host_id() {
     sstring req = format("SELECT host_id FROM system.{} WHERE key=?", LOCAL);
-    auto msg = co_await qctx->execute_cql(req, sstring(LOCAL));
+    auto msg = co_await execute_cql(req, sstring(LOCAL));
     if (msg->empty() || !msg->one().has("host_id")) {
         co_return co_await set_local_host_id(utils::make_random_uuid());
     } else {
