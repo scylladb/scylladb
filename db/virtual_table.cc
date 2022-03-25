@@ -14,6 +14,7 @@
 #include "db/chained_delegating_reader.hh"
 #include "readers/reversing.hh"
 #include "readers/forwardable.hh"
+#include "readers/slicing_filtering.hh"
 
 namespace db {
 
