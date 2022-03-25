@@ -2713,10 +2713,6 @@ future<> system_keyspace::make(distributed<replica::database>& db, distributed<s
     return system_keyspace_make(db, ss, g, cfg);
 }
 
-utils::UUID system_keyspace::get_local_host_id() {
-    return _local_cache.local()._cached_local_host_id.value();
-}
-
 future<utils::UUID> system_keyspace::load_local_host_id() {
     if (_local_cache.local()._cached_local_host_id) {
         co_return *_local_cache.local()._cached_local_host_id;
