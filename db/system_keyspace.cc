@@ -1301,8 +1301,8 @@ future<> system_keyspace::build_dc_rack_info() {
             sstring rack = row.template get_as<sstring>("rack");
 
             locator::endpoint_dc_rack  element = { dc, rack };
-            return _cache.invoke_on_all([gms_addr = std::move(gms_addr), element = std::move(element)] (local_cache& lc) {
-                lc._cached_dc_rack_info.emplace(gms_addr, element);
+            return container().invoke_on_all([gms_addr = std::move(gms_addr), element = std::move(element)] (auto& sys_ks) {
+                sys_ks._cache.local()._cached_dc_rack_info.emplace(gms_addr, element);
             });
         }).then([msg] {
             // Keep msg alive.
@@ -1324,8 +1324,8 @@ future<> system_keyspace::build_bootstrap_info() {
         if (!msg->empty() && msg->one().has("bootstrapped")) {
             state = state_map.at(msg->one().template get_as<sstring>("bootstrapped"));
         }
-        return _cache.invoke_on_all([state] (local_cache& lc) {
-            lc._state = state;
+        return container().invoke_on_all([state] (auto& sys_ks) {
+            sys_ks._cache.local()._state = state;
         });
     });
 }
@@ -1550,13 +1550,13 @@ future<> system_keyspace::update_cached_values(gms::inet_address ep, sstring col
 
 template <>
 future<> system_keyspace::update_cached_values(gms::inet_address ep, sstring column_name, sstring value) {
-    return _cache.invoke_on_all([ep = std::move(ep),
+    return container().invoke_on_all([ep = std::move(ep),
                                        column_name = std::move(column_name),
-                                       value = std::move(value)] (local_cache& lc) {
+                                       value = std::move(value)] (auto& sys_ks) {
         if (column_name == "data_center") {
-            lc._cached_dc_rack_info[ep].dc = value;
+            sys_ks._cache.local()._cached_dc_rack_info[ep].dc = value;
         } else if (column_name == "rack") {
-            lc._cached_dc_rack_info[ep].rack = value;
+            sys_ks._cache.local()._cached_dc_rack_info[ep].rack = value;
         }
         return make_ready_future<>();
     });
@@ -1615,8 +1615,8 @@ future<> system_keyspace::update_schema_version(utils::UUID version) {
  * Remove stored tokens being used by another node
  */
 future<> system_keyspace::remove_endpoint(gms::inet_address ep) {
-    co_await _cache.invoke_on_all([ep] (local_cache& lc) {
-        lc._cached_dc_rack_info.erase(ep);
+    co_await container().invoke_on_all([ep] (auto& sys_ks) {
+        sys_ks._cache.local()._cached_dc_rack_info.erase(ep);
     });
     sstring req = format("DELETE FROM system.{} WHERE peer = ?", PEERS);
     co_await execute_cql(req, ep.addr()).discard_result();
@@ -1791,8 +1791,8 @@ future<> system_keyspace::set_bootstrap_state(bootstrap_state state) {
     sstring req = format("INSERT INTO system.{} (key, bootstrapped) VALUES (?, ?)", LOCAL);
     co_await execute_cql(req, sstring(LOCAL), state_name).discard_result();
     co_await force_blocking_flush(LOCAL);
-    co_await _cache.invoke_on_all([state] (local_cache& lc) {
-        lc._state = state;
+    co_await container().invoke_on_all([state] (auto& sys_ks) {
+        sys_ks._cache.local()._state = state;
     });
 }
 

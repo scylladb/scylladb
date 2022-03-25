@@ -77,7 +77,7 @@ class system_keyspace_view_build_progress;
 struct truncation_record;
 typedef std::vector<db::replay_position> replay_positions;
 
-class system_keyspace {
+class system_keyspace : public seastar::peering_sharded_service<system_keyspace> {
     sharded<cql3::query_processor>& _qp;
     sharded<replica::database>& _db;
     sharded<local_cache>& _cache;
