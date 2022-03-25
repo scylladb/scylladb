@@ -48,6 +48,7 @@
 #include "utils/UUID_gen.hh"
 #include "utils/utf8.hh"
 #include "utils/fmt-compat.hh"
+#include "readers/filtering.hh"
 #include "tombstone_gc.hh"
 
 namespace sstables {

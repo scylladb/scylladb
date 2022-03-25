@@ -58,6 +58,7 @@
 #include "readers/next_partition_adaptor.hh"
 #include "readers/combined.hh"
 #include "readers/foreign.hh"
+#include "readers/filtering.hh"
 #include "readers/evictable.hh"
 
 static schema_ptr make_schema() {
