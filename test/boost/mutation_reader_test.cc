@@ -32,6 +32,7 @@
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/simple_position_reader_queue.hh"
+#include "test/lib/fragment_scatterer.hh"
 
 #include "dht/sharder.hh"
 #include "mutation_reader.hh"
@@ -1211,16 +1212,13 @@ SEASTAR_TEST_CASE(test_combined_mutation_source_is_a_mutation_source) {
                     memtables.push_back(make_lw_shared<replica::memtable>(s));
                 }
 
-                int source_index = 0;
                 for (auto&& m : muts) {
                     auto rd = make_flat_mutation_reader_from_mutations(s, semaphore.make_permit(), {m});
                     auto close_rd = deferred_close(rd);
-                    rd.consume_pausable([&] (mutation_fragment&& mf) {
-                        mutation mf_m(m.schema(), m.decorated_key());
-                        mf_m.partition().apply(*s, mf);
-                        memtables[source_index++ % memtables.size()]->apply(mf_m);
-                        return stop_iteration::no;
-                    }).get();
+                    auto muts = rd.consume(fragment_scatterer(s, n_sources)).get();
+                    for (int i = 0; i < n_sources; ++i) {
+                        memtables[i]->apply(std::move(muts[i]));
+                    }
                 }
 
                 std::vector<mutation_source> sources;
