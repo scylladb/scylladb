@@ -31,7 +31,9 @@
 
 // A StreamedMutationConsumer which distributes fragments randomly into several mutations.
 class fragment_scatterer {
-    std::vector<mutation>& _mutations;
+    schema_ptr _schema;
+    size_t _n;
+    std::vector<mutation> _mutations;
     size_t _next = 0;
 private:
     void for_each_target(noncopyable_function<void (mutation&)> func) {
@@ -40,11 +42,15 @@ private:
         ++_next;
     }
 public:
-    fragment_scatterer(std::vector<mutation>& muts)
-        : _mutations(muts)
+    explicit fragment_scatterer(schema_ptr schema, size_t n) : _schema(std::move(schema)), _n(n)
     { }
 
-    void consume_new_partition(const dht::decorated_key&) {}
+    void consume_new_partition(const dht::decorated_key& dk) {
+        _mutations.reserve(_n);
+        for (size_t i = 0; i < _n; ++i) {
+            _mutations.emplace_back(_schema, dk);
+        }
+    }
 
     stop_iteration consume(tombstone t) {
         for_each_target([&] (mutation& m) {
@@ -81,8 +87,8 @@ public:
         return stop_iteration::no;
     }
 
-    stop_iteration consume_end_of_stream() {
-        return stop_iteration::no;
+    std::vector<mutation> consume_end_of_stream() {
+        return std::move(_mutations);
     }
 };
 
@@ -101,13 +107,9 @@ SEASTAR_TEST_CASE(test_mutation_merger_conforms_to_mutation_source) {
             }
 
             for (auto&& m : partitions) {
-                std::vector<mutation> muts;
-                for (int i = 0; i < n; ++i) {
-                    muts.push_back(mutation(m.schema(), m.decorated_key()));
-                }
                 auto rd = make_flat_mutation_reader_from_mutations(s, semaphore.make_permit(), {m});
                 auto close_rd = deferred_close(rd);
-                rd.consume(fragment_scatterer{muts}).get();
+                auto muts = rd.consume(fragment_scatterer(s, n)).get();
                 for (int i = 0; i < n; ++i) {
                     memtables[i]->apply(std::move(muts[i]));
                 }
