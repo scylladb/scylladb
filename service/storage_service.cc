@@ -1543,27 +1543,27 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
     // make magic happen
     slogger.info("Checking remote features with gossip");
     co_await _gossiper.do_shadow_round(initial_contact_nodes);
-        auto local_features = _feature_service.known_feature_set();
-        _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
+    auto local_features = _feature_service.known_feature_set();
+    _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
 
-        // now that we've gossiped at least once, we should be able to find the node we're replacing
-        auto* state = _gossiper.get_endpoint_state_for_endpoint_ptr(replace_address);
-        if (!state) {
-            throw std::runtime_error(format("Cannot replace_address {} because it doesn't exist in gossip", replace_address));
-        }
+    // now that we've gossiped at least once, we should be able to find the node we're replacing
+    auto* state = _gossiper.get_endpoint_state_for_endpoint_ptr(replace_address);
+    if (!state) {
+        throw std::runtime_error(format("Cannot replace_address {} because it doesn't exist in gossip", replace_address));
+    }
 
-        // Reject to replace a node that has left the ring
-        auto status = _gossiper.get_gossip_status(replace_address);
-        if (status == gms::versioned_value::STATUS_LEFT || status == gms::versioned_value::REMOVED_TOKEN) {
-            throw std::runtime_error(format("Cannot replace_address {} because it has left the ring, status={}", replace_address, status));
-        }
+    // Reject to replace a node that has left the ring
+    auto status = _gossiper.get_gossip_status(replace_address);
+    if (status == gms::versioned_value::STATUS_LEFT || status == gms::versioned_value::REMOVED_TOKEN) {
+        throw std::runtime_error(format("Cannot replace_address {} because it has left the ring, status={}", replace_address, status));
+    }
 
-        auto tokens = get_tokens_for(replace_address);
-        if (tokens.empty()) {
-            throw std::runtime_error(format("Could not find tokens for {} to replace", replace_address));
-        }
+    auto tokens = get_tokens_for(replace_address);
+    if (tokens.empty()) {
+        throw std::runtime_error(format("Could not find tokens for {} to replace", replace_address));
+    }
 
-        replacement_info ret {std::move(tokens)};
+    replacement_info ret {std::move(tokens)};
 
     // use the replacee's host Id as our own so we receive hints, etc
     auto host_id = _gossiper.get_host_id(replace_address);
