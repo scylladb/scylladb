@@ -69,17 +69,6 @@ mutation_source make_combined_mutation_source(std::vector<mutation_source> adden
 
 namespace {
 
-struct remote_fill_buffer_result {
-    foreign_ptr<std::unique_ptr<const flat_mutation_reader::tracked_buffer>> buffer;
-    bool end_of_stream = false;
-
-    remote_fill_buffer_result() = default;
-    remote_fill_buffer_result(flat_mutation_reader::tracked_buffer&& buffer, bool end_of_stream)
-        : buffer(make_foreign(std::make_unique<const flat_mutation_reader::tracked_buffer>(std::move(buffer))))
-        , end_of_stream(end_of_stream) {
-    }
-};
-
 struct remote_fill_buffer_result_v2 {
     foreign_ptr<std::unique_ptr<const flat_mutation_reader_v2::tracked_buffer>> buffer;
     bool end_of_stream = false;
