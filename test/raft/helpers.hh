@@ -143,3 +143,8 @@ raft::server_address to_server_address(size_t int_id);
 size_t to_int_id(utils::UUID uuid);
 // Return true upon a random event with given probability
 bool rolladice(float probability = 1.0/2.0);
+
+// Invokes an abortable function `f` on shard `shard` using abort source `as` from the current shard.
+// It's not safe to use `as` directly on a different shard. This function routes the abort requests
+// from `as` to the other shard.
+future<> invoke_abortable_on(unsigned shard, noncopyable_function<future<>(abort_source&)> f, abort_source& as);
