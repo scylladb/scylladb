@@ -1567,7 +1567,7 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
 
     // use the replacee's host Id as our own so we receive hints, etc
     auto host_id = _gossiper.get_host_id(replace_address);
-    co_await db::system_keyspace::set_local_host_id(host_id).discard_result();
+    co_await _sys_ks.local().set_local_host_id(host_id).discard_result();
     const_cast<db::config&>(_db.local().get_config()).host_id = host_id; // FIXME -- carry non-cost config on storage service itself
     co_await _gossiper.reset_endpoint_state_map();
     co_return ret;

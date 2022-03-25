@@ -2722,7 +2722,7 @@ future<utils::UUID> system_keyspace::set_local_host_id(utils::UUID host_id) {
     slogger.info("Setting local host id to {}", host_id);
 
     sstring req = format("INSERT INTO system.{} (key, host_id) VALUES (?, ?)", LOCAL);
-    co_await qctx->execute_cql(req, sstring(LOCAL), host_id);
+    co_await execute_cql(req, sstring(LOCAL), host_id);
     co_await force_blocking_flush(LOCAL);
     co_return host_id;
 }

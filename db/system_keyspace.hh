@@ -347,7 +347,7 @@ public:
     /**
      * Sets the local host ID explicitly.  Should only be called outside of SystemTable when replacing a node.
      */
-    static future<utils::UUID> set_local_host_id(utils::UUID host_id);
+    future<utils::UUID> set_local_host_id(utils::UUID host_id);
 
     static api::timestamp_type schema_creation_timestamp();
 
