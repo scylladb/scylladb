@@ -10,6 +10,7 @@
 #include "mutation_reader.hh"
 #include "mutation_fragment_v2.hh"
 #include "schema_registry.hh"
+#include "readers/foreign.hh"
 #include <vector>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/queue.hh>

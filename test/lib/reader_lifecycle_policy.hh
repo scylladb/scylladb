@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "mutation_reader.hh"
+#include "readers/multishard.hh"
 #include <seastar/core/gate.hh>
 
 class test_reader_lifecycle_policy

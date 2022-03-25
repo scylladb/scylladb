@@ -57,6 +57,7 @@
 #include "utils/fb_utilities.hh"
 #include "query-result-writer.hh"
 #include "readers/from_fragments_v2.hh"
+#include "readers/evictable.hh"
 
 using namespace std::chrono_literals;
 

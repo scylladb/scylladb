@@ -57,6 +57,8 @@
 #include "readers/empty_v2.hh"
 #include "readers/next_partition_adaptor.hh"
 #include "readers/combined.hh"
+#include "readers/foreign.hh"
+#include "readers/evictable.hh"
 
 static schema_ptr make_schema() {
     return schema_builder("ks", "cf")

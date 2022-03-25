@@ -32,6 +32,7 @@
 #include "utils/ranges.hh"
 
 #include "readers/from_mutations_v2.hh"
+#include "readers/evictable.hh"
 
 using namespace std::literals::chrono_literals;
 

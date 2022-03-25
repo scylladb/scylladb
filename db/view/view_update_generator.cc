@@ -13,6 +13,7 @@
 #include "utils/error_injection.hh"
 #include "db/view/view_updating_consumer.hh"
 #include "sstables/sstables.hh"
+#include "readers/evictable.hh"
 
 static logging::logger vug_logger("view_update_generator");
 

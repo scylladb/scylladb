@@ -60,6 +60,7 @@
 
 #include "replica/data_dictionary_impl.hh"
 #include "readers/multi_range.hh"
+#include "readers/multishard.hh"
 
 using namespace std::chrono_literals;
 using namespace db;
