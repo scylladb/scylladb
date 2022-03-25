@@ -798,7 +798,7 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_reader_memory_limit) {
         void consume(tombstone) { }
         stop_iteration consume(static_row&&) { return stop_iteration::no; }
         stop_iteration consume(clustering_row&&) { return stop_iteration::no; }
-        stop_iteration consume(range_tombstone&&) { return stop_iteration::no; }
+        stop_iteration consume(range_tombstone_change&&) { return stop_iteration::no; }
         stop_iteration consume_end_of_partition() { return stop_iteration::no; }
         void consume_end_of_stream() { }
     };
