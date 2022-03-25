@@ -15,7 +15,6 @@
 #include <seastar/core/memory.hh>
 #include <seastar/util/noncopyable_function.hh>
 
-#include "mutation_reader.hh"
 #include "mutation_partition.hh"
 #include "utils/phased_barrier.hh"
 #include "utils/histogram.hh"
@@ -26,6 +25,7 @@
 #include "utils/double-decker.hh"
 #include "db/cache_tracker.hh"
 #include "readers/empty.hh"
+#include "readers/mutation_source.hh"
 
 namespace bi = boost::intrusive;
 

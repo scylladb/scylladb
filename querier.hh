@@ -11,7 +11,8 @@
 #include <seastar/util/closeable.hh>
 
 #include "mutation_compactor.hh"
-#include "mutation_reader.hh"
+#include "reader_concurrency_semaphore.hh"
+#include "readers/mutation_source.hh"
 
 #include <boost/intrusive/set.hpp>
 

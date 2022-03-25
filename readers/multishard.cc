@@ -11,12 +11,12 @@
 #include <seastar/util/closeable.hh>
 
 #include "dht/sharder.hh"
-#include "mutation_reader.hh"
 #include "readers/empty_v2.hh"
 #include "readers/evictable.hh"
 #include "readers/flat_mutation_reader_v2.hh"
 #include "readers/foreign.hh"
 #include "readers/multishard.hh"
+#include "readers/mutation_source.hh"
 #include "schema_registry.hh"
 
 extern logger mrlog;

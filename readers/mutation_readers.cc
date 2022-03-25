@@ -14,6 +14,7 @@
 #include "mutation_reader.hh"
 #include "range_tombstone_assembler.hh"
 #include "range_tombstone_splitter.hh"
+#include "readers/combined.hh"
 #include "readers/delegating.hh"
 #include "readers/delegating_v2.hh"
 #include "readers/empty.hh"
@@ -27,6 +28,7 @@
 #include "readers/from_mutations_v2.hh"
 #include "readers/generating_v2.hh"
 #include "readers/multi_range.hh"
+#include "readers/mutation_source.hh"
 #include "readers/nonforwardable.hh"
 #include "readers/reversing.hh"
 #include "readers/slice_mutations.hh"
@@ -1652,4 +1654,45 @@ flat_mutation_reader_v2 make_next_partition_adaptor(flat_mutation_reader_v2&& rd
         }
     };
     return make_flat_mutation_reader_v2<adaptor>(std::move(rd));
+}
+
+snapshot_source make_empty_snapshot_source() {
+    return snapshot_source([] {
+        return make_empty_mutation_source();
+    });
+}
+
+mutation_source make_empty_mutation_source() {
+    return mutation_source([](schema_ptr s,
+            reader_permit permit,
+            const dht::partition_range& pr,
+            const query::partition_slice& slice,
+            const io_priority_class& pc,
+            tracing::trace_state_ptr tr,
+            streamed_mutation::forwarding fwd,
+            mutation_reader::forwarding) {
+        return make_empty_flat_reader(s, std::move(permit));
+    }, [] {
+        return [] (const dht::decorated_key& key) {
+            return partition_presence_checker_result::definitely_doesnt_exist;
+        };
+    });
+}
+
+mutation_source make_combined_mutation_source(std::vector<mutation_source> addends) {
+    return mutation_source([addends = std::move(addends)] (schema_ptr s,
+            reader_permit permit,
+            const dht::partition_range& pr,
+            const query::partition_slice& slice,
+            const io_priority_class& pc,
+            tracing::trace_state_ptr tr,
+            streamed_mutation::forwarding fwd_sm,
+            mutation_reader::forwarding fwd_mr) {
+        std::vector<flat_mutation_reader_v2> rd;
+        rd.reserve(addends.size());
+        for (auto&& ms : addends) {
+            rd.emplace_back(ms.make_reader_v2(s, permit, pr, slice, pc, tr, fwd_sm, fwd_mr));
+        }
+        return make_combined_reader(s, std::move(permit), std::move(rd), fwd_sm, fwd_mr);
+    });
 }
