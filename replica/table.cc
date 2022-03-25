@@ -50,6 +50,7 @@
 #include "readers/multi_range.hh"
 #include "readers/conversion.hh"
 #include "readers/combined.hh"
+#include "readers/compacting.hh"
 
 namespace replica {
 
