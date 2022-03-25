@@ -1791,4 +1791,8 @@ unsigned compaction_descriptor::fan_in() const {
     return boost::copy_range<std::unordered_set<utils::UUID>>(sstables | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::run_identifier))).size();
 }
 
+uint64_t compaction_descriptor::sstables_size() const {
+    return boost::accumulate(sstables | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::data_size)), uint64_t(0));
+}
+
 }

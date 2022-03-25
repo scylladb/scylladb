@@ -408,7 +408,7 @@ sstable_directory::reshard(sstable_info_vector shared_info, compaction_manager& 
             // jobs. But only one will run in parallel at a time
             return parallel_for_each(buckets, [this, iop, &cm, &table, creator = std::move(creator)] (std::vector<sstables::shared_sstable>& sstlist) mutable {
                 return cm.run_custom_job(&table, compaction_type::Reshard, "Reshard compaction", [this, iop, &cm, &table, creator, &sstlist] (sstables::compaction_data& info) {
-                    sstables::compaction_descriptor desc(sstlist, {}, iop);
+                    sstables::compaction_descriptor desc(sstlist, iop);
                     desc.options = sstables::compaction_type_options::make_reshard();
                     desc.creator = std::move(creator);
 

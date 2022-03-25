@@ -51,7 +51,7 @@ compaction_descriptor leveled_compaction_strategy::get_sstables_for_compaction(t
             auto gc_before2 = j->get_gc_before_for_drop_estimation(compaction_time);
             return i->estimate_droppable_tombstone_ratio(gc_before1) < j->estimate_droppable_tombstone_ratio(gc_before2);
         });
-        return sstables::compaction_descriptor({ sst }, table_s.get_sstable_set(), service::get_local_compaction_priority(), sst->get_sstable_level());
+        return sstables::compaction_descriptor({ sst }, service::get_local_compaction_priority(), sst->get_sstable_level());
     }
     return {};
 }
@@ -64,7 +64,7 @@ compaction_descriptor leveled_compaction_strategy::get_major_compaction_job(tabl
     auto& sst = *std::max_element(candidates.begin(), candidates.end(), [&] (sstables::shared_sstable& sst1, sstables::shared_sstable& sst2) {
         return sst1->get_sstable_level() < sst2->get_sstable_level();
     });
-    return compaction_descriptor(std::move(candidates), table_s.get_sstable_set(), service::get_local_compaction_priority(),
+    return compaction_descriptor(std::move(candidates), service::get_local_compaction_priority(),
                                  sst->get_sstable_level(), _max_sstable_size_in_mb*1024*1024);
 }
 
@@ -147,7 +147,7 @@ leveled_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input
             leveled_manifest::logger.warn("Found SSTable with level {}, higher than the maximum {}. This is unexpected, but will fix", sst_level, leveled_manifest::MAX_LEVELS - 1);
 
             // This is really unexpected, so we'll just compact it all to fix it
-            compaction_descriptor desc(std::move(input), std::optional<sstables::sstable_set>(), iop, leveled_manifest::MAX_LEVELS - 1, max_sstable_size_in_bytes);
+            compaction_descriptor desc(std::move(input), iop, leveled_manifest::MAX_LEVELS - 1, max_sstable_size_in_bytes);
             desc.options = compaction_type_options::make_reshape();
             return desc;
         }
@@ -187,7 +187,7 @@ leveled_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input
         unsigned ideal_level = std::ceil(log_fanout(total_bytes / max_sstable_size_in_bytes));
 
         leveled_manifest::logger.info("Reshaping {} disjoint sstables in level 0 into level {}", level_info[0].size(), ideal_level);
-        compaction_descriptor desc(std::move(input), std::optional<sstables::sstable_set>(), iop, ideal_level, max_sstable_size_in_bytes);
+        compaction_descriptor desc(std::move(input), iop, ideal_level, max_sstable_size_in_bytes);
         desc.options = compaction_type_options::make_reshape();
         return desc;
     }
@@ -207,7 +207,7 @@ leveled_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input
         if (!disjoint) {
             leveled_manifest::logger.warn("Turns out that level {} is not disjoint, found {} overlapping SSTables, so compacting everything on behalf of {}.{}", level, overlapping_sstables, schema->ks_name(), schema->cf_name());
             // Unfortunately no good limit to limit input size to max_sstables for LCS major
-            compaction_descriptor desc(std::move(input), std::optional<sstables::sstable_set>(), iop, max_filled_level, max_sstable_size_in_bytes);
+            compaction_descriptor desc(std::move(input), iop, max_filled_level, max_sstable_size_in_bytes);
             desc.options = compaction_type_options::make_reshape();
             return desc;
         }

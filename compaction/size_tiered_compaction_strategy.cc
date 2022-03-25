@@ -156,13 +156,13 @@ size_tiered_compaction_strategy::get_sstables_for_compaction(table_state& table_
 
     if (is_any_bucket_interesting(buckets, min_threshold)) {
         std::vector<sstables::shared_sstable> most_interesting = most_interesting_bucket(std::move(buckets), min_threshold, max_threshold);
-        return sstables::compaction_descriptor(std::move(most_interesting), table_s.get_sstable_set(), service::get_local_compaction_priority());
+        return sstables::compaction_descriptor(std::move(most_interesting), service::get_local_compaction_priority());
     }
 
     // If we are not enforcing min_threshold explicitly, try any pair of SStables in the same tier.
     if (!table_s.compaction_enforce_min_threshold() && is_any_bucket_interesting(buckets, 2)) {
         std::vector<sstables::shared_sstable> most_interesting = most_interesting_bucket(std::move(buckets), 2, max_threshold);
-        return sstables::compaction_descriptor(std::move(most_interesting), table_s.get_sstable_set(), service::get_local_compaction_priority());
+        return sstables::compaction_descriptor(std::move(most_interesting), service::get_local_compaction_priority());
     }
 
     // if there is no sstable to compact in standard way, try compacting single sstable whose droppable tombstone
@@ -182,7 +182,7 @@ size_tiered_compaction_strategy::get_sstables_for_compaction(table_state& table_
         auto it = std::min_element(sstables.begin(), sstables.end(), [] (auto& i, auto& j) {
             return i->get_stats_metadata().min_timestamp < j->get_stats_metadata().min_timestamp;
         });
-        return sstables::compaction_descriptor({ *it }, table_s.get_sstable_set(), service::get_local_compaction_priority());
+        return sstables::compaction_descriptor({ *it }, service::get_local_compaction_priority());
     }
     return sstables::compaction_descriptor();
 }
@@ -242,7 +242,7 @@ size_tiered_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
         // All sstables can be reshaped at once if the amount of overlapping will not cause memory usage to be high,
         // which is possible because partitioned set is able to incrementally open sstables during compaction
         if (sstable_set_overlapping_count(schema, input) <= max_sstables) {
-            compaction_descriptor desc(std::move(input), std::optional<sstables::sstable_set>(), iop);
+            compaction_descriptor desc(std::move(input), iop);
             desc.options = compaction_type_options::make_reshape();
             return desc;
         }
@@ -258,13 +258,39 @@ size_tiered_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
                 });
                 bucket.resize(max_sstables);
             }
-            compaction_descriptor desc(std::move(bucket), std::optional<sstables::sstable_set>(), iop);
+            compaction_descriptor desc(std::move(bucket), iop);
             desc.options = compaction_type_options::make_reshape();
             return desc;
         }
     }
 
     return compaction_descriptor();
+}
+
+std::vector<compaction_descriptor>
+size_tiered_compaction_strategy::get_cleanup_compaction_jobs(table_state& table_s, const std::vector<shared_sstable>& candidates) const {
+    std::vector<compaction_descriptor> ret;
+    const auto& schema = table_s.schema();
+    unsigned max_threshold = schema->max_compaction_threshold();
+
+    for (auto& bucket : get_buckets(candidates)) {
+        if (bucket.size() > max_threshold) {
+            // preserve token contiguity
+            std::ranges::sort(bucket, [&schema] (const shared_sstable& a, const shared_sstable& b) {
+                return a->get_first_decorated_key().tri_compare(*schema, b->get_first_decorated_key()) < 0;
+            });
+        }
+        auto it = bucket.begin();
+        while (it != bucket.end()) {
+            unsigned remaining = std::distance(it, bucket.end());
+            unsigned needed = std::min(remaining, max_threshold);
+            std::vector<shared_sstable> sstables;
+            std::move(it, it + needed, std::back_inserter(sstables));
+            ret.push_back(compaction_descriptor(std::move(sstables), service::get_local_compaction_priority()));
+            std::advance(it, needed);
+        }
+    }
+    return ret;
 }
 
 }

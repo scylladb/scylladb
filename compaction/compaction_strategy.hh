@@ -49,6 +49,8 @@ public:
 
     compaction_descriptor get_major_compaction_job(table_state& table_s, std::vector<shared_sstable> candidates);
 
+    std::vector<compaction_descriptor> get_cleanup_compaction_jobs(table_state& table_s, const std::vector<shared_sstable>& candidates) const;
+
     // Some strategies may look at the compacted and resulting sstables to
     // get some useful information for subsequent compactions.
     void notify_completion(const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added);

@@ -163,14 +163,12 @@ struct compaction_descriptor {
     static constexpr uint64_t default_max_sstable_bytes = std::numeric_limits<uint64_t>::max();
 
     explicit compaction_descriptor(std::vector<sstables::shared_sstable> sstables,
-                                   std::optional<sstables::sstable_set> all_sstables_snapshot,
                                    ::io_priority_class io_priority,
                                    int level = default_level,
                                    uint64_t max_sstable_bytes = default_max_sstable_bytes,
                                    utils::UUID run_identifier = utils::make_random_uuid(),
                                    compaction_type_options options = compaction_type_options::make_regular())
         : sstables(std::move(sstables))
-        , all_sstables_snapshot(std::move(all_sstables_snapshot))
         , level(level)
         , max_sstable_bytes(max_sstable_bytes)
         , run_identifier(run_identifier)
@@ -180,10 +178,8 @@ struct compaction_descriptor {
 
     explicit compaction_descriptor(sstables::has_only_fully_expired has_only_fully_expired,
                                    std::vector<sstables::shared_sstable> sstables,
-                                   std::optional<sstables::sstable_set> all_sstables_snapshot,
                                    ::io_priority_class io_priority)
         : sstables(std::move(sstables))
-        , all_sstables_snapshot(std::move(all_sstables_snapshot))
         , level(default_level)
         , max_sstable_bytes(default_max_sstable_bytes)
         , run_identifier(utils::make_random_uuid())
@@ -194,6 +190,10 @@ struct compaction_descriptor {
 
     // Return fan-in of this job, which is equal to its number of runs.
     unsigned fan_in() const;
+    // Enables garbage collection for this descriptor, meaning that compaction will be able to purge expired data
+    void enable_garbage_collection(sstables::sstable_set snapshot) { all_sstables_snapshot = std::move(snapshot); }
+    // Returns total size of all sstables contained in this descriptor
+    uint64_t sstables_size() const;
 };
 
 }

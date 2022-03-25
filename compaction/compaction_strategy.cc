@@ -37,7 +37,16 @@ logging::logger leveled_manifest::logger("LeveledManifest");
 namespace sstables {
 
 compaction_descriptor compaction_strategy_impl::get_major_compaction_job(table_state& table_s, std::vector<sstables::shared_sstable> candidates) {
-    return compaction_descriptor(std::move(candidates), table_s.get_sstable_set(), service::get_local_compaction_priority());
+    return compaction_descriptor(std::move(candidates), service::get_local_compaction_priority());
+}
+
+std::vector<compaction_descriptor> compaction_strategy_impl::get_cleanup_compaction_jobs(table_state& table_s, const std::vector<shared_sstable>& candidates) const {
+    // The default implementation is suboptimal and causes the writeamp problem described issue in #10097.
+    // The compaction strategy relying on it should strive to implement its own method, to make cleanup bucket aware.
+    return boost::copy_range<std::vector<compaction_descriptor>>(candidates | boost::adaptors::transformed([] (const shared_sstable& sst) {
+        return compaction_descriptor({ sst }, service::get_local_compaction_priority(),
+            sst->get_sstable_level(), sstables::compaction_descriptor::default_max_sstable_bytes, sst->run_identifier());
+    }));
 }
 
 bool compaction_strategy_impl::worth_dropping_tombstones(const shared_sstable& sst, gc_clock::time_point compaction_time) {
@@ -614,7 +623,7 @@ compaction_descriptor date_tiered_compaction_strategy::get_sstables_for_compacti
 
     if (!sstables.empty()) {
         date_tiered_manifest::logger.debug("datetiered: Compacting {} out of {} sstables", sstables.size(), candidates.size());
-        return sstables::compaction_descriptor(std::move(sstables), table_s.get_sstable_set(), service::get_local_compaction_priority());
+        return sstables::compaction_descriptor(std::move(sstables), service::get_local_compaction_priority());
     }
 
     // filter out sstables which droppable tombstone ratio isn't greater than the defined threshold.
@@ -630,7 +639,7 @@ compaction_descriptor date_tiered_compaction_strategy::get_sstables_for_compacti
     auto it = std::min_element(candidates.begin(), candidates.end(), [] (auto& i, auto& j) {
         return i->get_stats_metadata().min_timestamp < j->get_stats_metadata().min_timestamp;
     });
-    return sstables::compaction_descriptor({ *it }, table_s.get_sstable_set(), service::get_local_compaction_priority());
+    return sstables::compaction_descriptor({ *it }, service::get_local_compaction_priority());
 }
 
 size_tiered_compaction_strategy::size_tiered_compaction_strategy(const std::map<sstring, sstring>& options)
@@ -662,6 +671,10 @@ compaction_descriptor compaction_strategy::get_sstables_for_compaction(table_sta
 
 compaction_descriptor compaction_strategy::get_major_compaction_job(table_state& table_s, std::vector<sstables::shared_sstable> candidates) {
     return _compaction_strategy_impl->get_major_compaction_job(table_s, std::move(candidates));
+}
+
+std::vector<compaction_descriptor> compaction_strategy::get_cleanup_compaction_jobs(table_state& table_s, const std::vector<shared_sstable>& candidates) const {
+    return _compaction_strategy_impl->get_cleanup_compaction_jobs(table_s, candidates);
 }
 
 void compaction_strategy::notify_completion(const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added) {
