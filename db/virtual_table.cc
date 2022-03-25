@@ -12,8 +12,8 @@
 
 #include "db/virtual_table.hh"
 #include "db/chained_delegating_reader.hh"
-#include "readers/reversing.hh"
-#include "readers/forwardable.hh"
+#include "readers/reversing_v2.hh"
+#include "readers/forwardable_v2.hh"
 
 namespace db {
 
@@ -146,12 +146,12 @@ mutation_source streaming_virtual_table::as_mutation_source() {
             }
         });
 
-        auto rd = make_slicing_filtering_reader(downgrade_to_v1(std::move(reader_and_handle.first)), pr, slice);
+        auto rd = upgrade_to_v2(make_slicing_filtering_reader(downgrade_to_v1(std::move(reader_and_handle.first)), pr, slice));
 
         if (!_shard_aware) {
-            rd = downgrade_to_v1(make_filtering_reader(upgrade_to_v2(std::move(rd)), [this] (const dht::decorated_key& dk) -> bool {
+            rd = make_filtering_reader(std::move(rd), [this] (const dht::decorated_key& dk) -> bool {
                 return this_shard_owns(dk);
-            }));
+            });
         }
 
         if (reversed) {
