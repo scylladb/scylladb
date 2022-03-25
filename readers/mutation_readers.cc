@@ -1187,7 +1187,7 @@ make_flat_mutation_reader_from_mutations(schema_ptr schema,
     auto sliced_ms = slice_mutations(schema, std::move(ms), slice);
     auto rd = make_flat_mutation_reader_from_mutations(schema, permit, sliced_ms, pr, reversed ? streamed_mutation::forwarding::no : fwd);
     if (reversed) {
-        rd = make_reversing_reader(std::move(rd), permit.max_result_size());
+        rd = downgrade_to_v1(make_reversing_reader(upgrade_to_v2(std::move(rd)), permit.max_result_size()));
         if (fwd) {
             rd = make_forwardable(std::move(rd));
         }
