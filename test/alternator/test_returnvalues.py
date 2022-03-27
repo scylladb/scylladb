@@ -429,3 +429,15 @@ def test_update_item_returnvalues_all_new_remove_etc(test_table_s):
         UpdateExpression='REMOVE d SET s = :v',
         ExpressionAttributeValues={':v': 'cat'})
     assert ret['Attributes']['s'] == 'cat'
+
+# Test a combination of ADD to an existing attribute, and ALL_NEW.
+# Before commit 964500e47a6, the ALL_NEW moved the previous_item object,
+# which made ADD unable to read it, throwing a "JSON error: condition not
+# met: IsObject()."
+def test_update_item_returnvalues_all_new_add_existing(test_table_s):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'n': 3})
+    ret=test_table_s.update_item(Key={'p': p}, ReturnValues='ALL_NEW',
+        UpdateExpression='ADD n :inc',
+        ExpressionAttributeValues={':inc': 1})
+    assert ret['Attributes']['n'] == 4
