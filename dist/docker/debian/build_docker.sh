@@ -89,6 +89,7 @@ run bash -ec "cat /scylla_bashrc >> /etc/bash.bashrc"
 run mkdir -p /etc/supervisor.conf.d
 run mkdir -p /var/log/scylla
 run chown -R scylla:scylla /var/lib/scylla
+run sed -i -e 's/^SCYLLA_ARGS=".*"$/SCYLLA_ARGS="--log-to-syslog 0 --log-to-stdout 1 --default-log-level info --network-stack posix"/' /etc/default/scylla-server
 
 run mkdir -p /opt/scylladb/supervisor
 run touch /opt/scylladb/SCYLLA-CONTAINER-FILE
