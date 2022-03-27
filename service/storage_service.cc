@@ -1264,6 +1264,9 @@ future<> storage_service::stop_transport() {
         (void) seastar::async([this] {
             slogger.info("Stop transport: starts");
 
+            slogger.debug("shutting down migration manager");
+            _migration_manager.invoke_on_all(&service::migration_manager::drain).get();
+
             shutdown_protocol_servers().get();
             slogger.info("Stop transport: shutdown rpc and cql server done");
 
@@ -2590,9 +2593,6 @@ future<> storage_service::do_drain() {
     co_await get_batchlog_manager().invoke_on_all([] (auto& bm) {
         return bm.drain();
     });
-
-    slogger.debug("shutting down migration manager");
-    co_await _migration_manager.invoke_on_all(&service::migration_manager::drain);
 
     slogger.debug("flushing column families");
     co_await _db.invoke_on_all(&replica::database::drain);
