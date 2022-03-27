@@ -503,6 +503,8 @@ private:
     class table_state;
     std::unique_ptr<table_state> _table_state;
 public:
+    data_dictionary::table as_data_dictionary() const;
+
     future<> add_sstable_and_update_cache(sstables::shared_sstable sst,
                                           sstables::offstrategy offstrategy = sstables::offstrategy::no);
     future<> add_sstables_and_update_cache(const std::vector<sstables::shared_sstable>& ssts);
@@ -1336,8 +1338,6 @@ private:
     std::unique_ptr<wasm::engine> _wasm_engine;
     utils::cross_shard_barrier _stop_barrier;
 
-    class data_dictionary_impl;
-    friend class data_dictionary_impl;
 public:
     data_dictionary::database as_data_dictionary() const;
     future<> init_commitlog();

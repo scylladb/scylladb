@@ -13,12 +13,19 @@
 #include "dht/token.hh"
 #include "schema_fwd.hh"
 #include "range.hh"
+#include "interval.hh"
 
 namespace dht {
 
 class decorated_key;
 
-using token_range = nonwrapping_range<token>;
+using token_range = nonwrapping_interval<token>;
+
+}
+
+namespace data_dictionary {
+
+class database;
 
 }
 
@@ -42,4 +49,4 @@ gc_clock::time_point get_gc_before_for_key(schema_ptr s, const dht::decorated_ke
 
 void update_repair_time(schema_ptr s, const dht::token_range& range, gc_clock::time_point repair_time);
 
-void validate_tombstone_gc_options(const tombstone_gc_options* options, const replica::database& db, sstring ks_name);
+void validate_tombstone_gc_options(const tombstone_gc_options* options, data_dictionary::database db, sstring ks_name);

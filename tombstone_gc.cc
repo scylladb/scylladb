@@ -17,6 +17,7 @@
 #include "exceptions/exceptions.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "replica/database.hh"
+#include "data_dictionary/data_dictionary.hh"
 #include "gms/feature_service.hh"
 
 extern logging::logger dblog;
@@ -168,7 +169,7 @@ static bool needs_repair_before_gc(const replica::database& db, sstring ks_name)
     return needs_repair;
 }
 
-void validate_tombstone_gc_options(const tombstone_gc_options* options, const replica::database& db, sstring ks_name) {
+void validate_tombstone_gc_options(const tombstone_gc_options* options, data_dictionary::database db, sstring ks_name) {
     if (!options) {
         return;
     }
@@ -176,7 +177,7 @@ void validate_tombstone_gc_options(const tombstone_gc_options* options, const re
         throw exceptions::configuration_exception("tombstone_gc option not supported by the cluster");
     }
 
-    if (options->mode() == tombstone_gc_mode::repair && !needs_repair_before_gc(db, ks_name)) {
+    if (options->mode() == tombstone_gc_mode::repair && !needs_repair_before_gc(db.real_database(), ks_name)) {
         throw exceptions::configuration_exception("tombstone_gc option with mode = repair not supported for table with RF one or local replication strategy");
     }
 }

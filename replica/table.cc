@@ -12,6 +12,7 @@
 #include <seastar/util/closeable.hh>
 
 #include "replica/database.hh"
+#include "replica/data_dictionary_impl.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include "service/priority_manager.hh"
@@ -1191,7 +1192,7 @@ table::table(schema_ptr schema, config config, db::commitlog* cl, compaction_man
     , _commitlog(cl)
     , _durable_writes(true)
     , _compaction_manager(compaction_manager)
-    , _index_manager(*this)
+    , _index_manager(this->as_data_dictionary())
     , _counter_cell_locks(_schema->is_counter() ? std::make_unique<cell_locker>(_schema, cl_stats) : nullptr)
     , _table_state(std::make_unique<table_state>(*this))
     , _row_locker(_schema)
@@ -2424,6 +2425,12 @@ public:
 
 compaction::table_state& table::as_table_state() const noexcept {
     return *_table_state;
+}
+
+data_dictionary::table
+table::as_data_dictionary() const {
+    static constinit data_dictionary_impl _impl;
+    return _impl.wrap(*this);
 }
 
 } // namespace replica
