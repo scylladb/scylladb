@@ -861,7 +861,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }
 
             auto& gossiper = gms::get_gossiper();
-            gossiper.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(feature_service), std::ref(token_metadata), std::ref(messaging), std::ref(*cfg), std::ref(gcfg)).get();
+            gossiper.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(feature_service), std::ref(token_metadata), std::ref(messaging), std::ref(sys_ks), std::ref(*cfg), std::ref(gcfg)).get();
             auto stop_gossiper = defer_verbose_shutdown("gossiper", [&gossiper] {
                 // call stop on each instance, but leave the sharded<> pointers alive
                 gossiper.invoke_on_all(&gms::gossiper::stop).get();
@@ -1010,7 +1010,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // FIXME -- this sys_ks start should really be up above, where its instance
             // start, but we only have query processor started that late
             sys_ks.invoke_on_all(&db::system_keyspace::start).get();
-            cfg->host_id = db::system_keyspace::load_local_host_id().get0();
+            cfg->host_id = sys_ks.local().load_local_host_id().get0();
 
             db::sstables_format_selector sst_format_selector(gossiper.local(), feature_service, db);
 
@@ -1169,7 +1169,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             cdc_config.ignore_msb_bits = cfg->murmur3_partitioner_ignore_msb_bits();
             cdc_config.ring_delay = std::chrono::milliseconds(cfg->ring_delay_ms());
             cdc_config.dont_rewrite_streams = cfg->cdc_dont_rewrite_streams();
-            cdc_generation_service.start(std::move(cdc_config), std::ref(gossiper), std::ref(sys_dist_ks),
+            cdc_generation_service.start(std::move(cdc_config), std::ref(gossiper), std::ref(sys_dist_ks), std::ref(sys_ks),
                     std::ref(stop_signal.as_sharded_abort_source()), std::ref(token_metadata), std::ref(feature_service), std::ref(db)).get();
             auto stop_cdc_generation_service = defer_verbose_shutdown("CDC Generation Management service", [] {
                 cdc_generation_service.stop().get();

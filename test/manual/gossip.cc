@@ -70,6 +70,7 @@ int main(int ac, char ** av) {
             sharded<abort_source> abort_sources;
             sharded<locator::shared_token_metadata> token_metadata;
             sharded<netw::messaging_service> messaging;
+            sharded<db::system_keyspace> sys_ks;
 
             abort_sources.start().get();
             auto stop_abort_source = defer([&] { abort_sources.stop().get(); });
@@ -84,7 +85,7 @@ int main(int ac, char ** av) {
             for (auto s : config["seed"].as<std::vector<std::string>>()) {
                 gcfg.seeds.emplace(std::move(s));
             }
-            gms::get_gossiper().start(std::ref(abort_sources), std::ref(feature_service), std::ref(token_metadata), std::ref(messaging), std::ref(*cfg), std::move(gcfg)).get();
+            gms::get_gossiper().start(std::ref(abort_sources), std::ref(feature_service), std::ref(token_metadata), std::ref(messaging), std::ref(sys_ks), std::ref(*cfg), std::move(gcfg)).get();
 
             auto& server = messaging.local();
             auto port = server.port();

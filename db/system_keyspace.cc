@@ -1283,12 +1283,7 @@ future<> system_keyspace::save_local_supported_features(const std::set<std::stri
 struct local_cache {
     std::unordered_map<gms::inet_address, locator::endpoint_dc_rack> _cached_dc_rack_info;
     system_keyspace::bootstrap_state _state;
-    std::optional<utils::UUID> _cached_local_host_id;
-    future<> stop() {
-        return make_ready_future<>();
-    }
 };
-static distributed<local_cache> _local_cache;
 
 future<> system_keyspace::build_dc_rack_info() {
     return execute_cql(format("SELECT peer, data_center, rack from system.{}", PEERS)).then([this] (::shared_ptr<cql3::untyped_result_set> msg) {
@@ -1302,8 +1297,8 @@ future<> system_keyspace::build_dc_rack_info() {
             sstring rack = row.template get_as<sstring>("rack");
 
             locator::endpoint_dc_rack  element = { dc, rack };
-            return _cache.invoke_on_all([gms_addr = std::move(gms_addr), element = std::move(element)] (local_cache& lc) {
-                lc._cached_dc_rack_info.emplace(gms_addr, element);
+            return container().invoke_on_all([gms_addr = std::move(gms_addr), element = std::move(element)] (auto& sys_ks) {
+                sys_ks._cache->_cached_dc_rack_info.emplace(gms_addr, element);
             });
         }).then([msg] {
             // Keep msg alive.
@@ -1325,8 +1320,8 @@ future<> system_keyspace::build_bootstrap_info() {
         if (!msg->empty() && msg->one().has("bootstrapped")) {
             state = state_map.at(msg->one().template get_as<sstring>("bootstrapped"));
         }
-        return _cache.invoke_on_all([state] (local_cache& lc) {
-            lc._state = state;
+        return container().invoke_on_all([state] (auto& sys_ks) {
+            sys_ks._cache->_state = state;
         });
     });
 }
@@ -1551,13 +1546,13 @@ future<> system_keyspace::update_cached_values(gms::inet_address ep, sstring col
 
 template <>
 future<> system_keyspace::update_cached_values(gms::inet_address ep, sstring column_name, sstring value) {
-    return _cache.invoke_on_all([ep = std::move(ep),
+    return container().invoke_on_all([ep = std::move(ep),
                                        column_name = std::move(column_name),
-                                       value = std::move(value)] (local_cache& lc) {
+                                       value = std::move(value)] (auto& sys_ks) {
         if (column_name == "data_center") {
-            lc._cached_dc_rack_info[ep].dc = value;
+            sys_ks._cache->_cached_dc_rack_info[ep].dc = value;
         } else if (column_name == "rack") {
-            lc._cached_dc_rack_info[ep].rack = value;
+            sys_ks._cache->_cached_dc_rack_info[ep].rack = value;
         }
         return make_ready_future<>();
     });
@@ -1616,8 +1611,8 @@ future<> system_keyspace::update_schema_version(utils::UUID version) {
  * Remove stored tokens being used by another node
  */
 future<> system_keyspace::remove_endpoint(gms::inet_address ep) {
-    co_await _cache.invoke_on_all([ep] (local_cache& lc) {
-        lc._cached_dc_rack_info.erase(ep);
+    co_await container().invoke_on_all([ep] (auto& sys_ks) {
+        sys_ks._cache->_cached_dc_rack_info.erase(ep);
     });
     sstring req = format("DELETE FROM system.{} WHERE peer = ?", PEERS);
     co_await execute_cql(req, ep.addr()).discard_result();
@@ -1776,7 +1771,7 @@ bool system_keyspace::was_decommissioned() {
 }
 
 system_keyspace::bootstrap_state system_keyspace::get_bootstrap_state() {
-    return _local_cache.local()._state;
+    return _cache->_state;
 }
 
 future<> system_keyspace::set_bootstrap_state(bootstrap_state state) {
@@ -1790,12 +1785,10 @@ future<> system_keyspace::set_bootstrap_state(bootstrap_state state) {
     sstring state_name = state_to_name.at(state);
 
     sstring req = format("INSERT INTO system.{} (key, bootstrapped) VALUES (?, ?)", LOCAL);
-    return qctx->execute_cql(req, sstring(LOCAL), state_name).discard_result().then([state] {
-        return force_blocking_flush(LOCAL).then([state] {
-            return _local_cache.invoke_on_all([state] (local_cache& lc) {
-                lc._state = state;
-            });
-        });
+    co_await execute_cql(req, sstring(LOCAL), state_name).discard_result();
+    co_await force_blocking_flush(LOCAL);
+    co_await container().invoke_on_all([state] (auto& sys_ks) {
+        sys_ks._cache->_state = state;
     });
 }
 
@@ -2713,49 +2706,30 @@ future<> system_keyspace::make(distributed<replica::database>& db, distributed<s
     return system_keyspace_make(db, ss, g, cfg);
 }
 
-utils::UUID system_keyspace::get_local_host_id() {
-    return _local_cache.local()._cached_local_host_id.value();
-}
-
 future<utils::UUID> system_keyspace::load_local_host_id() {
-    if (_local_cache.local()._cached_local_host_id) {
-        co_return *_local_cache.local()._cached_local_host_id;
-    }
-
     sstring req = format("SELECT host_id FROM system.{} WHERE key=?", LOCAL);
-    auto msg = co_await qctx->execute_cql(req, sstring(LOCAL));
+    auto msg = co_await execute_cql(req, sstring(LOCAL));
     if (msg->empty() || !msg->one().has("host_id")) {
         co_return co_await set_local_host_id(utils::make_random_uuid());
     } else {
         auto host_id = msg->one().get_as<utils::UUID>("host_id");
-        co_await smp::invoke_on_all([host_id] { _local_cache.local()._cached_local_host_id = host_id; });
         slogger.info("Loaded local host id: {}", host_id);
         co_return host_id;
     }
 }
 
 future<utils::UUID> system_keyspace::set_local_host_id(utils::UUID host_id) {
-    // Order of operations is important here: we need to cache the
-    // host id _before_ flushing system.local to prevent a cycle (the
-    // alternative would be checking "is this system.local" when
-    // setting host id in sstable metadata).
-    //
-    // Caching optimistically before commiting to disk is, strictly
-    // speaking, not nice -- but any failure during bootstrap should
-    // be unrecoverable anyway, so this little infidelity shouldn't
-    // matter.
-    co_await smp::invoke_on_all([host_id] { _local_cache.local()._cached_local_host_id = host_id; });
     slogger.info("Setting local host id to {}", host_id);
 
     sstring req = format("INSERT INTO system.{} (key, host_id) VALUES (?, ?)", LOCAL);
-    co_await qctx->execute_cql(req, sstring(LOCAL), host_id);
+    co_await execute_cql(req, sstring(LOCAL), host_id);
     co_await force_blocking_flush(LOCAL);
     co_return host_id;
 }
 
 std::unordered_map<gms::inet_address, locator::endpoint_dc_rack>
 system_keyspace::load_dc_rack_info() {
-    return _local_cache.local()._cached_dc_rack_info;
+    return _cache->_cached_dc_rack_info;
 }
 
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
@@ -3223,8 +3197,11 @@ sstring system_keyspace_name() {
 system_keyspace::system_keyspace(sharded<cql3::query_processor>& qp, sharded<replica::database>& db) noexcept
         : _qp(qp)
         , _db(db)
-        , _cache(_local_cache)
+        , _cache(std::make_unique<local_cache>())
 {
+}
+
+system_keyspace::~system_keyspace() {
 }
 
 future<> system_keyspace::start() {
@@ -3232,17 +3209,12 @@ future<> system_keyspace::start() {
 
     if (this_shard_id() == 0) {
         qctx = std::make_unique<query_context>(_qp);
-        co_await _cache.start();
     }
 
     co_return;
 }
 
 future<> system_keyspace::stop() {
-    if (this_shard_id() == 0) {
-        co_await _cache.stop();
-    }
-
     co_return;
 }
 

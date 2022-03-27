@@ -77,10 +77,10 @@ class system_keyspace_view_build_progress;
 struct truncation_record;
 typedef std::vector<db::replay_position> replay_positions;
 
-class system_keyspace {
+class system_keyspace : public seastar::peering_sharded_service<system_keyspace> {
     sharded<cql3::query_processor>& _qp;
     sharded<replica::database>& _db;
-    sharded<local_cache>& _cache;
+    std::unique_ptr<local_cache> _cache;
 
     static schema_ptr raft_config();
     static schema_ptr local();
@@ -270,8 +270,7 @@ public:
     /**
      * Return a map of IP addresses containing a map of dc and rack info
      */
-    static std::unordered_map<gms::inet_address, locator::endpoint_dc_rack>
-    load_dc_rack_info();
+    std::unordered_map<gms::inet_address, locator::endpoint_dc_rack> load_dc_rack_info();
 
     enum class bootstrap_state {
         NEEDS_BOOTSTRAP,
@@ -333,27 +332,22 @@ public:
     static future<std::unordered_map<gms::inet_address, sstring>> load_peer_features();
 
     static future<int> increment_and_get_generation();
-    static bool bootstrap_complete();
-    static bool bootstrap_in_progress();
-    static bootstrap_state get_bootstrap_state();
-    static bool was_decommissioned();
-    static future<> set_bootstrap_state(bootstrap_state state);
+    bool bootstrap_complete();
+    bool bootstrap_in_progress();
+    bootstrap_state get_bootstrap_state();
+    bool was_decommissioned();
+    future<> set_bootstrap_state(bootstrap_state state);
 
     /**
      * Read the host ID from the system keyspace, creating (and storing) one if
      * none exists.
      */
-    static future<utils::UUID> load_local_host_id();
-    /**
-     * Read the host ID from the system keyspace, generating an exception if it
-     * doesn't exist.
-     */
-    static utils::UUID get_local_host_id();
+    future<utils::UUID> load_local_host_id();
 
     /**
      * Sets the local host ID explicitly.  Should only be called outside of SystemTable when replacing a node.
      */
-    static future<utils::UUID> set_local_host_id(utils::UUID host_id);
+    future<utils::UUID> set_local_host_id(utils::UUID host_id);
 
     static api::timestamp_type schema_creation_timestamp();
 
@@ -436,6 +430,7 @@ public:
     static future<mutation> get_group0_history(distributed<service::storage_proxy>&);
 
     system_keyspace(sharded<cql3::query_processor>& qp, sharded<replica::database>& db) noexcept;
+    ~system_keyspace();
     future<> start();
     future<> stop();
 
