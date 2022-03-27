@@ -1571,6 +1571,16 @@ lw_shared_ptr<memtable> memtable_list::new_memtable() {
     return make_lw_shared<memtable>(_current_schema(), *_dirty_memory_manager, _table_stats, this, _compaction_scheduling_group);
 }
 
+future<> memtable_list::clear_and_add() {
+    auto mt = new_memtable();
+    for (auto& smt : _memtables) {
+        co_await std::move(smt)->clear_gently();
+    }
+    // emplace_back might throw only if _memtables was empty
+    // on entry.
+    _memtables.emplace_back(std::move(mt));
+}
+
 } // namespace replica
 
 future<flush_permit> flush_permit::reacquire_sstable_write_permit() && {
