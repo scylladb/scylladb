@@ -202,3 +202,36 @@ def test_unknown_operation(dynamodb):
     response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
     assert response.status_code == 400
     assert 'UnknownOperationException' in response.text
+    print(response.text)
+
+# Reproduce issue #10278, where double-quotes in an error message resulted
+# in a broken JSON structure in the error message, which confuses boto3 to
+# misunderstand the error response.
+# Because this test uses boto3, we can reproduce the error, but not really
+# understand what it is. We have another variant of this test below -
+# test_exception_escape_raw() - that does the same thing without boto3
+# so we can see the error happens during the reponse JSON parsing.
+def test_exception_escape(test_table_s):
+    # ADD expects its parameter :inc to be an integer. We'll send a string,
+    # so expect a ValidationException.
+    with pytest.raises(ClientError) as error:
+        test_table_s.update_item(Key={'p': 'hello'},
+            UpdateExpression='ADD n :inc',
+            ExpressionAttributeValues={':inc': '1'})
+    r = error.value.response
+    assert r['Error']['Code'] == 'ValidationException'
+    assert r['ResponseMetadata']['HTTPStatusCode'] == 400
+
+# Similar to test_exception_escape above, but do the request manually,
+# without boto3. This avoids boto3's blundering attempts of covering up
+# the error it seens - and allows us to notice that the bug is that
+# Alternator returns an unparsable JSON response.
+# Reproduces #10278
+def test_exception_escape_raw(dynamodb, test_table_s):
+    payload = '{"TableName": "' + test_table_s.name + '", "Key": {"p": {"S": "hello"}}, "UpdateExpression": "ADD n :inc", "ExpressionAttributeValues": {":inc": {"S": "1"}}}'
+    req = get_signed_request(dynamodb, 'UpdateItem', payload)
+    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+    assert response.status_code == 400
+    # In issue #10278, the JSON parsing fails:
+    r = json.loads(response.text)
+    assert 'ValidationException' in r['__type']

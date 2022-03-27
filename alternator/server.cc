@@ -152,8 +152,10 @@ public:
 
 protected:
     void generate_error_reply(reply& rep, const api_error& err) {
-        rep._content += "{\"__type\":\"com.amazonaws.dynamodb.v20120810#" + err._type + "\"," +
-                "\"message\":\"" + err._msg + "\"}";
+        rjson::value results = rjson::empty_object();
+        rjson::add(results, "__type", rjson::from_string("com.amazonaws.dynamodb.v20120810#" + err._type));
+        rjson::add(results, "message", err._msg);
+        rep._content = rjson::print(std::move(results));
         rep._status = err._http_code;
         slogger.trace("api_handler error case: {}", rep._content);
     }
