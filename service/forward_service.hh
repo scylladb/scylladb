@@ -155,6 +155,8 @@ private:
     void register_metrics();
     void init_messaging_service();
     future<> uninit_messaging_service();
+
+    friend class retrying_dispatcher;
 };
 
 } // namespace service

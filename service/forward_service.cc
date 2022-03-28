@@ -119,6 +119,40 @@ public:
     }
 };
 
+// `retrying_dispatcher` is a class that dispatches forward_requests to other
+// nodes. In case of a failure, local retries are available - request being
+// retried is executed on the super-coordinator.
+class retrying_dispatcher {
+    forward_service& _forwarder;
+    tracing::trace_state_ptr _tr_state;
+    std::optional<tracing::trace_info> _tr_info;
+public:
+    retrying_dispatcher(forward_service& forwarder, tracing::trace_state_ptr tr_state)
+        : _forwarder(forwarder),
+        _tr_state(tr_state),
+        _tr_info(tracing::make_trace_info(tr_state))
+    {}
+
+    future<query::forward_result> dispatch_to_node(netw::msg_addr id, query::forward_request req) {
+        if (!utils::fb_utilities::is_me(id.addr)) {
+            _forwarder._stats.requests_dispatched_to_other_nodes += 1;
+
+            // Try to send this forward_request to another node.
+            // In case of a failure, do a retry locally.
+            try {
+                co_return co_await ser::forward_request_rpc_verbs::send_forward_request(
+                    &_forwarder._messaging, id, req, _tr_info
+                );
+            } catch(rpc::closed_error& e) {
+                flogger.warn("retrying forward_request={} on a super-coordinator after failing to send it to {} ({})", req, id, e.what());
+                tracing::trace(_tr_state, "retrying forward_request={} on a super-coordinator after failing to send it to {} ({})", req, id, e.what());
+            }
+        }
+
+        co_return co_await _forwarder.dispatch_to_shards(req, _tr_info);
+    }
+};
+
 static dht::partition_range_vector retain_ranges_owned_by_this_shard(
     schema_ptr schema,
     dht::partition_range_vector pr
@@ -290,7 +324,6 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
 
     schema_ptr schema = local_schema_registry().get(req.cmd.schema_version);
     replica::keyspace& ks = _db.local().find_keyspace(schema->ks_name());
-
     // next_vnode is used to iterate through all vnodes produced by
     // query_ranges_to_vnodes_generator.
     auto next_vnode = [
@@ -321,11 +354,12 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
 
     tracing::trace(tr_state, "Dispatching forward_request to {} endpoints", vnodes_per_addr.size());
 
-    std::optional<tracing::trace_info> tr_info = tracing::make_trace_info(tr_state);
+    retrying_dispatcher dispatcher(*this, tr_state);
+
     std::optional<query::forward_result> result;
     // Forward request to each endpoint and merge results.
     co_await parallel_for_each(vnodes_per_addr.begin(), vnodes_per_addr.end(),
-        [this, &req, &result, &tr_state, &tr_info] (std::pair<netw::messaging_service::msg_addr, dht::partition_range_vector> vnodes_with_addr) -> future<> {
+        [this, &req, &result, &tr_state, &dispatcher] (std::pair<netw::messaging_service::msg_addr, dht::partition_range_vector> vnodes_with_addr) -> future<> {
             netw::messaging_service::msg_addr addr = vnodes_with_addr.first;
             std::optional<query::forward_result>& result_ = result;
             tracing::trace_state_ptr& tr_state_ = tr_state;
@@ -336,17 +370,10 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
             tracing::trace(tr_state_, "Sending forward_request to {}", addr);
             flogger.debug("dispatching forward_request={} to address={}", req_with_modified_pr, addr);
 
-            query::forward_result partial_result = co_await [&] {
-                if (utils::fb_utilities::is_me(addr.addr)) {
-                    return dispatch_to_shards(req_with_modified_pr, tr_info);
-                } else {
-                    _stats.requests_dispatched_to_other_nodes += 1;
-
-                    return ser::forward_request_rpc_verbs::send_forward_request(
-                        &_messaging, addr, req_with_modified_pr, tr_info
-                    );
-                }
-            }();
+            query::forward_result partial_result = co_await dispatcher.dispatch_to_node(
+                addr,
+                req_with_modified_pr
+            );
 
             query::forward_result::printer partial_result_printer{
                 .types = req_with_modified_pr.reduction_types,
