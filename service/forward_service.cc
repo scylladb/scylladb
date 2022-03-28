@@ -284,7 +284,10 @@ future<> forward_service::uninit_messaging_service() {
     return ser::forward_request_rpc_verbs::unregister(&_messaging);
 }
 
-future<query::forward_result> forward_service::dispatch(query::forward_request req, tracing::trace_state_ptr tr_state) {
+future<query::forward_result> forward_service::dispatch(query::forward_request req_, tracing::trace_state_ptr tr_state_) {
+    query::forward_request req = std::move(req_);
+    tracing::trace_state_ptr tr_state = std::move(tr_state_);
+
     schema_ptr schema = local_schema_registry().get(req.cmd.schema_version);
     replica::keyspace& ks = _db.local().find_keyspace(schema->ks_name());
 
@@ -322,13 +325,15 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
     std::optional<query::forward_result> result;
     // Forward request to each endpoint and merge results.
     co_await parallel_for_each(vnodes_per_addr.begin(), vnodes_per_addr.end(),
-        [this, &req, &result, &tr_state, &tr_info] (auto vnodes_with_addr) -> future<> {
-            auto& addr = vnodes_with_addr.first;
-            auto& partition_range = vnodes_with_addr.second;
-            auto req_with_modified_pr = req;
-            req_with_modified_pr.pr = partition_range;
+        [this, &req, &result, &tr_state, &tr_info] (std::pair<netw::messaging_service::msg_addr, dht::partition_range_vector> vnodes_with_addr) -> future<> {
+            netw::messaging_service::msg_addr addr = vnodes_with_addr.first;
+            std::optional<query::forward_result>& result_ = result;
+            tracing::trace_state_ptr& tr_state_ = tr_state;
 
-            tracing::trace(tr_state, "Sending forward_request to {}", addr);
+            query::forward_request req_with_modified_pr = req;
+            req_with_modified_pr.pr = std::move(vnodes_with_addr.second);
+
+            tracing::trace(tr_state_, "Sending forward_request to {}", addr);
             flogger.debug("dispatching forward_request={} to address={}", req_with_modified_pr, addr);
 
             query::forward_result partial_result = co_await [&] {
@@ -344,16 +349,16 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
             }();
 
             query::forward_result::printer partial_result_printer{
-                .types = req.reduction_types,
+                .types = req_with_modified_pr.reduction_types,
                 .res = partial_result
             };
-            tracing::trace(tr_state, "Received forward_result={} from {}", partial_result_printer, addr);
+            tracing::trace(tr_state_, "Received forward_result={} from {}", partial_result_printer, addr);
             flogger.debug("received forward_result={} from {}", partial_result_printer, addr);
 
-            if (result) {
-                result->merge(partial_result, req.reduction_types);
+            if (result_) {
+                result_->merge(partial_result, req_with_modified_pr.reduction_types);
             } else {
-                result = partial_result;
+                result_ = partial_result;
             }
         }
     );
