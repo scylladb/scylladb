@@ -12,6 +12,7 @@
 #include "mutation_fragment_stream_validator.hh"
 #include "schema_upgrader.hh"
 
+logging::logger mrlog("mutation_reader");
 logging::logger fmr_logger("flat_mutation_reader");
 
 flat_mutation_reader& flat_mutation_reader::operator=(flat_mutation_reader&& o) noexcept {

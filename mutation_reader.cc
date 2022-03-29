@@ -24,6 +24,5 @@
 #include "readers/empty_v2.hh"
 #include "readers/combined.hh"
 
-logging::logger mrlog("mutation_reader");
 
 
