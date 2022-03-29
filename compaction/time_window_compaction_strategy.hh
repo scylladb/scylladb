@@ -123,7 +123,7 @@ public:
     // @return A pair, where the left element is the bucket representation (map of timestamp to sstablereader),
     // and the right is the highest timestamp seen
     static std::pair<std::map<timestamp_type, std::vector<shared_sstable>>, timestamp_type>
-    get_buckets(std::vector<shared_sstable> files, time_window_compaction_strategy_options& options);
+    get_buckets(std::vector<shared_sstable> files, const time_window_compaction_strategy_options& options);
 
     std::vector<shared_sstable>
     newest_bucket(table_state& table_s, strategy_control& control, std::map<timestamp_type, std::vector<shared_sstable>> buckets,

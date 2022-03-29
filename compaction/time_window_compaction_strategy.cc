@@ -303,7 +303,7 @@ time_window_compaction_strategy::get_window_lower_bound(std::chrono::seconds sst
 }
 
 std::pair<std::map<timestamp_type, std::vector<shared_sstable>>, timestamp_type>
-time_window_compaction_strategy::get_buckets(std::vector<shared_sstable> files, time_window_compaction_strategy_options& options) {
+time_window_compaction_strategy::get_buckets(std::vector<shared_sstable> files, const time_window_compaction_strategy_options& options) {
     std::map<timestamp_type, std::vector<shared_sstable>> buckets;
 
     timestamp_type max_timestamp = 0;
