@@ -108,6 +108,7 @@ public:
     gms::feature tombstone_gc_options { *this, "TOMBSTONE_GC_OPTIONS"sv };
     gms::feature parallelized_aggregation { *this, "PARALLELIZED_AGGREGATION"sv };
     gms::feature keyspace_storage_options { *this, "KEYSPACE_STORAGE_OPTIONS"sv };
+    gms::feature typed_errors_in_read_rpc { *this, "TYPED_ERRORS_IN_READ_RPC"sv };
 
 public:
 
