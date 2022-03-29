@@ -142,6 +142,7 @@ extern const std::string_view USES_RAFT_CLUSTER_MANAGEMENT;
 extern const std::string_view TOMBSTONE_GC_OPTIONS;
 extern const std::string_view PARALLELIZED_AGGREGATION;
 extern const std::string_view KEYSPACE_STORAGE_OPTIONS;
+extern const std::string_view TYPED_ERRORS_IN_READ_RPC;
 
 }
 

@@ -67,6 +67,7 @@ constexpr std::string_view features::USES_RAFT_CLUSTER_MANAGEMENT = "USES_RAFT_C
 constexpr std::string_view features::TOMBSTONE_GC_OPTIONS = "TOMBSTONE_GC_OPTIONS";
 constexpr std::string_view features::PARALLELIZED_AGGREGATION = "PARALLELIZED_AGGREGATION";
 constexpr std::string_view features::KEYSPACE_STORAGE_OPTIONS = "KEYSPACE_STORAGE_OPTIONS";
+constexpr std::string_view features::TYPED_ERRORS_IN_READ_RPC = "TYPED_ERRORS_IN_READ_RPC";
 
 static logging::logger logger("features");
 
@@ -99,6 +100,7 @@ feature_service::feature_service(feature_config cfg) : _config(cfg)
         , _tombstone_gc_options(*this, features::TOMBSTONE_GC_OPTIONS)
         , _parallelized_aggregation(*this, features::PARALLELIZED_AGGREGATION)
         , _keyspace_storage_options(*this, features::KEYSPACE_STORAGE_OPTIONS)
+        , _typed_errors_in_read_rpc(*this, features::TYPED_ERRORS_IN_READ_RPC)
 {}
 
 feature_config feature_config_from_db_config(db::config& cfg, std::set<sstring> disabled) {
@@ -238,6 +240,7 @@ std::set<std::string_view> feature_service::known_feature_set() {
         gms::features::TOMBSTONE_GC_OPTIONS,
         gms::features::PARALLELIZED_AGGREGATION,
         gms::features::KEYSPACE_STORAGE_OPTIONS,
+        gms::features::TYPED_ERRORS_IN_READ_RPC,
     };
 
     for (const sstring& s : _config._disabled_features) {
@@ -351,6 +354,7 @@ void feature_service::enable(const std::set<std::string_view>& list) {
         std::ref(_tombstone_gc_options),
         std::ref(_parallelized_aggregation),
         std::ref(_keyspace_storage_options),
+        std::ref(_typed_errors_in_read_rpc),
     })
     {
         if (list.contains(f.name())) {
