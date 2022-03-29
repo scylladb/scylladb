@@ -268,7 +268,7 @@ size_tiered_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
 }
 
 std::vector<compaction_descriptor>
-size_tiered_compaction_strategy::get_cleanup_compaction_jobs(table_state& table_s, const std::vector<shared_sstable>& candidates) const {
+size_tiered_compaction_strategy::get_cleanup_compaction_jobs(table_state& table_s, std::vector<shared_sstable> candidates) const {
     std::vector<compaction_descriptor> ret;
     const auto& schema = table_s.schema();
     unsigned max_threshold = schema->max_compaction_threshold();
