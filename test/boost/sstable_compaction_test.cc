@@ -4926,12 +4926,15 @@ SEASTAR_TEST_CASE(test_compaction_strategy_cleanup_method) {
     return test_env::do_with_async([] (test_env& env) {
         constexpr size_t all_files = 64;
 
-        auto get_cleanup_jobs = [&env, &all_files] (sstables::compaction_strategy_type compaction_strategy_type) {
+        auto get_cleanup_jobs = [&env, &all_files] (sstables::compaction_strategy_type compaction_strategy_type,
+                                                    std::map<sstring, sstring> strategy_options = {},
+                                                    const api::timestamp_clock::duration step_base = 0ms) {
             auto builder = schema_builder("tests", "test_compaction_strategy_cleanup_method")
                     .with_column("id", utf8_type, column_kind::partition_key)
                     .with_column("cl", int32_type, column_kind::clustering_key)
                     .with_column("value", int32_type);
             builder.set_compaction_strategy(compaction_strategy_type);
+            builder.set_compaction_strategy_options(std::move(strategy_options));
             auto s = builder.build();
 
             auto tmp = tmpdir();
@@ -4944,18 +4947,24 @@ SEASTAR_TEST_CASE(test_compaction_strategy_cleanup_method) {
                                         sstables::get_highest_sstable_version(), big);
             };
 
-            auto make_mutation = [&](unsigned pkey_idx) {
+            using namespace std::chrono;
+            auto now = gc_clock::now().time_since_epoch() + duration_cast<microseconds>(seconds(tests::random::get_int(0, 3600*24)));
+            auto next_timestamp = [&now] (microseconds step) mutable -> api::timestamp_type {
+                return (now + step).count();
+            };
+            auto make_mutation = [&] (unsigned pkey_idx, api::timestamp_type ts) {
                 auto pkey = partition_key::from_exploded(*s, {to_bytes(tokens[pkey_idx].first)});
                 mutation m(s, pkey);
                 auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(1)});
-                m.set_clustered_cell(c_key, bytes("value"), data_value(int32_t(1)), gc_clock::now().time_since_epoch().count());
+                m.set_clustered_cell(c_key, bytes("value"), data_value(int32_t(1)), ts);
                 return m;
             };
 
             std::vector<sstables::shared_sstable> candidates;
             candidates.reserve(all_files);
             for (auto i = 0; i < all_files; i++) {
-                candidates.push_back(make_sstable_containing(sst_gen, {make_mutation(i)}));
+                auto current_step = duration_cast<microseconds>(step_base) * i;
+                candidates.push_back(make_sstable_containing(sst_gen, {make_mutation(i, next_timestamp(current_step))}));
             }
 
             auto strategy = cf->get_compaction_strategy();
@@ -4963,9 +4972,10 @@ SEASTAR_TEST_CASE(test_compaction_strategy_cleanup_method) {
             return std::make_pair(std::move(candidates), std::move(jobs));
         };
 
-        auto run_cleanup_strategy_test = [&] (sstables::compaction_strategy_type compaction_strategy_type, size_t per_job_files) {
+        auto run_cleanup_strategy_test = [&] (sstables::compaction_strategy_type compaction_strategy_type, size_t per_job_files, auto&&... args) {
+            testlog.info("Running cleanup test for strategy type {}", compaction_strategy::name(compaction_strategy_type));
             size_t target_job_count = all_files / per_job_files;
-            auto [candidates, descriptors] = get_cleanup_jobs(compaction_strategy_type);
+            auto [candidates, descriptors] = get_cleanup_jobs(compaction_strategy_type, std::forward<decltype(args)>(args)...);
             BOOST_REQUIRE(descriptors.size() == target_job_count);
             auto generations = boost::copy_range<std::unordered_set<unsigned>>(candidates | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::generation)));
             auto check_desc = [&] (const auto& desc) {
@@ -4984,5 +4994,12 @@ SEASTAR_TEST_CASE(test_compaction_strategy_cleanup_method) {
 
         // Default implementation: check that it will return one job for each file
         run_cleanup_strategy_test(sstables::compaction_strategy_type::null, 1);
+
+        // TWCS: Check that it will return one job for each time window
+        std::map<sstring, sstring> twcs_opts = {
+            {time_window_compaction_strategy_options::COMPACTION_WINDOW_UNIT_KEY, "HOURS"},
+            {time_window_compaction_strategy_options::COMPACTION_WINDOW_SIZE_KEY, "1"},
+        };
+        run_cleanup_strategy_test(sstables::compaction_strategy_type::time_window, 1, std::move(twcs_opts), 1h);
     });
 }
