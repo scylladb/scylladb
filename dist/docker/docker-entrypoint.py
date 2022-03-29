@@ -28,7 +28,12 @@ try:
     setup.cqlshrc()
     setup.arguments()
     setup.set_housekeeping()
-    supervisord = subprocess.Popen(["/usr/bin/supervisord", "-c",  "/etc/supervisord.conf"])
-    supervisord.wait()
+    # supervisord mode
+    if os.path.exists("/usr/bin/supervisord"):
+        supervisord = subprocess.Popen(["/usr/bin/supervisord", "-c",  "/etc/supervisord.conf"])
+        supervisord.wait()
+    # systemd mode
+    else:
+        subprocess.run(["/usr/bin/systemctl", "start", "scylla-server.service"])
 except Exception:
     logging.exception('failed!')

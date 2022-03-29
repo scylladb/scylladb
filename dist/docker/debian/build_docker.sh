@@ -17,6 +17,7 @@ if [[ "$version" = *rc* ]]; then
 fi
 
 mode="release"
+systemd=false
 
 if uname -m | grep x86_64 ; then
   arch="amd64"
@@ -37,6 +38,10 @@ while [ $# -gt 0 ]; do
         --mode)
             mode="$2"
             shift 2
+            ;;
+        --systemd)
+            systemd=true
+            shift 1
             ;;
         *)
             print_usage
@@ -80,28 +85,42 @@ run apt-get -y update
 run apt-get -y install dialog apt-utils
 run bash -ec "echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections"
 run bash -ec "rm -rf /etc/rsyslog.conf"
-run apt-get -y install hostname supervisor openssh-server openssh-client openjdk-11-jre-headless python python-yaml curl rsyslog locales sudo
+if ! $systemd; then
+    run apt-get -y install supervisor
+else
+    run apt-get -y install systemd systemd-sysv
+    run rm -fv /etc/systemd/system/multi-user.target.wants/systemd-resolved.service
+fi
+run apt-get -y install hostname openssh-server openssh-client openjdk-11-jre-headless python python-yaml curl rsyslog locales sudo
 run locale-gen en_US.UTF-8
 run update-locale LANG=en_US.UTF-8 LANGUAGE=en_US:en LC_ALL=en_US.UTF_8
 run bash -ec "dpkg -i packages/*.deb"
 run apt-get -y clean all
 run bash -ec "cat /scylla_bashrc >> /etc/bash.bashrc"
-run mkdir -p /etc/supervisor.conf.d
+if ! $systemd; then
+    run mkdir -p /etc/supervisor.conf.d
+fi
 run mkdir -p /var/log/scylla
 run chown -R scylla:scylla /var/lib/scylla
 run sed -i -e 's/^SCYLLA_ARGS=".*"$/SCYLLA_ARGS="--log-to-syslog 0 --log-to-stdout 1 --default-log-level info --network-stack posix"/' /etc/default/scylla-server
 
-run mkdir -p /opt/scylladb/supervisor
-bcp dist/common/supervisor/scylla-server.sh /opt/scylladb/supervisor/scylla-server.sh
-bcp dist/common/supervisor/scylla-jmx.sh /opt/scylladb/supervisor/scylla-jmx.sh
-bcp dist/common/supervisor/scylla-node-exporter.sh /opt/scylladb/supervisor/scylla-node-exporter.sh
-bcp dist/common/supervisor/scylla_util.sh /opt/scylladb/supervisor/scylla_util.sh
+if ! $systemd; then
+    run mkdir -p /opt/scylladb/supervisor
+    bcp dist/common/supervisor/scylla-server.sh /opt/scylladb/supervisor/scylla-server.sh
+    bcp dist/common/supervisor/scylla-jmx.sh /opt/scylladb/supervisor/scylla-jmx.sh
+    bcp dist/common/supervisor/scylla-node-exporter.sh /opt/scylladb/supervisor/scylla-node-exporter.sh
+    bcp dist/common/supervisor/scylla_util.sh /opt/scylladb/supervisor/scylla_util.sh
+fi
 
 bconfig --env PATH=/opt/scylladb/python3/bin:/usr/bin:/usr/sbin
 bconfig --env LANG=en_US.UTF-8
 bconfig --env LANGUAGE=en_US:en
 bconfig --env LC_ALL=en_US.UTF-8
-bconfig --entrypoint  '["/docker-entrypoint.py"]'
+if ! $systemd; then
+    bconfig --entrypoint  '["/docker-entrypoint.py"]'
+else
+    bconfig --entrypoint  '["/usr/sbin/init"]'
+fi
 bconfig --cmd  ''
 bconfig --port 10000 --port 9042 --port 9160 --port 9180 --port 7000 --port 7001 --port 22
 bconfig --volume "/var/lib/scylla"
