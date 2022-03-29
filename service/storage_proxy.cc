@@ -94,6 +94,7 @@
 #include "utils/result_loop.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/result_try.hh"
+#include "replica/exceptions.hh"
 
 namespace bi = boost::intrusive;
 
@@ -351,7 +352,6 @@ public:
 
 class abstract_write_response_handler : public seastar::enable_shared_from_this<abstract_write_response_handler> {
 protected:
-    using error = storage_proxy::error;
     storage_proxy::response_id_type _id;
     promise<result<>> _ready; // available when cl is achieved
     shared_ptr<storage_proxy> _proxy;
@@ -368,8 +368,7 @@ protected:
     size_t _cl_acks = 0;
     bool _cl_achieved = false;
     bool _throttled = false;
-    error _error = error::NONE;
-    std::optional<sstring> _message;
+    replica::exception_variant _exception;
     size_t _failed = 0; // only failures that may impact consistency
     size_t _all_failures = 0; // total amount of failures
     size_t _total_endpoints = 0;
@@ -410,15 +409,15 @@ public:
                 _proxy->unthrottle();
             }
         } else {
-            if (_error == error::TIMEOUT) {
-                _ready.set_value(mutation_write_timeout_exception(get_schema()->ks_name(), get_schema()->cf_name(), _cl, _cl_acks, _total_block_for, _type));
-            } else if (_error == error::FAILURE) {
-                if (!_message) {
-                    _ready.set_exception(mutation_write_failure_exception(get_schema()->ks_name(), get_schema()->cf_name(), _cl, _cl_acks, _failed, _total_block_for, _type));
+            std::visit([&] <typename Ex> (Ex& ex) {
+                if constexpr (std::is_same_v<Ex, replica::timeout_exception>) {
+                    _ready.set_value(mutation_write_timeout_exception(get_schema()->ks_name(), get_schema()->cf_name(), _cl, _cl_acks, _total_block_for, _type));
+                } else if constexpr (std::is_same_v<Ex, replica::virtual_table_update_exception>) {
+                    _ready.set_exception(mutation_write_failure_exception(ex.grab_cause(), _cl, _cl_acks, _failed, _total_block_for, _type));
                 } else {
-                    _ready.set_exception(mutation_write_failure_exception(*_message, _cl, _cl_acks, _failed, _total_block_for, _type));
+                    _ready.set_exception(mutation_write_failure_exception(get_schema()->ks_name(), get_schema()->cf_name(), _cl, _cl_acks, _failed, _total_block_for, _type));
                 }
-            }
+            }, _exception.reason);
             if (_cdc_operation_result_tracker) {
                 _cdc_operation_result_tracker->on_mutation_failed();
             }
@@ -455,12 +454,11 @@ public:
         }
     }
 
-    bool failure(gms::inet_address from, size_t count, error err, std::optional<sstring> msg) {
+    virtual bool failure(gms::inet_address from, size_t count, replica::exception_variant ex) {
         if (waited_for(from)) {
             _failed += count;
             if (_total_block_for + _failed > _total_endpoints) {
-                _error = err;
-                _message = std::move(msg);
+                _exception = std::move(ex);
                 delay(get_trace_state(), [] (abstract_write_response_handler*) { });
                 return true;
             }
@@ -468,15 +466,11 @@ public:
         return false;
     }
 
-    virtual bool failure(gms::inet_address from, size_t count, error err) {
-        return failure(std::move(from), count, std::move(err), {});
-    }
-
     void on_timeout() {
         if (_cl_achieved) {
             slogger.trace("Write is not acknowledged by {} replicas after achieving CL", get_targets());
         }
-        _error = error::TIMEOUT;
+        _exception = replica::timeout_exception();
         // We don't delay request completion after a timeout, but its possible we are currently delaying.
     }
     // return true on last ack
@@ -494,7 +488,7 @@ public:
     }
     // return true if handler is no longer needed because
     // CL cannot be reached
-    bool failure_response(gms::inet_address from, size_t count, error err, std::optional<sstring> msg) {
+    bool failure_response(gms::inet_address from, size_t count, replica::exception_variant ex) {
         if (boost::find(_targets, from) == _targets.end()) {
             // There is a little change we can get outdated reply
             // if the coordinator was restarted after sending a request and
@@ -506,7 +500,7 @@ public:
         _all_failures += count;
         // we should not fail CL=ANY requests since they may succeed after
         // writing hints
-        return _cl != db::consistency_level::ANY && failure(from, count, err, std::move(msg));
+        return _cl != db::consistency_level::ANY && failure(from, count, std::move(ex));
     }
     void check_for_early_completion() {
         if (_all_failures == _targets.size()) {
@@ -766,7 +760,7 @@ public:
             }
         }
     }
-    bool failure(gms::inet_address from, size_t count, error err) override {
+    bool failure(gms::inet_address from, size_t count, replica::exception_variant ex) override {
         auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
         const sstring& dc = snitch_ptr->get_datacenter(from);
         auto dc_resp = _dc_responses.find(dc);
@@ -774,7 +768,7 @@ public:
         dc_resp->second.failures += count;
         _failed += count;
         if (dc_resp->second.total_block_for + dc_resp->second.failures > dc_resp->second.total_endpoints) {
-            _error = err;
+            _exception = std::move(ex);
             return true;
         }
         return false;
@@ -1390,11 +1384,11 @@ void storage_proxy::got_response(storage_proxy::response_id_type id, gms::inet_a
     maybe_update_view_backlog_of(std::move(from), std::move(backlog));
 }
 
-void storage_proxy::got_failure_response(storage_proxy::response_id_type id, gms::inet_address from, size_t count, std::optional<db::view::update_backlog> backlog, error err, std::optional<sstring> msg) {
+void storage_proxy::got_failure_response(storage_proxy::response_id_type id, gms::inet_address from, size_t count, std::optional<db::view::update_backlog> backlog, replica::exception_variant ex) {
     auto it = _response_handlers.find(id);
     if (it != _response_handlers.end()) {
         tracing::trace(it->second->get_trace_state(), "Got {} failures from /{}", count, from);
-        if (it->second->failure_response(from, count, err, std::move(msg))) {
+        if (it->second->failure_response(from, count, std::move(ex))) {
             remove_response_handler_entry(std::move(it));
         } else {
             it->second->check_for_early_completion();
@@ -2795,25 +2789,27 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
         // Waited on indirectly.
         (void)f.handle_exception([response_id, forward_size, coordinator, handler_ptr, p = shared_from_this(), &stats] (std::exception_ptr eptr) {
             ++stats.writes_errors.get_ep_stat(coordinator);
-            error err = error::FAILURE;
-            std::optional<sstring> msg;
+            replica::exception_variant ex;
             try {
                 std::rethrow_exception(eptr);
-            } catch(rpc::closed_error&) {
+            } catch(rpc::closed_error& e) {
                 // ignore, disconnect will be logged by gossiper
-            } catch(seastar::gate_closed_exception&) {
+                ex = replica::encode_replica_exception(e);
+            } catch(seastar::gate_closed_exception& e) {
                 // may happen during shutdown, ignore it
-            } catch(timed_out_error&) {
+                ex = replica::encode_replica_exception(e);
+            } catch(timed_out_error& e) {
                 // from lmutate(). Ignore so that logs are not flooded
                 // database total_writes_timedout counter was incremented.
                 // It needs to be recorded that the timeout occurred locally though.
-                err = error::TIMEOUT;
+                ex = replica::encode_replica_exception(e);
             } catch(db::virtual_table_update_exception& e) {
-                msg = e.grab_cause();
+                ex = replica::encode_replica_exception(e);
             } catch(...) {
-                slogger.error("exception during mutation write to {}: {}", coordinator, std::current_exception());
+                slogger.error("exception during mutation write to {}: {}", coordinator, eptr);
+                ex = replica::encode_unknown_replica_exception(eptr);
             }
-            p->got_failure_response(response_id, coordinator, forward_size + 1, std::nullopt, err, std::move(msg));
+            p->got_failure_response(response_id, coordinator, forward_size + 1, std::nullopt, std::move(ex));
         });
     }
 }
@@ -4961,10 +4957,15 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
             timeout = *t;
         }
 
-        return do_with(std::move(in), get_local_shared_storage_proxy(), size_t(0), [src_addr = std::move(src_addr),
+        struct errors_info {
+            size_t count = 0;
+            replica::exception_variant local = replica::forward_exception();
+        };
+
+        return do_with(std::move(in), get_local_shared_storage_proxy(), errors_info{}, [src_addr = std::move(src_addr),
                        forward = std::move(forward), reply_to, shard, response_id, trace_state_ptr, timeout,
                        schema_version, apply_fn = std::move(apply_fn), forward_fn = std::move(forward_fn), &mm]
-                       (const auto& m, shared_ptr<storage_proxy>& p, size_t& errors) mutable {
+                       (const auto& m, shared_ptr<storage_proxy>& p, errors_info& errors) mutable {
             ++p->get_stats().received_mutations;
             p->get_stats().forwarded_mutations += forward.size();
             return when_all(
@@ -4998,7 +4999,8 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
                         l = seastar::log_level::debug;
                     }
                     slogger.log(l, "Failed to apply mutation from {}#{}: {}", reply_to, shard, eptr);
-                    errors++;
+                    errors.count++;
+                    errors.local = replica::encode_replica_exception(std::move(eptr));
                 }),
                 parallel_for_each(forward.begin(), forward.end(), [reply_to, shard, response_id, &m, &p, trace_state_ptr,
                                   timeout, &errors, forward_fn = std::move(forward_fn)] (gms::inet_address forward) {
@@ -5008,7 +5010,7 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
                             .then_wrapped([&p, &errors] (future<> f) {
                         if (f.failed()) {
                             ++p->get_stats().forwarding_errors;
-                            errors++;
+                            errors.count++;
                         };
                         f.ignore_ready_future();
                     });
@@ -5016,14 +5018,15 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
             ).then_wrapped([trace_state_ptr, reply_to, shard, response_id, &errors, &p] (future<std::tuple<future<>, future<>>>&& f) {
                 // ignore results, since we'll be returning them via MUTATION_DONE/MUTATION_FAILURE verbs
                 auto fut = make_ready_future<seastar::rpc::no_wait_type>(netw::messaging_service::no_wait());
-                if (errors) {
-                    tracing::trace(trace_state_ptr, "Sending mutation_failure with {} failures to /{}", errors, reply_to);
+                if (errors.count) {
+                    tracing::trace(trace_state_ptr, "Sending mutation_failure with {} failures to /{}", errors.count, reply_to);
                     fut = ser::storage_proxy_rpc_verbs::send_mutation_failed(&p->_messaging,
                             netw::messaging_service::msg_addr{reply_to, shard},
                             shard,
                             response_id,
-                            errors,
-                            p->get_view_update_backlog()).then_wrapped([] (future<> f) {
+                            errors.count,
+                            p->get_view_update_backlog(),
+                            std::move(errors.local)).then_wrapped([] (future<> f) {
                         f.ignore_ready_future();
                         return netw::messaging_service::no_wait();
                     });
@@ -5084,11 +5087,11 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
             return netw::messaging_service::no_wait();
         });
     });
-    ser::storage_proxy_rpc_verbs::register_mutation_failed(&ms, [this] (const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id, size_t num_failed, rpc::optional<db::view::update_backlog> backlog) {
+    ser::storage_proxy_rpc_verbs::register_mutation_failed(&ms, [this] (const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id, size_t num_failed, rpc::optional<db::view::update_backlog> backlog, rpc::optional<replica::exception_variant> exception) {
         auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         get_stats().replica_cross_shard_ops += shard != this_shard_id();
-        return container().invoke_on(shard, _write_ack_smp_service_group, [from, response_id, num_failed, backlog = std::move(backlog)] (storage_proxy& sp) mutable {
-            sp.got_failure_response(response_id, from, num_failed, std::move(backlog), error::FAILURE, std::nullopt);
+        return container().invoke_on(shard, _write_ack_smp_service_group, [from, response_id, num_failed, backlog = std::move(backlog), exception = std::move(exception)] (storage_proxy& sp) mutable {
+            sp.got_failure_response(response_id, from, num_failed, std::move(backlog), exception.value_or(replica::unknown_exception("")));
             return netw::messaging_service::no_wait();
         });
     });

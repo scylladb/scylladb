@@ -47,6 +47,7 @@
 #include "query_ranges_to_vnodes.hh"
 #include "exceptions/exceptions.hh"
 #include "exceptions/coordinator_result.hh"
+#include "replica/exceptions.hh"
 
 class reconcilable_result;
 class frozen_mutation_and_schema;
@@ -121,11 +122,6 @@ class cas_request;
 
 class storage_proxy : public seastar::async_sharded_service<storage_proxy>, public peering_sharded_service<storage_proxy>, public service::endpoint_lifecycle_subscriber  {
 public:
-    enum class error : uint8_t {
-        NONE,
-        TIMEOUT,
-        FAILURE,
-    };
     template<typename T = void>
     using result = exceptions::coordinator_result<T>;
     using clock_type = lowres_clock;
@@ -300,7 +296,7 @@ private:
     void remove_response_handler(response_id_type id);
     void remove_response_handler_entry(response_handlers_map::iterator entry);
     void got_response(response_id_type id, gms::inet_address from, std::optional<db::view::update_backlog> backlog);
-    void got_failure_response(response_id_type id, gms::inet_address from, size_t count, std::optional<db::view::update_backlog> backlog, error err, std::optional<sstring> msg);
+    void got_failure_response(response_id_type id, gms::inet_address from, size_t count, std::optional<db::view::update_backlog> backlog, replica::exception_variant exception);
     future<result<>> response_wait(response_id_type id, clock_type::time_point timeout);
     ::shared_ptr<abstract_write_response_handler>& get_write_response_handler(storage_proxy::response_id_type id);
     response_id_type create_write_response_handler_helper(schema_ptr s, const dht::token& token,
