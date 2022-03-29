@@ -2845,6 +2845,11 @@ future<result<>> storage_proxy::schedule_repair(std::unordered_map<dht::token, s
 
 class abstract_read_resolver {
 protected:
+    enum class error_kind : uint8_t {
+        FAILURE,
+        DISCONNECT,
+        RATE_LIMIT,
+    };
     db::consistency_level _cl;
     size_t _targets_count;
     promise<result<>> _done_promise; // all target responded
@@ -2876,18 +2881,21 @@ public:
         _timeout.arm(timeout);
     }
     virtual ~abstract_read_resolver() {};
-    virtual void on_error(gms::inet_address ep, bool disconnect) = 0;
+    virtual void on_error(gms::inet_address ep, error_kind kind) = 0;
     future<result<>> done() {
         return _done_promise.get_future();
     }
     void error(gms::inet_address ep, std::exception_ptr eptr) {
         sstring why;
-        bool disconnect = false;
+        error_kind kind = error_kind::FAILURE;
         try {
             std::rethrow_exception(eptr);
+        } catch (replica::rate_limit_exception&) {
+            // There might be a lot of those, so ignore
+            kind = error_kind::RATE_LIMIT;
         } catch (rpc::closed_error&) {
             // do not report connection closed exception, gossiper does that
-            disconnect = true;
+            kind = error_kind::DISCONNECT;
         } catch (rpc::timeout_error&) {
             // do not report timeouts, the whole operation will timeout and be reported
             return; // also do not report timeout as replica failure for the same reason
@@ -2909,7 +2917,7 @@ public:
         }
 
         if (!_request_failed) { // request may fail only once.
-            on_error(ep, disconnect);
+            on_error(ep, kind);
         }
     }
 };
@@ -2990,18 +2998,26 @@ public:
             _done_promise.set_value(bo::success());
         }
     }
-    void on_error(gms::inet_address ep, bool disconnect) override {
+    void on_error(gms::inet_address ep, error_kind kind) override {
         if (waiting_for(ep)) {
             _failed++;
         }
-        if (disconnect && _block_for == _target_count_for_cl) {
+        if (kind == error_kind::DISCONNECT && _block_for == _target_count_for_cl) {
             // if the error is because of a connection disconnect and there is no targets to speculate
             // wait for timeout in hope that the client will issue speculative read
             // FIXME: resolver should have access to all replicas and try another one in this case
             return;
         }
         if (_block_for + _failed > _target_count_for_cl) {
-            fail_request(read_failure_exception(_schema->ks_name(), _schema->cf_name(), _cl, _cl_responses, _failed, _block_for, _data_result));
+            switch (kind) {
+            case error_kind::RATE_LIMIT:
+                fail_request(exceptions::rate_limit_exception(_schema->ks_name(), _schema->cf_name(), db::operation_type::read, false));
+                break;
+            case error_kind::DISCONNECT:
+            case error_kind::FAILURE:
+                fail_request(read_failure_exception(_schema->ks_name(), _schema->cf_name(), _cl, _cl_responses, _failed, _block_for, _data_result));
+                break;
+            }
         }
     }
     future<result<digest_read_result>> has_cl() {
@@ -3314,8 +3330,16 @@ public:
             }
         }
     }
-    void on_error(gms::inet_address ep, bool disconnect) override {
-        fail_request(read_failure_exception(_schema->ks_name(), _schema->cf_name(), _cl, response_count(), 1, _targets_count, response_count() != 0));
+    void on_error(gms::inet_address ep, error_kind kind) override {
+        switch (kind) {
+        case error_kind::RATE_LIMIT:
+            fail_request(exceptions::rate_limit_exception(_schema->ks_name(), _schema->cf_name(), db::operation_type::read, false));
+            break;
+        case error_kind::DISCONNECT:
+        case error_kind::FAILURE:
+            fail_request(read_failure_exception(_schema->ks_name(), _schema->cf_name(), _cl, response_count(), 1, _targets_count, response_count() != 0));
+            break;
+        }
     }
     uint32_t max_live_count() const {
         return _max_live_count;
@@ -3565,8 +3589,11 @@ protected:
             return _proxy->query_mutations_locally(_schema, cmd, _partition_range, timeout, _trace_state);
         } else {
             tracing::trace(_trace_state, "read_mutation_data: sending a message to /{}", ep);
-            return ser::storage_proxy_rpc_verbs::send_read_mutation_data(&_proxy->_messaging, netw::messaging_service::msg_addr{ep, 0}, timeout, *cmd, _partition_range).then([this, ep](rpc::tuple<reconcilable_result, rpc::optional<cache_temperature>> result_and_hit_rate) {
-                auto&& [result, hit_rate] = result_and_hit_rate;
+            return ser::storage_proxy_rpc_verbs::send_read_mutation_data(&_proxy->_messaging, netw::messaging_service::msg_addr{ep, 0}, timeout, *cmd, _partition_range).then([this, ep](rpc::tuple<reconcilable_result, rpc::optional<cache_temperature>, rpc::optional<replica::exception_variant>> result_and_hit_rate) {
+                auto&& [result, hit_rate, opt_exception] = result_and_hit_rate;
+                if (opt_exception.has_value() && *opt_exception) {
+                    return make_exception_future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>((*opt_exception).into_exception_ptr());
+                }
                 tracing::trace(_trace_state, "read_mutation_data: got response from /{}", ep);
                 return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>(rpc::tuple(make_foreign(::make_lw_shared<reconcilable_result>(std::move(result))), hit_rate.value_or(cache_temperature::invalid())));
             });
@@ -3582,8 +3609,11 @@ protected:
             return _proxy->query_result_local(_schema, _cmd, _partition_range, opts, _trace_state, timeout);
         } else {
             tracing::trace(_trace_state, "read_data: sending a message to /{}", ep);
-            return ser::storage_proxy_rpc_verbs::send_read_data(&_proxy->_messaging, netw::messaging_service::msg_addr{ep, 0}, timeout, *_cmd, _partition_range, opts.digest_algo).then([this, ep](rpc::tuple<query::result, rpc::optional<cache_temperature>> result_hit_rate) {
-                auto&& [result, hit_rate] = result_hit_rate;
+            return ser::storage_proxy_rpc_verbs::send_read_data(&_proxy->_messaging, netw::messaging_service::msg_addr{ep, 0}, timeout, *_cmd, _partition_range, opts.digest_algo).then([this, ep](rpc::tuple<query::result, rpc::optional<cache_temperature>, rpc::optional<replica::exception_variant>> result_hit_rate) {
+                auto&& [result, hit_rate, opt_exception] = result_hit_rate;
+                if (opt_exception.has_value() && *opt_exception) {
+                    return make_exception_future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>((*opt_exception).into_exception_ptr());
+                }
                 tracing::trace(_trace_state, "read_data: got response from /{}", ep);
                 return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>(rpc::tuple(make_foreign(::make_lw_shared<query::result>(std::move(result))), hit_rate.value_or(cache_temperature::invalid())));
             });
@@ -3599,8 +3629,11 @@ protected:
             tracing::trace(_trace_state, "read_digest: sending a message to /{}", ep);
             return ser::storage_proxy_rpc_verbs::send_read_digest(&_proxy->_messaging, netw::messaging_service::msg_addr{ep, 0}, timeout, *_cmd,
                         _partition_range, digest_algorithm(*_proxy)).then([this, ep] (
-                    rpc::tuple<query::result_digest, rpc::optional<api::timestamp_type>, rpc::optional<cache_temperature>> digest_timestamp_hit_rate) {
-                auto&& [d, t, hit_rate] = digest_timestamp_hit_rate;
+                    rpc::tuple<query::result_digest, rpc::optional<api::timestamp_type>, rpc::optional<cache_temperature>, rpc::optional<replica::exception_variant>> digest_timestamp_hit_rate) {
+                auto&& [d, t, hit_rate, opt_exception] = digest_timestamp_hit_rate;
+                if (opt_exception.has_value() && *opt_exception) {
+                    return make_exception_future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>>((*opt_exception).into_exception_ptr());
+                }
                 tracing::trace(_trace_state, "read_digest: got response from /{}", ep);
                 return make_ready_future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>>(rpc::tuple(d, t ? t.value() : api::missing_timestamp, hit_rate.value_or(cache_temperature::invalid())));
             });
@@ -5125,7 +5158,27 @@ storage_proxy::handle_mutation_failed(const rpc::client_info& cinfo, unsigned sh
         });
 }
 
-future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>
+template<typename... Elements>
+future<rpc::tuple<Elements..., replica::exception_variant>> storage_proxy::encode_replica_exception_for_rpc(future<rpc::tuple<Elements...>>&& f, auto&& default_tuple_maker) {
+    using original_std_tuple_type = std::tuple<Elements...>;
+    using final_tuple_type = rpc::tuple<Elements..., replica::exception_variant>;
+
+    if (!f.failed()) {
+        return make_ready_future<final_tuple_type>(std::tuple_cat(original_std_tuple_type(f.get()), std::tuple<replica::exception_variant>(replica::exception_variant())));
+    }
+
+    std::exception_ptr eptr = f.get_exception();
+    if (features().typed_errors_in_read_rpc) {
+        replica::exception_variant ex = replica::try_encode_replica_exception(eptr);
+        if (ex) {
+            return make_ready_future<final_tuple_type>(std::tuple_cat(default_tuple_maker(), std::tuple<replica::exception_variant>(std::move(ex))));
+        }
+    }
+
+    return make_exception_future<final_tuple_type>(std::move(eptr));
+}
+
+future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature, replica::exception_variant>>
 storage_proxy::handle_read_data(const rpc::client_info& cinfo, rpc::opt_time_point t, query::read_command cmd, ::compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> oda) {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = netw::messaging_service::get_source(cinfo);
@@ -5154,13 +5207,14 @@ storage_proxy::handle_read_data(const rpc::client_info& cinfo, rpc::opt_time_poi
                 opts.request = da == query::digest_algorithm::none ? query::result_request::only_result : query::result_request::result_and_digest;
                 auto timeout = t ? *t : db::no_timeout;
                 return p->query_result_local(std::move(s), cmd, std::move(pr2.first), opts, trace_state_ptr, timeout);
-            }).finally([&trace_state_ptr, src_ip] () mutable {
+            }).then_wrapped([this, &trace_state_ptr, src_ip] (future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> f) mutable {
                 tracing::trace(trace_state_ptr, "read_data handling is done, sending a response to /{}", src_ip);
+                return encode_replica_exception_for_rpc(std::move(f), [] { return std::make_tuple(foreign_ptr(make_lw_shared<query::result>()), cache_temperature::invalid()); });
             });
         });
 }
 
-future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>
+future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature, replica::exception_variant>>
 storage_proxy::handle_read_mutation_data(const rpc::client_info& cinfo, rpc::opt_time_point t, query::read_command cmd, ::compat::wrapping_partition_range pr) {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = netw::messaging_service::get_source(cinfo);
@@ -5187,13 +5241,14 @@ storage_proxy::handle_read_mutation_data(const rpc::client_info& cinfo, rpc::opt
                 unwrapped = ::compat::unwrap(std::move(pr), *s);
                 auto timeout = t ? *t : db::no_timeout;
                 return p->query_mutations_locally(std::move(s), std::move(cmd), unwrapped, timeout, trace_state_ptr);
-            }).finally([&trace_state_ptr, src_ip] () mutable {
+            }).then_wrapped([this, &trace_state_ptr, src_ip] (future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> f) mutable {
                 tracing::trace(trace_state_ptr, "read_mutation_data handling is done, sending a response to /{}", src_ip);
+                return encode_replica_exception_for_rpc(std::move(f), [] { return std::make_tuple(foreign_ptr(make_lw_shared<reconcilable_result>()), cache_temperature::invalid()); });
             });
         });
 }
 
-future<rpc::tuple<query::result_digest, long, cache_temperature>>
+future<rpc::tuple<query::result_digest, long, cache_temperature, replica::exception_variant>>
 storage_proxy::handle_read_digest(const rpc::client_info& cinfo, rpc::opt_time_point t, query::read_command cmd, ::compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> oda) {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = netw::messaging_service::get_source(cinfo);
@@ -5217,8 +5272,9 @@ storage_proxy::handle_read_digest(const rpc::client_info& cinfo, rpc::opt_time_p
                 }
                 auto timeout = t ? *t : db::no_timeout;
                 return p->query_result_local_digest(std::move(s), cmd, std::move(pr2.first), trace_state_ptr, timeout, da);
-            }).finally([&trace_state_ptr, src_ip] () mutable {
+            }).then_wrapped([this, &trace_state_ptr, src_ip] (future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>> f) mutable {
                 tracing::trace(trace_state_ptr, "read_digest handling is done, sending a response to /{}", src_ip);
+                return encode_replica_exception_for_rpc(std::move(f), [] { return std::make_tuple(query::result_digest(), api::missing_timestamp, cache_temperature::invalid()); });
             });
         });
 }
