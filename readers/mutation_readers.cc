@@ -37,7 +37,7 @@
 #include <seastar/core/coroutine.hh>
 #include <stack>
 
-extern logging::logger fmr_logger;
+extern logging::logger mrlog;
 
 flat_mutation_reader make_delegating_reader(flat_mutation_reader& r) {
     return make_flat_mutation_reader<delegating_reader>(r);
@@ -473,7 +473,7 @@ flat_mutation_reader make_reversing_reader(flat_mutation_reader original, query:
                                     _max_size.hard_limit,
                                     key->with_schema(*_schema))));
                         } else {
-                            fmr_logger.warn(
+                            mrlog.warn(
                                     "Memory usage of reversed read exceeds soft limit of {} (configured via max_memory_for_unlimited_query_soft_limit), while reading partition {}",
                                     _max_size.soft_limit,
                                     key->with_schema(*_schema));
