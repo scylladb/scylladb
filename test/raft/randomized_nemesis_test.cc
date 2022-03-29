@@ -2788,16 +2788,24 @@ SEASTAR_TEST_CASE(basic_generator_test) {
             )
         );
 
+        struct statistics {
+            size_t invocations{0};
+            size_t successes{0};
+            size_t failures{0};
+        };
+
         class consistency_checker {
             append_reg_model _model;
+            statistics& _stats;
 
         public:
-            consistency_checker() : _model{} {}
+            consistency_checker(statistics& s) : _model{}, _stats(s) {}
 
             void operator()(op_type o) {
                 tlogger.debug("invocation {}", o);
 
                 if (auto call_op = std::get_if<raft_call<AppendReg>>(&o.op)) {
+                    ++_stats.invocations;
                     _model.invocation(call_op->input.x);
                 }
             }
@@ -2811,17 +2819,22 @@ SEASTAR_TEST_CASE(basic_generator_test) {
                     [this] (AppendReg::output_t& out) {
                         tlogger.debug("completion x: {} prev digest: {}", out.x, out.prev.digest());
 
+                        ++_stats.successes;
                         _model.return_success(out.x, std::move(out.prev));
                     },
-                    [] (raft::not_a_leader& e) {
+                    [this] (raft::not_a_leader& e) {
                         // TODO: this is a definite failure, mark it
                         // _model.return_failure(...)
+                        ++_stats.failures;
                     },
-                    [] (raft::commit_status_unknown& e) {
+                    [this] (raft::commit_status_unknown& e) {
                         // TODO assert: only allowed if reconfigurations happen?
                         // assert(false); TODO debug this
+                        ++_stats.failures;
                     },
-                    [] (auto&) { }
+                    [this] (auto&) {
+                        ++_stats.failures;
+                    }
                     ), *call_res);
                 } else {
                     tlogger.debug("completion {}", c);
@@ -2833,10 +2846,11 @@ SEASTAR_TEST_CASE(basic_generator_test) {
             }
         };
 
+        statistics stats;
         history_t history;
         interpreter<op_type, decltype(gen), consistency_checker> interp{
             std::move(gen), std::move(threads), 1_t, std::move(init_state), timer,
-            consistency_checker{}};
+            consistency_checker{stats}};
         try {
             co_await interp.run();
         } catch (inconsistency& e) {
@@ -2852,7 +2866,8 @@ SEASTAR_TEST_CASE(basic_generator_test) {
             assert(false);
         }
 
-        tlogger.debug("Finished generator run, time: {}", timer.now());
+        tlogger.info("Finished generator run, time: {}, invocations: {}, successes: {}, failures: {}, total: {}",
+                timer.now(), stats.invocations, stats.successes, stats.failures, stats.successes + stats.failures);
 
         // Liveness check: we must be able to obtain a final response after all the nemeses have stopped.
         // Due to possible multiple leaders at this point and the cluster stabilizing (for example there
