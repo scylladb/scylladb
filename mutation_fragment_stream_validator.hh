@@ -28,6 +28,7 @@ class mutation_fragment_stream_validator {
     mutation_fragment_v2::kind _prev_kind;
     position_in_partition _prev_pos;
     dht::decorated_key _prev_partition_key;
+    tombstone _current_tombstone;
 public:
     explicit mutation_fragment_stream_validator(const schema& s);
 
@@ -122,6 +123,12 @@ public:
     const position_in_partition& previous_position() const {
         return _prev_pos;
     }
+    /// Get the current effective tombstone
+    ///
+    /// Not meaningful, when operator()(mutation_fragment_v2) is not used.
+    tombstone current_tombstone() const {
+        return _current_tombstone;
+    }
     /// The previous valid partition key.
     ///
     /// Only valid if `operator()(const dht::decorated_key&)` or
@@ -151,6 +158,7 @@ class mutation_fragment_stream_validating_filter {
     mutation_fragment_stream_validator _validator;
     sstring _name;
     mutation_fragment_stream_validation_level _validation_level;
+    tombstone _current_tombstone;
 
 public:
     /// Constructor.

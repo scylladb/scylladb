@@ -1286,6 +1286,13 @@ private:
 
             const auto& key = _validator.previous_partition_key();
 
+            if (_validator.current_tombstone()) {
+                throw compaction_aborted_exception(
+                        _schema->ks_name(),
+                        _schema->cf_name(),
+                        "scrub compaction cannot handle invalid fragments with an active range tombstone change");
+            }
+
             // If the unexpected fragment is a partition end, we just drop it.
             // The only case a partition end is invalid is when it comes after
             // another partition end, and we can just drop it in that case.
