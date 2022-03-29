@@ -11,7 +11,6 @@
 #include "dht/i_partitioner.hh"
 #include "mutation.hh"
 #include "mutation_partition.hh"
-#include "mutation_reader.hh"
 #include "mutation_compactor.hh"
 #include "range_tombstone_assembler.hh"
 #include "range_tombstone_splitter.hh"

@@ -13,8 +13,6 @@
 #include <boost/range/algorithm/min_element.hpp>
 #include <seastar/core/shared_mutex.hh>
 
-#include "mutation_reader.hh"
-
 namespace mutation_writer {
 
 class shard_based_splitting_mutation_writer {

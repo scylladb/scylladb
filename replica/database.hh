@@ -39,7 +39,6 @@
 #include "db/snapshot-ctl.hh"
 #include "gms/feature.hh"
 #include "memtable.hh"
-#include "mutation_reader.hh"
 #include "row_cache.hh"
 #include "compaction/compaction_strategy.hh"
 #include "utils/estimated_histogram.hh"

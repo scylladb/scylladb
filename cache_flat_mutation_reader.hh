@@ -10,7 +10,6 @@
 
 #include <vector>
 #include "row_cache.hh"
-#include "mutation_reader.hh"
 #include "mutation_fragment.hh"
 #include "query-request.hh"
 #include "partition_snapshot_row_cursor.hh"

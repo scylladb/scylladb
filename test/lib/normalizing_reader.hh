@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include "mutation_reader.hh"
 #include <seastar/core/future.hh>
 #include "readers/flat_mutation_reader.hh"
 

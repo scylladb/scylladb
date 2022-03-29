@@ -23,6 +23,7 @@
 #include "binary_search.hh"
 #include "../dht/i_partitioner.hh"
 #include "readers/flat_mutation_reader_v2.hh"
+#include "readers/flat_mutation_reader.hh"
 #include "sstables/mx/partition_reversing_data_source.hh"
 
 namespace sstables {

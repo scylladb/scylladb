@@ -14,7 +14,6 @@
 #include "compaction/compaction_manager.hh"
 #include "compaction/time_window_compaction_strategy.hh"
 #include "cell_locking.hh"
-#include "mutation_reader.hh"
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/test_services.hh"
 #include "test/lib/random_utils.hh"

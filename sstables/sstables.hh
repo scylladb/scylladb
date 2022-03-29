@@ -32,7 +32,6 @@
 #include "encoding_stats.hh"
 #include "filter.hh"
 #include "exceptions.hh"
-#include "mutation_reader.hh"
 #include "query-request.hh"
 #include "compound_compat.hh"
 #include "utils/disk-error-handler.hh"
@@ -48,6 +47,8 @@
 #include "sstables/open_info.hh"
 #include "query-request.hh"
 #include "mutation_fragment_stream_validator.hh"
+#include "readers/flat_mutation_reader_fwd.hh"
+#include "tracing/trace_state.hh"
 
 #include <seastar/util/optimized_optional.hh>
 

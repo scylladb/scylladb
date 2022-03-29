@@ -34,7 +34,6 @@
 #include "test/lib/simple_position_reader_queue.hh"
 
 #include "dht/sharder.hh"
-#include "mutation_reader.hh"
 #include "schema_builder.hh"
 #include "cell_locking.hh"
 #include "sstables/sstables.hh"

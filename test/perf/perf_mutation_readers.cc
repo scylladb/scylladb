@@ -16,7 +16,6 @@
 #include "test/lib/simple_position_reader_queue.hh"
 #include "test/perf/perf.hh"
 
-#include "mutation_reader.hh"
 #include "readers/flat_mutation_reader.hh"
 #include "readers/from_mutations_v2.hh"
 #include "readers/empty_v2.hh"

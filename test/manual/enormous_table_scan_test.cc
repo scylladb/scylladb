@@ -23,7 +23,6 @@
 #include "clustering_bounds_comparator.hh"
 #include "dht/i_partitioner.hh"
 #include "mutation_fragment.hh"
-#include "mutation_reader.hh"
 #include "partition_range_compat.hh"
 #include "range.hh"
 #include "sstables/sstables.hh"

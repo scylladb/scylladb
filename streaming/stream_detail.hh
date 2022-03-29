@@ -11,7 +11,6 @@
 #pragma once
 
 #include "query-request.hh"
-#include "mutation_reader.hh"
 #include "utils/UUID.hh"
 #include <vector>
 #include "range.hh"
