@@ -433,7 +433,11 @@ future<> server_impl::add_entry_internal(T command, wait_type type, seastar::abo
 
 future<entry_id> server_impl::add_entry_on_leader(command cmd, seastar::abort_source* as) {
     // Wait for a new slot to become available
-    co_await _fsm->wait_max_log_size(as);
+    try {
+        co_await _fsm->wait_max_log_size(as);
+    } catch (semaphore_aborted&) {
+        throw request_aborted();
+    }
     logger.trace("[{}] adding entry after log size limit check", id());
 
     const log_entry& e = _fsm->add_entry(std::move(cmd));

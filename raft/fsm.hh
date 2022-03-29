@@ -385,6 +385,7 @@ public:
 
     // Call this function to wait for the number of log entries to
     // go below  max_log_size.
+    // On abort throws `semaphore_aborted`.
     future<> wait_max_log_size(seastar::abort_source* as);
 
     // Return current configuration. Throws if not a leader.
