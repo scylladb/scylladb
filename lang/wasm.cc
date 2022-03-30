@@ -66,7 +66,7 @@ static void init_abstract_arg(const abstract_type& t, const bytes_opt& param, st
         auto memory = std::get<wasmtime::Memory>(*memory_export);
         uint8_t* data = memory.data(store).data();
         size_t mem_size = memory.size(store) * WASM_PAGE_SIZE;
-        const int32_t serialized_size = param ? param->size() : 0;
+        int32_t serialized_size = param ? param->size() : 0;
         if (serialized_size > std::numeric_limits<int32_t>::max()) {
             throw wasm::exception(format("Serialized parameter is too large: {} > {}", param->size(), std::numeric_limits<int32_t>::max()));
         }
@@ -75,18 +75,16 @@ static void init_abstract_arg(const abstract_type& t, const bytes_opt& param, st
             throw wasm::exception(format("Failed to grow wasm memory to {}: {}", serialized_size, grown.err().message()));
         }
         if (param) {
-            // put the size in wasm module's memory
-            std::memcpy(data + mem_size, reinterpret_cast<const char*>(&serialized_size), sizeof(int32_t));
             // put the argument in wasm module's memory
-            std::memcpy(data + mem_size + sizeof(int32_t), param->data(), serialized_size);
+            std::memcpy(data + mem_size, param->data(), serialized_size);
         } else {
             // size of -1 means that the value is null
-            const int32_t is_null = -1;
-            std::memcpy(data + mem_size, reinterpret_cast<const char*>(&is_null), sizeof(int32_t));
+            serialized_size = -1;
         }
 
-        // the place inside wasm memory where the struct is placed
-        argv.push_back(int32_t(mem_size));
+        // the size of the struct in top 32 bits and the place inside wasm memory where the struct is placed in the bottom 32 bits
+        int64_t arg_combined = ((int64_t)serialized_size << 32) | mem_size;
+        argv.push_back(arg_combined);
 }
 
 struct init_arg_visitor {
@@ -185,20 +183,18 @@ struct from_val_visitor {
     }
 
     bytes_opt operator()(const abstract_type& t) {
-        expect_kind(wasmtime::ValKind::I32);
+        expect_kind(wasmtime::ValKind::I64);
         auto memory_export = instance.get(store, "memory");
         if (!memory_export) {
             throw wasm::exception("memory export not found - please export `memory` in the wasm module");
         }
         auto memory = std::get<wasmtime::Memory>(*memory_export);
         uint8_t* mem_base = memory.data(store).data();
-        uint8_t* data = mem_base + val.i32();
-        int32_t ret_size;
-        std::memcpy(reinterpret_cast<char*>(&ret_size), data, 4);
+        uint8_t* data = mem_base + (val.i64() & 0xffffffff);
+        int32_t ret_size = val.i64() >> 32;
         if (ret_size == -1) {
             return bytes_opt{};
         }
-        data += sizeof(int32_t); // size of the return type was consumed
         return t.decompose(t.deserialize(bytes_view(reinterpret_cast<int8_t*>(data), ret_size)));
     }
 
