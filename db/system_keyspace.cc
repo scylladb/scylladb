@@ -1758,19 +1758,19 @@ future<bool> system_keyspace::cdc_is_rewritten() {
     });
 }
 
-bool system_keyspace::bootstrap_complete() {
+bool system_keyspace::bootstrap_complete() const {
     return get_bootstrap_state() == bootstrap_state::COMPLETED;
 }
 
-bool system_keyspace::bootstrap_in_progress() {
+bool system_keyspace::bootstrap_in_progress() const {
     return get_bootstrap_state() == bootstrap_state::IN_PROGRESS;
 }
 
-bool system_keyspace::was_decommissioned() {
+bool system_keyspace::was_decommissioned() const {
     return get_bootstrap_state() == bootstrap_state::DECOMMISSIONED;
 }
 
-system_keyspace::bootstrap_state system_keyspace::get_bootstrap_state() {
+system_keyspace::bootstrap_state system_keyspace::get_bootstrap_state() const {
     return _cache->_state;
 }
 
