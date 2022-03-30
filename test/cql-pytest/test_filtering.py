@@ -130,3 +130,16 @@ def test_filter_like_on_desc_column(cql, test_keyspace, cassandra_bug):
         cql.execute(f"INSERT INTO {table} (a, b) VALUES (1, 'one')")
         res = cql.execute(f"SELECT b FROM {table} WHERE b LIKE '%%%' ALLOW FILTERING")
         assert res.one().b == "one"
+
+# Test that the fact that a column is indexed does not cause us to fetch
+# incorrect results from a filtering query (issue #10300).
+def test_index_with_in_relation(scylla_only, cql, test_keyspace):
+    schema = 'p int, c int, v boolean, primary key (p,c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"create index on {table}(v)")
+        for p, c, v in [(0,0,True),(0,1,False),(0,2,True),(0,3,False),
+                (1,0,True),(1,1,False),(1,2,True),(1,3,False),
+                (2,0,True),(2,1,False),(2,2,True),(2,3,False)]:
+            cql.execute(f"insert into {table} (p,c,v) values ({p}, {c}, {v})")
+        res = cql.execute(f"select * from {table} where p in (0,1) and v = False ALLOW FILTERING")
+        assert set(res) == set([(0,1,False),(0,3,False),(1,1,False), (1,3,False)])
