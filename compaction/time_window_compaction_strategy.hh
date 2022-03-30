@@ -88,6 +88,8 @@ public:
 public:
     time_window_compaction_strategy(const std::map<sstring, sstring>& options);
     virtual compaction_descriptor get_sstables_for_compaction(table_state& table_s, strategy_control& control, std::vector<shared_sstable> candidates) override;
+
+    virtual std::vector<compaction_descriptor> get_cleanup_compaction_jobs(table_state& table_s, std::vector<shared_sstable> candidates) const override;
 private:
     static timestamp_type
     to_timestamp_type(time_window_compaction_strategy_options::timestamp_resolutions resolution, int64_t timestamp_from_sstable) {
@@ -123,7 +125,7 @@ public:
     // @return A pair, where the left element is the bucket representation (map of timestamp to sstablereader),
     // and the right is the highest timestamp seen
     static std::pair<std::map<timestamp_type, std::vector<shared_sstable>>, timestamp_type>
-    get_buckets(std::vector<shared_sstable> files, time_window_compaction_strategy_options& options);
+    get_buckets(std::vector<shared_sstable> files, const time_window_compaction_strategy_options& options);
 
     std::vector<shared_sstable>
     newest_bucket(table_state& table_s, strategy_control& control, std::map<timestamp_type, std::vector<shared_sstable>> buckets,

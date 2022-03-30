@@ -303,7 +303,7 @@ time_window_compaction_strategy::get_window_lower_bound(std::chrono::seconds sst
 }
 
 std::pair<std::map<timestamp_type, std::vector<shared_sstable>>, timestamp_type>
-time_window_compaction_strategy::get_buckets(std::vector<shared_sstable> files, time_window_compaction_strategy_options& options) {
+time_window_compaction_strategy::get_buckets(std::vector<shared_sstable> files, const time_window_compaction_strategy_options& options) {
     std::map<timestamp_type, std::vector<shared_sstable>> buckets;
 
     timestamp_type max_timestamp = 0;
@@ -406,6 +406,16 @@ void time_window_compaction_strategy::update_estimated_compaction_by_tasks(std::
         }
     }
     _estimated_remaining_tasks = n;
+}
+
+std::vector<compaction_descriptor>
+time_window_compaction_strategy::get_cleanup_compaction_jobs(table_state& table_s, std::vector<shared_sstable> candidates) const {
+    std::vector<compaction_descriptor> ret;
+    for (auto&& [_, sstables] : get_buckets(std::move(candidates), _options).first) {
+        auto per_window_jobs = size_tiered_compaction_strategy(_stcs_options).get_cleanup_compaction_jobs(table_s, std::move(sstables));
+        std::move(per_window_jobs.begin(), per_window_jobs.end(), std::back_inserter(ret));
+    }
+    return ret;
 }
 
 }

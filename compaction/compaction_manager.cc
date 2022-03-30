@@ -1193,7 +1193,7 @@ public:
             : task(mgr, t, options.type(), sstring(sstables::to_string(options.type())))
             , _cleanup_options(std::move(options))
             , _compacting(std::move(compacting))
-            , _pending_cleanup_jobs(t->get_compaction_strategy().get_cleanup_compaction_jobs(t->as_table_state(), candidates))
+            , _pending_cleanup_jobs(t->get_compaction_strategy().get_cleanup_compaction_jobs(t->as_table_state(), std::move(candidates)))
     {
         // Cleanup is made more resilient under disk space pressure, by cleaning up smaller jobs first, so larger jobs
         // will have more space available released by previous jobs.

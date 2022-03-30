@@ -40,7 +40,7 @@ compaction_descriptor compaction_strategy_impl::get_major_compaction_job(table_s
     return compaction_descriptor(std::move(candidates), service::get_local_compaction_priority());
 }
 
-std::vector<compaction_descriptor> compaction_strategy_impl::get_cleanup_compaction_jobs(table_state& table_s, const std::vector<shared_sstable>& candidates) const {
+std::vector<compaction_descriptor> compaction_strategy_impl::get_cleanup_compaction_jobs(table_state& table_s, std::vector<shared_sstable> candidates) const {
     // The default implementation is suboptimal and causes the writeamp problem described issue in #10097.
     // The compaction strategy relying on it should strive to implement its own method, to make cleanup bucket aware.
     return boost::copy_range<std::vector<compaction_descriptor>>(candidates | boost::adaptors::transformed([] (const shared_sstable& sst) {
@@ -673,8 +673,8 @@ compaction_descriptor compaction_strategy::get_major_compaction_job(table_state&
     return _compaction_strategy_impl->get_major_compaction_job(table_s, std::move(candidates));
 }
 
-std::vector<compaction_descriptor> compaction_strategy::get_cleanup_compaction_jobs(table_state& table_s, const std::vector<shared_sstable>& candidates) const {
-    return _compaction_strategy_impl->get_cleanup_compaction_jobs(table_s, candidates);
+std::vector<compaction_descriptor> compaction_strategy::get_cleanup_compaction_jobs(table_state& table_s, std::vector<shared_sstable> candidates) const {
+    return _compaction_strategy_impl->get_cleanup_compaction_jobs(table_s, std::move(candidates));
 }
 
 void compaction_strategy::notify_completion(const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added) {
