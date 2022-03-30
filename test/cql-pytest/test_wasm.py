@@ -82,6 +82,7 @@ def test_fib(cql, test_keyspace, table1, scylla_with_wasm_only):
 # before operating on its native types.
 # Compiled from:
 # const int WASM_PAGE_SIZE = 64 * 1024;
+# const int _scylla_abi = 0;
 #
 # static long long swap_int64(long long val) {
 #     val = ((val << 8) & 0xFF00FF00FF00FF00ULL ) | ((val >> 8) & 0x00FF00FF00FF00FFULL );
@@ -111,7 +112,7 @@ def test_fib(cql, test_keyspace, table1, scylla_with_wasm_only):
 # }
 #
 # with:
-# $ clang -O2  --target=wasm32 --no-standard-libraries -Wl,--export=fib -Wl,--no-entry fibnull.c -o fibnull.wasm
+# $ clang -O2  --target=wasm32 --no-standard-libraries -Wl,--export=fib -Wl,--export=_scylla_abi -Wl,--no-entry fibnull.c -o fibnull.wasm
 # $ wasm2wat fibnull.wasm > fibnull.wat
 def test_fib_called_on_null(cql, test_keyspace, table1, scylla_with_wasm_only):
     table = table1
@@ -266,8 +267,11 @@ def test_fib_called_on_null(cql, test_keyspace, table1, scylla_with_wasm_only):
     i64.const 34359738368
     i64.or)
   (memory (;0;) 2)
+  (global (;0;) i32 (i32.const 1024))
   (export "memory" (memory 0))
-  (export "{fib_name}" (func 1)))
+  (export "{fib_name}" (func 1))
+  (export "_scylla_abi" (global 0))
+  (data (;0;) (i32.const 1024) "\\01"))
 """
     src = f"(input bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE xwasm AS '{fib_source}'"
     with new_function(cql, test_keyspace, src, fib_name):
@@ -303,7 +307,10 @@ def test_infinite_loop(cql, test_keyspace, table1, scylla_with_wasm_only):
   (table (;1;) 32 externref)
   (memory (;0;) 17)
   (export "{inf_loop_name}" (func ${inf_loop_name}))
-  (elem (;0;) (i32.const 0) func))
+  (elem (;0;) (i32.const 0) func)
+  (global (;0;) i32 (i32.const 1024))
+  (export "_scylla_abi" (global 0))
+  (data $.rodata (i32.const 1024) "\\01"))
 """
     src = f"(input int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE xwasm AS '{inf_loop_source}'"
     with new_function(cql, test_keyspace, src, inf_loop_name):
@@ -330,7 +337,10 @@ def test_f64_param(cql, test_keyspace, table1, scylla_with_wasm_only):
   (table (;1;) 32 externref)
   (memory (;0;) 17)
   (export "{dec_double_name}" (func ${dec_double_name}))
-  (elem (;0;) (i32.const 0) func))
+  (elem (;0;) (i32.const 0) func)
+  (global (;0;) i32 (i32.const 1024))
+  (export "_scylla_abi" (global 0))
+  (data $.rodata (i32.const 1024) "\\01"))
 """
     src = f"(input double) RETURNS NULL ON NULL INPUT RETURNS double LANGUAGE xwasm AS '{dec_double_source}'"
     with new_function(cql, test_keyspace, src, dec_double_name):
@@ -353,7 +363,10 @@ def test_f32_param(cql, test_keyspace, table1, scylla_with_wasm_only):
   (table (;1;) 32 externref)
   (memory (;0;) 17)
   (export "{inc_float_name}" (func ${inc_float_name}))
-  (elem (;0;) (i32.const 0) func))
+  (elem (;0;) (i32.const 0) func)
+  (global (;0;) i32 (i32.const 1024))
+  (export "_scylla_abi" (global 0))
+  (data $.rodata (i32.const 1024) "\\01"))
 """
     src = f"(input float) RETURNS NULL ON NULL INPUT RETURNS float LANGUAGE xwasm AS '{inc_float_source}'"
     with new_function(cql, test_keyspace, src, inc_float_name):
@@ -375,7 +388,10 @@ def test_bool_negate(cql, test_keyspace, table1, scylla_with_wasm_only):
   (table (;1;) 32 externref)
   (memory (;0;) 17)
   (export "{negate_name}" (func ${negate_name}))
-  (elem (;0;) (i32.const 0) func))
+  (elem (;0;) (i32.const 0) func)
+  (global (;0;) i32 (i32.const 1024))
+  (export "_scylla_abi" (global 0))
+  (data $.rodata (i32.const 1024) "\\01"))
 """
     src = f"(input boolean) RETURNS NULL ON NULL INPUT RETURNS boolean LANGUAGE xwasm AS '{negate_source}'"
     with new_function(cql, test_keyspace, src, negate_name):
@@ -402,7 +418,10 @@ def test_short_ints(cql, test_keyspace, table1, scylla_with_wasm_only):
   (table (;1;) 32 externref)
   (memory (;0;) 17)
   (export "{plus_name}" (func ${plus_name}))
-  (elem (;0;) (i32.const 0) func))
+  (elem (;0;) (i32.const 0) func)
+  (global (;0;) i32 (i32.const 1024))
+  (export "_scylla_abi" (global 0))
+  (data $.rodata (i32.const 1024) "\\01"))
 """
     src = f"(input tinyint, input2 tinyint) RETURNS NULL ON NULL INPUT RETURNS tinyint LANGUAGE xwasm AS '{plus_source}'"
     with new_function(cql, test_keyspace, src, plus_name):
@@ -451,7 +470,10 @@ def test_9_params(cql, test_keyspace, table1, scylla_with_wasm_only):
   (table (;1;) 32 externref)
   (memory (;0;) 17)
   (export "{sum9_name}" (func ${sum9_name}))
-  (elem (;0;) (i32.const 0) func))
+  (elem (;0;) (i32.const 0) func)
+  (global (;0;) i32 (i32.const 1024))
+  (export "_scylla_abi" (global 0))
+  (data $.rodata (i32.const 1024) "\\01"))
 
 """
     src = f"(a int, b int, c int, d int, e int, f int, g int, h int, i int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE xwasm AS '{sum9_source}'"
@@ -516,8 +538,11 @@ def test_pow(cql, test_keyspace, table1, scylla_with_wasm_only):
   (table (;0;) 1 1 funcref)
   (table (;1;) 32 externref)
   (memory (;0;) 17)
+  (global (;0;) i32 (i32.const 1024))
   (export "{pow_name}" (func ${pow_name}))
-  (elem (;0;) (i32.const 0) func))
+  (elem (;0;) (i32.const 0) func)
+  (export "_scylla_abi" (global 0))
+  (data $.rodata (i32.const 1024) "\\01"))
 """
     src = f"(base int, pow int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE xwasm AS '{pow_source}'"
     with new_function(cql, test_keyspace, src, pow_name):
@@ -569,8 +594,11 @@ def test_not_a_function(cql, test_keyspace, table1, scylla_with_wasm_only):
   (table (;1;) 32 externref)
   (memory (;0;) 17)
   (global (;0;) (mut i32) (i32.const 1048576))
+  (global (;1;) i32 (i32.const 1024))
   (export "memory" (memory 0))
-  (elem (;0;) (i32.const 0) func))
+  (elem (;0;) (i32.const 0) func)
+  (export "_scylla_abi" (global 1))
+  (data $.rodata (i32.const 1024) "\\01"))
 """
     with pytest.raises(InvalidRequest, match="not a function"):
         cql.execute(f"CREATE FUNCTION {test_keyspace}.memory (input float) RETURNS NULL ON NULL INPUT RETURNS float LANGUAGE xwasm "
@@ -590,9 +618,12 @@ def test_validate_params(cql, test_keyspace, table1, scylla_with_wasm_only):
   (table (;0;) 1 1 funcref)
   (table (;1;) 32 externref)
   (memory (;0;) 17)
+  (global (;0;) i32 (i32.const 1024))
   (export "memory" (memory 0))
   (export "{inc_float_name}" (func ${inc_float_name}))
-  (elem (;0;) (i32.const 0) func))
+  (elem (;0;) (i32.const 0) func)
+  (export "_scylla_abi" (global 0))
+  (data $.rodata (i32.const 1024) "\\01"))
 """
     src = f"(input int) RETURNS NULL ON NULL INPUT RETURNS float LANGUAGE xwasm AS '{inc_float_source}'"
     with new_function(cql, test_keyspace, src, inc_float_name):
@@ -614,9 +645,10 @@ def test_validate_params(cql, test_keyspace, table1, scylla_with_wasm_only):
 # The function doubles the string: dog -> dogdog.
 # Created with:
 # const int WASM_PAGE_SIZE = 64 * 1024;
+# const int _scylla_abi = 0;
 
 # long long dbl(long long par) {
-#    int size = par << 32;
+#    int size = par >> 32;
 #    int position = par & 0xffffffff;
 #    int orig_size = __builtin_wasm_memory_size(0) * WASM_PAGE_SIZE;
 #    __builtin_wasm_memory_grow(0, 1 + (2 * size - 1) / WASM_PAGE_SIZE);
@@ -629,7 +661,7 @@ def test_validate_params(cql, test_keyspace, table1, scylla_with_wasm_only):
 #    return ret;
 # }
 # ... and compiled with
-# clang --target=wasm32 --no-standard-libraries -Wl,--export=dbl -Wl,--no-entry demo.c -o demo.wasm
+# clang --target=wasm32 --no-standard-libraries -Wl,--export=dbl -Wl,--export=_scylla_abi -Wl,--no-entry demo.c -o demo.wasm
 # wasm2wat demo.wasm > demo.wat
 
 def test_word_double(cql, test_keyspace, table1, scylla_with_wasm_only):
@@ -900,9 +932,12 @@ def test_word_double(cql, test_keyspace, table1, scylla_with_wasm_only):
     local.get 71
     return)
   (memory (;0;) 2)
-  (global $__stack_pointer (mut i32) (i32.const 66560))
+  (global $__stack_pointer (mut i32) (i32.const 66576))
+  (global (;1;) i32 (i32.const 1024))
   (export "memory" (memory 0))
-  (export "{dbl_name}" (func $dbl)))
+  (export "{dbl_name}" (func $dbl))
+  (export "_scylla_abi" (global 1))
+  (data $.rodata (i32.const 1024) "\\01"))
 """
     src = f"(input text) RETURNS NULL ON NULL INPUT RETURNS text LANGUAGE xwasm AS '{dbl_source}'"
     with new_function(cql, test_keyspace, src, dbl_name):

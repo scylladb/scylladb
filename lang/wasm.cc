@@ -14,6 +14,7 @@
 #include "utils/ascii.hh"
 #include "utils/date.h"
 #include "db/config.hh"
+#include <seastar/core/byteorder.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/util/defer.hh>
 #include "seastarx.hh"
@@ -26,6 +27,19 @@ context::context(wasm::engine* engine_ptr, std::string name) : engine_ptr(engine
 }
 
 static constexpr size_t WASM_PAGE_SIZE = 64 * 1024;
+
+static uint32_t get_abi(wasmtime::Instance& instance, wasmtime::Store& store, uint8_t* data) {
+    auto abi_export = instance.get(store, "_scylla_abi");
+    if (!abi_export) {
+        throw wasm::exception(format("ABI version export not found - please export `_scylla_abi` in the wasm module"));
+    }
+    wasmtime::Global* abi_global = std::get_if<wasmtime::Global>(&*abi_export);
+    if (!abi_global) {
+        throw wasm::exception(format("Exported object {} is not a global", "_scylla_abi"));
+    }
+    wasmtime::Val abi_val = abi_global->get(store);
+    return seastar::read_le<uint32_t>((char*)data + abi_val.i32());
+}
 
 static std::pair<wasmtime::Instance, wasmtime::Func> create_instance_and_func(context& ctx, wasmtime::Store& store) {
     auto instance_res = wasmtime::Instance::create(store, *ctx.module, {});
@@ -70,9 +84,17 @@ static void init_abstract_arg(const abstract_type& t, const bytes_opt& param, st
         if (serialized_size > std::numeric_limits<int32_t>::max()) {
             throw wasm::exception(format("Serialized parameter is too large: {} > {}", param->size(), std::numeric_limits<int32_t>::max()));
         }
-        auto grown = memory.grow(store, 1 + (sizeof(int32_t) + serialized_size - 1) / WASM_PAGE_SIZE); // for fitting the serialized size + the buffer itself
-        if (!grown) {
-            throw wasm::exception(format("Failed to grow wasm memory to {}: {}", serialized_size, grown.err().message()));
+        switch (uint32_t abi_ver = get_abi(instance, store, data)) {
+            case 1: {
+                auto grown = memory.grow(store, 1 + (sizeof(int32_t) + serialized_size - 1) / WASM_PAGE_SIZE); // for fitting serialized size + the buffer itself
+                if (!grown) {
+                    throw wasm::exception(format("Failed to grow wasm memory to {}: {}", serialized_size, grown.err().message()));
+                }
+                mem_size = std::move(grown).unwrap() * WASM_PAGE_SIZE;
+                break;
+            }
+            default:
+                throw wasm::exception(format("ABI version {} not recognized", abi_ver));
         }
         if (param) {
             // put the argument in wasm module's memory
@@ -147,6 +169,7 @@ struct init_nullable_arg_visitor {
         init_abstract_arg(t, param, argv, store, instance);
     }
 };
+
 
 struct from_val_visitor {
     const wasmtime::Val& val;
