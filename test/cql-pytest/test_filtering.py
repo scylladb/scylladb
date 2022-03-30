@@ -117,9 +117,14 @@ def test_operator_ne_not_supported(cql, table1):
         cql.execute(f'SELECT a FROM {table1} WHERE token(a) != 0')
 
 # Test that LIKE operator works fine as a filter when the filtered column
-# has descending order. Regression test for issue #10183, when it was incorrectly
-# rejected as a "non-string" column.
-def test_filter_like_on_desc_column(cql, test_keyspace):
+# has descending order. Regression test for issue #10183, when it was
+# incorrectly rejected as a "non-string" column.
+#
+# Currently, Cassandra only allows LIKE on a SASI index, *not* when doing
+# filtering, so this test will fail on Cassandra. We mark the test with
+# "cassandra_bug" because they have an open issue to fix it (CASSANDRA-17198).
+# When Cassandra fixes this issue, this mark should be removed.
+def test_filter_like_on_desc_column(cql, test_keyspace, cassandra_bug):
     with new_test_table(cql, test_keyspace, "a int, b text, primary key(a, b)",
             extra="with clustering order by (b desc)") as table:
         cql.execute(f"INSERT INTO {table} (a, b) VALUES (1, 'one')")
