@@ -41,6 +41,31 @@ static uint32_t get_abi(wasmtime::Instance& instance, wasmtime::Store& store, ui
     return seastar::read_le<uint32_t>((char*)data + abi_val.i32());
 }
 
+static wasmtime::Func import_func(wasmtime::Instance& instance, wasmtime::Store& store, std::string_view name) {
+    auto func_export = instance.get(store, name);
+    if (func_export) {
+        wasmtime::Func* func = std::get_if<wasmtime::Func>(&*func_export);
+        if (!func) {
+            throw wasm::exception(format("Exported object {} is not a function", name));
+        }
+        return std::move(*func);
+    } else {
+        throw wasm::exception(format("Function {} was not found in given wasm source code", name));
+    }
+}
+
+static wasmtime::Val call_func(wasmtime::Store& store, wasmtime::Func func, std::vector<wasmtime::Val> argv) {
+    auto result = func.call(store, argv);
+    if (!result) {
+        throw wasm::exception("Calling wasm function failed: " + result.err().message());
+    }
+    std::vector<wasmtime::Val> result_vec = std::move(result).unwrap();
+    if (result_vec.size() != 1) {
+        throw wasm::exception(format("Unexpected number of returned values: {} (expected: 1)", result_vec.size()));
+    }
+    return std::move(result_vec[0]);
+}
+
 static std::pair<wasmtime::Instance, wasmtime::Func> create_instance_and_func(context& ctx, wasmtime::Store& store) {
     auto linker = wasmtime::Linker(ctx.engine_ptr->get());
     auto wasi_def = linker.define_wasi();
@@ -101,6 +126,13 @@ static void init_abstract_arg(const abstract_type& t, const bytes_opt& param, st
                     throw wasm::exception(format("Failed to grow wasm memory to {}: {}", serialized_size, grown.err().message()));
                 }
                 mem_size = std::move(grown).unwrap() * WASM_PAGE_SIZE;
+                break;
+            }
+            case 2: {
+                auto malloc_func = import_func(instance, store, "_scylla_malloc");
+                import_func(instance, store, "_scylla_free");
+                auto size = call_func(store, malloc_func, {int32_t(sizeof(int32_t) + serialized_size)});
+                mem_size = size.i32();
                 break;
             }
             default:
@@ -228,7 +260,14 @@ struct from_val_visitor {
         if (ret_size == -1) {
             return bytes_opt{};
         }
-        return t.decompose(t.deserialize(bytes_view(reinterpret_cast<int8_t*>(data), ret_size)));
+        bytes_opt ret = t.decompose(t.deserialize(bytes_view(reinterpret_cast<int8_t*>(data), ret_size)));
+
+        if (get_abi(instance, store, mem_base) == 2) {
+            auto free_func = import_func(instance, store, "_scylla_free");
+            call_func(store, free_func, {val.i32()});
+        }
+
+        return ret;
     }
 
     void expect_kind(wasmtime::ValKind expected) {

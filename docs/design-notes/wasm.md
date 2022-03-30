@@ -15,7 +15,18 @@ Different programming languages may require different ABIs. To support that, the
 export the symbol "_scylla_abi", that is a WebAssembly global with a 32-bit value of the offset in memory,
 where the version number can be read (that's the only method of exporting a constant in Rust).
 
-Currently, the only available ABI version is version 1, described below.
+Currently, the only available ABI versions are 1 and 2. Both of them use the same protocol for passing
+parameters and returning values, but they differ in approaches to memory management.
+
+## Memory management
+
+The memory management differs depending on the used ABI verison:
+ - version 1 - There are no requirements of the usage of memory by the user. The host grows memory for each of parameters and does not free the memory in any way.
+ - version 2 - The user program is required to export "_scylla_malloc" and "_scylla_free" methods, which
+ are then used by the host for allocating memory for parameters and freeing memory for the returned value. The user is required to free the memory allocated for parameters (this can be achieved by using
+ the provided helper libraries).
+ The "_scylla_malloc" and "_scylla_free" methods may be simple wrappers of "malloc" and "free" methods
+ implemented by default when compiling with WASI.
 
 ## Supported types
 
@@ -110,9 +121,19 @@ for memory management.
 Example source code:
 
 ```c
+#include<stdlib.h>
+
 const int WASM_PAGE_SIZE = 64 * 1024;
 
-const int _scylla_abi = 1;
+const int _scylla_abi = 2;
+
+void* _scylla_malloc(int size) {
+    return malloc(size);
+}
+
+void _scylla_free(void* ptr) {
+    free(ptr);
+}
 
 static long long swap_int64(long long val) {
     val = ((val << 8) & 0xFF00FF00FF00FF00ULL ) | ((val >> 8) & 0x00FF00FF00FF00FFULL );
@@ -131,21 +152,23 @@ long long fib(long long p) {
     int size = p >> 32;
     long long* p_val = (long long*)(p & 0xffffffff);
     // Initialize memory for the return value
-    long long* ret_val = (long long*)(__builtin_wasm_memory_size(0) * WASM_PAGE_SIZE);
-    __builtin_wasm_memory_grow(0, 1); // long long fits in one wasm page
+    long long* ret_val = _scylla_malloc(sizeof(long long));
     if (size == -1) {
         *ret_val = swap_int64(42);
     } else {
         *ret_val = swap_int64(fib_aux(swap_int64(*p_val)));
     }
+    _scylla_free(p_val);
     // 8 is the size of a bigint
     return (long long)(8ll << 32) | (long long)ret_val;
 }
+// using wasi in c/c++ requires adding a main function to the program
+int main(){}
 ```
 
 Compilation instructions:
 ```bash
- clang -O2  --target=wasm32 --no-standard-libraries -Wl,--export=fib -Wl,--export=_scylla_abi -Wl,--no-entry fibnull.c -o fibnull.wasm
+ /path/to/wasm/supporting/c/compiler --sysroot=/path/to/wasi/sysroot -O2  --target=wasm32-wasi -Wl,--export=fib -Wl,--export=_scylla_abi -Wl,--export=_scylla_malloc -Wl,--export=_scylla_free -Wl,--no-entry fibnull.c -o fibnull.wasm
  wasm2wat fibnull.wasm > fibnull.wat
 ```
 
