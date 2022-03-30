@@ -42,9 +42,19 @@ static uint32_t get_abi(wasmtime::Instance& instance, wasmtime::Store& store, ui
 }
 
 static std::pair<wasmtime::Instance, wasmtime::Func> create_instance_and_func(context& ctx, wasmtime::Store& store) {
-    auto instance_res = wasmtime::Instance::create(store, *ctx.module, {});
+    auto linker = wasmtime::Linker(ctx.engine_ptr->get());
+    auto wasi_def = linker.define_wasi();
+    if (!wasi_def) {
+        throw wasm::exception(format("Setting up wasi failed: {}", wasi_def.err().message()));
+    }
+    auto cfg = wasmtime::WasiConfig();
+    auto set_cfg = store.context().set_wasi(std::move(cfg));
+    if (!set_cfg) {
+        throw wasm::exception(format("Setting up wasi failed: {}", set_cfg.err().message()));
+    }
+    auto instance_res = linker.instantiate(store, *ctx.module);
     if (!instance_res) {
-      throw wasm::exception(format("Creating a wasm runtime instance failed: {}", instance_res.err().message()));
+        throw wasm::exception(format("Creating a wasm runtime instance failed: {}", instance_res.err().message()));
     }
     auto instance = instance_res.unwrap();
     auto function_obj = instance.get(store, ctx.function_name);
