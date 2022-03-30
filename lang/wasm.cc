@@ -56,6 +56,39 @@ void compile(context& ctx, const std::vector<sstring>& arg_names, std::string sc
     create_instance_and_func(ctx, store);
 }
 
+static void init_abstract_arg(const abstract_type& t, const bytes_opt& param, std::vector<wasmtime::Val>& argv, wasmtime::Store& store, wasmtime::Instance& instance) {
+        // set up exported memory's underlying buffer,
+        // `memory` is required to be exported in the WebAssembly module
+        auto memory_export = instance.get(store, "memory");
+        if (!memory_export) {
+            throw wasm::exception("memory export not found - please export `memory` in the wasm module");
+        }
+        auto memory = std::get<wasmtime::Memory>(*memory_export);
+        uint8_t* data = memory.data(store).data();
+        size_t mem_size = memory.size(store) * WASM_PAGE_SIZE;
+        const int32_t serialized_size = param ? param->size() : 0;
+        if (serialized_size > std::numeric_limits<int32_t>::max()) {
+            throw wasm::exception(format("Serialized parameter is too large: {} > {}", param->size(), std::numeric_limits<int32_t>::max()));
+        }
+        auto grown = memory.grow(store, 1 + (sizeof(int32_t) + serialized_size - 1) / WASM_PAGE_SIZE); // for fitting the serialized size + the buffer itself
+        if (!grown) {
+            throw wasm::exception(format("Failed to grow wasm memory to {}: {}", serialized_size, grown.err().message()));
+        }
+        if (param) {
+            // put the size in wasm module's memory
+            std::memcpy(data + mem_size, reinterpret_cast<const char*>(&serialized_size), sizeof(int32_t));
+            // put the argument in wasm module's memory
+            std::memcpy(data + mem_size + sizeof(int32_t), param->data(), serialized_size);
+        } else {
+            // size of -1 means that the value is null
+            const int32_t is_null = -1;
+            std::memcpy(data + mem_size, reinterpret_cast<const char*>(&is_null), sizeof(int32_t));
+        }
+
+        // the place inside wasm memory where the struct is placed
+        argv.push_back(int32_t(mem_size));
+}
+
 struct init_arg_visitor {
     const bytes_opt& param;
     std::vector<wasmtime::Val>& argv;
@@ -99,33 +132,10 @@ struct init_arg_visitor {
     }
 
     void operator()(const abstract_type& t) {
-        // set up exported memory's underlying buffer,
-        // `memory` is required to be exported in the WebAssembly module
-        auto memory_export = instance.get(store, "memory");
-        if (!memory_export) {
-            throw wasm::exception("memory export not found - please export `memory` in the wasm module");
-        }
-        auto memory = std::get<wasmtime::Memory>(*memory_export);
-        uint8_t* data = memory.data(store).data();
-        size_t mem_size = memory.size(store) * WASM_PAGE_SIZE;
         if (!param) {
             on_internal_error(wasm_logger, "init_arg_visitor does not accept null values");
         }
-        int32_t serialized_size = param->size();
-        if (serialized_size > std::numeric_limits<int32_t>::max()) {
-            throw wasm::exception(format("Serialized parameter is too large: {} > {}", serialized_size, std::numeric_limits<int32_t>::max()));
-        }
-        auto grown = memory.grow(store, 1 + (sizeof(int32_t) + serialized_size - 1) / WASM_PAGE_SIZE); // for fitting serialized size + the buffer itself
-        if (!grown) {
-            throw wasm::exception(format("Failed to grow wasm memory to {}: {}", serialized_size, grown.err().message()));
-        }
-        // put the size in wasm module's memory
-        std::memcpy(data + mem_size, reinterpret_cast<char*>(&serialized_size), sizeof(int32_t));
-        // put the argument in wasm module's memory
-        std::memcpy(data + mem_size + sizeof(int32_t), param->data(), serialized_size);
-
-        // the place inside wasm memory where the struct is placed
-        argv.push_back(int32_t(mem_size));
+        init_abstract_arg(t, param, argv, store, instance);
     }
 };
 
@@ -136,36 +146,7 @@ struct init_nullable_arg_visitor {
     wasmtime::Instance& instance;
 
     void operator()(const abstract_type& t) {
-        // set up exported memory's underlying buffer,
-        // `memory` is required to be exported in the WebAssembly module
-        auto memory_export = instance.get(store, "memory");
-        if (!memory_export) {
-            throw wasm::exception("memory export not found - please export `memory` in the wasm module");
-        }
-        auto memory = std::get<wasmtime::Memory>(*memory_export);
-        uint8_t* data = memory.data(store).data();
-        size_t mem_size = memory.size(store) * WASM_PAGE_SIZE;
-        const int32_t serialized_size = param ? param->size() : 0;
-        if (serialized_size > std::numeric_limits<int32_t>::max()) {
-            throw wasm::exception(format("Serialized parameter is too large: {} > {}", param->size(), std::numeric_limits<int32_t>::max()));
-        }
-        auto grown = memory.grow(store, 1 + (sizeof(int32_t) + serialized_size - 1) / WASM_PAGE_SIZE); // for fitting the serialized size + the buffer itself
-        if (!grown) {
-            throw wasm::exception(format("Failed to grow wasm memory to {}: {}", serialized_size, grown.err().message()));
-        }
-        if (param) {
-            // put the size in wasm module's memory
-            std::memcpy(data + mem_size, reinterpret_cast<const char*>(&serialized_size), sizeof(int32_t));
-            // put the argument in wasm module's memory
-            std::memcpy(data + mem_size + sizeof(int32_t), param->data(), serialized_size);
-        } else {
-            // size of -1 means that the value is null
-            const int32_t is_null = -1;
-            std::memcpy(data + mem_size, reinterpret_cast<const char*>(&is_null), sizeof(int32_t));
-        }
-
-        // the place inside wasm memory where the struct is placed
-        argv.push_back(int32_t(mem_size));
+        init_abstract_arg(t, param, argv, store, instance);
     }
 };
 
