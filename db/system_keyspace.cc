@@ -1758,6 +1758,10 @@ future<bool> system_keyspace::cdc_is_rewritten() {
     });
 }
 
+bool system_keyspace::bootstrap_needed() const {
+    return get_bootstrap_state() == bootstrap_state::NEEDS_BOOTSTRAP;
+}
+
 bool system_keyspace::bootstrap_complete() const {
     return get_bootstrap_state() == bootstrap_state::COMPLETED;
 }
