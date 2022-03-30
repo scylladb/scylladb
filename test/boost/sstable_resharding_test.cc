@@ -14,7 +14,6 @@
 #include "replica/database.hh"
 #include "dht/murmur3_partitioner.hh"
 #include "compaction/compaction_manager.hh"
-#include "mutation_reader.hh"
 #include "test/boost/sstable_test.hh"
 #include "test/lib/tmpdir.hh"
 #include "cell_locking.hh"

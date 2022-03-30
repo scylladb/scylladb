@@ -14,7 +14,6 @@
 #include "streaming/prepare_message.hh"
 #include "streaming/stream_result_future.hh"
 #include "streaming/stream_manager.hh"
-#include "mutation_reader.hh"
 #include "dht/i_partitioner.hh"
 #include "utils/fb_utilities.hh"
 #include "streaming/stream_plan.hh"

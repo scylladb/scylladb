@@ -34,7 +34,6 @@
 #include "test/lib/simple_position_reader_queue.hh"
 
 #include "dht/sharder.hh"
-#include "mutation_reader.hh"
 #include "schema_builder.hh"
 #include "cell_locking.hh"
 #include "sstables/sstables.hh"
@@ -56,6 +55,12 @@
 #include "readers/empty.hh"
 #include "readers/empty_v2.hh"
 #include "readers/next_partition_adaptor.hh"
+#include "readers/combined.hh"
+#include "readers/compacting.hh"
+#include "readers/foreign.hh"
+#include "readers/filtering.hh"
+#include "readers/evictable.hh"
+#include "readers/queue.hh"
 
 static schema_ptr make_schema() {
     return schema_builder("ks", "cf")

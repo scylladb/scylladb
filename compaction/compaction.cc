@@ -33,7 +33,6 @@
 #include "sstables/sstables_manager.hh"
 #include "compaction.hh"
 #include "compaction_manager.hh"
-#include "mutation_reader.hh"
 #include "schema.hh"
 #include "db/system_keyspace.hh"
 #include "service/priority_manager.hh"
@@ -48,6 +47,8 @@
 #include "utils/UUID_gen.hh"
 #include "utils/utf8.hh"
 #include "utils/fmt-compat.hh"
+#include "readers/filtering.hh"
+#include "readers/compacting.hh"
 #include "tombstone_gc.hh"
 
 namespace sstables {

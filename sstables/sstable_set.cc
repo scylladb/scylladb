@@ -23,6 +23,7 @@
 #include "replica/database.hh"
 #include "readers/from_mutations_v2.hh"
 #include "readers/empty_v2.hh"
+#include "readers/combined.hh"
 
 namespace sstables {
 

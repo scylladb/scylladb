@@ -74,6 +74,7 @@
 #include "utils/bit_cast.hh"
 #include "utils/cached_file.hh"
 #include "tombstone_gc.hh"
+#include "reader_concurrency_semaphore.hh"
 #include "readers/reversing.hh"
 #include "readers/forwardable.hh"
 

@@ -15,7 +15,6 @@
 #include "dht/i_partitioner.hh"
 #include "schema_fwd.hh"
 #include "encoding_stats.hh"
-#include "mutation_reader.hh"
 #include "db/commitlog/replay_position.hh"
 #include "db/commitlog/rp_set.hh"
 #include "utils/extremum_tracking.hh"
@@ -23,6 +22,7 @@
 #include "sstables/types.hh"
 #include "utils/double-decker.hh"
 #include "readers/empty_v2.hh"
+#include "readers/mutation_source.hh"
 
 class frozen_mutation;
 class row_cache;

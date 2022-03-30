@@ -12,7 +12,6 @@
 #include "dht/i_partitioner.hh"
 #include "readers/flat_mutation_reader_v2.hh"
 #include "mutation_fragment.hh"
-#include "mutation_reader.hh"
 #include "query-request.hh"
 #include "schema_fwd.hh"
 #include "tracing/tracing.hh"

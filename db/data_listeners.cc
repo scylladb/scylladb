@@ -8,6 +8,7 @@
 
 #include "db/data_listeners.hh"
 #include "replica/database.hh"
+#include "readers/filtering.hh"
 #include "db_clock.hh"
 
 #include <tuple>

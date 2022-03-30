@@ -12,7 +12,7 @@
 #include "mutation_fragment_stream_validator.hh"
 #include "schema_upgrader.hh"
 
-logging::logger fmr_logger("flat_mutation_reader");
+logging::logger mrlog("mutation_reader");
 
 flat_mutation_reader& flat_mutation_reader::operator=(flat_mutation_reader&& o) noexcept {
     if (_impl && _impl->is_close_required()) {
@@ -20,7 +20,7 @@ flat_mutation_reader& flat_mutation_reader::operator=(flat_mutation_reader&& o) 
         // Abort to enforce calling close() before readers are closed
         // to prevent leaks and potential use-after-free due to background
         // tasks left behind.
-        on_internal_error_noexcept(fmr_logger, format("{} [{}]: permit {}: was not closed before overwritten by move-assign", typeid(*ip).name(), fmt::ptr(ip), ip->_permit.description()));
+        on_internal_error_noexcept(mrlog, format("{} [{}]: permit {}: was not closed before overwritten by move-assign", typeid(*ip).name(), fmt::ptr(ip), ip->_permit.description()));
         abort();
     }
     _impl = std::move(o._impl);
@@ -33,7 +33,7 @@ flat_mutation_reader::~flat_mutation_reader() {
         // Abort to enforce calling close() before readers are closed
         // to prevent leaks and potential use-after-free due to background
         // tasks left behind.
-        on_internal_error_noexcept(fmr_logger, format("{} [{}]: permit {}: was not closed before destruction", typeid(*ip).name(), fmt::ptr(ip), ip->_permit.description()));
+        on_internal_error_noexcept(mrlog, format("{} [{}]: permit {}: was not closed before destruction", typeid(*ip).name(), fmt::ptr(ip), ip->_permit.description()));
         abort();
     }
 }
@@ -91,7 +91,7 @@ void flat_mutation_reader::do_upgrade_schema(const schema_ptr& s) {
 
 void flat_mutation_reader::on_close_error(std::unique_ptr<impl> i, std::exception_ptr ep) noexcept {
     impl* ip = i.get();
-    on_internal_error_noexcept(fmr_logger,
+    on_internal_error_noexcept(mrlog,
             format("Failed to close {} [{}]: permit {}: {}", typeid(*ip).name(), fmt::ptr(ip), ip->_permit.description(), ep));
 }
 
@@ -247,13 +247,13 @@ bool mutation_fragment_stream_validating_filter::operator()(const dht::decorated
         if (_validator(dk.token())) {
             return true;
         }
-        on_validation_error(fmr_logger, format("[validator {} for {}] Unexpected token: previous {}, current {}",
+        on_validation_error(mrlog, format("[validator {} for {}] Unexpected token: previous {}, current {}",
                 static_cast<void*>(this), _name, _validator.previous_token(), dk.token()));
     } else {
         if (_validator(dk)) {
             return true;
         }
-        on_validation_error(fmr_logger, format("[validator {} for {}] Unexpected partition key: previous {}, current {}",
+        on_validation_error(mrlog, format("[validator {} for {}] Unexpected partition key: previous {}, current {}",
                 static_cast<void*>(this), _name, _validator.previous_partition_key(), dk));
     }
 }
@@ -264,7 +264,7 @@ mutation_fragment_stream_validating_filter::mutation_fragment_stream_validating_
     , _name(format("{} ({}.{} {})", name, s.ks_name(), s.cf_name(), s.id()))
     , _validation_level(level)
 {
-    if (fmr_logger.level() <= log_level::debug) {
+    if (mrlog.level() <= log_level::debug) {
         std::string_view what;
         switch (_validation_level) {
             case mutation_fragment_stream_validation_level::partition_region:
@@ -280,17 +280,17 @@ mutation_fragment_stream_validating_filter::mutation_fragment_stream_validating_
                 what = "partition region, partition key and clustering key";
                 break;
         }
-        fmr_logger.debug("[validator {} for {}] Will validate {} monotonicity.", static_cast<void*>(this), _name, what);
+        mrlog.debug("[validator {} for {}] Will validate {} monotonicity.", static_cast<void*>(this), _name, what);
     }
 }
 
 bool mutation_fragment_stream_validating_filter::operator()(mutation_fragment_v2::kind kind, position_in_partition_view pos) {
     bool valid = false;
 
-    fmr_logger.debug("[validator {}] {}:{}", static_cast<void*>(this), kind, pos);
+    mrlog.debug("[validator {}] {}:{}", static_cast<void*>(this), kind, pos);
 
     if (kind == mutation_fragment_v2::kind::partition_end && _current_tombstone) {
-        on_validation_error(fmr_logger, format("[validator {} for {}] Unexpected active tombstone at partition-end: partition key {}: tombstone {}",
+        on_validation_error(mrlog, format("[validator {} for {}] Unexpected active tombstone at partition-end: partition key {}: tombstone {}",
                 static_cast<void*>(this), _name, _validator.previous_partition_key(), _current_tombstone));
     }
 
@@ -302,13 +302,13 @@ bool mutation_fragment_stream_validating_filter::operator()(mutation_fragment_v2
 
     if (__builtin_expect(!valid, false)) {
         if (_validation_level >= mutation_fragment_stream_validation_level::clustering_key) {
-            on_validation_error(fmr_logger, format("[validator {} for {}] Unexpected mutation fragment: partition key {}: previous {}:{}, current {}:{}",
+            on_validation_error(mrlog, format("[validator {} for {}] Unexpected mutation fragment: partition key {}: previous {}:{}, current {}:{}",
                     static_cast<void*>(this), _name, _validator.previous_partition_key(), _validator.previous_mutation_fragment_kind(), _validator.previous_position(), kind, pos));
         } else if (_validation_level >= mutation_fragment_stream_validation_level::partition_key) {
-            on_validation_error(fmr_logger, format("[validator {} for {}] Unexpected mutation fragment: partition key {}: previous {}, current {}",
+            on_validation_error(mrlog, format("[validator {} for {}] Unexpected mutation fragment: partition key {}: previous {}, current {}",
                     static_cast<void*>(this), _name, _validator.previous_partition_key(), _validator.previous_mutation_fragment_kind(), kind));
         } else {
-            on_validation_error(fmr_logger, format("[validator {} for {}] Unexpected mutation fragment: previous {}, current {}",
+            on_validation_error(mrlog, format("[validator {} for {}] Unexpected mutation fragment: previous {}, current {}",
                     static_cast<void*>(this), _name, _validator.previous_mutation_fragment_kind(), kind));
         }
     }
@@ -336,9 +336,9 @@ bool mutation_fragment_stream_validating_filter::on_end_of_partition() {
 }
 
 void mutation_fragment_stream_validating_filter::on_end_of_stream() {
-    fmr_logger.debug("[validator {}] EOS", static_cast<const void*>(this));
+    mrlog.debug("[validator {}] EOS", static_cast<const void*>(this));
     if (!_validator.on_end_of_stream()) {
-        on_validation_error(fmr_logger, format("[validator {} for {}] Stream ended with unclosed partition: {}", static_cast<const void*>(this), _name,
+        on_validation_error(mrlog, format("[validator {} for {}] Stream ended with unclosed partition: {}", static_cast<const void*>(this), _name,
                 _validator.previous_mutation_fragment_kind()));
     }
 }
@@ -359,7 +359,7 @@ flat_mutation_reader_v2& flat_mutation_reader_v2::operator=(flat_mutation_reader
         // Abort to enforce calling close() before readers are closed
         // to prevent leaks and potential use-after-free due to background
         // tasks left behind.
-        on_internal_error_noexcept(fmr_logger, format("{} [{}]: permit {}: was not closed before overwritten by move-assign", typeid(*ip).name(), fmt::ptr(ip), ip->_permit.description()));
+        on_internal_error_noexcept(mrlog, format("{} [{}]: permit {}: was not closed before overwritten by move-assign", typeid(*ip).name(), fmt::ptr(ip), ip->_permit.description()));
         abort();
     }
     _impl = std::move(o._impl);
@@ -372,7 +372,7 @@ flat_mutation_reader_v2::~flat_mutation_reader_v2() {
         // Abort to enforce calling close() before readers are closed
         // to prevent leaks and potential use-after-free due to background
         // tasks left behind.
-        on_internal_error_noexcept(fmr_logger, format("{} [{}]: permit {}: was not closed before destruction", typeid(*ip).name(), fmt::ptr(ip), ip->_permit.description()));
+        on_internal_error_noexcept(mrlog, format("{} [{}]: permit {}: was not closed before destruction", typeid(*ip).name(), fmt::ptr(ip), ip->_permit.description()));
         abort();
     }
 }
@@ -416,7 +416,7 @@ void flat_mutation_reader_v2::do_upgrade_schema(const schema_ptr& s) {
 
 void flat_mutation_reader_v2::on_close_error(std::unique_ptr<impl> i, std::exception_ptr ep) noexcept {
     impl* ip = i.get();
-    on_internal_error_noexcept(fmr_logger,
+    on_internal_error_noexcept(mrlog,
             format("Failed to close {} [{}]: permit {}: {}", typeid(*ip).name(), fmt::ptr(ip), ip->_permit.description(), ep));
 }
 

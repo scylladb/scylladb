@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "mutation_reader.hh"
+#include "readers/filtering.hh"
 #include "replica/memtable.hh"
 #include "schema.hh"
 #include "replica/database_fwd.hh"

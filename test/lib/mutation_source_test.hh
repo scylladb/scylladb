@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include "mutation_reader.hh"
 #include "test/lib/sstable_utils.hh"
 
 using populate_fn = std::function<mutation_source(schema_ptr s, const std::vector<mutation>&)>;

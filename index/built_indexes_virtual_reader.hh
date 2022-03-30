@@ -10,7 +10,6 @@
 #include "db/system_keyspace.hh"
 #include "readers/flat_mutation_reader_v2.hh"
 #include "mutation_fragment_v2.hh"
-#include "mutation_reader.hh"
 #include "query-request.hh"
 #include "schema_fwd.hh"
 #include "secondary_index_manager.hh"

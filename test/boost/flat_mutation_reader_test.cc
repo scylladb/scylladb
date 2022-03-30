@@ -21,7 +21,6 @@
 #include "readers/delegating.hh"
 #include "readers/multi_range.hh"
 #include "readers/from_mutations.hh"
-#include "mutation_reader.hh"
 #include "schema_builder.hh"
 #include "replica/memtable.hh"
 #include "row_cache.hh"

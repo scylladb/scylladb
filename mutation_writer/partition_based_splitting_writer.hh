@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <seastar/core/io_priority_class.hh>
 #include <seastar/util/noncopyable_function.hh>
 
 #include "feed_writers.hh"

@@ -24,7 +24,6 @@
 #include "test/lib/log.hh"
 
 #include "dht/sharder.hh"
-#include "mutation_reader.hh"
 #include "schema_registry.hh"
 #include "service/priority_manager.hh"
 #include "readers/forwardable_v2.hh"

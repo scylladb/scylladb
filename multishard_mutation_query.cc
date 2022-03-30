@@ -12,6 +12,7 @@
 #include "replica/database.hh"
 #include "db/config.hh"
 #include "query-result-writer.hh"
+#include "readers/multishard.hh"
 
 #include <seastar/core/coroutine.hh>
 
