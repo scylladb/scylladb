@@ -134,22 +134,24 @@ public:
     {}
 
     future<query::forward_result> dispatch_to_node(netw::msg_addr id, query::forward_request req) {
-        if (!utils::fb_utilities::is_me(id.addr)) {
-            _forwarder._stats.requests_dispatched_to_other_nodes += 1;
-
-            // Try to send this forward_request to another node.
-            // In case of a failure, do a retry locally.
-            try {
-                co_return co_await ser::forward_request_rpc_verbs::send_forward_request(
-                    &_forwarder._messaging, id, req, _tr_info
-                );
-            } catch(rpc::closed_error& e) {
-                flogger.warn("retrying forward_request={} on a super-coordinator after failing to send it to {} ({})", req, id, e.what());
-                tracing::trace(_tr_state, "retrying forward_request={} on a super-coordinator after failing to send it to {} ({})", req, id, e.what());
-            }
+        if (utils::fb_utilities::is_me(id.addr)) {
+            return _forwarder.dispatch_to_shards(req, _tr_info);
         }
 
-        co_return co_await _forwarder.dispatch_to_shards(req, _tr_info);
+        _forwarder._stats.requests_dispatched_to_other_nodes += 1;
+
+        // Try to send this forward_request to another node.
+        return do_with(id, req, [this] (netw::msg_addr& id, query::forward_request& req) -> future<query::forward_result> {
+            return ser::forward_request_rpc_verbs::send_forward_request(
+                &_forwarder._messaging, id, req, _tr_info
+            ).handle_exception_type([this, &req, &id] (rpc::closed_error& e) -> future<query::forward_result> {
+                // In case of forwarding failure, retry using super-coordinator as a coordinator
+                flogger.warn("retrying forward_request={} on a super-coordinator after failing to send it to {} ({})", req, id, e.what());
+                tracing::trace(_tr_state, "retrying forward_request={} on a super-coordinator after failing to send it to {} ({})", req, id, e.what());
+
+                return _forwarder.dispatch_to_shards(req, _tr_info);
+            });
+        });
     }
 };
 
