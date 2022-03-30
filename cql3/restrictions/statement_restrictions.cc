@@ -133,6 +133,7 @@ statement_restrictions::statement_restrictions(schema_ptr schema, bool allow_fil
     , _partition_key_restrictions(get_initial_partition_key_restrictions(allow_filtering))
     , _clustering_columns_restrictions(get_initial_clustering_key_restrictions(allow_filtering))
     , _nonprimary_key_restrictions(::make_shared<single_column_restrictions>(schema))
+    , _partition_range_is_simple(true)
 { }
 #if 0
 static const column_definition*
@@ -335,7 +336,7 @@ statement_restrictions::statement_restrictions(database& db,
     }
 
     if (!_nonprimary_key_restrictions->empty()) {
-        if (_has_queriable_regular_index) {
+        if (_has_queriable_regular_index && _partition_range_is_simple) {
             _uses_secondary_indexing = true;
         } else if (!allow_filtering) {
             throw exceptions::invalid_request_exception("Cannot execute this query as it might involve data filtering and "
@@ -377,6 +378,7 @@ void statement_restrictions::add_single_column_restriction(::shared_ptr<single_c
                     "Only EQ and IN relation are supported on the partition key (unless you use the token() function or allow filtering)");
         }
         _partition_key_restrictions = _partition_key_restrictions->merge_to(_schema, restriction);
+        _partition_range_is_simple &= !find(restriction->expression, expr::oper_t::IN);
     } else if (def.is_clustering_key()) {
         _clustering_columns_restrictions = _clustering_columns_restrictions->merge_to(_schema, restriction);
     } else {

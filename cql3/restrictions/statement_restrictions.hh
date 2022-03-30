@@ -107,6 +107,8 @@ private:
     std::optional<expr::expression> _where; ///< The entire WHERE clause.
     std::vector<expr::expression> _clustering_prefix_restrictions; ///< Parts of _where defining the clustering slice.
 
+    bool _partition_range_is_simple; ///< False iff _partition_range_restrictions imply a Cartesian product.
+
 public:
     /**
      * Creates a new empty <code>StatementRestrictions</code>.
