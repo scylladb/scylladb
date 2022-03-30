@@ -528,7 +528,7 @@ statement_restrictions::statement_restrictions(database& db,
     }
 
     if (!_nonprimary_key_restrictions->empty()) {
-        if (_has_queriable_regular_index) {
+        if (_has_queriable_regular_index && _partition_range_is_simple) {
             _uses_secondary_indexing = true;
         } else if (!allow_filtering) {
             throw exceptions::invalid_request_exception("Cannot execute this query as it might involve data filtering and "
