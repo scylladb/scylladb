@@ -20,7 +20,6 @@
 #include "readers/forwardable.hh"
 #include "readers/delegating_v2.hh"
 #include "readers/multi_range.hh"
-#include "readers/from_mutations.hh"
 #include "mutation_reader.hh"
 #include "schema_builder.hh"
 #include "replica/memtable.hh"
@@ -48,7 +47,7 @@ struct mock_consumer {
         size_t _consume_tombstone_call_count = 0;
         size_t _consume_end_of_partition_call_count = 0;
         bool _consume_end_of_stream_called = false;
-        std::vector<mutation_fragment> _fragments;
+        std::vector<mutation_fragment_v2> _fragments;
     };
     const schema& _schema;
     reader_permit _permit;
@@ -68,15 +67,15 @@ struct mock_consumer {
         return stop_iteration::no;
     }
     stop_iteration consume(static_row&& sr) {
-        _result._fragments.push_back(mutation_fragment(_schema, _permit, std::move(sr)));
+        _result._fragments.emplace_back(_schema, _permit, std::move(sr));
         return update_depth();
     }
     stop_iteration consume(clustering_row&& cr) {
-        _result._fragments.push_back(mutation_fragment(_schema, _permit, std::move(cr)));
+        _result._fragments.emplace_back(_schema, _permit, std::move(cr));
         return update_depth();
     }
-    stop_iteration consume(range_tombstone&& rt) {
-        _result._fragments.push_back(mutation_fragment(_schema, _permit, std::move(rt)));
+    stop_iteration consume(range_tombstone_change&& rtc) {
+        _result._fragments.emplace_back(_schema, _permit, std::move(rtc));
         return update_depth();
     }
     stop_iteration consume_end_of_partition() {
@@ -91,7 +90,7 @@ struct mock_consumer {
 
 static size_t count_fragments(mutation m) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
-    auto r = make_flat_mutation_reader_from_mutations(m.schema(), semaphore.make_permit(), {m});
+    auto r = make_flat_mutation_reader_from_mutations_v2(m.schema(), semaphore.make_permit(), {m});
     auto close_reader = deferred_close(r);
     size_t res = 0;
     auto mfopt = r().get0();
@@ -108,26 +107,20 @@ SEASTAR_TEST_CASE(test_flat_mutation_reader_consume_single_partition) {
         for_each_mutation([&] (const mutation& m) {
             size_t fragments_in_m = count_fragments(m);
             for (size_t depth = 1; depth <= fragments_in_m + 1; ++depth) {
-                auto r = make_flat_mutation_reader_from_mutations(m.schema(), semaphore.make_permit(), {m});
+                auto r = make_flat_mutation_reader_from_mutations_v2(m.schema(), semaphore.make_permit(), {m});
                 auto close_reader = deferred_close(r);
                 auto result = r.consume(mock_consumer(*m.schema(), semaphore.make_permit(), depth)).get0();
                 BOOST_REQUIRE(result._consume_end_of_stream_called);
                 BOOST_REQUIRE_EQUAL(1, result._consume_new_partition_call_count);
                 BOOST_REQUIRE_EQUAL(1, result._consume_end_of_partition_call_count);
                 BOOST_REQUIRE_EQUAL(m.partition().partition_tombstone() ? 1 : 0, result._consume_tombstone_call_count);
-                auto r2 = assert_that(make_flat_mutation_reader_from_mutations(m.schema(), semaphore.make_permit(), {m}));
+                auto r2 = assert_that(make_flat_mutation_reader_from_mutations_v2(m.schema(), semaphore.make_permit(), {m}));
                 r2.produces_partition_start(m.decorated_key(), m.partition().partition_tombstone());
                 if (result._fragments.empty()) {
                     continue;
                 }
-                query::clustering_row_ranges ck_ranges = {};
-                if (depth > 1) {
-                    const auto& mf = result._fragments.back();
-                    auto ck_range = query::clustering_range::make_ending_with({mf.position().key(), mf.position().get_bound_weight() >= bound_weight::equal});
-                    ck_ranges = {ck_range};
-                }
                 for (auto& mf : result._fragments) {
-                    r2.produces(*m.schema(), mf, ck_ranges);
+                    r2.produces(*m.schema(), mf);
                 }
             }
         });
@@ -141,14 +134,14 @@ SEASTAR_TEST_CASE(test_flat_mutation_reader_consume_two_partitions) {
             size_t fragments_in_m1 = count_fragments(m1);
             size_t fragments_in_m2 = count_fragments(m2);
             for (size_t depth = 1; depth < fragments_in_m1; ++depth) {
-                auto r = make_flat_mutation_reader_from_mutations(m1.schema(), semaphore.make_permit(), {m1, m2});
+                auto r = make_flat_mutation_reader_from_mutations_v2(m1.schema(), semaphore.make_permit(), {m1, m2});
                 auto close_r = deferred_close(r);
                 auto result = r.consume(mock_consumer(*m1.schema(), semaphore.make_permit(), depth)).get0();
                 BOOST_REQUIRE(result._consume_end_of_stream_called);
                 BOOST_REQUIRE_EQUAL(1, result._consume_new_partition_call_count);
                 BOOST_REQUIRE_EQUAL(1, result._consume_end_of_partition_call_count);
                 BOOST_REQUIRE_EQUAL(m1.partition().partition_tombstone() ? 1 : 0, result._consume_tombstone_call_count);
-                auto r2 = make_flat_mutation_reader_from_mutations(m1.schema(), semaphore.make_permit(), {m1, m2});
+                auto r2 = make_flat_mutation_reader_from_mutations_v2(m1.schema(), semaphore.make_permit(), {m1, m2});
                 auto close_r2 = deferred_close(r2);
                 auto start = r2().get0();
                 BOOST_REQUIRE(start);
@@ -160,7 +153,7 @@ SEASTAR_TEST_CASE(test_flat_mutation_reader_consume_two_partitions) {
                 }
             }
             for (size_t depth = fragments_in_m1; depth < fragments_in_m1 + fragments_in_m2 + 1; ++depth) {
-                auto r = make_flat_mutation_reader_from_mutations(m1.schema(), semaphore.make_permit(), {m1, m2});
+                auto r = make_flat_mutation_reader_from_mutations_v2(m1.schema(), semaphore.make_permit(), {m1, m2});
                 auto close_r = deferred_close(r);
                 auto result = r.consume(mock_consumer(*m1.schema(), semaphore.make_permit(), depth)).get0();
                 BOOST_REQUIRE(result._consume_end_of_stream_called);
@@ -174,7 +167,7 @@ SEASTAR_TEST_CASE(test_flat_mutation_reader_consume_two_partitions) {
                     ++tombstones_count;
                 }
                 BOOST_REQUIRE_EQUAL(tombstones_count, result._consume_tombstone_call_count);
-                auto r2 = make_flat_mutation_reader_from_mutations(m1.schema(), semaphore.make_permit(), {m1, m2});
+                auto r2 = make_flat_mutation_reader_from_mutations_v2(m1.schema(), semaphore.make_permit(), {m1, m2});
                 auto close_r2 = deferred_close(r2);
                 auto start = r2().get0();
                 BOOST_REQUIRE(start);
@@ -298,8 +291,8 @@ SEASTAR_TEST_CASE(test_fragmenting_and_freezing) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_flat_mutation_reader_move_buffer_content_to) {
-    struct dummy_reader_impl : public flat_mutation_reader::impl {
-        using flat_mutation_reader::impl::impl;
+    struct dummy_reader_impl : public flat_mutation_reader_v2::impl {
+        using flat_mutation_reader_v2::impl::impl;
         virtual future<> fill_buffer() override { return make_ready_future<>(); }
         virtual future<> next_partition() override { return make_ready_future<>(); }
         virtual future<> fast_forward_to(const dht::partition_range&) override { return make_ready_future<>(); }
@@ -324,7 +317,8 @@ SEASTAR_THREAD_TEST_CASE(test_flat_mutation_reader_move_buffer_content_to) {
     // having to have loads of data.
     const auto max_buffer_size = size_t{100};
 
-    auto reader = make_flat_mutation_reader_from_mutations(s.schema(), semaphore.make_permit(), {mut_orig}, dht::partition_range::make_open_ended_both_sides());
+    const auto prange = dht::partition_range::make_open_ended_both_sides();
+    auto reader = make_flat_mutation_reader_from_mutations_v2(s.schema(), semaphore.make_permit(), {mut_orig}, prange);
     auto close_reader = deferred_close(reader);
     auto dummy_impl = std::make_unique<dummy_reader_impl>(s.schema(), semaphore.make_permit());
     reader.set_max_buffer_size(max_buffer_size);
@@ -359,7 +353,7 @@ SEASTAR_THREAD_TEST_CASE(test_flat_mutation_reader_move_buffer_content_to) {
         BOOST_CHECK_EQUAL(dummy_impl->buffer_size(), expected_buf_size);
     }
 
-    auto dummy_reader = flat_mutation_reader(std::move(dummy_impl));
+    auto dummy_reader = flat_mutation_reader_v2(std::move(dummy_impl));
     auto close_dummy_reader = deferred_close(dummy_reader);
     auto mut_new = read_mutation_from_flat_mutation_reader(dummy_reader).get0();
 
@@ -390,7 +384,7 @@ SEASTAR_TEST_CASE(test_multi_range_reader) {
         }));
 
         auto source = mutation_source([&] (schema_ptr, reader_permit permit, const dht::partition_range& range) {
-            return make_flat_mutation_reader_from_mutations(s.schema(), std::move(permit), ms, range);
+            return make_flat_mutation_reader_from_mutations_v2(s.schema(), std::move(permit), ms, range);
         });
 
         const auto empty_ranges = dht::partition_range_vector{};
@@ -684,7 +678,7 @@ SEASTAR_TEST_CASE(test_make_forwardable) {
 
         auto make_reader = [&] (auto& range) {
             return assert_that(
-                make_forwardable(make_flat_mutation_reader_from_mutations(s.schema(), semaphore.make_permit(), ms, range, streamed_mutation::forwarding::no)));
+                make_forwardable(make_flat_mutation_reader_from_mutations_v2(s.schema(), semaphore.make_permit(), ms, range, streamed_mutation::forwarding::no)));
         };
 
         auto test = [&] (auto& rd, auto& partition) {
@@ -728,7 +722,7 @@ SEASTAR_TEST_CASE(test_abandoned_flat_mutation_reader_from_mutation) {
     return seastar::async([] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
         for_each_mutation([&] (const mutation& m) {
-            auto rd = make_flat_mutation_reader_from_mutations(m.schema(), semaphore.make_permit(), {mutation(m)});
+            auto rd = make_flat_mutation_reader_from_mutations_v2(m.schema(), semaphore.make_permit(), {mutation(m)});
             auto close_rd = deferred_close(rd);
             rd().get();
             rd().get();
@@ -748,7 +742,7 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_reader_from_mutations_as_mutation_source)
                 tracing::trace_state_ptr,
                 streamed_mutation::forwarding fwd_sm,
                 mutation_reader::forwarding) mutable {
-            return make_flat_mutation_reader_from_mutations(schema, std::move(permit), squash_mutations(muts), range, slice, fwd_sm);
+            return make_flat_mutation_reader_from_mutations_v2(schema, std::move(permit), squash_mutations(muts), range, slice, fwd_sm);
         });
     };
     run_mutation_source_tests(populate);
