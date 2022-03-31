@@ -119,12 +119,6 @@ feature_config feature_config_from_db_config(db::config& cfg, std::set<sstring> 
 
     if (!cfg.enable_user_defined_functions()) {
         fcfg._disabled_features.insert(sstring(gms::features::UDF));
-    } else {
-        if (!cfg.check_experimental(db::experimental_features_t::UDF)) {
-            throw std::runtime_error(
-                    "You must use both enable_user_defined_functions and experimental_features:udf "
-                    "to enable user-defined functions");
-        }
     }
 
     if (!cfg.check_experimental(db::experimental_features_t::ALTERNATOR_STREAMS)) {
