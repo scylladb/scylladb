@@ -177,8 +177,6 @@ public:
         return make_ready_future<>();
     }
 
-    virtual future<> gossip_snitch_info(std::list<std::pair<gms::application_state, gms::versioned_value>> info) = 0;
-
     virtual snitch_signal_connection_t when_reconfigured(snitch_signal_slot_t& slot) {
         // no updates by default
         return snitch_signal_connection_t();
@@ -425,7 +423,6 @@ public:
         inet_address_vector_replica_set& l1,
         inet_address_vector_replica_set& l2) override;
 
-    virtual future<> gossip_snitch_info(std::list<std::pair<gms::application_state, gms::versioned_value>> info) override;
     virtual std::list<std::pair<gms::application_state, gms::versioned_value>> get_app_states() const override;
 
 private:
