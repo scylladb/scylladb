@@ -386,7 +386,7 @@ std::vector<mutation> slice_mutations(schema_ptr schema, std::vector<mutation> m
     std::vector<mutation> sliced_ms;
     for (auto& m : ms) {
         auto ck_ranges = query::clustering_key_filter_ranges::get_ranges(*schema, slice, m.key());
-        auto mp = mutation_partition(std::move(m.partition()), *schema, std::move(ck_ranges));
+        auto mp = mutation_partition(std::move(m.partition()), *m.schema(), std::move(ck_ranges));
         sliced_ms.emplace_back(schema, m.decorated_key(), std::move(mp));
     }
     return sliced_ms;
