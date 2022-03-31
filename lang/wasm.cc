@@ -14,6 +14,7 @@
 #include "utils/ascii.hh"
 #include "utils/date.h"
 #include "db/config.hh"
+#include <seastar/core/byteorder.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/util/defer.hh>
 #include "seastarx.hh"
@@ -25,10 +26,60 @@ namespace wasm {
 context::context(wasm::engine* engine_ptr, std::string name) : engine_ptr(engine_ptr), function_name(name) {
 }
 
+static constexpr size_t WASM_PAGE_SIZE = 64 * 1024;
+
+static uint32_t get_abi(wasmtime::Instance& instance, wasmtime::Store& store, uint8_t* data) {
+    auto abi_export = instance.get(store, "_scylla_abi");
+    if (!abi_export) {
+        throw wasm::exception(format("ABI version export not found - please export `_scylla_abi` in the wasm module"));
+    }
+    wasmtime::Global* abi_global = std::get_if<wasmtime::Global>(&*abi_export);
+    if (!abi_global) {
+        throw wasm::exception(format("Exported object {} is not a global", "_scylla_abi"));
+    }
+    wasmtime::Val abi_val = abi_global->get(store);
+    return seastar::read_le<uint32_t>((char*)data + abi_val.i32());
+}
+
+static wasmtime::Func import_func(wasmtime::Instance& instance, wasmtime::Store& store, std::string_view name) {
+    auto func_export = instance.get(store, name);
+    if (func_export) {
+        wasmtime::Func* func = std::get_if<wasmtime::Func>(&*func_export);
+        if (!func) {
+            throw wasm::exception(format("Exported object {} is not a function", name));
+        }
+        return std::move(*func);
+    } else {
+        throw wasm::exception(format("Function {} was not found in given wasm source code", name));
+    }
+}
+
+static wasmtime::Val call_func(wasmtime::Store& store, wasmtime::Func func, std::vector<wasmtime::Val> argv) {
+    auto result = func.call(store, argv);
+    if (!result) {
+        throw wasm::exception("Calling wasm function failed: " + result.err().message());
+    }
+    std::vector<wasmtime::Val> result_vec = std::move(result).unwrap();
+    if (result_vec.size() != 1) {
+        throw wasm::exception(format("Unexpected number of returned values: {} (expected: 1)", result_vec.size()));
+    }
+    return std::move(result_vec[0]);
+}
+
 static std::pair<wasmtime::Instance, wasmtime::Func> create_instance_and_func(context& ctx, wasmtime::Store& store) {
-    auto instance_res = wasmtime::Instance::create(store, *ctx.module, {});
+    auto linker = wasmtime::Linker(ctx.engine_ptr->get());
+    auto wasi_def = linker.define_wasi();
+    if (!wasi_def) {
+        throw wasm::exception(format("Setting up wasi failed: {}", wasi_def.err().message()));
+    }
+    auto cfg = wasmtime::WasiConfig();
+    auto set_cfg = store.context().set_wasi(std::move(cfg));
+    if (!set_cfg) {
+        throw wasm::exception(format("Setting up wasi failed: {}", set_cfg.err().message()));
+    }
+    auto instance_res = linker.instantiate(store, *ctx.module);
     if (!instance_res) {
-      throw wasm::exception(format("Creating a wasm runtime instance failed: {}", instance_res.err().message()));
+        throw wasm::exception(format("Creating a wasm runtime instance failed: {}", instance_res.err().message()));
     }
     auto instance = instance_res.unwrap();
     auto function_obj = instance.get(store, ctx.function_name);
@@ -52,6 +103,52 @@ void compile(context& ctx, const std::vector<sstring>& arg_names, std::string sc
     // Create the instance and extract function definition for validation purposes only
     wasmtime::Store store(ctx.engine_ptr->get());
     create_instance_and_func(ctx, store);
+}
+
+static void init_abstract_arg(const abstract_type& t, const bytes_opt& param, std::vector<wasmtime::Val>& argv, wasmtime::Store& store, wasmtime::Instance& instance) {
+        // set up exported memory's underlying buffer,
+        // `memory` is required to be exported in the WebAssembly module
+        auto memory_export = instance.get(store, "memory");
+        if (!memory_export) {
+            throw wasm::exception("memory export not found - please export `memory` in the wasm module");
+        }
+        auto memory = std::get<wasmtime::Memory>(*memory_export);
+        uint8_t* data = memory.data(store).data();
+        size_t mem_size = memory.size(store) * WASM_PAGE_SIZE;
+        int32_t serialized_size = param ? param->size() : 0;
+        if (serialized_size > std::numeric_limits<int32_t>::max()) {
+            throw wasm::exception(format("Serialized parameter is too large: {} > {}", param->size(), std::numeric_limits<int32_t>::max()));
+        }
+        switch (uint32_t abi_ver = get_abi(instance, store, data)) {
+            case 1: {
+                auto grown = memory.grow(store, 1 + (sizeof(int32_t) + serialized_size - 1) / WASM_PAGE_SIZE); // for fitting serialized size + the buffer itself
+                if (!grown) {
+                    throw wasm::exception(format("Failed to grow wasm memory to {}: {}", serialized_size, grown.err().message()));
+                }
+                mem_size = std::move(grown).unwrap() * WASM_PAGE_SIZE;
+                break;
+            }
+            case 2: {
+                auto malloc_func = import_func(instance, store, "_scylla_malloc");
+                import_func(instance, store, "_scylla_free");
+                auto size = call_func(store, malloc_func, {int32_t(sizeof(int32_t) + serialized_size)});
+                mem_size = size.i32();
+                break;
+            }
+            default:
+                throw wasm::exception(format("ABI version {} not recognized", abi_ver));
+        }
+        if (param) {
+            // put the argument in wasm module's memory
+            std::memcpy(data + mem_size, param->data(), serialized_size);
+        } else {
+            // size of -1 means that the value is null
+            serialized_size = -1;
+        }
+
+        // the size of the struct in top 32 bits and the place inside wasm memory where the struct is placed in the bottom 32 bits
+        int64_t arg_combined = ((int64_t)serialized_size << 32) | mem_size;
+        argv.push_back(arg_combined);
 }
 
 struct init_arg_visitor {
@@ -97,33 +194,10 @@ struct init_arg_visitor {
     }
 
     void operator()(const abstract_type& t) {
-        // set up exported memory's underlying buffer,
-        // `memory` is required to be exported in the WebAssembly module
-        auto memory_export = instance.get(store, "memory");
-        if (!memory_export) {
-            throw wasm::exception("memory export not found - please export `memory` in the wasm module");
-        }
-        auto memory = std::get<wasmtime::Memory>(*memory_export);
-        uint8_t* data = memory.data(store).data();
-        size_t mem_size = memory.size(store);
         if (!param) {
             on_internal_error(wasm_logger, "init_arg_visitor does not accept null values");
         }
-        int32_t serialized_size = param->size();
-        if (serialized_size > std::numeric_limits<int32_t>::max()) {
-            throw wasm::exception(format("Serialized parameter is too large: {} > {}", serialized_size, std::numeric_limits<int32_t>::max()));
-        }
-        auto grown = memory.grow(store, sizeof(int32_t) + serialized_size); // for fitting serialized size + the buffer itself
-        if (!grown) {
-            throw wasm::exception(format("Failed to grow wasm memory to {}: {}", serialized_size, grown.err().message()));
-        }
-        // put the size in wasm module's memory
-        std::memcpy(data + mem_size, reinterpret_cast<char*>(&serialized_size), sizeof(int32_t));
-        // put the argument in wasm module's memory
-        std::memcpy(data + mem_size + sizeof(int32_t), param->data(), serialized_size);
-
-        // the place inside wasm memory where the struct is placed
-        argv.push_back(int32_t(mem_size));
+        init_abstract_arg(t, param, argv, store, instance);
     }
 };
 
@@ -134,38 +208,10 @@ struct init_nullable_arg_visitor {
     wasmtime::Instance& instance;
 
     void operator()(const abstract_type& t) {
-        // set up exported memory's underlying buffer,
-        // `memory` is required to be exported in the WebAssembly module
-        auto memory_export = instance.get(store, "memory");
-        if (!memory_export) {
-            throw wasm::exception("memory export not found - please export `memory` in the wasm module");
-        }
-        auto memory = std::get<wasmtime::Memory>(*memory_export);
-        uint8_t* data = memory.data(store).data();
-        size_t mem_size = memory.size(store);
-        const int32_t serialized_size = param ? param->size() : 0;
-        if (serialized_size > std::numeric_limits<int32_t>::max()) {
-            throw wasm::exception(format("Serialized parameter is too large: {} > {}", param->size(), std::numeric_limits<int32_t>::max()));
-        }
-        auto grown = memory.grow(store, sizeof(int32_t) + serialized_size); // for fitting the serialized size + the buffer itself
-        if (!grown) {
-            throw wasm::exception(format("Failed to grow wasm memory to {}: {}", serialized_size, grown.err().message()));
-        }
-        if (param) {
-            // put the size in wasm module's memory
-            std::memcpy(data + mem_size, reinterpret_cast<const char*>(&serialized_size), sizeof(int32_t));
-            // put the argument in wasm module's memory
-            std::memcpy(data + mem_size + sizeof(int32_t), param->data(), serialized_size);
-        } else {
-            // size of -1 means that the value is null
-            const int32_t is_null = -1;
-            std::memcpy(data + mem_size, reinterpret_cast<const char*>(&is_null), sizeof(int32_t));
-        }
-
-        // the place inside wasm memory where the struct is placed
-        argv.push_back(int32_t(mem_size));
+        init_abstract_arg(t, param, argv, store, instance);
     }
 };
+
 
 struct from_val_visitor {
     const wasmtime::Val& val;
@@ -202,21 +248,26 @@ struct from_val_visitor {
     }
 
     bytes_opt operator()(const abstract_type& t) {
-        expect_kind(wasmtime::ValKind::I32);
+        expect_kind(wasmtime::ValKind::I64);
         auto memory_export = instance.get(store, "memory");
         if (!memory_export) {
             throw wasm::exception("memory export not found - please export `memory` in the wasm module");
         }
         auto memory = std::get<wasmtime::Memory>(*memory_export);
         uint8_t* mem_base = memory.data(store).data();
-        uint8_t* data = mem_base + val.i32();
-        int32_t ret_size;
-        std::memcpy(reinterpret_cast<char*>(&ret_size), data, 4);
+        uint8_t* data = mem_base + (val.i64() & 0xffffffff);
+        int32_t ret_size = val.i64() >> 32;
         if (ret_size == -1) {
             return bytes_opt{};
         }
-        data += sizeof(int32_t); // size of the return type was consumed
-        return t.decompose(t.deserialize(bytes_view(reinterpret_cast<int8_t*>(data), ret_size)));
+        bytes_opt ret = t.decompose(t.deserialize(bytes_view(reinterpret_cast<int8_t*>(data), ret_size)));
+
+        if (get_abi(instance, store, mem_base) == 2) {
+            auto free_func = import_func(instance, store, "_scylla_free");
+            call_func(store, free_func, {val.i32()});
+        }
+
+        return ret;
     }
 
     void expect_kind(wasmtime::ValKind expected) {

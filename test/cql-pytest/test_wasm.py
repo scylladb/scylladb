@@ -81,10 +81,8 @@ def test_fib(cql, test_keyspace, table1, scylla_with_wasm_only):
 # WebAssembly should convert to host endianness (assumed little endian here)
 # before operating on its native types.
 # Compiled from:
-# struct __attribute__((packed)) nullable_bigint {
-#     int size;
-#     long long v;
-# };
+# const int WASM_PAGE_SIZE = 64 * 1024;
+# const int _scylla_abi = 0;
 #
 # static long long swap_int64(long long val) {
 #     val = ((val << 8) & 0xFF00FF00FF00FF00ULL ) | ((val >> 8) & 0x00FF00FF00FF00FFULL );
@@ -98,52 +96,44 @@ def test_fib(cql, test_keyspace, table1, scylla_with_wasm_only):
 #     }
 #     return fib_aux(n-1) + fib_aux(n-2);
 # }
-#
-# struct nullable_bigint* fib(struct nullable_bigint* p) {
-#     // Initialize memory for the return struct
-#     struct nullable_bigint* ret = (struct nullable_bigint*)__builtin_wasm_memory_size(0);
-#     __builtin_wasm_memory_grow(0, sizeof(struct nullable_bigint));
-#
-#     ret->size = sizeof(long long);
-#     if (p->size == -1) {
-#         ret->v = swap_int64(42);
+# long long fib(long long p) {
+#     int size = p >> 32;
+#     long long* p_val = (long long*)(p & 0xffffffff);
+#     // Initialize memory for the return value
+#     long long* ret_val = (long long*)(__builtin_wasm_memory_size(0) * WASM_PAGE_SIZE);
+#     __builtin_wasm_memory_grow(0, 1); // long long fits in one wasm page
+#     if (size == -1) {
+#         *ret_val = swap_int64(42);
 #     } else {
-#         ret->v = swap_int64(fib_aux(swap_int64(p->v)));
+#         *ret_val = swap_int64(fib_aux(swap_int64(*p_val)));
 #     }
-#     return ret;
+#     // 8 is the size of a bigint
+#     return (long long)(8ll << 32) | (long long)ret_val;
 # }
 #
 # with:
-# $ clang -O2  --target=wasm32 --no-standard-libraries -Wl,--export-all -Wl,--no-entry fibnull.c -o fibnull.wasm
+# $ clang -O2  --target=wasm32 --no-standard-libraries -Wl,--export=fib -Wl,--export=_scylla_abi -Wl,--no-entry fibnull.c -o fibnull.wasm
 # $ wasm2wat fibnull.wasm > fibnull.wat
 def test_fib_called_on_null(cql, test_keyspace, table1, scylla_with_wasm_only):
     table = table1
     fib_name = unique_name()
     fib_source = f"""
 (module
-  (type (;0;) (func))
-  (type (;1;) (func (param i64) (result i64)))
-  (type (;2;) (func (param i32) (result i32)))
-  (func $__wasm_call_ctors (type 0))
-  (func $fib_aux (type 1) (param i64) (result i64)
-    (local i64 i32 i64)
-    block  ;; label = @1
+  (type (;0;) (func (param i64) (result i64)))
+  (func (;0;) (type 0) (param i64) (result i64)
+    (local i64 i32)
+    local.get 0
+    i64.const 2
+    i64.lt_s
+    if  ;; label = @1
       local.get 0
-      i64.const 2
-      i64.ge_s
-      br_if 0 (;@1;)
-      local.get 0
-      i64.const 0
-      i64.add
       return
     end
-    i64.const 0
-    local.set 1
     loop  ;; label = @1
       local.get 0
-      i64.const -1
-      i64.add
-      call $fib_aux
+      i64.const 1
+      i64.sub
+      call 0
       local.get 1
       i64.add
       local.set 1
@@ -152,140 +142,136 @@ def test_fib_called_on_null(cql, test_keyspace, table1, scylla_with_wasm_only):
       i64.gt_s
       local.set 2
       local.get 0
-      i64.const -2
-      i64.add
-      local.tee 3
+      i64.const 2
+      i64.sub
       local.set 0
       local.get 2
       br_if 0 (;@1;)
     end
-    local.get 3
+    local.get 0
     local.get 1
     i64.add)
-  (func $fib (type 2) (param i32) (result i32)
+  (func (;1;) (type 0) (param i64) (result i64)
     (local i32 i64)
     memory.size
     local.set 1
-    i32.const 12
+    i32.const 1
     memory.grow
     drop
+    i64.const 3026418949592973312
+    local.set 2
     local.get 1
-    i32.const 8
-    i32.store align=1
-    block  ;; label = @1
-      local.get 0
-      i32.load align=1
-      i32.const -1
-      i32.ne
-      br_if 0 (;@1;)
-      local.get 1
-      i64.const 3026418949592973312
-      i64.store offset=4 align=1
-      local.get 1
-      return
-    end
-    local.get 1
+    i32.const 16
+    i32.shl
+    local.tee 1
     local.get 0
-    i64.load offset=4 align=1
-    local.tee 2
-    i64.const 56
-    i64.shl
-    local.get 2
-    i64.const 40
-    i64.shl
-    i64.const 71776119061217280
-    i64.and
-    i64.or
-    local.get 2
-    i64.const 24
-    i64.shl
-    i64.const 280375465082880
-    i64.and
-    local.get 2
-    i64.const 8
-    i64.shl
-    i64.const 1095216660480
-    i64.and
-    i64.or
-    i64.or
-    local.get 2
-    i64.const 8
-    i64.shr_u
-    i64.const 4278190080
-    i64.and
-    local.get 2
-    i64.const 24
-    i64.shr_u
-    i64.const 16711680
-    i64.and
-    i64.or
-    local.get 2
-    i64.const 40
-    i64.shr_u
-    i64.const 65280
-    i64.and
-    local.get 2
-    i64.const 56
-    i64.shr_u
-    i64.or
-    i64.or
-    i64.or
-    call $fib_aux
-    local.tee 2
-    i64.const 56
-    i64.shl
-    local.get 2
-    i64.const 40
-    i64.shl
-    i64.const 71776119061217280
-    i64.and
-    i64.or
-    local.get 2
-    i64.const 24
-    i64.shl
-    i64.const 280375465082880
-    i64.and
-    local.get 2
-    i64.const 8
-    i64.shl
-    i64.const 1095216660480
-    i64.and
-    i64.or
-    i64.or
-    local.get 2
-    i64.const 8
-    i64.shr_u
-    i64.const 4278190080
-    i64.and
-    local.get 2
-    i64.const 24
-    i64.shr_u
-    i64.const 16711680
-    i64.and
-    i64.or
-    local.get 2
-    i64.const 40
-    i64.shr_u
-    i64.const 65280
-    i64.and
-    local.get 2
-    i64.const 56
-    i64.shr_u
-    i64.or
-    i64.or
-    i64.or
-    i64.store offset=4 align=1
-    local.get 1)
+    i64.const -4294967297
+    i64.le_u
+    if (result i64)  ;; label = @1
+      local.get 0
+      i32.wrap_i64
+      i64.load
+      local.tee 0
+      i64.const 56
+      i64.shl
+      local.get 0
+      i64.const 40
+      i64.shl
+      i64.const 71776119061217280
+      i64.and
+      i64.or
+      local.get 0
+      i64.const 24
+      i64.shl
+      i64.const 280375465082880
+      i64.and
+      local.get 0
+      i64.const 8
+      i64.shl
+      i64.const 1095216660480
+      i64.and
+      i64.or
+      i64.or
+      local.get 0
+      i64.const 8
+      i64.shr_u
+      i64.const 4278190080
+      i64.and
+      local.get 0
+      i64.const 24
+      i64.shr_u
+      i64.const 16711680
+      i64.and
+      i64.or
+      local.get 0
+      i64.const 40
+      i64.shr_u
+      i64.const 65280
+      i64.and
+      local.get 0
+      i64.const 56
+      i64.shr_u
+      i64.or
+      i64.or
+      i64.or
+      call 0
+      local.tee 0
+      i64.const 56
+      i64.shl
+      local.get 0
+      i64.const 40
+      i64.shl
+      i64.const 71776119061217280
+      i64.and
+      i64.or
+      local.get 0
+      i64.const 24
+      i64.shl
+      i64.const 280375465082880
+      i64.and
+      local.get 0
+      i64.const 8
+      i64.shl
+      i64.const 1095216660480
+      i64.and
+      i64.or
+      i64.or
+      local.get 0
+      i64.const 8
+      i64.shr_u
+      i64.const 4278190080
+      i64.and
+      local.get 0
+      i64.const 24
+      i64.shr_u
+      i64.const 16711680
+      i64.and
+      i64.or
+      local.get 0
+      i64.const 40
+      i64.shr_u
+      i64.const 65280
+      i64.and
+      local.get 0
+      i64.const 56
+      i64.shr_u
+      i64.or
+      i64.or
+      i64.or
+    else
+      local.get 2
+    end
+    i64.store
+    local.get 1
+    i64.extend_i32_u
+    i64.const 34359738368
+    i64.or)
   (memory (;0;) 2)
-  (global (;0;) (mut i32) (i32.const 66560))
-  (global (;1;) i32 (i32.const 1024))
-  (global (;2;) i32 (i32.const 1024))
-  (global (;3;) i32 (i32.const 1024))
-  (global (;4;) i32 (i32.const 66560))
-  (global (;5;) i32 (i32.const 0))
-  (global (;6;) i32 (i32.const 1))
+  (global (;0;) i32 (i32.const 1024))
   (export "memory" (memory 0))
-  (export "{fib_name}" (func $fib)))
+  (export "{fib_name}" (func 1))
+  (export "_scylla_abi" (global 0))
+  (data (;0;) (i32.const 1024) "\\01"))
 """
     src = f"(input bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE xwasm AS '{fib_source}'"
     with new_function(cql, test_keyspace, src, fib_name):
@@ -321,7 +307,10 @@ def test_infinite_loop(cql, test_keyspace, table1, scylla_with_wasm_only):
   (table (;1;) 32 externref)
   (memory (;0;) 17)
   (export "{inf_loop_name}" (func ${inf_loop_name}))
-  (elem (;0;) (i32.const 0) func))
+  (elem (;0;) (i32.const 0) func)
+  (global (;0;) i32 (i32.const 1024))
+  (export "_scylla_abi" (global 0))
+  (data $.rodata (i32.const 1024) "\\01"))
 """
     src = f"(input int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE xwasm AS '{inf_loop_source}'"
     with new_function(cql, test_keyspace, src, inf_loop_name):
@@ -348,7 +337,10 @@ def test_f64_param(cql, test_keyspace, table1, scylla_with_wasm_only):
   (table (;1;) 32 externref)
   (memory (;0;) 17)
   (export "{dec_double_name}" (func ${dec_double_name}))
-  (elem (;0;) (i32.const 0) func))
+  (elem (;0;) (i32.const 0) func)
+  (global (;0;) i32 (i32.const 1024))
+  (export "_scylla_abi" (global 0))
+  (data $.rodata (i32.const 1024) "\\01"))
 """
     src = f"(input double) RETURNS NULL ON NULL INPUT RETURNS double LANGUAGE xwasm AS '{dec_double_source}'"
     with new_function(cql, test_keyspace, src, dec_double_name):
@@ -371,7 +363,10 @@ def test_f32_param(cql, test_keyspace, table1, scylla_with_wasm_only):
   (table (;1;) 32 externref)
   (memory (;0;) 17)
   (export "{inc_float_name}" (func ${inc_float_name}))
-  (elem (;0;) (i32.const 0) func))
+  (elem (;0;) (i32.const 0) func)
+  (global (;0;) i32 (i32.const 1024))
+  (export "_scylla_abi" (global 0))
+  (data $.rodata (i32.const 1024) "\\01"))
 """
     src = f"(input float) RETURNS NULL ON NULL INPUT RETURNS float LANGUAGE xwasm AS '{inc_float_source}'"
     with new_function(cql, test_keyspace, src, inc_float_name):
@@ -393,7 +388,10 @@ def test_bool_negate(cql, test_keyspace, table1, scylla_with_wasm_only):
   (table (;1;) 32 externref)
   (memory (;0;) 17)
   (export "{negate_name}" (func ${negate_name}))
-  (elem (;0;) (i32.const 0) func))
+  (elem (;0;) (i32.const 0) func)
+  (global (;0;) i32 (i32.const 1024))
+  (export "_scylla_abi" (global 0))
+  (data $.rodata (i32.const 1024) "\\01"))
 """
     src = f"(input boolean) RETURNS NULL ON NULL INPUT RETURNS boolean LANGUAGE xwasm AS '{negate_source}'"
     with new_function(cql, test_keyspace, src, negate_name):
@@ -420,7 +418,10 @@ def test_short_ints(cql, test_keyspace, table1, scylla_with_wasm_only):
   (table (;1;) 32 externref)
   (memory (;0;) 17)
   (export "{plus_name}" (func ${plus_name}))
-  (elem (;0;) (i32.const 0) func))
+  (elem (;0;) (i32.const 0) func)
+  (global (;0;) i32 (i32.const 1024))
+  (export "_scylla_abi" (global 0))
+  (data $.rodata (i32.const 1024) "\\01"))
 """
     src = f"(input tinyint, input2 tinyint) RETURNS NULL ON NULL INPUT RETURNS tinyint LANGUAGE xwasm AS '{plus_source}'"
     with new_function(cql, test_keyspace, src, plus_name):
@@ -469,7 +470,10 @@ def test_9_params(cql, test_keyspace, table1, scylla_with_wasm_only):
   (table (;1;) 32 externref)
   (memory (;0;) 17)
   (export "{sum9_name}" (func ${sum9_name}))
-  (elem (;0;) (i32.const 0) func))
+  (elem (;0;) (i32.const 0) func)
+  (global (;0;) i32 (i32.const 1024))
+  (export "_scylla_abi" (global 0))
+  (data $.rodata (i32.const 1024) "\\01"))
 
 """
     src = f"(a int, b int, c int, d int, e int, f int, g int, h int, i int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE xwasm AS '{sum9_source}'"
@@ -534,8 +538,11 @@ def test_pow(cql, test_keyspace, table1, scylla_with_wasm_only):
   (table (;0;) 1 1 funcref)
   (table (;1;) 32 externref)
   (memory (;0;) 17)
+  (global (;0;) i32 (i32.const 1024))
   (export "{pow_name}" (func ${pow_name}))
-  (elem (;0;) (i32.const 0) func))
+  (elem (;0;) (i32.const 0) func)
+  (export "_scylla_abi" (global 0))
+  (data $.rodata (i32.const 1024) "\\01"))
 """
     src = f"(base int, pow int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE xwasm AS '{pow_source}'"
     with new_function(cql, test_keyspace, src, pow_name):
@@ -587,8 +594,11 @@ def test_not_a_function(cql, test_keyspace, table1, scylla_with_wasm_only):
   (table (;1;) 32 externref)
   (memory (;0;) 17)
   (global (;0;) (mut i32) (i32.const 1048576))
+  (global (;1;) i32 (i32.const 1024))
   (export "memory" (memory 0))
-  (elem (;0;) (i32.const 0) func))
+  (elem (;0;) (i32.const 0) func)
+  (export "_scylla_abi" (global 1))
+  (data $.rodata (i32.const 1024) "\\01"))
 """
     with pytest.raises(InvalidRequest, match="not a function"):
         cql.execute(f"CREATE FUNCTION {test_keyspace}.memory (input float) RETURNS NULL ON NULL INPUT RETURNS float LANGUAGE xwasm "
@@ -608,9 +618,12 @@ def test_validate_params(cql, test_keyspace, table1, scylla_with_wasm_only):
   (table (;0;) 1 1 funcref)
   (table (;1;) 32 externref)
   (memory (;0;) 17)
+  (global (;0;) i32 (i32.const 1024))
   (export "memory" (memory 0))
   (export "{inc_float_name}" (func ${inc_float_name}))
-  (elem (;0;) (i32.const 0) func))
+  (elem (;0;) (i32.const 0) func)
+  (export "_scylla_abi" (global 0))
+  (data $.rodata (i32.const 1024) "\\01"))
 """
     src = f"(input int) RETURNS NULL ON NULL INPUT RETURNS float LANGUAGE xwasm AS '{inc_float_source}'"
     with new_function(cql, test_keyspace, src, inc_float_name):
@@ -631,30 +644,24 @@ def test_validate_params(cql, test_keyspace, table1, scylla_with_wasm_only):
 # Test that calling a wasm-based function on a string works.
 # The function doubles the string: dog -> dogdog.
 # Created with:
-# struct __attribute__((packed)) param {
-#    int size;
-#    char buf[0];
-#};
-#
-# int dbl(struct param* par, int ret_pos) {
-#    int size = par->size;
-#    int position = (int)par->buf;
-#    int orig_size = __builtin_wasm_memory_size(0);
-#    __builtin_wasm_memory_grow(0, 2*size);
+# const int WASM_PAGE_SIZE = 64 * 1024;
+# const int _scylla_abi = 0;
+
+# long long dbl(long long par) {
+#    int size = par >> 32;
+#    int position = par & 0xffffffff;
+#    int orig_size = __builtin_wasm_memory_size(0) * WASM_PAGE_SIZE;
+#    __builtin_wasm_memory_grow(0, 1 + (2 * size - 1) / WASM_PAGE_SIZE);
 #    char* p = (char*)0;
 #    for (int i = 0; i < size; ++i) {
 #        p[orig_size + i] = p[position + i];
 #        p[orig_size + size + i] = p[position + i];
 #    }
-#    int ret_val = 2*size;
-#    char* ret = (char*)ret_pos;
-#    for (int i = 0; i < 4; ++i) {
-#        *ret = (char)(ret_val >> 8*(3-i));
-#    }
-#    return orig_size;
-#}
+#    long long ret = ((long long)2 * size << 32) | (long long)orig_size;
+#    return ret;
+# }
 # ... and compiled with
-# clang --target=wasm32 --no-standard-libraries -Wl,--export-all -Wl,--no-entry demo.c -o demo.wasm
+# clang --target=wasm32 --no-standard-libraries -Wl,--export=dbl -Wl,--export=_scylla_abi -Wl,--no-entry demo.c -o demo.wasm
 # wasm2wat demo.wasm > demo.wat
 
 def test_word_double(cql, test_keyspace, table1, scylla_with_wasm_only):
@@ -662,12 +669,10 @@ def test_word_double(cql, test_keyspace, table1, scylla_with_wasm_only):
     dbl_name = unique_name()
     dbl_source = f"""
 (module
-  (type (;0;) (func))
-  (type (;1;) (func (param i32) (result i32)))
-  (func $__wasm_call_ctors (type 0))
-  (func $dbl (type 1) (param i32) (result i32)
-    (local i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32)
-    global.get 0
+  (type (;0;) (func (param i64) (result i64)))
+  (func $dbl (type 0) (param i64) (result i64)
+    (local i32 i32 i32 i64 i64 i64 i32 i64 i64 i64 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i64 i64 i64 i64 i64 i32 i32 i64 i64 i64)
+    global.get $__stack_pointer
     local.set 1
     i32.const 48
     local.set 2
@@ -677,123 +682,118 @@ def test_word_double(cql, test_keyspace, table1, scylla_with_wasm_only):
     local.set 3
     local.get 3
     local.get 0
-    i32.store offset=44
+    i64.store offset=40
     local.get 3
-    i32.load offset=44
+    i64.load offset=40
     local.set 4
-    local.get 4
-    i32.load
+    i64.const 32
     local.set 5
-    local.get 3
+    local.get 4
     local.get 5
-    i32.store offset=40
-    local.get 3
-    i32.load offset=44
+    i64.shr_s
     local.set 6
-    i32.const 4
-    local.set 7
     local.get 6
+    i32.wrap_i64
+    local.set 7
+    local.get 3
     local.get 7
-    i32.add
-    local.set 8
-    local.get 3
-    local.get 8
     i32.store offset=36
-    memory.size
+    local.get 3
+    i64.load offset=40
+    local.set 8
+    i64.const 4294967295
     local.set 9
-    local.get 3
+    local.get 8
     local.get 9
-    i32.store offset=32
-    local.get 3
-    i32.load offset=32
+    i64.and
     local.set 10
-    i32.const 4
-    local.set 11
     local.get 10
-    local.get 11
-    i32.add
-    local.set 12
+    i32.wrap_i64
+    local.set 11
     local.get 3
+    local.get 11
+    i32.store offset=32
+    memory.size
+    local.set 12
+    i32.const 16
+    local.set 13
     local.get 12
+    local.get 13
+    i32.shl
+    local.set 14
+    local.get 3
+    local.get 14
     i32.store offset=28
     local.get 3
-    i32.load offset=40
-    local.set 13
-    i32.const 1
-    local.set 14
-    local.get 13
-    local.get 14
-    i32.shl
+    i32.load offset=36
     local.set 15
-    i32.const 4
+    i32.const 1
     local.set 16
     local.get 15
     local.get 16
-    i32.add
+    i32.shl
     local.set 17
+    i32.const 1
+    local.set 18
     local.get 17
+    local.get 18
+    i32.sub
+    local.set 19
+    i32.const 65536
+    local.set 20
+    local.get 19
+    local.get 20
+    i32.div_s
+    local.set 21
+    i32.const 1
+    local.set 22
+    local.get 21
+    local.get 22
+    i32.add
+    local.set 23
+    local.get 23
     memory.grow
     drop
     i32.const 0
-    local.set 18
+    local.set 24
     local.get 3
-    local.get 18
+    local.get 24
     i32.store offset=24
     i32.const 0
-    local.set 19
+    local.set 25
     local.get 3
-    local.get 19
+    local.get 25
     i32.store offset=20
     block  ;; label = @1
       loop  ;; label = @2
         local.get 3
         i32.load offset=20
-        local.set 20
-        local.get 3
-        i32.load offset=40
-        local.set 21
-        local.get 20
-        local.set 22
-        local.get 21
-        local.set 23
-        local.get 22
-        local.get 23
-        i32.lt_s
-        local.set 24
-        i32.const 1
-        local.set 25
-        local.get 24
-        local.get 25
-        i32.and
         local.set 26
+        local.get 3
+        i32.load offset=36
+        local.set 27
         local.get 26
+        local.set 28
+        local.get 27
+        local.set 29
+        local.get 28
+        local.get 29
+        i32.lt_s
+        local.set 30
+        i32.const 1
+        local.set 31
+        local.get 30
+        local.get 31
+        i32.and
+        local.set 32
+        local.get 32
         i32.eqz
         br_if 1 (;@1;)
         local.get 3
         i32.load offset=24
-        local.set 27
-        local.get 3
-        i32.load offset=36
-        local.set 28
-        local.get 3
-        i32.load offset=20
-        local.set 29
-        local.get 28
-        local.get 29
-        i32.add
-        local.set 30
-        local.get 27
-        local.get 30
-        i32.add
-        local.set 31
-        local.get 31
-        i32.load8_u
-        local.set 32
-        local.get 3
-        i32.load offset=24
         local.set 33
         local.get 3
-        i32.load offset=28
+        i32.load offset=32
         local.set 34
         local.get 3
         i32.load offset=20
@@ -807,175 +807,137 @@ def test_word_double(cql, test_keyspace, table1, scylla_with_wasm_only):
         i32.add
         local.set 37
         local.get 37
-        local.get 32
-        i32.store8
-        local.get 3
-        i32.load offset=24
+        i32.load8_u
         local.set 38
         local.get 3
-        i32.load offset=36
+        i32.load offset=24
         local.set 39
         local.get 3
-        i32.load offset=20
+        i32.load offset=28
         local.set 40
-        local.get 39
-        local.get 40
-        i32.add
+        local.get 3
+        i32.load offset=20
         local.set 41
-        local.get 38
+        local.get 40
         local.get 41
         i32.add
         local.set 42
+        local.get 39
         local.get 42
-        i32.load8_u
+        i32.add
         local.set 43
+        local.get 43
+        local.get 38
+        i32.store8
         local.get 3
         i32.load offset=24
         local.set 44
         local.get 3
-        i32.load offset=28
+        i32.load offset=32
         local.set 45
         local.get 3
-        i32.load offset=40
+        i32.load offset=20
         local.set 46
         local.get 45
         local.get 46
         i32.add
         local.set 47
-        local.get 3
-        i32.load offset=20
-        local.set 48
-        local.get 47
-        local.get 48
-        i32.add
-        local.set 49
         local.get 44
-        local.get 49
+        local.get 47
         i32.add
-        local.set 50
-        local.get 50
-        local.get 43
-        i32.store8
+        local.set 48
+        local.get 48
+        i32.load8_u
+        local.set 49
         local.get 3
-        i32.load offset=20
+        i32.load offset=24
+        local.set 50
+        local.get 3
+        i32.load offset=28
         local.set 51
-        i32.const 1
+        local.get 3
+        i32.load offset=36
         local.set 52
         local.get 51
         local.get 52
         i32.add
         local.set 53
         local.get 3
+        i32.load offset=20
+        local.set 54
         local.get 53
+        local.get 54
+        i32.add
+        local.set 55
+        local.get 50
+        local.get 55
+        i32.add
+        local.set 56
+        local.get 56
+        local.get 49
+        i32.store8
+        local.get 3
+        i32.load offset=20
+        local.set 57
+        i32.const 1
+        local.set 58
+        local.get 57
+        local.get 58
+        i32.add
+        local.set 59
+        local.get 3
+        local.get 59
         i32.store offset=20
         br 0 (;@2;)
       end
     end
     local.get 3
-    i32.load offset=40
-    local.set 54
-    i32.const 1
-    local.set 55
-    local.get 54
-    local.get 55
-    i32.shl
-    local.set 56
+    i32.load offset=36
+    local.set 60
+    local.get 60
+    local.set 61
+    local.get 61
+    i64.extend_i32_s
+    local.set 62
+    i64.const 1
+    local.set 63
+    local.get 62
+    local.get 63
+    i64.shl
+    local.set 64
+    i64.const 32
+    local.set 65
+    local.get 64
+    local.get 65
+    i64.shl
+    local.set 66
     local.get 3
-    local.get 56
-    i32.store offset=16
+    i32.load offset=28
+    local.set 67
+    local.get 67
+    local.set 68
+    local.get 68
+    i64.extend_i32_s
+    local.set 69
+    local.get 66
+    local.get 69
+    i64.or
+    local.set 70
     local.get 3
-    i32.load offset=32
-    local.set 57
+    local.get 70
+    i64.store offset=8
     local.get 3
-    local.get 57
-    i32.store offset=12
-    i32.const 0
-    local.set 58
-    local.get 3
-    local.get 58
-    i32.store offset=8
-    block  ;; label = @1
-      loop  ;; label = @2
-        local.get 3
-        i32.load offset=8
-        local.set 59
-        i32.const 4
-        local.set 60
-        local.get 59
-        local.set 61
-        local.get 60
-        local.set 62
-        local.get 61
-        local.get 62
-        i32.lt_s
-        local.set 63
-        i32.const 1
-        local.set 64
-        local.get 63
-        local.get 64
-        i32.and
-        local.set 65
-        local.get 65
-        i32.eqz
-        br_if 1 (;@1;)
-        local.get 3
-        i32.load offset=16
-        local.set 66
-        local.get 3
-        i32.load offset=8
-        local.set 67
-        i32.const 3
-        local.set 68
-        local.get 68
-        local.get 67
-        i32.sub
-        local.set 69
-        i32.const 3
-        local.set 70
-        local.get 69
-        local.get 70
-        i32.shl
-        local.set 71
-        local.get 66
-        local.get 71
-        i32.shr_s
-        local.set 72
-        local.get 3
-        i32.load offset=12
-        local.set 73
-        local.get 73
-        local.get 72
-        i32.store8
-        local.get 3
-        i32.load offset=8
-        local.set 74
-        i32.const 1
-        local.set 75
-        local.get 74
-        local.get 75
-        i32.add
-        local.set 76
-        local.get 3
-        local.get 76
-        i32.store offset=8
-        br 0 (;@2;)
-      end
-    end
-    local.get 3
-    i32.load offset=32
-    local.set 77
-    local.get 77
+    i64.load offset=8
+    local.set 71
+    local.get 71
     return)
   (memory (;0;) 2)
-  (global (;0;) (mut i32) (i32.const 66560))
+  (global $__stack_pointer (mut i32) (i32.const 66576))
   (global (;1;) i32 (i32.const 1024))
-  (global (;2;) i32 (i32.const 1024))
-  (global (;3;) i32 (i32.const 1024))
-  (global (;4;) i32 (i32.const 66560))
-  (global (;5;) i32 (i32.const 0))
-  (global (;6;) i32 (i32.const 1))
   (export "memory" (memory 0))
-  (export "{dbl_name}" (func $dbl)))
+  (export "{dbl_name}" (func $dbl))
+  (export "_scylla_abi" (global 1))
+  (data $.rodata (i32.const 1024) "\\01"))
 """
     src = f"(input text) RETURNS NULL ON NULL INPUT RETURNS text LANGUAGE xwasm AS '{dbl_source}'"
     with new_function(cql, test_keyspace, src, dbl_name):
