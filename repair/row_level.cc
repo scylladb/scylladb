@@ -1169,6 +1169,10 @@ public:
         } else {
             return;
         }
+        flush_rows(_schema, _working_row_buf, _repair_writer, _db, _sys_dist_ks, _view_update_generator);
+    }
+
+    static void flush_rows(schema_ptr _schema, std::list<repair_row>& _working_row_buf, lw_shared_ptr<repair_writer>& _repair_writer, seastar::sharded<replica::database>& _db, seastar::sharded<db::system_distributed_keyspace>& _sys_dist_ks, seastar::sharded<db::view::view_update_generator>& _view_update_generator) {
         auto cmp = position_in_partition::tri_compare(*_schema);
         lw_shared_ptr<mutation_fragment> last_mf;
         lw_shared_ptr<const decorated_key_with_hash> last_dk;
