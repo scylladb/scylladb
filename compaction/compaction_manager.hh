@@ -335,6 +335,10 @@ private:
     future<> perform_task_on_all_files(replica::table* t, sstables::compaction_type_options options, get_candidates_func, Args... args);
 
     future<> rewrite_sstables(replica::table* t, sstables::compaction_type_options options, get_candidates_func, can_purge_tombstones can_purge = can_purge_tombstones::yes);
+
+    // Stop all fibers, without waiting. Safe to be called multiple times.
+    void do_stop() noexcept;
+    void really_do_stop();
 public:
     compaction_manager(compaction_scheduling_group csg, maintenance_scheduling_group msg, size_t available_memory, abort_source& as);
     compaction_manager(compaction_scheduling_group csg, maintenance_scheduling_group msg, size_t available_memory, uint64_t shares, abort_source& as);
@@ -354,10 +358,6 @@ public:
     // The compaction manager is still alive after drain but it will not accept new compactions
     // unless it is moved back to enabled state.
     future<> drain();
-
-    // Stop all fibers, without waiting. Safe to be called multiple times.
-    void do_stop() noexcept;
-    void really_do_stop();
 
     // Submit a table to be compacted.
     void submit(replica::table* t);
