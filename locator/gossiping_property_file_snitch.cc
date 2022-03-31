@@ -195,16 +195,14 @@ future<> gossiping_property_file_snitch::reload_configuration() {
         }).then([this] {
             return seastar::async([this] {
                 // reload Gossiper state (executed on CPU0 only)
-                smp::submit_to(0, [] {
-                    auto& local_snitch_ptr = get_local_snitch_ptr();
+                _my_distributed->invoke_on(0, [] (snitch_ptr& local_snitch_ptr) {
                     return local_snitch_ptr->reload_gossiper_state();
                 }).get();
 
                 _reconfigured();
 
                 // spread the word...
-                smp::submit_to(0, [] {
-                    auto& local_snitch_ptr = get_local_snitch_ptr();
+                _my_distributed->invoke_on(0, [] (snitch_ptr& local_snitch_ptr) {
                     if (local_snitch_ptr->local_gossiper_started()) {
                         return local_snitch_ptr->gossip_snitch_info({});
                     }
