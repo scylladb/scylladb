@@ -108,7 +108,7 @@ future<> gossiping_property_file_snitch::gossiper_starting() {
     // this function will be executed on CPU0 only.
     //
         _gossip_started = true;
-        return reload_gossiper_state();
+        return make_ready_future<>();
 }
 
 std::list<std::pair<gms::application_state, gms::versioned_value>> gossiping_property_file_snitch::get_app_states() const {
@@ -189,6 +189,11 @@ future<> gossiping_property_file_snitch::reload_configuration() {
                 local_s->set_prefer_local(_prefer_local);
             }
         }).then([this] {
+            // FIXME -- tests don't start gossiper
+            if (!gms::get_gossiper().local_is_initialized()) {
+                return make_ready_future<>();
+            }
+
             return seastar::async([this] {
                 // reload Gossiper state (executed on CPU0 only)
                 _my_distributed->invoke_on(0, [] (snitch_ptr& local_snitch_ptr) {
@@ -272,10 +277,6 @@ future<> gossiping_property_file_snitch::pause_io() {
 
 // should be invoked of CPU0 only
 future<> gossiping_property_file_snitch::reload_gossiper_state() {
-    if (!_gossip_started) {
-        return make_ready_future<>();
-    }
-
     future<> ret = make_ready_future<>();
     if (_reconnectable_helper) {
         ret = gms::get_local_gossiper().unregister_(_reconnectable_helper);
