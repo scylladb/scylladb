@@ -12,6 +12,7 @@
 import pytest
 import boto3
 import requests
+import re
 from util import create_test_table, is_aws
 
 # When tests are run with HTTPS, the server often won't have its SSL
@@ -268,3 +269,23 @@ def test_table_s_forbid_rmw(dynamodb, scylla_only):
     table.meta.client.tag_resource(ResourceArn=arn, Tags=[{'Key': 'system:write_isolation', 'Value': 'forbid_rmw'}])
     yield table
     table.delete()
+
+# A fixture allowing to make Scylla-specific REST API requests.
+# If we're not testing Scylla, or the REST API port (10000) is not available,
+# the test using this fixture will be skipped with a message about the REST
+# API not being available.
+@pytest.fixture(scope="session")
+def rest_api(dynamodb):
+    if is_aws(dynamodb):
+        pytest.skip('Scylla-only REST API not supported by AWS')
+    url = dynamodb.meta.client._endpoint.host
+    # The REST API is on port 10000, and always http, not https.
+    url = re.sub(r':[0-9]+(/|$)', ':10000', url)
+    url = re.sub(r'^https:', 'http:', url)
+    # Scylla's REST API does not have an official "ping" command,
+    # so we just list the keyspaces as a (usually) short operation
+    try:
+        requests.get(f'{url}/column_family/name/keyspace', timeout=1).raise_for_status()
+    except:
+        pytest.skip('Cannot connect to Scylla REST API')
+    return url

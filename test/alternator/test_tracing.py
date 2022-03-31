@@ -16,7 +16,6 @@
 
 import pytest
 import requests
-import re
 import time
 import json
 from botocore.exceptions import ClientError
@@ -30,31 +29,24 @@ from util import random_string, full_scan, full_query, create_test_table
 # run in parallel, the tests here need to be prepared that completely
 # unrelated requests get traced during a test with with_tracing.
 @pytest.fixture(scope="function")
-def with_tracing(dynamodb):
-    print("with_tracing enabling tracing")
-    if dynamodb.meta.client._endpoint.host.endswith('.amazonaws.com'):
-        pytest.skip('Scylla-only feature not supported by AWS')
-    url = dynamodb.meta.client._endpoint.host
-    # The REST API is on port 10000, and always http, not https.
-    url = re.sub(r':[0-9]+(/|$)', ':10000', url)
-    url = re.sub(r'^https:', 'http:', url)
-    probability_resp = requests.get(url+'/storage_service/trace_probability')
+def with_tracing(rest_api):
+    probability_resp = requests.get(rest_api+'/storage_service/trace_probability')
     if probability_resp.status_code != 200:
         pytest.skip('Failed to fetch tracing probability')
     probability = probability_resp.text
-    response = requests.post(url+'/storage_service/trace_probability?probability=1')
+    response = requests.post(rest_api+'/storage_service/trace_probability?probability=1')
     if response.status_code != 200:
         pytest.skip('Failed to enable tracing')
     # verify tha tracing is really enabled
-    response = requests.get(url+'/storage_service/trace_probability')
+    response = requests.get(rest_api+'/storage_service/trace_probability')
     if response.status_code != 200 or response.content.decode('utf-8') != '1':
         pytest.skip('Failed to verify tracing')
     yield
     print("with_tracing restoring tracing")
-    response = requests.post(url+'/storage_service/trace_probability?probability='+probability)
+    response = requests.post(rest_api+'/storage_service/trace_probability?probability='+probability)
     if response.status_code != 200:
         pytest.fail('Failed to disable tracing after with_tracing test')
-    response = requests.get(url+'/storage_service/trace_probability')
+    response = requests.get(rest_api+'/storage_service/trace_probability')
     if response.status_code != 200 or response.content.decode('utf-8') != '0':
         pytest.skip('Failed to verify tracing disabled')
 
@@ -62,27 +54,21 @@ def with_tracing(dynamodb):
 # test function. Slow logging is set up with threshold equal to 0 microseconds,
 # which effectively means that each query will be qualified as slow and logged.
 @pytest.fixture(scope="function")
-def with_slow_query_logging(dynamodb):
+def with_slow_query_logging(rest_api):
     print("with_slow_query_logging enabling slow query logging")
-    if dynamodb.meta.client._endpoint.host.endswith('.amazonaws.com'):
-        pytest.skip('Scylla-only feature not supported by AWS')
-    url = dynamodb.meta.client._endpoint.host
-    # The REST API is on port 10000, and always http, not https.
-    url = re.sub(r':[0-9]+(/|$)', ':10000', url)
-    url = re.sub(r'^https:', 'http:', url)
-    slow_query_info = requests.get(url+'/storage_service/slow_query')
+    slow_query_info = requests.get(rest_api+'/storage_service/slow_query')
     if slow_query_info.status_code != 200:
         pytest.skip('Failed to fetch slow query logging info')
     slow_query_json = json.loads(slow_query_info.text)
     print(slow_query_json)
-    response = requests.post(url+'/storage_service/slow_query?enable=true')
+    response = requests.post(rest_api+'/storage_service/slow_query?enable=true')
     if response.status_code != 200:
         pytest.skip('Failed to enable slow query logging')
-    response = requests.post(url+'/storage_service/slow_query?threshold=0')
+    response = requests.post(rest_api+'/storage_service/slow_query?threshold=0')
     if response.status_code != 200:
         pytest.skip('Failed to enable slow query logging threshold')
     # verify that logging is really enabled
-    response = requests.get(url+'/storage_service/slow_query')
+    response = requests.get(rest_api+'/storage_service/slow_query')
     if response.status_code != 200:
         pytest.skip('Failed to verify slow query logging')
     response_json = json.loads(response.text)
@@ -91,10 +77,10 @@ def with_slow_query_logging(dynamodb):
     print(response_json)
     yield
     print("with_slow_query_logging restoring slow query logging")
-    response = requests.post(url+'/storage_service/slow_query?enable='+str(slow_query_json['enable']))
+    response = requests.post(rest_api+'/storage_service/slow_query?enable='+str(slow_query_json['enable']))
     if response.status_code != 200:
         pytest.fail('Failed to restore slow query logging')
-    response = requests.post(url+'/storage_service/slow_query?threshold='+str(slow_query_json['threshold']))
+    response = requests.post(rest_api+'/storage_service/slow_query?threshold='+str(slow_query_json['threshold']))
     if response.status_code != 200:
         pytest.fail('Failed to restore slow query logging threshold')
 

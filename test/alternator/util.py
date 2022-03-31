@@ -220,15 +220,9 @@ def is_aws(dynamodb):
 # and only in specific build modes (dev, debug, sanitize), so this function
 # will trigger a test to be skipped if it cannot be executed.
 @contextmanager
-def scylla_inject_error(dynamodb, err, one_shot=False):
-    if dynamodb.meta.client._endpoint.host.endswith('.amazonaws.com'):
-        pytest.skip("Error injection not enabled on AWS")
-    url = dynamodb.meta.client._endpoint.host
-    # The REST API is on port 10000, and always http, not https.
-    url = re.sub(r':[0-9]+(/|$)', ':10000', url)
-    url = re.sub(r'^https:', 'http:', url)
-    response = requests.post(f'{url}/v2/error_injection/injection/{err}?one_shot={one_shot}')
-    response = requests.get(f'{url}/v2/error_injection/injection')
+def scylla_inject_error(rest_api, err, one_shot=False):
+    response = requests.post(f'{rest_api}/v2/error_injection/injection/{err}?one_shot={one_shot}')
+    response = requests.get(f'{rest_api}/v2/error_injection/injection')
     print("Enabled error injections:", response.content.decode('utf-8'))
     if response.content.decode('utf-8') == "[]":
         pytest.skip("Error injection not enabled in Scylla - try compiling in dev/debug/sanitize mode")
@@ -236,4 +230,4 @@ def scylla_inject_error(dynamodb, err, one_shot=False):
         yield
     finally:
         print("Disabling error injection", err)
-        response = requests.delete(f'{url}/v2/error_injection/injection/{err}')
+        response = requests.delete(f'{rest_api}/v2/error_injection/injection/{err}')

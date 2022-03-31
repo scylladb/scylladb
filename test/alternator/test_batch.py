@@ -378,7 +378,7 @@ def test_batch_get_item_large(test_table_sn):
 # is properly handled. This test relies on error injection available
 # only in Scylla compiled with appropriate flags (present in dev/debug/sanitize
 # modes) and is skipped otherwise.
-def test_batch_get_item_partial(scylla_only, dynamodb, test_table_sn):
+def test_batch_get_item_partial(scylla_only, dynamodb, rest_api, test_table_sn):
     p = random_string()
     content = random_string()
     count = 10
@@ -388,7 +388,7 @@ def test_batch_get_item_partial(scylla_only, dynamodb, test_table_sn):
                 'p': p, 'c': i, 'content': content})
     responses = []
     to_read = { test_table_sn.name: {'Keys': [{'p': p, 'c': c} for c in range(count)], 'ConsistentRead': True } }
-    with scylla_inject_error(dynamodb, "alternator_batch_get_item", one_shot=True):
+    with scylla_inject_error(rest_api, "alternator_batch_get_item", one_shot=True):
         some_keys_were_unprocessed = False
         while to_read:
             reply = test_table_sn.meta.client.batch_get_item(RequestItems = to_read)
@@ -406,7 +406,7 @@ def test_batch_get_item_partial(scylla_only, dynamodb, test_table_sn):
 # Test that if the batch read failure is total, i.e. all read requests
 # failed, it's reported as an error and not as a regular response with
 # UnprocessedKeys set to all given keys.
-def test_batch_get_item_full_failure(scylla_only, dynamodb, test_table_sn):
+def test_batch_get_item_full_failure(scylla_only, dynamodb, rest_api, test_table_sn):
     p = random_string()
     content = random_string()
     count = 10
@@ -417,6 +417,6 @@ def test_batch_get_item_full_failure(scylla_only, dynamodb, test_table_sn):
     responses = []
     to_read = { test_table_sn.name: {'Keys': [{'p': p, 'c': c} for c in range(count)], 'ConsistentRead': True } }
     # The error injection is permanent, so it will fire for each batch read.
-    with scylla_inject_error(dynamodb, "alternator_batch_get_item", one_shot=False):
+    with scylla_inject_error(rest_api, "alternator_batch_get_item", one_shot=False):
         with pytest.raises(ClientError, match="InternalServerError"):
             reply = test_table_sn.meta.client.batch_get_item(RequestItems = to_read)
