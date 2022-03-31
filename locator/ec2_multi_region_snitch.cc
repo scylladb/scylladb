@@ -78,6 +78,11 @@ future<> ec2_multi_region_snitch::start() {
                 if (this_shard_id() != io_cpu_id()) {
                     local_s->set_local_private_addr(_local_private_address);
                 }
+
+                // this invoke_on() was done from the io_cpu_id() which had
+                // already passed through ec2_snitch::load_config() which, in
+                // turn, had already spread the _my_dc accross shards
+                gms::get_local_gossiper().register_(::make_shared<reconnectable_snitch_helper>(_my_dc));
             }).get();
 
             set_snitch_ready();
@@ -98,11 +103,7 @@ future<> ec2_multi_region_snitch::gossiper_starting() {
     // this function will be executed on CPU0 only.
     //
 
-        if (!_gossip_started) {
-            gms::get_local_gossiper().register_(::make_shared<reconnectable_snitch_helper>(_my_dc));
-            _gossip_started = true;
-        }
-
+    _gossip_started = true;
     return make_ready_future<>();
 }
 
