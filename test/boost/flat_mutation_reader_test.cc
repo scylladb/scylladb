@@ -19,7 +19,7 @@
 #include "readers/reversing.hh"
 #include "readers/reversing_v2.hh"
 #include "readers/forwardable.hh"
-#include "readers/delegating.hh"
+#include "readers/delegating_v2.hh"
 #include "readers/multi_range.hh"
 #include "readers/from_mutations.hh"
 #include "mutation_reader.hh"
@@ -29,6 +29,7 @@
 #include "test/lib/tmpdir.hh"
 #include "repair/repair.hh"
 #include "mutation_partition_view.hh"
+#include "mutation_rebuilder.hh"
 
 #include "test/lib/simple_schema.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
@@ -487,7 +488,10 @@ struct flat_stream_consumer {
     skip_after_first_fragment _skip_partition;
     skip_after_first_partition _skip_stream;
     std::vector<mutation> _mutations;
+    std::optional<mutation_rebuilder_v2> _mut;
     std::optional<position_in_partition> _previous_position;
+    tombstone _current_tombstone;
+    circular_buffer<range_tombstone_change> _reversed_rtcs;
     bool _inside_partition = false;
 private:
     void verify_order(position_in_partition_view pos) {
@@ -508,48 +512,59 @@ public:
     void consume_new_partition(dht::decorated_key dk) {
         BOOST_REQUIRE(!_inside_partition);
         BOOST_REQUIRE(!_previous_position);
-        _mutations.emplace_back(_schema, dk);
+        _mut.emplace(_schema);
+        _mut->consume_new_partition(dk);
         _inside_partition = true;
     }
     void consume(tombstone pt) {
         BOOST_REQUIRE(_inside_partition);
         BOOST_REQUIRE(!_previous_position);
-        BOOST_REQUIRE_GE(_mutations.size(), 1);
-        _mutations.back().partition().apply(pt);
+        BOOST_REQUIRE(_mut);
+        _mut->consume(pt);
     }
     stop_iteration consume(static_row&& sr) {
         BOOST_REQUIRE(_inside_partition);
         BOOST_REQUIRE(!_previous_position);
-        BOOST_REQUIRE_GE(_mutations.size(), 1);
+        BOOST_REQUIRE(_mut);
         _previous_position.emplace(sr.position());
-        _mutations.back().partition().apply(*_schema, mutation_fragment(*_schema, _permit, std::move(sr)));
+        _mut->consume(std::move(sr));
         return stop_iteration(bool(_skip_partition));
     }
     stop_iteration consume(clustering_row&& cr) {
         BOOST_REQUIRE(_inside_partition);
         verify_order(cr.position());
-        BOOST_REQUIRE_GE(_mutations.size(), 1);
+        BOOST_REQUIRE(_mut);
         _previous_position.emplace(cr.position());
-        _mutations.back().partition().apply(*_schema, mutation_fragment(*_schema, _permit, std::move(cr)));
+        _mut->consume(std::move(cr));
         return stop_iteration(bool(_skip_partition));
     }
-    stop_iteration consume(range_tombstone&& rt) {
+    stop_iteration consume(range_tombstone_change&& rtc) {
         BOOST_REQUIRE(_inside_partition);
-        auto pos = rt.position();
+        auto pos = rtc.position();
         verify_order(pos);
-        BOOST_REQUIRE_GE(_mutations.size(), 1);
+        BOOST_REQUIRE(_mut);
         _previous_position.emplace(pos);
         if (_reversed_schema) {
-            rt.reverse(); // undo the reversing
+            //FIXME: until mutation rebuilder has to do v1 conversion and hence requires rtc to be fed in schema order
+            _reversed_rtcs.emplace_front(std::move(pos).reversed(), std::exchange(_current_tombstone, rtc.tombstone()));
+        } else {
+            _mut->consume(std::move(rtc));
         }
-        _mutations.back().partition().apply(*_schema, mutation_fragment(*_schema, _permit, std::move(rt)));
         return stop_iteration(bool(_skip_partition));
     }
     stop_iteration consume_end_of_partition() {
         BOOST_REQUIRE(_inside_partition);
-        BOOST_REQUIRE_GE(_mutations.size(), 1);
+        BOOST_REQUIRE(_mut);
+        BOOST_REQUIRE(!_current_tombstone);
         _previous_position = std::nullopt;
         _inside_partition = false;
+        for (auto&& rtc : _reversed_rtcs) {
+            _mut->consume(std::move(rtc));
+        }
+        _reversed_rtcs.clear();
+        auto mut_opt = _mut->consume_end_of_stream();
+        BOOST_REQUIRE(mut_opt);
+        _mutations.emplace_back(std::move(*mut_opt));
         return stop_iteration(bool(_skip_stream));
     }
     std::vector<mutation> consume_end_of_stream() {
@@ -562,14 +577,14 @@ void test_flat_stream(schema_ptr s, std::vector<mutation> muts, reversed_partiti
     tests::reader_concurrency_semaphore_wrapper semaphore;
     auto reversed_msg = reversed ? ", reversed partitions" : "";
 
-    auto consume_fn = [&] (flat_mutation_reader& fmr, flat_stream_consumer fsc) {
+    auto consume_fn = [&] (flat_mutation_reader_v2& fmr, flat_stream_consumer fsc) {
         if (thread) {
             assert(bool(!reversed));
             return fmr.consume_in_thread(std::move(fsc));
         } else {
             if (reversed) {
-                return with_closeable(make_reversing_reader(make_delegating_reader(fmr), query::max_result_size(size_t(1) << 20)),
-                        [fsc = std::move(fsc)] (flat_mutation_reader& reverse_reader) mutable {
+                return with_closeable(make_reversing_reader(make_delegating_reader_v2(fmr), query::max_result_size(size_t(1) << 20)),
+                        [fsc = std::move(fsc)] (flat_mutation_reader_v2& reverse_reader) mutable {
                     return reverse_reader.consume(std::move(fsc));
                 }).get0();
             }
@@ -579,7 +594,7 @@ void test_flat_stream(schema_ptr s, std::vector<mutation> muts, reversed_partiti
 
   {
     testlog.info("Consume all{}", reversed_msg);
-    auto fmr = make_flat_mutation_reader_from_mutations(s, semaphore.make_permit(), muts);
+    auto fmr = make_flat_mutation_reader_from_mutations_v2(s, semaphore.make_permit(), muts);
     auto close_fmr = deferred_close(fmr);
     auto muts2 = consume_fn(fmr, flat_stream_consumer(s, semaphore.make_permit(), reversed));
     BOOST_REQUIRE_EQUAL(muts, muts2);
@@ -587,7 +602,7 @@ void test_flat_stream(schema_ptr s, std::vector<mutation> muts, reversed_partiti
 
   {
     testlog.info("Consume first fragment from partition{}", reversed_msg);
-    auto fmr = make_flat_mutation_reader_from_mutations(s, semaphore.make_permit(), muts);
+    auto fmr = make_flat_mutation_reader_from_mutations_v2(s, semaphore.make_permit(), muts);
     auto close_fmr = deferred_close(fmr);
     auto muts2 = consume_fn(fmr, flat_stream_consumer(s, semaphore.make_permit(), reversed, skip_after_first_fragment::yes));
     BOOST_REQUIRE_EQUAL(muts.size(), muts2.size());
@@ -603,7 +618,7 @@ void test_flat_stream(schema_ptr s, std::vector<mutation> muts, reversed_partiti
 
   {
     testlog.info("Consume first partition{}", reversed_msg);
-    auto fmr = make_flat_mutation_reader_from_mutations(s, semaphore.make_permit(), muts);
+    auto fmr = make_flat_mutation_reader_from_mutations_v2(s, semaphore.make_permit(), muts);
     auto close_fmr = deferred_close(fmr);
     auto muts2 = consume_fn(fmr, flat_stream_consumer(s, semaphore.make_permit(), reversed, skip_after_first_fragment::no,
                                              skip_after_first_partition::yes));
@@ -612,7 +627,7 @@ void test_flat_stream(schema_ptr s, std::vector<mutation> muts, reversed_partiti
   }
 
     if (thread) {
-        auto filter = flat_mutation_reader::filter([&] (const dht::decorated_key& dk) {
+        auto filter = flat_mutation_reader_v2::filter([&] (const dht::decorated_key& dk) {
             for (auto j = size_t(0); j < muts.size(); j += 2) {
                 if (dk.equal(*s, muts[j].decorated_key())) {
                     return false;
@@ -621,7 +636,7 @@ void test_flat_stream(schema_ptr s, std::vector<mutation> muts, reversed_partiti
             return true;
         });
         testlog.info("Consume all, filtered");
-        auto fmr = make_flat_mutation_reader_from_mutations(s, semaphore.make_permit(), muts);
+        auto fmr = make_flat_mutation_reader_from_mutations_v2(s, semaphore.make_permit(), muts);
         auto close_fmr = deferred_close(fmr);
         auto muts2 = fmr.consume_in_thread(flat_stream_consumer(s, semaphore.make_permit(), reversed), std::move(filter));
         BOOST_REQUIRE_EQUAL(muts.size() / 2, muts2.size());
