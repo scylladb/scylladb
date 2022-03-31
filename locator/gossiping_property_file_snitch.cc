@@ -124,6 +124,15 @@ future<> gossiping_property_file_snitch::gossiper_starting() {
     });
 }
 
+std::list<std::pair<gms::application_state, gms::versioned_value>> gossiping_property_file_snitch::get_app_states() const {
+    sstring ip = format("{}", gms::get_local_gossiper().get_local_messaging().listen_address());
+    return {
+        {gms::application_state::DC, gms::versioned_value::datacenter(_my_dc)},
+        {gms::application_state::RACK, gms::versioned_value::rack(_my_rack)},
+        {gms::application_state::INTERNAL_IP, gms::versioned_value::internal_ip(std::move(ip))},
+    };
+}
+
 future<> gossiping_property_file_snitch::read_property_file() {
     using namespace exceptions;
 

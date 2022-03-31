@@ -97,6 +97,11 @@ public:
     }
 
     /**
+     * returns whatever info snitch wants to gossip
+     */
+    virtual std::list<std::pair<gms::application_state, gms::versioned_value>> get_app_states() const = 0;
+
+    /**
      * Returns whether for a range query doing a query against merged is likely
      * to be faster than 2 sequential queries, one against l1 followed by one
      * against l2.
@@ -421,6 +426,7 @@ public:
         inet_address_vector_replica_set& l2) override;
 
     virtual future<> gossip_snitch_info(std::list<std::pair<gms::application_state, gms::versioned_value>> info) override;
+    virtual std::list<std::pair<gms::application_state, gms::versioned_value>> get_app_states() const override;
 
 private:
     bool has_remote_node(inet_address_vector_replica_set& l);

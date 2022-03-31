@@ -112,6 +112,14 @@ future<> ec2_multi_region_snitch::gossiper_starting() {
 
 }
 
+std::list<std::pair<gms::application_state, gms::versioned_value>> ec2_multi_region_snitch::get_app_states() const {
+    return {
+        {gms::application_state::DC, gms::versioned_value::datacenter(_my_dc)},
+        {gms::application_state::RACK, gms::versioned_value::rack(_my_rack)},
+        {gms::application_state::INTERNAL_IP, gms::versioned_value::internal_ip(_local_private_address)},
+    };
+}
+
 using registry_2_params = class_registrator<i_endpoint_snitch, ec2_multi_region_snitch, const sstring&, unsigned>;
 static registry_2_params registrator2("org.apache.cassandra.locator.Ec2MultiRegionSnitch");
 static registry_2_params registrator2_short_name("Ec2MultiRegionSnitch");

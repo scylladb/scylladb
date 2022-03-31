@@ -125,6 +125,13 @@ future<> snitch_base::gossip_snitch_info(std::list<std::pair<gms::application_st
     return gossiper.add_local_application_state(std::move(info));
 }
 
+std::list<std::pair<gms::application_state, gms::versioned_value>> snitch_base::get_app_states() const {
+    return {
+        {gms::application_state::DC, gms::versioned_value::datacenter(_my_dc)},
+        {gms::application_state::RACK, gms::versioned_value::rack(_my_rack)},
+    };
+}
+
 future<> i_endpoint_snitch::stop_snitch() {
     // First stop the instance on a CPU where I/O is running
     return snitch_instance().invoke_on(io_cpu_id(), [] (snitch_ptr& s) {
