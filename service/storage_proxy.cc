@@ -2840,6 +2840,12 @@ future<result<>> storage_proxy::schedule_repair(std::unordered_map<dht::token, s
     return mutate_internal(diffs | boost::adaptors::map_values, cl, false, std::move(trace_state), std::move(permit));
 }
 
+// std::runtime_error returned by rpc read verbs are translate to
+// this error
+struct remote_read_error : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
 class abstract_read_resolver {
 protected:
     db::consistency_level _cl;
@@ -2894,6 +2900,14 @@ public:
         } catch (timed_out_error&) {
             // do not report timeouts, the whole operation will timeout and be reported
             return; // also do not report timeout as replica failure for the same reason
+        } catch (abort_requested_exception& e) {
+            // do not report aborts, they are trigerred by shutdown or timeouts
+            return;
+        } catch (remote_read_error& e) {
+            // Log remote read error with lower severity.
+            // If it is really severe it we be handled on the host that sent
+            // it.
+            slogger.warn("Exception when communicating with {}, to read from {}.{}: {}", ep, _schema->ks_name(), _schema->cf_name(), e.what());
         } catch(...) {
             slogger.error("Exception when communicating with {}, to read from {}.{}: {}", ep, _schema->ks_name(), _schema->cf_name(), eptr);
         }
@@ -3560,6 +3574,8 @@ protected:
                 auto&& [result, hit_rate] = result_and_hit_rate;
                 tracing::trace(_trace_state, "read_mutation_data: got response from /{}", ep);
                 return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>(rpc::tuple(make_foreign(::make_lw_shared<reconcilable_result>(std::move(result))), hit_rate.value_or(cache_temperature::invalid())));
+            }).handle_exception_type([] (std::runtime_error& e) {
+                return make_exception_future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>(remote_read_error(e.what()));
             });
         }
     }
@@ -3577,6 +3593,8 @@ protected:
                 auto&& [result, hit_rate] = result_hit_rate;
                 tracing::trace(_trace_state, "read_data: got response from /{}", ep);
                 return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>(rpc::tuple(make_foreign(::make_lw_shared<query::result>(std::move(result))), hit_rate.value_or(cache_temperature::invalid())));
+            }).handle_exception_type([] (std::runtime_error& e) {
+                return make_exception_future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>(remote_read_error(e.what()));
             });
         }
     }
@@ -3594,6 +3612,8 @@ protected:
                 auto&& [d, t, hit_rate] = digest_timestamp_hit_rate;
                 tracing::trace(_trace_state, "read_digest: got response from /{}", ep);
                 return make_ready_future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>>(rpc::tuple(d, t ? t.value() : api::missing_timestamp, hit_rate.value_or(cache_temperature::invalid())));
+            }).handle_exception_type([] (std::runtime_error& e) {
+                return make_exception_future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>>(remote_read_error(e.what()));
             });
         }
     }
