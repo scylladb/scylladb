@@ -204,10 +204,10 @@ future<> gossiping_property_file_snitch::reload_configuration() {
 
                 // spread the word...
                 _my_distributed->invoke_on(0, [] (snitch_ptr& local_snitch_ptr) {
-                    if (local_snitch_ptr->local_gossiper_started()) {
-                        return local_snitch_ptr->gossip_snitch_info({});
+                    auto& gossiper = gms::get_local_gossiper();
+                    if (gossiper.is_enabled()) {
+                        return gossiper.add_local_application_state(local_snitch_ptr->get_app_states());
                     }
-
                     return make_ready_future<>();
                 }).get();
             });
