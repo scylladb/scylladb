@@ -4929,7 +4929,8 @@ SEASTAR_TEST_CASE(test_compaction_strategy_cleanup_method) {
 
         auto get_cleanup_jobs = [&env, &all_files] (sstables::compaction_strategy_type compaction_strategy_type,
                                                     std::map<sstring, sstring> strategy_options = {},
-                                                    const api::timestamp_clock::duration step_base = 0ms) {
+                                                    const api::timestamp_clock::duration step_base = 0ms,
+                                                    unsigned sstable_level = 0) {
             auto builder = schema_builder("tests", "test_compaction_strategy_cleanup_method")
                     .with_column("id", utf8_type, column_kind::partition_key)
                     .with_column("cl", int32_type, column_kind::clustering_key)
@@ -4965,7 +4966,9 @@ SEASTAR_TEST_CASE(test_compaction_strategy_cleanup_method) {
             candidates.reserve(all_files);
             for (auto i = 0; i < all_files; i++) {
                 auto current_step = duration_cast<microseconds>(step_base) * i;
-                candidates.push_back(make_sstable_containing(sst_gen, {make_mutation(i, next_timestamp(current_step))}));
+                auto sst = make_sstable_containing(sst_gen, {make_mutation(i, next_timestamp(current_step))});
+                sst->set_sstable_level(sstable_level);
+                candidates.push_back(std::move(sst));
             }
 
             auto strategy = cf->get_compaction_strategy();
@@ -4977,6 +4980,7 @@ SEASTAR_TEST_CASE(test_compaction_strategy_cleanup_method) {
             testlog.info("Running cleanup test for strategy type {}", compaction_strategy::name(compaction_strategy_type));
             size_t target_job_count = all_files / per_job_files;
             auto [candidates, descriptors] = get_cleanup_jobs(compaction_strategy_type, std::forward<decltype(args)>(args)...);
+            testlog.info("get_cleanup_jobs() returned {} descriptors; expected={}", descriptors.size(), target_job_count);
             BOOST_REQUIRE(descriptors.size() == target_job_count);
             auto generations = boost::copy_range<std::unordered_set<unsigned>>(candidates | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::generation)));
             auto check_desc = [&] (const auto& desc) {
@@ -5002,5 +5006,12 @@ SEASTAR_TEST_CASE(test_compaction_strategy_cleanup_method) {
             {time_window_compaction_strategy_options::COMPACTION_WINDOW_SIZE_KEY, "1"},
         };
         run_cleanup_strategy_test(sstables::compaction_strategy_type::time_window, 1, std::move(twcs_opts), 1h);
+
+        const std::map<sstring, sstring> empty_opts;
+        // LCS: Check that 2 jobs are returned for all similar-sized files in level 0.
+        run_cleanup_strategy_test(sstables::compaction_strategy_type::leveled, 32, empty_opts, 0ms, 0);
+        // LCS: Check that 1 jobs is returned for all non-overlapping files in level 1, as incremental compaction can be employed
+        // to limit memory usage and space requirement.
+        run_cleanup_strategy_test(sstables::compaction_strategy_type::leveled, 64, empty_opts, 0ms, 1);
     });
 }

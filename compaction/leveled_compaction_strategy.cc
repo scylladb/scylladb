@@ -216,4 +216,20 @@ leveled_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input
    return compaction_descriptor();
 }
 
+std::vector<compaction_descriptor>
+leveled_compaction_strategy::get_cleanup_compaction_jobs(table_state& table_s, std::vector<shared_sstable> candidates) const {
+    std::vector<compaction_descriptor> ret;
+
+    auto levels = leveled_manifest::get_levels(candidates);
+
+    ret = size_tiered_compaction_strategy(_stcs_options).get_cleanup_compaction_jobs(table_s, std::move(levels[0]));
+    for (auto level = 1; level < levels.size(); level++) {
+        if (levels[level].empty()) {
+            continue;
+        }
+        ret.push_back(compaction_descriptor(std::move(levels[level]), service::get_local_compaction_priority(), level, _max_sstable_size_in_mb * 1024 * 1024));
+    }
+    return ret;
+}
+
 }
