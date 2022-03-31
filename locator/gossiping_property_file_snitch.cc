@@ -103,25 +103,12 @@ void gossiping_property_file_snitch::periodic_reader_callback() {
 }
 
 future<> gossiping_property_file_snitch::gossiper_starting() {
-    using namespace gms;
-    using namespace service;
     //
     // Note: currently gossiper "main" instance always runs on CPU0 therefore
     // this function will be executed on CPU0 only.
     //
-    auto& g = get_local_gossiper();
-
-    auto local_internal_addr = g.get_local_messaging().listen_address();
-    std::ostringstream ostrm;
-
-    ostrm<<local_internal_addr<<std::flush;
-
-    return gossip_snitch_info({
-        { application_state::INTERNAL_IP, versioned_value::internal_ip(ostrm.str()) },
-    }).then([this] {
         _gossip_started = true;
         return reload_gossiper_state();
-    });
 }
 
 std::list<std::pair<gms::application_state, gms::versioned_value>> gossiping_property_file_snitch::get_app_states() const {

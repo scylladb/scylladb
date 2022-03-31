@@ -346,6 +346,10 @@ void storage_service::prepare_to_join(
     app_states.emplace(gms::application_state::SHARD_COUNT, versioned_value::shard_count(smp::count));
     app_states.emplace(gms::application_state::IGNORE_MSB_BITS, versioned_value::ignore_msb_bits(_db.local().get_config().murmur3_partitioner_ignore_msb_bits()));
 
+    for (auto&& s : snitch->get_app_states()) {
+        app_states.emplace(s.first, std::move(s.second));
+    }
+
     slogger.info("Starting up server gossip");
 
     auto generation_number = db::system_keyspace::increment_and_get_generation().get0();

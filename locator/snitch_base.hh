@@ -93,7 +93,7 @@ public:
      */
     virtual future<> gossiper_starting() {
         _gossip_started = true;
-        return gossip_snitch_info({});
+        return make_ready_future<>();
     }
 
     /**
