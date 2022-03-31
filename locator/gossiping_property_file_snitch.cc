@@ -102,15 +102,6 @@ void gossiping_property_file_snitch::periodic_reader_callback() {
     });
 }
 
-future<> gossiping_property_file_snitch::gossiper_starting() {
-    //
-    // Note: currently gossiper "main" instance always runs on CPU0 therefore
-    // this function will be executed on CPU0 only.
-    //
-        _gossip_started = true;
-        return make_ready_future<>();
-}
-
 std::list<std::pair<gms::application_state, gms::versioned_value>> gossiping_property_file_snitch::get_app_states() const {
     sstring ip = format("{}", gms::get_local_gossiper().get_local_messaging().listen_address());
     return {

@@ -97,16 +97,6 @@ void ec2_multi_region_snitch::set_local_private_addr(const sstring& addr_str) {
     _local_private_address = addr_str;
 }
 
-future<> ec2_multi_region_snitch::gossiper_starting() {
-    //
-    // Note: currently gossiper "main" instance always runs on CPU0 therefore
-    // this function will be executed on CPU0 only.
-    //
-
-    _gossip_started = true;
-    return make_ready_future<>();
-}
-
 std::list<std::pair<gms::application_state, gms::versioned_value>> ec2_multi_region_snitch::get_app_states() const {
     return {
         {gms::application_state::DC, gms::versioned_value::datacenter(_my_dc)},

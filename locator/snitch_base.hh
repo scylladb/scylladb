@@ -88,15 +88,6 @@ public:
         inet_address& target, inet_address& a1, inet_address& a2) = 0;
 
     /**
-     * called after Gossiper instance exists immediately before it starts
-     * gossiping
-     */
-    virtual future<> gossiper_starting() {
-        _gossip_started = true;
-        return make_ready_future<>();
-    }
-
-    /**
      * returns whatever info snitch wants to gossip
      */
     virtual std::list<std::pair<gms::application_state, gms::versioned_value>> get_app_states() const = 0;
@@ -168,10 +159,6 @@ public:
         //noop by default
     }
 
-    bool local_gossiper_started() {
-        return _gossip_started;
-    }
-
     virtual future<> reload_gossiper_state() {
         // noop by default
         return make_ready_future<>();
@@ -202,7 +189,6 @@ protected:
         stopping,
         stopped
     } _state = snitch_state::initializing;
-    bool _gossip_started = false;
 };
 
 struct snitch_ptr {
