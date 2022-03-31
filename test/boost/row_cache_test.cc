@@ -33,7 +33,6 @@
 #include "test/lib/random_utils.hh"
 
 #include <boost/range/algorithm/min_element.hpp>
-#include "readers/from_mutations.hh"
 #include "readers/from_mutations_v2.hh"
 #include "readers/delegating.hh"
 #include "readers/delegating_v2.hh"
@@ -84,7 +83,7 @@ snapshot_source make_decorated_snapshot_source(snapshot_source src, std::functio
 mutation_source make_source_with(mutation m) {
     return mutation_source([m] (schema_ptr s, reader_permit permit, const dht::partition_range&, const query::partition_slice&, const io_priority_class&, tracing::trace_state_ptr, streamed_mutation::forwarding fwd) {
         assert(m.schema() == s);
-        return make_flat_mutation_reader_from_mutations(s, std::move(permit), {m}, std::move(fwd));
+        return make_flat_mutation_reader_from_mutations_v2(s, std::move(permit), {m}, std::move(fwd));
     });
 }
 

@@ -19,7 +19,7 @@
 #include <seastar/util/closeable.hh>
 
 #include <boost/range/algorithm/sort.hpp>
-#include "readers/from_mutations.hh"
+#include "readers/from_mutations_v2.hh"
 #include "readers/empty_v2.hh"
 
 using namespace std::chrono_literals;
@@ -156,7 +156,7 @@ public:
         , _cache(entry_ttl)
         , _mutations(make_mutations(_s, external_make_value))
         , _mutation_source([this] (schema_ptr schema, reader_permit permit, const dht::partition_range& range) {
-            auto rd = make_flat_mutation_reader_from_mutations(schema, std::move(permit), _mutations, range);
+            auto rd = make_flat_mutation_reader_from_mutations_v2(schema, std::move(permit), _mutations, range);
             rd.set_max_buffer_size(max_reader_buffer_size);
             return rd;
         }) {

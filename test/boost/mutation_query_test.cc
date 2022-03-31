@@ -27,7 +27,7 @@
 #include <seastar/core/thread.hh>
 #include "schema_builder.hh"
 #include "partition_slice_builder.hh"
-#include "readers/from_mutations.hh"
+#include "readers/from_mutations_v2.hh"
 
 using namespace std::literals::chrono_literals;
 
@@ -59,7 +59,7 @@ mutation_source make_source(std::vector<mutation> mutations) {
                 assert(m.schema() == s);
             }
         }
-        return make_flat_mutation_reader_from_mutations(s, std::move(permit), mutations, slice, fwd);
+        return make_flat_mutation_reader_from_mutations_v2(s, std::move(permit), mutations, slice, fwd);
     });
 }
 
