@@ -755,12 +755,12 @@ public:
 };
 
 static
-uint64_t consume_all(flat_mutation_reader& rd) {
+uint64_t consume_all(flat_mutation_reader_v2& rd) {
     return rd.consume(counting_consumer()).get0();
 }
 
 static
-uint64_t consume_all_with_next_partition(flat_mutation_reader& rd) {
+uint64_t consume_all_with_next_partition(flat_mutation_reader_v2& rd) {
     uint64_t fragments = 0;
     do {
         fragments += consume_all(rd);
@@ -770,7 +770,7 @@ uint64_t consume_all_with_next_partition(flat_mutation_reader& rd) {
     return fragments;
 }
 
-static void assert_partition_start(flat_mutation_reader& rd) {
+static void assert_partition_start(flat_mutation_reader_v2& rd) {
     auto mfopt = rd().get0();
     assert(mfopt);
     assert(mfopt->is_partition_start());
@@ -795,7 +795,7 @@ public:
 // cf should belong to ks.test
 static test_result scan_rows_with_stride(replica::column_family& cf, clustered_ds& ds, int n_rows, int n_read = 1, int n_skip = 0) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
-    auto rd = cf.make_reader(cf.schema(),
+    auto rd = cf.make_reader_v2(cf.schema(),
         semaphore.make_permit(),
         query::full_partition_range,
         cf.schema()->full_slice(),
@@ -843,7 +843,7 @@ static test_result scan_with_stride_partitions(replica::column_family& cf, int n
     int pk = 0;
     auto pr = n_skip ? dht::partition_range::make_ending_with(dht::partition_range::bound(keys[0], false)) // covering none
                      : query::full_partition_range;
-    auto rd = cf.make_reader(cf.schema(), semaphore.make_permit(), pr, cf.schema()->full_slice());
+    auto rd = cf.make_reader_v2(cf.schema(), semaphore.make_permit(), pr, cf.schema()->full_slice());
     auto close_rd = deferred_close(rd);
 
     metrics_snapshot before;
@@ -866,7 +866,7 @@ static test_result scan_with_stride_partitions(replica::column_family& cf, int n
 
 static test_result slice_rows(replica::column_family& cf, clustered_ds& ds, int offset = 0, int n_read = 1) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
-    auto rd = cf.make_reader(cf.schema(),
+    auto rd = cf.make_reader_v2(cf.schema(),
         semaphore.make_permit(),
         query::full_partition_range,
         cf.schema()->full_slice(),
@@ -886,7 +886,7 @@ static test_result slice_rows(replica::column_family& cf, clustered_ds& ds, int 
     return {before, fragments};
 }
 
-static test_result test_reading_all(flat_mutation_reader& rd) {
+static test_result test_reading_all(flat_mutation_reader_v2& rd) {
     metrics_snapshot before;
     return {before, consume_all(rd)};
 }
@@ -899,7 +899,7 @@ static test_result slice_rows_by_ck(replica::column_family& cf, clustered_ds& ds
             ds.make_ck(*cf.schema(), offset + n_read - 1)))
         .build();
     auto pr = dht::partition_range::make_singular(dht::decorate_key(*cf.schema(), ds.make_pk(*cf.schema())));
-    auto rd = cf.make_reader(cf.schema(), semaphore.make_permit(), pr, slice);
+    auto rd = cf.make_reader_v2(cf.schema(), semaphore.make_permit(), pr, slice);
     auto close_rd = deferred_close(rd);
 
     return test_reading_all(rd);
@@ -913,7 +913,7 @@ static test_result select_spread_rows(replica::column_family& cf, clustered_ds& 
     }
 
     auto slice = sb.build();
-    auto rd = cf.make_reader(cf.schema(),
+    auto rd = cf.make_reader_v2(cf.schema(),
         semaphore.make_permit(),
         query::full_partition_range,
         slice);
@@ -930,7 +930,7 @@ static test_result test_slicing_using_restrictions(replica::column_family& cf, c
         }))
         .build();
     auto pr = dht::partition_range::make_singular(make_pkey(*cf.schema(), 0));
-    auto rd = cf.make_reader(cf.schema(), semaphore.make_permit(), pr, slice, default_priority_class(), nullptr,
+    auto rd = cf.make_reader_v2(cf.schema(), semaphore.make_permit(), pr, slice, default_priority_class(), nullptr,
                              streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
     auto close_rd = deferred_close(rd);
 
@@ -940,7 +940,7 @@ static test_result test_slicing_using_restrictions(replica::column_family& cf, c
 static test_result slice_rows_single_key(replica::column_family& cf, clustered_ds& ds, int offset = 0, int n_read = 1) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
     auto pr = dht::partition_range::make_singular(make_pkey(*cf.schema(), 0));
-    auto rd = cf.make_reader(cf.schema(), semaphore.make_permit(), pr, cf.schema()->full_slice(), default_priority_class(), nullptr, streamed_mutation::forwarding::yes, mutation_reader::forwarding::no);
+    auto rd = cf.make_reader_v2(cf.schema(), semaphore.make_permit(), pr, cf.schema()->full_slice(), default_priority_class(), nullptr, streamed_mutation::forwarding::yes, mutation_reader::forwarding::no);
     auto close_rd = deferred_close(rd);
 
     metrics_snapshot before;
@@ -961,7 +961,7 @@ static test_result slice_partitions(replica::column_family& cf, const std::vecto
         dht::partition_range::bound(keys[std::min<size_t>(keys.size(), offset + n_read) - 1], true)
     );
 
-    auto rd = cf.make_reader(cf.schema(), semaphore.make_permit(), pr, cf.schema()->full_slice());
+    auto rd = cf.make_reader_v2(cf.schema(), semaphore.make_permit(), pr, cf.schema()->full_slice());
     auto close_rd = deferred_close(rd);
     metrics_snapshot before;
 
@@ -1125,7 +1125,7 @@ static test_result test_forwarding_with_restriction(replica::column_family& cf, 
         .build();
 
     auto pr = single_partition ? dht::partition_range::make_singular(make_pkey(*cf.schema(), 0)) : query::full_partition_range;
-    auto rd = cf.make_reader(cf.schema(),
+    auto rd = cf.make_reader_v2(cf.schema(),
         semaphore.make_permit(),
         pr,
         slice,
