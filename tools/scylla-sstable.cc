@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <boost/algorithm/string.hpp>
 #include <boost/algorithm/string/join.hpp>
 #include <filesystem>
 #include <fmt/chrono.h>
@@ -2058,6 +2059,25 @@ NOTE: currently you have to prefix dir local paths with `./`.
 
 # Schema
 
+To be able to interpret the sstables, their schema is required. There
+are multiple ways to obtain the schema:
+* system schema
+* schema file
+
+## System schema
+
+If the examined sstables belong to a system table, whose schema is
+hardcoded in scylla (and thus known), it is enough to provide just
+the name of said table in the `keyspace.table` notation, via the
+`--system-schema` command line option. The table has to be from one of
+the following system keyspaces:
+* system
+* system_schema
+* system_distributed
+* system_distributed_everywhere
+
+## Schema file
+
 The schema to read the sstables is read from a schema.cql file. This
 should contain the keyspace and table definitions, any UDTs used and
 dropped columns in the form of relevant CQL statements. The keyspace
@@ -2111,6 +2131,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
 
     app.add_options()
         ("schema-file", bpo::value<sstring>()->default_value("schema.cql"), "file containing the schema description")
+        ("system-schema", bpo::value<sstring>(), "table has to be a system table, name has to be in `keyspace.table` notation")
         ;
 
     app.add_positional_options({
@@ -2136,10 +2157,19 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
             const auto& operation = *found_op;
 
             schema_ptr schema;
+            std::string schema_source_opt;
             try {
-                schema = tools::load_one_schema_from_file(std::filesystem::path(app_config["schema-file"].as<sstring>())).get();
+                if (auto it = app_config.find("system-schema"); it != app_config.end()) {
+                    schema_source_opt = "system-schema";
+                    std::vector<sstring> comps;
+                    boost::split(comps, app_config["system-schema"].as<sstring>(), boost::is_any_of("."));
+                    schema = tools::load_system_schema(comps.at(0), comps.at(1));
+                } else {
+                    schema_source_opt = "schema-file";
+                    schema = tools::load_one_schema_from_file(std::filesystem::path(app_config["schema-file"].as<sstring>())).get();
+                }
             } catch (...) {
-                std::cerr << "error: could not load schema file '" << app_config["schema-file"].as<sstring>() << "': " << std::current_exception() << std::endl;
+                fmt::print(std::cerr, "error: could not load {} '{}': {}", schema_source_opt, app_config[schema_source_opt].as<sstring>(), std::current_exception());
                 return 1;
             }
 
