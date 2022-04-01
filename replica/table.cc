@@ -107,7 +107,7 @@ void table::refresh_compound_sstable_set() {
 future<table::const_mutation_partition_ptr>
 table::find_partition(schema_ptr s, reader_permit permit, const dht::decorated_key& key) const {
     return do_with(dht::partition_range::make_singular(key), [s = std::move(s), permit = std::move(permit), this] (auto& range) mutable {
-        return with_closeable(this->make_reader(std::move(s), std::move(permit), range), [] (flat_mutation_reader& reader) {
+        return with_closeable(this->make_reader_v2(std::move(s), std::move(permit), range), [] (flat_mutation_reader_v2& reader) {
             return read_mutation_from_flat_mutation_reader(reader).then([] (mutation_opt&& mo) -> std::unique_ptr<const mutation_partition> {
                 if (!mo) {
                     return {};
@@ -213,18 +213,6 @@ table::make_reader_v2(schema_ptr s,
     return rd;
 }
 
-flat_mutation_reader
-table::make_reader(schema_ptr s,
-                           reader_permit permit,
-                           const dht::partition_range& range,
-                           const query::partition_slice& slice,
-                           const io_priority_class& pc,
-                           tracing::trace_state_ptr trace_state,
-                           streamed_mutation::forwarding fwd,
-                           mutation_reader::forwarding fwd_mr) const {
-    return downgrade_to_v1(make_reader_v2(std::move(s), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr));
-}
-
 sstables::shared_sstable table::make_streaming_sstable_for_write(std::optional<sstring> subdir) {
     sstring dir = _config.datadir;
     if (subdir) {
@@ -311,7 +299,7 @@ api::timestamp_type table::min_memtable_timestamp() const {
 future<bool>
 table::for_all_partitions_slow(schema_ptr s, reader_permit permit, std::function<bool (const dht::decorated_key&, const mutation_partition&)> func) const {
     struct iteration_state {
-        flat_mutation_reader reader;
+        flat_mutation_reader_v2 reader;
         std::function<bool (const dht::decorated_key&, const mutation_partition&)> func;
         bool ok = true;
         bool empty = false;
@@ -319,7 +307,7 @@ table::for_all_partitions_slow(schema_ptr s, reader_permit permit, std::function
         bool done() const { return !ok || empty; }
         iteration_state(schema_ptr s, reader_permit permit, const column_family& cf,
                 std::function<bool (const dht::decorated_key&, const mutation_partition&)>&& func)
-            : reader(cf.make_reader(std::move(s), std::move(permit)))
+            : reader(cf.make_reader_v2(std::move(s), std::move(permit)))
             , func(std::move(func))
         { }
     };
@@ -2208,8 +2196,8 @@ table::disable_auto_compaction() {
     });
 }
 
-flat_mutation_reader
-table::make_reader_excluding_sstables(schema_ptr s,
+flat_mutation_reader_v2
+table::make_reader_v2_excluding_sstables(schema_ptr s,
         reader_permit permit,
         std::vector<sstables::shared_sstable>& excluded,
         const dht::partition_range& range,
@@ -2237,7 +2225,7 @@ table::make_reader_excluding_sstables(schema_ptr s,
     });
 
     readers.emplace_back(make_sstable_reader(s, permit, std::move(effective_sstables), range, slice, pc, std::move(trace_state), fwd, fwd_mr));
-    return downgrade_to_v1(make_combined_reader(s, std::move(permit), std::move(readers), fwd, fwd_mr));
+    return make_combined_reader(s, std::move(permit), std::move(readers), fwd, fwd_mr);
 }
 
 future<> table::move_sstables_from_staging(std::vector<sstables::shared_sstable> sstables) {
@@ -2364,7 +2352,7 @@ table::as_mutation_source_excluding(std::vector<sstables::shared_sstable>& ssts)
                                    tracing::trace_state_ptr trace_state,
                                    streamed_mutation::forwarding fwd,
                                    mutation_reader::forwarding fwd_mr) {
-        return this->make_reader_excluding_sstables(std::move(s), std::move(permit), ssts, range, slice, pc, std::move(trace_state), fwd, fwd_mr);
+        return this->make_reader_v2_excluding_sstables(std::move(s), std::move(permit), ssts, range, slice, pc, std::move(trace_state), fwd, fwd_mr);
     });
 }
 

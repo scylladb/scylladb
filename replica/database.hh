@@ -674,15 +674,7 @@ public:
             tracing::trace_state_ptr trace_state = nullptr,
             streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
             mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes) const;
-    flat_mutation_reader make_reader(schema_ptr schema,
-            reader_permit permit,
-            const dht::partition_range& range,
-            const query::partition_slice& slice,
-            const io_priority_class& pc = default_priority_class(),
-            tracing::trace_state_ptr trace_state = nullptr,
-            streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
-            mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes) const;
-    flat_mutation_reader make_reader_excluding_sstables(schema_ptr schema,
+    flat_mutation_reader_v2 make_reader_v2_excluding_sstables(schema_ptr schema,
             reader_permit permit,
             std::vector<sstables::shared_sstable>& sst,
             const dht::partition_range& range,
@@ -692,10 +684,6 @@ public:
             streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
             mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes) const;
 
-    flat_mutation_reader make_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range = query::full_partition_range) const {
-        auto& full_slice = schema->full_slice();
-        return make_reader(std::move(schema), std::move(permit), range, full_slice);
-    }
     flat_mutation_reader_v2 make_reader_v2(schema_ptr schema, reader_permit permit, const dht::partition_range& range = query::full_partition_range) const {
         auto& full_slice = schema->full_slice();
         return make_reader_v2(std::move(schema), std::move(permit), range, full_slice);
