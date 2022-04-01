@@ -83,6 +83,54 @@ flat_mutation_reader_v2 make_delegating_reader_v2(flat_mutation_reader_v2& r) {
     return make_flat_mutation_reader_v2<delegating_reader_v2>(r);
 }
 
+namespace {
+class partition_slicer {
+public:
+    using fragment_consumer = std::function<void(mutation_fragment_v2)>;
+private:
+    schema_ptr _schema;
+    reader_permit _permit;
+    clustering_ranges_walker _ranges_walker;
+    fragment_consumer _consume;
+    clustering_ranges_walker::progress _p{.contained = true};
+public:
+    partition_slicer(schema_ptr schema, reader_permit permit, const query::clustering_row_ranges& row_ranges, fragment_consumer consume)
+        : _schema(schema)
+        , _permit(permit)
+        , _ranges_walker(*schema, row_ranges, false)
+        , _consume(std::move(consume)) { }
+
+    void apply(mutation_fragment_v2 mf) {
+        switch (mf.mutation_fragment_kind()) {
+            case mutation_fragment_v2::kind::partition_start:
+                // can't happen
+                assert(false);
+                break;
+            case mutation_fragment_v2::kind::static_row:
+                break;
+            case mutation_fragment_v2::kind::clustering_row:
+                _p = _ranges_walker.advance_to(mf.position(), _ranges_walker.current_tombstone());
+                break;
+            case mutation_fragment_v2::kind::range_tombstone_change:
+                _p = _ranges_walker.advance_to(mf.position(), mf.as_range_tombstone_change().tombstone());
+                _p.contained = false;
+                break;
+            case mutation_fragment_v2::kind::partition_end:
+                _p = _ranges_walker.advance_to(mf.position(), _ranges_walker.current_tombstone());
+                _p.contained = true;
+                break;
+        }
+
+        for (auto&& rt : _p.rts) {
+            _consume(mutation_fragment_v2(*_schema, _permit, std::move(rt)));
+        }
+        if (_p.contained) {
+            _consume(std::move(mf));
+        }
+    }
+};
+} //anon namespace
+
 class empty_flat_reader final : public flat_mutation_reader::impl {
 public:
     empty_flat_reader(schema_ptr s, reader_permit permit) : impl(std::move(s), std::move(permit)) { _end_of_stream = true; }
@@ -287,18 +335,17 @@ flat_mutation_reader_v2 make_forwardable(flat_mutation_reader_v2 m) {
     return make_flat_mutation_reader_v2<reader>(std::move(m));
 }
 
-flat_mutation_reader make_slicing_filtering_reader(flat_mutation_reader rd, const dht::partition_range& pr, const query::partition_slice& slice) {
-    class reader : public flat_mutation_reader::impl {
-        flat_mutation_reader _rd;
+flat_mutation_reader_v2 make_slicing_filtering_reader(flat_mutation_reader_v2 rd, const dht::partition_range& pr, const query::partition_slice& slice) {
+    class reader : public flat_mutation_reader_v2::impl {
+        flat_mutation_reader_v2 _rd;
         const dht::partition_range* _pr;
         const query::partition_slice* _slice;
         dht::ring_position_comparator _cmp;
-        std::optional<clustering_ranges_walker> _ranges_walker;
-        std::optional<range_tombstone_splitter> _splitter;
+        std::optional<partition_slicer> _partition_slicer;
 
     public:
-        reader(flat_mutation_reader rd, const dht::partition_range& pr, const query::partition_slice& slice)
-            : flat_mutation_reader::impl(rd.schema(), rd.permit())
+        reader(flat_mutation_reader_v2 rd, const dht::partition_range& pr, const query::partition_slice& slice)
+            : flat_mutation_reader_v2::impl(rd.schema(), rd.permit())
             , _rd(std::move(rd))
             , _pr(&pr)
             , _slice(&slice)
@@ -306,49 +353,30 @@ flat_mutation_reader make_slicing_filtering_reader(flat_mutation_reader rd, cons
         }
 
         virtual future<> fill_buffer() override {
-            const auto consume_fn = [this] (mutation_fragment mf) {
-                push_mutation_fragment(std::move(mf));
-            };
-
             while (!is_buffer_full() && !is_end_of_stream()) {
                 co_await _rd.fill_buffer();
                 while (!_rd.is_buffer_empty()) {
                     auto mf = _rd.pop_mutation_fragment();
                     switch (mf.mutation_fragment_kind()) {
-                    case mutation_fragment::kind::partition_start: {
-                        auto& dk = mf.as_partition_start().key();
-                        if (!_pr->contains(dk, _cmp)) {
-                            co_return co_await _rd.next_partition();
-                        } else {
-                            _ranges_walker.emplace(*_schema, _slice->row_ranges(*_schema, dk.key()), false);
-                            _splitter.emplace(*_schema, _permit, *_ranges_walker);
+                        case mutation_fragment_v2::kind::partition_start: {
+                            auto& dk = mf.as_partition_start().key();
+                            if (!_pr->contains(dk, _cmp)) {
+                                co_return co_await _rd.next_partition();
+                            }
+                            _partition_slicer.emplace(_schema, _permit, _slice->row_ranges(*_schema, dk.key()),
+                                                      [this] (mutation_fragment_v2 mf) {
+                                                          push_mutation_fragment(std::move(mf));
+                                                      });
+                            push_mutation_fragment(std::move(mf));
+                            break;
                         }
-                        // fall-through
-                    }
 
-                    case mutation_fragment::kind::static_row:
-                        consume_fn(std::move(mf));
-                        break;
-
-                    case mutation_fragment::kind::partition_end:
-                        _splitter->flush(position_in_partition::after_all_clustered_rows(), consume_fn);
-                        consume_fn(std::move(mf));
-                        break;
-
-                    case mutation_fragment::kind::clustering_row:
-                        _splitter->flush(mf.position(), consume_fn);
-                        if (_ranges_walker->advance_to(mf.position())) {
-                            consume_fn(std::move(mf));
-                        }
-                        break;
-
-                    case mutation_fragment::kind::range_tombstone:
-                        auto&& rt = mf.as_range_tombstone();
-                        _splitter->consume(rt, consume_fn);
-                        break;
+                        default:
+                            _partition_slicer->apply(std::move(mf));
+                            break;
                     }
                 }
-                
+
                 _end_of_stream = _rd.is_end_of_stream();
                 co_return;
             }
@@ -381,7 +409,7 @@ flat_mutation_reader make_slicing_filtering_reader(flat_mutation_reader rd, cons
         }
     };
 
-    return make_flat_mutation_reader<reader>(std::move(rd), pr, slice);
+    return make_flat_mutation_reader_v2<reader>(std::move(rd), pr, slice);
 }
 
 std::vector<mutation> slice_mutations(schema_ptr schema, std::vector<mutation> ms, const query::partition_slice& slice) {
@@ -1123,38 +1151,23 @@ make_flat_mutation_reader_from_fragments(schema_ptr schema, reader_permit permit
     }
     auto slice = reversed ? query::legacy_reverse_slice_to_native_reverse_slice(*schema, query_slice) : query_slice;
 
-    std::optional<clustering_ranges_walker> ranges_walker;
     std::deque<mutation_fragment_v2> filtered;
-    std::optional<range_tombstone_change> activa_tombstone;
-    for (auto&& mf : fragments) {
-        clustering_ranges_walker::progress p{.contained = true};
-
-        switch (mf.mutation_fragment_kind()) {
-            case mutation_fragment_v2::kind::partition_start:
-                ranges_walker.emplace(*schema, slice.row_ranges(*schema, mf.as_partition_start().key().key()), false);
-                [[fallthrough]];
-            case mutation_fragment_v2::kind::static_row:
-                break;
-            case mutation_fragment_v2::kind::clustering_row:
-                p = ranges_walker->advance_to(mf.position(), ranges_walker->current_tombstone());
-                break;
-            case mutation_fragment_v2::kind::range_tombstone_change:
-                p = ranges_walker->advance_to(mf.position(), mf.as_range_tombstone_change().tombstone());
-                p.contained = false;
-                break;
-            case mutation_fragment_v2::kind::partition_end:
-                p = ranges_walker->advance_to(mf.position(), ranges_walker->current_tombstone());
-                p.contained = true;
-                break;
-        }
-
-        for (auto&& rt : p.rts) {
-            filtered.emplace_back(*schema, permit, std::move(rt));
-        }
-        if (p.contained) {
-            filtered.push_back(std::move(mf));
-        }
+    for (auto it = fragments.begin(); it != fragments.end(); ) {
+        auto&& mf = *it++;
+        auto kind = mf.mutation_fragment_kind();
+        assert(kind == mutation_fragment_v2::kind::partition_start);
+        partition_slicer slicer(schema, permit, slice.row_ranges(*schema, mf.as_partition_start().key().key()),
+                                [&filtered] (mutation_fragment_v2 mf) {
+                                    filtered.push_back(std::move(mf));
+                                });
+        filtered.push_back(std::move(mf));
+        do {
+            auto&& mf = *it++;
+            kind = mf.mutation_fragment_kind();
+            slicer.apply(std::move(mf));
+        } while (kind != mutation_fragment_v2::kind::partition_end);
     }
+
     return make_flat_mutation_reader_from_fragments(std::move(schema), permit, std::move(filtered), pr);
 }
 

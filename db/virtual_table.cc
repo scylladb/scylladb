@@ -148,7 +148,7 @@ mutation_source streaming_virtual_table::as_mutation_source() {
             }
         });
 
-        auto rd = upgrade_to_v2(make_slicing_filtering_reader(downgrade_to_v1(std::move(reader_and_handle.first)), pr, slice));
+        auto rd = make_slicing_filtering_reader(std::move(reader_and_handle.first), pr, slice);
 
         if (!_shard_aware) {
             rd = make_filtering_reader(std::move(rd), [this] (const dht::decorated_key& dk) -> bool {
