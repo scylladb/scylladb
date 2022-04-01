@@ -167,7 +167,7 @@ static void test_database(void (*run_tests)(populate_fn_ex, bool)) {
                     tracing::trace_state_ptr trace_state,
                     streamed_mutation::forwarding fwd,
                     mutation_reader::forwarding fwd_mr) {
-                return cf.make_reader(s, std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
+                return cf.make_reader_v2(s, std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
             });
         }, true);
     }).get();
