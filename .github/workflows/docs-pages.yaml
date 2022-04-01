@@ -1,4 +1,6 @@
 name: "Docs / Publish"
+# For more information,
+# see https://sphinx-theme.scylladb.com/stable/deployment/production.html#available-workflows
 
 on:
   push:
@@ -13,16 +15,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
           persist-credentials: false
           fetch-depth: 0
       - name: Set up Python
-        uses: actions/setup-python@v2.3.2
+        uses: actions/setup-python@v3
         with:
           python-version: 3.7
-      - name: Set up Poetry
-        run: curl -sSL https://install.python-poetry.org | python -
+      - name: Set up env
+        run: make -C docs setupenv
       - name: Build docs
         run: make -C docs multiversion
       - name: Deploy docs to GitHub Pages

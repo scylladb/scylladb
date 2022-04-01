@@ -419,4 +419,4 @@ $ eu-unstrip -n --core <coredump> | awk '/scylla$/ { s=$2; sub(/@.*$/, "", s); p
 
 ### Core dump debugging
 
-See [debugging.md](debugging.md).
+See [debugging.md](docs/guides/debugging.md).
