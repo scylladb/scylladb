@@ -21,6 +21,7 @@
 #include "db/cql_type_parser.hh"
 #include "db/config.hh"
 #include "db/extensions.hh"
+#include "db/system_distributed_keyspace.hh"
 #include "db/schema_tables.hh"
 #include "db/system_keyspace.hh"
 #include "replica/database.hh"
@@ -316,6 +317,29 @@ future<schema_ptr> load_one_schema_from_file(std::filesystem::path path) {
         }
         return std::move(schemas.front());
     });
+}
+
+schema_ptr load_system_schema(std::string_view keyspace, std::string_view table) {
+    db::config cfg;
+    cfg.experimental.set(true);
+    cfg.experimental_features.set(db::experimental_features_t::all());
+    const std::unordered_map<std::string_view, std::vector<schema_ptr>> schemas{
+        {db::schema_tables::NAME, db::schema_tables::all_tables(db::schema_features::full())},
+        {db::system_keyspace::NAME, db::system_keyspace::all_tables(cfg)},
+        {db::system_distributed_keyspace::NAME, db::system_distributed_keyspace::all_distributed_tables()},
+        {db::system_distributed_keyspace::NAME_EVERYWHERE, db::system_distributed_keyspace::all_everywhere_tables()},
+    };
+    auto ks_it = schemas.find(keyspace);
+    if (ks_it == schemas.end()) {
+        throw std::invalid_argument(fmt::format("unknown system keyspace: {}", keyspace));
+    }
+    auto tb_it = boost::find_if(ks_it->second, [&] (const schema_ptr& s) {
+        return s->cf_name() == table;
+    });
+    if (tb_it == ks_it->second.end()) {
+        throw std::invalid_argument(fmt::format("unknown table {} in system keyspace: {}", table, keyspace));
+    }
+    return *tb_it;
 }
 
 } // namespace tools
