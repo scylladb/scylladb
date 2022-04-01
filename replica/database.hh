@@ -696,6 +696,10 @@ public:
         auto& full_slice = schema->full_slice();
         return make_reader(std::move(schema), std::move(permit), range, full_slice);
     }
+    flat_mutation_reader_v2 make_reader_v2(schema_ptr schema, reader_permit permit, const dht::partition_range& range = query::full_partition_range) const {
+        auto& full_slice = schema->full_slice();
+        return make_reader_v2(std::move(schema), std::move(permit), range, full_slice);
+    }
 
     // The streaming mutation reader differs from the regular mutation reader in that:
     //  - Reflects all writes accepted by replica prior to creation of the
