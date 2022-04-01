@@ -2033,11 +2033,31 @@ R"(scylla-sstable - a multifunctional command-line tool to examine the content o
 Usage: scylla sstable {{operation}} [--option1] [--option2] ... {{sstable_path1}} [{{sstable_path2}}] ...
 
 Allows examining the contents of sstables with various built-in tools
-(operations). The sstables to-be-examined are passed as positional
-command line arguments. Sstables will be processed by the selected
-operation one-by-one. Any number of sstables can be passed but mind the
-open file limits. Always pass the path to the data component of the
-sstables (*-Data.db) even if you want to examine another component.
+(operations).
+
+# Operations
+
+The operation to execute is the mandatory, first positional argument.
+Operations write their output to stdout, or file(s). Logs are written to
+stderr, with a logger called {}.
+
+The supported operations are:
+{}
+
+For more details on an operation, run: scylla sstable {{operation}} --help
+
+# Sstables
+
+The sstables to-be-examined are passed as positional command line
+arguments. Sstables will be processed by the selected operation
+one-by-one. Any number of sstables can be passed but mind the open file
+limits and the memory consumption. Always pass the path to the data
+component of the sstables (*-Data.db) even if you want to examine
+another component.
+NOTE: currently you have to prefix dir local paths with `./`.
+
+# Schema
+
 The schema to read the sstables is read from a schema.cql file. This
 should contain the keyspace and table definitions, any UDTs used and
 dropped columns in the form of relevant CQL statements. The keyspace
@@ -2060,27 +2080,21 @@ In general you should be able to use the output of `DESCRIBE TABLE` or
 the relevant parts of `DESCRIBE KEYSPACE` of `cqlsh` as well as the
 `schema.cql` produced by snapshots.
 
-Operations write their output to stdout, or file(s). The tool logs to
-stderr, with a logger called {}.
+# Examples
 
-The supported operations are:
-{}
-
-For more details on an operation, run: scylla sstable {{operation}} --help
-
-Examples:
-
-# dump the content of the sstable
+Dump the content of the sstable:
 $ scylla sstable dump-data /path/to/md-123456-big-Data.db
 
-# dump the content of the two sstable(s) as a unified stream
+Dump the content of the two sstable(s) as a unified stream:
 $ scylla sstable dump-data --merge /path/to/md-123456-big-Data.db /path/to/md-123457-big-Data.db
 
-# generate a joint histogram for the specified partition
+Generate a joint histogram for the specified partition:
 $ scylla sstable writetime-histogram --partition={{myhexpartitionkey}} /path/to/md-123456-big-Data.db
 
-# validate the specified sstables
+Validate the specified sstables:
 $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-Data.db
+
+
 )";
 
     if (found_op) {
