@@ -203,6 +203,10 @@ public:
         return _supports_raft_cluster_mgmt;
     }
 
+    bool cluster_uses_raft_cluster_mgmt() const {
+        return static_cast<bool>(_uses_raft_cluster_mgmt);
+    }
+
     static std::set<sstring> to_feature_set(sstring features_string);
     // Persist enabled feature in the `system.scylla_local` table under the "enabled_features" key.
     // The key itself is maintained as an `unordered_set<string>` and serialized via `to_string`
