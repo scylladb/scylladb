@@ -71,6 +71,11 @@ public:
     // FIXME: respect preemption
     template<RangeTombstoneChangeConsumer C>
     void flush(position_in_partition_view upper_bound, C consumer) {
+        if (_range_tombstones.empty()) {
+            _lower_bound = upper_bound;
+            return;
+        }
+
         position_in_partition::less_compare less(_schema);
         std::optional<range_tombstone> prev;
 
