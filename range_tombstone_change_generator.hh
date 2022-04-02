@@ -68,9 +68,14 @@ public:
     // for accumulated range tombstones.
     // After this, only range_tombstones with positions >= upper_bound may be added,
     // which guarantees that they won't affect the output of this flush.
+    //
+    // If upper_bound == position_in_partition::after_all_clustered_rows(),
+    // emits all remaining range_tombstone_changes.
+    // No range_tombstones may be added after this.
+    //
     // FIXME: respect preemption
     template<RangeTombstoneChangeConsumer C>
-    void flush(position_in_partition_view upper_bound, C consumer) {
+    void flush(const position_in_partition_view upper_bound, C consumer) {
         if (_range_tombstones.empty()) {
             _lower_bound = upper_bound;
             return;
@@ -78,8 +83,9 @@ public:
 
         position_in_partition::tri_compare cmp(_schema);
         std::optional<range_tombstone> prev;
+        bool flush_all = cmp(upper_bound, position_in_partition::after_all_clustered_rows()) == 0;
 
-        while (!_range_tombstones.empty() && (cmp(_range_tombstones.begin()->end_position(), upper_bound) < 0)) {
+        while (!_range_tombstones.empty() && (flush_all || (cmp(_range_tombstones.begin()->end_position(), upper_bound) < 0))) {
             auto rt = _range_tombstones.pop(_range_tombstones.begin());
 
             if (prev && (cmp(prev->end_position(), rt.position()) < 0)) { // [1]
