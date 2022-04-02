@@ -8,6 +8,7 @@
 
 #include <boost/range/algorithm/heap_algorithm.hpp>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/util/closeable.hh>
 
 #include "dht/sharder.hh"
@@ -845,12 +846,12 @@ future<> shard_reader_v2::do_fill_buffer() {
         });
     }
 
-    return fill_buf_fut.then([this] (remote_fill_buffer_result_v2 res) mutable {
-        _end_of_stream = res.end_of_stream;
-        for (const auto& mf : *res.buffer) {
-            push_mutation_fragment(mutation_fragment_v2(*_schema, _permit, mf));
-        }
-    });
+    auto res = co_await(std::move(fill_buf_fut));
+    _end_of_stream = res.end_of_stream;
+    for (const auto& mf : *res.buffer) {
+        push_mutation_fragment(mutation_fragment_v2(*_schema, _permit, mf));
+        co_await coroutine::maybe_yield();
+    }
 }
 
 future<> shard_reader_v2::fill_buffer() {
