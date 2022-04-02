@@ -76,19 +76,19 @@ public:
             return;
         }
 
-        position_in_partition::less_compare less(_schema);
+        position_in_partition::tri_compare cmp(_schema);
         std::optional<range_tombstone> prev;
 
-        while (!_range_tombstones.empty() && less(_range_tombstones.begin()->end_position(), upper_bound)) {
+        while (!_range_tombstones.empty() && (cmp(_range_tombstones.begin()->end_position(), upper_bound) < 0)) {
             auto rt = _range_tombstones.pop(_range_tombstones.begin());
 
-            if (prev && less(prev->end_position(), rt.position())) { // [1]
+            if (prev && (cmp(prev->end_position(), rt.position()) < 0)) { // [1]
                 // previous range tombstone not adjacent, emit gap.
                 consumer(range_tombstone_change(prev->end_position(), tombstone()));
             }
 
             // Check if start of rt was already emitted, emit if not.
-            if (!less(rt.position(), _lower_bound)) {
+            if (cmp(rt.position(), _lower_bound) >= 0) {
                 consumer(range_tombstone_change(rt.position(), rt.tomb));
             }
 
@@ -100,15 +100,15 @@ public:
         // It cannot get adjacent later because prev->end_position() < upper_bound,
         // so nothing == prev->end_position() can be added after this invocation.
         if (prev && (_range_tombstones.empty()
-                     || less(prev->end_position(), _range_tombstones.begin()->position()))) {
+                     || (cmp(prev->end_position(), _range_tombstones.begin()->position()) < 0))) {
             consumer(range_tombstone_change(prev->end_position(), tombstone())); // [2]
         }
 
         // Emit the fragment for start bound of a range_tombstone which is overlapping with upper_bound,
         // unless no such fragment or already emitted.
         if (!_range_tombstones.empty()
-            && less(_range_tombstones.begin()->position(), upper_bound)
-            && (!less(_range_tombstones.begin()->position(), _lower_bound))) {
+            && (cmp(_range_tombstones.begin()->position(), upper_bound) < 0)
+            && (cmp(_range_tombstones.begin()->position(), _lower_bound) >= 0)) {
             consumer(range_tombstone_change(
                     _range_tombstones.begin()->position(), _range_tombstones.begin()->tombstone().tomb));
         }
