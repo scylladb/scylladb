@@ -2045,6 +2045,7 @@ private:
     std::uniform_int_distribution<size_t> _ck_index_dist{0, n_blobs - 1};
     std::uniform_int_distribution<int> _bool_dist{0, 1};
     std::uniform_int_distribution<int> _not_dummy_dist{0, 19};
+    std::uniform_int_distribution<int> _range_tombstone_dist{0, 29};
     std::uniform_int_distribution<api::timestamp_type> _timestamp_dist{::api::min_timestamp, ::api::min_timestamp + 2};
 
     template <typename Generator>
@@ -2111,10 +2112,13 @@ public:
         return clustering_key::from_exploded(*_schema, { random_blob(), random_blob() });
     }
 
-    clustering_key_prefix make_random_prefix() {
+    clustering_key_prefix make_random_prefix(std::optional<size_t> max_components_opt = std::nullopt) {
         std::vector<bytes> components = { random_blob() };
-        if (_bool_dist(_gen)) {
-            components.push_back(random_blob());
+        auto max_components = max_components_opt.value_or(_schema->clustering_key_size());
+        for (size_t i = 1; i < max_components; i++) {
+            if (_bool_dist(_gen)) {
+                components.push_back(random_blob());
+            }
         }
         return clustering_key_prefix::from_exploded(*_schema, std::move(components));
     }
@@ -2169,13 +2173,46 @@ public:
     }
 
     range_tombstone make_random_range_tombstone() {
-        auto start = make_random_prefix();
-        auto end = make_random_prefix();
-        clustering_key_prefix::less_compare less(*_schema);
-        if (less(end, start)) {
-            std::swap(start, end);
+        auto t = random_tombstone(timestamp_level::range_tombstone);
+        switch (_range_tombstone_dist(_gen)) {
+        case 0: {
+            // singular prefix
+            auto prefix = make_random_prefix(_schema->clustering_key_size()-1);    // make sure the prefix is partial
+            auto start = bound_view(prefix, bound_kind::incl_start);
+            auto end = bound_view(prefix, bound_kind::incl_end);
+            return range_tombstone(std::move(start), std::move(end), std::move(t));
         }
-        return range_tombstone(std::move(start), std::move(end), random_tombstone(timestamp_level::range_tombstone));
+        case 1: {
+            // unbound start
+            auto prefix = make_random_prefix();
+            auto start = bound_view::bottom();
+            auto end = bound_view(prefix, _bool_dist(_gen) ? bound_kind::incl_end : bound_kind::excl_end);
+            return range_tombstone(std::move(start), std::move(end), std::move(t));
+        }
+        case 2: {
+            // unbound end
+            auto prefix = make_random_prefix();
+            auto start = bound_view(prefix, _bool_dist(_gen) ? bound_kind::incl_start : bound_kind::excl_start);
+            auto end = bound_view::top();
+            return range_tombstone(std::move(start), std::move(end), std::move(t));
+        }
+        default:
+            // fully bounded
+            auto start_prefix = make_random_prefix();
+            auto end_prefix = make_random_prefix();
+            clustering_key_prefix::tri_compare cmp(*_schema);
+            auto d = cmp(end_prefix, start_prefix);
+            while (d == 0) {
+                end_prefix = make_random_prefix();
+                d = cmp(end_prefix, start_prefix);
+            }
+            if (d < 0) {
+                std::swap(end_prefix, start_prefix);
+            }
+            auto start = bound_view(std::move(start_prefix), _bool_dist(_gen) ? bound_kind::incl_start : bound_kind::excl_start);
+            auto end = bound_view(std::move(end_prefix), _bool_dist(_gen) ? bound_kind::incl_end : bound_kind::excl_end);
+            return range_tombstone(std::move(start), std::move(end), std::move(t));
+        }
     }
 
     mutation operator()() {
