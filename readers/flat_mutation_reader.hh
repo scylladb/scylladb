@@ -139,6 +139,9 @@ public:
             _buffer.erase(_buffer.begin(), _buffer.end());
             _buffer_size = 0;
         }
+        void reserve_additional(size_t n) {
+            _buffer.reserve(_buffer.size() + n);
+        }
         void forward_buffer_to(const position_in_partition& pos);
         void clear_buffer_to_next_partition();
         template<typename Source>
