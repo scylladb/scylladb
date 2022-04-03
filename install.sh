@@ -520,8 +520,13 @@ relocate_python3 "$rprefix"/scyllatop tools/scyllatop/scyllatop.py
 if $supervisor; then
     install -d -m755 `supervisor_dir $retc`
     for service in scylla-server scylla-jmx scylla-node-exporter; do
+        if [ "$service" = "scylla-server" ]; then
+            program="scylla"
+        else
+            program=$service
+        fi
         cat << EOS > `supervisor_conf $retc $service`
-[program:$service]
+[program:$program]
 directory=$rprefix
 command=/bin/bash -c './supervisor/$service.sh'
 EOS
