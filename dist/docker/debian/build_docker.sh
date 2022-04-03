@@ -82,7 +82,7 @@ run bash -ec "echo 'debconf debconf/frontend select Noninteractive' | debconf-se
 run bash -ec "rm -rf /etc/rsyslog.conf"
 run apt-get -y install hostname supervisor openssh-server openssh-client openjdk-11-jre-headless python python-yaml curl rsyslog locales sudo
 run locale-gen en_US.UTF-8
-run update-locale LANG=en_US.UTF-8 LANGUAGE=en_US:en LC_ALL=en_US.UTF_8
+run update-locale LANG=en_US.UTF-8 LANGUAGE=en_US:en LC_ALL=en_US.UTF-8
 run bash -ec "dpkg -i packages/*.deb"
 run apt-get -y clean all
 run bash -ec "cat /scylla_bashrc >> /etc/bash.bashrc"
