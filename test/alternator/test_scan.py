@@ -5,8 +5,9 @@
 # Tests for the Scan operation
 
 import pytest
+import time
 from botocore.exceptions import ClientError
-from util import random_string, random_bytes, full_scan, full_scan_and_count, multiset
+from util import random_string, random_bytes, full_scan, full_scan_and_count, multiset, new_test_table
 from boto3.dynamodb.conditions import Attr
 
 # Test that scanning works fine with/without pagination
@@ -286,3 +287,131 @@ def test_scan_paging_bytes(test_table_b):
             batch.put_item(item)
     response = test_table_b.scan(ConsistentRead=True, Limit=1)
     assert 'LastEvaluatedKey' in response
+
+# The following two xfailing tests reproduce issue #7933, where a scan
+# encounters a long string of row/partition tombstones and is expected to
+# return a page in a constant amount of time - so may need to stop in the
+# middle of that string of tombstones. Both tests are currently marked
+# "verylong" so will not run by default, but when we fix #7933 by deciding
+# on a threshold number of tombstones to process in a single page, we can
+# hopefully make these tests shorter and hopefully can drop the "verylong"
+# mark.
+
+# In the following test, we create a single long partition with just two
+# live items and a long contiguous string of row tombstones between them.
+# A Scan of this partition should be able to stop in the middle of this
+# string and *not* return both live items in a single page - because
+# returning both live items takes an unbounded amount of time (proportional
+# to the number of tombstones), and retrieving a single page must take a
+# bounded amount of time. Reproduces issue #7933.
+#
+# Unfortunately, there is no official threshold number of tombstones over
+# which we know that paging must stop a page, so curently we can only
+# demonstrate the bug asymptotically: We know that there must be a large
+# enough N (number of consecutive tombstones) for which fetching the first
+# page should return just the first live item - not both. If we try with
+# arbitrarily large N, and the time to read the single page grows as O(N)
+# but still always get two results - this is a bug.
+#
+# The test is marked "veryslow" because to reach a high N we need to create
+# a lot of data so the test's preperation is very slow and does a lot of I/O.
+#
+# This test is marked "scylla_only" because it doesn't really test something
+# that *has* to happen (there is no reason why reading a partition with a lot
+# of deleted data should take a long time), but specifically happens in
+# Scylla's tombstone-based implementation - and in that implementation,
+# and only in that implementation, we can require the scan to stop early.
+@pytest.mark.xfail(reason="Issue #7933")
+@pytest.mark.veryslow
+def test_scan_long_row_tombstone_string(dynamodb, scylla_only, rest_api):
+    # TODO: When we fix #7933, we'll probably introduce some limit to the
+    # number of tombstones processed in one page, at which point we can
+    # use this limit here instead of a huge number, and perhaps even
+    # make this test not "veryslow".
+    N = 1000000
+    with new_test_table(dynamodb,
+        KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' },
+                   { 'AttributeName': 'c', 'KeyType': 'RANGE' }],
+        AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'N' },
+                               { 'AttributeName': 'c', 'AttributeType': 'N' }]
+        ) as table:
+        # Create two items with c=0 and c=N, and N-2 deletions between them.
+        # Although the deleted items never existed, Scylla is forced to keep
+        # tombstones for them.
+        start = time.time()
+        with table.batch_writer() as batch:
+            batch.put_item(Item={ 'p': 1, 'c': 0 })
+            for i in range(1, N-1):
+                batch.delete_item(Key={ 'p': 1, 'c': i })
+            batch.put_item(Item={ 'p': 1, 'c': N })
+        print(f"time for test table setup: {time.time() - start} seconds")
+        start = time.time()
+        response = table.scan()
+        Tt = time.time() - start
+        print(f"time for single page with deletions: {Tt} seconds")
+
+        found = len(response['Items'])
+        print(f"first page found {found}")
+        assert found == 1
+
+        # Let's finish the scan for as many pages as it takes (some of them
+        # may be empty!), and confirm we eventually got the two results.
+        while 'LastEvaluatedKey' in response:
+            response = table.scan(ExclusiveStartKey=r['LastEvaluatedKey'])
+            found += len(response['Items'])
+        assert found == 2
+
+# A similar test to the above, but here we have a table with two partitions
+# separated by a long string of partition tombstones. Again, the Scan should
+# be able to stop in the middle of that string, and not return both partitions
+# in a single page.
+@pytest.mark.xfail(reason="Issue #7933")
+@pytest.mark.veryslow
+def test_scan_long_partition_tombstone_string(dynamodb):
+    # TODO: When we fix #7933, we'll probably introduce some limit to the
+    # number of tombstones processed in one page, at which point we can
+    # use this limit here instead of a huge number, and perhaps even
+    # make this test not "veryslow".
+    N = 1000000
+    with new_test_table(dynamodb,
+        KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
+        AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'N' }]
+        ) as table:
+        # We want to have two live partitions with a lot of partition
+        # tombstones between them. But the hash function is pseudo-random
+        # so we don't know which partitions would be the first and last.
+        # As a workaround, let's begin by writing just 100 partitions, then
+        # read them back and keep the first and last one of those live. If
+        # the hash function is random enough, 99% of the partitions we'll
+        # write later will fall between those two partitions two.
+        start = time.time()
+        with table.batch_writer() as batch:
+            for i in range(100):
+                batch.put_item(Item={ 'p': i })
+        r = table.scan()
+        first = r['Items'][0]['p']
+        while 'LastEvaluatedKey' in r:
+            r = table.scan(ExclusiveStartKey=r['LastEvaluatedKey'])
+        last = r['Items'][-1]['p']
+        # Now write all N items - all except "first" and "last" are deletions
+        with table.batch_writer() as batch:
+            for i in range(N):
+                if i == first or i == last:
+                    batch.put_item(Item={ 'p': i })
+                else:
+                    batch.delete_item(Key={ 'p': i })
+        print(f"time for test table setup: {time.time() - start} seconds")
+        start = time.time()
+        response = table.scan()
+        print(f"time for single page: {time.time() - start} seconds")
+
+        found = len(response['Items'])
+        print(f"first page found {found}")
+        assert found == 1
+
+        # Let's finish the scan for as many pages as it takes (some of them
+        # may be empty!), and confirm we eventually got the two results.
+        while 'LastEvaluatedKey' in response:
+            response = table.scan(ExclusiveStartKey=r['LastEvaluatedKey'])
+            found += len(response['Items'])
+        assert found == 2
