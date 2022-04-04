@@ -109,7 +109,7 @@ void range_tombstone_list::insert_from(const schema& s,
         if (cmp(end, it->position()) < 0) {
             // not overlapping
             if (it->tombstone().tomb == tomb && cmp(end, it->position()) == 0) {
-                rev.update(it, {std::move(start), std::move(start), tomb});
+                rev.update(it, {std::move(start), std::move(end), tomb});
             } else {
                 auto rt = construct_range_tombstone_entry(std::move(start), std::move(end), tomb);
                 rev.insert(it, *rt);
