@@ -21,7 +21,7 @@
 #include "cache_flat_mutation_reader.hh"
 #include "real_dirty_memory_accounter.hh"
 #include "readers/empty.hh"
-#include "readers/forwardable.hh"
+#include "readers/forwardable_v2.hh"
 #include "readers/nonforwardable.hh"
 
 namespace cache {
@@ -722,7 +722,7 @@ row_cache::make_scanning_reader(const dht::partition_range& range, std::unique_p
     return make_flat_mutation_reader<scanning_and_populating_reader>(*this, range, std::move(context));
 }
 
-flat_mutation_reader_opt
+flat_mutation_reader_v2_opt
 row_cache::make_reader_opt(schema_ptr s,
                        reader_permit permit,
                        const dht::partition_range& range,
@@ -739,7 +739,7 @@ row_cache::make_reader_opt(schema_ptr s,
     if (query::is_single_partition(range) && !fwd_mr) {
         tracing::trace(trace_state, "Querying cache for range {} and slice {}",
                 range, seastar::value_of([&slice] { return slice.get_all_ranges(); }));
-        auto mr = _read_section(_tracker.region(), [&] () -> flat_mutation_reader_opt {
+        auto mr = _read_section(_tracker.region(), [&] () -> flat_mutation_reader_v2_opt {
             dht::ring_position_comparator cmp(*_schema);
             auto&& pos = range.start()->value();
             partitions_type::bound_hint hint;
@@ -748,13 +748,13 @@ row_cache::make_reader_opt(schema_ptr s,
                 cache_entry& e = *i;
                 upgrade_entry(e);
                 on_partition_hit();
-                return e.read(*this, make_context());
+                return upgrade_to_v2(e.read(*this, make_context()));
             } else if (i->continuous()) {
                 return {};
             } else {
                 tracing::trace(trace_state, "Range {} not found in cache", range);
                 on_partition_miss();
-                return make_flat_mutation_reader<single_partition_populating_reader>(*this, make_context());
+                return upgrade_to_v2(make_flat_mutation_reader<single_partition_populating_reader>(*this, make_context()));
             }
         });
 
@@ -767,7 +767,7 @@ row_cache::make_reader_opt(schema_ptr s,
 
     tracing::trace(trace_state, "Scanning cache for range {} and slice {}",
                    range, seastar::value_of([&slice] { return slice.get_all_ranges(); }));
-    auto mr = make_scanning_reader(range, make_context());
+    auto mr = upgrade_to_v2(make_scanning_reader(range, make_context()));
     if (fwd == streamed_mutation::forwarding::yes) {
         return make_forwardable(std::move(mr));
     } else {

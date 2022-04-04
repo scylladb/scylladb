@@ -112,7 +112,7 @@ void test_scans_with_dummy_entries() {
         scheduling_latency_measurer slm;
         slm.start();
         auto d = duration_in_seconds([&] {
-            rd.consume_pausable([](mutation_fragment) {
+            rd.consume_pausable([](mutation_fragment_v2) {
                 return stop_iteration(cancelled);
             }).get();
         });

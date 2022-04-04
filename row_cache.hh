@@ -24,14 +24,14 @@
 #include "mutation_cleaner.hh"
 #include "utils/double-decker.hh"
 #include "db/cache_tracker.hh"
-#include "readers/empty.hh"
+#include "readers/empty_v2.hh"
 #include "readers/mutation_source.hh"
 
 namespace bi = boost::intrusive;
 
 class row_cache;
 class cache_tracker;
-class flat_mutation_reader;
+class flat_mutation_reader_v2;
 
 namespace replica {
 class memtable_entry;
@@ -362,7 +362,7 @@ public:
     // User needs to ensure that the row_cache object stays alive
     // as long as the reader is used.
     // The range must not wrap around.
-    flat_mutation_reader make_reader(schema_ptr s,
+    flat_mutation_reader_v2 make_reader(schema_ptr s,
                                      reader_permit permit,
                                      const dht::partition_range& range,
                                      const query::partition_slice& slice,
@@ -373,11 +373,11 @@ public:
         if (auto reader_opt = make_reader_opt(s, permit, range, slice, pc, std::move(trace_state), fwd, fwd_mr)) {
             return std::move(*reader_opt);
         }
-        [[unlikely]] return make_empty_flat_reader(std::move(s), std::move(permit));
+        [[unlikely]] return make_empty_flat_reader_v2(std::move(s), std::move(permit));
     }
     // Same as make_reader, but returns an empty optional instead of a no-op reader when there is nothing to
     // read. This is an optimization.
-    flat_mutation_reader_opt make_reader_opt(schema_ptr,
+    flat_mutation_reader_v2_opt make_reader_opt(schema_ptr,
                                      reader_permit permit,
                                      const dht::partition_range&,
                                      const query::partition_slice&,
@@ -386,7 +386,7 @@ public:
                                      streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
                                      mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no);
 
-    flat_mutation_reader make_reader(schema_ptr s, reader_permit permit, const dht::partition_range& range = query::full_partition_range) {
+    flat_mutation_reader_v2 make_reader(schema_ptr s, reader_permit permit, const dht::partition_range& range = query::full_partition_range) {
         auto& full_slice = s->full_slice();
         return make_reader(std::move(s), std::move(permit), range, full_slice);
     }

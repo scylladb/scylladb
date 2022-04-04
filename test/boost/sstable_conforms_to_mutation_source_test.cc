@@ -31,7 +31,7 @@ mutation_source make_sstable_mutation_source(sstables::test_env& env, schema_ptr
     return as_mutation_source(make_sstable(env, s, dir, std::move(mutations), cfg, version, query_time));
 }
 
-static void consume_all(flat_mutation_reader& rd) {
+static void consume_all(flat_mutation_reader_v2& rd) {
     while (auto mfopt = rd().get0()) {}
 }
 
