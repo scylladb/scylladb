@@ -1568,23 +1568,30 @@ static shared_ptr<cql3::functions::user_aggregate> create_aggregate(replica::dat
     auto arg_types = read_arg_types(row, name.keyspace);
     data_type state_type = db::cql_type_parser::parse(name.keyspace, row.get_nonnull<sstring>("state_type"));
     sstring sfunc = row.get_nonnull<sstring>("state_func");
-    sstring ffunc = row.get_nonnull<sstring>("final_func");
-    sstring initcond_str = row.get_nonnull<sstring>("initcond");
+    auto ffunc = row.get<sstring>("final_func");
+    auto initcond_str = row.get<sstring>("initcond");
 
     std::vector<data_type> acc_types{state_type};
     acc_types.insert(acc_types.end(), arg_types.begin(), arg_types.end());
     auto state_func = dynamic_pointer_cast<cql3::functions::scalar_function>(
             cql3::functions::functions::find(cql3::functions::function_name{name.keyspace, sfunc}, acc_types));
-    auto final_func = dynamic_pointer_cast<cql3::functions::scalar_function>(
-            cql3::functions::functions::find(cql3::functions::function_name{name.keyspace, ffunc}, {state_type}));
     if (!state_func) {
         throw std::runtime_error(format("State function {} needed by aggregate {} not found", sfunc, name.name));
     }
-    if (!final_func) {
-        throw std::runtime_error(format("Final function {} needed by aggregate {} not found", ffunc, name.name));
+    
+    ::shared_ptr<cql3::functions::scalar_function> final_func = nullptr;
+    if (ffunc) {
+        final_func = dynamic_pointer_cast<cql3::functions::scalar_function>(
+            cql3::functions::functions::find(cql3::functions::function_name{name.keyspace, ffunc.value()}, {state_type}));
+        if (!final_func) {
+            throw std::runtime_error(format("Final function {} needed by aggregate {} not found", ffunc.value(), name.name));
+        }
     }
 
-    bytes_opt initcond = state_type->from_string(initcond_str);
+    bytes_opt initcond = std::nullopt;
+    if (initcond_str) {
+        initcond = state_type->from_string(initcond_str.value());
+    }
 
     return ::make_shared<cql3::functions::user_aggregate>(name, initcond, std::move(state_func), std::move(final_func));
 
@@ -1929,9 +1936,13 @@ std::vector<mutation> make_create_aggregate_mutations(shared_ptr<cql3::functions
     mutation& m = p.first;
     clustering_key& ckey = p.second;
 
-    m.set_clustered_cell(ckey, "final_func", aggregate->finalfunc().name().name, timestamp);
     data_type state_type = aggregate->sfunc().arg_types()[0];
-    m.set_clustered_cell(ckey, "initcond", state_type->to_string(*aggregate->initcond()), timestamp);
+    if (aggregate->has_finalfunc()) {
+        m.set_clustered_cell(ckey, "final_func", aggregate->finalfunc().name().name, timestamp);
+    }
+    if (aggregate->initcond()) {
+        m.set_clustered_cell(ckey, "initcond", state_type->to_string(*aggregate->initcond()), timestamp);
+    }
     m.set_clustered_cell(ckey, "return_type", aggregate->return_type()->as_cql3_type().to_string(), timestamp);
     m.set_clustered_cell(ckey, "state_func", aggregate->sfunc().name().name, timestamp);
     m.set_clustered_cell(ckey, "state_type", state_type->as_cql3_type().to_string(), timestamp);

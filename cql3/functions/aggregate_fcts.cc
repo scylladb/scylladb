@@ -102,7 +102,7 @@ public:
         _acc = _initcond;
     }
     virtual opt_bytes compute(cql_serialization_format sf) override {
-        return _finalfunc->execute(sf, std::vector<bytes_opt>{_acc});
+        return _finalfunc ? _finalfunc->execute(sf, std::vector<bytes_opt>{_acc}) : _acc;
     }
     virtual void add_input(cql_serialization_format sf, const std::vector<opt_bytes>& values) override {
         std::vector<bytes_opt> args{_acc};
@@ -481,8 +481,12 @@ static std::vector<data_type> state_arg_types_to_uda_arg_types(const std::vector
     return types;
 }
 
+static data_type uda_return_type(const ::shared_ptr<scalar_function>& ffunc, const ::shared_ptr<scalar_function>& sfunc) {
+    return ffunc ? ffunc->return_type() : sfunc->return_type();
+}
+
 user_aggregate::user_aggregate(function_name fname, bytes_opt initcond, ::shared_ptr<scalar_function> sfunc, ::shared_ptr<scalar_function> finalfunc)
-        : abstract_function(std::move(fname), state_arg_types_to_uda_arg_types(sfunc->arg_types()), finalfunc->return_type())
+        : abstract_function(std::move(fname), state_arg_types_to_uda_arg_types(sfunc->arg_types()), uda_return_type(finalfunc, sfunc))
         , _initcond(std::move(initcond))
         , _sfunc(std::move(sfunc))
         , _finalfunc(std::move(finalfunc))
@@ -492,10 +496,11 @@ std::unique_ptr<aggregate_function::aggregate> user_aggregate::new_aggregate() {
     return std::make_unique<impl_user_aggregate>(_initcond, _sfunc, _finalfunc);
 }
 
-bool user_aggregate::is_pure() const { return _sfunc->is_pure() && _finalfunc->is_pure(); }
+bool user_aggregate::is_pure() const { return _sfunc->is_pure() && (!_finalfunc || _finalfunc->is_pure()); }
 bool user_aggregate::is_native() const { return false; }
 bool user_aggregate::is_aggregate() const { return true; }
-bool user_aggregate::requires_thread() const { return _sfunc->requires_thread() || _finalfunc->requires_thread(); }
+bool user_aggregate::requires_thread() const { return _sfunc->requires_thread() || (_finalfunc && _finalfunc->requires_thread()); }
+bool user_aggregate::has_finalfunc() const { return _finalfunc != nullptr; }
 
 shared_ptr<aggregate_function>
 aggregate_fcts::make_count_rows_function() {
