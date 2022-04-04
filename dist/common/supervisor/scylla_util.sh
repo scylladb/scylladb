@@ -6,12 +6,16 @@ is_nonroot() {
     [ -f "$scylladir"/SCYLLA-NONROOT-FILE ]
 }
 
+is_container() {
+    [ -f "$scylladir"/SCYLLA-CONTAINER-FILE ]
+}
+
 is_privileged() {
     [ ${EUID:-${UID}} = 0 ]
 }
 
 execsudo() {
-    if is_nonroot; then
+    if is_nonroot || is_container; then
         exec "$@"
     else
         exec sudo -u scylla -g scylla "$@"

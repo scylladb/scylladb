@@ -92,6 +92,7 @@ run chown -R scylla:scylla /var/lib/scylla
 run sed -i -e 's/^SCYLLA_ARGS=".*"$/SCYLLA_ARGS="--log-to-syslog 0 --log-to-stdout 1 --default-log-level info --network-stack posix"/' /etc/default/scylla-server
 
 run mkdir -p /opt/scylladb/supervisor
+run touch /opt/scylladb/SCYLLA-CONTAINER-FILE
 bcp dist/common/supervisor/scylla-server.sh /opt/scylladb/supervisor/scylla-server.sh
 bcp dist/common/supervisor/scylla-jmx.sh /opt/scylladb/supervisor/scylla-jmx.sh
 bcp dist/common/supervisor/scylla-node-exporter.sh /opt/scylladb/supervisor/scylla-node-exporter.sh
