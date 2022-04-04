@@ -12,6 +12,8 @@
 
 #include "seastarx.hh"
 
+#include <list>
+
 #include <seastar/core/future.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/net/api.hh>
