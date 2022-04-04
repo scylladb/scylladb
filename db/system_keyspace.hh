@@ -410,7 +410,7 @@ public:
     /*
     * Save the CDC generation ID announced by this node in persistent storage.
     */
-    static future<> update_cdc_generation_id(cdc::generation_id);
+    future<> update_cdc_generation_id(cdc::generation_id);
 
     /*
     * Read the CDC generation ID announced by this node from persistent storage.

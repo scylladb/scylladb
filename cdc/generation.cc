@@ -875,7 +875,7 @@ future<> generation_service::check_and_repair_cdc_streams() {
             { gms::application_state::CDC_GENERATION_ID, gms::versioned_value::cdc_generation_id(new_gen_id) },
             { gms::application_state::STATUS, *status }
     });
-    co_await db::system_keyspace::update_cdc_generation_id(new_gen_id);
+    co_await _sys_ks.local().update_cdc_generation_id(new_gen_id);
 }
 
 future<> generation_service::handle_cdc_generation(std::optional<cdc::generation_id> gen_id) {
@@ -1018,7 +1018,7 @@ future<bool> generation_service::do_handle_cdc_generation(cdc::generation_id gen
     // The assumption follows from the requirement of bootstrapping nodes sequentially.
     if (!_gen_id || get_ts(*_gen_id) < get_ts(gen_id)) {
         _gen_id = gen_id;
-        co_await db::system_keyspace::update_cdc_generation_id(gen_id);
+        co_await _sys_ks.local().update_cdc_generation_id(gen_id);
         co_await _gossiper.add_local_application_state(
                 gms::application_state::CDC_GENERATION_ID, gms::versioned_value::cdc_generation_id(gen_id));
     }

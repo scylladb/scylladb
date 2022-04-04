@@ -582,7 +582,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
 
     // Persist the CDC streams timestamp before we persist bootstrap_state = COMPLETED.
     if (cdc_gen_id) {
-        co_await db::system_keyspace::update_cdc_generation_id(*cdc_gen_id);
+        co_await _sys_ks.local().update_cdc_generation_id(*cdc_gen_id);
     }
     // If we crash now, we will choose a new CDC streams timestamp anyway (because we will also choose a new set of tokens).
     // But if we crash after setting bootstrap_state = COMPLETED, we will keep using the persisted CDC streams timestamp after restarting.

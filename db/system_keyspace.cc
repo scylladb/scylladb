@@ -1750,13 +1750,13 @@ future<std::unordered_set<dht::token>> system_keyspace::get_local_tokens() {
 
 future<> system_keyspace::update_cdc_generation_id(cdc::generation_id gen_id) {
     co_await std::visit(make_visitor(
-    [] (cdc::generation_id_v1 id) -> future<> {
-        co_await qctx->execute_cql(
+    [this] (cdc::generation_id_v1 id) -> future<> {
+        co_await execute_cql(
                 format("INSERT INTO system.{} (key, streams_timestamp) VALUES (?, ?)", v3::CDC_LOCAL),
                 sstring(v3::CDC_LOCAL), id.ts);
     },
-    [] (cdc::generation_id_v2 id) -> future<> {
-        co_await qctx->execute_cql(
+    [this] (cdc::generation_id_v2 id) -> future<> {
+        co_await execute_cql(
                 format("INSERT INTO system.{} (key, streams_timestamp, uuid) VALUES (?, ?, ?)", v3::CDC_LOCAL),
                 sstring(v3::CDC_LOCAL), id.ts, id.id);
     }
