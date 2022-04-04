@@ -87,3 +87,33 @@ def test_incorrect_state_func(scylla_only, cql, test_keyspace):
         custom_avg_body = f"(bigint) SFUNC {avg2_partial} STYPE tuple<bigint, bigint> FINALFUNC {div_fun} INITCOND (0,0)"
         with pytest.raises(InvalidRequest, match="State function not found"):
             cql.execute(f"CREATE AGGREGATE {test_keyspace}.{unique_name()} {custom_avg_body}")
+
+# Test that UDA works without final function and returns accumulator then
+def test_no_final_func(scylla_only, cql, test_keyspace):
+    schema = "id int primary key"
+    sum_partial_body = "(acc int, val int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE lua AS 'return acc + val'"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        for i in range(5):
+            cql.execute(f"INSERT INTO {table} (id) VALUES ({i})")
+        with new_function(cql, test_keyspace, sum_partial_body) as sum_partial:
+            custom_sum_body = f"(int) SFUNC {sum_partial} STYPE int INITCOND 0"
+            with new_aggregate(cql, test_keyspace, custom_sum_body) as custom_sum:
+                custom_res = cql.execute(f"SELECT {custom_sum}(id) AS result FROM {table}").one()
+                avg_res = cql.execute(f"SELECT sum(id) AS result FROM {table}").one()
+                assert custom_res == avg_res
+
+# Test that UDA works without initcond and inits acc as null
+def test_no_initcond(scylla_only, cql, test_keyspace):
+    rows = 5
+    schema = "id int primary key"
+    # This aggregate will return `1000 - #rows` if there is no initcond and `initcond - #rows` otherwise
+    state_body = "(acc int, val int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'if acc == null then return 999 else return acc - 1 end'"
+    final_body = "(acc int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return acc'"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        for i in range(rows):
+            cql.execute(f"INSERT INTO {table} (id) VALUES ({i})")
+        with new_function(cql, test_keyspace, state_body) as state_func, new_function(cql, test_keyspace, final_body) as final_func:
+            aggr_body = f"(int) SFUNC {state_func} STYPE int FINALFUNC {final_func}"
+            with new_aggregate(cql, test_keyspace, aggr_body) as aggr_func:
+                result = cql.execute(f"SELECT {aggr_func}(id) AS result FROM {table}").one()
+                assert result.result == (1000 - rows)
