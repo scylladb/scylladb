@@ -38,6 +38,9 @@ shared_ptr<functions::function> create_aggregate_statement::create(query_process
     if (!state_func) {
         throw exceptions::invalid_request_exception(format("State function not found: {}", _sfunc));
     }
+    if (state_func->return_type() != state_type) {
+        throw exceptions::invalid_request_exception(format("State function '{}' doesn't return state", _sfunc));
+    }
 
     ::shared_ptr<cql3::functions::scalar_function> final_func = nullptr;
     if (_ffunc) {

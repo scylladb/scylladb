@@ -1578,6 +1578,9 @@ static shared_ptr<cql3::functions::user_aggregate> create_aggregate(replica::dat
     if (!state_func) {
         throw std::runtime_error(format("State function {} needed by aggregate {} not found", sfunc, name.name));
     }
+    if (state_func->return_type() != state_type) {
+        throw std::runtime_error(format("State function {} needed by aggregate {} doesn't return state", sfunc, name.name));
+    }
     
     ::shared_ptr<cql3::functions::scalar_function> final_func = nullptr;
     if (ffunc) {
