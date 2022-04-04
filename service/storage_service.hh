@@ -379,6 +379,9 @@ public:
 
     future<> stop_transport();
 
+    // delegates work to `raft_group0::join_group0`
+    future<> join_group0();
+
 private:
     bool should_bootstrap();
     std::optional<gms::inet_address> get_replace_address();
