@@ -317,6 +317,10 @@ future<> migration_manager::do_merge_schema_from(netw::messaging_service::msg_ad
 
 future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr id)
 {
+    if (_as.abort_requested()) {
+        return make_exception_future<>(abort_requested_exception());
+    }
+
     mlogger.info("Requesting schema pull from {}", id);
     auto i = _schema_pulls.find(id);
     if (i == _schema_pulls.end()) {
@@ -334,6 +338,10 @@ future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr 
     mlogger.debug("Applying schema mutations from {}", src);
     auto& proxy = _storage_proxy;
     const auto& db = proxy.get_db().local();
+
+    if (_as.abort_requested()) {
+        return make_exception_future<>(abort_requested_exception());
+    }
 
     std::vector<mutation> mutations;
     mutations.reserve(canonical_mutations.size());
@@ -353,6 +361,10 @@ future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr 
 
 future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr src, const std::vector<frozen_mutation>& mutations)
 {
+    if (_as.abort_requested()) {
+        return make_exception_future<>(abort_requested_exception());
+    }
+
     mlogger.debug("Applying schema mutations from {}", src);
     return map_reduce(mutations, [this, src](const frozen_mutation& fm) {
         // schema table's schema is not syncable so just use get_schema_definition()
@@ -1017,7 +1029,7 @@ future<> migration_manager::announce_with_raft(std::vector<mutation> schema, gro
     do {
         retry = false;
         try {
-            co_await _raft_gr.group0().add_entry(cmd, raft::wait_type::applied);
+            co_await _raft_gr.group0().add_entry(cmd, raft::wait_type::applied, &_as);
         } catch (const raft::dropped_entry& e) {
             mlogger.warn("`announce_with_raft`: `add_entry` returned \"{}\". Retrying the command (prev_state_id: {}, new_state_id: {})",
                     e, group0_cmd.prev_state_id, group0_cmd.new_state_id);
@@ -1103,7 +1115,7 @@ future<group0_guard> migration_manager::start_group0_operation() {
         }
 
         auto operation_holder = co_await get_units(_group0_operation_mutex, 1);
-        co_await _raft_gr.group0().read_barrier();
+        co_await _raft_gr.group0().read_barrier(&_as);
 
         // Take `_group0_read_apply_mutex` *after* read barrier.
         // Read barrier may wait for `group0_state_machine::apply` which also takes this mutex.
@@ -1294,6 +1306,10 @@ future<schema_ptr> migration_manager::get_schema_for_read(table_schema_version v
 }
 
 future<schema_ptr> migration_manager::get_schema_for_write(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms) {
+    if (_as.abort_requested()) {
+        return make_exception_future<schema_ptr>(abort_requested_exception());
+    }
+
     return get_schema_definition(v, dst, ms, _storage_proxy).then([this, dst] (schema_ptr s) {
         return maybe_sync(s, dst).then([s] {
             return s;
