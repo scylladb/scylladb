@@ -41,11 +41,14 @@ public:
     bool discardable() const {
         return _rt_gen.discardable() && !_current_rt;
     }
-    void flush_tombstones(position_in_partition_view pos) {
+    void flush_tombstones(position_in_partition_view pos, bool emit_end = false) {
         _rt_gen.flush(pos, [&] (range_tombstone_change rt) {
             _current_rt = rt.tombstone();
             do_consume(std::move(rt));
         });
+        if (emit_end && _current_rt) {
+            do_consume(range_tombstone_change(pos, {}));
+        }
     }
     void consume(partition_start mf) {
         _rt_gen.reset();
@@ -72,10 +75,10 @@ public:
         _rt_gen.consume(std::move(rt));
     }
     void consume(partition_end mf) {
-        flush_tombstones(position_in_partition::after_all_clustered_rows());
-        if (_current_rt) {
-            assert(!_pr);
-            do_consume(range_tombstone_change(position_in_partition::after_all_clustered_rows(), {}));
+        if (_pr) {
+            flush_tombstones(_pr->end(), true);
+        } else {
+            flush_tombstones(position_in_partition::after_all_clustered_rows());
         }
         do_consume(std::move(mf));
     }
@@ -84,10 +87,7 @@ public:
     }
     void on_end_of_stream() {
         if (_pr) {
-            flush_tombstones(_pr->end());
-            if (_current_rt) {
-                do_consume(range_tombstone_change(_pr->end(), {}));
-            }
+            flush_tombstones(_pr->end(), true);
         }
     }
 };
