@@ -91,6 +91,7 @@ run mkdir -p /var/log/scylla
 run chown -R scylla:scylla /var/lib/scylla
 
 run mkdir -p /opt/scylladb/supervisor
+run touch /opt/scylladb/SCYLLA-CONTAINER-FILE
 bcp dist/common/supervisor/scylla-server.sh /opt/scylladb/supervisor/scylla-server.sh
 bcp dist/common/supervisor/scylla-jmx.sh /opt/scylladb/supervisor/scylla-jmx.sh
 bcp dist/common/supervisor/scylla-node-exporter.sh /opt/scylladb/supervisor/scylla-node-exporter.sh
