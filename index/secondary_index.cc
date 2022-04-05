@@ -127,7 +127,17 @@ sstring target_parser::serialize_targets(const std::vector<::shared_ptr<cql3::st
     };
 
     if (targets.size() == 1 && std::holds_alternative<index_target::single_column>(targets.front()->value)) {
-        return std::get<index_target::single_column>(targets.front()->value)->to_string();
+        auto& target = targets.front();
+        auto single_target = std::get<index_target::single_column>(target->value);
+        switch (target->type) {
+            case index_target::target_type::regular_values:     [[fallthrough]];
+            case index_target::target_type::full:
+                return single_target->to_string();
+            case index_target::target_type::collection_values:  [[fallthrough]];
+            case index_target::target_type::keys:               [[fallthrough]];
+            case index_target::target_type::keys_and_values:
+                return cql3::statements::to_sstring(target->type) + "(" + single_target->to_string() + ")";
+        }
     }
 
     rjson::value json_map = rjson::empty_object();

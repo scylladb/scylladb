@@ -24,6 +24,7 @@ const sstring index_target::custom_index_option_name = "class_name";
 
 sstring index_target::as_string() const {
     struct as_string_visitor {
+        const index_target* target;
         sstring operator()(const std::vector<::shared_ptr<column_identifier>>& columns) const {
             return "(" + boost::algorithm::join(columns | boost::adaptors::transformed(
                     [](const ::shared_ptr<cql3::column_identifier>& ident) -> sstring {
@@ -32,11 +33,23 @@ sstring index_target::as_string() const {
         }
 
         sstring operator()(const ::shared_ptr<column_identifier>& column) const {
-            return column->to_string();
+            sstring postfix;
+            switch (target->type) {
+                case index_target::target_type::keys:
+                    [[fallthrough]];
+                case index_target::target_type::collection_values:
+                    [[fallthrough]];
+                case index_target::target_type::keys_and_values:
+                    postfix = "_" + to_sstring(target->type);
+                    break;
+                default:
+                    break;
+            }
+            return column->to_string() + postfix;
         }
     };
 
-    return std::visit(as_string_visitor(), value);
+    return std::visit(as_string_visitor {this}, value);
 }
 
 index_target::target_type index_target::from_sstring(const sstring& s)
