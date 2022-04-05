@@ -548,6 +548,36 @@ future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows, sche
     });
 }
 
+void flush_rows(schema_ptr _schema, std::list<repair_row>& _working_row_buf, lw_shared_ptr<repair_writer>& _repair_writer, seastar::sharded<replica::database>& _db, seastar::sharded<db::system_distributed_keyspace>& _sys_dist_ks, seastar::sharded<db::view::view_update_generator>& _view_update_generator) {
+    auto cmp = position_in_partition::tri_compare(*_schema);
+    lw_shared_ptr<mutation_fragment> last_mf;
+    lw_shared_ptr<const decorated_key_with_hash> last_dk;
+    for (auto& r : _working_row_buf) {
+        thread::maybe_yield();
+        if (!r.dirty_on_master()) {
+            continue;
+        }
+        _repair_writer->create_writer(_db, _sys_dist_ks, _view_update_generator);
+        auto mf = r.get_mutation_fragment_ptr();
+        const auto& dk = r.get_dk_with_hash()->dk;
+        if (last_mf && last_dk &&
+                cmp(last_mf->position(), mf->position()) == 0 &&
+                dk.tri_compare(*_schema, last_dk->dk) == 0 &&
+                last_mf->mergeable_with(*mf)) {
+            last_mf->apply(*_schema, std::move(*mf));
+        } else {
+            if (last_mf && last_dk) {
+                _repair_writer->do_write(std::move(last_dk), std::move(*last_mf)).get();
+            }
+            last_mf = mf;
+            last_dk = r.get_dk_with_hash();
+        }
+    }
+    if (last_mf && last_dk) {
+        _repair_writer->do_write(std::move(last_dk), std::move(*last_mf)).get();
+    }
+}
+
 class repair_meta {
     friend repair_meta_tracker;
 public:
@@ -1170,36 +1200,6 @@ public:
             return;
         }
         flush_rows(_schema, _working_row_buf, _repair_writer, _db, _sys_dist_ks, _view_update_generator);
-    }
-
-    static void flush_rows(schema_ptr _schema, std::list<repair_row>& _working_row_buf, lw_shared_ptr<repair_writer>& _repair_writer, seastar::sharded<replica::database>& _db, seastar::sharded<db::system_distributed_keyspace>& _sys_dist_ks, seastar::sharded<db::view::view_update_generator>& _view_update_generator) {
-        auto cmp = position_in_partition::tri_compare(*_schema);
-        lw_shared_ptr<mutation_fragment> last_mf;
-        lw_shared_ptr<const decorated_key_with_hash> last_dk;
-        for (auto& r : _working_row_buf) {
-            thread::maybe_yield();
-            if (!r.dirty_on_master()) {
-                continue;
-            }
-            _repair_writer->create_writer(_db, _sys_dist_ks, _view_update_generator);
-            auto mf = r.get_mutation_fragment_ptr();
-            const auto& dk = r.get_dk_with_hash()->dk;
-            if (last_mf && last_dk &&
-                    cmp(last_mf->position(), mf->position()) == 0 &&
-                    dk.tri_compare(*_schema, last_dk->dk) == 0 &&
-                    last_mf->mergeable_with(*mf)) {
-                last_mf->apply(*_schema, std::move(*mf));
-            } else {
-                if (last_mf && last_dk) {
-                    _repair_writer->do_write(std::move(last_dk), std::move(*last_mf)).get();
-                }
-                last_mf = mf;
-                last_dk = r.get_dk_with_hash();
-            }
-        }
-        if (last_mf && last_dk) {
-            _repair_writer->do_write(std::move(last_dk), std::move(*last_mf)).get();
-        }
     }
 
 private:

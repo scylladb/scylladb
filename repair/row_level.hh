@@ -236,6 +236,7 @@ class partition_key_and_mutation_fragments;
 using repair_rows_on_wire = std::list<partition_key_and_mutation_fragments>;
 class repair_row;
 class repair_hasher;
+class repair_writer;
 
 future<> repair_cf_range_row_level(repair_info& ri,
         sstring cf_name, utils::UUID table_id, dht::token_range range,
@@ -243,3 +244,8 @@ future<> repair_cf_range_row_level(repair_info& ri,
 future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows,
         schema_ptr s, uint64_t seed, repair_master is_master,
         reader_permit permit, repair_hasher hasher);
+void flush_rows(schema_ptr _schema, std::list<repair_row>& _working_row_buf,
+        lw_shared_ptr<repair_writer>& _repair_writer,
+        seastar::sharded<replica::database>& _db,
+        seastar::sharded<db::system_distributed_keyspace>& _sys_dist_ks,
+        seastar::sharded<db::view::view_update_generator>& _view_update_generator);
