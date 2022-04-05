@@ -15,6 +15,7 @@
 
 #include <seastar/core/app-template.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/reactor.hh>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/testing/test_runner.hh>
 
@@ -42,7 +43,9 @@ struct test_config {
     uint64_t max_flush_delay_in_ms;
 };
 
-static void write_json_result(std::string result_file, const test_config& cfg, perf_result median, double mad, double max, double min) {
+using clperf_result = perf_result_with_aio_writes;
+
+static void write_json_result(std::string result_file, const test_config& cfg, clperf_result median, double mad, double max, double min) {
     Json::Value results;
 
     Json::Value params;
@@ -63,6 +66,8 @@ static void write_json_result(std::string result_file, const test_config& cfg, p
     stats["allocs_per_op"] = median.mallocs_per_op;
     stats["tasks_per_op"] = median.tasks_per_op;
     stats["instructions_per_op"] = median.instructions_per_op;
+    stats["aio_writes"] = median.aio_writes;
+    stats["aio_write_bytes"] = median.aio_write_bytes;
     stats["mad tps"] = mad;
     stats["max tps"] = max;
     stats["min tps"] = min;
@@ -130,10 +135,10 @@ struct commitlog_service {
     }
 };
 
-static std::vector<perf_result> do_commitlog_test(distributed<commitlog_service>& cls, test_config& cfg) {
+static std::vector<clperf_result> do_commitlog_test(distributed<commitlog_service>& cls, test_config& cfg) {
     auto uuid = utils::UUID_gen::get_time_UUID();
 
-    return time_parallel([&] {
+    return time_parallel_ex<clperf_result>([&] {
         auto& log = cls.local();
         size_t size = log.size_dist(tests::random::gen());
         return log.log->add_mutation(uuid, size, db::commitlog::force_sync::no, [size](db::commitlog::output& dst) {
@@ -141,7 +146,7 @@ static std::vector<perf_result> do_commitlog_test(distributed<commitlog_service>
         }).then([](db::rp_handle h) {
             h.release();
         });
-    }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard);
+    }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, &clperf_result::update);
 }
 
 int main(int argc, char** argv) {
