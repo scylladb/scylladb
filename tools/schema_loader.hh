@@ -46,4 +46,17 @@ future<std::vector<schema_ptr>> load_schemas_from_file(std::filesystem::path pat
 /// the file at the specified path.
 future<schema_ptr> load_one_schema_from_file(std::filesystem::path path);
 
+/// Load the system schema, with the given keyspace and table
+///
+/// Note that only schemas from builtin system tables are supported, i.e.,
+/// from the following keyspaces:
+/// * system
+/// * system_schema
+/// * system_distributed
+/// * system_distributed_everywhere
+///
+/// Any table from said keyspaces can be loaded. The keyspaces are created with
+/// all schema and experimental features enabled.
+schema_ptr load_system_schema(std::string_view keyspace, std::string_view table);
+
 } // namespace tools

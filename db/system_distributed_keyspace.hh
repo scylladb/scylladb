@@ -80,6 +80,9 @@ public:
      * before being acknowledged? */
     static bool is_extra_durable(const sstring& cf_name);
 
+    static std::vector<schema_ptr> all_distributed_tables();
+    static std::vector<schema_ptr> all_everywhere_tables();
+
     system_distributed_keyspace(cql3::query_processor&, service::migration_manager&, service::storage_proxy&);
 
     future<> start();

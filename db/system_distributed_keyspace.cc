@@ -182,6 +182,14 @@ bool system_distributed_keyspace::is_extra_durable(const sstring& cf_name) {
     return cf_name == CDC_TOPOLOGY_DESCRIPTION || cf_name == CDC_GENERATIONS_V2;
 }
 
+std::vector<schema_ptr> system_distributed_keyspace::all_distributed_tables() {
+    return {view_build_status(), cdc_desc(), cdc_timestamps(), service_levels()};
+}
+
+std::vector<schema_ptr> system_distributed_keyspace::all_everywhere_tables() {
+    return {cdc_generations_v2()};
+}
+
 system_distributed_keyspace::system_distributed_keyspace(cql3::query_processor& qp, service::migration_manager& mm, service::storage_proxy& sp)
         : _qp(qp)
         , _mm(mm)
