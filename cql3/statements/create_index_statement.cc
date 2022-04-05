@@ -10,6 +10,7 @@
 
 #include <seastar/core/coroutine.hh>
 #include "create_index_statement.hh"
+#include "exceptions/exceptions.hh"
 #include "prepared_statement.hh"
 #include "validation.hh"
 #include "service/storage_proxy.hh"
@@ -90,6 +91,7 @@ std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_e
         validate_targets_for_multi_column_index(targets);
     }
 
+    const bool is_local_index = targets.size() > 0 && std::holds_alternative<index_target::multiple_columns>(targets.front()->value);
     for (auto& target : targets) {
         auto* ident = std::get_if<::shared_ptr<column_identifier>>(&target->value);
         if (!ident) {
@@ -132,10 +134,17 @@ std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_e
         }
 
         if (cd->type->is_multi_cell()) {
-            // NOTICE(sarna): should be lifted after #2962 (indexes on non-frozen collections) is implemented
-            // NOTICE(kbraun): don't forget about non-frozen user defined types
-            throw exceptions::invalid_request_exception(
-                    format("Cannot create secondary index on non-frozen collection or UDT column {}", cd->name_as_text()));
+            if (cd->type->is_collection()) {
+                if (is_local_index) {
+                    throw exceptions::invalid_request_exception(
+                            format("Local secondary index on collection column {} is not implemented yet.", target->as_string()));
+                }
+                validate_not_full_index(*target);
+                validate_for_collection(*target, *cd);
+                rewrite_target_for_collection(*target, *cd);
+            } else {
+                throw exceptions::invalid_request_exception(format("Cannot create secondary index on UDT column {}", cd->name_as_text()));
+            }
         } else if (cd->type->is_collection()) {
             validate_for_frozen_collection(*target);
         } else {
@@ -207,6 +216,30 @@ void create_index_statement::validate_not_full_index(const index_target& target)
     }
 }
 
+void create_index_statement::validate_for_collection(const index_target& target, const column_definition& cd) const
+{
+    auto throw_exception = [&] {
+        const char* msg_format = "Cannot create secondary index on {} of non-frozen collection column {}";
+        throw exceptions::invalid_request_exception(format(msg_format, to_sstring(target.type), cd.name_as_text()));
+    };
+    switch (target.type) {
+        case index_target::target_type::full:
+            throw std::logic_error("invalid target type(full) in validate_for_collection");
+        case index_target::target_type::regular_values:
+            break;
+        case index_target::target_type::collection_values:
+            break;
+        case index_target::target_type::keys:
+            [[fallthrough]];
+        case index_target::target_type::keys_and_values:
+            if (!cd.type->is_map()) {
+                const char* msg_format = "Cannot create secondary index on {} of column {} with non-map type";
+                throw exceptions::invalid_request_exception(format(msg_format, to_sstring(target.type), cd.name_as_text()));
+            }
+            break;
+    }
+}
+
 void create_index_statement::rewrite_target_for_collection(index_target& target, const column_definition& cd) const
 {
     // In Cassandra, `CREATE INDEX ON table(collection)` works the same as `CREATE INDEX ON table(VALUES(collection))`,
@@ -222,6 +255,8 @@ void create_index_statement::rewrite_target_for_collection(index_target& target,
             // If it was entries, then it must have been a map.
             break;
         case index_target::target_type::regular_values:
+            // Regular values for collections means the same as collection values.
+            [[fallthrough]];
         case index_target::target_type::collection_values:
             if (cd.type->is_map() || cd.type->is_list()) {
                 target.type = index_target::target_type::collection_values;
