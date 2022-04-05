@@ -22,6 +22,7 @@
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/algorithm.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
+#include <type_traits>
 #include "view_info.hh"
 #include "partition_slice_builder.hh"
 #include "replica/database.hh"
@@ -162,7 +163,7 @@ bool schema::has_custom_partitioner() const {
 }
 
 lw_shared_ptr<cql3::column_specification>
-schema::make_column_specification(const column_definition& def) {
+schema::make_column_specification(const column_definition& def) const {
     auto id = ::make_shared<cql3::column_identifier>(def.name(), column_name_type(def));
     return make_lw_shared<cql3::column_specification>(_raw._ks_name, _raw._cf_name, std::move(id), def.type);
 }
