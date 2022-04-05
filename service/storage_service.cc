@@ -353,7 +353,7 @@ void storage_service::prepare_to_join(
     _gossiper.start_gossiping(generation_number, app_states, advertise).get();
 }
 
-void storage_service::maybe_start_sys_dist_ks() {
+void storage_service::start_sys_dist_ks() {
     supervisor::notify("starting system distributed keyspace");
     _sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start).get();
 }
@@ -486,12 +486,12 @@ void storage_service::join_token_ring(std::chrono::milliseconds delay) {
             slogger.info("Replacing a node with token(s): {}", _bootstrap_tokens);
             // _bootstrap_tokens was previously set in prepare_to_join using tokens gossiped by the replaced node
         }
-        maybe_start_sys_dist_ks();
+        start_sys_dist_ks();
         mark_existing_views_as_built();
         _sys_ks.local().update_tokens(_bootstrap_tokens).get();
         bootstrap(); // blocks until finished
     } else {
-        maybe_start_sys_dist_ks();
+        start_sys_dist_ks();
         _bootstrap_tokens = db::system_keyspace::get_saved_tokens().get0();
         if (_bootstrap_tokens.empty()) {
             _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(get_token_metadata_ptr(), _db.local().get_config(), dht::check_token_endpoint::no);
