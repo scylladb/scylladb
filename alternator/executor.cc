@@ -51,6 +51,7 @@
 #include "schema_registry.hh"
 #include "utils/error_injection.hh"
 #include "db/schema_tables.hh"
+#include "utils/rjson.hh"
 
 logging::logger elogger("alternator-executor");
 
@@ -2146,10 +2147,62 @@ void attribute_path_map_add(const char* source, attribute_path_map<T>& map, cons
     }
 }
 
+// Parse the "Select" parameter of a Scan or Query operation, throwing a
+// ValidationException in various forbidden combinations of options and
+// finally returning one of three options:
+// 1. regular - the default scan behavior of returning all or specific
+//    attributes ("ALL_ATTRIBUTES" or "SPECIFIC_ATTRIBUTES").
+// 2. count - just count the items ("COUNT")
+// 3. projection - return projected attributes ("ALL_PROJECTED_ATTRIBUTES")
+// An ValidationException is thrown when recognizing an invalid combination
+// of options - such as ALL_PROJECTED_ATTRIBUTES for a base table, or
+// SPECIFIC_ATTRIBUTES without ProjectionExpression or AttributesToGet.
+enum class select_type { regular, count, projection };
+static select_type parse_select(const rjson::value& request, table_or_view_type table_type) {
+    const rjson::value* select_value = rjson::find(request, "Select");
+    if (!select_value) {
+        // If "Select" is not specificed, it defaults to ALL_ATTRIBUTES
+        // on a base table, or ALL_PROJECTED_ATTRIBUTES on an index
+        return table_type == table_or_view_type::base ?
+            select_type::regular : select_type::projection;
+    }
+    if (!select_value->IsString()) {
+        throw api_error::validation("Select parameter must be a string");
+    }
+    std::string_view select = rjson::to_string_view(*select_value);
+    const bool has_attributes_to_get = request.HasMember("AttributesToGet");
+    const bool has_projection_expression = request.HasMember("ProjectionExpression");
+    if (select == "SPECIFIC_ATTRIBUTES") {
+        if (has_projection_expression || has_attributes_to_get) {
+            return select_type::regular;
+        }
+        throw api_error::validation("Select=SPECIFIC_ATTRIBUTES requires AttributesToGet or ProjectionExpression");
+    }
+    if (has_projection_expression || has_attributes_to_get) {
+        throw api_error::validation("AttributesToGet or ProjectionExpression require Select to be either SPECIFIC_ATTRIBUTES or missing");
+    }
+    if (select == "COUNT") {
+        return select_type::count;
+    }
+    if (select == "ALL_ATTRIBUTES") {
+        // FIXME: when we support projections (#5036), if this is a GSI and
+        // not all attributes are projected to it, we should throw.
+        return select_type::regular;
+    }
+    if (select == "ALL_PROJECTED_ATTRIBUTES") {
+        if (table_type == table_or_view_type::base) {
+            throw api_error::validation("ALL_PROJECTED_ATTRIBUTES only allowed for indexes");
+        }
+        return select_type::projection;
+    }
+    throw api_error::validation(format("Unknown Select value '{}'. Allowed choices: ALL_ATTRIBUTES, SPECIFIC_ATTRIBUTES, ALL_PROJECTED_ATTRIBUTES, COUNT",
+        select));
+}
+
 // calculate_attrs_to_get() takes either AttributesToGet or
 // ProjectionExpression parameters (having both is *not* allowed),
-// and returns the list of cells we need to read, or an empty set when
-// *all* attributes are to be returned.
+// and returns the list of cells we need to read, or a disengaged optional
+// when *all* attributes are to be returned.
 // However, in our current implementation, only top-level attributes are
 // stored as separate cells - a nested document is stored serialized together
 // (as JSON) in the same cell. So this function return a map - each key is the
@@ -2158,7 +2211,14 @@ void attribute_path_map_add(const char* source, attribute_path_map<T>& map, cons
 // that we will need to extract from that serialized JSON.
 // For example, if ProjectionExpression lists a.b and a.c[2], we
 // return one top-level attribute name, "a", with the value "{b, c[2]}".
-static attrs_to_get calculate_attrs_to_get(const rjson::value& req, std::unordered_set<std::string>& used_attribute_names) {
+
+static std::optional<attrs_to_get> calculate_attrs_to_get(const rjson::value& req, std::unordered_set<std::string>& used_attribute_names, select_type select = select_type::regular) {
+    if (select == select_type::count) {
+        // An empty map asks to retrieve no attributes. Note that this is
+        // different from a disengaged optional which means retrieve all.
+        return attrs_to_get();
+    }
+    // FIXME: also need to handle select_type::projection
     const bool has_attributes_to_get = req.HasMember("AttributesToGet");
     const bool has_projection_expression = req.HasMember("ProjectionExpression");
     if (has_attributes_to_get && has_projection_expression) {
@@ -2191,8 +2251,8 @@ static attrs_to_get calculate_attrs_to_get(const rjson::value& req, std::unorder
         }
         return ret;
     }
-    // An empty map asks to read everything
-    return {};
+    // An disengaged optional asks to read everything
+    return std::nullopt;
 }
 
 /**
@@ -2212,7 +2272,7 @@ static attrs_to_get calculate_attrs_to_get(const rjson::value& req, std::unorder
  */ 
 void executor::describe_single_item(const cql3::selection::selection& selection,
     const std::vector<bytes_opt>& result_row,
-    const attrs_to_get& attrs_to_get,
+    const std::optional<attrs_to_get>& attrs_to_get,
     rjson::value& item,
     bool include_all_embedded_attributes) 
 {
@@ -2221,7 +2281,7 @@ void executor::describe_single_item(const cql3::selection::selection& selection,
     for (const bytes_opt& cell : result_row) {
         std::string column_name = (*column_it)->name_as_text();
         if (cell && column_name != executor::ATTRS_COLUMN_NAME) {
-            if (attrs_to_get.empty() || attrs_to_get.contains(column_name)) {
+            if (!attrs_to_get || attrs_to_get->contains(column_name)) {
                 // item is expected to start empty, and column_name are unique
                 // so add() makes sense
                 rjson::add_with_string_name(item, column_name, rjson::empty_object());
@@ -2233,20 +2293,23 @@ void executor::describe_single_item(const cql3::selection::selection& selection,
             auto keys_and_values = value_cast<map_type_impl::native_type>(deserialized);
             for (auto entry : keys_and_values) {
                 std::string attr_name = value_cast<sstring>(entry.first);
-                if (include_all_embedded_attributes || attrs_to_get.empty() || attrs_to_get.contains(attr_name)) {
+                if (include_all_embedded_attributes || !attrs_to_get || attrs_to_get->contains(attr_name)) {
                     bytes value = value_cast<bytes>(entry.second);
                     rjson::value v = deserialize_item(value);
-                    auto it = attrs_to_get.find(attr_name);
-                    if (it != attrs_to_get.end()) {
-                        // attrs_to_get may have asked for only part of this attribute:
-                        if (hierarchy_filter(v, it->second)) {
-                            // item is expected to start empty, and attribute
-                            // names are unique so add() makes sense
-                            rjson::add_with_string_name(item, attr_name, std::move(v));
+                    if (attrs_to_get) {
+                        auto it = attrs_to_get->find(attr_name);
+                        if (it != attrs_to_get->end()) {
+                            // attrs_to_get may have asked for only part of
+                            // this attribute. hierarchy_filter() modifies v,
+                            // and returns false when nothing is to be kept.
+                            if (!hierarchy_filter(v, it->second)) {
+                                continue;
+                            }
                         }
-                    } else {
-                        rjson::add_with_string_name(item, attr_name, std::move(v));
                     }
+                    // item is expected to start empty, and attribute
+                    // names are unique so add() makes sense
+                    rjson::add_with_string_name(item, attr_name, std::move(v));
                 }
             }
         }
@@ -2258,7 +2321,7 @@ std::optional<rjson::value> executor::describe_single_item(schema_ptr schema,
         const query::partition_slice& slice,
         const cql3::selection::selection& selection,
         const query::result& query_result,
-        const attrs_to_get& attrs_to_get) {
+        const std::optional<attrs_to_get>& attrs_to_get) {
     rjson::value item = rjson::empty_object();
 
     cql3::selection::result_set_builder builder(selection, gc_clock::now(), cql_serialization_format::latest());
@@ -2952,7 +3015,7 @@ static rjson::value describe_item(schema_ptr schema,
         const query::partition_slice& slice,
         const cql3::selection::selection& selection,
         const query::result& query_result,
-        const attrs_to_get& attrs_to_get) {
+        const std::optional<attrs_to_get>& attrs_to_get) {
     std::optional<rjson::value> opt_item = executor::describe_single_item(std::move(schema), slice, selection, std::move(query_result), attrs_to_get);
     if (!opt_item) {
         // If there is no matching item, we're supposed to return an empty
@@ -3087,7 +3150,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     struct table_requests {
         schema_ptr schema;
         db::consistency_level cl;
-        ::shared_ptr<const alternator::attrs_to_get> attrs_to_get;
+        ::shared_ptr<const std::optional<alternator::attrs_to_get>> attrs_to_get;
         struct single_request {
             partition_key pk;
             clustering_key ck;
@@ -3102,7 +3165,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
         tracing::add_table_name(trace_state, sstring(executor::KEYSPACE_NAME_PREFIX) + rs.schema->cf_name(), rs.schema->cf_name());
         rs.cl = get_read_consistency(it->value);
         std::unordered_set<std::string> used_attribute_names;
-        rs.attrs_to_get = ::make_shared<const attrs_to_get>(calculate_attrs_to_get(it->value, used_attribute_names));
+        rs.attrs_to_get = ::make_shared<const std::optional<attrs_to_get>>(calculate_attrs_to_get(it->value, used_attribute_names));
         verify_all_are_used(request, "ExpressionAttributeNames", used_attribute_names, "GetItem");
         auto& keys = (it->value)["Keys"];
         for (const rjson::value& key : keys.GetArray()) {
@@ -3337,7 +3400,7 @@ void filter::for_filters_on(const noncopyable_function<void(std::string_view)>& 
 class describe_items_visitor {
     typedef std::vector<const column_definition*> columns_t;
     const columns_t& _columns;
-    const attrs_to_get& _attrs_to_get;
+    const std::optional<attrs_to_get>& _attrs_to_get;
     std::unordered_set<std::string> _extra_filter_attrs;
     const filter& _filter;
     typename columns_t::const_iterator _column_it;
@@ -3346,7 +3409,7 @@ class describe_items_visitor {
     size_t _scanned_count;
 
 public:
-    describe_items_visitor(const columns_t& columns, const attrs_to_get& attrs_to_get, filter& filter)
+    describe_items_visitor(const columns_t& columns, const std::optional<attrs_to_get>& attrs_to_get, filter& filter)
             : _columns(columns)
             , _attrs_to_get(attrs_to_get)
             , _filter(filter)
@@ -3359,10 +3422,10 @@ public:
         // _attrs_to_get (i.e., not requested as part of the output).
         // We list those in _extra_filter_attrs. We will include them in
         // the JSON but take them out before finally returning the JSON.
-        if (!_attrs_to_get.empty()) {
+        if (_attrs_to_get) {
             _filter.for_filters_on([&] (std::string_view attr) {
                 std::string a(attr); // no heterogenous maps searches :-(
-                if (!_attrs_to_get.contains(a)) {
+                if (!_attrs_to_get->contains(a)) {
                     _extra_filter_attrs.emplace(std::move(a));
                 }
             });
@@ -3381,7 +3444,7 @@ public:
         result_bytes_view->with_linearized([this] (bytes_view bv) {
             std::string column_name = (*_column_it)->name_as_text();
             if (column_name != executor::ATTRS_COLUMN_NAME) {
-                if (_attrs_to_get.empty() || _attrs_to_get.contains(column_name) || _extra_filter_attrs.contains(column_name)) {
+                if (!_attrs_to_get || _attrs_to_get->contains(column_name) || _extra_filter_attrs.contains(column_name)) {
                     if (!_item.HasMember(column_name.c_str())) {
                         rjson::add_with_string_name(_item, column_name, rjson::empty_object());
                     }
@@ -3393,7 +3456,7 @@ public:
                 auto keys_and_values = value_cast<map_type_impl::native_type>(deserialized);
                 for (auto entry : keys_and_values) {
                     std::string attr_name = value_cast<sstring>(entry.first);
-                    if (_attrs_to_get.empty() || _attrs_to_get.contains(attr_name) || _extra_filter_attrs.contains(attr_name)) {
+                    if (!_attrs_to_get || _attrs_to_get->contains(attr_name) || _extra_filter_attrs.contains(attr_name)) {
                         bytes value = value_cast<bytes>(entry.second);
                         // Even if _attrs_to_get asked to keep only a part of a
                         // top-level attribute, we keep the entire attribute
@@ -3413,13 +3476,15 @@ public:
         if (_filter.check(_item)) {
             // As noted above, we kept entire top-level attributes listed in
             // _attrs_to_get. We may need to only keep parts of them.
-            for (const auto& attr: _attrs_to_get) {
-                // If !attr.has_value() it means we were asked not to keep
-                // attr entirely, but just parts of it.
-                if (!attr.second.has_value()) {
-                    rjson::value* toplevel= rjson::find(_item, attr.first);
-                    if (toplevel && !hierarchy_filter(*toplevel, attr.second)) {
-                        rjson::remove_member(_item, attr.first);
+            if (_attrs_to_get) {
+                for (const auto& attr: *_attrs_to_get) {
+                    // If !attr.has_value() it means we were asked not to keep
+                    // attr entirely, but just parts of it.
+                    if (!attr.second.has_value()) {
+                        rjson::value* toplevel= rjson::find(_item, attr.first);
+                        if (toplevel && !hierarchy_filter(*toplevel, attr.second)) {
+                            rjson::remove_member(_item, attr.first);
+                        }
                     }
                 }
             }
@@ -3444,7 +3509,7 @@ public:
     }
 };
 
-static std::tuple<rjson::value, size_t> describe_items(schema_ptr schema, const query::partition_slice& slice, const cql3::selection::selection& selection, std::unique_ptr<cql3::result_set> result_set, attrs_to_get&& attrs_to_get, filter&& filter) {
+static std::tuple<rjson::value, size_t> describe_items(schema_ptr schema, const query::partition_slice& slice, const cql3::selection::selection& selection, std::unique_ptr<cql3::result_set> result_set, std::optional<attrs_to_get>&& attrs_to_get, filter&& filter) {
     describe_items_visitor visitor(selection.get_columns(), attrs_to_get, filter);
     result_set->visit(visitor);
     auto scanned_count = visitor.get_scanned_count();
@@ -3453,7 +3518,16 @@ static std::tuple<rjson::value, size_t> describe_items(schema_ptr schema, const 
     auto size = items.Size();
     rjson::add(items_descr, "Count", rjson::value(size));
     rjson::add(items_descr, "ScannedCount", rjson::value(scanned_count));
-    rjson::add(items_descr, "Items", std::move(items));
+    // If attrs_to_get && attrs_to_get->empty(), this means the user asked not
+    // to get any attributes (i.e., a Scan or Query with Select=COUNT) and we
+    // shouldn't return "Items" at all.
+    // TODO: consider optimizing the case of Select=COUNT without a filter.
+    // In that case, we currently build a list of empty items and here drop
+    // it. We could just count the items and not bother with the empty items.
+    // (However, remember that when we do have a filter, we need the items).
+    if (!attrs_to_get || !attrs_to_get->empty()) {
+        rjson::add(items_descr, "Items", std::move(items));
+    }
     return {std::move(items_descr), size};
 }
 
@@ -3486,7 +3560,7 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
         const rjson::value* exclusive_start_key,
         dht::partition_range_vector&& partition_ranges,
         std::vector<query::clustering_range>&& ck_bounds,
-        attrs_to_get&& attrs_to_get,
+        std::optional<attrs_to_get>&& attrs_to_get,
         uint32_t limit,
         db::consistency_level cl,
         filter&& filter,
@@ -3618,9 +3692,11 @@ future<executor::request_return_type> executor::scan(client_state& client_state,
         return make_ready_future<request_return_type>(api_error::validation("Limit must be greater than 0"));
     }
 
+    select_type select = parse_select(request, table_type);
+
     std::unordered_set<std::string> used_attribute_names;
     std::unordered_set<std::string> used_attribute_values;
-    auto attrs_to_get = calculate_attrs_to_get(request, used_attribute_names);
+    auto attrs_to_get = calculate_attrs_to_get(request, used_attribute_names, select);
 
     dht::partition_range_vector partition_ranges;
     if (segment) {
@@ -4118,7 +4194,9 @@ future<executor::request_return_type> executor::query(client_state& client_state
         break;
     }
 
-    auto attrs_to_get = calculate_attrs_to_get(request, used_attribute_names);
+    select_type select = parse_select(request, table_type);
+
+    auto attrs_to_get = calculate_attrs_to_get(request, used_attribute_names, select);
     verify_all_are_used(request, "ExpressionAttributeValues", used_attribute_values, "Query");
     verify_all_are_used(request, "ExpressionAttributeNames", used_attribute_names, "Query");
     query::partition_slice::option_set opts;

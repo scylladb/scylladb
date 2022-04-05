@@ -221,7 +221,6 @@ def test_query_which_key(test_table):
 # ALL_ATTRIBUTES, returns items with all their attributes. Other modes
 # allow returning just specific attributes or just counting the results
 # without returning items at all.
-@pytest.mark.xfail(reason="Select not supported yet. Issue #5058")
 def test_query_select(test_table_sn):
     numbers = [Decimal(i) for i in range(10)]
     # Insert these numbers, in random order, into one partition:
@@ -269,6 +268,10 @@ def test_query_select(test_table_sn):
     # Select with some unknown string generates a validation exception:
     with pytest.raises(ClientError, match='ValidationException'):
         test_table_sn.query(ConsistentRead=True, KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}, Select='UNKNOWN')
+    # The Select value is case sensitive - "COUNT" works (checked above),
+    # but "count" doesn't:
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_sn.query(ConsistentRead=True, KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}, Select='count')
     # If either AttributesToGet or ProjectionExpression appear in the query,
     # only Select=SPECIFIC_ATTRIBUTES (or nothing) is allowed - other Select
     # settings contradict the AttributesToGet or ProjectionExpression, and

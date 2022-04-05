@@ -130,10 +130,6 @@ they should be easy to detect. Here is a list of these unimplemented features:
   conditional updates feature are fully supported.
   https://github.com/scylladb/scylla/issues/5064
 
-* The "Select" option of Scan and Query operations, which allows to only
-  read parts of items or to just count them, is not yet supported.
-  https://github.com/scylladb/scylla/issues/5058
-
 * Alternator does not yet support the DynamoDB API calls that control which
   table is available in which data center (DC): CreateGlobalTable,
   UpdateGlobalTable, DescribeGlobalTable, ListGlobalTables,

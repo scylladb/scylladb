@@ -186,7 +186,6 @@ def test_scan_with_key_equality_filtering(dynamodb, filled_test_table):
 # ALL_ATTRIBUTES, returns items with all their attributes. Other modes
 # allow returning just specific attributes or just counting the results
 # without returning items at all.
-@pytest.mark.xfail(reason="Select not supported yet. Issue #5058")
 def test_scan_select(filled_test_table):
     test_table, items = filled_test_table
     got_items = full_scan(test_table)

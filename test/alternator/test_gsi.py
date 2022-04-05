@@ -1154,7 +1154,6 @@ def test_gsi_backfill_empty_string(dynamodb):
 # We split the test into two, the first just requiring proper implementation
 # of Select, and the second requiring also a proper implementation of
 # projection of just a subset of the attributes.
-@pytest.mark.xfail(reason="Select not supported yet. Issue #5058")
 def test_gsi_query_select_1(test_table_gsi_1):
     items = [{'p': random_string(), 'c': random_string(), 'x': random_string(), 'y': random_string()} for i in range(10)]
     with test_table_gsi_1.batch_writer() as batch:
@@ -1187,7 +1186,7 @@ def test_gsi_query_select_1(test_table_gsi_1):
         Select='COUNT',
         KeyConditions={'c': {'AttributeValueList': [c], 'ComparisonOperator': 'EQ'}})
 
-@pytest.mark.xfail(reason="Projection and Select not supported yet. Issue #5036, #5058")
+@pytest.mark.xfail(reason="Projection not supported yet. Issue #5036")
 def test_gsi_query_select_2(dynamodb):
     with new_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],

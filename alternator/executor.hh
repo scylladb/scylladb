@@ -144,6 +144,11 @@ template<typename T>
 using attribute_path_map = std::unordered_map<std::string, attribute_path_map_node<T>>;
 
 using attrs_to_get_node = attribute_path_map_node<std::monostate>;
+// attrs_to_get lists which top-level attribute are needed, and possibly also
+// which part of the top-level attribute is really needed (when nested
+// attribute paths appeared in the query).
+// Most code actually uses optional<attrs_to_get>. There, a disengaged
+// optional means we should get all attributes, not specific ones.
 using attrs_to_get = attribute_path_map<std::monostate>;
 
 
@@ -216,11 +221,11 @@ public:
         const query::partition_slice&,
         const cql3::selection::selection&,
         const query::result&,
-        const attrs_to_get&);
+        const std::optional<attrs_to_get>&);
 
     static void describe_single_item(const cql3::selection::selection&,
         const std::vector<bytes_opt>&,
-        const attrs_to_get&,
+        const std::optional<attrs_to_get>&,
         rjson::value&,
         bool = false);
 

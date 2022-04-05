@@ -712,7 +712,6 @@ def test_filter_expression_and_projection_expression_2(test_table):
 # Test that a FilterExpression and Select=COUNT may be given together. Namely,
 # test that FilterExpression may inspect attributes which will not be returned
 # by the query, because the responses are just counted.
-@pytest.mark.xfail(reason="Select not supported yet - #5058")
 def test_filter_expression_and_select_count(test_table):
     p = random_string()
     test_table.put_item(Item={'p': p, 'c': 'hi', 'x': 'dog', 'y': 'cat'})

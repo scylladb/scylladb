@@ -551,7 +551,6 @@ def test_query_filter_and_attributes_to_get(test_table):
 # Test that a QueryFilter and Select=COUNT may be given together. Namely,
 # test that QueryFilter may inspect attributes which will not be returned
 # by the query, because the responses are just counted.
-@pytest.mark.xfail(reason="Select not supported yet - #5058")
 def test_query_filter_and_select_count(test_table):
     p = random_string()
     test_table.put_item(Item={'p': p, 'c': 'hi', 'x': 'dog', 'y': 'cat'})
