@@ -43,15 +43,13 @@ public:
         _last_key = std::move(_new_last_key);
         auto start = population_range_start();
         auto phase = _cache.phase_of(start);
-        auto refresh_reader = make_ready_future<>();
         if (!_reader || _reader_creation_phase != phase) {
             if (_last_key) {
                 auto cmp = dht::ring_position_comparator(*_cache._schema);
                 auto&& new_range = _range.split_after(*_last_key, cmp);
                 if (!new_range) {
-                  return close_reader().then([] {
-                    return make_ready_future<mutation_fragment_opt>();
-                  });
+                    co_await close_reader();
+                    co_return std::nullopt;
                 }
                 _range = std::move(*new_range);
                 _last_key = {};
@@ -60,27 +58,26 @@ public:
                 ++_cache._tracker._stats.underlying_recreations;
             }
             auto old_reader = std::move(*_reader);
-          refresh_reader = futurize_invoke([this, phase] () {
+            std::exception_ptr ex;
+          try {
             _reader = _cache.create_underlying_reader(_read_context, _cache.snapshot_for_phase(phase), _range);
             _reader_creation_phase = phase;
-          }).finally([rd = std::move(old_reader)] () mutable {
-            return rd.close();
-          });
+          } catch(...) {
+              ex = std::current_exception();
+          }
+            co_await old_reader.close();
+            maybe_rethrow_exception(std::move(ex));
         }
-     return refresh_reader.then([this] {
-      return _reader->next_partition().then([this] {
+        co_await _reader->next_partition();
         if (_reader->is_end_of_stream() && _reader->is_buffer_empty()) {
-            return make_ready_future<mutation_fragment_opt>();
+            co_return std::nullopt;
         }
-        return (*_reader)().then([this] (auto&& mfopt) {
+        auto mfopt = co_await (*_reader)();
             if (mfopt) {
                 assert(mfopt->is_partition_start());
                 _new_last_key = mfopt->as_partition_start().key();
             }
-            return std::move(mfopt);
-        });
-      });
-     });
+            co_return std::move(mfopt);
     }
     future<> fast_forward_to(dht::partition_range&& range) {
         auto snapshot_and_phase = _cache.snapshot_of(dht::ring_position_view::for_range_start(_range));
