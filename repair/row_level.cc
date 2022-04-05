@@ -396,103 +396,103 @@ public:
     }
 };
 
-    future<> repair_writer::write_start_and_mf(lw_shared_ptr<const decorated_key_with_hash> dk, mutation_fragment mf) {
-        _current_dk_written_to_sstable = dk;
-        if (mf.is_partition_start()) {
-            return _mq->push(std::move(mf)).then([this] {
-                _partition_opened = true;
-            });
-        } else {
-            auto start = mutation_fragment(*_schema, _permit, partition_start(dk->dk, tombstone()));
-            return _mq->push(std::move(start)).then([this, mf = std::move(mf)] () mutable {
-                _partition_opened = true;
-                return _mq->push(std::move(mf));
-            });
-        }
-    };
-
-    void repair_writer::create_writer(sharded<replica::database>& db, sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<db::view::view_update_generator>& view_update_gen) {
-        if (_writer_done) {
-            return;
-        }
-        replica::table& t = db.local().find_column_family(_schema->id());
-        auto [queue_reader, queue_handle] = make_queue_reader(_schema, _permit);
-        _mq = std::move(queue_handle);
-        auto writer = shared_from_this();
-        _writer_done = mutation_writer::distribute_reader_and_consume_on_shards(_schema, upgrade_to_v2(std::move(queue_reader)),
-                streaming::make_streaming_consumer(sstables::repair_origin, db, sys_dist_ks, view_update_gen, _estimated_partitions, _reason, is_offstrategy_supported(_reason)),
-        t.stream_in_progress()).then([writer] (uint64_t partitions) {
-            rlogger.debug("repair_writer: keyspace={}, table={}, managed to write partitions={} to sstable",
-                writer->_schema->ks_name(), writer->_schema->cf_name(), partitions);
-        }).handle_exception([writer] (std::exception_ptr ep) {
-            rlogger.warn("repair_writer: keyspace={}, table={}, multishard_writer failed: {}",
-                    writer->_schema->ks_name(), writer->_schema->cf_name(), ep);
-            writer->_mq->abort(ep);
-            return make_exception_future<>(std::move(ep));
+future<> repair_writer::write_start_and_mf(lw_shared_ptr<const decorated_key_with_hash> dk, mutation_fragment mf) {
+    _current_dk_written_to_sstable = dk;
+    if (mf.is_partition_start()) {
+        return _mq->push(std::move(mf)).then([this] {
+            _partition_opened = true;
+        });
+    } else {
+        auto start = mutation_fragment(*_schema, _permit, partition_start(dk->dk, tombstone()));
+        return _mq->push(std::move(start)).then([this, mf = std::move(mf)] () mutable {
+            _partition_opened = true;
+            return _mq->push(std::move(mf));
         });
     }
+};
 
-    future<> repair_writer::write_partition_end() {
-        if (_partition_opened) {
-            return _mq->push(mutation_fragment(*_schema, _permit, partition_end())).then([this] {
-                _partition_opened = false;
+void repair_writer::create_writer(sharded<replica::database>& db, sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<db::view::view_update_generator>& view_update_gen) {
+    if (_writer_done) {
+        return;
+    }
+    replica::table& t = db.local().find_column_family(_schema->id());
+    auto [queue_reader, queue_handle] = make_queue_reader(_schema, _permit);
+    _mq = std::move(queue_handle);
+    auto writer = shared_from_this();
+    _writer_done = mutation_writer::distribute_reader_and_consume_on_shards(_schema, upgrade_to_v2(std::move(queue_reader)),
+            streaming::make_streaming_consumer(sstables::repair_origin, db, sys_dist_ks, view_update_gen, _estimated_partitions, _reason, is_offstrategy_supported(_reason)),
+    t.stream_in_progress()).then([writer] (uint64_t partitions) {
+        rlogger.debug("repair_writer: keyspace={}, table={}, managed to write partitions={} to sstable",
+            writer->_schema->ks_name(), writer->_schema->cf_name(), partitions);
+    }).handle_exception([writer] (std::exception_ptr ep) {
+        rlogger.warn("repair_writer: keyspace={}, table={}, multishard_writer failed: {}",
+                writer->_schema->ks_name(), writer->_schema->cf_name(), ep);
+        writer->_mq->abort(ep);
+        return make_exception_future<>(std::move(ep));
+    });
+}
+
+future<> repair_writer::write_partition_end() {
+    if (_partition_opened) {
+        return _mq->push(mutation_fragment(*_schema, _permit, partition_end())).then([this] {
+            _partition_opened = false;
+        });
+    }
+    return make_ready_future<>();
+}
+
+future<> repair_writer::do_write(lw_shared_ptr<const decorated_key_with_hash> dk, mutation_fragment mf) {
+    if (_current_dk_written_to_sstable) {
+        const auto cmp_res = _current_dk_written_to_sstable->dk.tri_compare(*_schema, dk->dk);
+        if (cmp_res > 0) {
+            on_internal_error(rlogger, format("repair_writer::do_write(): received out-of-order partition, current: {}, next: {}", _current_dk_written_to_sstable->dk, dk->dk));
+        } else if (cmp_res == 0) {
+            return _mq->push(std::move(mf));
+        } else {
+            return write_partition_end().then([this,
+                    dk = std::move(dk), mf = std::move(mf)] () mutable {
+                return write_start_and_mf(std::move(dk), std::move(mf));
             });
         }
-        return make_ready_future<>();
+    } else {
+        return write_start_and_mf(std::move(dk), std::move(mf));
     }
+}
 
-    future<> repair_writer::do_write(lw_shared_ptr<const decorated_key_with_hash> dk, mutation_fragment mf) {
-        if (_current_dk_written_to_sstable) {
-            const auto cmp_res = _current_dk_written_to_sstable->dk.tri_compare(*_schema, dk->dk);
-            if (cmp_res > 0) {
-                on_internal_error(rlogger, format("repair_writer::do_write(): received out-of-order partition, current: {}, next: {}", _current_dk_written_to_sstable->dk, dk->dk));
-            } else if (cmp_res == 0) {
-                return _mq->push(std::move(mf));
-            } else {
-                return write_partition_end().then([this,
-                        dk = std::move(dk), mf = std::move(mf)] () mutable {
-                    return write_start_and_mf(std::move(dk), std::move(mf));
-                });
-            }
-        } else {
-            return write_start_and_mf(std::move(dk), std::move(mf));
-        }
-    }
-
-    future<> repair_writer::write_end_of_stream() {
-        if (_mq) {
-          return with_semaphore(_sem, 1, [this] {
-            // Partition_end is never sent on wire, so we have to write one ourselves.
-            return write_partition_end().then([this] () mutable {
-                _mq->push_end_of_stream();
-            }).handle_exception([this] (std::exception_ptr ep) {
-                _mq->abort(ep);
-                rlogger.warn("repair_writer: keyspace={}, table={}, write_end_of_stream failed: {}",
-                        _schema->ks_name(), _schema->cf_name(), ep);
-                return make_exception_future<>(std::move(ep));
-            });
-          });
-        } else {
-            return make_ready_future<>();
-        }
-    }
-
-    future<> repair_writer::do_wait_for_writer_done() {
-        if (_writer_done) {
-            return std::move(*(_writer_done));
-        } else {
-            return make_ready_future<>();
-        }
-    }
-
-    future<> repair_writer::wait_for_writer_done() {
-        return when_all_succeed(write_end_of_stream(), do_wait_for_writer_done()).discard_result().handle_exception(
-                [this] (std::exception_ptr ep) {
-            rlogger.warn("repair_writer: keyspace={}, table={}, wait_for_writer_done failed: {}",
+future<> repair_writer::write_end_of_stream() {
+    if (_mq) {
+      return with_semaphore(_sem, 1, [this] {
+        // Partition_end is never sent on wire, so we have to write one ourselves.
+        return write_partition_end().then([this] () mutable {
+            _mq->push_end_of_stream();
+        }).handle_exception([this] (std::exception_ptr ep) {
+            _mq->abort(ep);
+            rlogger.warn("repair_writer: keyspace={}, table={}, write_end_of_stream failed: {}",
                     _schema->ks_name(), _schema->cf_name(), ep);
             return make_exception_future<>(std::move(ep));
         });
+      });
+    } else {
+        return make_ready_future<>();
     }
+}
+
+future<> repair_writer::do_wait_for_writer_done() {
+    if (_writer_done) {
+        return std::move(*(_writer_done));
+    } else {
+        return make_ready_future<>();
+    }
+}
+
+future<> repair_writer::wait_for_writer_done() {
+    return when_all_succeed(write_end_of_stream(), do_wait_for_writer_done()).discard_result().handle_exception(
+            [this] (std::exception_ptr ep) {
+        rlogger.warn("repair_writer: keyspace={}, table={}, wait_for_writer_done failed: {}",
+                _schema->ks_name(), _schema->cf_name(), ep);
+        return make_exception_future<>(std::move(ep));
+    });
+}
 
 class repair_meta;
 class repair_meta_tracker;
