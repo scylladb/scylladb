@@ -1842,6 +1842,62 @@ future<> database::apply_with_commitlog(column_family& cf, const mutation& m, db
     }
 }
 
+future<> database::apply(const std::vector<frozen_mutation>& muts, db::timeout_clock::time_point timeout) {
+    if (timeout <= db::timeout_clock::now()) {
+        update_write_metrics_for_timed_out_write();
+        return make_exception_future<>(timed_out_error{});
+    }
+    return update_write_metrics(do_apply_many(muts, timeout));
+}
+
+future<> database::do_apply_many(const std::vector<frozen_mutation>& muts, db::timeout_clock::time_point timeout) {
+    std::vector<commitlog_entry_writer> writers;
+    db::commitlog* cl = nullptr;
+    std::optional<shard_id> shard;
+
+    writers.reserve(muts.size());
+
+    for (auto i = 0; i < muts.size(); ++i) {
+        auto s = local_schema_registry().get(muts[i].schema_version());
+        auto&& cf = find_column_family(muts[i].column_family_id());
+
+        if (!cl) {
+            cl = cf.commitlog();
+        } else if (cl != cf.commitlog()) {
+            auto&& first_cf = find_column_family(muts[0].column_family_id());
+            on_internal_error(dblog, format("Cannot apply atomically across commitlog domains: {}.{}, {}.{}",
+                              cf.schema()->ks_name(), cf.schema()->cf_name(),
+                              first_cf.schema()->ks_name(), first_cf.schema()->cf_name()));
+        }
+
+        auto m_shard = dht::shard_of(*s, dht::get_token(*s, muts[i].key()));
+        if (!shard) {
+            if (this_shard_id() != m_shard) {
+                on_internal_error(dblog, format("Must call apply() on the owning shard ({} != {})", this_shard_id(), m_shard));
+            }
+            shard = m_shard;
+        } else if (*shard != m_shard) {
+            on_internal_error(dblog, "Cannot apply atomically across shards");
+        }
+
+        dblog.trace("apply [{}/{}]: {}", i, muts.size() - 1, muts[i].pretty_printer(s));
+        writers.emplace_back(s, muts[i], commitlog_entry_writer::force_sync::yes);
+    }
+
+    if (!cl) {
+        on_internal_error(dblog, "Cannot apply atomically without commitlog");
+    }
+
+    std::vector<rp_handle> handles = co_await cl->add_entries(std::move(writers), timeout);
+
+    // FIXME: Memtable application is not atomic so reads may observe mutations partially applied until restart.
+    for (auto i = 0; i < muts.size(); ++i) {
+        auto&& cf = find_column_family(muts[i].column_family_id());
+        auto s = local_schema_registry().get(muts[i].schema_version());
+        co_await apply_in_memory(muts[i], s, std::move(handles[i]), timeout);
+    }
+}
+
 future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout, db::commitlog::force_sync sync, db::per_partition_rate_limit::info rate_limit_info) {
     // I'm doing a nullcheck here since the init code path for db etc
     // is a little in flux and commitlog is created only when db is
