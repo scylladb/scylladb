@@ -240,4 +240,6 @@ class repair_hasher;
 future<> repair_cf_range_row_level(repair_info& ri,
         sstring cf_name, utils::UUID table_id, dht::token_range range,
         const std::vector<gms::inet_address>& all_peer_nodes);
-future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows, schema_ptr _schema, uint64_t _seed, repair_master _repair_master, reader_permit _permit, repair_hasher _repair_hasher);
+future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows,
+        schema_ptr s, uint64_t seed, repair_master is_master,
+        reader_permit permit, repair_hasher hasher);
