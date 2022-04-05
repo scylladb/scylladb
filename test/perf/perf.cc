@@ -54,6 +54,22 @@ operator<<(std::ostream& os, const perf_result& result) {
     return os;
 }
 
+aio_writes_result_mixin::aio_writes_result_mixin()
+    : aio_writes(engine().get_io_stats().aio_writes)
+    , aio_write_bytes(engine().get_io_stats().aio_write_bytes)
+{}
+
+void aio_writes_result_mixin::update(aio_writes_result_mixin& result, const executor_shard_stats& stats) {
+    result.aio_writes = (engine().get_io_stats().aio_writes - result.aio_writes) / stats.invocations;
+    result.aio_write_bytes = (engine().get_io_stats().aio_write_bytes - result.aio_write_bytes) / stats.invocations;
+}
+
+std::ostream& operator<<(std::ostream& os, const perf_result_with_aio_writes& result) {
+    fmt::print(os, "{:.2f} tps ({:5.1f} allocs/op, {:5.1f} tasks/op, {:7.0f} insns/op, {:7.2f} bytes/op, {:5.1f} writes/op)",
+            result.throughput, result.mallocs_per_op, result.tasks_per_op, result.instructions_per_op, result.aio_write_bytes, result.aio_writes);
+    return os;
+}
+
 namespace perf {
 
 reader_concurrency_semaphore_wrapper::reader_concurrency_semaphore_wrapper(sstring name)

@@ -143,6 +143,21 @@ struct perf_result {
 
 std::ostream& operator<<(std::ostream& os, const perf_result& result);
 
+// Use to make a perf_result with aio_writes added. Need to give "update" as
+// update-func to time_parallel_ex to make it work.
+struct aio_writes_result_mixin {
+    double aio_writes;
+    double aio_write_bytes;
+
+    aio_writes_result_mixin();
+
+    static void update(aio_writes_result_mixin& result, const executor_shard_stats& stats);
+};
+
+struct perf_result_with_aio_writes : public perf_result, public aio_writes_result_mixin {};
+
+std::ostream& operator<<(std::ostream& os, const perf_result_with_aio_writes& result);
+
 /**
  * Measures throughput of an asynchronous action. Executes the action on all cores
  * in parallel, with given number of concurrent executions per core.
