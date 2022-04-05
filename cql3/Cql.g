@@ -857,7 +857,8 @@ indexIdent returns [::shared_ptr<index_target::raw> id]
     @init {
         std::vector<::shared_ptr<cql3::column_identifier::raw>> columns;
     }
-    : c=cident                   { $id = index_target::raw::values_of(c); }
+    : c=cident                   { $id = index_target::raw::regular_values_of(c); }
+    | K_VALUES '(' c=cident ')'  { $id = index_target::raw::collection_values_of(c); }
     | K_KEYS '(' c=cident ')'    { $id = index_target::raw::keys_of(c); }
     | K_ENTRIES '(' c=cident ')' { $id = index_target::raw::keys_and_values_of(c); }
     | K_FULL '(' c=cident ')'    { $id = index_target::raw::full_collection(c); }

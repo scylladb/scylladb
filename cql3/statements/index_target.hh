@@ -22,13 +22,13 @@ struct index_target {
     static const sstring target_option_name;
     static const sstring custom_index_option_name;
 
-    using single_column =::shared_ptr<column_identifier>;
+    enum class target_type {
+        regular_values, collection_values, keys, keys_and_values, full
+    };
+
+    using single_column = ::shared_ptr<column_identifier>;
     using multiple_columns = std::vector<::shared_ptr<column_identifier>>;
     using value_type = std::variant<single_column, multiple_columns>;
-
-    enum class target_type {
-        values, keys, keys_and_values, full
-    };
 
     const value_type value;
     const target_type type;
@@ -54,7 +54,8 @@ struct index_target {
         raw(::shared_ptr<column_identifier::raw> c, target_type t) : value(c), type(t) {}
         raw(std::vector<::shared_ptr<column_identifier::raw>> pk_columns, target_type t) : value(pk_columns), type(t) {}
 
-        static ::shared_ptr<raw> values_of(::shared_ptr<column_identifier::raw> c);
+        static ::shared_ptr<raw> regular_values_of(::shared_ptr<column_identifier::raw> c);
+        static ::shared_ptr<raw> collection_values_of(::shared_ptr<column_identifier::raw> c);
         static ::shared_ptr<raw> keys_of(::shared_ptr<column_identifier::raw> c);
         static ::shared_ptr<raw> keys_and_values_of(::shared_ptr<column_identifier::raw> c);
         static ::shared_ptr<raw> full_collection(::shared_ptr<column_identifier::raw> c);

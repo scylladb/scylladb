@@ -45,8 +45,10 @@ index_target::target_type index_target::from_sstring(const sstring& s)
         return index_target::target_type::keys;
     } else if (s == "entries") {
         return index_target::target_type::keys_and_values;
+    } else if (s == "regular_values") {
+        return index_target::target_type::regular_values;
     } else if (s == "values") {
-        return index_target::target_type::values;
+        return index_target::target_type::collection_values;
     } else if (s == "full") {
         return index_target::target_type::full;
     }
@@ -57,14 +59,20 @@ sstring index_target::index_option(target_type type) {
     switch (type) {
         case target_type::keys: return secondary_index::index_keys_option_name;
         case target_type::keys_and_values: return secondary_index::index_entries_option_name;
-        case target_type::values: return secondary_index::index_values_option_name;
+        case target_type::collection_values: return secondary_index::index_collection_values_option_name;
+        case target_type::regular_values: return secondary_index::index_regular_values_option_name;
         default: throw std::invalid_argument("should not reach");
     }
 }
 
 ::shared_ptr<index_target::raw>
-index_target::raw::values_of(::shared_ptr<column_identifier::raw> c) {
-    return ::make_shared<raw>(c, target_type::values);
+index_target::raw::regular_values_of(::shared_ptr<column_identifier::raw> c) {
+    return ::make_shared<raw>(c, target_type::regular_values);
+}
+
+::shared_ptr<index_target::raw>
+index_target::raw::collection_values_of(::shared_ptr<column_identifier::raw> c) {
+    return ::make_shared<raw>(c, target_type::collection_values);
 }
 
 ::shared_ptr<index_target::raw>
@@ -84,7 +92,7 @@ index_target::raw::full_collection(::shared_ptr<column_identifier::raw> c) {
 
 ::shared_ptr<index_target::raw>
 index_target::raw::columns(std::vector<::shared_ptr<column_identifier::raw>> c) {
-    return ::make_shared<raw>(std::move(c), target_type::values);
+    return ::make_shared<raw>(std::move(c), target_type::regular_values);
 }
 
 ::shared_ptr<index_target>
@@ -115,7 +123,8 @@ sstring to_sstring(index_target::target_type type)
     switch (type) {
     case index_target::target_type::keys: return "keys";
     case index_target::target_type::keys_and_values: return "entries";
-    case index_target::target_type::values: return "values";
+    case index_target::target_type::regular_values: return "regular_values";
+    case index_target::target_type::collection_values: return "values";
     case index_target::target_type::full: return "full";
     }
     return "";

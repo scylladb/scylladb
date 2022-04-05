@@ -96,9 +96,6 @@ view_ptr secondary_index_manager::create_view_for_index(const index_metadata& im
     auto target_info = target_parser::parse(schema, im);
     const auto* index_target = im.local() ? target_info.ck_columns.front() : target_info.pk_columns.front();
     auto target_type = target_info.type;
-    if (target_type != cql3::statements::index_target::target_type::values) {
-        throw std::runtime_error(format("Unsupported index target type: {}", to_sstring(target_type)));
-    }
 
     // For local indexing, start with base partition key
     if (im.local()) {
