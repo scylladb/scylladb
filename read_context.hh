@@ -59,12 +59,12 @@ public:
             }
             auto old_reader = std::move(*_reader);
             std::exception_ptr ex;
-          try {
-            _reader = _cache.create_underlying_reader(_read_context, _cache.snapshot_for_phase(phase), _range);
-            _reader_creation_phase = phase;
-          } catch(...) {
-              ex = std::current_exception();
-          }
+            try {
+                _reader = _cache.create_underlying_reader(_read_context, _cache.snapshot_for_phase(phase), _range);
+                _reader_creation_phase = phase;
+            } catch(...) {
+                  ex = std::current_exception();
+            }
             co_await old_reader.close();
             maybe_rethrow_exception(std::move(ex));
         }
@@ -73,11 +73,11 @@ public:
             co_return std::nullopt;
         }
         auto mfopt = co_await (*_reader)();
-            if (mfopt) {
-                assert(mfopt->is_partition_start());
-                _new_last_key = mfopt->as_partition_start().key();
-            }
-            co_return std::move(mfopt);
+        if (mfopt) {
+            assert(mfopt->is_partition_start());
+            _new_last_key = mfopt->as_partition_start().key();
+        }
+        co_return std::move(mfopt);
     }
     future<> fast_forward_to(dht::partition_range&& range) {
         auto snapshot_and_phase = _cache.snapshot_of(dht::ring_position_view::for_range_start(_range));
