@@ -18,6 +18,7 @@
 #include "schema_builder.hh"
 #include "replica/database.hh"
 #include "db/view/view.hh"
+#include "concrete_types.hh"
 
 #include <boost/range/adaptor/map.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
@@ -67,6 +68,52 @@ void secondary_index_manager::add_index(const index_metadata& im) {
     sstring index_target_name = target_parser::get_target_column_name_from_string(index_target);
     _indices.emplace(im.name(), index{index_target_name, im});
 }
+
+static const data_type collection_keys_type(const abstract_type& t) {
+    struct visitor {
+        const data_type operator()(const abstract_type& t) {
+            throw std::logic_error(format("collection_keys_type: only collections (maps, lists and sets) supported, but received {}", t.cql3_type_name()));
+        }
+        const data_type operator()(const list_type_impl& l) {
+            return timeuuid_type;
+        }
+        const data_type operator()(const map_type_impl& m) {
+            return m.get_keys_type();
+        }
+        const data_type operator()(const set_type_impl& s) {
+            return s.get_elements_type();
+        }
+    };
+    return visit(t, visitor{});
+}
+
+static const data_type collection_values_type(const abstract_type& t) {
+    struct visitor {
+        const data_type operator()(const abstract_type& t) {
+            throw std::logic_error(format("collection_values_type: only maps and lists supported, but received {}", t.cql3_type_name()));
+        }
+        const data_type operator()(const map_type_impl& m) {
+            return m.get_values_type();
+        }
+        const data_type operator()(const list_type_impl& l) {
+            return l.get_elements_type();
+        }
+    };
+    return visit(t, visitor{});
+}
+
+static const data_type collection_entries_type(const abstract_type& t) {
+    struct visitor {
+        const data_type operator()(const abstract_type& t) {
+            throw std::logic_error(format("collection_entries_type: only maps supported, but received {}", t.cql3_type_name()));
+        }
+        const data_type operator()(const map_type_impl& m) {
+            return tuple_type_impl::get_instance({m.get_keys_type(), m.get_values_type()});
+        }
+    };
+    return visit(t, visitor{});
+}
+
 
 sstring index_table_name(const sstring& index_name) {
     return format("{}_index", index_name);

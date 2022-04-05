@@ -24,6 +24,7 @@
 #include <cmath>
 #include <chrono>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <regex>
 #include <concepts>
