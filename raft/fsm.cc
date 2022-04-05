@@ -1073,6 +1073,11 @@ std::optional<std::pair<read_id, index_t>> fsm::start_read_barrier(server_id req
 }
 
 void fsm::stop() {
+    if (is_leader()) {
+        // Become follower to stop accepting requests
+        // (in particular, abort waits on log_limiter_semaphore and prevent new ones).
+        become_follower({});
+    }
     _sm_events.broken();
 }
 
