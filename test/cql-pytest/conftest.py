@@ -133,7 +133,7 @@ def check_pre_raft(cql):
     # If not running on Scylla, return false.
     names = [row.table_name for row in cql.execute("SELECT * FROM system_schema.tables WHERE keyspace_name = 'system'")]
     if not any('scylla' in name for name in names):
-        return false
+        return False
     # In Scylla, we check Raft mode by inspecting the configuration via CQL.
     experimental_features = list(cql.execute("SELECT value FROM system.config WHERE name = 'experimental_features'"))[0].value
     return not '"raft"' in experimental_features
