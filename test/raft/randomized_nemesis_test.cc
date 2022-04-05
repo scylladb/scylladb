@@ -1719,10 +1719,11 @@ auto with_env_and_ticker(environment_config cfg, F f) {
 
             // We abort the environment before the ticker as the environment may require time to advance
             // in order to finish (e.g. some operations may need to timeout).
+            tlogger.info("aborting environment");
             co_await env->abort();
-            tlogger.trace("environment aborted");
+            tlogger.info("environment aborted, aborting ticker");
             co_await t->abort();
-            tlogger.trace("ticker aborted");
+            tlogger.info("ticker aborted");
         });
     });
 }
@@ -2914,7 +2915,7 @@ SEASTAR_TEST_CASE(basic_generator_test) {
         auto limit = timer.now() + 10000_t;
         size_t cnt = 0;
         for (; timer.now() < limit; ++cnt) {
-            tlogger.debug("Trying to obtain last result: attempt number {}", cnt + 1);
+            tlogger.info("Trying to obtain last result: attempt number {}", cnt + 1);
 
             auto now = timer.now();
             auto leader = co_await wait_for_leader<AppendReg>{}(env,
@@ -2925,7 +2926,7 @@ SEASTAR_TEST_CASE(basic_generator_test) {
             });
 
             if (env.is_leader(leader)) {
-                tlogger.debug("Leader {} found after {} ticks", leader, timer.now() - now);
+                tlogger.info("Leader {} found after {} ticks", leader, timer.now() - now);
             } else {
                 tlogger.warn("Leader {} found after {} ticks, but suddenly lost leadership", leader, timer.now() - now);
                 continue;
@@ -2933,23 +2934,24 @@ SEASTAR_TEST_CASE(basic_generator_test) {
 
             auto config = env.get_configuration(leader);
             assert(config);
-            tlogger.debug("Leader {} configuration: current {} previous {}", leader, config->current, config->previous);
+            tlogger.info("Leader {} configuration: current {} previous {}", leader, config->current, config->previous);
 
             for (auto& s: all_servers) {
                 if (env.is_leader(s) && s != leader) {
                     auto conf = env.get_configuration(s);
                     assert(conf);
-                    tlogger.debug("There is another leader: {}, configuration: current {} previous {}", s, conf->current, conf->previous);
+                    tlogger.info("There is another leader: {}, configuration: current {} previous {}", s, conf->current, conf->previous);
                 }
             }
 
-            tlogger.debug("From the clients' point of view, the possible cluster members are: {}", known_config);
+            tlogger.info("From the clients' point of view, the possible cluster members are: {}", known_config);
 
             auto [res, last_attempted_server] = co_await bouncing{[&timer, &env] (raft::server_id id) {
                 return env.call(id, AppendReg::append{-1}, timer.now() + 200_t, timer);
             }}(timer, known_config, leader, known_config.size() + 1, 10_t, 10_t);
 
             if (std::holds_alternative<typename AppendReg::ret>(res)) {
+                tlogger.info("Obtained last result");
                 tlogger.debug("Last result: {}", res);
                 co_return;
             }
