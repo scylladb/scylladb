@@ -210,7 +210,7 @@ void create_index_statement::validate_is_values_index_if_target_column_not_colle
         const column_definition* cd, const index_target& target) const
 {
     if (!cd->type->is_collection()
-            && target.type != index_target::target_type::values) {
+            && target.type != index_target::target_type::regular_values) {
         throw exceptions::invalid_request_exception(
                 format("Cannot create index on {} of column {}; only non-frozen collections support {} indexes",
                        index_target::index_option(target.type),

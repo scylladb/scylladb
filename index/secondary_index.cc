@@ -22,7 +22,8 @@
 
 const sstring db::index::secondary_index::custom_index_option_name = "class_name";
 const sstring db::index::secondary_index::index_keys_option_name = "index_keys";
-const sstring db::index::secondary_index::index_values_option_name = "index_values";
+const sstring db::index::secondary_index::index_collection_values_option_name = "index_collection_values";
+const sstring db::index::secondary_index::index_regular_values_option_name = "index_regular_values";
 const sstring db::index::secondary_index::index_entries_option_name = "index_keys_and_values";
 
 namespace secondary_index {
@@ -73,12 +74,12 @@ target_parser::target_info target_parser::parse(schema_ptr schema, const sstring
         for (const rjson::value& v : ck->GetArray()) {
             info.ck_columns.push_back(get_column(sstring(rjson::to_string_view(v))));
         }
-        info.type = index_target::target_type::values;
+        info.type = index_target::target_type::regular_values;
         return info;
     }
 
     // Fallback and treat the whole string as a single target
-    return target_info{{get_column(target)}, {}, index_target::target_type::values};
+    return target_info{{get_column(target)}, {}, index_target::target_type::regular_values};
 }
 
 bool target_parser::is_local(sstring target_string) {
