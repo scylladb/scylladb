@@ -972,7 +972,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // done only by shard 0, so we'll no longer face race conditions as
             // described here: https://github.com/scylladb/scylla/issues/1014
             supervisor::notify("loading system sstables");
-            replica::distributed_loader::init_system_keyspace(db, ss, gossiper, *cfg, db::table_selector::all()).get();
+            auto system_keyspace_sel = db::table_selector::all_in_keyspace(db::system_keyspace::NAME);
+            replica::distributed_loader::init_system_keyspace(db, ss, gossiper, *cfg, *system_keyspace_sel).get();
 
             smp::invoke_on_all([blocked_reactor_notify_ms] {
                 engine().update_blocked_reactor_notify_ms(blocked_reactor_notify_ms);
@@ -1073,17 +1074,25 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 sst_format_selector.stop().get();
             });
 
+            // Re-enable previously enabled features on node startup.
+            // This should be done before commitlog starts replaying
+            // since some features affect storage.
+            db::system_keyspace::enable_features_on_startup(feature_service).get();
+
+            db.local().before_schema_keyspace_init();
+
+            // Init schema tables only after enable_features_on_startup()
+            // because table construction consults enabled features.
+            // Needs to be before system_keyspace::setup(), which writes to schema tables.
+            supervisor::notify("loading system_schema sstables");
+            auto schema_keyspace_sel = db::table_selector::all_in_keyspace(db::schema_tables::NAME);
+            replica::distributed_loader::init_system_keyspace(db, ss, gossiper, *cfg, *schema_keyspace_sel).get();
+
             // schema migration, if needed, is also done on shard 0
             db::legacy_schema_migrator::migrate(proxy, db, qp.local()).get();
 
             // making compaction manager api available, after system keyspace has already been established.
             api::set_server_compaction_manager(ctx).get();
-
-            supervisor::notify("loading non-system sstables");
-            replica::distributed_loader::init_non_system_keyspaces(db, proxy, sys_ks).get();
-
-            supervisor::notify("starting view update generator");
-            view_update_generator.start(std::ref(db)).get();
 
             supervisor::notify("setting up system keyspace");
             // FIXME -- should happen in start(), but
@@ -1092,10 +1101,52 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // 3. need to check if it depends on any of the above steps
             sys_ks.local().setup(messaging).get();
 
-            // Re-enable previously enabled features on node startup.
-            // This should be done before commitlog starts replaying
-            // since some features affect storage.
-            db::system_keyspace::enable_features_on_startup(feature_service).get();
+            supervisor::notify("starting schema commit log");
+
+            // Check there is no truncation record for schema tables.
+            // Needs to happen before replaying the schema commitlog, which interprets
+            // replay position in the truncation record.
+            // Needs to happen before system_keyspace::setup(), which reads truncation records.
+            for (auto&& e : db.local().get_column_families()) {
+                auto table_ptr = e.second;
+                if (table_ptr->schema()->ks_name() == db::schema_tables::NAME) {
+                    if (table_ptr->get_truncation_record() != db_clock::time_point::min()) {
+                        // replay_position stored in the truncation record may belong to
+                        // the old (default) commitlog domain. It's not safe to interpret
+                        // that replay position in the schema commitlog domain.
+                        // Refuse to boot in this case. We assume no one truncated schema tables.
+                        // We will hit this during rolling upgrade, in which case the user will
+                        // roll back and let us know.
+                        throw std::runtime_error(format("Schema table {}.{} has a truncation record. Booting is not safe.",
+                                                        table_ptr->schema()->ks_name(), table_ptr->schema()->cf_name()));
+                    }
+                }
+            }
+
+            auto sch_cl = db.local().schema_commitlog();
+            if (sch_cl != nullptr) {
+                auto paths = sch_cl->get_segments_to_replay();
+                if (!paths.empty()) {
+                    supervisor::notify("replaying schema commit log");
+                    auto rp = db::commitlog_replayer::create_replayer(db).get0();
+                    rp.recover(paths, db::schema_tables::COMMITLOG_FILENAME_PREFIX).get();
+                    supervisor::notify("replaying schema commit log - flushing memtables");
+                    db.invoke_on_all([] (replica::database& db) {
+                        return db.flush_all_memtables();
+                    }).get();
+                    supervisor::notify("replaying schema commit log - removing old commitlog segments");
+                    //FIXME: discarded future
+                    (void)sch_cl->delete_segments(std::move(paths));
+                }
+            }
+
+            db::schema_tables::recalculate_schema_version(sys_ks, proxy, feature_service.local()).get();
+
+            supervisor::notify("loading non-system sstables");
+            replica::distributed_loader::init_non_system_keyspaces(db, proxy, sys_ks).get();
+
+            supervisor::notify("starting view update generator");
+            view_update_generator.start(std::ref(db)).get();
 
             supervisor::notify("starting commit log");
             auto cl = db.local().commitlog();

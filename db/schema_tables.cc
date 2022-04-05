@@ -907,6 +907,13 @@ future<> update_schema_version_and_announce(sharded<db::system_keyspace>& sys_ks
  */
 future<> merge_schema(sharded<db::system_keyspace>& sys_ks, distributed<service::storage_proxy>& proxy, gms::feature_service& feat, std::vector<mutation> mutations)
 {
+    if (this_shard_id() != 0) {
+        // mutations must be applied on the owning shard (0).
+        co_await smp::submit_to(0, [&, fmuts = freeze(mutations)] () mutable -> future<> {
+            return merge_schema(sys_ks, proxy, feat, unfreeze(fmuts));
+        });
+        co_return;
+    }
     co_await with_merge_lock([&] () mutable -> future<> {
         bool flush_schema = proxy.local().get_db().local().get_config().flush_schema_tables_after_modification();
         co_await do_merge_schema(proxy, std::move(mutations), flush_schema);
@@ -1068,13 +1075,17 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std:
     auto old_functions = co_await read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces);
     auto old_aggregates = co_await read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces);
 
-    co_await proxy.local().mutate_locally(std::move(mutations), tracing::trace_state_ptr());
+    if (proxy.local().get_db().local().uses_schema_commitlog()) {
+        co_await proxy.local().get_db().local().apply(freeze(mutations), db::no_timeout);
+    } else {
+        co_await proxy.local().mutate_locally(std::move(mutations), tracing::trace_state_ptr());
 
-    if (do_flush) {
-        auto& db = proxy.local().local_db();
-        co_await coroutine::parallel_for_each(column_families, [&db] (const utils::UUID& id) -> future<> {
-            return db.flush_on_all(id);
-        });
+        if (do_flush) {
+            auto& db = proxy.local().local_db();
+            co_await coroutine::parallel_for_each(column_families, [&db] (const utils::UUID& id) -> future<> {
+                return db.flush_on_all(id);
+            });
+        }
     }
 
     // with new data applied

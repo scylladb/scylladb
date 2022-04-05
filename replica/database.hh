@@ -1329,6 +1329,7 @@ private:
         flat_hash_map<std::pair<sstring, sstring>, utils::UUID, utils::tuple_hash, string_pair_eq>;
     ks_cf_to_uuid_t _ks_cf_to_uuid;
     std::unique_ptr<db::commitlog> _commitlog;
+    std::unique_ptr<db::commitlog> _schema_commitlog;
     utils::updateable_value_source<utils::UUID> _version;
     uint32_t _schema_change_count = 0;
     // compaction_manager object is referenced by all column families of a database.
@@ -1337,6 +1338,7 @@ private:
     bool _enable_incremental_backups = false;
     bool _shutdown = false;
     bool _enable_autocompaction_toggle = false;
+    bool _uses_schema_commitlog = false;
     query::querier_cache _querier_cache;
 
     std::unique_ptr<db::large_data_handler> _large_data_handler;
@@ -1352,6 +1354,7 @@ private:
 
     service::migration_notifier& _mnotifier;
     gms::feature_service& _feat;
+    std::vector<std::any> _listeners;
     const locator::shared_token_metadata& _shared_token_metadata;
 
     sharded<semaphore>& _sst_dir_semaphore;
@@ -1447,6 +1450,9 @@ public:
     db::commitlog* commitlog() const {
         return _commitlog.get();
     }
+    db::commitlog* schema_commitlog() const {
+        return _schema_commitlog.get();
+    }
     replica::cf_stats* cf_stats() {
         return &_cf_stats;
     }
@@ -1468,6 +1474,7 @@ public:
     const service::migration_notifier& get_notifier() const { return _mnotifier; }
 
     void add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg);
+    void before_schema_keyspace_init();
     future<> add_column_family_and_make_directory(schema_ptr schema);
 
     /* throws no_such_column_family if missing */
@@ -1683,6 +1690,10 @@ public:
 
     sharded<semaphore>& get_sharded_sst_dir_semaphore() {
         return _sst_dir_semaphore;
+    }
+
+    bool uses_schema_commitlog() const {
+        return _uses_schema_commitlog;
     }
 };
 
