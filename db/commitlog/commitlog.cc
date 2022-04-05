@@ -772,14 +772,12 @@ class db::commitlog::segment : public enable_shared_from_this<segment>, public c
     uint64_t _file_pos = 0;
     file_pos_counter _written_pos = 0;
     file_pos_counter _flush_pos = 0;
-    uint64_t _flushing_to_pos = 0;
 
     uint64_t _waste = 0;
 
     size_t _alignment;
 
     bool _closed = false;
-    bool _terminated = false;
 
     using buffer_type = segment_manager::buffer_type;
     using sseg_ptr = segment_manager::sseg_ptr;
@@ -931,36 +929,17 @@ public:
     }
     future<> terminate() {
         assert(_closed);
-        bool terminate = false;
+        co_await cycle(true);
 
-        for (;;) {
-            auto wr = make_write_request(true, terminate);
+        if (file_position() < _segment_manager->max_size) {
+            clogger.trace("{} is closed but not terminated.", *this);
+            assert(_buffer.empty());
+            new_buffer(0);
+            auto wr = make_write_request(true, true);
             auto top = wr.file_offset + wr.size;
-
-            co_await perform_write_request(wr);
+            _segment_manager->send(std::move(wr));
             co_await _flush_pos.wait(top);
-
-            // should not really get here more than once, but...
-            if (!std::exchange(_terminated, true)) {
-                // write a terminating zero block iff we are ending (a reused)
-                // block before actual file end.
-                // we should only get here when all actual data is 
-                // already flushed (see below, close()).
-                if (file_position() < _segment_manager->max_size) {
-                    clogger.trace("{} is closed but not terminated.", *this);
-                    if (_buffer.empty()) {
-                        new_buffer(0);
-                    }
-                    terminate = true;
-                    continue;
-                }
-            }
-            break;
         }
-
-        // just in case, wait for flushing to finish up to what is now final end
-        // pos.
-        co_await _flush_pos.wait(_file_pos);
     }
     void issue_close_request() {
         if (!std::exchange(_closed, true)) {
@@ -1129,10 +1108,8 @@ public:
             }
 
             if (size != 0) {
-                // This is a bit of a change from previous behaviour. We effectively
-                // serialize the "position report" of writes. They can be parallel,
-                // but we serialize them here, similar to rp_queue did before.
-                co_await _written_pos.when(r.file_offset);
+                // all writes are serialized and in order.
+                assert(_written_pos == r.file_offset);
                 _written_pos.set(top);
                 clogger.trace("Write {} serialized to {} -> {}", *this, r.file_offset, top);
             }
@@ -1144,38 +1121,22 @@ public:
 
         if (flush && !ep) {
             auto pos = r.file_offset;
-            co_await begin_flush();
 
             clogger.trace("Flush {} begin at {}", *this, top);
 
-            try {
-                auto prev = pos;
-                if (top < _flushing_to_pos) {
-                    clogger.trace("Flush {} at {} already in progress", *this, top);
-                    co_await _flush_pos.when(top);
-                } else {
-                    prev = std::exchange(_flushing_to_pos, top);
-                }
-                if (top <= _flush_pos) {
-                    clogger.trace("{} already synced! ({} <= {})", *this, top, _flush_pos);
-                } else {
-                    clogger.trace("Flush {} at {} wait for write {} -> {}", *this, top, _written_pos, top);
-                    co_await _written_pos.when(top);
-                    clogger.trace("Flush {} at {} wait for previous flush -> {}", *this, prev, pos);
-                    co_await _flush_pos.when(prev);
+            if (_flush_pos < top) {
+                co_await begin_flush();
+                try {
                     co_await _file.flush();
                     ++_segment_manager->totals.flush_count;
                     clogger.trace("{} synced to {}", *this, top);
-                    if (_flush_pos < top) {
-                        _flush_pos.set(top);
-                    }
+                    _flush_pos.set(top);
+                } catch (...) {
+                    ep = std::current_exception();
+                    clogger.error("Failed to flush commits to disk: {} ({})", ep, pos);
                 }
-            } catch (...) {
-                ep = std::current_exception();
-                clogger.error("Failed to flush commits to disk: {} ({})", ep, pos);
+                end_flush();
             }
-
-            end_flush();
         }
 
         // notify_memory_written is about buffer memory used,
@@ -1235,22 +1196,17 @@ public:
          * This has the benefit of allowing several allocations to
          * queue up in a single buffer.
          */
-        auto fp = _file_pos;
+        auto fp = file_position();
         try {
             // wait for all writes (and maybe flush) to reach our _start_
             co_await _written_pos.when(fp, timeout);
-            if (fp != _file_pos) {
+            if (fp != file_position()) {
                 // some other request already wrote this buffer.
                 // If so, wait for the operation at our intended file offset
                 // to finish, then we know the flush is complete and we
                 // are in accord.
                 // (Note: wait_for_pending(pos) waits for operation _at_ pos (and before),
-                assert(_segment_manager->cfg.mode != sync_mode::BATCH || _flush_pos > fp);
-                if (_flush_pos > fp) {
-                    co_return;
-                    // previous op we were waiting for was not sync one, so it did not flush
-                    // force flush here
-                }
+                co_return co_await _flush_pos.when(fp + 1);
             }
 
             reset_sync_time();
