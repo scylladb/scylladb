@@ -361,6 +361,14 @@ def test_getitem_attributes_to_get_duplicate(dynamodb, test_table):
     with pytest.raises(ClientError, match='ValidationException.*Duplicate'):
         test_table.get_item(Key={'p': p, 'c': c}, AttributesToGet=['a', 'a'], ConsistentRead=True)
 
+# Verify that it is forbidden to ask for an empty AttributesToGet
+# Reproduces issue #10332.
+def test_getitem_attributes_to_get_empty(dynamodb, test_table):
+    p = random_string()
+    c = random_string()
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table.get_item(Key={'p': p, 'c': c}, AttributesToGet=[], ConsistentRead=True)
+
 # Basic test for DeleteItem, with hash key only
 def test_delete_item_hash(test_table_s):
     p = random_string()

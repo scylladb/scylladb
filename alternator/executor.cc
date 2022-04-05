@@ -2171,6 +2171,9 @@ static attrs_to_get calculate_attrs_to_get(const rjson::value& req, std::unorder
         for (auto it = attributes_to_get.Begin(); it != attributes_to_get.End(); ++it) {
             attribute_path_map_add("AttributesToGet", ret, it->GetString());
         }
+        if (ret.empty()) {
+            throw api_error::validation("Empty AttributesToGet is not allowed. Consider using Select=COUNT instead.");
+        }
         return ret;
     } else if (has_projection_expression) {
         const rjson::value& projection_expression = req["ProjectionExpression"];

@@ -157,6 +157,13 @@ def test_query_attributes_to_get(dynamodb, test_table):
         expected_items = [{k: x[k] for k in wanted if k in x} for x in items]
         assert multiset(expected_items) == multiset(got_items)
 
+# Verify that it is forbidden to ask for an empty AttributesToGet
+# Reproduces issue #10332.
+def test_query_attributes_to_get_empty(dynamodb, test_table):
+    p = random_string()
+    with pytest.raises(ClientError, match='ValidationException'):
+        full_query(test_table, KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}, AttributesToGet=[])
+
 # Test that in a table with both hash key and sort key, which keys we can
 # Query by: We can Query by the hash key, by a combination of both hash and
 # sort keys, but *cannot* query by just the sort key, and obviously not
