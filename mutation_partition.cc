@@ -2073,10 +2073,21 @@ to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::pa
             max_partitions, query_result_builder(*s, builder));
     const auto reverse = slice.options.contains(query::partition_slice::option::reversed) ? consume_in_reverse::legacy_half_reverse : consume_in_reverse::no;
 
-    for (const partition& p : r.partitions()) {
-        const auto res = p.mut().unfreeze(s).consume(consumer, reverse);
-        if (res.stop == stop_iteration::yes) {
-            break;
+    // FIXME: frozen_mutation::consume supports only forward consumers
+    if (reverse == consume_in_reverse::no) {
+        frozen_mutation_consumer_adaptor adaptor(s, consumer);
+        for (const partition& p : r.partitions()) {
+            const auto res = p.mut().consume(s, adaptor);
+            if (res.stop == stop_iteration::yes) {
+                break;
+            }
+        }
+    } else {
+        for (const partition& p : r.partitions()) {
+            const auto res = p.mut().unfreeze(s).consume(consumer, reverse);
+            if (res.stop == stop_iteration::yes) {
+                break;
+            }
         }
     }
     if (r.is_short_read()) {

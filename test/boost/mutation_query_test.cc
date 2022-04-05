@@ -28,6 +28,7 @@
 #include "schema_builder.hh"
 #include "partition_slice_builder.hh"
 #include "readers/from_mutations_v2.hh"
+#include "mutation_rebuilder.hh"
 
 using namespace std::literals::chrono_literals;
 
@@ -558,3 +559,21 @@ SEASTAR_THREAD_TEST_CASE(test_result_size_calculation) {
     BOOST_REQUIRE_EQUAL(digest_only_builder.memory_accounter().used_memory(), result_and_digest_builder.memory_accounter().used_memory());
 }
 
+SEASTAR_THREAD_TEST_CASE(test_frozen_mutation_consumer) {
+    random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+    schema_ptr s = gen.schema();
+    std::vector<mutation> mutations = gen(1);
+    const mutation& m = mutations[0];
+    frozen_mutation fm = freeze(m);
+
+    // sanity check unfreeze first
+    mutation um = fm.unfreeze(s);
+    BOOST_REQUIRE_EQUAL(um, m);
+
+    // Rebuild mutation by consuming from the frozen_mutation
+    mutation_rebuilder_v2 rebuilder(s);
+    auto res = fm.consume(s, rebuilder);
+    BOOST_REQUIRE(res.result);
+    const auto& rebuilt = *res.result;
+    BOOST_REQUIRE_EQUAL(rebuilt, m);
+}
