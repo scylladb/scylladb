@@ -18,6 +18,8 @@
 import requests
 import os
 import subprocess
+import shutil
+import pytest
 
 # For a "cql" object connected to one node, find the REST API URL
 # with the same node and port 10000.
@@ -43,14 +45,30 @@ def has_rest_api(cql):
     return checked_rest_api[url]
 
 
+# Find the external "nodetool" executable (can be overridden by the NODETOOL
+# environment variable). Only call this if the REST API doesn't work.
+def nodetool_cmd():
+    if nodetool_cmd.cmd:
+        return nodetool_cmd.cmd
+    if not nodetool_cmd.failed:
+        nodetool_cmd.conf = os.getenv('NODETOOL') or 'nodetool'
+        nodetool_cmd.cmd = shutil.which(nodetool_cmd.conf)
+        if nodetool_cmd.cmd is None:
+            nodetool_cmd.failed = True
+    if nodetool_cmd.failed:
+        pytest.fail(f"Error: Can't find {nodetool_cmd.conf}. Please set the NODETOOL environment variable to the path of the nodetool utility.", pytrace=False)
+    return nodetool_cmd.cmd
+nodetool_cmd.cmd = None
+nodetool_cmd.failed = False
+nodetool_cmd.conf = False
+
 # Run the external "nodetool" executable (can be overridden by the NODETOOL
 # environment variable). Only call this if the REST API doesn't work.
-nodetool_cmd = os.getenv('NODETOOL') or 'nodetool'
 def run_nodetool(cql, *args):
     # TODO: We may need to change this function or its callers to add proper
     # support for testing on multi-node clusters.
     host = cql.cluster.contact_points[0]
-    subprocess.run([nodetool_cmd, '-h', host, *args])
+    subprocess.run([nodetool_cmd(), '-h', host, *args])
 
 def flush(cql, table):
     ks, cf = table.split('.')
