@@ -2683,7 +2683,11 @@ SEASTAR_TEST_CASE(basic_generator_test) {
         }, 200'000);
 
         std::bernoulli_distribution bdist{0.5};
-        bool forwarding = false; //bdist(random_engine) TODO
+
+        // With probability 1/2 enable forwarding: when we send a command to a follower, it automatically
+        // forwards it to the known leader or waits for learning about a leader instead of returning
+        // `not_a_leader`.
+        bool forwarding = bdist(random_engine);
 
         // With probability 1/2, run the servers with a configuration which causes frequent snapshotting.
         // Note: with the default configuration we won't observe any snapshots at all, since the default
@@ -2702,7 +2706,7 @@ SEASTAR_TEST_CASE(basic_generator_test) {
                 .enable_forwarding{forwarding},
             };
 
-        tlogger.info("basic_generator_test: frequent snapshotting: {}", frequent_snapshotting);
+        tlogger.info("basic_generator_test: forwarding: {}, frequent snapshotting: {}", forwarding, frequent_snapshotting);
 
         auto leader_id = co_await env.new_server(true, srv_cfg);
 
