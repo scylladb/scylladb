@@ -585,7 +585,7 @@ void test_flat_stream(schema_ptr s, std::vector<mutation> muts, reversed_partiti
             return fmr.consume_in_thread(std::move(fsc));
         } else {
             if (reversed) {
-                return with_closeable(make_reversing_reader(make_delegating_reader_v2(fmr), query::max_result_size(size_t(1) << 20)),
+                return with_closeable(make_reversing_reader(make_delegating_reader(fmr), query::max_result_size(size_t(1) << 20)),
                         [fsc = std::move(fsc)] (flat_mutation_reader_v2& reverse_reader) mutable {
                     return reverse_reader.consume(std::move(fsc));
                 }).get0();

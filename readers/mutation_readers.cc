@@ -78,7 +78,7 @@ future<> delegating_reader::close() noexcept {
     return _underlying_holder ? _underlying_holder->close() : make_ready_future<>();
 }
 
-flat_mutation_reader_v2 make_delegating_reader_v2(flat_mutation_reader_v2& r) {
+flat_mutation_reader_v2 make_delegating_reader(flat_mutation_reader_v2& r) {
     return make_flat_mutation_reader_v2<delegating_reader_v2>(r);
 }
 

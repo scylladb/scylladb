@@ -62,6 +62,6 @@ public:
         return _underlying_holder ? _underlying_holder->close() : make_ready_future<>();
     }
 };
-flat_mutation_reader_v2 make_delegating_reader_v2(flat_mutation_reader_v2&);
+flat_mutation_reader_v2 make_delegating_reader(flat_mutation_reader_v2&);
 
 
