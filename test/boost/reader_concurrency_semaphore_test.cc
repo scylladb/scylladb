@@ -176,7 +176,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_readmission_preserves
 // kills the test if no progress is being made.
 SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_forward_progress) {
     class reader {
-        class skeleton_reader : public flat_mutation_reader::impl {
+        class skeleton_reader : public flat_mutation_reader_v2::impl {
             std::optional<reader_permit::resource_units> _resources;
         public:
             skeleton_reader(schema_ptr s, reader_permit permit)
@@ -197,7 +197,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_forward_progress) {
         struct reader_visitor {
             reader& r;
             future<> operator()(std::monostate& ms) { return r.tick(ms); }
-            future<> operator()(flat_mutation_reader& reader) { return r.tick(reader); }
+            future<> operator()(flat_mutation_reader_v2& reader) { return r.tick(reader); }
             future<> operator()(reader_concurrency_semaphore::inactive_read_handle& handle) { return r.tick(handle); }
         };
 
@@ -208,32 +208,32 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_forward_progress) {
         bool _evictable = false;
         reader_permit_opt _permit;
         std::optional<reader_permit::resource_units> _units;
-        std::variant<std::monostate, flat_mutation_reader, reader_concurrency_semaphore::inactive_read_handle> _reader;
+        std::variant<std::monostate, flat_mutation_reader_v2, reader_concurrency_semaphore::inactive_read_handle> _reader;
 
     private:
         void make_reader() {
-            _reader = make_flat_mutation_reader<skeleton_reader>(_schema, *_permit);
+            _reader = make_flat_mutation_reader_v2<skeleton_reader>(_schema, *_permit);
         }
         future<> tick(std::monostate&) {
             make_reader();
-            co_await tick(std::get<flat_mutation_reader>(_reader));
+            co_await tick(std::get<flat_mutation_reader_v2>(_reader));
         }
-        future<> tick(flat_mutation_reader& reader) {
+        future<> tick(flat_mutation_reader_v2& reader) {
             co_await reader.fill_buffer();
             if (_evictable) {
-                _reader = _permit->semaphore().register_inactive_read(upgrade_to_v2(std::move(reader)));
+                _reader = _permit->semaphore().register_inactive_read(std::move(reader));
             }
         }
         future<> tick(reader_concurrency_semaphore::inactive_read_handle& handle) {
             if (auto reader = _permit->semaphore().unregister_inactive_read(std::move(handle)); reader) {
-                _reader = downgrade_to_v1(std::move(*reader));
+                _reader = std::move(*reader);
             } else {
                 if (_permit->needs_readmission()) {
                     co_await _permit->wait_readmission();
                 }
                 make_reader();
             }
-            co_await tick(std::get<flat_mutation_reader>(_reader));
+            co_await tick(std::get<flat_mutation_reader_v2>(_reader));
         }
 
     public:
@@ -256,7 +256,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_forward_progress) {
             return std::visit(reader_visitor{*this}, _reader);
         }
         future<> close() noexcept {
-            if (auto reader = std::get_if<flat_mutation_reader>(&_reader)) {
+            if (auto reader = std::get_if<flat_mutation_reader_v2>(&_reader)) {
                 return reader->close();
             }
             return make_ready_future<>();
