@@ -337,7 +337,6 @@ set(scylla_sources
     compaction/size_tiered_compaction_strategy.cc
     compaction/time_window_compaction_strategy.cc
     compress.cc
-    connection_notifier.cc
     converting_mutation_partition_applier.cc
     counters.cc
     cql3/abstract_marker.cc
