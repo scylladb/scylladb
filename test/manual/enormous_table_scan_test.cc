@@ -27,9 +27,9 @@
 #include "range.hh"
 #include "sstables/sstables.hh"
 #include "schema_builder.hh"
-#include "readers/forwardable.hh"
+#include "readers/forwardable_v2.hh"
 
-class enormous_table_reader final : public flat_mutation_reader::impl {
+class enormous_table_reader final : public flat_mutation_reader_v2::impl {
 // Reader for a table with 4.5 billion rows, all with partition key 0 and an incrementing clustering key
 public:
     static constexpr uint64_t CLUSTERING_ROW_COUNT = 4500ULL * 1000ULL * 1000ULL;
@@ -165,7 +165,7 @@ private:
 };
 
 struct enormous_virtual_reader {
-    flat_mutation_reader operator()(schema_ptr schema,
+    flat_mutation_reader_v2 operator()(schema_ptr schema,
             reader_permit permit,
             const dht::partition_range& range,
             const query::partition_slice& slice,
@@ -173,7 +173,7 @@ struct enormous_virtual_reader {
             tracing::trace_state_ptr trace_state,
             streamed_mutation::forwarding fwd,
             mutation_reader::forwarding fwd_mr) {
-        auto reader = make_flat_mutation_reader<enormous_table_reader>(schema, permit, range, slice);
+        auto reader = make_flat_mutation_reader_v2<enormous_table_reader>(schema, permit, range, slice);
         if (fwd == streamed_mutation::forwarding::yes) {
             return make_forwardable(std::move(reader));
         }
