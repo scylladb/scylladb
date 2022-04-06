@@ -71,9 +71,6 @@ options {
 #include "cql3/constants.hh"
 #include "cql3/operation_impl.hh"
 #include "cql3/error_listener.hh"
-#include "cql3/multi_column_relation.hh"
-#include "cql3/single_column_relation.hh"
-#include "cql3/token_relation.hh"
 #include "cql3/index_name.hh"
 #include "cql3/cql3_type.hh"
 #include "cql3/cf_name.hh"
@@ -469,7 +466,7 @@ countArgument
                 } }
     ;
 
-whereClause returns [std::vector<cql3::relation_ptr> clause]
+whereClause returns [std::vector<expression> clause]
     : relation[$clause] (K_AND relation[$clause])*
     ;
 
@@ -1641,44 +1638,89 @@ relationType returns [oper_t op]
     | K_LIKE { $op = oper_t::LIKE; }
     ;
 
-relation[std::vector<cql3::relation_ptr>& clauses]
+relation[std::vector<expression>& clauses]
     @init{ oper_t rt; }
-    : name=cident type=relationType t=term { $clauses.emplace_back(::make_shared<cql3::single_column_relation>(std::move(name), type, std::move(t))); }
+    : name=cident type=relationType t=term { $clauses.emplace_back(binary_operator(unresolved_identifier{std::move(name)}, type, std::move(t))); }
 
     | K_TOKEN l=tupleOfIdentifiers type=relationType t=term
-        { $clauses.emplace_back(::make_shared<cql3::token_relation>(std::move(l), type, std::move(t))); }
+        { $clauses.emplace_back(binary_operator(token{std::move(l.elements)}, type, std::move(t))); }
     | name=cident K_IS K_NOT K_NULL {
-          $clauses.emplace_back(make_shared<cql3::single_column_relation>(std::move(name), oper_t::IS_NOT, null())); }
+          $clauses.emplace_back(binary_operator(unresolved_identifier{std::move(name)}, oper_t::IS_NOT, null())); }
     | name=cident K_IN marker=inMarker
-        { $clauses.emplace_back(::make_shared<cql3::single_column_relation>(std::move(name), oper_t::IN, std::move(marker))); }
+        { $clauses.emplace_back(binary_operator(unresolved_identifier{std::move(name)}, oper_t::IN, std::move(marker))); }
     | name=cident K_IN in_values=singleColumnInValues
-        { $clauses.emplace_back(cql3::single_column_relation::create_in_relation(std::move(name), std::move(in_values))); }
+        { $clauses.emplace_back(binary_operator(unresolved_identifier{std::move(name)}, oper_t::IN,
+        collection_constructor {
+            .style = collection_constructor::style_type::list,
+            .elements = std::move(in_values)
+        })); }
     | name=cident K_CONTAINS { rt = oper_t::CONTAINS; } (K_KEY { rt = oper_t::CONTAINS_KEY; })?
-        t=term { $clauses.emplace_back(::make_shared<cql3::single_column_relation>(std::move(name), rt, std::move(t))); }
-    | name=cident '[' key=term ']' type=relationType t=term { $clauses.emplace_back(::make_shared<cql3::single_column_relation>(std::move(name), std::move(key), type, std::move(t))); }
+        t=term { $clauses.emplace_back(binary_operator(unresolved_identifier{std::move(name)}, rt, std::move(t))); }
+    | name=cident '[' key=term ']' type=relationType t=term { $clauses.emplace_back(binary_operator(subscript{.val = unresolved_identifier{std::move(name)}, .sub = std::move(key)}, type, std::move(t))); }
     | ids=tupleOfIdentifiers
       ( K_IN
           ( '(' ')'
-              { $clauses.emplace_back(cql3::multi_column_relation::create_in_relation(ids, std::vector<expression>())); }
+              {
+                $clauses.emplace_back(
+                  binary_operator(
+                    ids,
+                    oper_t::IN,
+                    collection_constructor {
+                      .style = collection_constructor::style_type::list,
+                      .elements = std::vector<expression>()
+                    }
+                  )
+                );
+              }
           | tupleInMarker=inMarkerForTuple /* (a, b, c) IN ? */
-              { $clauses.emplace_back(cql3::multi_column_relation::create_single_marker_in_relation(ids, tupleInMarker)); }
+              {
+                $clauses.emplace_back(
+                  binary_operator(
+                    ids,
+                    oper_t::IN,
+                    std::move(tupleInMarker)
+                  )
+                );
+              }
           | literals=tupleOfTupleLiterals /* (a, b, c) IN ((1, 2, 3), (4, 5, 6), ...) */
               {
-                  $clauses.emplace_back(cql3::multi_column_relation::create_in_relation(ids, literals));
+                $clauses.emplace_back(
+                  binary_operator(
+                    ids,
+                    oper_t::IN,
+                    collection_constructor {
+                      .style = collection_constructor::style_type::list,
+                      .elements = std::move(literals)
+                    }
+                  )
+                );
               }
           | markers=tupleOfMarkersForTuples /* (a, b, c) IN (?, ?, ...) */
-              { $clauses.emplace_back(cql3::multi_column_relation::create_in_relation(ids, markers)); }
+              {
+                $clauses.emplace_back(
+                  binary_operator(
+                    ids,
+                    oper_t::IN,
+                    collection_constructor {
+                      .style = collection_constructor::style_type::list,
+                      .elements = std::move(markers)
+                    }
+                  )
+                );
+              }
           )
       | type=relationType literal=tupleLiteral /* (a, b, c) > (1, 2, 3) or (a, b, c) > (?, ?, ?) */
           {
-              $clauses.emplace_back(cql3::multi_column_relation::create_non_in_relation(ids, type, std::move(literal)));
+              $clauses.emplace_back(binary_operator(ids, type, std::move(literal)));
           }
       | type=relationType K_SCYLLA_CLUSTERING_BOUND literal=tupleLiteral /* (a, b, c) > (1, 2, 3) or (a, b, c) > (?, ?, ?) */
           {
-              $clauses.emplace_back(cql3::multi_column_relation::create_scylla_clustering_bound_non_in_relation(ids, type, std::move(literal)));
+              $clauses.emplace_back(binary_operator(ids, type, std::move(literal), cql3::expr::comparison_order::clustering));
           }
       | type=relationType tupleMarker=markerForTuple /* (a, b, c) >= ? */
-          { $clauses.emplace_back(cql3::multi_column_relation::create_non_in_relation(ids, type, tupleMarker)); }
+          {
+              $clauses.emplace_back(binary_operator(ids, type, std::move(tupleMarker)));
+          }
       )
     | '(' relation[$clauses] ')'
     ;
@@ -1688,16 +1730,16 @@ inMarker returns [expression marker]
     | ':' name=ident { $marker = new_in_bind_variables(name); }
     ;
 
-tupleOfIdentifiers returns [std::vector<::shared_ptr<cql3::column_identifier::raw>> ids]
-    : '(' n1=cident { $ids.push_back(n1); } (',' ni=cident { $ids.push_back(ni); })* ')'
+tupleOfIdentifiers returns [tuple_constructor tup]
+    : '(' n1=cident { $tup.elements.push_back(unresolved_identifier{std::move(n1)}); } (',' ni=cident { $tup.elements.push_back(unresolved_identifier{std::move(ni)}); })* ')'
     ;
 
 listOfIdentifiers returns [std::vector<::shared_ptr<cql3::column_identifier::raw>> ids]
     : n1=cident { $ids.push_back(n1); } (',' ni=cident { $ids.push_back(ni); })*
     ;
 
-singleColumnInValues returns [std::vector<expression> terms]
-    : '(' ( t1 = term { $terms.push_back(std::move(t1)); } (',' ti=term { $terms.push_back(std::move(ti)); })* )? ')'
+singleColumnInValues returns [std::vector<expression> list]
+    : '(' ( t1 = term { $list.push_back(std::move(t1)); } (',' ti=term { $list.push_back(std::move(ti)); })* )? ')'
     ;
 
 tupleOfTupleLiterals returns [std::vector<expression> literals]

@@ -32,7 +32,7 @@ class update_statement : public raw::modification_statement {
 private:
     // Provided for an UPDATE
     std::vector<std::pair<::shared_ptr<column_identifier::raw>, std::unique_ptr<operation::raw_update>>> _updates;
-    std::vector<relation_ptr> _where_clause;
+    std::vector<expr::expression> _where_clause;
 public:
     /**
      * Creates a new UpdateStatement from a column family name, columns map, consistency
@@ -46,7 +46,7 @@ public:
     update_statement(cf_name name,
         std::unique_ptr<attributes::raw> attrs,
         std::vector<std::pair<::shared_ptr<column_identifier::raw>, std::unique_ptr<operation::raw_update>>> updates,
-        std::vector<relation_ptr> where_clause,
+        std::vector<expr::expression> where_clause,
         conditions_vector conditions, bool if_exists);
 protected:
     virtual ::shared_ptr<cql3::statements::modification_statement> prepare_internal(data_dictionary::database db, schema_ptr schema,

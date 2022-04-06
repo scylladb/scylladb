@@ -16,6 +16,7 @@
 #include <ranges>
 #include <stdexcept>
 
+#include "cql3/expr/expression.hh"
 #include "query-result-reader.hh"
 #include "statement_restrictions.hh"
 #include "multi_column_restriction.hh"
@@ -400,7 +401,7 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
 statement_restrictions::statement_restrictions(data_dictionary::database db,
         schema_ptr schema,
         statements::statement_type type,
-        const std::vector<::shared_ptr<relation>>& where_clause,
+        const std::vector<expr::expression>& where_clause,
         prepare_context& ctx,
         bool selects_only_static_columns,
         bool for_view,
@@ -408,31 +409,32 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
     : statement_restrictions(schema, allow_filtering)
 {
     if (!where_clause.empty()) {
-        for (auto&& relation : where_clause) {
-            if (relation->get_operator() == expr::oper_t::IS_NOT) {
-                single_column_relation* r =
-                        dynamic_cast<single_column_relation*>(relation.get());
+        for (auto&& relation_expr : where_clause) {
+            if (is<expr::binary_operator>(relation_expr) && as<expr::binary_operator>(relation_expr).op == expr::oper_t::IS_NOT) {
+                const expr::binary_operator& relation = as<expr::binary_operator>(relation_expr);
+                const expr::unresolved_identifier* lhs_col_ident =
+                        expr::as_if<expr::unresolved_identifier>(&relation.lhs);
                 // The "IS NOT NULL" restriction is only supported (and
                 // mandatory) for materialized view creation:
-                if (!r) {
+                if (lhs_col_ident == nullptr) {
                     throw exceptions::invalid_request_exception("IS NOT only supports single column");
                 }
                 // currently, the grammar only allows the NULL argument to be
                 // "IS NOT", so this assertion should not be able to fail
-                assert(expr::is<expr::null>(*r->get_value()));
+                assert(expr::is<expr::null>(relation.rhs));
 
-                auto col_id = r->get_entity()->prepare_column_identifier(*schema);
+                auto col_id = lhs_col_ident->ident->prepare_column_identifier(*schema);
                 const auto *cd = get_column_definition(*schema, *col_id);
                 if (!cd) {
-                    throw exceptions::invalid_request_exception(format("restriction '{}' unknown column {}", relation->to_string(), r->get_entity()->to_string()));
+                    throw exceptions::invalid_request_exception(format("restriction '{}' unknown column {}", relation, lhs_col_ident->ident->to_string()));
                 }
                 _not_null_columns.insert(cd);
 
                 if (!for_view) {
-                    throw exceptions::invalid_request_exception(format("restriction '{}' is only supported in materialized view creation", relation->to_string()));
+                    throw exceptions::invalid_request_exception(format("restriction '{}' is only supported in materialized view creation", relation));
                 }
             } else {
-                const auto restriction = relation->to_restriction(db, schema, ctx);
+                const auto restriction = expr::to_restriction(relation_expr, db, schema, ctx);
                 if (dynamic_pointer_cast<multi_column_restriction>(restriction)) {
                     _clustering_columns_restrictions = _clustering_columns_restrictions->merge_to(_schema, restriction);
                 } else if (has_token(restriction->expression)) {
