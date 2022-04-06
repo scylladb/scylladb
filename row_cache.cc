@@ -23,6 +23,7 @@
 #include "readers/empty.hh"
 #include "readers/forwardable_v2.hh"
 #include "readers/nonforwardable.hh"
+#include "readers/conversion.hh"
 
 namespace cache {
 
@@ -351,7 +352,7 @@ future<> read_context::create_underlying() {
 static flat_mutation_reader read_directly_from_underlying(read_context& reader) {
     flat_mutation_reader res = make_delegating_reader(reader.underlying().underlying());
     res.upgrade_schema(reader.schema());
-    return make_nonforwardable(std::move(res), true);
+    return downgrade_to_v1(make_nonforwardable(upgrade_to_v2(std::move(res)), true));
 }
 
 // Reader which populates the cache using data from the delegate.
