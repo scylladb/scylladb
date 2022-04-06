@@ -35,19 +35,28 @@ shared_ptr<functions::function> create_aggregate_statement::create(query_process
     std::vector<data_type> acc_types{state_type};
     acc_types.insert(acc_types.end(), _arg_types.begin(), _arg_types.end());
     auto state_func = dynamic_pointer_cast<functions::scalar_function>(functions::functions::find(functions::function_name{_name.keyspace, _sfunc}, acc_types));
-    auto final_func = dynamic_pointer_cast<functions::scalar_function>(functions::functions::find(functions::function_name{_name.keyspace, _ffunc}, {state_type}));
- 
     if (!state_func) {
         throw exceptions::invalid_request_exception(format("State function not found: {}", _sfunc));
     }
-    if (!final_func) {
-        throw exceptions::invalid_request_exception(format("Final function not found: {}", _ffunc));
+    if (state_func->return_type() != state_type) {
+        throw exceptions::invalid_request_exception(format("State function '{}' doesn't return state", _sfunc));
     }
 
-    auto dummy_ident = ::make_shared<column_identifier>("", true);
-    auto column_spec = make_lw_shared<column_specification>("", "", dummy_ident, state_type);
-    auto initcond_term = expr::evaluate(prepare_expression(_ival, db, _name.keyspace, {column_spec}), query_options::DEFAULT);
-    bytes_opt initcond = std::move(initcond_term.value).to_bytes();
+    ::shared_ptr<cql3::functions::scalar_function> final_func = nullptr;
+    if (_ffunc) {
+        final_func = dynamic_pointer_cast<functions::scalar_function>(functions::functions::find(functions::function_name{_name.keyspace, _ffunc.value()}, {state_type}));
+        if (!final_func) {
+            throw exceptions::invalid_request_exception(format("Final function not found: {}", _ffunc.value()));
+        }
+    }
+
+    bytes_opt initcond = std::nullopt;
+    if (_ival) {
+        auto dummy_ident = ::make_shared<column_identifier>("", true);
+        auto column_spec = make_lw_shared<column_specification>("", "", dummy_ident, state_type);
+        auto initcond_term = expr::evaluate(prepare_expression(_ival.value(), db, _name.keyspace, {column_spec}), query_options::DEFAULT);
+        initcond = std::move(initcond_term.value).to_bytes();
+    }
 
     return ::make_shared<functions::user_aggregate>(_name, initcond, std::move(state_func), std::move(final_func));
 }
@@ -71,7 +80,7 @@ create_aggregate_statement::prepare_schema_mutations(query_processor& qp, api::t
 }
 
 create_aggregate_statement::create_aggregate_statement(functions::function_name name, std::vector<shared_ptr<cql3_type::raw>> arg_types,
-            sstring sfunc, shared_ptr<cql3_type::raw> stype, sstring ffunc, expr::expression ival, bool or_replace, bool if_not_exists)
+            sstring sfunc, shared_ptr<cql3_type::raw> stype, std::optional<sstring> ffunc, std::optional<expr::expression> ival, bool or_replace, bool if_not_exists)
         : create_function_statement_base(std::move(name), std::move(arg_types), or_replace, if_not_exists)
         , _sfunc(std::move(sfunc))
         , _stype(std::move(stype))

@@ -26,6 +26,7 @@ public:
     virtual bool is_native() const override;
     virtual bool is_aggregate() const override;
     virtual bool requires_thread() const override;
+    bool has_finalfunc() const;
 
     const scalar_function& sfunc() const {
         return *_sfunc;
