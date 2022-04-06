@@ -468,7 +468,7 @@ set(scylla_sources
     dht/murmur3_partitioner.cc
     dht/range_streamer.cc
     dht/token.cc
-    distributed_loader.cc
+    replica/distributed_loader.cc
     duration.cc
     exceptions/exceptions.cc
     flat_mutation_reader.cc
@@ -491,7 +491,7 @@ set(scylla_sources
     index/secondary_index_manager.cc
     init.cc
     keys.cc
-    lister.cc
+    utils/lister.cc
     locator/abstract_replication_strategy.cc
     locator/azure_snitch.cc
     locator/ec2_multi_region_snitch.cc
@@ -509,7 +509,7 @@ set(scylla_sources
     locator/token_metadata.cc
     lang/lua.cc
     main.cc
-    memtable.cc
+    replica/memtable.cc
     message/messaging_service.cc
     multishard_mutation_query.cc
     mutation.cc
@@ -518,7 +518,7 @@ set(scylla_sources
     mutation_partition_serializer.cc
     mutation_partition_view.cc
     mutation_query.cc
-    mutation_reader.cc
+    readers/mutation_reader.cc
     mutation_writer/feed_writers.cc
     mutation_writer/multishard_writer.cc
     mutation_writer/partition_based_splitting_writer.cc
