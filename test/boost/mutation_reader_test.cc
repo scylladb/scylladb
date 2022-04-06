@@ -3936,8 +3936,8 @@ SEASTAR_THREAD_TEST_CASE(clustering_combined_reader_mutation_source_test) {
 
     // Multi partition reader from single partition readers.
     // precondition: readers must be nonempty (they return a partition_start)
-    struct multi_partition_reader : public flat_mutation_reader::impl {
-        using container_t = std::map<dht::decorated_key, flat_mutation_reader, dht::decorated_key::less_comparator>;
+    struct multi_partition_reader : public flat_mutation_reader_v2::impl {
+        using container_t = std::map<dht::decorated_key, flat_mutation_reader_v2, dht::decorated_key::less_comparator>;
 
         std::reference_wrapper<const dht::partition_range> _range;
 
@@ -4025,9 +4025,9 @@ SEASTAR_THREAD_TEST_CASE(clustering_combined_reader_mutation_source_test) {
             });
         }
 
-        future<mutation_fragment_opt> next_fragment() {
+        future<mutation_fragment_v2_opt> next_fragment() {
             if (_it == _readers.end() || _range.get().after(_it->first, dht::ring_position_comparator(*_schema))) {
-                co_return mutation_fragment_opt{};
+                co_return mutation_fragment_v2_opt{};
             }
 
             auto mfo = co_await _it->second();
@@ -4043,7 +4043,7 @@ SEASTAR_THREAD_TEST_CASE(clustering_combined_reader_mutation_source_test) {
 
             // our readers must be sm::forwarding (invariant 2) and the range was just exhausted,
             // waiting for ff or next_partition
-            co_return mutation_fragment_opt{};
+            co_return mutation_fragment_v2_opt{};
         }
     };
 
@@ -4114,7 +4114,7 @@ SEASTAR_THREAD_TEST_CASE(clustering_combined_reader_mutation_source_test) {
                 streamed_mutation::forwarding fwd_sm,
                 mutation_reader::forwarding fwd_mr) {
             auto reversed = slice.options.contains(query::partition_slice::option::reversed);
-            std::map<dht::decorated_key, flat_mutation_reader, dht::decorated_key::less_comparator>
+            std::map<dht::decorated_key, flat_mutation_reader_v2, dht::decorated_key::less_comparator>
                 good_readers{dht::decorated_key::less_comparator(s)};
             for (auto& [k, ms]: good) {
                 auto rs = boost::copy_range<std::vector<reader_bounds>>(ms
@@ -4133,14 +4133,14 @@ SEASTAR_THREAD_TEST_CASE(clustering_combined_reader_mutation_source_test) {
                 std::sort(rs.begin(), rs.end(), [less = position_in_partition::less_compare(*s)]
                         (const reader_bounds& a, const reader_bounds& b) { return less(a.lower, b.lower); });
                 auto q = std::make_unique<simple_position_reader_queue>(*s, std::move(rs));
-                good_readers.emplace(k, downgrade_to_v1(make_clustering_combined_reader(s, permit, fwd_sm, std::move(q))));
+                good_readers.emplace(k, make_clustering_combined_reader(s, permit, fwd_sm, std::move(q)));
             }
 
             std::vector<flat_mutation_reader_v2> readers;
             for (auto& m: bad) {
                 readers.push_back(make_flat_mutation_reader_from_mutations_v2(s, permit, {m}, range, slice, fwd_sm));
             }
-            readers.push_back(upgrade_to_v2(make_flat_mutation_reader<multi_partition_reader>(s, permit, std::move(good_readers), range)));
+            readers.push_back(make_flat_mutation_reader_v2<multi_partition_reader>(s, permit, std::move(good_readers), range));
 
             return make_combined_reader(std::move(s), std::move(permit), std::move(readers), fwd_sm, fwd_mr);
         });
