@@ -354,7 +354,7 @@ private:
 };
 
 using can_purge_tombstones = compaction_manager::can_purge_tombstones;
-future<compaction_result> compact_sstables(sstables::compaction_descriptor descriptor, replica::column_family& cf,
+future<compaction_result> compact_sstables(compaction_manager& cm, sstables::compaction_descriptor descriptor, replica::column_family& cf,
         std::function<shared_sstable()> creator, sstables::compaction_sstable_replacer_fn replacer = sstables::replacer_fn_no_op(),
         can_purge_tombstones can_purge = can_purge_tombstones::yes);
 

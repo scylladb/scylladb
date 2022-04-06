@@ -911,10 +911,6 @@ public:
         return _config;
     }
 
-    compaction_manager& get_compaction_manager() const {
-        return _compaction_manager;
-    }
-
     cache_temperature get_global_cache_hit_rate() const {
         return _global_cache_hit_rate;
     }

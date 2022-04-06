@@ -66,6 +66,8 @@ struct column_family_for_tests {
     replica::column_family& operator*() { return *_data->cf; }
     replica::column_family* operator->() { return _data->cf.get(); }
 
+    compaction_manager& get_compaction_manager() noexcept { return _data->cm; }
+
     future<> stop() {
         return when_all_succeed(_data->cm.stop(), _data->semaphore.stop()).discard_result();
     }

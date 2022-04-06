@@ -198,7 +198,7 @@ future<> run_resharding_jobs(sharded<sstables::sstable_directory>& dir, std::vec
         return dir.invoke_on_all([&dir, &db, &reshard_jobs, ks_name, table_name, creator] (sstables::sstable_directory& d) mutable {
             auto& table = db.local().find_column_family(ks_name, table_name);
             auto info_vec = std::move(reshard_jobs[this_shard_id()].info_vec);
-            auto& cm = table.get_compaction_manager();
+            auto& cm = db.local().get_compaction_manager();
             auto max_threshold = table.schema()->max_compaction_threshold();
             auto& iop = service::get_local_streaming_priority();
             return d.reshard(std::move(info_vec), cm, table, max_threshold, creator, iop).then([&d, &dir] {
@@ -249,7 +249,7 @@ distributed_loader::reshape(sharded<sstables::sstable_directory>& dir, sharded<r
     auto start = std::chrono::steady_clock::now();
     return dir.map_reduce0([&dir, &db, ks_name = std::move(ks_name), table_name = std::move(table_name), creator = std::move(creator), mode, filter] (sstables::sstable_directory& d) {
         auto& table = db.local().find_column_family(ks_name, table_name);
-        auto& cm = table.get_compaction_manager();
+        auto& cm = db.local().get_compaction_manager();
         auto& iop = service::get_local_streaming_priority();
         return d.reshape(cm, table, creator, iop, mode, filter);
     }, uint64_t(0), std::plus<uint64_t>()).then([start] (uint64_t total_size) {
