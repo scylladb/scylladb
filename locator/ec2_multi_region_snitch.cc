@@ -78,6 +78,11 @@ future<> ec2_multi_region_snitch::start() {
                 if (this_shard_id() != io_cpu_id()) {
                     local_s->set_local_private_addr(_local_private_address);
                 }
+
+                // this invoke_on() was done from the io_cpu_id() which had
+                // already passed through ec2_snitch::load_config() which, in
+                // turn, had already spread the _my_dc accross shards
+                gms::get_local_gossiper().register_(::make_shared<reconnectable_snitch_helper>(_my_dc));
             }).get();
 
             set_snitch_ready();
@@ -92,24 +97,12 @@ void ec2_multi_region_snitch::set_local_private_addr(const sstring& addr_str) {
     _local_private_address = addr_str;
 }
 
-future<> ec2_multi_region_snitch::gossiper_starting() {
-    //
-    // Note: currently gossiper "main" instance always runs on CPU0 therefore
-    // this function will be executed on CPU0 only.
-    //
-
-    using namespace gms;
-    auto& g = get_local_gossiper();
-
-    return gossip_snitch_info({
-        { application_state::INTERNAL_IP, versioned_value::internal_ip(_local_private_address) }
-    }).then([this] {
-        if (!_gossip_started) {
-            gms::get_local_gossiper().register_(::make_shared<reconnectable_snitch_helper>(_my_dc));
-            _gossip_started = true;
-        }
-    });
-
+std::list<std::pair<gms::application_state, gms::versioned_value>> ec2_multi_region_snitch::get_app_states() const {
+    return {
+        {gms::application_state::DC, gms::versioned_value::datacenter(_my_dc)},
+        {gms::application_state::RACK, gms::versioned_value::rack(_my_rack)},
+        {gms::application_state::INTERNAL_IP, gms::versioned_value::internal_ip(_local_private_address)},
+    };
 }
 
 using registry_2_params = class_registrator<i_endpoint_snitch, ec2_multi_region_snitch, const sstring&, unsigned>;

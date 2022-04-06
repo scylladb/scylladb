@@ -36,7 +36,7 @@ public:
         return std::chrono::seconds(60);
     }
 
-    virtual future<> gossiper_starting() override;
+    virtual std::list<std::pair<gms::application_state, gms::versioned_value>> get_app_states() const override;
     virtual future<> stop() override;
     virtual future<> start() override;
     virtual future<> pause_io() override;

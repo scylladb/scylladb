@@ -102,26 +102,13 @@ void gossiping_property_file_snitch::periodic_reader_callback() {
     });
 }
 
-future<> gossiping_property_file_snitch::gossiper_starting() {
-    using namespace gms;
-    using namespace service;
-    //
-    // Note: currently gossiper "main" instance always runs on CPU0 therefore
-    // this function will be executed on CPU0 only.
-    //
-    auto& g = get_local_gossiper();
-
-    auto local_internal_addr = g.get_local_messaging().listen_address();
-    std::ostringstream ostrm;
-
-    ostrm<<local_internal_addr<<std::flush;
-
-    return gossip_snitch_info({
-        { application_state::INTERNAL_IP, versioned_value::internal_ip(ostrm.str()) },
-    }).then([this] {
-        _gossip_started = true;
-        return reload_gossiper_state();
-    });
+std::list<std::pair<gms::application_state, gms::versioned_value>> gossiping_property_file_snitch::get_app_states() const {
+    sstring ip = format("{}", gms::get_local_gossiper().get_local_messaging().listen_address());
+    return {
+        {gms::application_state::DC, gms::versioned_value::datacenter(_my_dc)},
+        {gms::application_state::RACK, gms::versioned_value::rack(_my_rack)},
+        {gms::application_state::INTERNAL_IP, gms::versioned_value::internal_ip(std::move(ip))},
+    };
 }
 
 future<> gossiping_property_file_snitch::read_property_file() {
@@ -193,22 +180,25 @@ future<> gossiping_property_file_snitch::reload_configuration() {
                 local_s->set_prefer_local(_prefer_local);
             }
         }).then([this] {
+            // FIXME -- tests don't start gossiper
+            if (!gms::get_gossiper().local_is_initialized()) {
+                return make_ready_future<>();
+            }
+
             return seastar::async([this] {
                 // reload Gossiper state (executed on CPU0 only)
-                smp::submit_to(0, [] {
-                    auto& local_snitch_ptr = get_local_snitch_ptr();
+                _my_distributed->invoke_on(0, [] (snitch_ptr& local_snitch_ptr) {
                     return local_snitch_ptr->reload_gossiper_state();
                 }).get();
 
                 _reconfigured();
 
                 // spread the word...
-                smp::submit_to(0, [] {
-                    auto& local_snitch_ptr = get_local_snitch_ptr();
-                    if (local_snitch_ptr->local_gossiper_started()) {
-                        return local_snitch_ptr->gossip_snitch_info({});
+                _my_distributed->invoke_on(0, [] (snitch_ptr& local_snitch_ptr) {
+                    auto& gossiper = gms::get_local_gossiper();
+                    if (gossiper.is_enabled()) {
+                        return gossiper.add_local_application_state(local_snitch_ptr->get_app_states());
                     }
-
                     return make_ready_future<>();
                 }).get();
             });
@@ -278,10 +268,6 @@ future<> gossiping_property_file_snitch::pause_io() {
 
 // should be invoked of CPU0 only
 future<> gossiping_property_file_snitch::reload_gossiper_state() {
-    if (!_gossip_started) {
-        return make_ready_future<>();
-    }
-
     future<> ret = make_ready_future<>();
     if (_reconnectable_helper) {
         ret = gms::get_local_gossiper().unregister_(_reconnectable_helper);

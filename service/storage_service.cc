@@ -341,10 +341,14 @@ void storage_service::prepare_to_join(
     if (replacing_a_node_with_same_ip || replacing_a_node_with_diff_ip) {
         app_states.emplace(gms::application_state::TOKENS, versioned_value::tokens(_bootstrap_tokens));
     }
-    const auto& snitch_name = locator::i_endpoint_snitch::get_local_snitch_ptr()->get_name();
-    app_states.emplace(gms::application_state::SNITCH_NAME, versioned_value::snitch_name(snitch_name));
+    auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
+    app_states.emplace(gms::application_state::SNITCH_NAME, versioned_value::snitch_name(snitch->get_name()));
     app_states.emplace(gms::application_state::SHARD_COUNT, versioned_value::shard_count(smp::count));
     app_states.emplace(gms::application_state::IGNORE_MSB_BITS, versioned_value::ignore_msb_bits(_db.local().get_config().murmur3_partitioner_ignore_msb_bits()));
+
+    for (auto&& s : snitch->get_app_states()) {
+        app_states.emplace(s.first, std::move(s.second));
+    }
 
     slogger.info("Starting up server gossip");
 

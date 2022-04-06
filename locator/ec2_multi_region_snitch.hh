@@ -16,7 +16,7 @@ namespace locator {
 class ec2_multi_region_snitch : public ec2_snitch {
 public:
     ec2_multi_region_snitch(const sstring& fname = "", unsigned io_cpu_id = 0);
-    virtual future<> gossiper_starting() override;
+    virtual std::list<std::pair<gms::application_state, gms::versioned_value>> get_app_states() const override;
     virtual future<> start() override;
     virtual void set_local_private_addr(const sstring& addr_str) override;
     virtual sstring get_name() const override {

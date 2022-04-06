@@ -88,13 +88,9 @@ public:
         inet_address& target, inet_address& a1, inet_address& a2) = 0;
 
     /**
-     * called after Gossiper instance exists immediately before it starts
-     * gossiping
+     * returns whatever info snitch wants to gossip
      */
-    virtual future<> gossiper_starting() {
-        _gossip_started = true;
-        return gossip_snitch_info({});
-    }
+    virtual std::list<std::pair<gms::application_state, gms::versioned_value>> get_app_states() const = 0;
 
     /**
      * Returns whether for a range query doing a query against merged is likely
@@ -163,16 +159,10 @@ public:
         //noop by default
     }
 
-    bool local_gossiper_started() {
-        return _gossip_started;
-    }
-
     virtual future<> reload_gossiper_state() {
         // noop by default
         return make_ready_future<>();
     }
-
-    virtual future<> gossip_snitch_info(std::list<std::pair<gms::application_state, gms::versioned_value>> info) = 0;
 
     virtual snitch_signal_connection_t when_reconfigured(snitch_signal_slot_t& slot) {
         // no updates by default
@@ -199,7 +189,6 @@ protected:
         stopping,
         stopped
     } _state = snitch_state::initializing;
-    bool _gossip_started = false;
 };
 
 struct snitch_ptr {
@@ -420,7 +409,7 @@ public:
         inet_address_vector_replica_set& l1,
         inet_address_vector_replica_set& l2) override;
 
-    virtual future<> gossip_snitch_info(std::list<std::pair<gms::application_state, gms::versioned_value>> info) override;
+    virtual std::list<std::pair<gms::application_state, gms::versioned_value>> get_app_states() const override;
 
 private:
     bool has_remote_node(inet_address_vector_replica_set& l);

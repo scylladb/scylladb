@@ -1824,9 +1824,6 @@ future<> gossiper::start_gossiping(int generation_nbr, std::map<application_stat
 
     co_await replicate(get_broadcast_address(), local_state);
 
-    //notify snitches that Gossiper is about to start
-    co_await locator::i_endpoint_snitch::get_local_snitch_ptr()->gossiper_starting();
-
     logger.trace("gossip started with generation {}", generation);
     _enabled = true;
     _nr_run = 0;
