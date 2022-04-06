@@ -1966,16 +1966,13 @@ schema_ptr database::find_indexed_table(const sstring& ks_name, const sstring& i
 }
 
 future<> database::close_tables(table_kind kind_to_close) {
-    return parallel_for_each(_column_families, [this, kind_to_close](auto& val_pair) {
+    co_await parallel_for_each(_column_families, [this, kind_to_close](auto& val_pair) -> future<> {
         table_kind k = is_system_table(*val_pair.second->schema()) ? table_kind::system : table_kind::user;
         if (k == kind_to_close) {
-            return val_pair.second->stop();
-        } else {
-            return make_ready_future<>();
+            co_await val_pair.second->stop();
         }
-    }).then([this] {
-        return _stop_barrier.arrive_and_wait();
     });
+    co_await _stop_barrier.arrive_and_wait();
 }
 
 void database::revert_initial_system_read_concurrency_boost() {
