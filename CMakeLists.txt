@@ -470,7 +470,7 @@ set(scylla_sources
     replica/distributed_loader.cc
     duration.cc
     exceptions/exceptions.cc
-    flat_mutation_reader.cc
+    readers/mutation_readers.cc
     frozen_mutation.cc
     frozen_schema.cc
     generic_server.cc
