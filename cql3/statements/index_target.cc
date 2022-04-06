@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
+#include <regex>
 #include <stdexcept>
 #include "index_target.hh"
 #include "index/secondary_index.hh"
@@ -21,6 +22,7 @@ using db::index::secondary_index;
 
 const sstring index_target::target_option_name = "target";
 const sstring index_target::custom_index_option_name = "class_name";
+const std::regex index_target::target_regex("^(keys|entries|values|full)\\((.+)\\)$");
 
 sstring index_target::as_string() const {
     struct as_string_visitor {
@@ -66,6 +68,22 @@ index_target::target_type index_target::from_sstring(const sstring& s)
         return index_target::target_type::full;
     }
     throw std::runtime_error(format("Unknown target type: {}", s));
+}
+
+index_target::target_type index_target::from_target_string(const sstring& target) {
+    std::cmatch match;
+    if (std::regex_match(target.data(), match, target_regex)) {
+        return index_target::from_sstring(match[1].str());
+    }
+    return target_type::regular_values;
+}
+
+sstring index_target::column_name_from_target_string(const sstring& target) {
+    std::cmatch match;
+    if (std::regex_match(target.data(), match, target_regex)) {
+        return match[2].str();
+    }
+    return target;
 }
 
 sstring index_target::index_option(target_type type) {
