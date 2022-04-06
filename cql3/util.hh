@@ -20,7 +20,6 @@
 #include "cql3/column_identifier.hh"
 #include "cql3/CqlParser.hpp"
 #include "cql3/error_collector.hh"
-#include "cql3/relation.hh"
 #include "cql3/statements/raw/select_statement.hh"
 
 namespace cql3 {

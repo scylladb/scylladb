@@ -363,7 +363,6 @@ set(scylla_sources
     cql3/prepare_context.cc
     cql3/query_options.cc
     cql3/query_processor.cc
-    cql3/relation.cc
     cql3/restrictions/statement_restrictions.cc
     cql3/result_set.cc
     cql3/role_name.cc
@@ -374,7 +373,6 @@ set(scylla_sources
     cql3/selection/selector_factories.cc
     cql3/selection/simple_selector.cc
     cql3/sets.cc
-    cql3/single_column_relation.cc
     cql3/statements/alter_keyspace_statement.cc
     cql3/statements/alter_service_level_statement.cc
     cql3/statements/alter_table_statement.cc
@@ -427,7 +425,6 @@ set(scylla_sources
     cql3/statements/truncate_statement.cc
     cql3/statements/update_statement.cc
     cql3/statements/use_statement.cc
-    cql3/token_relation.cc
     cql3/type_json.cc
     cql3/untyped_result_set.cc
     cql3/update_parameters.cc

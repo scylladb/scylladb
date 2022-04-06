@@ -13,7 +13,6 @@
 #include "cql3/statements/raw/modification_statement.hh"
 #include "cql3/column_identifier.hh"
 #include "cql3/operation.hh"
-#include "cql3/relation.hh"
 
 #include "data_dictionary/data_dictionary.hh"
 

@@ -27,7 +27,6 @@
 #include "cql3/constants.hh"
 #include "cql3/lists.hh"
 #include "cql3/selection/selection.hh"
-#include "cql3/single_column_relation.hh"
 #include "cql3/statements/request_validations.hh"
 #include "types/list.hh"
 #include "types/map.hh"

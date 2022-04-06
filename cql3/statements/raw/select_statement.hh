@@ -12,7 +12,6 @@
 
 #include "cql3/statements/raw/cf_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
-#include "cql3/relation.hh"
 #include "cql3/attributes.hh"
 #include "db/config.hh"
 #include <seastar/core/shared_ptr.hh>

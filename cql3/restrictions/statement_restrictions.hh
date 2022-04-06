@@ -17,7 +17,6 @@
 #include "cql3/restrictions/restrictions.hh"
 #include "cql3/restrictions/primary_key_restrictions.hh"
 #include "cql3/restrictions/single_column_restrictions.hh"
-#include "cql3/relation.hh"
 #include "cql3/prepare_context.hh"
 #include "cql3/statements/statement_type.hh"
 
