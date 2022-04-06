@@ -75,7 +75,6 @@ operator-(executor_shard_stats a, executor_shard_stats b) {
 uint64_t perf_tasks_processed();
 uint64_t perf_mallocs();
 
-
 // Drives concurrent and continuous execution of given asynchronous action
 // until a deadline. Counts invocations and collects statistics.
 template <typename Func>
@@ -144,6 +143,21 @@ struct perf_result {
 
 std::ostream& operator<<(std::ostream& os, const perf_result& result);
 
+// Use to make a perf_result with aio_writes added. Need to give "update" as
+// update-func to time_parallel_ex to make it work.
+struct aio_writes_result_mixin {
+    double aio_writes;
+    double aio_write_bytes;
+
+    aio_writes_result_mixin();
+
+    static void update(aio_writes_result_mixin& result, const executor_shard_stats& stats);
+};
+
+struct perf_result_with_aio_writes : public perf_result, public aio_writes_result_mixin {};
+
+std::ostream& operator<<(std::ostream& os, const perf_result_with_aio_writes& result);
+
 /**
  * Measures throughput of an asynchronous action. Executes the action on all cores
  * in parallel, with given number of concurrent executions per core.
@@ -152,34 +166,44 @@ std::ostream& operator<<(std::ostream& os, const perf_result& result);
  *
  * Returns a vector of throughputs achieved in each iteration.
  */
-template <typename Func>
+template <typename Res, typename Func, typename UpdateFunc = void(*)(const Res&, const executor_shard_stats&)>
+requires (std::is_base_of_v<perf_result, Res> && std::is_invocable_v<UpdateFunc, Res&, const executor_shard_stats&>)
 static
-std::vector<perf_result> time_parallel(Func func, unsigned concurrency_per_core, int iterations = 5, unsigned operations_per_shard = 0) {
+std::vector<Res> time_parallel_ex(Func func, unsigned concurrency_per_core, int iterations = 5, unsigned operations_per_shard = 0, UpdateFunc uf = [](const auto&, const auto&) {}) {
     using clk = std::chrono::steady_clock;
     if (operations_per_shard) {
         iterations = 1;
     }
-    std::vector<perf_result> results;
+    std::vector<Res> results;
     for (int i = 0; i < iterations; ++i) {
         auto start = clk::now();
         auto end_at = lowres_clock::now() + std::chrono::seconds(1);
         distributed<executor<Func>> exec;
+        Res result;
         exec.start(concurrency_per_core, func, std::move(end_at), operations_per_shard).get();
         auto stats = exec.map_reduce0(std::mem_fn(&executor<Func>::run),
                 executor_shard_stats(), std::plus<executor_shard_stats>()).get0();
         auto end = clk::now();
         auto duration = std::chrono::duration<double>(end - start).count();
-        auto result = perf_result{
-            .throughput = static_cast<double>(stats.invocations) / duration,
-            .mallocs_per_op = double(stats.allocations) / stats.invocations,
-            .tasks_per_op = double(stats.tasks_executed) / stats.invocations,
-            .instructions_per_op = double(stats.instructions_retired) / stats.invocations,
-        };
-        std::cout << result << "\n";
+
+        result.throughput = static_cast<double>(stats.invocations) / duration;
+        result.mallocs_per_op = double(stats.allocations) / stats.invocations;
+        result.tasks_per_op = double(stats.tasks_executed) / stats.invocations;
+        result.instructions_per_op = double(stats.instructions_retired) / stats.invocations;
+
+        uf(result, stats);
+
+        std::cout << result << std::endl;
         results.emplace_back(result);
         exec.stop().get();
     }
     return results;
+}
+
+template <typename Func>
+static
+std::vector<perf_result> time_parallel(Func func, unsigned concurrency_per_core, int iterations = 5, unsigned operations_per_shard = 0) {
+    return time_parallel_ex<perf_result>(std::move(func), concurrency_per_core, iterations, operations_per_shard);
 }
 
 template<typename Func>
