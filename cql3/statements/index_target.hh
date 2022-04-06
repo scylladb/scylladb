@@ -13,6 +13,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include "cql3/column_identifier.hh"
 #include <variant>
+#include <regex>
 
 namespace cql3 {
 
@@ -21,6 +22,7 @@ namespace statements {
 struct index_target {
     static const sstring target_option_name;
     static const sstring custom_index_option_name;
+    static const std::regex target_regex;
 
     enum class target_type {
         regular_values, collection_values, keys, keys_and_values, full
@@ -40,7 +42,15 @@ struct index_target {
 
     static sstring index_option(target_type type);
     static target_type from_column_definition(const column_definition& cd);
+    // Parses index_target::target_type from it's textual form.
+    // e.g. from_sstring("keys") == index_target::target_type::keys
     static index_target::target_type from_sstring(const sstring& s);
+    // Parses index_target::target_type from index target string form.
+    // e.g. from_target_string("keys(some_column)") == index_target::target_type::keys
+    static index_target::target_type from_target_string(const sstring& s);
+    // Parses column name from index target string form
+    // e.g. column_name_from_target_string("keys(some_column)") == "some_column"
+    static sstring column_name_from_target_string(const sstring& s);
 
     class raw {
     public:

@@ -818,6 +818,12 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                                         : to_range(oper.op, std::move(*val));
                             } else if (oper.op == oper_t::IN) {
                                 return get_IN_values(oper.rhs, options, type->as_less_comparator(), cdef->name_as_text());
+                            } else if (oper.op == oper_t::CONTAINS || oper.op == oper_t::CONTAINS_KEY) {
+                                managed_bytes_opt val = evaluate(oper.rhs, options).value.to_managed_bytes_opt();
+                                if (!val) {
+                                    return empty_value_set; // All NULL comparisons fail; no column values match.
+                                }
+                                return value_set(value_list{*val});
                             }
                             throw std::logic_error(format("possible_lhs_values: unhandled operator {}", oper));
                         },
