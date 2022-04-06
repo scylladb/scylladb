@@ -68,6 +68,15 @@ bool index::supports_expression(const column_definition& cdef, const cql3::expr:
     }
 }
 
+bool index::supports_subscript_expression(const column_definition& cdef, const cql3::expr::oper_t op) const {
+    using target_type = cql3::statements::index_target::target_type;
+    if (cdef.name_as_text() != _target_column) {
+        return false;
+    }
+
+    return op == cql3::expr::oper_t::EQ && _target_type == target_type::keys_and_values;
+}
+
 const index_metadata& index::metadata() const {
     return _im;
 }

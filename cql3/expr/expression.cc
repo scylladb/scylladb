@@ -819,7 +819,7 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                             } else if (oper.op == oper_t::IN) {
                                 return get_IN_values(oper.rhs, options, type->as_less_comparator(), cdef->name_as_text());
                             } else if (oper.op == oper_t::CONTAINS || oper.op == oper_t::CONTAINS_KEY) {
-                                managed_bytes_opt val = evaluate(oper.rhs, options).value.to_managed_bytes_opt();
+                                managed_bytes_opt val = evaluate(oper.rhs, options).to_managed_bytes_opt();
                                 if (!val) {
                                     return empty_value_set; // All NULL comparisons fail; no column values match.
                                 }
@@ -828,7 +828,27 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                             throw std::logic_error(format("possible_lhs_values: unhandled operator {}", oper));
                         },
                         [&] (const subscript& s) -> value_set {
-                            on_internal_error(expr_logger, "possible_lhs_values: subscripts are not supported as the LHS of a binary expression");
+                            const column_value& col = get_subscripted_column(s);
+
+                            if (!cdef || cdef != col.col) {
+                                return unbounded_value_set;
+                            }
+
+                            managed_bytes_opt sval = evaluate(s.sub, options).to_managed_bytes_opt();
+                            if (!sval) {
+                                return empty_value_set; // NULL can't be a map key
+                            }
+
+                            if (oper.op == oper_t::EQ) {
+                                managed_bytes_opt rval = evaluate(oper.rhs, options).to_managed_bytes_opt();
+                                if (!rval) {
+                                    return empty_value_set; // All NULL comparisons fail; no column values match.
+                                }
+                                managed_bytes_opt elements[] = {sval, rval};
+                                managed_bytes val = tuple_type_impl::build_value_fragmented(elements);
+                                return value_set(value_list{val});
+                            }
+                            throw std::logic_error(format("possible_lhs_values: unhandled operator {}", oper));
                         },
                         [&] (const tuple_constructor& tuple) -> value_set {
                             if (!cdef) {
@@ -1007,8 +1027,8 @@ bool is_supported_by(const expression& expr, const secondary_index::index& idx) 
                         },
                         [&] (const token&) { return false; },
                         [&] (const subscript& s) -> bool {
-                            // We don't support indexes on map entries yet.
-                            return false;
+                            const column_value& col = get_subscripted_column(s);
+                            return idx.supports_subscript_expression(*col.col, oper.op);
                         },
                         [&] (const binary_operator&) -> bool {
                             on_internal_error(expr_logger, "is_supported_by: nested binary operators are not supported");
