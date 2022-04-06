@@ -1236,8 +1236,6 @@ for t in perf_tests:
     deps[t] = [t + '.cc'] + scylla_tests_dependencies + perf_tests_seastar_deps
     deps[t] += ['test/perf/perf.cc', 'test/perf/linux-perf-event.cc']
 
-deps['test/boost/sstable_test'] += ['test/lib/normalizing_reader.cc']
-deps['test/boost/sstable_datafile_test'] += ['test/lib/normalizing_reader.cc']
 deps['test/boost/mutation_reader_test'] += ['test/lib/dummy_sharder.cc' ]
 deps['test/boost/multishard_combining_reader_as_mutation_source_test'] += ['test/lib/dummy_sharder.cc' ]
 
