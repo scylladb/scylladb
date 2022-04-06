@@ -156,7 +156,6 @@ private:
         after_partition_end,
     };
 
-    schema_ptr _schema;
     const query::partition_slice& _slice;
     streamed_mutation::forwarding _fwd;
     partition_production_state _pps = partition_production_state::not_started;
