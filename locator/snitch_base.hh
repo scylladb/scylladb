@@ -300,10 +300,6 @@ inline future<> i_endpoint_snitch::reset_snitch(snitch_config cfg) {
         // If we've got here then we may not fail
 
         // (3) stop the current snitch instances on all CPUs
-        snitch_instance().invoke_on(io_cpu_id(), [] (snitch_ptr& s) {
-            // stop the instance on an I/O CPU first
-            return s->stop();
-        }).get();
         snitch_instance().invoke_on_all([] (snitch_ptr& s) {
             return s->stop();
         }).get();
@@ -313,10 +309,6 @@ inline future<> i_endpoint_snitch::reset_snitch(snitch_config cfg) {
         // and initialized. We may pause its I/O it now and start moving
         // pointers...
         //
-        tmp_snitch.invoke_on(io_cpu_id(), [] (snitch_ptr& local_inst) {
-            // pause the instance on an I/O CPU first
-            return local_inst->pause_io();
-        }).get();
         tmp_snitch.invoke_on_all([] (snitch_ptr& local_inst) {
             return local_inst->pause_io();
         }).get();
