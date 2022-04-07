@@ -50,8 +50,6 @@ struct snitch_config {
 };
 
 struct i_endpoint_snitch {
-private:
-    static future<> init_snitch_obj(distributed<snitch_ptr>& snitch_obj, snitch_config cfg);
 public:
     using ptr_type = std::unique_ptr<i_endpoint_snitch>;
 
@@ -240,21 +238,6 @@ private:
 };
 
 /**
- * Initializes the distributed<snitch_ptr> object
- *
- * @note The local snitch objects will remain not start()ed.
- *
- * @param snitch_obj distributed<> object to initialize
- * @param snitch_name name of the snitch class to create
- * @param a snitch constructor arguments
- *
- * @return ready future when the snitch has been successfully created
- */
-inline future<> i_endpoint_snitch::init_snitch_obj(distributed<snitch_ptr>& snitch_obj, snitch_config cfg) {
-    // First, create the snitch_ptr objects...
-    return snitch_obj.start(cfg);
-}
-/**
  * Creates the distributed i_endpoint_snitch::snitch_instane object
  *
  * @param snitch_name name of the snitch class (comes from the cassandra.yaml)
@@ -263,7 +246,7 @@ inline future<> i_endpoint_snitch::init_snitch_obj(distributed<snitch_ptr>& snit
  */
 inline future<> i_endpoint_snitch::create_snitch(snitch_config cfg) {
     // First, create and "start" the distributed snitch object...
-    return init_snitch_obj(snitch_instance(), cfg).then([snitch_name = cfg.name] {
+    return snitch_instance().start(cfg).then([snitch_name = cfg.name] {
         // ...and then start each local snitch.
         return snitch_instance().invoke_on_all([] (snitch_ptr& local_inst) {
             return local_inst.start();
@@ -303,7 +286,7 @@ inline future<> i_endpoint_snitch::reset_snitch(snitch_config cfg) {
         // (1) create a new snitch
         distributed<snitch_ptr> tmp_snitch;
         try {
-            init_snitch_obj(tmp_snitch, cfg).get();
+            tmp_snitch.start(cfg).get();
 
             // (2) start the local instances of the new snitch
             tmp_snitch.invoke_on_all([] (snitch_ptr& local_inst) {
