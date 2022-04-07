@@ -37,9 +37,10 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
 
     engine().set_strict_dma(false);
 
-    return i_endpoint_snitch::create_snitch<const sstring&>(
-        "org.apache.cassandra.locator.GossipingPropertyFileSnitch",
-        sstring(fname.string()))
+    snitch_config cfg;
+    cfg.name = "org.apache.cassandra.locator.GossipingPropertyFileSnitch";
+    cfg.properties_file_name = fname.string();
+    return i_endpoint_snitch::create_snitch(cfg)
         .then_wrapped([exp_result] (auto&& f) {
             try {
                 f.get();

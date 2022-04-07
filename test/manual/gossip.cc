@@ -61,7 +61,7 @@ int main(int ac, char ** av) {
             utils::fb_utilities::set_broadcast_address(listen);
             utils::fb_utilities::set_broadcast_rpc_address(listen);
             auto cfg = std::make_unique<db::config>();
-            locator::i_endpoint_snitch::create_snitch("SimpleSnitch").get();
+            locator::i_endpoint_snitch::create_snitch(locator::snitch_config{}).get();
 
             sharded<gms::feature_service> feature_service;
             feature_service.start(gms::feature_config_from_db_config(*cfg)).get();

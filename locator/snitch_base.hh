@@ -40,19 +40,23 @@ struct snitch_ptr;
 
 typedef gms::inet_address inet_address;
 
+struct snitch_config {
+    sstring name = "SimpleSnitch";
+    sstring properties_file_name = "";
+    unsigned io_cpu_id = 0;
+
+    // GCE-specific
+    sstring gce_meta_server_url = "";
+};
+
 struct i_endpoint_snitch {
 private:
-    template <typename... A>
-    static future<> init_snitch_obj(
-        distributed<snitch_ptr>& snitch_obj, const sstring& snitch_name, A&&... a);
+    static future<> init_snitch_obj(distributed<snitch_ptr>& snitch_obj, snitch_config cfg);
 public:
     using ptr_type = std::unique_ptr<i_endpoint_snitch>;
 
-    template <typename... A>
-    static future<> create_snitch(const sstring& snitch_name, A&&... a);
-
-    template <typename... A>
-    static future<> reset_snitch(const sstring& snitch_name, A&&... a);
+    static future<> create_snitch(snitch_config cfg);
+    static future<> reset_snitch(snitch_config cfg);
 
     static future<> stop_snitch();
 
@@ -244,25 +248,17 @@ private:
  *
  * @return ready future when the snitch has been successfully created
  */
-template <typename... A>
-future<> i_endpoint_snitch::init_snitch_obj(
-    distributed<snitch_ptr>& snitch_obj, const sstring& snitch_name, A&&... a) {
-
+inline future<> i_endpoint_snitch::init_snitch_obj(distributed<snitch_ptr>& snitch_obj, snitch_config cfg) {
     // First, create the snitch_ptr objects...
-    return snitch_obj.start().then(
-        [&snitch_obj, snitch_name = std::move(snitch_name), a = std::make_tuple(std::forward<A>(a)...)] () {
+    return snitch_obj.start().then([&snitch_obj, cfg = std::move(cfg)] () {
         // ...then, create the snitches...
-        return snitch_obj.invoke_on_all(
-            [snitch_name, a] (snitch_ptr& local_inst) {
+        return snitch_obj.invoke_on_all([cfg] (snitch_ptr& local_inst) {
             try {
-                auto s(std::move(apply([snitch_name] (A&&... a) {
-                    return create_object<i_endpoint_snitch>(snitch_name, std::forward<A>(a)...);
-                }, std::move(a))));
-
+                auto s = create_object<i_endpoint_snitch>(cfg.name, cfg);
                 s->set_backreference(local_inst);
                 local_inst = std::move(s);
             } catch (no_such_class& e) {
-                logger().error("Can't create snitch {}: not supported", snitch_name);
+                logger().error("Can't create snitch {}: not supported", cfg.name);
                 throw;
             } catch (...) {
                 throw;
@@ -279,12 +275,9 @@ future<> i_endpoint_snitch::init_snitch_obj(
  *
  * @return ready future when the distributed object is ready.
  */
-template <typename... A>
-future<> i_endpoint_snitch::create_snitch(
-    const sstring& snitch_name, A&&... a) {
-
+inline future<> i_endpoint_snitch::create_snitch(snitch_config cfg) {
     // First, create and "start" the distributed snitch object...
-    return init_snitch_obj(snitch_instance(), snitch_name, std::forward<A>(a)...).then([snitch_name] {
+    return init_snitch_obj(snitch_instance(), cfg).then([snitch_name = cfg.name] {
         // ...and then start each local snitch.
         return snitch_instance().invoke_on_all([] (snitch_ptr& local_inst) {
             return local_inst.start();
@@ -319,18 +312,12 @@ future<> i_endpoint_snitch::create_snitch(
  *  6) Start the new snitches.
  *  7) Stop() the temporary distributed<snitch_ptr> from (1).
  */
-template <typename... A>
-future<> i_endpoint_snitch::reset_snitch(
-    const sstring& snitch_name, A&&... a) {
-    return seastar::async(
-            [snitch_name, a = std::make_tuple(std::forward<A>(a)...)] {
-
+inline future<> i_endpoint_snitch::reset_snitch(snitch_config cfg) {
+    return seastar::async([cfg = std::move(cfg)] {
         // (1) create a new snitch
         distributed<snitch_ptr> tmp_snitch;
         try {
-            apply([snitch_name,&tmp_snitch](A&& ... a) {
-                return init_snitch_obj(tmp_snitch, snitch_name, std::forward<A>(a)...);
-            }, std::move(a)).get();
+            init_snitch_obj(tmp_snitch, cfg).get();
 
             // (2) start the local instances of the new snitch
             tmp_snitch.invoke_on_all([] (snitch_ptr& local_inst) {

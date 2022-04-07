@@ -80,7 +80,11 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
                 http_server.listen(ipv4_addr(meta_url.c_str(), 80)).get();
             }
 
-            i_endpoint_snitch::create_snitch<const sstring&, const unsigned&, const sstring&>("GoogleCloudSnitch", sstring(fname.string()), 0, meta_url).get();
+            snitch_config cfg;
+            cfg.name = "GoogleCloudSnitch";
+            cfg.properties_file_name = fname.string();
+            cfg.gce_meta_server_url = meta_url;
+            i_endpoint_snitch::create_snitch(cfg).get();
             if (!exp_result) {
                 BOOST_ERROR("Failed to catch an error in a malformed configuration file");
                 i_endpoint_snitch::stop_snitch().get();

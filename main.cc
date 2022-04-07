@@ -744,7 +744,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 tracing::tracing::tracing_instance().stop().get();
             });
             supervisor::notify("creating snitch");
-            i_endpoint_snitch::create_snitch(cfg->endpoint_snitch()).get();
+            snitch_config snitch_cfg;
+            snitch_cfg.name = cfg->endpoint_snitch();
+            i_endpoint_snitch::create_snitch(snitch_cfg).get();
             // #293 - do not stop anything
             // engine().at_exit([] { return i_endpoint_snitch::stop_snitch(); });
 

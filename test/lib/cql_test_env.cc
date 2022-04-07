@@ -448,7 +448,7 @@ public:
 
             utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
             utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
-            locator::i_endpoint_snitch::create_snitch("SimpleSnitch").get();
+            locator::i_endpoint_snitch::create_snitch(locator::snitch_config{}).get();
             auto stop_snitch = defer([] { locator::i_endpoint_snitch::stop_snitch().get(); });
 
             sharded<abort_source> abort_sources;

@@ -48,10 +48,10 @@ future<> one_test(const std::string& property_fname1,
             fname2 /= path(property_fname2);
 
             try {
-                i_endpoint_snitch::create_snitch<const sstring&>(
-                    "org.apache.cassandra.locator.GossipingPropertyFileSnitch",
-                    sstring(fname1.string())
-                ).get();
+                snitch_config cfg;
+                cfg.name = "org.apache.cassandra.locator.GossipingPropertyFileSnitch";
+                cfg.properties_file_name = fname1.string();
+                i_endpoint_snitch::create_snitch(cfg).get();
             } catch (std::exception& e) {
                 printf("%s\n", e.what());
                 BOOST_ERROR("Failed to create an initial snitch");
@@ -64,10 +64,10 @@ future<> one_test(const std::string& property_fname1,
                 *cpu0_rack = inst->get_rack(my_address);
             }).get();
 
-            i_endpoint_snitch::reset_snitch<const sstring&>(
-                "org.apache.cassandra.locator.GossipingPropertyFileSnitch",
-                sstring(fname2.string())
-            ).get();
+            snitch_config cfg;
+            cfg.name = "org.apache.cassandra.locator.GossipingPropertyFileSnitch";
+            cfg.properties_file_name = fname2.string();
+            i_endpoint_snitch::reset_snitch(cfg).get();
 
             if (!exp_result) {
                 BOOST_ERROR("Failed to catch an error in a malformed "

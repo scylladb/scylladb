@@ -175,7 +175,9 @@ void simple_test() {
     utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
 
     // Create the RackInferringSnitch
-    i_endpoint_snitch::create_snitch("RackInferringSnitch").get();
+    snitch_config cfg;
+    cfg.name = "RackInferringSnitch";
+    i_endpoint_snitch::create_snitch(cfg).get();
     auto stop_snitch = defer([] {
         i_endpoint_snitch::stop_snitch().get();
     });
@@ -252,7 +254,9 @@ void heavy_origin_test() {
     utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
 
     // Create the RackInferringSnitch
-    i_endpoint_snitch::create_snitch("RackInferringSnitch").get();
+    snitch_config cfg;
+    cfg.name = "RackInferringSnitch";
+    i_endpoint_snitch::create_snitch(cfg).get();
     auto stop_snitch = defer([] {
         i_endpoint_snitch::stop_snitch().get();
     });
@@ -565,7 +569,9 @@ SEASTAR_THREAD_TEST_CASE(testCalculateEndpoints) {
     utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
     utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
 
-    i_endpoint_snitch::create_snitch("RackInferringSnitch").get();
+    snitch_config cfg;
+    cfg.name = "RackInferringSnitch";
+    i_endpoint_snitch::create_snitch(cfg).get();
     auto stop_snitch = defer([] {
         i_endpoint_snitch::stop_snitch().get();
     });

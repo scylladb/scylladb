@@ -17,7 +17,7 @@ public:
     static constexpr const char* AWS_QUERY_SERVER_ADDR = "169.254.169.254";
     static constexpr uint16_t AWS_QUERY_SERVER_PORT = 80;
 
-    ec2_snitch(const sstring& fname = "", unsigned io_cpu_id = 0);
+    ec2_snitch(const snitch_config&);
     virtual future<> start() override;
     virtual sstring get_name() const override {
         return "org.apache.cassandra.locator.Ec2Snitch";
