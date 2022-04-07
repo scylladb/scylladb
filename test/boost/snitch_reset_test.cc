@@ -39,6 +39,7 @@ future<> one_test(const std::string& property_fname1,
         auto cpu0_dc_new = make_lw_shared<sstring>();
         auto cpu0_rack_new = make_lw_shared<sstring>();
         auto my_address = utils::fb_utilities::get_broadcast_address();
+        sharded<snitch_ptr>& snitch = i_endpoint_snitch::snitch_instance();
 
         try {
             path fname1(test_files_subdir);
@@ -51,7 +52,8 @@ future<> one_test(const std::string& property_fname1,
                 snitch_config cfg;
                 cfg.name = "org.apache.cassandra.locator.GossipingPropertyFileSnitch";
                 cfg.properties_file_name = fname1.string();
-                i_endpoint_snitch::create_snitch(cfg).get();
+                snitch.start(cfg).get();
+                snitch.invoke_on_all(&snitch_ptr::start).get();
             } catch (std::exception& e) {
                 printf("%s\n", e.what());
                 BOOST_ERROR("Failed to create an initial snitch");
@@ -72,7 +74,7 @@ future<> one_test(const std::string& property_fname1,
             if (!exp_result) {
                 BOOST_ERROR("Failed to catch an error in a malformed "
                             "configuration file");
-                i_endpoint_snitch::stop_snitch().get();
+                snitch.stop().get();
                 return;
             }
 
@@ -87,7 +89,7 @@ future<> one_test(const std::string& property_fname1,
 
             if (*cpu0_dc == *cpu0_dc_new || *cpu0_rack == *cpu0_rack_new) {
                 BOOST_ERROR("Data center or Rack haven't been updated");
-                i_endpoint_snitch::stop_snitch().get();
+                snitch.stop().get();
                 return;
             }
 
@@ -107,7 +109,7 @@ future<> one_test(const std::string& property_fname1,
                 BOOST_CHECK(true);
             }
 
-            i_endpoint_snitch::stop_snitch().get();
+            snitch.stop().get();
         } catch (std::exception& e) {
             if (!exp_result) {
                 //
@@ -122,13 +124,13 @@ future<> one_test(const std::string& property_fname1,
 
                 if (*cpu0_dc != *cpu0_dc_new || *cpu0_rack != *cpu0_rack_new) {
                     BOOST_ERROR("Data center or Rack have been updated while they shouldn't have");
-                    i_endpoint_snitch::stop_snitch().get();
+                    snitch.stop().get();
                     return;
                 }
             }
 
             BOOST_CHECK(!exp_result);
-            i_endpoint_snitch::stop_snitch().get();
+            snitch.stop().get();
         }
     });
 }

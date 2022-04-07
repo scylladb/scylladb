@@ -84,10 +84,12 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
             cfg.name = "GoogleCloudSnitch";
             cfg.properties_file_name = fname.string();
             cfg.gce_meta_server_url = meta_url;
-            i_endpoint_snitch::create_snitch(cfg).get();
+            sharded<snitch_ptr>& snitch = i_endpoint_snitch::snitch_instance();
+            snitch.start(cfg).get();
+            snitch.invoke_on_all(&snitch_ptr::start).get();
             if (!exp_result) {
                 BOOST_ERROR("Failed to catch an error in a malformed configuration file");
-                i_endpoint_snitch::stop_snitch().get();
+                snitch.stop().get();
                 if (use_dummy_server) {
                     http_server.stop().get();
                 }
@@ -115,7 +117,7 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
             } else {
                 BOOST_CHECK(true);
             }
-            i_endpoint_snitch::stop_snitch().get();
+            snitch.stop().get();
         } catch (std::exception& e) {
             BOOST_CHECK(!exp_result);
         }

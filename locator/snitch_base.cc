@@ -125,10 +125,6 @@ std::list<std::pair<gms::application_state, gms::versioned_value>> snitch_base::
     };
 }
 
-future<> i_endpoint_snitch::stop_snitch() {
-    return snitch_instance().stop();
-}
-
 snitch_ptr::snitch_ptr(const snitch_config cfg) {
     i_endpoint_snitch::ptr_type s;
     try {

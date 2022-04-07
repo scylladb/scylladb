@@ -53,10 +53,7 @@ struct i_endpoint_snitch {
 public:
     using ptr_type = std::unique_ptr<i_endpoint_snitch>;
 
-    static future<> create_snitch(snitch_config cfg);
     static future<> reset_snitch(snitch_config cfg);
-
-    static future<> stop_snitch();
 
     /**
      * returns a String representing the rack this endpoint belongs to
@@ -236,28 +233,6 @@ struct snitch_ptr : public peering_sharded_service<snitch_ptr> {
 private:
     ptr_type _ptr;
 };
-
-/**
- * Creates the distributed i_endpoint_snitch::snitch_instane object
- *
- * @param snitch_name name of the snitch class (comes from the cassandra.yaml)
- *
- * @return ready future when the distributed object is ready.
- */
-inline future<> i_endpoint_snitch::create_snitch(snitch_config cfg) {
-    // First, create and "start" the distributed snitch object...
-    return snitch_instance().start(cfg).then([snitch_name = cfg.name] {
-        // ...and then start each local snitch.
-        return snitch_instance().invoke_on_all([] (snitch_ptr& local_inst) {
-            return local_inst.start();
-        }).handle_exception([snitch_name] (std::exception_ptr eptr) {
-            logger().error("Failed to create {}: {}", snitch_name, eptr);
-            return stop_snitch().finally([eptr = std::move(eptr)] {
-                return make_exception_future<>(eptr);
-            });
-        });
-    });
-}
 
 /**
  * Resets the global snitch instance with the new value
