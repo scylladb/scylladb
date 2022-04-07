@@ -12,6 +12,8 @@
 #include <deque>
 #include <random>
 #include "utils/lsa/chunked_managed_vector.hh"
+#include "utils/managed_ref.hh"
+#include "test/lib/log.hh"
 
 #include <boost/range/algorithm/sort.hpp>
 #include <boost/range/algorithm/equal.hpp>
@@ -202,4 +204,65 @@ SEASTAR_TEST_CASE(tests_reserve_partial) {
    });
   });
   return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_clear_and_release) {
+    region region;
+    allocating_section as;
+
+    with_allocator(region.allocator(), [&] {
+        lsa::chunked_managed_vector<managed_ref<uint64_t>> v;
+
+        for (uint64_t i = 1; i < 4000; ++i) {
+            as(region, [&] {
+                v.emplace_back(make_managed<uint64_t>(i));
+            });
+        }
+
+        v.clear_and_release();
+    });
+
+    return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_chunk_reserve) {
+    region region;
+    allocating_section as;
+
+    for (auto conf :
+            { // std::make_pair(reserve size, push count)
+                std::make_pair(0, 4000),
+                std::make_pair(100, 4000),
+                std::make_pair(200, 4000),
+                std::make_pair(1000, 4000),
+                std::make_pair(2000, 4000),
+                std::make_pair(3000, 4000),
+                std::make_pair(5000, 4000),
+                std::make_pair(500, 8000),
+                std::make_pair(1000, 8000),
+                std::make_pair(2000, 8000),
+                std::make_pair(8000, 500),
+            })
+    {
+        with_allocator(region.allocator(), [&] {
+            auto [reserve_size, push_count] = conf;
+            testlog.info("Testing reserve({}), {}x emplace_back()", reserve_size, push_count);
+            lsa::chunked_managed_vector<managed_ref<uint64_t>> v;
+            v.reserve(reserve_size);
+            uint64_t seed = rand();
+            for (uint64_t i = 0; i < push_count; ++i) {
+                as(region, [&] {
+                    v.emplace_back(make_managed<uint64_t>(seed + i));
+                    BOOST_REQUIRE(**v.begin() == seed);
+                });
+            }
+            auto v_it = v.begin();
+            for (uint64_t i = 0; i < push_count; ++i) {
+                BOOST_REQUIRE(**v_it++ == seed + i);
+            }
+            v.clear_and_release();
+        });
+    }
+
+    return make_ready_future<>();
 }
