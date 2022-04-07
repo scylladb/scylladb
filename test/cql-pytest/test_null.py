@@ -174,3 +174,20 @@ def test_empty_string_key2(cql, test_keyspace):
         cql.execute(f"INSERT INTO {table} (p1,p2,c,v) VALUES ('', '', '', 'cat')")
         cql.execute(f"INSERT INTO {table} (p1,p2,c,v) VALUES ('x', 'y', 'z', 'dog')")
         assert list(cql.execute(f"SELECT v FROM {table} WHERE p1='' AND p2='' AND c=''")) == [('cat',)]
+
+# For historical reasons, CQL allows any type to be empty, not just strings.
+# An "empty" int value is a value with size 0 - and is distinct from a null
+# int (size -1) or UNSET_VALUE (size -2) or a normal int value (size 4).
+# This is not an important behavior to preserve in modern CQL, but we should
+# probably be aware if we ever break it, so it's good to have a regression
+# test for it.
+def test_empty_int(cql, test_keyspace):
+    schema = 'p text, v int, primary key (p)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        # blobAsInt(0x) is the way to generate an empty int in CQL:
+        cql.execute(f"INSERT INTO {table} (p,v) VALUES ('hi', blobAsInt(0x))")
+        # When the Python driver returns an empty int, it returns it just like
+        # a null int - None. Note that some other drivers may have problems
+        # with an empty integer being returned - e.g., see
+        # https://github.com/scylladb/scylla-rust-driver/issues/278
+        assert list(cql.execute(f"SELECT v FROM {table} WHERE p='hi'")) == [(None,)]
