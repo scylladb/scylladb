@@ -1344,7 +1344,6 @@ private:
     void setup_metrics();
     void setup_scylla_memory_diagnostics_producer();
 
-    friend class db_apply_executor;
     future<> do_apply(schema_ptr, const frozen_mutation&, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout, db::commitlog_force_sync sync);
     future<> apply_with_commitlog(column_family& cf, const mutation& m, db::timeout_clock::time_point timeout);
 
