@@ -115,5 +115,12 @@ private:
     unsigned _file_reader_cpu_id;
     shared_ptr<reconnectable_snitch_helper> _reconnectable_helper;
     snitch_signal_t _reconfigured;
+    promise<> _io_is_stopped;
+
+    void reset_io_state() {
+        // Reset the promise to allow repeating
+        // start()+stop()/pause_io()+resume_io() call sequences.
+        _io_is_stopped = promise<>();
+    }
 };
 } // namespace locator

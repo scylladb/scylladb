@@ -62,14 +62,6 @@ void production_snitch_base::set_backreference(snitch_ptr& d) {
     _backreference = &d;
 }
 
-void production_snitch_base::reset_io_state() {
-    //
-    // Reset the promise to allow repeating
-    // start()+stop()/pause_io()+resume_io() call sequences.
-    //
-    _io_is_stopped = promise<>();
-}
-
 sstring production_snitch_base::get_endpoint_info(inet_address endpoint, gms::application_state key,
                                                   const sstring& default_val) {
     auto val = snitch_base::get_endpoint_info(endpoint, key);

@@ -46,8 +46,6 @@ public:
     virtual sstring get_datacenter(inet_address endpoint) override;
     virtual void set_backreference(snitch_ptr& d) override;
 
-    void reset_io_state();
-
 private:
     sstring get_endpoint_info(inet_address endpoint, gms::application_state key,
                               const sstring& default_val);
@@ -74,7 +72,6 @@ protected:
     void throw_incomplete_file() const;
 
 protected:
-    promise<> _io_is_stopped;
     std::optional<addr2dc_rack_map> _saved_endpoints;
     std::string _prop_file_contents;
     sstring _prop_file_name;
