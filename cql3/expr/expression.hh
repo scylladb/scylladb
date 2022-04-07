@@ -57,6 +57,10 @@ class function;
 
 }
 
+namespace restrictions {
+    class restriction;
+}
+
 namespace expr {
 
 struct allow_local_index_tag {};
@@ -681,6 +685,14 @@ void fill_prepare_context(expression&, cql3::prepare_context&);
 // there can be other things that prevent immediate evaluation of an expression.
 // For example an expression can contain calls to nonpure functions.
 bool contains_bind_marker(const expression& e);
+
+// Converts the given expression to the corresponding restriction instance.
+// The expression does't have to be prepared, it will be prepared in this function.
+// Needed for now, but in the future all restrictions will be replaced by expression.
+::shared_ptr<restrictions::restriction> to_restriction(const expression&,
+                                                       data_dictionary::database,
+                                                       schema_ptr,
+                                                       prepare_context&);
 } // namespace expr
 
 } // namespace cql3
