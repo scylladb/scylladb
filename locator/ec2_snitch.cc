@@ -42,7 +42,7 @@ future<> ec2_snitch::load_config() {
                 _my_dc += datacenter_suffix;
                 logger().info("Ec2Snitch using region: {}, zone: {}.", _my_dc, _my_rack);
 
-                return _my_distributed->invoke_on_all(
+                return container().invoke_on_all(
                     [this] (snitch_ptr& local_s) {
 
                     // Distribute the new values on all CPUs but the current one

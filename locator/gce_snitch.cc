@@ -61,7 +61,7 @@ future<> gce_snitch::load_config() {
                 _my_dc += datacenter_suffix;
                 logger().info("GCESnitch using region: {}, zone: {}.", _my_dc, _my_rack);
 
-                return _my_distributed->invoke_on_all([this] (snitch_ptr& local_s) {
+                return container().invoke_on_all([this] (snitch_ptr& local_s) {
                     // Distribute the new values on all CPUs but the current one
                     if (this_shard_id() != io_cpu_id()) {
                         local_s->set_my_dc(_my_dc);

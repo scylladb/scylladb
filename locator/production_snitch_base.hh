@@ -76,12 +76,17 @@ protected:
 protected:
     promise<> _io_is_stopped;
     std::optional<addr2dc_rack_map> _saved_endpoints;
-    distributed<snitch_ptr>* _my_distributed = nullptr;
     std::string _prop_file_contents;
     sstring _prop_file_name;
     std::unordered_map<sstring, sstring> _prop_values;
 
+    sharded<snitch_ptr>& container() noexcept {
+        assert(_my_distributed != nullptr);
+        return *_my_distributed;
+    }
+
 private:
     size_t _prop_file_size;
+    distributed<snitch_ptr>* _my_distributed = nullptr;
 };
 } // namespace locator

@@ -168,9 +168,7 @@ future<> gossiping_property_file_snitch::reload_configuration() {
         _my_rack = new_rack;
         _prefer_local = new_prefer_local;
 
-        assert(_my_distributed);
-
-        return _my_distributed->invoke_on_all(
+        return container().invoke_on_all(
             [this] (snitch_ptr& local_s) {
 
             // Distribute the new values on all CPUs but the current one
@@ -187,14 +185,14 @@ future<> gossiping_property_file_snitch::reload_configuration() {
 
             return seastar::async([this] {
                 // reload Gossiper state (executed on CPU0 only)
-                _my_distributed->invoke_on(0, [] (snitch_ptr& local_snitch_ptr) {
+                container().invoke_on(0, [] (snitch_ptr& local_snitch_ptr) {
                     return local_snitch_ptr->reload_gossiper_state();
                 }).get();
 
                 _reconfigured();
 
                 // spread the word...
-                _my_distributed->invoke_on(0, [] (snitch_ptr& local_snitch_ptr) {
+                container().invoke_on(0, [] (snitch_ptr& local_snitch_ptr) {
                     auto& gossiper = gms::get_local_gossiper();
                     if (gossiper.is_enabled()) {
                         return gossiper.add_local_application_state(local_snitch_ptr->get_app_states());
