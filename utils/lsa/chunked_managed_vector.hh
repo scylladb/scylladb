@@ -73,6 +73,9 @@ private:
             throw std::out_of_range("chunked_managed_vector out of range access");
         }
     }
+    chunk_ptr& back_chunk() {
+        return _chunks[_size / max_chunk_capacity()];
+    }
     static void migrate(T* begin, T* end, managed_vector<T>& result);
 public:
     using value_type = T;
@@ -119,24 +122,24 @@ public:
 
     void push_back(const T& x) {
         reserve_for_push_back();
-        _chunks.back().emplace_back(x);
+        back_chunk().emplace_back(x);
         ++_size;
     }
     void push_back(T&& x) {
         reserve_for_push_back();
-        _chunks.back().emplace_back(std::move(x));
+        back_chunk().emplace_back(std::move(x));
         ++_size;
     }
     template <typename... Args>
     T& emplace_back(Args&&... args) {
         reserve_for_push_back();
-        auto& ret = _chunks.back().emplace_back(std::forward<Args>(args)...);
+        auto& ret = back_chunk().emplace_back(std::forward<Args>(args)...);
         ++_size;
         return ret;
     }
     void pop_back() {
         --_size;
-        _chunks.back().pop_back();
+        back_chunk().pop_back();
     }
     const T& back() const {
         return *addr(_size - 1);
