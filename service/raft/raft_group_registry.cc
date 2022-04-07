@@ -36,9 +36,11 @@ raft_group_registry::raft_group_registry(bool is_enabled, netw::messaging_servic
         // we can re-enable support for the second gossip feature to trigger
         // actual use of raft-based cluster management procedures.
         feat.support(gms::features::USES_RAFT_CLUSTER_MANAGEMENT).get();
-        // When the supported feature set is dynamically extended, re-advertise it through the gossip.
-        gossiper.add_local_application_state(gms::application_state::SUPPORTED_FEATURES,
-            gms::versioned_value::supported_features(feat.supported_feature_set())).get();
+        if (this_shard_id() == 0) {
+            // When the supported feature set is dynamically extended, re-advertise it through the gossip.
+            gossiper.add_local_application_state(gms::application_state::SUPPORTED_FEATURES,
+                gms::versioned_value::supported_features(feat.supported_feature_set())).get();
+        }
     }))
 {
 }
