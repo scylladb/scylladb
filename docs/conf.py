@@ -46,7 +46,7 @@ autosectionlabel_prefix_document = True
 master_doc = 'contents'
 
 # General information about the project.
-project = 'Scylla Documentation'
+project = 'Scylla Dev'
 copyright = str(date.today().year) + ', ScyllaDB. All rights reserved.'
 author = u'Scylla Project Contributors'
 
