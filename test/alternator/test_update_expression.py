@@ -614,6 +614,15 @@ def test_update_expression_function_nesting(test_table_s):
         UpdateExpression='SET a = list_append(if_not_exists(a, :val1), :val2)',
             ExpressionAttributeValues={':val1': ['a', 'b'], ':val2': ['1', '2']})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == ['a', 'b', 'cat', 'dog', '1', '2']
+    # It's even fine to nest two calls of the same if_not_exists function:
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET a = if_not_exists(b, if_not_exists(c, :val1))',
+            ExpressionAttributeValues={':val1': 3})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == 3
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET x = if_not_exists(b, if_not_exists(a, :val1))',
+            ExpressionAttributeValues={':val1': 4})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['x'] == 3
     # I don't understand why the following expression isn't accepted, but it
     # isn't! It produces a "Invalid UpdateExpression: The function is not
     # allowed to be used this way in an expression; function: list_append".
