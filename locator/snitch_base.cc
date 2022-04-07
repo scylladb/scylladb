@@ -132,4 +132,18 @@ future<> i_endpoint_snitch::stop_snitch() {
     }).then([] { return snitch_instance().stop(); });
 }
 
+snitch_ptr::snitch_ptr(const snitch_config cfg) {
+    i_endpoint_snitch::ptr_type s;
+    try {
+        s = create_object<i_endpoint_snitch>(cfg.name, cfg);
+    } catch (no_such_class& e) {
+        i_endpoint_snitch::logger().error("Can't create snitch {}: not supported", cfg.name);
+        throw;
+    } catch (...) {
+        throw;
+    }
+    s->set_backreference(*this);
+    _ptr = std::move(s);
+}
+
 } // namespace locator

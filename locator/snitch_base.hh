@@ -173,12 +173,12 @@ public:
         return snitch_signal_connection_t();
     }
 
-protected:
     static logging::logger& logger() {
         static logging::logger snitch_logger("snitch_logger");
         return snitch_logger;
     }
 
+protected:
     static unsigned& io_cpu_id() {
         static unsigned id = 0;
         return id;
@@ -233,6 +233,8 @@ struct snitch_ptr : public peering_sharded_service<snitch_ptr> {
         return _ptr ? true : false;
     }
 
+    explicit snitch_ptr(const snitch_config cfg);
+
 private:
     ptr_type _ptr;
 };
@@ -250,23 +252,7 @@ private:
  */
 inline future<> i_endpoint_snitch::init_snitch_obj(distributed<snitch_ptr>& snitch_obj, snitch_config cfg) {
     // First, create the snitch_ptr objects...
-    return snitch_obj.start().then([&snitch_obj, cfg = std::move(cfg)] () {
-        // ...then, create the snitches...
-        return snitch_obj.invoke_on_all([cfg] (snitch_ptr& local_inst) {
-            try {
-                auto s = create_object<i_endpoint_snitch>(cfg.name, cfg);
-                s->set_backreference(local_inst);
-                local_inst = std::move(s);
-            } catch (no_such_class& e) {
-                logger().error("Can't create snitch {}: not supported", cfg.name);
-                throw;
-            } catch (...) {
-                throw;
-            }
-
-            return make_ready_future<>();
-        });
-    });
+    return snitch_obj.start(cfg);
 }
 /**
  * Creates the distributed i_endpoint_snitch::snitch_instane object
