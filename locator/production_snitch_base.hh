@@ -44,7 +44,7 @@ public:
 
     virtual sstring get_rack(inet_address endpoint) override;
     virtual sstring get_datacenter(inet_address endpoint) override;
-    virtual void set_my_distributed(distributed<snitch_ptr>* d) override;
+    virtual void set_backreference(snitch_ptr& d) override;
 
     void reset_io_state();
 
@@ -81,12 +81,12 @@ protected:
     std::unordered_map<sstring, sstring> _prop_values;
 
     sharded<snitch_ptr>& container() noexcept {
-        assert(_my_distributed != nullptr);
-        return *_my_distributed;
+        assert(_backreference != nullptr);
+        return _backreference->container();
     }
 
 private:
     size_t _prop_file_size;
-    distributed<snitch_ptr>* _my_distributed = nullptr;
+    snitch_ptr* _backreference = nullptr;
 };
 } // namespace locator

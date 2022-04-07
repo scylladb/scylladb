@@ -155,7 +155,7 @@ public:
     virtual sstring get_name() const = 0;
 
     // should be called for production snitches before calling start()
-    virtual void set_my_distributed(distributed<snitch_ptr>* d)  {
+    virtual void set_backreference(snitch_ptr& d)  {
         //noop by default
     }
 
@@ -191,7 +191,7 @@ protected:
     } _state = snitch_state::initializing;
 };
 
-struct snitch_ptr {
+struct snitch_ptr : public peering_sharded_service<snitch_ptr> {
     using ptr_type = i_endpoint_snitch::ptr_type;
     future<> stop() {
         if (_ptr) {
@@ -253,13 +253,13 @@ future<> i_endpoint_snitch::init_snitch_obj(
         [&snitch_obj, snitch_name = std::move(snitch_name), a = std::make_tuple(std::forward<A>(a)...)] () {
         // ...then, create the snitches...
         return snitch_obj.invoke_on_all(
-            [snitch_name, a, &snitch_obj] (snitch_ptr& local_inst) {
+            [snitch_name, a] (snitch_ptr& local_inst) {
             try {
                 auto s(std::move(apply([snitch_name] (A&&... a) {
                     return create_object<i_endpoint_snitch>(snitch_name, std::forward<A>(a)...);
                 }, std::move(a))));
 
-                s->set_my_distributed(&snitch_obj);
+                s->set_backreference(local_inst);
                 local_inst = std::move(s);
             } catch (no_such_class& e) {
                 logger().error("Can't create snitch {}: not supported", snitch_name);
@@ -370,7 +370,7 @@ future<> i_endpoint_snitch::reset_snitch(
         // per-shard level (since users are holding snitch_ptr objects only)
         //
         tmp_snitch.invoke_on_all([] (snitch_ptr& local_inst) {
-            local_inst->set_my_distributed(&snitch_instance());
+            local_inst->set_backreference(snitch_instance().local());
             snitch_instance().local() = std::move(local_inst);
 
             return make_ready_future<>();

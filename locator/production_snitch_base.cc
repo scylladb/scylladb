@@ -58,8 +58,8 @@ sstring production_snitch_base::get_datacenter(inet_address endpoint) {
                              default_dc);
 }
 
-void production_snitch_base::set_my_distributed(distributed<snitch_ptr>* d) {
-    _my_distributed = d;
+void production_snitch_base::set_backreference(snitch_ptr& d) {
+    _backreference = &d;
 }
 
 void production_snitch_base::reset_io_state() {
