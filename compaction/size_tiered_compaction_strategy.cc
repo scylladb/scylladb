@@ -112,8 +112,9 @@ std::vector<sstables::shared_sstable>
 size_tiered_compaction_strategy::most_interesting_bucket(std::vector<std::vector<sstables::shared_sstable>> buckets,
         unsigned min_threshold, unsigned max_threshold)
 {
-    std::vector<std::pair<std::vector<sstables::shared_sstable>, uint64_t>> pruned_buckets_and_hotness;
-    pruned_buckets_and_hotness.reserve(buckets.size());
+    using bucket_t = std::vector<sstables::shared_sstable>;
+    std::vector<bucket_t> pruned_buckets;
+    pruned_buckets.reserve(buckets.size());
 
     // FIXME: add support to get hotness for each bucket.
 
@@ -123,24 +124,20 @@ size_tiered_compaction_strategy::most_interesting_bucket(std::vector<std::vector
         // By the time being, we will only compact buckets that meet the threshold.
         bucket.resize(std::min(bucket.size(), size_t(max_threshold)));
         if (is_bucket_interesting(bucket, min_threshold)) {
-            auto avg = avg_size(bucket);
-            pruned_buckets_and_hotness.push_back({ std::move(bucket), avg });
+            pruned_buckets.push_back(std::move(bucket));
         }
     }
 
-    if (pruned_buckets_and_hotness.empty()) {
+    if (pruned_buckets.empty()) {
         return std::vector<sstables::shared_sstable>();
     }
 
     // Pick the bucket with more elements, as efficiency of same-tier compactions increases with number of files.
-    auto& min = *std::min_element(pruned_buckets_and_hotness.begin(), pruned_buckets_and_hotness.end(), [] (auto& i, auto& j) {
+    auto& max = *std::max_element(pruned_buckets.begin(), pruned_buckets.end(), [] (const bucket_t& i, const bucket_t& j) {
         // FIXME: ignoring hotness by the time being.
-
-        return i.first.size() > j.first.size();
+        return i.size() < j.size();
     });
-    auto hottest = std::move(min.first);
-
-    return hottest;
+    return std::move(max);
 }
 
 compaction_descriptor
