@@ -122,10 +122,11 @@ size_tiered_compaction_strategy::most_interesting_bucket(std::vector<std::vector
         // FIXME: the coldest sstables will be trimmed to meet the threshold, so we must add support to this feature
         // by converting SizeTieredCompactionStrategy::trimToThresholdWithHotness.
         // By the time being, we will only compact buckets that meet the threshold.
-        bucket.resize(std::min(bucket.size(), size_t(max_threshold)));
-        if (is_bucket_interesting(bucket, min_threshold)) {
-            pruned_buckets.push_back(std::move(bucket));
+        if (!is_bucket_interesting(bucket, min_threshold)) {
+            continue;
         }
+        bucket.resize(std::min(bucket.size(), size_t(max_threshold)));
+        pruned_buckets.push_back(std::move(bucket));
     }
 
     if (pruned_buckets.empty()) {
