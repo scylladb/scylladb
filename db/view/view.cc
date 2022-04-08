@@ -906,7 +906,8 @@ future<stop_iteration> view_update_builder::stop() const {
 }
 
 future<utils::chunked_vector<frozen_mutation_and_schema>> view_update_builder::build_some() {
-    return advance_all().then([this] (stop_iteration ignored) {
+    auto _ = co_await advance_all();
+    // FIXME: indentation
         bool do_advance_updates = false;
         bool do_advance_existings = false;
         if (_update && _update->is_partition_start()) {
@@ -919,22 +920,18 @@ future<utils::chunked_vector<frozen_mutation_and_schema>> view_update_builder::b
             do_advance_existings = true;
         }
         if (do_advance_updates) {
-            return do_advance_existings ? advance_all() : advance_updates();
+            co_await (do_advance_existings ? advance_all() : advance_updates());
         } else if (do_advance_existings) {
-            return advance_existings();
+            co_await advance_existings();
         }
-        return make_ready_future<stop_iteration>(stop_iteration::no);
-    }).then([this] (stop_iteration ignored) {
-        return repeat([this] {
-            return this->on_results();
-        });
-    }).then([this] {
+
+    while (co_await on_results() == stop_iteration::no) {};
+
         utils::chunked_vector<frozen_mutation_and_schema> mutations;
         for (auto& update : _view_updates) {
             update.move_to(mutations);
         }
-        return mutations;
-    });
+    co_return mutations;
 }
 
 void view_update_builder::generate_update(clustering_row&& update, std::optional<clustering_row>&& existing) {
