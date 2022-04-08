@@ -388,12 +388,14 @@ bool matches_view_filter(const schema& base, const view_info& view, const partit
             && visitor.matches_view_filter();
 }
 
-void view_updates::move_to(utils::chunked_vector<frozen_mutation_and_schema>& mutations) {
-    std::transform(_updates.begin(), _updates.end(), std::back_inserter(mutations), [&, this] (auto&& m) {
+future<> view_updates::move_to(utils::chunked_vector<frozen_mutation_and_schema>& mutations) {
+    mutations.reserve(mutations.size() + _updates.size());
+    for (auto it = _updates.begin(); it != _updates.end(); it = _updates.erase(it)) {
+        auto&& m = std::move(*it);
         auto mut = mutation(_view, dht::decorate_key(*_view, std::move(m.first)), std::move(m.second));
-        return frozen_mutation_and_schema{freeze(mut), _view};
-    });
-    _updates.clear();
+        mutations.emplace_back(frozen_mutation_and_schema{freeze(mut), _view});
+        co_await coroutine::maybe_yield();
+    }
     _op_count = 0;
 }
 
@@ -928,8 +930,7 @@ future<utils::chunked_vector<frozen_mutation_and_schema>> view_update_builder::b
 
     utils::chunked_vector<frozen_mutation_and_schema> mutations;
     for (auto& update : _view_updates) {
-        update.move_to(mutations);
-        co_await coroutine::maybe_yield();
+        co_await update.move_to(mutations);
     }
     co_return mutations;
 }
