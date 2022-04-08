@@ -1001,7 +1001,7 @@ future<> messaging_service::unregister_gossip_digest_syn() {
     return unregister_handler(netw::messaging_verb::GOSSIP_DIGEST_SYN);
 }
 future<> messaging_service::send_gossip_digest_syn(msg_addr id, gossip_digest_syn msg) {
-    return send_message_oneway(this, messaging_verb::GOSSIP_DIGEST_SYN, std::move(id), {}, std::move(msg));
+    return send_message_oneway(this, messaging_verb::GOSSIP_DIGEST_SYN, std::move(id), {.report_connection_error=false}, std::move(msg));
 }
 
 // gossip ack
