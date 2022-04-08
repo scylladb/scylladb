@@ -907,30 +907,29 @@ future<stop_iteration> view_update_builder::stop() const {
 
 future<utils::chunked_vector<frozen_mutation_and_schema>> view_update_builder::build_some() {
     auto _ = co_await advance_all();
-    // FIXME: indentation
-        bool do_advance_updates = false;
-        bool do_advance_existings = false;
-        if (_update && _update->is_partition_start()) {
-            _key = std::move(std::move(_update)->as_partition_start().key().key());
-            _update_partition_tombstone = _update->as_partition_start().partition_tombstone();
-            do_advance_updates = true;
-        }
-        if (_existing && _existing->is_partition_start()) {
-            _existing_partition_tombstone = _existing->as_partition_start().partition_tombstone();
-            do_advance_existings = true;
-        }
-        if (do_advance_updates) {
-            co_await (do_advance_existings ? advance_all() : advance_updates());
-        } else if (do_advance_existings) {
-            co_await advance_existings();
-        }
+    bool do_advance_updates = false;
+    bool do_advance_existings = false;
+    if (_update && _update->is_partition_start()) {
+        _key = std::move(std::move(_update)->as_partition_start().key().key());
+        _update_partition_tombstone = _update->as_partition_start().partition_tombstone();
+        do_advance_updates = true;
+    }
+    if (_existing && _existing->is_partition_start()) {
+        _existing_partition_tombstone = _existing->as_partition_start().partition_tombstone();
+        do_advance_existings = true;
+    }
+    if (do_advance_updates) {
+        co_await (do_advance_existings ? advance_all() : advance_updates());
+    } else if (do_advance_existings) {
+        co_await advance_existings();
+    }
 
     while (co_await on_results() == stop_iteration::no) {};
 
-        utils::chunked_vector<frozen_mutation_and_schema> mutations;
-        for (auto& update : _view_updates) {
-            update.move_to(mutations);
-        }
+    utils::chunked_vector<frozen_mutation_and_schema> mutations;
+    for (auto& update : _view_updates) {
+        update.move_to(mutations);
+    }
     co_return mutations;
 }
 
