@@ -751,11 +751,15 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     assert(res.second);
     it = res.first;
     uint32_t src_cpu_id = this_shard_id();
-    // No reply is received, nothing to wait for.
-    (void)_rpc->make_client<rpc::no_wait_type(gms::inet_address, uint32_t, uint64_t)>(messaging_verb::CLIENT_ID)(*it->second.rpc_client, utils::fb_utilities::get_broadcast_address(), src_cpu_id,
-                                                                                                           query::result_memory_limiter::maximum_result_size).handle_exception([ms = shared_from_this(), remote_addr, verb] (std::exception_ptr ep) {
-        mlogger.debug("Failed to send client id to {} for verb {}: {}", remote_addr, std::underlying_type_t<messaging_verb>(verb), ep);
-    });
+    {
+        auto c = _rpc->make_client<rpc::no_wait_type(gms::inet_address, uint32_t, uint64_t)>(messaging_verb::CLIENT_ID);
+        c.opts.report_connection_error = false;
+        // No reply is received, nothing to wait for.
+        (void)c(*it->second.rpc_client, utils::fb_utilities::get_broadcast_address(), src_cpu_id, query::result_memory_limiter::maximum_result_size)
+                .handle_exception([ms = shared_from_this(), remote_addr, verb] (std::exception_ptr ep) {
+            mlogger.debug("Failed to send client id to {} for verb {}: {}", remote_addr, std::underlying_type_t<messaging_verb>(verb), ep);
+        });
+    }
     return it->second.rpc_client;
 }
 
