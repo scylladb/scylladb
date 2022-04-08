@@ -96,18 +96,6 @@ class size_tiered_compaction_strategy : public compaction_strategy_impl {
     std::vector<sstables::shared_sstable>
     most_interesting_bucket(std::vector<std::vector<sstables::shared_sstable>> buckets, unsigned min_threshold, unsigned max_threshold);
 
-    // Return the average size of a given list of sstables.
-    uint64_t avg_size(std::vector<sstables::shared_sstable> const& sstables) const {
-        assert(sstables.size() > 0); // this should never fail
-        uint64_t n = 0;
-
-        for (auto const& sstable : sstables) {
-            n += sstable->data_size();
-        }
-
-        return n / sstables.size();
-    }
-
     static bool is_bucket_interesting(const std::vector<sstables::shared_sstable>& bucket, int min_threshold) {
         return bucket.size() >= size_t(min_threshold);
     }
