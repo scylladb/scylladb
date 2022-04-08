@@ -543,7 +543,8 @@ class RpcVerb(ASTBase):
         return res
 
     def send_message_argument_list(self):
-        res = f'ms, {self.messaging_verb_enum_case()}, id'
+        opts = '{}'
+        res = f'ms, {self.messaging_verb_enum_case()}, id, {opts}'
         if self.with_timeout:
             res += ', timeout'
         if self.params:

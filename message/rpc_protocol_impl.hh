@@ -113,7 +113,7 @@ void register_handler(messaging_service *ms, messaging_verb verb, Func &&func) {
 
 // Send a message for verb
 template <typename MsgIn, typename... MsgOut>
-auto send_message(messaging_service* ms, messaging_verb verb, msg_addr id, MsgOut&&... msg) {
+auto send_message(messaging_service* ms, messaging_verb verb, msg_addr id, rpc::send_options opts, MsgOut&&... msg) {
     auto rpc_handler = ms->rpc()->make_client<MsgIn(MsgOut...)>(verb);
     if (ms->is_shutting_down()) {
         using futurator = futurize<std::result_of_t<decltype(rpc_handler)(rpc_protocol::client&, MsgOut...)>>;
@@ -121,6 +121,7 @@ auto send_message(messaging_service* ms, messaging_verb verb, msg_addr id, MsgOu
     }
     auto rpc_client_ptr = ms->get_rpc_client(verb, id);
     auto& rpc_client = *rpc_client_ptr;
+    rpc_handler.opts = std::move(opts);
     return rpc_handler(rpc_client, std::forward<MsgOut>(msg)...).then_wrapped([ms = ms->shared_from_this(), id, verb, rpc_client_ptr = std::move(rpc_client_ptr)] (auto&& f) {
         try {
             if (f.failed()) {
@@ -142,7 +143,7 @@ auto send_message(messaging_service* ms, messaging_verb verb, msg_addr id, MsgOu
 
 // TODO: Remove duplicated code in send_message
 template <typename MsgIn, typename Timeout, typename... MsgOut>
-auto send_message_timeout(messaging_service* ms, messaging_verb verb, msg_addr id, Timeout timeout, MsgOut&&... msg) {
+auto send_message_timeout(messaging_service* ms, messaging_verb verb, msg_addr id, rpc::send_options opts, Timeout timeout, MsgOut&&... msg) {
     auto rpc_handler = ms->rpc()->make_client<MsgIn(MsgOut...)>(verb);
     if (ms->is_shutting_down()) {
         using futurator = futurize<std::result_of_t<decltype(rpc_handler)(rpc_protocol::client&, MsgOut...)>>;
@@ -150,6 +151,7 @@ auto send_message_timeout(messaging_service* ms, messaging_verb verb, msg_addr i
     }
     auto rpc_client_ptr = ms->get_rpc_client(verb, id);
     auto& rpc_client = *rpc_client_ptr;
+    rpc_handler.opts = std::move(opts);
     return rpc_handler(rpc_client, timeout, std::forward<MsgOut>(msg)...).then_wrapped([ms = ms->shared_from_this(), id, verb, rpc_client_ptr = std::move(rpc_client_ptr)] (auto&& f) {
         try {
             if (f.failed()) {
@@ -171,14 +173,14 @@ auto send_message_timeout(messaging_service* ms, messaging_verb verb, msg_addr i
 
 // Send one way message for verb
 template <typename... MsgOut>
-auto send_message_oneway(messaging_service* ms, messaging_verb verb, msg_addr id, MsgOut&&... msg) {
-    return send_message<rpc::no_wait_type>(ms, std::move(verb), std::move(id), std::forward<MsgOut>(msg)...);
+auto send_message_oneway(messaging_service* ms, messaging_verb verb, msg_addr id, rpc::send_options opts, MsgOut&&... msg) {
+    return send_message<rpc::no_wait_type>(ms, std::move(verb), std::move(id), std::move(opts), std::forward<MsgOut>(msg)...);
 }
 
 // Send one way message for verb
 template <typename Timeout, typename... MsgOut>
-auto send_message_oneway_timeout(messaging_service* ms, messaging_verb verb, msg_addr id, Timeout timeout, MsgOut&&... msg) {
-    return send_message_timeout<rpc::no_wait_type>(ms, std::move(verb), std::move(id), timeout, std::forward<MsgOut>(msg)...);
+auto send_message_oneway_timeout(messaging_service* ms, messaging_verb verb, msg_addr id, rpc::send_options opts, Timeout timeout, MsgOut&&... msg) {
+    return send_message_timeout<rpc::no_wait_type>(ms, std::move(verb), std::move(id), std::move(opts), timeout, std::forward<MsgOut>(msg)...);
 }
 
 } // namespace netw
