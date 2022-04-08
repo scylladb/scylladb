@@ -266,3 +266,24 @@ SEASTAR_TEST_CASE(test_chunk_reserve) {
 
     return make_ready_future<>();
 }
+
+SEASTAR_TEST_CASE(test_correctness_when_crossing_chunk_boundary) {
+    region region;
+    allocating_section as;
+    with_allocator(region.allocator(), [&] {
+        as(region, [&] {
+            size_t max_chunk_size = lsa::chunked_managed_vector<int>::max_chunk_capacity();
+
+            lsa::chunked_managed_vector<int> v;
+            for (auto i = 0; i < (max_chunk_size + 1); i++) {
+                v.push_back(i);
+            }
+            BOOST_REQUIRE(v.back() == max_chunk_size);
+            BOOST_REQUIRE(v.at(max_chunk_size) == max_chunk_size);
+            v.pop_back();
+            BOOST_REQUIRE(v.back() == max_chunk_size - 1);
+            BOOST_REQUIRE(v.at(max_chunk_size - 1) == max_chunk_size - 1);
+        });
+    });
+    return make_ready_future<>();
+}
