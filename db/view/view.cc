@@ -929,6 +929,7 @@ future<utils::chunked_vector<frozen_mutation_and_schema>> view_update_builder::b
     utils::chunked_vector<frozen_mutation_and_schema> mutations;
     for (auto& update : _view_updates) {
         update.move_to(mutations);
+        co_await coroutine::maybe_yield();
     }
     co_return mutations;
 }
