@@ -2285,7 +2285,6 @@ std::string_view gossiper::get_gossip_status(const inet_address& endpoint) const
 }
 
 future<> gossiper::wait_for_gossip(std::chrono::milliseconds initial_delay, std::optional<int32_t> force_after) {
-    static constexpr std::chrono::milliseconds GOSSIP_SETTLE_MIN_WAIT_MS{5000};
     static constexpr std::chrono::milliseconds GOSSIP_SETTLE_POLL_INTERVAL_MS{1000};
     static constexpr int32_t GOSSIP_SETTLE_POLL_SUCCESSES_REQUIRED = 3;
 
@@ -2328,7 +2327,6 @@ future<> gossiper::wait_for_gossip(std::chrono::milliseconds initial_delay, std:
 }
 
 future<> gossiper::wait_for_gossip_to_settle() {
-    static constexpr std::chrono::milliseconds GOSSIP_SETTLE_MIN_WAIT_MS{5000};
     auto force_after = _gcfg.skip_wait_for_gossip_to_settle;
     auto do_enable_features = [this] {
         return async([this] {

@@ -179,6 +179,8 @@ public:
     static constexpr std::chrono::milliseconds INTERVAL{1000};
     static constexpr std::chrono::hours A_VERY_LONG_TIME{24 * 3};
 
+    static constexpr std::chrono::milliseconds GOSSIP_SETTLE_MIN_WAIT_MS{5000};
+
     // Maximimum difference between remote generation value and generation
     // value this node would get if this node were restarted that we are
     // willing to accept about a peer.
