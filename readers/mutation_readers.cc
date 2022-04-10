@@ -31,7 +31,6 @@
 #include "readers/nonforwardable.hh"
 #include "readers/queue.hh"
 #include "readers/reversing_v2.hh"
-#include "readers/slice_mutations.hh"
 #include "readers/upgrading_consumer.hh"
 #include <seastar/core/coroutine.hh>
 #include <stack>
@@ -412,7 +411,7 @@ flat_mutation_reader_v2 make_slicing_filtering_reader(flat_mutation_reader_v2 rd
     return make_flat_mutation_reader_v2<reader>(std::move(rd), pr, slice);
 }
 
-std::vector<mutation> slice_mutations(schema_ptr schema, std::vector<mutation> ms, const query::partition_slice& slice) {
+static std::vector<mutation> slice_mutations(schema_ptr schema, std::vector<mutation> ms, const query::partition_slice& slice) {
     std::vector<mutation> sliced_ms;
     for (auto& m : ms) {
         auto ck_ranges = query::clustering_key_filter_ranges::get_ranges(*schema, slice, m.key());
