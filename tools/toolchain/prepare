@@ -48,7 +48,7 @@ buildah manifest create "$(<tools/toolchain/image)"
 build_arch() {
     local arch="$1"
     image_id_file="$(mktemp)"
-    buildah bud --arch="$arch" --no-cache --pull -f tools/toolchain/Dockerfile --iidfile "$image_id_file"
+    buildah bud --arch="$arch" --squash --no-cache --pull -f tools/toolchain/Dockerfile --iidfile "$image_id_file"
     buildah manifest add --all "$(<tools/toolchain/image)" "$(<$image_id_file)"
     rm "$image_id_file"
 }
