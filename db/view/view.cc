@@ -388,12 +388,14 @@ bool matches_view_filter(const schema& base, const view_info& view, const partit
             && visitor.matches_view_filter();
 }
 
-void view_updates::move_to(utils::chunked_vector<frozen_mutation_and_schema>& mutations) {
-    std::transform(_updates.begin(), _updates.end(), std::back_inserter(mutations), [&, this] (auto&& m) {
+future<> view_updates::move_to(utils::chunked_vector<frozen_mutation_and_schema>& mutations) {
+    mutations.reserve(mutations.size() + _updates.size());
+    for (auto it = _updates.begin(); it != _updates.end(); it = _updates.erase(it)) {
+        auto&& m = std::move(*it);
         auto mut = mutation(_view, dht::decorate_key(*_view, std::move(m.first)), std::move(m.second));
-        return frozen_mutation_and_schema{freeze(mut), _view};
-    });
-    _updates.clear();
+        mutations.emplace_back(frozen_mutation_and_schema{freeze(mut), _view});
+        co_await coroutine::maybe_yield();
+    }
     _op_count = 0;
 }
 
@@ -906,35 +908,31 @@ future<stop_iteration> view_update_builder::stop() const {
 }
 
 future<utils::chunked_vector<frozen_mutation_and_schema>> view_update_builder::build_some() {
-    return advance_all().then([this] (stop_iteration ignored) {
-        bool do_advance_updates = false;
-        bool do_advance_existings = false;
-        if (_update && _update->is_partition_start()) {
-            _key = std::move(std::move(_update)->as_partition_start().key().key());
-            _update_partition_tombstone = _update->as_partition_start().partition_tombstone();
-            do_advance_updates = true;
-        }
-        if (_existing && _existing->is_partition_start()) {
-            _existing_partition_tombstone = _existing->as_partition_start().partition_tombstone();
-            do_advance_existings = true;
-        }
-        if (do_advance_updates) {
-            return do_advance_existings ? advance_all() : advance_updates();
-        } else if (do_advance_existings) {
-            return advance_existings();
-        }
-        return make_ready_future<stop_iteration>(stop_iteration::no);
-    }).then([this] (stop_iteration ignored) {
-        return repeat([this] {
-            return this->on_results();
-        });
-    }).then([this] {
-        utils::chunked_vector<frozen_mutation_and_schema> mutations;
-        for (auto& update : _view_updates) {
-            update.move_to(mutations);
-        }
-        return mutations;
-    });
+    auto _ = co_await advance_all();
+    bool do_advance_updates = false;
+    bool do_advance_existings = false;
+    if (_update && _update->is_partition_start()) {
+        _key = std::move(std::move(_update)->as_partition_start().key().key());
+        _update_partition_tombstone = _update->as_partition_start().partition_tombstone();
+        do_advance_updates = true;
+    }
+    if (_existing && _existing->is_partition_start()) {
+        _existing_partition_tombstone = _existing->as_partition_start().partition_tombstone();
+        do_advance_existings = true;
+    }
+    if (do_advance_updates) {
+        co_await (do_advance_existings ? advance_all() : advance_updates());
+    } else if (do_advance_existings) {
+        co_await advance_existings();
+    }
+
+    while (co_await on_results() == stop_iteration::no) {};
+
+    utils::chunked_vector<frozen_mutation_and_schema> mutations;
+    for (auto& update : _view_updates) {
+        co_await update.move_to(mutations);
+    }
+    co_return mutations;
 }
 
 void view_update_builder::generate_update(clustering_row&& update, std::optional<clustering_row>&& existing) {

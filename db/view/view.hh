@@ -139,7 +139,7 @@ public:
             , _updates(8, partition_key::hashing(*_view), partition_key::equality(*_view)) {
     }
 
-    void move_to(utils::chunked_vector<frozen_mutation_and_schema>& mutations);
+    future<> move_to(utils::chunked_vector<frozen_mutation_and_schema>& mutations);
 
     void generate_update(const partition_key& base_key, const clustering_row& update, const std::optional<clustering_row>& existing, gc_clock::time_point now);
 
