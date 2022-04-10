@@ -350,7 +350,182 @@ def test_limit_expression_len(test_table_s):
 #   (not a very interesting limit...)
 
 #############################################################################
-# TODO: additional limits documented in DynamoDB's documentation that we
-# should test here:
-# * limit on partition key length: 1 to 2048 bytes
-# * limit on sort key length: 1 to 1024 bytes
+
+# DynamoDB documentation says that the sort key must be between 1 and 1024
+# bytes in length. We already test (test_item.py::test_update_item_empty_key)
+# that 0 bytes are not allowed, so here we want to verify that 1024 is
+# indeed the limit - i.e., 1024 is allowed, 1025 is isn't. This is true for
+# both strings and bytes (and for bytes, it is the actual bytes - not their
+# base64 encoding - that is counted).
+# We may decide that this test never needs to pass on Alternator, because
+# we may adopt a different limit. In this case we'll need to document this
+# decision. In any case, Alternator must have some key-length limits (the
+# internal implementation limits key length to 64 KB), so the test after this
+# one should pass.
+@pytest.mark.xfail(reason="issue #10347: sort key limits not enforced")
+def test_limit_sort_key_len_1024(test_table_ss, test_table_sb):
+    p = random_string()
+    # String sort key with length 1024 is fine:
+    key = {'p': p, 'c': 'x'*1024}
+    test_table_ss.put_item(Item=key)
+    assert test_table_ss.get_item(Key=key, ConsistentRead=True)['Item'] == key
+    # But sort key with length 1025 is forbidden - in both read and write.
+    # DynamoDB's message says "Aggregated size of all range keys has exceeded
+    # the size limit of 1024 bytes". It's not clear what "all range keys"
+    # actually refers to, as there can be only one. We investigate this
+    # further below in test_limit_sort_key_len_lsi().
+    key = {'p': p, 'c': 'x'*1025}
+    with pytest.raises(ClientError, match='ValidationException.*limit'):
+        test_table_ss.put_item(Item=key)
+    with pytest.raises(ClientError, match='ValidationException.*limit'):
+        test_table_ss.get_item(Key=key, ConsistentRead=True)
+
+    # The same limits are true for the bytes type. The length of a bytes
+    # array is its real length - not the length of its base64 encoding.
+    key = {'p': p, 'c': bytearray([123]*1024)}
+    test_table_sb.put_item(Item=key)
+    assert test_table_sb.get_item(Key=key, ConsistentRead=True)['Item'] == key
+    key = {'p': p, 'c': bytearray([123]*1025)}
+    with pytest.raises(ClientError, match='ValidationException.*limit'):
+        test_table_sb.put_item(Item=key)
+    with pytest.raises(ClientError, match='ValidationException.*limit'):
+        test_table_sb.get_item(Key=key, ConsistentRead=True)
+
+# This is a variant of the above test, where we don't insist that the
+# sort key length limit must be exactly 1024 bytes as in DynamoDB, but
+# that it be *at least* 1024. I.e., we verify that 1024-byte sort keys
+# are allowed, while very long keys that surpass Scylla's low-level
+# key-length limit (64 KB) are forbidden with an appropriate error message
+# and not an "internal server error". This test should pass even if
+# Alternator decides to adopt a different sort-key-length limit from
+# DynamoDB. We do have to adopt *some* limit because the internal Scylla
+# implementation has a 64 KB limit on key lengths.
+@pytest.mark.xfail(reason="issue #10347: sort key limits not enforced")
+def test_limit_sort_key_len(test_table_ss, test_table_sb):
+    p = random_string()
+    # String sort key with length 1024 is fine:
+    key = {'p': p, 'c': 'x'*1024}
+    test_table_ss.put_item(Item=key)
+    assert test_table_ss.get_item(Key=key, ConsistentRead=True)['Item'] == key
+    # Sort key of length 64 KB + 1 is forbidden - it obviously exceeds
+    # DynamoDB's limit (1024 bytes), but also exceeds Scylla's internal
+    # limit on key length (64 KB). We except to get a reasonable error
+    # on request validation - not some "internal server error".
+    key = {'p': p, 'c': 'x'*65537}
+    with pytest.raises(ClientError, match='ValidationException.*limit'):
+        test_table_ss.put_item(Item=key)
+    with pytest.raises(ClientError, match='ValidationException.*limit'):
+        test_table_ss.get_item(Key=key, ConsistentRead=True)
+
+    # The same limits are true for the bytes type. The length of a bytes
+    # array is its real length - not the length of its base64 encoding.
+    key = {'p': p, 'c': bytearray([123]*1024)}
+    test_table_sb.put_item(Item=key)
+    assert test_table_sb.get_item(Key=key, ConsistentRead=True)['Item'] == key
+    key = {'p': p, 'c': bytearray([123]*65537)}
+    with pytest.raises(ClientError, match='ValidationException.*limit'):
+        test_table_sb.put_item(Item=key)
+    with pytest.raises(ClientError, match='ValidationException.*limit'):
+        test_table_sb.get_item(Key=key, ConsistentRead=True)
+
+# As mentioned above, DynamoDB's error about sort key length exceeding the
+# 1024 byte limit says that "Aggregated size of all range keys has exceeded
+# the size limit of 1024 bytes". This is an odd message, considering that
+# there can only be one range key... So there is a question whether when we
+# have an LSI and several of the item's attributes become range keys (of
+# different tables), perhaps their *total* length is limited. It turns out
+# the answer is no. We can write an item with two 1024-byte attributes, where
+# one if the base table's sort key and the other is an LSI's sort key.
+# DyanamoDB's error message appears to be nothing more than a mistake.
+def test_limit_sort_key_len_lsi(dynamodb):
+    with new_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'a', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'b', 'KeyType': 'RANGE' }
+        ],
+        AttributeDefinitions=[
+             { 'AttributeName': 'a', 'AttributeType': 'S' },
+             { 'AttributeName': 'b', 'AttributeType': 'S' },
+             { 'AttributeName': 'c', 'AttributeType': 'S' }
+        ],
+        LocalSecondaryIndexes=[
+             { 'IndexName': 'lsi', 'KeySchema': [
+                  { 'AttributeName': 'a', 'KeyType': 'HASH' },
+                  { 'AttributeName': 'c', 'KeyType': 'RANGE' },
+               ], 'Projection': { 'ProjectionType': 'ALL' }
+             }
+        ]) as table:
+        item = {'a': 'hello', 'b': 'x'*1024, 'c': 'y'*1024 }
+        table.put_item(Item=item)
+        assert table.get_item(Key={'a': 'hello', 'b': 'x'*1024}, ConsistentRead=True)['Item'] == item
+        assert table.query(IndexName='lsi', KeyConditions={'a': {'AttributeValueList': ['hello'], 'ComparisonOperator': 'EQ'}, 'c': {'AttributeValueList': ['y'*1024], 'ComparisonOperator': 'EQ'}}, ConsistentRead=True)['Items'] == [item]
+
+# DynamoDB documentation says that the partition key must be between 1 and 2048
+# bytes in length. We already test (test_item.py::test_update_item_empty_key)
+# that 0 bytes are not allowed, so here we want to verify that 2048 is
+# indeed the limit - i.e., 2048 is allowed, 2049 is isn't. This is true for
+# both strings and bytes (and for bytes, it is the actual bytes - not their
+# base64 encoding - that is counted).
+# We may decide that this test never needs to pass on Alternator, because
+# we may adopt a different limit. In this case we'll need to document this
+# decision. In any case, Alternator must have some key-length limits (the
+# internal implementation limits key length to 64 KB), so even if this test
+# won't pass, the one after it should pass.
+@pytest.mark.xfail(reason="issue #10347: sort key limits not enforced")
+def test_limit_partition_key_len_2048(test_table_s, test_table_b):
+    # String partition key with length 2048 is fine:
+    item = {'p': 'x'*2048, 'z': 'hello'}
+    test_table_s.put_item(Item=item)
+    assert test_table_s.get_item(Key={'p': 'x'*2048}, ConsistentRead=True)['Item'] == item
+    # But partition key with length 2049 is forbidden - in both read and write.
+    key = {'p': 'x'*2049}
+    with pytest.raises(ClientError, match='ValidationException.*limit'):
+        test_table_s.put_item(Item=key)
+    with pytest.raises(ClientError, match='ValidationException.*limit'):
+        test_table_s.get_item(Key=key, ConsistentRead=True)
+
+    # The same limits are true for the bytes type. The length of a bytes
+    # array is its real length - not the length of its base64 encoding.
+    item = {'p': bytearray([123]*2048), 'z': 'hello'}
+    test_table_b.put_item(Item=item)
+    assert test_table_b.get_item(Key={'p': bytearray([123]*2048)}, ConsistentRead=True)['Item'] == item
+    key = {'p': bytearray([123]*2049)}
+    with pytest.raises(ClientError, match='ValidationException.*limit'):
+        test_table_b.put_item(Item=key)
+    with pytest.raises(ClientError, match='ValidationException.*limit'):
+        test_table_b.get_item(Key=key, ConsistentRead=True)
+
+# This is a variant of the above test, where we don't insist that the
+# partition key length limit must be exactly 2048 bytes as in DynamoDB, but
+# that it be *at least* 2048. I.e., we verify that 2048-byte sort keys
+# are allowed, while very long keys that surpass Scylla's low-level
+# key-length limit (64 KB) are forbidden with an appropriate error message
+# and not an "internal server error". This test should pass even if
+# Alternator decides to adopt a different sort-key-length limit from
+# DynamoDB. We do have to adopt *some* limit because the internal Scylla
+# implementation has a 64 KB limit on key lengths.
+@pytest.mark.xfail(reason="issue #10347: sort key limits not enforced")
+def test_limit_partition_key_len(test_table_s, test_table_b):
+    # String partition key with length 2048 is fine:
+    item = {'p': 'x'*2048, 'z': 'hello'}
+    test_table_s.put_item(Item=item)
+    assert test_table_s.get_item(Key={'p': 'x'*2048}, ConsistentRead=True)['Item'] == item
+    # Partition key of length 64 KB + 1 is forbidden - it obviously exceeds
+    # DynamoDB's limit (2048 bytes), but also exceeds Scylla's internal
+    # limit on key length (64 KB). We except to get a reasonable error
+    # on request validation - not some "internal server error".
+    key = {'p': 'x'*65537}
+    with pytest.raises(ClientError, match='ValidationException.*limit'):
+        test_table_s.put_item(Item=key)
+    with pytest.raises(ClientError, match='ValidationException.*limit'):
+        test_table_s.get_item(Key=key, ConsistentRead=True)
+
+    # The same limits are true for the bytes type. The length of a bytes
+    # array is its real length - not the length of its base64 encoding.
+    item = {'p': bytearray([123]*2048), 'z': 'hello'}
+    test_table_b.put_item(Item=item)
+    assert test_table_b.get_item(Key={'p': bytearray([123]*2048)}, ConsistentRead=True)['Item'] == item
+    key = {'p': bytearray([123]*65537)}
+    with pytest.raises(ClientError, match='ValidationException.*limit'):
+        test_table_b.put_item(Item=key)
+    with pytest.raises(ClientError, match='ValidationException.*limit'):
+        test_table_b.get_item(Key=key, ConsistentRead=True)
