@@ -191,6 +191,56 @@ def test_concurrent_create_and_drop_keyspace(cql, this_dc, fails_without_raft):
             cql.execute(f"DROP KEYSPACE {keyspace}")
         cql.execute(f"CREATE KEYSPACE {keyspace} {ksdef}")
 
+# Test that passing "LOCAL" parameter to storage options works as expected
+# and is not explicitly stored - since it's equal to the original storage
+def test_storage_options_local(cql, scylla_only):
+    ksdef = "WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : '1' } " \
+            "AND STORAGE = { 'type' : 'LOCAL' }"
+    with new_test_keyspace(cql, ksdef) as keyspace:
+        res = cql.execute(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{keyspace}'")
+        assert not res.all()
+
+# Test that passing an unsupported storage type is not legal
+def test_storage_options_unknown_type(cql, scylla_only):
+    ksdef = "WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : '1' } " \
+            "AND STORAGE = { 'type' : 'S4', 'bucket' : '42', 'endpoint' : 'localhost' }"
+    with pytest.raises(InvalidRequest):
+        with new_test_keyspace(cql, ksdef):
+            pass
+
+# Test that passing nonexistent options results in an error
+def test_storage_options_nonexistent_param(cql, scylla_only):
+    ksdef = "WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : '1' } " \
+            "AND STORAGE = { 'type' : 'S3', 'bucket' : '42', 'endpoint' : 'localhost', 'superfluous' : 'info' }"
+    with pytest.raises(InvalidRequest):
+        with new_test_keyspace(cql, ksdef):
+            pass
+    ksdef = "WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : '1' } " \
+            "AND STORAGE = { 'type' : 'LOCAL', 'superfluous' : 'info' }"
+    with pytest.raises(InvalidRequest):
+        with new_test_keyspace(cql, ksdef):
+            pass
+
+# Test that not passing required parameters fails
+def test_storage_options_required_param(cql, scylla_only):
+    ksdef = "WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : '1' } " \
+            "AND STORAGE = { 'type' : 'S3', 'bucket' : '42' }"
+    with pytest.raises(InvalidRequest):
+        with new_test_keyspace(cql, ksdef):
+            pass
+
+# Test that storage options cannot be altered (at least until it's well defined
+# what it means to e.g. switch from S3 to another format and back).
+def test_storage_options_alter_type(cql, scylla_only):
+    ksdef = "WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : '1' } " \
+            "AND STORAGE = { 'type' : 'LOCAL' }"
+    with new_test_keyspace(cql, ksdef) as keyspace:
+         # It's not fine to change the storage type
+        ksdef_local = "WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : '1' } " \
+            "AND STORAGE = { 'type' : 'S3', 'bucket' : '/b1', 'endpoint': 'localhost'}"
+        with pytest.raises(InvalidRequest):
+            res = cql.execute(f"ALTER KEYSPACE {keyspace} {ksdef_local}")
+
 # TODO: more tests for "WITH REPLICATION" syntax in CREATE TABLE.
 # TODO: check the "AND DURABLE_WRITES" option of CREATE TABLE.
 # TODO: confirm case insensitivity without quotes, and case sensitivity with them.

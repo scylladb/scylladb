@@ -213,7 +213,7 @@ future<> save_system_schema(cql3::query_processor& qp, const sstring & ksname) {
             deletion_timestamp), ksm->name()).discard_result();
     });
     {
-        auto mvec  = make_create_keyspace_mutations(ksm, system_keyspace::schema_creation_timestamp(), true);
+        auto mvec  = make_create_keyspace_mutations(qp.db().features().cluster_schema_features(), ksm, system_keyspace::schema_creation_timestamp(), true);
         co_await qp.proxy().mutate_locally(std::move(mvec), tracing::trace_state_ptr());
     }
 }
@@ -238,6 +238,7 @@ schema_ptr keyspaces() {
         {
             {"durable_writes", boolean_type},
             {"replication", map_type_impl::get_instance(utf8_type, utf8_type, false)},
+            {"storage", map_type_impl::get_instance(utf8_type, utf8_type, false)},
         },
         // static columns
         {},
@@ -245,6 +246,33 @@ schema_ptr keyspaces() {
         utf8_type,
         // comment
         "keyspace definitions"
+        );
+        builder.set_gc_grace_seconds(schema_gc_grace);
+        builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
+        builder.with_null_sharder();
+        return builder.build();
+    }();
+    return schema;
+}
+
+schema_ptr scylla_keyspaces() {
+    static thread_local auto schema = [] {
+        schema_builder builder(generate_legacy_id(NAME, SCYLLA_KEYSPACES), NAME, SCYLLA_KEYSPACES,
+        // partition key
+        {{"keyspace_name", utf8_type}},
+        // clustering key
+        {},
+        // regular columns
+        {
+            {"storage_type", utf8_type},
+            {"storage_options", map_type_impl::get_instance(utf8_type, utf8_type, false)},
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "scylla-specific information for keyspaces"
         );
         builder.set_gc_grace_seconds(schema_gc_grace);
         builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
@@ -1077,6 +1105,21 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std:
     });
 }
 
+future<lw_shared_ptr<query::result_set>> extract_scylla_specific_keyspace_info(distributed<service::storage_proxy>& proxy, const schema_result_value_type& partition) {
+    lw_shared_ptr<query::result_set> scylla_specific_rs;
+    if (proxy.local().features().cluster_schema_features().contains<schema_feature::SCYLLA_KEYSPACES>()) {
+        auto&& rs = partition.second;
+        if (rs->empty()) {
+            co_return coroutine::make_exception(std::runtime_error("query result has no rows"));
+        }
+        auto&& row = rs->row(0);
+        auto keyspace_name = row.get_nonnull<sstring>("keyspace_name");
+        auto keyspace_key = dht::decorate_key(*scylla_keyspaces(), partition_key::from_singular(*scylla_keyspaces(), keyspace_name));
+        scylla_specific_rs = co_await db::system_keyspace::query(proxy, NAME, SCYLLA_KEYSPACES, keyspace_key);
+    }
+    co_return scylla_specific_rs;
+}
+
 future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& proxy, schema_result&& before, schema_result&& after)
 {
     std::vector<schema_result_value_type> created;
@@ -1110,7 +1153,8 @@ future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& p
     }
     co_await proxy.local().get_db().invoke_on_all([&] (replica::database& db) -> future<> {
         for (auto&& val : created) {
-            auto ksm = create_keyspace_from_schema_partition(val);
+            auto scylla_specific_rs = co_await extract_scylla_specific_keyspace_info(proxy, val);
+            auto ksm = create_keyspace_from_schema_partition(val, std::move(scylla_specific_rs));
             co_await db.create_keyspace(ksm, proxy.local().get_erm_factory());
             co_await db.get_notifier().create_keyspace(ksm);
         }
@@ -1687,7 +1731,7 @@ static void store_map(mutation& m, const K& ckey, const bytes& name, api::timest
  * Keyspace metadata serialization/deserialization.
  */
 
-std::vector<mutation> make_create_keyspace_mutations(lw_shared_ptr<keyspace_metadata> keyspace, api::timestamp_type timestamp, bool with_tables_and_types_and_functions)
+std::vector<mutation> make_create_keyspace_mutations(schema_features features, lw_shared_ptr<keyspace_metadata> keyspace, api::timestamp_type timestamp, bool with_tables_and_types_and_functions)
 {
     std::vector<mutation> mutations;
     schema_ptr s = keyspaces();
@@ -1699,6 +1743,19 @@ std::vector<mutation> make_create_keyspace_mutations(lw_shared_ptr<keyspace_meta
     auto map = keyspace->strategy_options();
     map["class"] = keyspace->strategy_name();
     store_map(m, ckey, "replication", timestamp, map);
+
+    if (features.contains<schema_feature::SCYLLA_KEYSPACES>()) {
+        schema_ptr scylla_keyspaces_s = scylla_keyspaces();
+        mutation scylla_m(scylla_keyspaces_s, pkey); // pkey can be reused, it's identical in both tables
+        auto& storage_options = keyspace->get_storage_options();
+        sstring storage_type(storage_options.type_string());
+        auto storage_map = storage_options.to_map();
+        if (!storage_map.empty()) {
+            scylla_m.set_cell(ckey, "storage_type", storage_type, timestamp);
+            store_map(scylla_m, ckey, "storage_options", timestamp, storage_map);
+        }
+        mutations.emplace_back(std::move(scylla_m));
+    }
 
     mutations.emplace_back(std::move(m));
 
@@ -1713,7 +1770,7 @@ std::vector<mutation> make_create_keyspace_mutations(lw_shared_ptr<keyspace_meta
     return mutations;
 }
 
-std::vector<mutation> make_drop_keyspace_mutations(lw_shared_ptr<keyspace_metadata> keyspace, api::timestamp_type timestamp)
+std::vector<mutation> make_drop_keyspace_mutations(schema_features features, lw_shared_ptr<keyspace_metadata> keyspace, api::timestamp_type timestamp)
 {
     std::vector<mutation> mutations;
     for (auto&& schema_table : all_tables(schema_features::full())) {
@@ -1727,6 +1784,11 @@ std::vector<mutation> make_drop_keyspace_mutations(lw_shared_ptr<keyspace_metada
     mutation m{schema, pkey};
     m.partition().apply(tombstone{timestamp, gc_clock::now()});
     mutations.emplace_back(std::move(m));
+    if (features.contains<schema_feature::SCYLLA_KEYSPACES>()) {
+        mutation km{scylla_keyspaces(), pkey};
+        km.partition().apply(tombstone{timestamp, gc_clock::now()});
+        mutations.emplace_back(std::move(km));
+    }
     return mutations;
 }
 
@@ -1735,7 +1797,7 @@ std::vector<mutation> make_drop_keyspace_mutations(lw_shared_ptr<keyspace_metada
  *
  * @param partition Keyspace attributes in serialized form
  */
-lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const schema_result_value_type& result)
+lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const schema_result_value_type& result, lw_shared_ptr<query::result_set> scylla_specific_rs)
 {
     auto&& rs = result.second;
     if (rs->empty()) {
@@ -1755,7 +1817,25 @@ lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const sch
     auto strategy_name = strategy_options["class"];
     strategy_options.erase("class");
     bool durable_writes = row.get_nonnull<bool>("durable_writes");
-    return make_lw_shared<keyspace_metadata>(keyspace_name, strategy_name, strategy_options, durable_writes);
+
+    data_dictionary::storage_options storage_opts;
+    // Scylla-specific row will only be present if SCYLLA_KEYSPACES schema feature is available in the cluster
+    if (scylla_specific_rs) {
+        if (!scylla_specific_rs->empty()) {
+            auto row = scylla_specific_rs->row(0);
+            auto storage_type = row.get<sstring>("storage_type");
+            auto options = row.get<map_type_impl::native_type>("storage_options");
+            if (storage_type && options) {
+                std::map<sstring, sstring> values;
+                for (const auto& entry : *options) {
+                    values.emplace(value_cast<sstring>(entry.first), value_cast<sstring>(entry.second));
+                }
+                storage_opts.value = data_dictionary::storage_options::from_map(std::string_view(*storage_type), values);
+            }
+        }
+    }
+    return make_lw_shared<keyspace_metadata>(keyspace_name, strategy_name, strategy_options, durable_writes,
+            std::vector<schema_ptr>{}, data_dictionary::user_types_metadata{}, storage_opts);
 }
 
 template<typename V>
@@ -3147,6 +3227,9 @@ std::vector<schema_ptr> all_tables(schema_features features) {
     }
     if (features.contains<schema_feature::COMPUTED_COLUMNS>()) {
         result.emplace_back(computed_columns());
+    }
+    if (features.contains<schema_feature::SCYLLA_KEYSPACES>()) {
+        result.emplace_back(scylla_keyspaces());
     }
     return result;
 }

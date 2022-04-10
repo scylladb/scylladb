@@ -560,7 +560,7 @@ public:
                             , ks.durable_writes);
 
             // we want separate time stamps for tables/types, so cannot bulk them into the ksm.
-            for (auto&& m : db::schema_tables::make_create_keyspace_mutations(ksm, ks.timestamp.time_since_epoch().count(), false)) {
+            for (auto&& m : db::schema_tables::make_create_keyspace_mutations(schema_features::full(), ksm, ks.timestamp.time_since_epoch().count(), false)) {
                 mutations.emplace_back(std::move(m));
             }
             for (auto& t : ks.tables) {

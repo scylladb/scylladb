@@ -1036,7 +1036,8 @@ std::unordered_map<sstring, db::experimental_features_t::feature> db::experiment
         {"cdc", UNUSED},
         {"alternator-streams", ALTERNATOR_STREAMS},
         {"alternator-ttl", ALTERNATOR_TTL},
-        {"raft", RAFT}
+        {"raft", RAFT},
+        {"keyspace-storage-options", KEYSPACE_STORAGE_OPTIONS},
     };
 }
 

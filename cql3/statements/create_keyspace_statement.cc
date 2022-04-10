@@ -23,6 +23,7 @@
 #include "transport/messages/result_message.hh"
 #include "cql3/query_processor.hh"
 #include "db/config.hh"
+#include "gms/feature_service.hh"
 
 #include <regex>
 
@@ -51,7 +52,7 @@ future<> create_keyspace_statement::check_access(query_processor& qp, const serv
     return state.has_all_keyspaces_access(auth::permission::CREATE);
 }
 
-void create_keyspace_statement::validate(query_processor&, const service::client_state& state) const
+void create_keyspace_statement::validate(query_processor& qp, const service::client_state& state) const
 {
     std::string name;
     name.resize(_name.length());
@@ -72,6 +73,15 @@ void create_keyspace_statement::validate(query_processor&, const service::client
 
     if (!bool(_attrs->get_replication_strategy_class())) {
         throw exceptions::configuration_exception("Missing mandatory replication strategy class");
+    }
+    try {
+        _attrs->get_storage_options();
+    } catch (const std::runtime_error& e) {
+        throw exceptions::invalid_request_exception(e.what());
+    }
+    if (!qp.proxy().features().cluster_supports_keyspace_storage_options()
+            && _attrs->get_storage_options().type_string() != "LOCAL") {
+        throw exceptions::invalid_request_exception("Keyspace storage options not supported in the cluster");
     }
 #if 0
     // The strategy is validated through KSMetaData.validate() in announceNewKeyspace below.

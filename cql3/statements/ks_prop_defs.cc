@@ -79,7 +79,7 @@ void ks_prop_defs::validate() {
         return;
     }
 
-    static std::set<sstring> keywords({ sstring(KW_DURABLE_WRITES), sstring(KW_REPLICATION) });
+    static std::set<sstring> keywords({ sstring(KW_DURABLE_WRITES), sstring(KW_REPLICATION), sstring(KW_STORAGE) });
     property_definitions::validate(keywords);
 
     auto replication_options = get_replication_options();
@@ -96,6 +96,20 @@ std::map<sstring, sstring> ks_prop_defs::get_replication_options() const {
     return std::map<sstring, sstring>{};
 }
 
+data_dictionary::storage_options ks_prop_defs::get_storage_options() const {
+    data_dictionary::storage_options opts;
+    auto options_map = get_map(KW_STORAGE);
+    if (options_map) {
+        auto it = options_map->find("type");
+        if (it != options_map->end()) {
+            sstring storage_type = it->second;
+            options_map->erase(it);
+            opts.value = data_dictionary::storage_options::from_map(storage_type, std::move(*options_map));
+        }
+    }
+    return opts;
+}
+
 std::optional<sstring> ks_prop_defs::get_replication_strategy_class() const {
     return _strategy_class;
 }
@@ -103,7 +117,7 @@ std::optional<sstring> ks_prop_defs::get_replication_strategy_class() const {
 lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata(sstring ks_name, const locator::token_metadata& tm) {
     auto sc = get_replication_strategy_class().value();
     return data_dictionary::keyspace_metadata::new_keyspace(ks_name, sc,
-            prepare_options(sc, tm, get_replication_options()), get_boolean(KW_DURABLE_WRITES, true));
+            prepare_options(sc, tm, get_replication_options()), get_boolean(KW_DURABLE_WRITES, true), std::vector<schema_ptr>{}, get_storage_options());
 }
 
 lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_update(lw_shared_ptr<data_dictionary::keyspace_metadata> old, const locator::token_metadata& tm) {
@@ -117,7 +131,7 @@ lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_u
         options = old_options;
     }
 
-    return data_dictionary::keyspace_metadata::new_keyspace(old->name(), *sc, options, get_boolean(KW_DURABLE_WRITES, true));
+    return data_dictionary::keyspace_metadata::new_keyspace(old->name(), *sc, options, get_boolean(KW_DURABLE_WRITES, true), std::vector<schema_ptr>{}, get_storage_options());
 }
 
 
