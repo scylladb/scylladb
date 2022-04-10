@@ -24,10 +24,23 @@ fi
 
 archs=(amd64 arm64 s390x)
 
-if [[ ! -f  /proc/sys/fs/binfmt_misc/qemu-aarch64 || ! -f /proc/sys/fs/binfmt_misc/qemu-s390x ]]; then
-    echo install qemu-user-static
-    exit 1
-fi
+# docker arch has a diffrent spelling than uname arch
+arch_uname_amd64=x86_64
+arch_uname_arm64=aarch64
+arch_uname_s390x=s390x
+
+for arch in "${archs[@]}"; do
+    # translate from docker arch to uname arch
+    indirect="arch_uname_${arch}"
+    arch_uname="${!indirect}"
+    if [[ "$(uname -m)" == "${arch_uname}" ]]; then
+        continue
+    fi
+    if [[ ! -f  /proc/sys/fs/binfmt_misc/qemu-"${arch_uname}" ]]; then
+        echo install qemu-user-static
+        exit 1
+    fi
+done
 
 buildah manifest create "$(<tools/toolchain/image)"
 
