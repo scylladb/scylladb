@@ -41,7 +41,7 @@
 
 struct mock_consumer {
     struct result {
-        size_t _depth;
+        ssize_t _depth;
         size_t _consume_new_partition_call_count = 0;
         size_t _consume_tombstone_call_count = 0;
         size_t _consume_end_of_partition_call_count = 0;
