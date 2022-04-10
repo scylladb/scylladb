@@ -151,6 +151,13 @@ future<> combined::consume_all(flat_mutation_reader_v2 mr) const
     });
 }
 
+PERF_TEST_F(combined, one_mutation)
+{
+    std::vector<flat_mutation_reader_v2> mrs;
+    mrs.emplace_back(make_flat_mutation_reader_from_mutations_v2(schema().schema(), permit(), one_row_stream()[0]));
+    return consume_all(make_combined_reader(schema().schema(), permit(), std::move(mrs)));
+}
+
 PERF_TEST_F(combined, one_row)
 {
     std::vector<flat_mutation_reader_v2> mrs;
