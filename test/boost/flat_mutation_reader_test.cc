@@ -116,14 +116,14 @@ SEASTAR_TEST_CASE(test_flat_mutation_reader_consume_single_partition) {
         for_each_mutation([&] (const mutation& m) {
             size_t fragments_in_m = count_fragments(m);
             for (size_t depth = 1; depth <= fragments_in_m + 1; ++depth) {
-                auto r = make_flat_mutation_reader_from_mutations_v2(m.schema(), semaphore.make_permit(), {m});
+                auto r = make_flat_mutation_reader_from_mutations_v2(m.schema(), semaphore.make_permit(), m);
                 auto close_reader = deferred_close(r);
                 auto result = r.consume(mock_consumer(*m.schema(), semaphore.make_permit(), depth)).get0();
                 BOOST_REQUIRE(result._consume_end_of_stream_called);
                 BOOST_REQUIRE_EQUAL(1, result._consume_new_partition_call_count);
                 BOOST_REQUIRE_EQUAL(1, result._consume_end_of_partition_call_count);
                 BOOST_REQUIRE_EQUAL(m.partition().partition_tombstone() ? 1 : 0, result._consume_tombstone_call_count);
-                auto r2 = assert_that(make_flat_mutation_reader_from_mutations_v2(m.schema(), semaphore.make_permit(), {m}));
+                auto r2 = assert_that(make_flat_mutation_reader_from_mutations_v2(m.schema(), semaphore.make_permit(), m));
                 r2.produces_partition_start(m.decorated_key(), m.partition().partition_tombstone());
                 if (result._fragments.empty()) {
                     continue;
