@@ -547,16 +547,17 @@ future<> read_context::lookup_readers(db::timeout_clock::time_point timeout) {
         return make_ready_future<>();
     }
 
-    return parallel_for_each(boost::irange(0u, smp::count), [this, timeout] (shard_id shard) {
-        return _db.invoke_on(shard, [this, shard, cmd = &_cmd, ranges = &_ranges, gs = global_schema_ptr(_schema),
+        return _db.invoke_on_all([this, cmd = &_cmd, ranges = &_ranges, gs = global_schema_ptr(_schema),
                 gts = tracing::global_trace_state_ptr(_trace_state), timeout] (replica::database& db) mutable {
             auto schema = gs.get();
             auto querier_opt = db.get_querier_cache().lookup_shard_mutation_querier(cmd->query_uuid, *schema, *ranges, cmd->slice, gts.get(), timeout);
             auto& table = db.find_column_family(schema);
             auto& semaphore = this->semaphore();
+            auto shard = this_shard_id();
 
             if (!querier_opt) {
-                return reader_meta(reader_state::inexistent);
+                _readers[shard] = reader_meta(reader_state::inexistent);
+                return;
             }
 
             auto& q = *querier_opt;
@@ -571,14 +572,11 @@ future<> read_context::lookup_readers(db::timeout_clock::time_point timeout) {
             }
 
             auto handle = semaphore.register_inactive_read(std::move(q).reader());
-            return reader_meta(
+            _readers[shard] = reader_meta(
                     reader_state::successful_lookup,
                     reader_meta::remote_parts(q.permit(), std::move(q).reader_range(), std::move(q).reader_slice(), table.read_in_progress(),
                             std::move(handle)));
-        }).then([this, shard] (reader_meta rm) {
-            _readers[shard] = std::move(rm);
         });
-    });
 }
 
 future<> read_context::save_readers(flat_mutation_reader_v2::tracked_buffer unconsumed_buffer, detached_compaction_state compaction_state,
