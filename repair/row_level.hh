@@ -22,6 +22,7 @@ class storage_proxy;
 
 namespace db {
 
+class system_keyspace;
 class system_distributed_keyspace;
 class batchlog_manager;
 
@@ -82,6 +83,7 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
     sharded<service::storage_proxy>& _sp;
     sharded<db::batchlog_manager>& _bm;
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
+    sharded<db::system_keyspace>& _sys_ks;
     sharded<db::view::view_update_generator>& _view_update_generator;
     service::migration_manager& _mm;
     tracker _tracker;
@@ -107,6 +109,7 @@ public:
             sharded<service::storage_proxy>& sp,
             sharded<db::batchlog_manager>& bm,
             sharded<db::system_distributed_keyspace>& sys_dist_ks,
+            sharded<db::system_keyspace>& sys_ks,
             sharded<db::view::view_update_generator>& vug,
             service::migration_manager& mm, size_t max_repair_memory);
     ~repair_service();

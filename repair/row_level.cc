@@ -2946,6 +2946,7 @@ repair_service::repair_service(distributed<gms::gossiper>& gossiper,
         sharded<service::storage_proxy>& sp,
         sharded<db::batchlog_manager>& bm,
         sharded<db::system_distributed_keyspace>& sys_dist_ks,
+        sharded<db::system_keyspace>& sys_ks,
         sharded<db::view::view_update_generator>& vug,
         service::migration_manager& mm,
         size_t max_repair_memory)
@@ -2955,6 +2956,7 @@ repair_service::repair_service(distributed<gms::gossiper>& gossiper,
     , _sp(sp)
     , _bm(bm)
     , _sys_dist_ks(sys_dist_ks)
+    , _sys_ks(sys_ks)
     , _view_update_generator(vug)
     , _mm(mm)
     , _tracker(max_repair_memory)
