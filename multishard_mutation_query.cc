@@ -743,29 +743,28 @@ future<typename ResultBuilder::result_type> do_query(
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
         db::timeout_clock::time_point timeout,
-        ResultBuilder&& result_builder) {
+        ResultBuilder&& result_builder_) {
     auto ctx = seastar::make_shared<read_context>(db, s, cmd, ranges, trace_state, timeout);
 
-    std::exception_ptr ex;
-
-    try {
-        co_await ctx->lookup_readers(timeout);
-
-        auto [last_ckey, result, unconsumed_buffer, compaction_state] = co_await read_page<ResultBuilder>(ctx, s, cmd, ranges, trace_state,
-                std::move(result_builder));
-
-        if (compaction_state->are_limits_reached() || result.is_short_read()) {
-            co_await ctx->save_readers(std::move(unconsumed_buffer), std::move(*compaction_state).detach_state(), std::move(last_ckey));
+    // "capture" result_builder so it won't be released if we yield.
+    auto result_builder = std::move(result_builder_);
+    // Use coroutine::as_future to prevent exception on timesout.
+    auto f = co_await coroutine::as_future(ctx->lookup_readers(timeout).then([&] {
+        return read_page<ResultBuilder>(ctx, s, cmd, ranges, trace_state, std::move(result_builder));
+    }).then([&] (page_consume_result<ResultBuilder> r) {
+        auto f = make_ready_future<>();
+        if (r.compaction_state->are_limits_reached() || r.result.is_short_read()) {
+            f = ctx->save_readers(std::move(r.unconsumed_fragments), std::move(*r.compaction_state).detach_state(), std::move(r.last_ckey));
         }
-
-        co_await ctx->stop();
-        co_return std::move(result);
-    } catch (...) {
-        ex = std::current_exception();
-    }
-
+        return f.then([result = std::move(r.result)] () mutable {
+            return std::move(result);
+        });
+    }));
     co_await ctx->stop();
-    co_return coroutine::exception(std::move(ex));
+    if (f.failed()) {
+        co_return coroutine::exception(f.get_exception());
+    }
+    co_return f.get0();
 }
 
 template <typename ResultBuilder>
