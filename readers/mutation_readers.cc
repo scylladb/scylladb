@@ -903,6 +903,60 @@ flat_mutation_reader_v2 make_generating_reader_v1(schema_ptr s, reader_permit pe
     return make_flat_mutation_reader_v2<generating_reader_v2>(s, permit, adaptor(s, permit, std::move(get_next_fragment)));
 }
 
+class reader_from_mutation_base : public flat_mutation_reader_v2::impl {
+    const dht::decorated_key* _dk = nullptr;
+
+private:
+    void maybe_emit_partition_start() {
+        if (_dk) {
+            consume(tombstone{}); // flush partition-start
+        }
+    }
+public:
+    void consume_new_partition(const dht::decorated_key& dk) {
+        _dk = &dk;
+    }
+    void consume(tombstone t) {
+        push_mutation_fragment(*_schema, _permit, partition_start(*_dk, t));
+        _dk = nullptr;
+    }
+    stop_iteration consume(static_row&& sr) {
+        maybe_emit_partition_start();
+        push_mutation_fragment(*_schema, _permit, std::move(sr));
+        return stop_iteration(is_buffer_full());
+    }
+    stop_iteration consume(clustering_row&& cr) {
+        maybe_emit_partition_start();
+        push_mutation_fragment(*_schema, _permit, std::move(cr));
+        return stop_iteration(is_buffer_full());
+    }
+    stop_iteration consume(range_tombstone_change&& rtc) {
+        maybe_emit_partition_start();
+        push_mutation_fragment(*_schema, _permit, std::move(rtc));
+        return stop_iteration(is_buffer_full());
+    }
+    stop_iteration consume_end_of_partition() {
+        if (is_buffer_full()) {
+            return stop_iteration::yes;
+        }
+        maybe_emit_partition_start();
+        push_mutation_fragment(*_schema, _permit, partition_end{});
+        return stop_iteration::no;
+    }
+    void consume_end_of_stream() { }
+
+public:
+    reader_from_mutation_base(schema_ptr schema, reader_permit permit) noexcept
+        : impl(std::move(schema), std::move(permit))
+    { }
+    virtual future<> fast_forward_to(position_range pr) override {
+        return make_exception_future<>(std::bad_function_call{});
+    }
+    virtual future<> close() noexcept override {
+        return make_ready_future<>();
+    }
+};
+
 // Reader optimized for a single mutation.
 flat_mutation_reader_v2
 make_flat_mutation_reader_from_mutations_v2(
@@ -911,55 +965,14 @@ make_flat_mutation_reader_from_mutations_v2(
         mutation m,
         streamed_mutation::forwarding fwd,
         bool reversed) {
-    // FIXME: refactor a base class from make_flat_mutation_reader_from_mutations_v2's reader
-    class reader final : public flat_mutation_reader_v2::impl {
+    class reader final : public reader_from_mutation_base {
         mutation _mutation;
         bool _reversed;
-        const dht::decorated_key* _dk = nullptr;
         std::optional<mutation_consume_cookie> _cookie;
-
-    private:
-        void maybe_emit_partition_start() {
-            if (_dk) {
-                consume(tombstone{}); // flush partition-start
-            }
-        }
-    public:
-        void consume_new_partition(const dht::decorated_key& dk) {
-            _dk = &dk;
-        }
-        void consume(tombstone t) {
-            push_mutation_fragment(*_schema, _permit, partition_start(*_dk, t));
-            _dk = nullptr;
-        }
-        stop_iteration consume(static_row&& sr) {
-            maybe_emit_partition_start();
-            push_mutation_fragment(*_schema, _permit, std::move(sr));
-            return stop_iteration(is_buffer_full());
-        }
-        stop_iteration consume(clustering_row&& cr) {
-            maybe_emit_partition_start();
-            push_mutation_fragment(*_schema, _permit, std::move(cr));
-            return stop_iteration(is_buffer_full());
-        }
-        stop_iteration consume(range_tombstone_change&& rtc) {
-            maybe_emit_partition_start();
-            push_mutation_fragment(*_schema, _permit, std::move(rtc));
-            return stop_iteration(is_buffer_full());
-        }
-        stop_iteration consume_end_of_partition() {
-            if (is_buffer_full()) {
-                return stop_iteration::yes;
-            }
-            maybe_emit_partition_start();
-            push_mutation_fragment(*_schema, _permit, partition_end{});
-            return stop_iteration::no;
-        }
-        void consume_end_of_stream() { }
 
     public:
         reader(schema_ptr schema, reader_permit permit, mutation&& m, bool reversed) noexcept
-            : impl(std::move(schema), std::move(permit))
+            : reader_from_mutation_base(std::move(schema), std::move(permit))
             , _mutation(std::move(m))
             , _reversed(reversed)
         {}
@@ -992,12 +1005,6 @@ make_flat_mutation_reader_from_mutations_v2(
             _end_of_stream = true;
             return make_ready_future<>();
         }
-        virtual future<> fast_forward_to(position_range pr) override {
-            return make_exception_future<>(std::bad_function_call{});
-        }
-        virtual future<> close() noexcept override {
-            return make_ready_future<>();
-        }
     };
     auto res = make_flat_mutation_reader_v2<reader>(s, std::move(permit), std::move(m), reversed);
     if (fwd) {
@@ -1024,55 +1031,15 @@ make_flat_mutation_reader_from_mutations_v2(
 flat_mutation_reader_v2
 make_flat_mutation_reader_from_mutations_v2(schema_ptr s, reader_permit permit, std::vector<mutation> mutations, const dht::partition_range& pr,
         const query::partition_slice& query_slice, streamed_mutation::forwarding fwd) {
-    class reader final : public flat_mutation_reader_v2::impl {
+    class reader final : public reader_from_mutation_base {
         std::vector<mutation> _mutations;
         const dht::partition_range* _pr;
         bool _reversed;
-        const dht::decorated_key* _dk = nullptr;
         std::optional<mutation_consume_cookie> _cookie;
-
-    private:
-        void maybe_emit_partition_start() {
-            if (_dk) {
-                consume(tombstone{}); // flush partition-start
-            }
-        }
-    public:
-        void consume_new_partition(const dht::decorated_key& dk) {
-            _dk = &dk;
-        }
-        void consume(tombstone t) {
-            push_mutation_fragment(*_schema, _permit, partition_start(*_dk, t));
-            _dk = nullptr;
-        }
-        stop_iteration consume(static_row&& sr) {
-            maybe_emit_partition_start();
-            push_mutation_fragment(*_schema, _permit, std::move(sr));
-            return stop_iteration(is_buffer_full());
-        }
-        stop_iteration consume(clustering_row&& cr) {
-            maybe_emit_partition_start();
-            push_mutation_fragment(*_schema, _permit, std::move(cr));
-            return stop_iteration(is_buffer_full());
-        }
-        stop_iteration consume(range_tombstone_change&& rtc) {
-            maybe_emit_partition_start();
-            push_mutation_fragment(*_schema, _permit, std::move(rtc));
-            return stop_iteration(is_buffer_full());
-        }
-        stop_iteration consume_end_of_partition() {
-            if (is_buffer_full()) {
-                return stop_iteration::yes;
-            }
-            maybe_emit_partition_start();
-            push_mutation_fragment(*_schema, _permit, partition_end{});
-            return stop_iteration::no;
-        }
-        void consume_end_of_stream() { }
 
     public:
         reader(schema_ptr schema, reader_permit permit, std::vector<mutation> mutations, const dht::partition_range& pr, bool reversed)
-            : impl(std::move(schema), std::move(permit))
+            : reader_from_mutation_base(std::move(schema), std::move(permit))
             , _mutations(std::move(mutations))
             , _pr(&pr)
             , _reversed(reversed)
@@ -1123,12 +1090,6 @@ make_flat_mutation_reader_from_mutations_v2(schema_ptr s, reader_permit permit, 
             _end_of_stream = false;
             _cookie.reset();
             _pr = &pr;
-            return make_ready_future<>();
-        }
-        virtual future<> fast_forward_to(position_range pr) override {
-            return make_exception_future<>(std::bad_function_call{});
-        }
-        virtual future<> close() noexcept override {
             return make_ready_future<>();
         }
     };
