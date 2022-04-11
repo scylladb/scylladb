@@ -1097,6 +1097,10 @@ alternator = [
        'alternator/ttl.cc',
 ]
 
+websocket = [
+        'websocket/controller.cc',
+        ]
+
 redis = [
         'redis/controller.cc',
         'redis/server.cc',
@@ -1181,7 +1185,7 @@ scylla_raft_dependencies = scylla_raft_core + ['utils/uuid.cc']
 scylla_tools = ['tools/scylla-types.cc', 'tools/scylla-sstable.cc', 'tools/schema_loader.cc', 'tools/utils.cc']
 
 deps = {
-    'scylla': idls + ['main.cc'] + scylla_core + api + alternator + redis + scylla_tools,
+    'scylla': idls + ['main.cc'] + scylla_core + api + alternator + redis + scylla_tools + websocket,
 }
 
 pure_boost_tests = set([

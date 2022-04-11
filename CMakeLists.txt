@@ -538,6 +538,7 @@ set(scylla_sources
     tombstone_gc_options.cc
     tombstone_gc.cc
     reader_concurrency_semaphore.cc
+    websocket/controller.cc
     redis/abstract_command.cc
     redis/command_factory.cc
     redis/commands.cc

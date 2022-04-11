@@ -74,6 +74,7 @@
 #include "db/schema_tables.hh"
 
 #include "redis/controller.hh"
+#include "websocket/controller.hh"
 #include "cdc/log.hh"
 #include "cdc/cdc_extension.hh"
 #include "cdc/generation_service.hh"
