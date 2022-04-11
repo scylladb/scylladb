@@ -307,6 +307,8 @@ public:
     };
 
     future<> update_repair_history(repair_history_entry);
+    using repair_history_consumer = noncopyable_function<future<>(const repair_history_entry&)>;
+    future<> get_repair_history(utils::UUID table_id, repair_history_consumer f);
 
     typedef std::vector<db::replay_position> replay_positions;
 

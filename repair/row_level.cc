@@ -40,11 +40,9 @@
 #include "streaming/consumer.hh"
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/all.hh>
-#include "db/query_context.hh"
 #include "db/system_keyspace.hh"
 #include "service/storage_proxy.hh"
 #include "db/batchlog_manager.hh"
-#include "cql3/untyped_result_set.hh"
 #include "idl/partition_checksum.dist.hh"
 #include "readers/empty.hh"
 #include "readers/evictable.hh"
@@ -3036,15 +3034,7 @@ future<> repair_service::load_history() {
         }
         rlogger.info("Loading repair history for keyspace={}, table={}, table_uuid={}",
                 table->schema()->ks_name(), table->schema()->cf_name(), table_uuid);
-        auto req = format("SELECT * from system.{} WHERE table_uuid = {}", db::system_keyspace::REPAIR_HISTORY, table_uuid);
-        co_await db::qctx->qp().query_internal(req, [this] (const cql3::untyped_result_set::row& row) mutable -> future<stop_iteration> {
-            db::system_keyspace::repair_history_entry entry;
-            entry.table_uuid = row.get_as<utils::UUID>("table_uuid");
-            entry.range_start = row.get_as<int64_t>("range_start");
-            entry.range_end = row.get_as<int64_t>("range_end");
-            entry.ks = row.get_as<sstring>("keyspace_name");
-            entry.cf = row.get_as<sstring>("table_name");
-            entry.ts = row.get_as<db_clock::time_point>("repair_time");
+        co_await _sys_ks.local().get_repair_history(table_uuid, [this] (const auto& entry) -> future<> {
             auto start = entry.range_start == std::numeric_limits<int64_t>::min() ? dht::minimum_token() : dht::token::from_int64(entry.range_start);
             auto end = entry.range_end == std::numeric_limits<int64_t>::min() ? dht::maximum_token() : dht::token::from_int64(entry.range_end);
             auto range = dht::token_range(dht::token_range::bound(start, false), dht::token_range::bound(end, true));
@@ -3063,7 +3053,6 @@ future<> repair_service::load_history() {
                 }
                 co_return;
             });
-            co_return stop_iteration::no;
         });
     }
     co_return;
