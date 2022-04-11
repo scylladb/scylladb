@@ -376,7 +376,9 @@ chunked_vector<T, max_contiguous_allocation>::make_room(size_t n, bool stop_afte
         auto new_last_chunk_capacity = last_chunk_capacity + capacity_increase;
         // FIXME: realloc? maybe not worth the complication; only works for PODs
         auto new_last_chunk = new_chunk(new_last_chunk_capacity);
-        migrate(addr(_capacity - last_chunk_capacity), addr(_size), new_last_chunk.get());
+        if (_size > _capacity - last_chunk_capacity) {
+            migrate(addr(_capacity - last_chunk_capacity), addr(_size), new_last_chunk.get());
+        }
         _chunks.back() = std::move(new_last_chunk);
         _capacity += capacity_increase;
     }
