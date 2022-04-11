@@ -597,13 +597,12 @@ future<> read_context::save_readers(flat_mutation_reader_v2::tracked_buffer unco
     tracing::trace(_trace_state, "Dismantled compaction state: {}", cs_stats);
 
     co_await parallel_for_each(boost::irange(0u, smp::count), [this, &last_pkey, &last_ckey] (shard_id shard) {
-        // FIXME: indentation
-            auto& rm = _readers[shard];
-            if (rm.state == reader_state::successful_lookup || rm.state == reader_state::saving) {
-                return save_reader(shard, last_pkey, last_ckey);
-            }
+        auto& rm = _readers[shard];
+        if (rm.state == reader_state::successful_lookup || rm.state == reader_state::saving) {
+            return save_reader(shard, last_pkey, last_ckey);
+        }
 
-            return make_ready_future<>();
+        return make_ready_future<>();
     });
 }
 
