@@ -2139,13 +2139,17 @@ future<repair_update_system_table_response> repair_service::repair_update_system
         auto& table = local_db.find_column_family(req.table_uuid);
         return ::update_repair_time(table.schema(), req.range, req.repair_time);
     });
-    sstring cql = format("INSERT INTO system.{} (table_uuid, repair_time, repair_uuid, keyspace_name, table_name, range_start, range_end) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            db::system_keyspace::REPAIR_HISTORY);
+    db::system_keyspace::repair_history_entry ent;
+    ent.id = req.repair_uuid;
+    ent.table_uuid = req.table_uuid;
+    ent.ts = db_clock::from_time_t(gc_clock::to_time_t(req.repair_time));
+    ent.ks = req.keyspace_name;
+    ent.cf = req.table_name;
     auto range_start = req.range.start() ? req.range.start()->value() : dht::minimum_token();
+    ent.range_start = dht::token::to_int64(range_start);
     auto range_end = req.range.end() ? req.range.end()->value() : dht::maximum_token();
-    db_clock::time_point ts = db_clock::from_time_t(gc_clock::to_time_t(req.repair_time));
-    co_await db::qctx->execute_cql(cql, req.table_uuid, ts, req.repair_uuid, req.keyspace_name, req.table_name,
-            dht::token::to_int64(range_start), dht::token::to_int64(range_end)).discard_result();
+    ent.range_end = dht::token::to_int64(range_end);
+    co_await _sys_ks.local().update_repair_history(std::move(ent));
     co_return repair_update_system_table_response();
 }
 

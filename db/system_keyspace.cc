@@ -2823,6 +2823,11 @@ future<> system_keyspace::get_compaction_history(compaction_history_consumer&& f
     });
 }
 
+future<> system_keyspace::update_repair_history(repair_history_entry entry) {
+    sstring req = format("INSERT INTO system.{} (table_uuid, repair_time, repair_uuid, keyspace_name, table_name, range_start, range_end) VALUES (?, ?, ?, ?, ?, ?, ?)", REPAIR_HISTORY);
+    co_await execute_cql(req, entry.table_uuid, entry.ts, entry.id, entry.ks, entry.cf, entry.range_start, entry.range_end).discard_result();
+}
+
 future<int> system_keyspace::increment_and_get_generation() {
     auto req = format("SELECT gossip_generation FROM system.{} WHERE key='{}'", LOCAL, LOCAL);
     return qctx->qp().execute_internal(req).then([] (auto rs) {

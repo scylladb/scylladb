@@ -296,6 +296,18 @@ public:
     using compaction_history_consumer = noncopyable_function<future<>(const compaction_history_entry&)>;
     static future<> get_compaction_history(compaction_history_consumer&& f);
 
+    struct repair_history_entry {
+        utils::UUID id;
+        utils::UUID table_uuid;
+        db_clock::time_point ts;
+        sstring ks;
+        sstring cf;
+        int64_t range_start;
+        int64_t range_end;
+    };
+
+    future<> update_repair_history(repair_history_entry);
+
     typedef std::vector<db::replay_position> replay_positions;
 
     static future<> save_truncation_record(utils::UUID, db_clock::time_point truncated_at, db::replay_position);
