@@ -45,6 +45,17 @@ public:
             , _reason(reason) {
     }
 
+    void create_writer(sharded<replica::database>& db, sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<db::view::view_update_generator>& view_update_gen);
+
+    future<> do_write(lw_shared_ptr<const decorated_key_with_hash> dk, mutation_fragment mf);
+
+    future<> wait_for_writer_done();
+
+    named_semaphore& sem() {
+        return _sem;
+    }
+
+private:
     future<> write_start_and_mf(lw_shared_ptr<const decorated_key_with_hash> dk, mutation_fragment mf);
 
     static sstables::offstrategy is_offstrategy_supported(streaming::stream_reason reason) {
@@ -59,20 +70,8 @@ public:
         return sstables::offstrategy(operations_supported.contains(reason));
     }
 
-    void create_writer(sharded<replica::database>& db, sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<db::view::view_update_generator>& view_update_gen);
-
     future<> write_partition_end();
-
-    future<> do_write(lw_shared_ptr<const decorated_key_with_hash> dk, mutation_fragment mf);
-
     future<> write_end_of_stream();
-
     future<> do_wait_for_writer_done();
-
-    future<> wait_for_writer_done();
-
-    named_semaphore& sem() {
-        return _sem;
-    }
 };
 
