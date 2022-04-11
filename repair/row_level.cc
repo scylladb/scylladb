@@ -49,6 +49,8 @@
 #include "readers/empty.hh"
 #include "readers/evictable.hh"
 #include "readers/queue.hh"
+#include "repair/hash.hh"
+#include "xx_hasher.hh"
 
 extern logging::logger rlogger;
 
@@ -252,6 +254,13 @@ public:
         hash = repair_hash(h.finalize_uint64());
     }
 };
+
+repair_hash repair_hasher::do_hash_for_mf(const decorated_key_with_hash& dk_with_hash, const mutation_fragment& mf) {
+    xx_hasher h(_seed);
+    feed_hash(h, mf, *_schema);
+    feed_hash(h, dk_with_hash.hash.hash);
+    return repair_hash(h.finalize_uint64());
+}
 
 using is_dirty_on_master = bool_class<class is_dirty_on_master_tag>;
 
@@ -687,6 +696,7 @@ private:
     std::vector<repair_node_state> _all_node_states;
     is_dirty_on_master _dirty_on_master = is_dirty_on_master::no;
     std::optional<shared_promise<>> _stop_promise;
+    repair_hasher _repair_hasher;
 public:
     std::vector<repair_node_state>& all_nodes() {
         return _all_node_states;
@@ -787,6 +797,7 @@ public:
                         return rs.get_messaging().make_sink_and_source_for_repair_put_row_diff_with_rpc_stream(repair_meta_id, addr);
                 })
             , _row_level_repair_ptr(row_level_repair_ptr)
+            , _repair_hasher(_seed, _schema)
             {
             if (master) {
                 add_to_repair_meta_for_masters(*this);
@@ -977,13 +988,6 @@ private:
         });
     }
 
-    repair_hash do_hash_for_mf(const decorated_key_with_hash& dk_with_hash, const mutation_fragment& mf) {
-        xx_hasher h(_seed);
-        feed_hash(h, mf, *_schema);
-        feed_hash(h, dk_with_hash.hash.hash);
-        return repair_hash(h.finalize_uint64());
-    }
-
     stop_iteration handle_mutation_fragment(mutation_fragment& mf, size_t& cur_size, size_t& new_rows_size, std::list<repair_row>& cur_rows) {
         if (mf.is_partition_start()) {
             auto& start = mf.as_partition_start();
@@ -996,7 +1000,7 @@ private:
             _repair_reader.clear_current_dk();
             return stop_iteration::no;
         }
-        auto hash = do_hash_for_mf(*_repair_reader.get_current_dk(), mf);
+        auto hash = _repair_hasher.do_hash_for_mf(*_repair_reader.get_current_dk(), mf);
         repair_row r(freeze(*_schema, mf), position_in_partition(mf.position()), _repair_reader.get_current_dk(), hash, is_dirty_on_master::no);
         rlogger.trace("Reading: r.boundary={}, r.hash={}", r.boundary(), r.hash());
         _metrics.row_from_disk_nr++;
@@ -1339,7 +1343,7 @@ private:
                         // mutation_fragment is needed by _repair_writer.do_write()
                         // to apply the repair_row to disk
                         auto mf = make_lw_shared<mutation_fragment>(fmf.unfreeze(*_schema, _permit));
-                        auto hash = do_hash_for_mf(*dk_ptr, *mf);
+                        auto hash = _repair_hasher.do_hash_for_mf(*dk_ptr, *mf);
                         position_in_partition pos(mf->position());
                         row_list.push_back(repair_row(std::move(fmf), std::move(pos), dk_ptr, std::move(hash), is_dirty_on_master::yes, std::move(mf)));
                     });

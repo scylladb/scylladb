@@ -26,6 +26,7 @@
 #include "utils/hash.hh"
 #include "streaming/stream_reason.hh"
 #include "locator/token_metadata.hh"
+#include "repair/hash.hh"
 
 class flat_mutation_reader;
 
@@ -279,35 +280,6 @@ struct repair_sync_boundary {
         return os << "{ " << x.pk << "," <<  x.position << " }";
     }
 };
-
-// Hash of a repair row
-class repair_hash {
-public:
-    uint64_t hash = 0;
-    repair_hash() = default;
-    explicit repair_hash(uint64_t h) : hash(h) {
-    }
-    void clear() {
-        hash = 0;
-    }
-    void add(const repair_hash& other) {
-        hash ^= other.hash;
-    }
-    bool operator==(const repair_hash& x) const {
-        return x.hash == hash;
-    }
-    bool operator!=(const repair_hash& x) const {
-        return x.hash != hash;
-    }
-    bool operator<(const repair_hash& x) const {
-        return x.hash < hash;
-    }
-    friend std::ostream& operator<<(std::ostream& os, const repair_hash& x) {
-        return os << x.hash;
-    }
-};
-
-using repair_hash_set = absl::btree_set<repair_hash>;
 
 enum class repair_row_level_start_status: uint8_t {
     ok,
