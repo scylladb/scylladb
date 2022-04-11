@@ -3038,26 +3038,28 @@ future<> repair_service::load_history() {
                 table->schema()->ks_name(), table->schema()->cf_name(), table_uuid);
         auto req = format("SELECT * from system.{} WHERE table_uuid = {}", db::system_keyspace::REPAIR_HISTORY, table_uuid);
         co_await db::qctx->qp().query_internal(req, [this] (const cql3::untyped_result_set::row& row) mutable -> future<stop_iteration> {
-            auto table_uuid = row.get_as<utils::UUID>("table_uuid");
-            auto range_start = row.get_as<int64_t>("range_start");
-            auto range_end = row.get_as<int64_t>("range_end");
-            auto keyspace_name = row.get_as<sstring>("keyspace_name");
-            auto table_name = row.get_as<sstring>("table_name");
-            auto start = range_start == std::numeric_limits<int64_t>::min() ? dht::minimum_token() : dht::token::from_int64(range_start);
-            auto end = range_end == std::numeric_limits<int64_t>::min() ? dht::maximum_token() : dht::token::from_int64(range_end);
-            auto repair_time = to_gc_clock(row.get_as<db_clock::time_point>("repair_time"));
+            db::system_keyspace::repair_history_entry entry;
+            entry.table_uuid = row.get_as<utils::UUID>("table_uuid");
+            entry.range_start = row.get_as<int64_t>("range_start");
+            entry.range_end = row.get_as<int64_t>("range_end");
+            entry.ks = row.get_as<sstring>("keyspace_name");
+            entry.cf = row.get_as<sstring>("table_name");
+            entry.ts = row.get_as<db_clock::time_point>("repair_time");
+            auto start = entry.range_start == std::numeric_limits<int64_t>::min() ? dht::minimum_token() : dht::token::from_int64(entry.range_start);
+            auto end = entry.range_end == std::numeric_limits<int64_t>::min() ? dht::maximum_token() : dht::token::from_int64(entry.range_end);
             auto range = dht::token_range(dht::token_range::bound(start, false), dht::token_range::bound(end, true));
+            auto repair_time = to_gc_clock(entry.ts);
             rlogger.debug("Loading repair history for keyspace={}, table={}, table_uuid={}, repair_time={}, range={}",
-                    keyspace_name, table_name, table_uuid, repair_time, range);
-            co_await get_db().invoke_on_all([table_uuid, range, repair_time, keyspace_name, table_name] (replica::database& local_db) -> future<> {
+                    entry.ks, entry.cf, entry.table_uuid, entry.ts, range);
+            co_await get_db().invoke_on_all([entry, range, repair_time] (replica::database& local_db) -> future<> {
                 try {
-                    auto& table = local_db.find_column_family(table_uuid);
+                    auto& table = local_db.find_column_family(entry.table_uuid);
                     ::update_repair_time(table.schema(), range, repair_time);
                 } catch (replica::no_such_column_family&) {
-                    rlogger.trace("Table {}.{} with {} does not exist", keyspace_name, table_name, table_uuid);
+                    rlogger.trace("Table {}.{} with {} does not exist", entry.ks, entry.cf, entry.table_uuid);
                 } catch (...) {
                     rlogger.warn("Failed to load repair history for keyspace={}, table={}, range={}, repair_time={}",
-                            keyspace_name, table_name, range, repair_time);
+                            entry.ks, entry.cf, range, repair_time);
                 }
                 co_return;
             });
