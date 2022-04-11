@@ -191,3 +191,32 @@ BOOST_AUTO_TEST_CASE(tests_reserve_partial) {
         BOOST_REQUIRE_EQUAL(v.capacity(), orig_size);
     }
 }
+
+// Tests the case of make_room() invoked with last_chunk_capacity_deficit but _size not in
+// the last reserved chunk.
+BOOST_AUTO_TEST_CASE(test_shrinking_and_expansion_involving_chunk_boundary) {
+    using vector_type = utils::chunked_vector<std::unique_ptr<uint64_t>>;
+    vector_type v;
+
+    // Fill two chunks
+    v.reserve(vector_type::max_chunk_capacity() * 3 / 2);
+    for (uint64_t i = 0; i < vector_type::max_chunk_capacity() * 3 / 2; ++i) {
+        v.emplace_back(std::make_unique<uint64_t>(i));
+    }
+
+    // Make the last chunk smaller than max size to trigger the last_chunk_capacity_deficit path in make_room()
+    v.shrink_to_fit();
+
+    // Leave the last chunk reserved but empty
+    for (uint64_t i = 0; i < vector_type::max_chunk_capacity(); ++i) {
+        v.pop_back();
+    }
+
+    // Try to reserve more than the currently reserved capacity and trigger last_chunk_capacity_deficit path
+    // with _size not in the last chunk. Should not sigsegv.
+    v.reserve(vector_type::max_chunk_capacity() * 4);
+
+    for (uint64_t i = 0; i < vector_type::max_chunk_capacity() * 2; ++i) {
+        v.emplace_back(std::make_unique<uint64_t>(i));
+    }
+}
