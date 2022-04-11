@@ -166,20 +166,6 @@ public:
      */
     sstables::compaction_descriptor get_compaction_candidates(const std::vector<std::optional<dht::decorated_key>>& last_compacted_keys,
         std::vector<int>& compaction_counter) {
-#if 0
-        // during bootstrap we only do size tiering in L0 to make sure
-        // the streamed files can be placed in their original levels
-        if (StorageService.instance.isBootstrapMode())
-        {
-            List<SSTableReader> mostInteresting = getSSTablesForSTCS(getLevel(0));
-            if (!mostInteresting.isEmpty())
-            {
-                logger.info("Bootstrapping - doing STCS in L0");
-                return new CompactionCandidate(mostInteresting, 0, Long.MAX_VALUE);
-            }
-            return null;
-        }
-#endif
         // LevelDB gives each level a score of how much data it contains vs its ideal amount, and
         // compacts the level with the highest score. But this falls apart spectacularly once you
         // get behind.  Consider this set of levels:
