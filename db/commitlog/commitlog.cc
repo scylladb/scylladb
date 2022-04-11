@@ -1902,6 +1902,12 @@ void db::commitlog::segment_manager::create_counters(const sstring& metrics_cate
 
         sm::make_gauge("active_allocations", totals.active_allocations,
                        sm::description("Current number of active allocations.")),
+                       
+        sm::make_gauge("message_queue_length", [this] { return _message_queue.size(); },
+                       sm::description("Pending, unprocessed messages in commitlog action queue")),
+
+        sm::make_gauge("write_queue_length", [this] { return _write_queue.size(); },
+                       sm::description("Pending, unprocessed write commands in commitlog IO queue")),
     });
 }
 
