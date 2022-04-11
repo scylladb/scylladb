@@ -13,7 +13,7 @@ import pytest
 import re
 import random
 from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException, ReadFailure
-from util import unique_name
+from util import unique_name, unique_key_int, new_test_table
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
@@ -353,3 +353,30 @@ def test_validation_ascii_from_lua(scylla_only, cql, test_keyspace, table1):
     assert len(results) == 1
     assert len(results[0]) == 1
     assert results[0][0] == 'hello'
+
+#############################################################################
+# The functions like blobAsInt() take a byte array and read an integer from
+# it. The byte array must have a specific number of bytes (for blobAsInt, it
+# is 4) - trying to pass less or more is a validation error.
+# Note that an *empty* blob is actually allowed and results in a so-called
+# empty value (which is distinct from a null value). We have a separate test
+# for that - test_empty.py::test_empty_int.
+def test_validation_blob_as_int_len(cql, test_keyspace):
+    types = [   ('i', 'int', 4),
+                ('b', 'bigint', 8),
+                ('s', 'smallint', 2),
+                ('t', 'tinyint', 1),
+            ]
+    types_def = ','.join([f'{x[0]} {x[1]}' for x in types])
+    with new_test_table(cql, test_keyspace, f'k int primary key, {types_def}') as table:
+        k = unique_key_int();
+        for var, typ, length in types:
+            # Check that a blob with exactly length bytes is fine, one with one
+            # less or one more is rejected as an invalid request:
+            cql.execute(f"INSERT INTO {table} (k, {var}) VALUES ({k}, blobAs{typ}(0x{'00'*length}))")
+            assert 0 == getattr(cql.execute(f"SELECT {var} FROM {table} WHERE k = {k}").one(), var)
+            with pytest.raises(InvalidRequest, match='is not a valid binary'):
+                cql.execute(f"INSERT INTO {table} (k, {var}) VALUES ({k}, blobAs{typ}(0x{'00'*(length+1)}))")
+            if length - 1 != 0:
+                with pytest.raises(InvalidRequest, match='is not a valid binary'):
+                    cql.execute(f"INSERT INTO {table} (k, {var}) VALUES ({k}, blobAs{typ}(0x{'00'*(length-1)}))")
