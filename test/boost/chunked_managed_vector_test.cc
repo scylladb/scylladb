@@ -266,3 +266,45 @@ SEASTAR_TEST_CASE(test_chunk_reserve) {
 
     return make_ready_future<>();
 }
+
+// Tests the case of make_room() invoked with last_chunk_capacity_deficit but _size not in
+// the last reserved chunk.
+SEASTAR_TEST_CASE(test_shrinking_and_expansion_involving_chunk_boundary) {
+    region region;
+    allocating_section as;
+
+    with_allocator(region.allocator(), [&] {
+        lsa::chunked_managed_vector<managed_ref<uint64_t>> v;
+
+        // Fill two chunks
+        v.reserve(2000);
+        for (uint64_t i = 0; i < 2000; ++i) {
+            as(region, [&] {
+                v.emplace_back(make_managed<uint64_t>(i));
+            });
+        }
+
+        // Make the last chunk smaller than max size to trigger the last_chunk_capacity_deficit path in make_room()
+        v.shrink_to_fit();
+
+        // Leave the last chunk reserved but empty
+        for (uint64_t i = 0; i < 1000; ++i) {
+            v.pop_back();
+        }
+
+        // Try to reserve more than the currently reserved capacity and trigger last_chunk_capacity_deficit path
+        // with _size not in the last chunk. Should not sigsegv.
+        v.reserve(8000);
+
+        for (uint64_t i = 0; i < 2000; ++i) {
+            as(region, [&] {
+                v.emplace_back(make_managed<uint64_t>(i));
+            });
+        }
+
+        v.clear_and_release();
+    });
+
+    return make_ready_future<>();
+}
+
