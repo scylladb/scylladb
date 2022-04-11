@@ -15,6 +15,7 @@
 #include "readers/multishard.hh"
 
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/as_future.hh>
 
 #include <boost/range/adaptor/reversed.hpp>
 
@@ -708,10 +709,12 @@ future<page_consume_result<ResultBuilder>> read_page(
         reader = make_flat_mutation_reader_v2<multi_range_reader>(s, ctx->permit(), std::move(reader), ranges);
     }
 
-    std::exception_ptr ex;
-    try {
-        auto [ckey, result] = co_await query::consume_page(reader, compaction_state, cmd.slice, std::move(result_builder), cmd.get_row_limit(),
-                cmd.partition_limit, cmd.timestamp);
+    // Use coroutine::as_future to prevent exception on timesout.
+    auto f = co_await coroutine::as_future(query::consume_page(reader, compaction_state, cmd.slice, std::move(result_builder), cmd.get_row_limit(),
+                cmd.partition_limit, cmd.timestamp));
+    if (!f.failed()) {
+        // no exceptions are thrown in this block
+        auto [ckey, result] = std::move(f).get0();
         const auto& cstats = compaction_state->stats();
         tracing::trace(trace_state, "Page stats: {} partition(s), {} static row(s) ({} live, {} dead), {} clustering row(s) ({} live, {} dead) and {} range tombstone(s)",
                 cstats.partitions,
@@ -726,11 +729,10 @@ future<page_consume_result<ResultBuilder>> read_page(
         co_await reader.close();
         // page_consume_result cannot fail so there's no risk of double-closing reader.
         co_return page_consume_result<ResultBuilder>(std::move(ckey), std::move(result), std::move(buffer), std::move(compaction_state));
-    } catch (...) {
-        ex = std::current_exception();
     }
+
     co_await reader.close();
-    co_return coroutine::exception(std::move(ex));
+    co_return coroutine::exception(f.get_exception());
 }
 
 template <typename ResultBuilder>
