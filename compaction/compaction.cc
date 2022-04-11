@@ -597,6 +597,10 @@ protected:
     const std::vector<shared_sstable>& used_garbage_collected_sstables() const {
         return _used_garbage_collected_sstables;
     }
+
+    bool enable_garbage_collected_sstable_writer() const noexcept {
+        return _contains_multi_fragment_runs && _max_sstable_size != std::numeric_limits<uint64_t>::max();
+    }
 public:
     compaction& operator=(const compaction&) = delete;
     compaction(const compaction&) = delete;
@@ -831,10 +835,6 @@ protected:
         log(log_level::trace, std::move(fmt), std::forward<Args>(args)...);
     }
 public:
-    bool enable_garbage_collected_sstable_writer() const noexcept {
-        return _contains_multi_fragment_runs && _max_sstable_size != std::numeric_limits<uint64_t>::max();
-    }
-
     static future<compaction_result> run(std::unique_ptr<compaction> c);
 
     friend class compacted_fragments_writer;
