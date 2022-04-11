@@ -1968,16 +1968,15 @@ schema_ptr database::find_indexed_table(const sstring& ks_name, const sstring& i
 }
 
 future<> database::close_tables(table_kind kind_to_close) {
-    return parallel_for_each(_column_families, [this, kind_to_close](auto& val_pair) {
+    auto b = defer([this] { _stop_barrier.abort(); });
+    co_await parallel_for_each(_column_families, [this, kind_to_close](auto& val_pair) -> future<> {
         table_kind k = is_system_table(*val_pair.second->schema()) ? table_kind::system : table_kind::user;
         if (k == kind_to_close) {
-            return val_pair.second->stop();
-        } else {
-            return make_ready_future<>();
+            co_await val_pair.second->stop();
         }
-    }).then([this] {
-        return _stop_barrier.arrive_and_wait();
     });
+    co_await _stop_barrier.arrive_and_wait();
+    b.cancel();
 }
 
 void database::revert_initial_system_read_concurrency_boost() {
@@ -1994,8 +1993,11 @@ future<> database::start() {
 
 future<> database::shutdown() {
     _shutdown = true;
+    auto b = defer([this] { _stop_barrier.abort(); });
     co_await _compaction_manager->stop();
     co_await _stop_barrier.arrive_and_wait();
+    b.cancel();
+
     // Closing a table can cause us to find a large partition. Since we want to record that, we have to close
     // system.large_partitions after the regular tables.
     co_await close_tables(database::table_kind::user);
@@ -2319,6 +2321,7 @@ future<> database::flush_system_column_families() {
 }
 
 future<> database::drain() {
+    auto b = defer([this] { _stop_barrier.abort(); });
     // Interrupt on going compaction and shutdown to prevent further compaction
     co_await _compaction_manager->drain();
 
@@ -2330,6 +2333,7 @@ future<> database::drain() {
     co_await flush_system_column_families();
     co_await _stop_barrier.arrive_and_wait();
     co_await _commitlog->shutdown();
+    b.cancel();
 }
 
 data_dictionary::database

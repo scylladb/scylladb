@@ -12,6 +12,7 @@
 #include <seastar/core/sharded.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/util/defer.hh>
 #include <fmt/core.h>
 #include "utils/cross-shard-barrier.hh"
 
@@ -66,6 +67,21 @@ public:
             co_await seastar::sleep(std::chrono::milliseconds(_rndgen() % 100));
         }
     }
+
+    future<> loop_with_error() {
+        auto b = seastar::defer([this] { _barrier.abort(); });
+
+        while (true) {
+            if (_rndgen() % 3 == 0) {
+                throw std::runtime_error("exception");
+            }
+
+            co_await _barrier.arrive_and_wait();
+            _phase.fetch_add(1);
+        }
+    }
+
+    unsigned get_phase() const noexcept { return _phase.load(); }
 };
 
 int main(int argc, char **argv) {
@@ -81,6 +97,24 @@ int main(int argc, char **argv) {
             w.start(utils::cross_shard_barrier()).get();
             w.invoke_on_all(&worker::loop).get();
             w.stop().get();
+
+            for (int i = 0; i < smp::count * phases_scale; i++) {
+                sharded<worker> w;
+                w.start(utils::cross_shard_barrier()).get();
+                try {
+                    w.invoke_on_all(&worker::loop_with_error).get();
+                } catch (...) {
+                    auto ph = w.invoke_on(0, [] (auto& w) { return w.get_phase(); }).get0();
+                    for (int c = 1; c < smp::count; c++) {
+                        auto ph_2 = w.invoke_on(c, [] (auto& w) { return w.get_phase(); }).get0();
+                        if (ph_2 != ph) {
+                            fmt::print("aborted barrier passed shard through\n");
+                            abort();
+                        }
+                    }
+                }
+                w.stop().get();
+            }
         });
     });
 }
