@@ -803,26 +803,7 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                             throw std::logic_error(format("possible_lhs_values: unhandled operator {}", oper));
                         },
                         [&] (const subscript& s) -> value_set {
-                            // FIXME: This looks wrong, the restriction is for the subscripted value, not the column.
-                            // Code copied from column_value& handler to preserve behaviour.
-                            // I didn't want to introduce changes in a refactor PR.
-                            // Will be fixed in another patch soon.
-                            const column_value& col = get_subscripted_column(s);
-
-                            if (!cdef || cdef != col.col) {
-                                return unbounded_value_set;
-                            }
-                            if (is_compare(oper.op)) {
-                                managed_bytes_opt val = evaluate(oper.rhs, options).value.to_managed_bytes_opt();
-                                if (!val) {
-                                    return empty_value_set; // All NULL comparisons fail; no column values match.
-                                }
-                                return oper.op == oper_t::EQ ? value_set(value_list{*val})
-                                        : to_range(oper.op, std::move(*val));
-                            } else if (oper.op == oper_t::IN) {
-                                return get_IN_values(oper.rhs, options, type->as_less_comparator(), cdef->name_as_text());
-                            }
-                            throw std::logic_error(format("possible_lhs_values: unhandled operator {}", oper));
+                            on_internal_error(expr_logger, "possible_lhs_values: subscripts are not supported as the LHS of a binary expression");
                         },
                         [&] (const tuple_constructor& tuple) -> value_set {
                             if (!cdef) {
