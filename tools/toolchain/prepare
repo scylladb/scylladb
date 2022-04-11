@@ -24,20 +24,51 @@ fi
 
 archs=(amd64 arm64 s390x)
 
-if [[ ! -f  /proc/sys/fs/binfmt_misc/qemu-aarch64 || ! -f /proc/sys/fs/binfmt_misc/qemu-s390x ]]; then
-    echo install qemu-user-static
-    exit 1
-fi
+# docker arch has a diffrent spelling than uname arch
+arch_uname_amd64=x86_64
+arch_uname_arm64=aarch64
+arch_uname_s390x=s390x
+
+for arch in "${archs[@]}"; do
+    # translate from docker arch to uname arch
+    indirect="arch_uname_${arch}"
+    arch_uname="${!indirect}"
+    if [[ "$(uname -m)" == "${arch_uname}" ]]; then
+        continue
+    fi
+    if [[ ! -f  /proc/sys/fs/binfmt_misc/qemu-"${arch_uname}" ]]; then
+        echo install qemu-user-static
+        exit 1
+    fi
+done
 
 buildah manifest create "$(<tools/toolchain/image)"
 
 
-for arch in "${archs[@]}"; do
+build_arch() {
+    local arch="$1"
     image_id_file="$(mktemp)"
-    buildah bud --arch="$arch" --no-cache --pull -f tools/toolchain/Dockerfile --iidfile "$image_id_file"
+    buildah bud --arch="$arch" --squash --no-cache --pull -f tools/toolchain/Dockerfile --iidfile "$image_id_file"
     buildah manifest add --all "$(<tools/toolchain/image)" "$(<$image_id_file)"
     rm "$image_id_file"
+}
+
+for arch in "${archs[@]}"; do
+    build_arch "$arch" &
 done
+
+fails=0
+
+for arch in "${archs[@]}"; do
+    if ! wait -n; then
+        (( fails += 1 ))
+    fi
+done
+
+if (( fails > 0 )); then
+    echo "$fails failures building arch-specific images"
+    exit 1
+fi
 
 echo "Done building $(<tools/toolchain/image). You can now test it, and push with"
 echo ""
