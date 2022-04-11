@@ -694,11 +694,11 @@ future<typename ResultBuilder::result_type> do_query(
         ResultBuilder&& result_builder) {
     auto ctx = seastar::make_shared<read_context>(db, s, cmd, ranges, trace_state, timeout);
 
-    co_await ctx->lookup_readers(timeout);
-
     std::exception_ptr ex;
 
     try {
+        co_await ctx->lookup_readers(timeout);
+
         auto [last_ckey, result, unconsumed_buffer, compaction_state] = co_await read_page<ResultBuilder>(ctx, s, cmd, ranges, trace_state,
                 std::move(result_builder));
 
