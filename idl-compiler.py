@@ -465,21 +465,24 @@ class RpcVerb(ASTBase):
     - [[one_way]] - the handler function is annotated by
       future<rpc::no_wait_type> return type to designate that a client
       doesn't need to wait for an answer.
+    - [[no_report_connection_error]] - this RPC won't request the Seastar
+      RPC module to report connection errors (see `seastar::rpc::send_options`).
 
     The `-> return_values` clause is optional for two-way messages. If omitted,
     the return type is set to be `future<>`.
     For one-way verbs, the use of return clause is prohibited and the
     signature of `send*` function always returns `future<>`."""
-    def __init__(self, name, parameters, return_values, with_client_info, with_timeout, one_way):
+    def __init__(self, name, parameters, return_values, with_client_info, with_timeout, one_way, report_connection_error):
         super().__init__(name)
         self.params = parameters
         self.return_values = return_values
         self.with_client_info = with_client_info
         self.with_timeout = with_timeout
         self.one_way = one_way
+        self.report_connection_error = report_connection_error
 
     def __str__(self):
-        return f"<RpcVerb(name={self.name}, params={self.params}, return_values={self.return_values}, with_client_info={self.with_client_info}, with_timeout={self.with_timeout}, one_way={self.one_way})>"
+        return f"<RpcVerb(name={self.name}, params={self.params}, return_values={self.return_values}, with_client_info={self.with_client_info}, with_timeout={self.with_timeout}, one_way={self.one_way}, report_connection_error={self.report_connection_error})>"
 
     def __repr__(self):
         return self.__str__()
@@ -543,7 +546,7 @@ class RpcVerb(ASTBase):
         return res
 
     def send_message_argument_list(self):
-        opts = '{}'
+        opts = '{ .report_connection_error = false }' if not self.report_connection_error else '{}' # The default is true
         res = f'ms, {self.messaging_verb_enum_case()}, id, {opts}'
         if self.with_timeout:
             res += ', timeout'
@@ -662,7 +665,8 @@ def rpc_verb_parse_action(tokens):
     one_way = not raw_attrs.empty() and 'one_way' in raw_attrs.attr_items
     if one_way and 'return_values' in tokens:
         raise Exception(f"Invalid return type specification for one-way RPC verb '{name}'")
-    return RpcVerb(name=name, parameters=params, return_values=tokens.get('return_values'), with_client_info=with_client_info, with_timeout=with_timeout, one_way=one_way)
+    report_connection_error = raw_attrs.empty() or ('no_report_connection_error' not in raw_attrs.attr_items)
+    return RpcVerb(name=name, parameters=params, return_values=tokens.get('return_values'), with_client_info=with_client_info, with_timeout=with_timeout, one_way=one_way, report_connection_error=report_connection_error)
 
 
 def namespace_parse_action(tokens):
