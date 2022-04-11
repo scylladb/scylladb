@@ -50,6 +50,7 @@
 #include "readers/evictable.hh"
 #include "readers/queue.hh"
 #include "repair/hash.hh"
+#include "repair/decorated_key_with_hash.hh"
 #include "xx_hasher.hh"
 
 extern logging::logger rlogger;
@@ -242,18 +243,6 @@ static uint64_t get_random_seed() {
     static thread_local std::uniform_int_distribution<uint64_t> random_dist{};
     return random_dist(random_engine);
 }
-
-class decorated_key_with_hash {
-public:
-    dht::decorated_key dk;
-    repair_hash hash;
-    decorated_key_with_hash(const schema& s, dht::decorated_key key, uint64_t seed)
-        : dk(key) {
-        xx_hasher h(seed);
-        feed_hash(h, dk.key(), s);
-        hash = repair_hash(h.finalize_uint64());
-    }
-};
 
 repair_hash repair_hasher::do_hash_for_mf(const decorated_key_with_hash& dk_with_hash, const mutation_fragment& mf) {
     xx_hasher h(_seed);
