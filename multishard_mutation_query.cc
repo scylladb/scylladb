@@ -274,7 +274,7 @@ public:
     future<> lookup_readers(db::timeout_clock::time_point timeout) noexcept;
 
     future<> save_readers(flat_mutation_reader_v2::tracked_buffer unconsumed_buffer, detached_compaction_state compaction_state,
-            std::optional<clustering_key_prefix> last_ckey);
+            std::optional<clustering_key_prefix> last_ckey) noexcept;
 
     future<> stop();
 };
@@ -583,9 +583,9 @@ future<> read_context::lookup_readers(db::timeout_clock::time_point timeout) noe
 }
 
 future<> read_context::save_readers(flat_mutation_reader_v2::tracked_buffer unconsumed_buffer, detached_compaction_state compaction_state,
-            std::optional<clustering_key_prefix> last_ckey) {
+            std::optional<clustering_key_prefix> last_ckey) noexcept {
     if (_cmd.query_uuid == utils::UUID{}) {
-        return make_ready_future<>();
+        co_return;
     }
 
     auto last_pkey = compaction_state.partition_start.key();
@@ -596,16 +596,14 @@ future<> read_context::save_readers(flat_mutation_reader_v2::tracked_buffer unco
     const auto cs_stats = dismantle_compaction_state(std::move(compaction_state));
     tracing::trace(_trace_state, "Dismantled compaction state: {}", cs_stats);
 
-    return do_with(std::move(last_pkey), std::move(last_ckey), [this] (const dht::decorated_key& last_pkey,
-            const std::optional<clustering_key_prefix>& last_ckey) {
-        return parallel_for_each(boost::irange(0u, smp::count), [this, &last_pkey, &last_ckey] (shard_id shard) {
+    co_await parallel_for_each(boost::irange(0u, smp::count), [this, &last_pkey, &last_ckey] (shard_id shard) {
+        // FIXME: indentation
             auto& rm = _readers[shard];
             if (rm.state == reader_state::successful_lookup || rm.state == reader_state::saving) {
                 return save_reader(shard, last_pkey, last_ckey);
             }
 
             return make_ready_future<>();
-        });
     });
 }
 
