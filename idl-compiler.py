@@ -543,15 +543,9 @@ class RpcVerb(ASTBase):
         return res
 
     def send_message_argument_list(self):
-        res = f'ms, '
-        if self.with_timeout and self.one_way:
-            # For some reason the timeout argument position in
-            # `send_message_oneway_timeout` is different from `send_message_timeout`.
-            res += f'timeout, {self.messaging_verb_enum_case()}, id'
-        else:
-            res += f'{self.messaging_verb_enum_case()}, id'
-            if self.with_timeout:
-                res += ', timeout'
+        res = f'ms, {self.messaging_verb_enum_case()}, id'
+        if self.with_timeout:
+            res += ', timeout'
         if self.params:
             for idx, p in enumerate(self.params):
                 res += ', ' + f'std::move({p.name if p.name else f"_{idx + 1}"})'

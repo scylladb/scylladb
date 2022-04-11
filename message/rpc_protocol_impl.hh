@@ -177,7 +177,7 @@ auto send_message_oneway(messaging_service* ms, messaging_verb verb, msg_addr id
 
 // Send one way message for verb
 template <typename Timeout, typename... MsgOut>
-auto send_message_oneway_timeout(messaging_service* ms, Timeout timeout, messaging_verb verb, msg_addr id, MsgOut&&... msg) {
+auto send_message_oneway_timeout(messaging_service* ms, messaging_verb verb, msg_addr id, Timeout timeout, MsgOut&&... msg) {
     return send_message_timeout<rpc::no_wait_type>(ms, std::move(verb), std::move(id), timeout, std::forward<MsgOut>(msg)...);
 }
 
