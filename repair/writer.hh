@@ -19,33 +19,74 @@ namespace db {
     }
 }
 
+class mutation_fragment_queue {
+public:
+    class impl {
+    public:
+        virtual future<> push(mutation_fragment mf) = 0;
+        virtual void abort(std::exception_ptr ep) = 0;
+        virtual void push_end_of_stream() = 0;
+        virtual ~impl() {}
+    };
+
+private:
+    std::unique_ptr<impl> _impl;
+
+public:
+    mutation_fragment_queue(std::unique_ptr<impl> impl)
+        : _impl(std::move(impl))
+    {}
+
+    future<> push(mutation_fragment mf) {
+        return _impl->push(std::move(mf));
+    }
+
+    void abort(std::exception_ptr ep) {
+        _impl->abort(ep);
+    }
+
+    void push_end_of_stream() {
+        _impl->push_end_of_stream();
+    }
+};
+
 class repair_writer : public enable_lw_shared_from_this<repair_writer> {
     schema_ptr _schema;
     reader_permit _permit;
-    uint64_t _estimated_partitions;
-    std::optional<future<>> _writer_done;
-    std::optional<queue_reader_handle> _mq;
     // Current partition written to disk
     lw_shared_ptr<const decorated_key_with_hash> _current_dk_written_to_sstable;
     // Is current partition still open. A partition is opened when a
     // partition_start is written and is closed when a partition_end is
     // written.
     bool _partition_opened;
-    streaming::stream_reason _reason;
     named_semaphore _sem{1, named_semaphore_exception_factory{"repair_writer"}};
+    bool _created_writer = false;
+public:
+    class impl {
+    public:
+        virtual mutation_fragment_queue& queue() = 0;
+        virtual future<> wait_for_writer_done() = 0;
+        virtual void create_writer(lw_shared_ptr<repair_writer> writer) = 0;
+        virtual ~impl() = default;
+    };
+private:
+    std::unique_ptr<impl> _impl;
+    mutation_fragment_queue* _mq;
 public:
     repair_writer(
             schema_ptr schema,
             reader_permit permit,
-            uint64_t estimated_partitions,
-            streaming::stream_reason reason)
+            std::unique_ptr<impl> impl)
             : _schema(std::move(schema))
             , _permit(std::move(permit))
-            , _estimated_partitions(estimated_partitions)
-            , _reason(reason) {
-    }
+            , _impl(std::move(impl))
+            , _mq(&_impl->queue())
+    {}
 
-    void create_writer(sharded<replica::database>& db, sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<db::view::view_update_generator>& view_update_gen);
+    void create_writer() {
+        _impl->create_writer(shared_from_this());
+        _created_writer = true;
+    }
 
     future<> do_write(lw_shared_ptr<const decorated_key_with_hash> dk, mutation_fragment mf);
 
@@ -55,23 +96,28 @@ public:
         return _sem;
     }
 
+    schema_ptr schema() const noexcept {
+        return _schema;
+    }
+
+    mutation_fragment_queue& queue() {
+        return _impl->queue();
+    }
+
 private:
     future<> write_start_and_mf(lw_shared_ptr<const decorated_key_with_hash> dk, mutation_fragment mf);
 
-    static sstables::offstrategy is_offstrategy_supported(streaming::stream_reason reason) {
-        static const std::unordered_set<streaming::stream_reason> operations_supported = {
-            streaming::stream_reason::bootstrap,
-            streaming::stream_reason::replace,
-            streaming::stream_reason::removenode,
-            streaming::stream_reason::decommission,
-            streaming::stream_reason::repair,
-            streaming::stream_reason::rebuild,
-        };
-        return sstables::offstrategy(operations_supported.contains(reason));
-    }
 
     future<> write_partition_end();
     future<> write_end_of_stream();
-    future<> do_wait_for_writer_done();
 };
+
+lw_shared_ptr<repair_writer> make_repair_writer(
+            schema_ptr schema,
+            reader_permit permit,
+            uint64_t estimated_partitions,
+            streaming::stream_reason reason,
+            sharded<replica::database>& db,
+            sharded<db::system_distributed_keyspace>& sys_dist_ks,
+            sharded<db::view::view_update_generator>& view_update_generator);
 

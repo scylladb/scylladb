@@ -244,8 +244,4 @@ future<> repair_cf_range_row_level(repair_info& ri,
 future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows,
         schema_ptr s, uint64_t seed, repair_master is_master,
         reader_permit permit, repair_hasher hasher);
-void flush_rows(schema_ptr s, std::list<repair_row>& rows,
-        lw_shared_ptr<repair_writer>& writer,
-        seastar::sharded<replica::database>& db,
-        seastar::sharded<db::system_distributed_keyspace>& sys_dist_ks,
-        seastar::sharded<db::view::view_update_generator>& view_update_generator);
+void flush_rows(schema_ptr s, std::list<repair_row>& rows, lw_shared_ptr<repair_writer>& writer);
