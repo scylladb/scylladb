@@ -19,6 +19,8 @@ from cassandra.policies import RoundRobinPolicy                          # type:
 from test.pylib.util import unique_name                                  # type: ignore
 import pytest
 import ssl
+from typing import AsyncGenerator
+from test.pylib.random_tables import RandomTables                        # type: ignore
 
 
 # By default, tests run against a CQL server (Scylla or Cassandra) listening
@@ -146,3 +148,12 @@ async def keyspace(cql, this_dc):
                 this_dc + "' : 1 }")
     yield name
     await cql.run_async("DROP KEYSPACE " + name)
+
+
+# "random_tables" fixture: Creates and returns a temporary RandomTables object
+# used in tests to make schema changes. Tables are dropped after finished.
+@pytest.fixture(scope="function")
+async def random_tables(request, cql, keyspace) -> AsyncGenerator:
+    tables = RandomTables(request.node.name, cql, keyspace)
+    yield tables
+    await tables.drop_all_tables()
