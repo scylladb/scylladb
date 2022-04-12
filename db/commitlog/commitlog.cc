@@ -15,6 +15,7 @@
 #include <sys/stat.h>
 #include <malloc.h>
 #include <regex>
+#include <filesystem>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/reversed.hpp>
 #include <unordered_map>
@@ -107,9 +108,12 @@ db::commitlog::config db::commitlog::config::from_db_config(const db::config& cf
     c.commitlog_sync_period_in_ms = cfg.commitlog_sync_period_in_ms();
     c.mode = cfg.commitlog_sync() == "batch" ? sync_mode::BATCH : sync_mode::PERIODIC;
     c.extensions = &cfg.extensions();
-    c.reuse_segments = cfg.commitlog_reuse_segments();
     c.use_o_dsync = cfg.commitlog_use_o_dsync();
     c.allow_going_over_size_limit = !cfg.commitlog_use_hard_size_limit();
+
+    if (cfg.commitlog_flush_threshold_in_mb() >= 0) {
+        c.commitlog_flush_threshold_in_mb = cfg.commitlog_flush_threshold_in_mb();
+    }
 
     return c;
 }
@@ -260,11 +264,56 @@ public:
     using request_controller_type = basic_semaphore<timeout_exception_factory, db::timeout_clock>;
     using request_controller_units = semaphore_units<timeout_exception_factory, db::timeout_clock>;
     request_controller_type _request_controller;
-    shared_promise<> _disk_deletions;
+
+    class named_file : public seastar::file {
+        sstring _name;
+        uint64_t _known_size = 0;
+
+        template<typename Func, typename... Args>
+        auto make_awaiter(future<Args...>, Func func);
+        template<typename Func, typename... Args>
+        struct myawait;
+    public:
+        named_file(std::string_view name)
+            : _name(name)
+        {}
+        named_file(named_file&&) = default;
+
+        future<> open(open_flags, file_open_options, std::optional<uint64_t> size_in = std::nullopt) noexcept;
+        future<> rename(std::string_view to);
+
+        // NOT overrides. Nothing virtual. Will rely on exact type
+        template <typename CharType>
+        auto dma_write(uint64_t pos, const CharType* buffer, size_t len, const io_priority_class& pc = default_priority_class(), io_intent* intent = nullptr) noexcept;
+        auto dma_write(uint64_t pos, std::vector<iovec> iov, const io_priority_class& pc = default_priority_class(), io_intent* intent = nullptr) noexcept;
+
+        auto truncate(uint64_t length) noexcept;
+        auto allocate(uint64_t position, uint64_t length) noexcept;
+        auto remove_file() noexcept;
+
+        void assign(file&& f, uint64_t size) {
+            this->file::operator=(std::move(f));
+            this->_known_size = size;
+        }
+        uint64_t known_size() const {
+            return _known_size;
+        }
+        const sstring& name() const {
+            return _name;
+        }
+        void maybe_update_size(uint64_t pos) {
+            _known_size = std::max(pos, _known_size);
+        }
+    };
+
+    // Segments dropped while not clean may not be
+    // deleted. Marker enum to keep track of this.
+    enum class dispose_mode : char {
+        Delete, ForceDelete, Keep,
+    };
 
     std::optional<shared_future<with_clock<db::timeout_clock>>> _segment_allocating;
-    std::unordered_map<sstring, descriptor> _files_to_delete;
-    std::vector<file> _files_to_close;
+    std::vector<std::pair<named_file, dispose_mode>> _files_to_dispose;
 
     void account_memory_usage(size_t size) noexcept {
         _request_controller.consume(size);
@@ -337,7 +386,7 @@ public:
     future<sseg_ptr> new_segment();
     future<sseg_ptr> active_segment(db::timeout_clock::time_point timeout);
     future<sseg_ptr> allocate_segment();
-    future<sseg_ptr> allocate_segment_ex(descriptor, sstring filename, open_flags);
+    future<sseg_ptr> allocate_segment_ex(descriptor, named_file, open_flags);
 
     sstring filename(const descriptor& d) const {
         return cfg.commit_log_location + "/" + d.filename();
@@ -352,13 +401,10 @@ public:
 
     future<> orphan_all();
 
-    void add_file_to_delete(sstring, descriptor);
-    void add_file_to_close(file);
+    void add_file_to_dispose(named_file, dispose_mode);
 
     future<> do_pending_deletes();
-
     future<> delete_segments(std::vector<sstring>);
-    future<> delete_file(const sstring&);
 
     void discard_unused_segments();
     void discard_completed_segments(const cf_id_type&);
@@ -398,16 +444,12 @@ private:
 
     future<> clear_reserve_segments();
     void abort_recycled_list(std::exception_ptr);
-    void abort_deletion_promise(std::exception_ptr);
 
-    future<> recalculate_footprint();
-
-    future<> rename_file(sstring, sstring) const;
     size_t max_request_controller_units() const;
     segment_id_type _ids = 0;
     std::vector<sseg_ptr> _segments;
     queue<sseg_ptr> _reserve_segments;
-    queue<sstring> _recycled_segments;
+    queue<named_file> _recycled_segments;
     std::unordered_map<flush_handler_id, flush_handler> _flush_handlers;
     flush_handler_id _flush_ids = 0;
     replay_position _flush_position;
@@ -418,8 +460,101 @@ private:
     seastar::gate _gate;
     uint64_t _new_counter = 0;
     std::optional<size_t> _disk_write_alignment;
-    seastar::semaphore _reserve_recalculation_guard;
 };
+
+future<> db::commitlog::segment_manager::named_file::open(open_flags flags, file_open_options opt, std::optional<uint64_t> size_in) noexcept {
+    assert(!*this);
+    auto f = co_await open_file_dma(_name, flags, opt);
+    // bypass roundtrip to disk if caller knows size, or open flags truncated file
+    auto existing_size = size_in 
+        ? *size_in
+        : (flags & open_flags::truncate) == open_flags{}
+            ? co_await f.size()
+            : 0
+        ;
+    assign(std::move(f), existing_size);
+}
+
+future<> db::commitlog::segment_manager::named_file::rename(std::string_view to) {
+    assert(!*this);
+    try {
+        auto s = sstring(to);
+        auto dir = std::filesystem::path(to).parent_path();
+        co_await seastar::rename_file(_name, s);
+        _name = std::move(s);
+        co_await seastar::sync_directory(dir.string());
+    } catch (...) {
+        commit_error_handler(std::current_exception());
+        throw;
+    }
+}
+
+/**
+ * Special awaiter for chaining a callee-continuation (essentially "then") into calling
+ * co-routine frame, by storing the continuation not as a chained task, but a func 
+ * in the returned awaiter. The function is only executed iff we don't except
+ * the base call.
+ * This is a very explicit way to optimize away a then or coroutine frame, the latter
+ * which the compiler really should be able to coalesque, but...
+ */
+template<typename Func, typename... Args>
+struct db::commitlog::segment_manager::named_file::myawait : public seastar::internal::awaiter<true, Args...> {
+    using mybase = seastar::internal::awaiter<true, Args...>;
+    using resume_type = decltype(std::declval<mybase>().await_resume());
+
+    Func _func;
+
+    myawait(future<Args...> f, Func func)
+        : mybase(std::move(f))
+        , _func(std::move(func))
+    {}
+    resume_type await_resume() {
+        if constexpr (std::is_same_v<resume_type, void>) {
+            mybase::await_resume();
+            _func();
+        } else {
+            return _func(mybase::await_resume());
+        }
+    }
+};
+
+template<typename Func, typename... Args>
+auto db::commitlog::segment_manager::named_file::make_awaiter(future<Args...> f, Func func) {
+    return myawait<Func, Args...>(std::move(f), std::move(func));
+}
+
+template <typename CharType>
+auto db::commitlog::segment_manager::named_file::dma_write(uint64_t pos, const CharType* buffer, size_t len, const io_priority_class& pc, io_intent* intent) noexcept {
+    return make_awaiter(file::dma_write(pos, buffer, len, pc, intent), [this, pos](size_t res) {
+        maybe_update_size(pos + res);
+        return res;
+    });
+}
+
+auto db::commitlog::segment_manager::named_file::dma_write(uint64_t pos, std::vector<iovec> iov, const io_priority_class& pc, io_intent* intent) noexcept {
+    return make_awaiter(file::dma_write(pos, std::move(iov), pc, intent), [this, pos](size_t res) {
+        maybe_update_size(pos + res);
+        return res;
+    });
+}
+
+auto db::commitlog::segment_manager::named_file::truncate(uint64_t length) noexcept {
+    return make_awaiter(file::truncate(length), [this, length] {
+        _known_size = length;
+    });
+}
+
+auto db::commitlog::segment_manager::named_file::allocate(uint64_t position, uint64_t length) noexcept {
+    return make_awaiter(file::allocate(position, length), [this, position, length] {
+        _known_size = position + length;
+    });
+}
+
+auto db::commitlog::segment_manager::named_file::remove_file() noexcept {
+    return make_awaiter(seastar::remove_file(name()), [this] {
+        _known_size = 0;
+    });
+}
 
 template<typename T>
 static void write(fragmented_temporary_buffer::ostream& out, T value) {
@@ -477,24 +612,21 @@ std::enable_if_t<std::is_fundamental<T>::value, T> read(Input& in) {
 
 class db::commitlog::segment : public enable_shared_from_this<segment>, public cf_holder {
     friend class rp_handle;
+    using named_file = segment_manager::named_file;
+    using dispose_mode = segment_manager::dispose_mode;
 
     ::shared_ptr<segment_manager> _segment_manager;
 
     descriptor _desc;
-    file _file;
-    sstring _file_name;
+    named_file _file;
 
     uint64_t _file_pos = 0;
     uint64_t _flush_pos = 0;
-    uint64_t _size_on_disk = 0;
     uint64_t _waste = 0;
 
     size_t _alignment;
 
     bool _closed = false;
-    // Not the same as _closed since files can be reused
-    bool _closed_file = false;
-
     bool _terminated = false;
 
     using buffer_type = segment_manager::buffer_type;
@@ -553,10 +685,8 @@ public:
     // TODO : tune initial / default size
     static constexpr size_t default_size = 128 * 1024;
 
-    segment(::shared_ptr<segment_manager> m, descriptor&& d, file&& f, uint64_t initial_disk_size, size_t alignment)
+    segment(::shared_ptr<segment_manager> m, descriptor&& d, named_file&& f, size_t alignment)
             : _segment_manager(std::move(m)), _desc(std::move(d)), _file(std::move(f)),
-        _file_name(_segment_manager->cfg.commit_log_location + "/" + _desc.filename()), 
-        _size_on_disk(initial_disk_size),
         _alignment(alignment),
         _sync_time(clock_type::now()), _pending_ops(true) // want exception propagation
     {
@@ -564,21 +694,27 @@ public:
         clogger.debug("Created new segment {}", *this);
     }
     ~segment() {
-        if (!_closed_file) {
-            _segment_manager->add_file_to_close(std::move(_file));
-        }
-        
-        _segment_manager->totals.buffer_list_bytes -= _buffer.size_bytes();
-        
+        dispose_mode mode = dispose_mode::Keep;
+
         if (is_clean()) {
             clogger.debug("Segment {} is no longer active and will submitted for delete now", *this);
             ++_segment_manager->totals.segments_destroyed;
             _segment_manager->totals.active_size_on_disk -= file_position();
             _segment_manager->totals.wasted_size_on_disk -= _waste;
-            _segment_manager->add_file_to_delete(_file_name, _desc);
+            mode = dispose_mode::Delete;
         } else if (_segment_manager->cfg.warn_about_segments_left_on_disk_after_shutdown) {
             clogger.warn("Segment {} is dirty and is left on disk.", *this);
         }
+
+        _segment_manager->totals.buffer_list_bytes -= _buffer.size_bytes();
+
+        if (mode != dispose_mode::Keep || _file) {
+            _segment_manager->add_file_to_dispose(std::move(_file), mode);
+        }
+    }
+
+    uint64_t size_on_disk() const noexcept {
+        return _file.known_size();
     }
 
     bool is_schema_version_known(schema_ptr s) {
@@ -645,7 +781,6 @@ public:
         co_await _pending_ops.close();
         co_await _file.truncate(_flush_pos);
         co_await _file.close();
-        _closed_file = true;
 
         if (p) {
             co_return coroutine::exception(std::move(p));
@@ -701,7 +836,7 @@ public:
         auto s = co_await sync();
         co_await flush();
         co_await terminate();
-        _waste = _size_on_disk - file_position();
+        _waste = _file.known_size() - file_position();
         _segment_manager->totals.wasted_size_on_disk += _waste;
         co_return s;
     }
@@ -839,9 +974,8 @@ public:
             auto finally = defer([&] () noexcept {
                 _segment_manager->notify_memory_written(size);
                 _segment_manager->totals.buffer_list_bytes -= buf.size_bytes();
-                if (_size_on_disk < _file_pos) {
-                    _segment_manager->totals.total_size_on_disk += (_file_pos - _size_on_disk);
-                    _size_on_disk = _file_pos;
+                if (_file.known_size() < _file_pos) {
+                    _segment_manager->totals.total_size_on_disk += (_file_pos - _file.known_size());
                 }
             });
 
@@ -1200,7 +1334,6 @@ db::commitlog::segment_manager::segment_manager(config c)
     , _recycled_segments(std::numeric_limits<size_t>::max())
     , _reserve_replenisher(make_ready_future<>())
     , _background_sync(make_ready_future<>())
-    , _reserve_recalculation_guard(1)
 {
     assert(max_size > 0);
     assert(max_mutation_size < segment::multi_entry_size_magic);
@@ -1226,11 +1359,6 @@ future<> db::commitlog::segment_manager::replenish_reserve() {
         }
         try {
             gate::holder g(_gate);
-            auto guard = co_await get_units(_reserve_recalculation_guard, 1);
-            if (_reserve_segments.full()) {
-                // can happen if we recalculate
-                continue;
-            }
             // note: if we were strict with disk size, we would refuse to do this 
             // unless disk footprint is lower than threshold. but we cannot (yet?)
             // trust that flush logic will absolutely free up an existing 
@@ -1391,11 +1519,11 @@ void db::commitlog::segment_manager::flush_segments(uint64_t size_to_remove) {
 
     if (size_to_remove != 0) {
         for (auto& s : _segments) {
-            if (n <= s->_size_on_disk) {
-                high = replay_position(s->_desc.id, db::position_type(s->_size_on_disk));
+            if (n <= s->size_on_disk()) {
+                high = replay_position(s->_desc.id, db::position_type(s->size_on_disk()));
                 break;
             }
-            n -= s->_size_on_disk;
+            n -= s->size_on_disk();
         }
     }
 
@@ -1422,26 +1550,26 @@ void db::commitlog::segment_manager::flush_segments(uint64_t size_to_remove) {
     }
 }
 
-future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::allocate_segment_ex(descriptor d, sstring filename, open_flags flags) {
+future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::allocate_segment_ex(descriptor d, named_file f, open_flags flags) {
     file_open_options opt;
     opt.extent_allocation_size_hint = max_size;
     opt.append_is_unlikely = true;
 
-    file f;
     size_t align;
     std::exception_ptr ep;
 
+    auto filename = f.name();
+
     try {
-        f = co_await open_file_dma(filename, flags, opt);
+        // when we get here, f.known_size() is either size of recycled segment we open,
+        // or zero in case we create brand new segment
+        co_await f.open(flags, opt, f.known_size());
 
         align = f.disk_write_dma_alignment();
         auto is_overwrite = false;
 
         if ((flags & open_flags::dsync) != open_flags{}) {
-            auto existing_size = (flags & open_flags::create) == open_flags{}
-                ? co_await f.size()
-                : 0
-                ;
+            auto existing_size = f.known_size();
             is_overwrite = true;
             // would be super nice if we just could mmap(/dev/zero) and do sendto
             // instead of this, but for now we must do explicit buffer writes.
@@ -1461,7 +1589,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
                 // data being committed before we've reached eof/finished writing.
                 // Again an argument for sendfile-like constructs I guess...
                 co_await f.close();
-                f = co_await open_file_dma(filename, flags & open_flags(~int(open_flags::dsync)), opt);
+                co_await f.open(flags & open_flags(~int(open_flags::dsync)), opt, existing_size);
                 co_await f.allocate(existing_size, max_size - existing_size);
 
                 size_t buf_size = align_up<size_t>(16 * 1024, size_t(align));
@@ -1491,7 +1619,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
                 // sync metadata (size/written)
                 co_await f.flush();
                 co_await f.close();
-                f = co_await open_file_dma(filename, flags, opt);
+                co_await f.open(flags, opt, max_size);
 
                 // we will never add blocks (scouts honour). I can haz smaller align?
                 align = f.disk_overwrite_dma_alignment();
@@ -1504,13 +1632,13 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
             for (auto * ext : cfg.extensions->commitlog_file_extensions()) {
                 auto nf = co_await ext->wrap_file(filename, f, flags);
                 if (nf) {
-                    f = std::move(nf);
+                    f.assign(std::move(nf), f.known_size());
                     align = is_overwrite ? f.disk_overwrite_dma_alignment() : f.disk_write_dma_alignment();
                 }
             }
         }
 
-        f = make_checked_file(commit_error_handler, std::move(f));
+        f.assign(make_checked_file(commit_error_handler, std::move(f)), f.known_size());
     } catch (...) {
         ep = std::current_exception();
     }
@@ -1527,21 +1655,11 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
         co_await f.close();
     }
     if (ep) {
-        add_file_to_delete(filename, d);
+        add_file_to_dispose(std::move(f), dispose_mode::Delete);
         co_return coroutine::exception(std::move(ep));
     }
 
-    co_return make_shared<segment>(shared_from_this(), std::move(d), std::move(f), max_size, align);
-}
-
-future<> db::commitlog::segment_manager::rename_file(sstring from, sstring to) const {
-    try {
-        co_await seastar::rename_file(from, to);
-        co_await seastar::sync_directory(cfg.commit_log_location);
-    } catch (...) {
-        commit_error_handler(std::current_exception());
-        throw;
-    }
+    co_return make_shared<segment>(shared_from_this(), std::move(d), std::move(f), align);
 }
 
 future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::allocate_segment() {
@@ -1554,19 +1672,19 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
         }
 
         if (!_recycled_segments.empty()) {
-            auto src = _recycled_segments.pop();
+            auto f = _recycled_segments.pop();
             // Note: we have to do the rename here to ensure
             // proper descriptor id order. If we renamed in the delete call
             // that recycled the file we could potentially have
             // out-of-order files. (Sort does not help).
-            clogger.debug("Using recycled segment file {} -> {}", src, dst);
-            co_await rename_file(src, dst);
-            co_return co_await allocate_segment_ex(std::move(d), std::move(dst), flags);
+            clogger.debug("Using recycled segment file {} -> {}", f.name(), dst);
+            co_await f.rename(dst);
+            co_return co_await allocate_segment_ex(std::move(d), std::move(f), flags);
         }
 
         if (!cfg.allow_going_over_size_limit && max_disk_size != 0 && totals.total_size_on_disk >= max_disk_size) {
             clogger.debug("Disk usage ({} MB) exceeds maximum ({} MB) - allocation will wait...", totals.total_size_on_disk/(1024*1024), max_disk_size/(1024*1024));
-            auto f = cfg.reuse_segments ? _recycled_segments.not_empty() :  _disk_deletions.get_shared_future();
+            auto f = _recycled_segments.not_empty();
             if (!f.available()) {
                 _new_counter = 0; // zero this so timer task does not duplicate the below flush
                 flush_segments(0); // force memtable flush already
@@ -1581,7 +1699,8 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
             continue;
         }
 
-        co_return co_await allocate_segment_ex(std::move(d), std::move(dst), flags|open_flags::create);
+        named_file f(dst);
+        co_return co_await allocate_segment_ex(std::move(d), std::move(f), flags|open_flags::create);
     }
 }
 
@@ -1718,20 +1837,18 @@ future<> db::commitlog::segment_manager::clear_reserve_segments() {
         _reserve_segments.pop();
     }
 
-    std::vector<sstring> tmp;
-    tmp.reserve(_recycled_segments.size());
+    for (auto& [f, mode] : _files_to_dispose) {
+        if (mode == dispose_mode::Delete) {
+            mode = dispose_mode::ForceDelete;
+        }
+    }
 
-    _recycled_segments.consume([&](sstring s) {
-        tmp.emplace_back(std::move(s));
+    _recycled_segments.consume([&](named_file f) {
+        _files_to_dispose.emplace_back(std::move(f), dispose_mode::ForceDelete);
         return true;
     });
-    
-    co_await parallel_for_each(tmp, [this](const sstring& filename) {
-        clogger.debug("Deleting recycled segment file {}", filename);
-        return delete_file(filename);
-    }).finally([this] {
-        return do_pending_deletes();
-    });
+
+    return do_pending_deletes();
 }
 
 future<> db::commitlog::segment_manager::sync_all_segments() {
@@ -1788,7 +1905,6 @@ future<> db::commitlog::segment_manager::shutdown() {
             if (_recycled_segments.empty()) {
                 abort_recycled_list(ep);
             }
-            abort_deletion_promise(ep);
             auto f2 = std::exchange(_background_sync, make_ready_future<>());
 
             co_await std::move(f);
@@ -1827,95 +1943,117 @@ future<> db::commitlog::segment_manager::shutdown() {
     co_return co_await _shutdown_promise->get_shared_future();
 }
 
-void db::commitlog::segment_manager::add_file_to_delete(sstring filename, descriptor d) {
-    assert(!_files_to_delete.contains(filename));
-    _files_to_delete.emplace(std::move(filename), std::move(d));
-}
-
-void db::commitlog::segment_manager::add_file_to_close(file f) {
-    _files_to_close.emplace_back(std::move(f));
-}
-
-future<> db::commitlog::segment_manager::delete_file(const sstring& filename) {
-    clogger.debug("Deleting segment file {}", filename);
-    try {
-        auto size = co_await seastar::file_size(filename);
-        co_await seastar::remove_file(filename);
-        clogger.trace("Reclaimed {} MB", size/(1024*1024));
-        totals.total_size_on_disk -= size;
-        auto p = std::exchange(_disk_deletions, {});
-        p.set_value();
-    } catch (...) {
-        commit_error_handler(std::current_exception());
-        throw;
-    }
+void db::commitlog::segment_manager::add_file_to_dispose(named_file f, dispose_mode mode) {
+    _files_to_dispose.emplace_back(std::move(f), mode);
 }
 
 future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> files) {
-    if (files.empty()) {
+    for (auto& s : files) {
+        // Note: this is only for replay files. We can decide to
+        // recycle these, but they don't count into footprint,
+        // thus unopened named_files are what we want (known_size == 0)
+        _files_to_dispose.emplace_back(s, dispose_mode::Delete);
+    }
+    return do_pending_deletes();
+}
+
+void db::commitlog::segment_manager::abort_recycled_list(std::exception_ptr ep) {
+    // may not call here with elements in list. that would leak files.
+    assert(_recycled_segments.empty());
+    _recycled_segments.abort(ep);
+    // and ensure next lap(s) still has a queue
+    _recycled_segments = queue<named_file>(std::numeric_limits<size_t>::max());
+}
+
+namespace db {
+
+std::ostream& operator<<(std::ostream& os, const commitlog::segment_manager::named_file& f) {
+    return os << f.name() << " (" << f.known_size() << ")";
+}
+
+std::ostream& operator<<(std::ostream& os, commitlog::segment_manager::dispose_mode mode) {
+    using dispose_mode = db::commitlog::segment_manager::dispose_mode;
+
+    switch (mode) {
+        case dispose_mode::Delete: os << "Delete"; break;
+        case dispose_mode::ForceDelete: os << "Force Delete"; break;
+        case dispose_mode::Keep: os << "Keep"; break;
+        default: break;
+    }
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const std::pair<commitlog::segment_manager::named_file, db::commitlog::segment_manager::dispose_mode>& p) {
+    return os << p.first << " (" << p.second << ")";
+}
+
+}
+
+future<> db::commitlog::segment_manager::do_pending_deletes() {
+    auto ftd = std::exchange(_files_to_dispose, {});
+
+    if (ftd.empty()) {
         co_return;
     }
 
-    clogger.debug("Delete segments {}", files);
-
     std::exception_ptr recycle_error;
-
     size_t num_deleted = 0;
-    bool except = false;
-    while (!files.empty()) {
-        auto filename = std::move(files.back());
-        files.pop_back();
+    auto exts = cfg.extensions;
 
+    clogger.debug("Discarding segments {}", ftd);
+
+    for (auto& [f, mode] : ftd) {
         try {
-            auto exts = cfg.extensions;
+            if (f) {
+                co_await f.close();
+            }
+
+            // retain the file (replay...)
+            if (mode == dispose_mode::Keep) {
+                continue;
+            }
+
             if (exts && !exts->commitlog_file_extensions().empty()) {
                 for (auto& ext : exts->commitlog_file_extensions()) {
-                    co_await ext->before_delete(filename);
+                    co_await ext->before_delete(f.name());
                 }
             }
 
-            // We allow reuse of the segment if the current disk size is less than shard max.
-            if (cfg.reuse_segments) {
-                auto usage = totals.total_size_on_disk;
-                auto recycle = usage <= max_disk_size;
+            auto size = f.known_size();
+            auto usage = totals.total_size_on_disk;
+            auto next_usage = usage - size;
 
-                // if total size is not a multiple of segment size, we need
-                // to check if we are the overlap segment, and noone else
-                // can be recycled. If so, let this one live so allocation
-                // can proceed. We assume/hope a future delete will kill
-                // files down to under the threshold, but we should expect
-                // to stomp around nearest multiple of segment size, not 
-                // the actual limit.
-                if (!recycle && _recycled_segments.empty() && files.empty()) {
-                    auto size = co_await seastar::file_size(filename);
-                    recycle = (usage - size) <= max_disk_size;
-                }
+            if (next_usage <= max_disk_size && mode != dispose_mode::ForceDelete) {
+                descriptor d(next_id(), "Recycled-" + cfg.fname_prefix);
+                auto dst = this->filename(d);
 
-                if (recycle) {
-                    descriptor d(next_id(), "Recycled-" + cfg.fname_prefix);
-                    auto dst = this->filename(d);
-
-                    clogger.debug("Recycling segment file {}", filename);
-                    // must rename the file since we must ensure the
-                    // data is not replayed. Changing the name will
-                    // cause header ID to be invalid in the file -> ignored
-                    try {
-                        co_await rename_file(filename, dst);
-                        auto b = _recycled_segments.push(std::move(dst));
-                        assert(b); // we set this to max_size_t so...
-                        continue;
-                    } catch (...) {
-                        recycle_error = std::current_exception();
-                        // fallthrough
-                    }
+                clogger.debug("Recycling segment file {}", f.name());
+                // must rename the file since we must ensure the
+                // data is not replayed. Changing the name will
+                // cause header ID to be invalid in the file -> ignored
+                try {
+                    co_await f.rename(dst);
+                    auto b = _recycled_segments.push(std::move(f));
+                    assert(b); // we set this to max_size_t so...
+                    continue;
+                } catch (...) {
+                    clogger.error("Could not recycle segment {}: {}", f.name(), std::current_exception());
+                    recycle_error = std::current_exception();
+                    // fallthrough
                 }
             }
-            co_await delete_file(filename);
+
+            // last resort.
+            co_await f.remove_file();
             ++num_deleted;
         } catch (...) {
-            clogger.error("Could not delete segment {}: {}", filename, std::current_exception());
-            except = true;
+            clogger.error("Could not delete segment {}: {}", f.name(), std::current_exception());
         }
+        // if we get here, we either successfully deleted the file,
+        // or had such an exception that we consider the file dead
+        // anyway. In either case we _remove_ the file size from
+        // footprint, because it is no longer our problem.
+        totals.total_size_on_disk -= f.known_size();
     }
 
     // #8376 - if we had an error in recycling (disk rename?), and no elements
@@ -1927,98 +2065,6 @@ future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> fi
     if (recycle_error && _recycled_segments.empty()) {
         abort_recycled_list(recycle_error);
     }
-    // If recycle failed and turned into a delete, we should fake-wakeup waiters
-    // since we might still have cleaned up disk space.
-    if (!recycle_error && num_deleted && cfg.reuse_segments && _recycled_segments.empty()) {
-        abort_recycled_list(std::make_exception_ptr(std::runtime_error("deleted files")));
-    }
-
-    // #9348 - if we had an exception, we can't trust our bookeep any more. recalculate.
-    if (except) {
-        co_await recalculate_footprint();
-    }
-}
-
-void db::commitlog::segment_manager::abort_recycled_list(std::exception_ptr ep) {
-    // may not call here with elements in list. that would leak files.
-    assert(_recycled_segments.empty());
-    _recycled_segments.abort(ep);
-    // and ensure next lap(s) still has a queue
-    _recycled_segments = queue<sstring>(std::numeric_limits<size_t>::max());
-}
-
-void db::commitlog::segment_manager::abort_deletion_promise(std::exception_ptr ep) {
-    std::exchange(_disk_deletions, {}).set_exception(ep);
-}
-
-future<> db::commitlog::segment_manager::recalculate_footprint() {
-    try {
-        co_await do_pending_deletes();
-
-        auto guard = co_await get_units(_reserve_recalculation_guard, 1);
-        auto segments_copy = _segments;
-        std::vector<sseg_ptr> reserves;
-        std::vector<sstring> recycles;
-        // this causes haywire things while we steal stuff, but...
-        while (!_reserve_segments.empty()) {
-            reserves.push_back(_reserve_segments.pop());
-        }
-        while (!_recycled_segments.empty()) {
-            recycles.push_back(_recycled_segments.pop());
-        }
-        // #9955 - must re-stock the queues before we do anything
-        // interruptable/continuation. Because both queues are
-        // used with push/pop eventually which _waits_ for signal
-        // but does _not_ verify that the condition is true once
-        // we return. So copy the objects and look at instead.
-        for (auto& filename : recycles) {
-            _recycled_segments.push(sstring(filename));
-        }
-        for (auto& s : reserves) {
-            _reserve_segments.push(sseg_ptr(s)); // you can have it back now.
-        }
-
-        // first, guesstimate sizes
-        uint64_t recycle_size = recycles.size() * max_size;
-        auto old = totals.total_size_on_disk;
-
-        totals.total_size_on_disk = recycle_size;
-        for (auto& s : _segments) {
-            totals.total_size_on_disk += s->_size_on_disk;
-        }
-        for (auto& s : reserves) {
-            totals.total_size_on_disk += s->_size_on_disk;
-        }
-
-        // now we need to adjust the actual sizes of recycled files
-
-        uint64_t actual_recycled_size = 0;
-
-        try {
-            for (auto& filename : recycles) {
-                auto s = co_await seastar::file_size(filename);
-                actual_recycled_size += s;
-            }
-        } catch (...) {
-            clogger.error("Exception reading disk footprint ({}).", std::current_exception());
-            actual_recycled_size = recycle_size; // best we got
-        }
-
-        totals.total_size_on_disk += actual_recycled_size - recycle_size;
-        // pushing things to reserve/recycled queues will have resumed any
-        // waiters, so we should be done.
-    } catch (...) {
-        clogger.error("Exception recalculating disk footprint ({}). Values might be off...", std::current_exception());
-    }
-}
-
-future<> db::commitlog::segment_manager::do_pending_deletes() {
-    auto ftc = std::exchange(_files_to_close, {});
-    auto ftd = std::exchange(_files_to_delete, {});
-    auto i = ftc.begin();
-    auto e = ftc.end();
-    co_await parallel_for_each(ftc, std::mem_fn(&file::close));
-    co_await delete_segments(boost::copy_range<std::vector<sstring>>(ftd | boost::adaptors::map_keys));
 }
 
 future<> db::commitlog::segment_manager::orphan_all() {
