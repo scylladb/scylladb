@@ -52,6 +52,7 @@
 #include "repair/hash.hh"
 #include "repair/decorated_key_with_hash.hh"
 #include "repair/row.hh"
+#include "repair/writer.hh"
 #include "xx_hasher.hh"
 
 extern logging::logger rlogger;
@@ -395,33 +396,7 @@ public:
     }
 };
 
-class repair_writer : public enable_lw_shared_from_this<repair_writer> {
-    schema_ptr _schema;
-    reader_permit _permit;
-    uint64_t _estimated_partitions;
-    std::optional<future<>> _writer_done;
-    std::optional<queue_reader_handle> _mq;
-    // Current partition written to disk
-    lw_shared_ptr<const decorated_key_with_hash> _current_dk_written_to_sstable;
-    // Is current partition still open. A partition is opened when a
-    // partition_start is written and is closed when a partition_end is
-    // written.
-    bool _partition_opened;
-    streaming::stream_reason _reason;
-    named_semaphore _sem{1, named_semaphore_exception_factory{"repair_writer"}};
-public:
-    repair_writer(
-            schema_ptr schema,
-            reader_permit permit,
-            uint64_t estimated_partitions,
-            streaming::stream_reason reason)
-            : _schema(std::move(schema))
-            , _permit(std::move(permit))
-            , _estimated_partitions(estimated_partitions)
-            , _reason(reason) {
-    }
-
-    future<> write_start_and_mf(lw_shared_ptr<const decorated_key_with_hash> dk, mutation_fragment mf)  {
+    future<> repair_writer::write_start_and_mf(lw_shared_ptr<const decorated_key_with_hash> dk, mutation_fragment mf) {
         _current_dk_written_to_sstable = dk;
         if (mf.is_partition_start()) {
             return _mq->push(std::move(mf)).then([this] {
@@ -436,19 +411,7 @@ public:
         }
     };
 
-    static sstables::offstrategy is_offstrategy_supported(streaming::stream_reason reason) {
-        static const std::unordered_set<streaming::stream_reason> operations_supported = {
-            streaming::stream_reason::bootstrap,
-            streaming::stream_reason::replace,
-            streaming::stream_reason::removenode,
-            streaming::stream_reason::decommission,
-            streaming::stream_reason::repair,
-            streaming::stream_reason::rebuild,
-        };
-        return sstables::offstrategy(operations_supported.contains(reason));
-    }
-
-    void create_writer(sharded<replica::database>& db, sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<db::view::view_update_generator>& view_update_gen) {
+    void repair_writer::create_writer(sharded<replica::database>& db, sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<db::view::view_update_generator>& view_update_gen) {
         if (_writer_done) {
             return;
         }
@@ -469,7 +432,7 @@ public:
         });
     }
 
-    future<> write_partition_end() {
+    future<> repair_writer::write_partition_end() {
         if (_partition_opened) {
             return _mq->push(mutation_fragment(*_schema, _permit, partition_end())).then([this] {
                 _partition_opened = false;
@@ -478,7 +441,7 @@ public:
         return make_ready_future<>();
     }
 
-    future<> do_write(lw_shared_ptr<const decorated_key_with_hash> dk, mutation_fragment mf) {
+    future<> repair_writer::do_write(lw_shared_ptr<const decorated_key_with_hash> dk, mutation_fragment mf) {
         if (_current_dk_written_to_sstable) {
             const auto cmp_res = _current_dk_written_to_sstable->dk.tri_compare(*_schema, dk->dk);
             if (cmp_res > 0) {
@@ -496,7 +459,7 @@ public:
         }
     }
 
-    future<> write_end_of_stream() {
+    future<> repair_writer::write_end_of_stream() {
         if (_mq) {
           return with_semaphore(_sem, 1, [this] {
             // Partition_end is never sent on wire, so we have to write one ourselves.
@@ -514,7 +477,7 @@ public:
         }
     }
 
-    future<> do_wait_for_writer_done() {
+    future<> repair_writer::do_wait_for_writer_done() {
         if (_writer_done) {
             return std::move(*(_writer_done));
         } else {
@@ -522,7 +485,7 @@ public:
         }
     }
 
-    future<> wait_for_writer_done() {
+    future<> repair_writer::wait_for_writer_done() {
         return when_all_succeed(write_end_of_stream(), do_wait_for_writer_done()).discard_result().handle_exception(
                 [this] (std::exception_ptr ep) {
             rlogger.warn("repair_writer: keyspace={}, table={}, wait_for_writer_done failed: {}",
@@ -530,11 +493,6 @@ public:
             return make_exception_future<>(std::move(ep));
         });
     }
-
-    named_semaphore& sem() {
-        return _sem;
-    }
-};
 
 class repair_meta;
 class repair_meta_tracker;
