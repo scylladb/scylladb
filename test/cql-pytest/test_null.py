@@ -15,7 +15,7 @@ from util import unique_name, unique_key_string, new_test_table
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
     table = test_keyspace + "." + unique_name()
-    cql.execute(f"CREATE TABLE {table} (p text, c text, v text, primary key (p, c))")
+    cql.execute(f"CREATE TABLE {table} (p text, c text, v text, i int, s set<int>, m map<int, int>, primary key (p, c))")
     yield table
     cql.execute("DROP TABLE " + table)
 
@@ -195,3 +195,44 @@ def test_empty_string_key2(cql, test_keyspace):
 def test_map_subscript_null(cql, table1, cassandra_bug):
     assert list(cql.execute(f"SELECT p FROM {table1} WHERE m[null] = 3 ALLOW FILTERING")) == []
     assert list(cql.execute(cql.prepare(f"SELECT p FROM {table1} WHERE m[?] = 3 ALLOW FILTERING"), [None])) == []
+
+# Similarly, CONTAINS restriction with NULL should also match nothing.
+# Reproduces #10359.
+@pytest.mark.xfail(reason="Issue #10359")
+def test_filtering_contains_null(cassandra_bug, cql, table1):
+    p = unique_key_string()
+    cql.execute(f"INSERT INTO {table1} (p,c,s) VALUES ('{p}', '1', {{1, 2}})")
+    cql.execute(f"INSERT INTO {table1} (p,c,s) VALUES ('{p}', '2', {{3, 4}})")
+    cql.execute(f"INSERT INTO {table1} (p,c) VALUES ('{p}', '3')")
+    assert list(cql.execute(f"SELECT c FROM {table1} WHERE p='{p}' AND s CONTAINS NULL ALLOW FILTERING")) == []
+
+# Similarly, CONTAINS KEY restriction with NULL should also match nothing.
+# Reproduces #10359.
+@pytest.mark.xfail(reason="Issue #10359")
+def test_filtering_contains_key_null(cassandra_bug, cql, table1):
+    p = unique_key_string()
+    cql.execute(f"INSERT INTO {table1} (p,c,m) VALUES ('{p}', '1', {{1: 2}})")
+    cql.execute(f"INSERT INTO {table1} (p,c,m) VALUES ('{p}', '2', {{3: 4}})")
+    cql.execute(f"INSERT INTO {table1} (p,c) VALUES ('{p}', '3')")
+    assert list(cql.execute(f"SELECT c FROM {table1} WHERE p='{p}' AND m CONTAINS KEY NULL ALLOW FILTERING")) == []
+
+# The above tests test_filtering_eq_null and test_filtering_inequality_null
+# have WHERE x=NULL or x>NULL where "x" is a regular column. Such a
+# comparison requires ALLOW FILTERING for non-NULL parameters, so we also
+# require it for NULL. Unlike the previous tests, this one also passed on
+# Cassandra.
+def test_filtering_null_comparison_no_filtering(cql, table1):
+    with pytest.raises(InvalidRequest, match='ALLOW FILTERING'):
+        cql.execute(f"SELECT c FROM {table1} WHERE p='x' AND i=NULL")
+    with pytest.raises(InvalidRequest, match='ALLOW FILTERING'):
+        cql.execute(f"SELECT c FROM {table1} WHERE p='x' AND i>NULL")
+    with pytest.raises(InvalidRequest, match='ALLOW FILTERING'):
+        cql.execute(f"SELECT c FROM {table1} WHERE p='x' AND i>=NULL")
+    with pytest.raises(InvalidRequest, match='ALLOW FILTERING'):
+        cql.execute(f"SELECT c FROM {table1} WHERE p='x' AND i<NULL")
+    with pytest.raises(InvalidRequest, match='ALLOW FILTERING'):
+        cql.execute(f"SELECT c FROM {table1} WHERE p='x' AND i<=NULL")
+    with pytest.raises(InvalidRequest, match='ALLOW FILTERING'):
+        cql.execute(f"SELECT c FROM {table1} WHERE p='x' AND s CONTAINS NULL")
+    with pytest.raises(InvalidRequest, match='ALLOW FILTERING'):
+        cql.execute(f"SELECT c FROM {table1} WHERE p='x' AND m CONTAINS KEY NULL")
