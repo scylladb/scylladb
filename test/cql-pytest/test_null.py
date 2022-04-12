@@ -158,3 +158,12 @@ def test_filtering_null_comparison_no_filtering(cql, table1):
         cql.execute(f"SELECT c FROM {table1} WHERE p='x' AND s CONTAINS NULL")
     with pytest.raises(InvalidRequest, match='ALLOW FILTERING'):
         cql.execute(f"SELECT c FROM {table1} WHERE p='x' AND m CONTAINS KEY NULL")
+
+# Test that null subscript m[null] is caught as the appropriate invalid-
+# request error, and not some internal server error as we had in #10361.
+@pytest.mark.xfail(reason="Issue #10361")
+def test_map_subscript_null(cql, table1):
+    with pytest.raises(InvalidRequest, match='null'):
+        cql.execute(f"SELECT p FROM {table1} WHERE m[null] = 3 ALLOW FILTERING")
+    with pytest.raises(InvalidRequest, match='null'):
+        cql.execute(cql.prepare(f"SELECT p FROM {table1} WHERE m[?] = 3 ALLOW FILTERING"), [None])
