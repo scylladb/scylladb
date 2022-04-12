@@ -815,7 +815,7 @@ future<mutation> query_partition_mutation(service::storage_proxy& proxy,
     } else if (partitions.size() == 1) {
         co_return partitions[0].mut().unfreeze(s);
     } else {
-        throw std::invalid_argument("Results must have at most one partition");
+        co_return coroutine::make_exception(std::invalid_argument("Results must have at most one partition"));
     }
 }
 
@@ -2449,7 +2449,7 @@ future<schema_ptr> create_table_from_name(distributed<service::storage_proxy>& p
     auto qn = qualified_name(keyspace, table);
     auto sm = co_await read_table_mutations(proxy, qn, tables());
     if (!sm.live()) {
-        throw std::runtime_error(format("{}:{} not found in the schema definitions keyspace.", qn.keyspace_name, qn.table_name));
+        co_return coroutine::make_exception(std::runtime_error(format("{}:{} not found in the schema definitions keyspace.", qn.keyspace_name, qn.table_name)));
     }
     co_return create_table_from_mutations(proxy, std::move(sm));
 }
@@ -2945,7 +2945,7 @@ static future<view_ptr> create_view_from_table_row(distributed<service::storage_
     qualified_name qn(row.get_nonnull<sstring>("keyspace_name"), row.get_nonnull<sstring>("view_name"));
     schema_mutations sm = co_await read_table_mutations(proxy, qn, views());
     if (!sm.live()) {
-        throw std::runtime_error(format("{}:{} not found in the view definitions keyspace.", qn.keyspace_name, qn.table_name));
+        co_return coroutine::make_exception(std::runtime_error(format("{}:{} not found in the view definitions keyspace.", qn.keyspace_name, qn.table_name)));
     }
     co_return create_view_from_mutations(proxy, std::move(sm));
 }
