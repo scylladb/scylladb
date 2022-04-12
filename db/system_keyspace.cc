@@ -2823,6 +2823,27 @@ future<> system_keyspace::get_compaction_history(compaction_history_consumer&& f
     });
 }
 
+future<> system_keyspace::update_repair_history(repair_history_entry entry) {
+    sstring req = format("INSERT INTO system.{} (table_uuid, repair_time, repair_uuid, keyspace_name, table_name, range_start, range_end) VALUES (?, ?, ?, ?, ?, ?, ?)", REPAIR_HISTORY);
+    co_await execute_cql(req, entry.table_uuid, entry.ts, entry.id, entry.ks, entry.cf, entry.range_start, entry.range_end).discard_result();
+}
+
+future<> system_keyspace::get_repair_history(utils::UUID table_id, repair_history_consumer f) {
+    sstring req = format("SELECT * from system.{} WHERE table_uuid = {}", REPAIR_HISTORY, table_id);
+    co_await _qp.local().query_internal(req, [&f] (const cql3::untyped_result_set::row& row) mutable -> future<stop_iteration> {
+        repair_history_entry ent;
+        ent.id = row.get_as<utils::UUID>("repair_uuid");
+        ent.table_uuid = row.get_as<utils::UUID>("table_uuid");
+        ent.range_start = row.get_as<int64_t>("range_start");
+        ent.range_end = row.get_as<int64_t>("range_end");
+        ent.ks = row.get_as<sstring>("keyspace_name");
+        ent.cf = row.get_as<sstring>("table_name");
+        ent.ts = row.get_as<db_clock::time_point>("repair_time");
+        co_await f(std::move(ent));
+        co_return stop_iteration::no;
+    });
+}
+
 future<int> system_keyspace::increment_and_get_generation() {
     auto req = format("SELECT gossip_generation FROM system.{} WHERE key='{}'", LOCAL, LOCAL);
     return qctx->qp().execute_internal(req).then([] (auto rs) {

@@ -40,11 +40,9 @@
 #include "streaming/consumer.hh"
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/all.hh>
-#include "db/query_context.hh"
 #include "db/system_keyspace.hh"
 #include "service/storage_proxy.hh"
 #include "db/batchlog_manager.hh"
-#include "cql3/untyped_result_set.hh"
 #include "idl/partition_checksum.dist.hh"
 #include "readers/empty.hh"
 #include "readers/evictable.hh"
@@ -2139,13 +2137,17 @@ future<repair_update_system_table_response> repair_service::repair_update_system
         auto& table = local_db.find_column_family(req.table_uuid);
         return ::update_repair_time(table.schema(), req.range, req.repair_time);
     });
-    sstring cql = format("INSERT INTO system.{} (table_uuid, repair_time, repair_uuid, keyspace_name, table_name, range_start, range_end) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            db::system_keyspace::REPAIR_HISTORY);
+    db::system_keyspace::repair_history_entry ent;
+    ent.id = req.repair_uuid;
+    ent.table_uuid = req.table_uuid;
+    ent.ts = db_clock::from_time_t(gc_clock::to_time_t(req.repair_time));
+    ent.ks = req.keyspace_name;
+    ent.cf = req.table_name;
     auto range_start = req.range.start() ? req.range.start()->value() : dht::minimum_token();
+    ent.range_start = dht::token::to_int64(range_start);
     auto range_end = req.range.end() ? req.range.end()->value() : dht::maximum_token();
-    db_clock::time_point ts = db_clock::from_time_t(gc_clock::to_time_t(req.repair_time));
-    co_await db::qctx->execute_cql(cql, req.table_uuid, ts, req.repair_uuid, req.keyspace_name, req.table_name,
-            dht::token::to_int64(range_start), dht::token::to_int64(range_end)).discard_result();
+    ent.range_end = dht::token::to_int64(range_end);
+    co_await _sys_ks.local().update_repair_history(std::move(ent));
     co_return repair_update_system_table_response();
 }
 
@@ -2946,6 +2948,7 @@ repair_service::repair_service(distributed<gms::gossiper>& gossiper,
         sharded<service::storage_proxy>& sp,
         sharded<db::batchlog_manager>& bm,
         sharded<db::system_distributed_keyspace>& sys_dist_ks,
+        sharded<db::system_keyspace>& sys_ks,
         sharded<db::view::view_update_generator>& vug,
         service::migration_manager& mm,
         size_t max_repair_memory)
@@ -2955,6 +2958,7 @@ repair_service::repair_service(distributed<gms::gossiper>& gossiper,
     , _sp(sp)
     , _bm(bm)
     , _sys_dist_ks(sys_dist_ks)
+    , _sys_ks(sys_ks)
     , _view_update_generator(vug)
     , _mm(mm)
     , _tracker(max_repair_memory)
@@ -3030,32 +3034,25 @@ future<> repair_service::load_history() {
         }
         rlogger.info("Loading repair history for keyspace={}, table={}, table_uuid={}",
                 table->schema()->ks_name(), table->schema()->cf_name(), table_uuid);
-        auto req = format("SELECT * from system.{} WHERE table_uuid = {}", db::system_keyspace::REPAIR_HISTORY, table_uuid);
-        co_await db::qctx->qp().query_internal(req, [this] (const cql3::untyped_result_set::row& row) mutable -> future<stop_iteration> {
-            auto table_uuid = row.get_as<utils::UUID>("table_uuid");
-            auto range_start = row.get_as<int64_t>("range_start");
-            auto range_end = row.get_as<int64_t>("range_end");
-            auto keyspace_name = row.get_as<sstring>("keyspace_name");
-            auto table_name = row.get_as<sstring>("table_name");
-            auto start = range_start == std::numeric_limits<int64_t>::min() ? dht::minimum_token() : dht::token::from_int64(range_start);
-            auto end = range_end == std::numeric_limits<int64_t>::min() ? dht::maximum_token() : dht::token::from_int64(range_end);
-            auto repair_time = to_gc_clock(row.get_as<db_clock::time_point>("repair_time"));
+        co_await _sys_ks.local().get_repair_history(table_uuid, [this] (const auto& entry) -> future<> {
+            auto start = entry.range_start == std::numeric_limits<int64_t>::min() ? dht::minimum_token() : dht::token::from_int64(entry.range_start);
+            auto end = entry.range_end == std::numeric_limits<int64_t>::min() ? dht::maximum_token() : dht::token::from_int64(entry.range_end);
             auto range = dht::token_range(dht::token_range::bound(start, false), dht::token_range::bound(end, true));
+            auto repair_time = to_gc_clock(entry.ts);
             rlogger.debug("Loading repair history for keyspace={}, table={}, table_uuid={}, repair_time={}, range={}",
-                    keyspace_name, table_name, table_uuid, repair_time, range);
-            co_await get_db().invoke_on_all([table_uuid, range, repair_time, keyspace_name, table_name] (replica::database& local_db) -> future<> {
+                    entry.ks, entry.cf, entry.table_uuid, entry.ts, range);
+            co_await get_db().invoke_on_all([entry, range, repair_time] (replica::database& local_db) -> future<> {
                 try {
-                    auto& table = local_db.find_column_family(table_uuid);
+                    auto& table = local_db.find_column_family(entry.table_uuid);
                     ::update_repair_time(table.schema(), range, repair_time);
                 } catch (replica::no_such_column_family&) {
-                    rlogger.trace("Table {}.{} with {} does not exist", keyspace_name, table_name, table_uuid);
+                    rlogger.trace("Table {}.{} with {} does not exist", entry.ks, entry.cf, entry.table_uuid);
                 } catch (...) {
                     rlogger.warn("Failed to load repair history for keyspace={}, table={}, range={}, repair_time={}",
-                            keyspace_name, table_name, range, repair_time);
+                            entry.ks, entry.cf, range, repair_time);
                 }
                 co_return;
             });
-            co_return stop_iteration::no;
         });
     }
     co_return;
