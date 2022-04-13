@@ -38,3 +38,16 @@ async def test_alter_verify_schema(cql, random_tables):
     await cql.run_async(f"ALTER TABLE {table} DROP {table.columns[-1].name}")
     with pytest.raises(AssertionError, match='Column'):
         await random_tables.verify_schema()
+
+
+@pytest.mark.asyncio
+async def test_new_table_insert_one(cql, random_tables):
+    table = await random_tables.add_table(ncolumns=5)
+    await table.insert_seq()
+    pk_col = table.columns[0]
+    ck_col = table.columns[1]
+    vals = [pk_col.val(1), ck_col.val(1)]
+    res = await cql.run_async(f"SELECT * FROM {table} WHERE pk=%s AND {ck_col}=%s",
+                              parameters=vals)
+    assert len(res) == 1
+    assert list(res[0])[:2] == vals
