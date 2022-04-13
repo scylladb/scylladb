@@ -1719,10 +1719,11 @@ auto with_env_and_ticker(environment_config cfg, F f) {
 
             // We abort the environment before the ticker as the environment may require time to advance
             // in order to finish (e.g. some operations may need to timeout).
+            tlogger.info("aborting environment");
             co_await env->abort();
-            tlogger.trace("environment aborted");
+            tlogger.info("environment aborted, aborting ticker");
             co_await t->abort();
-            tlogger.trace("ticker aborted");
+            tlogger.info("ticker aborted");
         });
     });
 }
@@ -2682,7 +2683,11 @@ SEASTAR_TEST_CASE(basic_generator_test) {
         }, 200'000);
 
         std::bernoulli_distribution bdist{0.5};
-        bool forwarding = false; //bdist(random_engine) TODO
+
+        // With probability 1/2 enable forwarding: when we send a command to a follower, it automatically
+        // forwards it to the known leader or waits for learning about a leader instead of returning
+        // `not_a_leader`.
+        bool forwarding = bdist(random_engine);
 
         // With probability 1/2, run the servers with a configuration which causes frequent snapshotting.
         // Note: with the default configuration we won't observe any snapshots at all, since the default
@@ -2701,7 +2706,7 @@ SEASTAR_TEST_CASE(basic_generator_test) {
                 .enable_forwarding{forwarding},
             };
 
-        tlogger.info("basic_generator_test: frequent snapshotting: {}", frequent_snapshotting);
+        tlogger.info("basic_generator_test: forwarding: {}, frequent snapshotting: {}", forwarding, frequent_snapshotting);
 
         auto leader_id = co_await env.new_server(true, srv_cfg);
 
@@ -2914,7 +2919,7 @@ SEASTAR_TEST_CASE(basic_generator_test) {
         auto limit = timer.now() + 10000_t;
         size_t cnt = 0;
         for (; timer.now() < limit; ++cnt) {
-            tlogger.debug("Trying to obtain last result: attempt number {}", cnt + 1);
+            tlogger.info("Trying to obtain last result: attempt number {}", cnt + 1);
 
             auto now = timer.now();
             auto leader = co_await wait_for_leader<AppendReg>{}(env,
@@ -2925,7 +2930,7 @@ SEASTAR_TEST_CASE(basic_generator_test) {
             });
 
             if (env.is_leader(leader)) {
-                tlogger.debug("Leader {} found after {} ticks", leader, timer.now() - now);
+                tlogger.info("Leader {} found after {} ticks", leader, timer.now() - now);
             } else {
                 tlogger.warn("Leader {} found after {} ticks, but suddenly lost leadership", leader, timer.now() - now);
                 continue;
@@ -2933,23 +2938,24 @@ SEASTAR_TEST_CASE(basic_generator_test) {
 
             auto config = env.get_configuration(leader);
             assert(config);
-            tlogger.debug("Leader {} configuration: current {} previous {}", leader, config->current, config->previous);
+            tlogger.info("Leader {} configuration: current {} previous {}", leader, config->current, config->previous);
 
             for (auto& s: all_servers) {
                 if (env.is_leader(s) && s != leader) {
                     auto conf = env.get_configuration(s);
                     assert(conf);
-                    tlogger.debug("There is another leader: {}, configuration: current {} previous {}", s, conf->current, conf->previous);
+                    tlogger.info("There is another leader: {}, configuration: current {} previous {}", s, conf->current, conf->previous);
                 }
             }
 
-            tlogger.debug("From the clients' point of view, the possible cluster members are: {}", known_config);
+            tlogger.info("From the clients' point of view, the possible cluster members are: {}", known_config);
 
             auto [res, last_attempted_server] = co_await bouncing{[&timer, &env] (raft::server_id id) {
                 return env.call(id, AppendReg::append{-1}, timer.now() + 200_t, timer);
             }}(timer, known_config, leader, known_config.size() + 1, 10_t, 10_t);
 
             if (std::holds_alternative<typename AppendReg::ret>(res)) {
+                tlogger.info("Obtained last result");
                 tlogger.debug("Last result: {}", res);
                 co_return;
             }

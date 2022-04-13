@@ -335,7 +335,12 @@ future<> server_impl::wait_for_leader(seastar::abort_source* as) {
     if (!_leader_promise) {
         _leader_promise.emplace();
     }
-    return as ? _leader_promise->get_shared_future(*as) : _leader_promise->get_shared_future();
+
+    try {
+        co_await (as ? _leader_promise->get_shared_future(*as) : _leader_promise->get_shared_future());
+    } catch (abort_requested_exception&) {
+        throw request_aborted();
+    }
 }
 
 future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abort_source* as) {
