@@ -8,6 +8,7 @@
 
 #include <seastar/core/coroutine.hh>
 #include "frozen_mutation.hh"
+#include "schema_registry.hh"
 #include "mutation_partition.hh"
 #include "mutation.hh"
 #include "counters.hh"
@@ -138,6 +139,18 @@ mutation frozen_mutation::unfreeze_upgrading(schema_ptr schema, const column_map
 
 frozen_mutation freeze(const mutation& m) {
     return frozen_mutation{ m };
+}
+
+std::vector<frozen_mutation> freeze(const std::vector<mutation>& muts) {
+    return boost::copy_range<std::vector<frozen_mutation>>(muts | boost::adaptors::transformed([] (const mutation& m) {
+        return freeze(m);
+    }));
+}
+
+std::vector<mutation> unfreeze(const std::vector<frozen_mutation>& muts) {
+    return boost::copy_range<std::vector<mutation>>(muts | boost::adaptors::transformed([] (const frozen_mutation& fm) {
+        return fm.unfreeze(local_schema_registry().get(fm.schema_version()));
+    }));
 }
 
 mutation_partition_view frozen_mutation::partition() const {
