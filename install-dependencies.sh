@@ -34,6 +34,7 @@ debian_base_packages=(
     python3-aiohttp
     python3-pyparsing
     python3-colorama
+    python3-tabulate
     libsnappy-dev
     libjsoncpp-dev
     rapidjson-dev
@@ -72,6 +73,7 @@ fedora_packages=(
     python3-pip
     python3-magic
     python3-colorama
+    python3-tabulate
     python3-boto3
     python3-pytest
     python3-redis
