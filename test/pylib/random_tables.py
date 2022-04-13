@@ -35,7 +35,7 @@ import itertools
 import logging
 import random
 import uuid
-from typing import Optional, Type, List, Union, TYPE_CHECKING
+from typing import Optional, Type, List, Set, Union, TYPE_CHECKING
 if TYPE_CHECKING:
     from cassandra.cluster import Session as CassandraSession            # type: ignore
 
@@ -146,6 +146,9 @@ class RandomTable():
         self.removed_columns: List[Column] = []
         # Counter for sequential values to insert
         self.next_seq = itertools.count(start=1).__next__
+        self.next_idx_id = itertools.count(start=1).__next__
+        self.indexes: Set[str] = set()
+        self.removed_indexes: Set[str] = set()
 
     @property
     def all_col_names(self) -> str:
@@ -202,6 +205,29 @@ class RandomTable():
         return await self.cql.run_async(f"INSERT INTO {self.full_name} ({self.all_col_names}) " +
                                         f"VALUES ({', '.join(['%s'] * len(self.columns)) })",
                                         parameters=[c.val(seed) for c in self.columns])
+
+    async def add_index(self, column: Union[Column, str], name: str = None) -> str:
+        if isinstance(column, int):
+            assert column > 0, f"Cannot create secondary index " \
+                               f"on partition key column {self.columns[0].name}"
+            col_name = self.columns[column].name
+        elif isinstance(column, str):
+            col_name = column
+        elif isinstance(column, Column):
+            assert column in self.columns
+            col_name = column.name
+        else:
+            raise TypeError(f"Wrong column type {type(column)} given to add_column")
+
+        name = name if name is not None else f"{self.name}_{col_name}_{self.next_idx_id():02}"
+        await self.cql.run_async(f"CREATE INDEX {name} on {self.full_name} ({col_name})")
+        self.indexes.add(name)
+        return name
+
+    async def drop_index(self, name: str) -> None:
+        self.indexes.remove(name)
+        await self.cql.run_async(f"DROP INDEX {self.keyspace}.{name}")
+        self.removed_indexes.add(name)
 
     def __str__(self):
         return self.full_name

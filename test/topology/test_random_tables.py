@@ -67,3 +67,13 @@ async def test_drop_column(cql, random_tables):
                                parameters=[table.columns[0].val(1)]))[0]
     assert len(res) == 3
     await random_tables.verify_schema(table)
+
+
+@pytest.mark.asyncio
+async def test_add_index(cql, random_tables):
+    """Add and drop an index"""
+    table = await random_tables.add_table(ncolumns=5)
+    with pytest.raises(AssertionError, match='partition key'):
+        await table.add_index(0)
+    await table.add_index(2)
+    await random_tables.verify_schema(table)
