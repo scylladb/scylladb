@@ -221,7 +221,8 @@ future<> db::commitlog_replayer::impl::process(stats* s, commitlog::buffer_and_r
         auto cm_it = local_cm.find(fm.schema_version());
         if (cm_it == local_cm.end()) {
             if (!cer.get_column_mapping()) {
-                throw std::runtime_error(format("unknown schema version {}", fm.schema_version()));
+                rlogger.debug("replaying at {} v={} at {}", fm.column_family_id(), fm.schema_version(), rp);
+                throw std::runtime_error(format("unknown schema version {}, table=", fm.schema_version(), fm.column_family_id()));
             }
             rlogger.debug("new schema version {} in entry {}", fm.schema_version(), rp);
             cm_it = local_cm.emplace(fm.schema_version(), *cer.get_column_mapping()).first;
