@@ -14,4 +14,5 @@ RUN dnf -y update \
     && echo 'Defaults !requiretty' >> /etc/sudoers
 RUN mkdir -p /root/.m2/repository
 ENV JAVA8_HOME=/usr/lib/jvm/java-1.8.0-openjdk
+ENV PATH=/usr/lib64/ccache:$PATH
 CMD /bin/bash
