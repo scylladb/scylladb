@@ -24,14 +24,23 @@ raft_group_registry::raft_group_registry(bool is_enabled, netw::messaging_servic
     : _is_enabled(is_enabled)
     , _ms(ms)
     , _fd(make_shared<raft_gossip_failure_detector>(gossiper, _srv_address_mappings))
-    , _raft_support_listener(feat.cluster_supports_raft_cluster_mgmt().when_enabled([&feat, &gossiper] {
+    , _raft_support_listener(feat.cluster_supports_raft_cluster_mgmt().when_enabled([this, &feat, &gossiper] {
+        // If the `USES_RAFT_CLUSTER_MANAGEMENT` feature was already enabled, do nothing.
+        //
+        // This can happen if the current node is either a fresh node in an empty cluster
+        // or a restarting node, which is already part of an existing group0.
+        if (!_is_enabled || feat.cluster_uses_raft_cluster_mgmt()) {
+            return;
+        }
         // When the cluster fully supports raft-based cluster management,
         // we can re-enable support for the second gossip feature to trigger
         // actual use of raft-based cluster management procedures.
         feat.support(gms::features::USES_RAFT_CLUSTER_MANAGEMENT).get();
-        // When the supported feature set is dynamically extended, re-advertise it through the gossip.
-        gossiper.add_local_application_state(gms::application_state::SUPPORTED_FEATURES,
-            gms::versioned_value::supported_features(feat.supported_feature_set())).get();
+        if (this_shard_id() == 0) {
+            // When the supported feature set is dynamically extended, re-advertise it through the gossip.
+            gossiper.add_local_application_state(gms::application_state::SUPPORTED_FEATURES,
+                gms::versioned_value::supported_features(feat.supported_feature_set())).get();
+        }
     }))
 {
 }

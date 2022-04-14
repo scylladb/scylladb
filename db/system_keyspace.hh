@@ -346,10 +346,11 @@ public:
     static future<std::unordered_map<gms::inet_address, sstring>> load_peer_features();
 
     static future<int> increment_and_get_generation();
-    bool bootstrap_complete();
-    bool bootstrap_in_progress();
-    bootstrap_state get_bootstrap_state();
-    bool was_decommissioned();
+    bool bootstrap_needed() const;
+    bool bootstrap_complete() const;
+    bool bootstrap_in_progress() const;
+    bootstrap_state get_bootstrap_state() const;
+    bool was_decommissioned() const;
     future<> set_bootstrap_state(bootstrap_state state);
 
     /**

@@ -174,7 +174,10 @@ raft_group0::do_discover_group0(raft::server_address my_addr) {
 
 future<> raft_group0::join_group0() {
     assert(this_shard_id() == 0);
-    if (!_raft_gr.is_enabled()) {
+    // do nothing either if raft group registry is not enabled or we've already
+    // finished joining some existing group0, so that subsequent calls
+    // to the function are safe.
+    if (!_raft_gr.is_enabled() || std::holds_alternative<raft::group_id>(_group0)) {
         co_return;
     }
     auto my_addr = co_await load_or_create_my_addr();

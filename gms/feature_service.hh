@@ -204,6 +204,10 @@ public:
         return _supports_raft_cluster_mgmt;
     }
 
+    bool cluster_uses_raft_cluster_mgmt() const {
+        return static_cast<bool>(_uses_raft_cluster_mgmt);
+    }
+
     bool cluster_supports_keyspace_storage_options() const {
         return bool(_keyspace_storage_options);
     }

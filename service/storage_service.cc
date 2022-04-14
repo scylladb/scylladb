@@ -3677,6 +3677,10 @@ future<> storage_service::node_ops_abort_thread() {
     });
 }
 
+future<> storage_service::join_group0() {
+    assert(_group0);
+    return _group0->join_group0();
+}
 
 } // namespace service
 
