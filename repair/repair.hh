@@ -26,6 +26,8 @@
 #include "utils/hash.hh"
 #include "streaming/stream_reason.hh"
 #include "locator/token_metadata.hh"
+#include "repair/hash.hh"
+#include "repair/sync_boundary.hh"
 
 class flat_mutation_reader;
 
@@ -256,58 +258,6 @@ public:
 future<uint64_t> estimate_partitions(seastar::sharded<replica::database>& db, const sstring& keyspace,
         const sstring& cf, const dht::token_range& range);
 
-// Represent a position of a mutation_fragment read from a flat mutation
-// reader. Repair nodes negotiate a small range identified by two
-// repair_sync_boundary to work on in each round.
-struct repair_sync_boundary {
-    dht::decorated_key pk;
-    position_in_partition position;
-    class tri_compare {
-        dht::ring_position_comparator _pk_cmp;
-        position_in_partition::tri_compare _position_cmp;
-    public:
-        tri_compare(const schema& s) : _pk_cmp(s), _position_cmp(s) { }
-        std::strong_ordering operator()(const repair_sync_boundary& a, const repair_sync_boundary& b) const {
-            auto ret = _pk_cmp(a.pk, b.pk);
-            if (ret == 0) {
-                ret = _position_cmp(a.position, b.position);
-            }
-            return ret;
-        }
-    };
-    friend std::ostream& operator<<(std::ostream& os, const repair_sync_boundary& x) {
-        return os << "{ " << x.pk << "," <<  x.position << " }";
-    }
-};
-
-// Hash of a repair row
-class repair_hash {
-public:
-    uint64_t hash = 0;
-    repair_hash() = default;
-    explicit repair_hash(uint64_t h) : hash(h) {
-    }
-    void clear() {
-        hash = 0;
-    }
-    void add(const repair_hash& other) {
-        hash ^= other.hash;
-    }
-    bool operator==(const repair_hash& x) const {
-        return x.hash == hash;
-    }
-    bool operator!=(const repair_hash& x) const {
-        return x.hash != hash;
-    }
-    bool operator<(const repair_hash& x) const {
-        return x.hash < hash;
-    }
-    friend std::ostream& operator<<(std::ostream& os, const repair_hash& x) {
-        return os << x.hash;
-    }
-};
-
-using repair_hash_set = absl::btree_set<repair_hash>;
 
 enum class repair_row_level_start_status: uint8_t {
     ok,
