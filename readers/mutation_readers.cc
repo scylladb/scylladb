@@ -31,7 +31,6 @@
 #include "readers/nonforwardable.hh"
 #include "readers/queue.hh"
 #include "readers/reversing_v2.hh"
-#include "readers/slice_mutations.hh"
 #include "readers/upgrading_consumer.hh"
 #include <seastar/core/coroutine.hh>
 #include <stack>
@@ -412,12 +411,17 @@ flat_mutation_reader_v2 make_slicing_filtering_reader(flat_mutation_reader_v2 rd
     return make_flat_mutation_reader_v2<reader>(std::move(rd), pr, slice);
 }
 
-std::vector<mutation> slice_mutations(schema_ptr schema, std::vector<mutation> ms, const query::partition_slice& slice) {
+static mutation slice_mutation(schema_ptr schema, mutation&& m, const query::partition_slice& slice) {
+    auto ck_ranges = query::clustering_key_filter_ranges::get_ranges(*schema, slice, m.key());
+    auto&& mp = mutation_partition(std::move(m.partition()), *m.schema(), std::move(ck_ranges));
+    return mutation(schema, m.decorated_key(), std::move(mp));
+}
+
+static std::vector<mutation> slice_mutations(schema_ptr schema, std::vector<mutation> ms, const query::partition_slice& slice) {
     std::vector<mutation> sliced_ms;
+    sliced_ms.reserve(ms.size());
     for (auto& m : ms) {
-        auto ck_ranges = query::clustering_key_filter_ranges::get_ranges(*schema, slice, m.key());
-        auto mp = mutation_partition(std::move(m.partition()), *m.schema(), std::move(ck_ranges));
-        sliced_ms.emplace_back(schema, m.decorated_key(), std::move(mp));
+        sliced_ms.emplace_back(slice_mutation(schema, std::move(m), slice));
     }
     return sliced_ms;
 }
@@ -899,63 +903,143 @@ flat_mutation_reader_v2 make_generating_reader_v1(schema_ptr s, reader_permit pe
     return make_flat_mutation_reader_v2<generating_reader_v2>(s, permit, adaptor(s, permit, std::move(get_next_fragment)));
 }
 
+class reader_from_mutation_base : public flat_mutation_reader_v2::impl {
+    const dht::decorated_key* _dk = nullptr;
+
+private:
+    void maybe_emit_partition_start() {
+        if (_dk) {
+            consume(tombstone{}); // flush partition-start
+        }
+    }
+public:
+    void consume_new_partition(const dht::decorated_key& dk) {
+        _dk = &dk;
+    }
+    void consume(tombstone t) {
+        push_mutation_fragment(*_schema, _permit, partition_start(*_dk, t));
+        _dk = nullptr;
+    }
+    stop_iteration consume(static_row&& sr) {
+        maybe_emit_partition_start();
+        push_mutation_fragment(*_schema, _permit, std::move(sr));
+        return stop_iteration(is_buffer_full());
+    }
+    stop_iteration consume(clustering_row&& cr) {
+        maybe_emit_partition_start();
+        push_mutation_fragment(*_schema, _permit, std::move(cr));
+        return stop_iteration(is_buffer_full());
+    }
+    stop_iteration consume(range_tombstone_change&& rtc) {
+        maybe_emit_partition_start();
+        push_mutation_fragment(*_schema, _permit, std::move(rtc));
+        return stop_iteration(is_buffer_full());
+    }
+    stop_iteration consume_end_of_partition() {
+        if (is_buffer_full()) {
+            return stop_iteration::yes;
+        }
+        maybe_emit_partition_start();
+        push_mutation_fragment(*_schema, _permit, partition_end{});
+        return stop_iteration::no;
+    }
+    void consume_end_of_stream() { }
+
+public:
+    reader_from_mutation_base(schema_ptr schema, reader_permit permit) noexcept
+        : impl(std::move(schema), std::move(permit))
+    { }
+    virtual future<> fast_forward_to(position_range pr) override {
+        return make_exception_future<>(std::bad_function_call{});
+    }
+    virtual future<> close() noexcept override {
+        return make_ready_future<>();
+    }
+};
+
+// Reader optimized for a single mutation.
 flat_mutation_reader_v2
-make_flat_mutation_reader_from_mutations_v2(schema_ptr schema, reader_permit permit, std::vector<mutation> ms, const query::partition_slice& slice, streamed_mutation::forwarding fwd) {
-    return make_flat_mutation_reader_from_mutations_v2(std::move(schema), std::move(permit), std::move(ms), query::full_partition_range, slice, fwd);
+make_flat_mutation_reader_from_mutations_v2(
+        schema_ptr s,
+        reader_permit permit,
+        mutation m,
+        streamed_mutation::forwarding fwd,
+        bool reversed) {
+    class reader final : public reader_from_mutation_base {
+        mutation _mutation;
+        bool _reversed;
+        std::optional<mutation_consume_cookie> _cookie;
+
+    public:
+        reader(schema_ptr schema, reader_permit permit, mutation&& m, bool reversed) noexcept
+            : reader_from_mutation_base(std::move(schema), std::move(permit))
+            , _mutation(std::move(m))
+            , _reversed(reversed)
+        {}
+        virtual future<> fill_buffer() override {
+            if (_end_of_stream) {
+                return make_ready_future<>();
+            }
+
+            auto res = std::move(_mutation).consume(*this, consume_in_reverse(_reversed), _cookie ? std::move(*_cookie) : mutation_consume_cookie());
+            if (res.stop == stop_iteration::yes) {
+                _cookie.emplace(std::move(res.cookie));
+            } else {
+                _end_of_stream = true;
+            }
+            return make_ready_future<>();
+        }
+        virtual future<> next_partition() override {
+            // Next partition may be called before fill_buffer
+            // so set _end_of_stream only if stopped mid-fill.
+            if (_cookie) {
+                clear_buffer();
+                _end_of_stream = true;
+            }
+            return make_ready_future<>();
+        }
+        virtual future<> fast_forward_to(const dht::partition_range& pr) override {
+            // We assume that the reader is always created within
+            // the initial partition_range.
+            clear_buffer();
+            _end_of_stream = true;
+            return make_ready_future<>();
+        }
+    };
+    auto res = make_flat_mutation_reader_v2<reader>(s, std::move(permit), std::move(m), reversed);
+    if (fwd) {
+        return make_forwardable(std::move(res));
+    }
+    return res;
+}
+
+// Reader optimized for a single mutation.
+flat_mutation_reader_v2
+make_flat_mutation_reader_from_mutations_v2(
+        schema_ptr s,
+        reader_permit permit,
+        mutation m,
+        const query::partition_slice& slice,
+        streamed_mutation::forwarding fwd) {
+    const auto reversed = slice.is_reversed();
+    auto sliced_mutation = reversed
+        ? slice_mutation(s->make_reversed(), std::move(m), query::half_reverse_slice(*s, slice))
+        : slice_mutation(s, std::move(m), slice);
+    return make_flat_mutation_reader_from_mutations_v2(std::move(s), std::move(permit), std::move(sliced_mutation), fwd, reversed);
 }
 
 flat_mutation_reader_v2
 make_flat_mutation_reader_from_mutations_v2(schema_ptr s, reader_permit permit, std::vector<mutation> mutations, const dht::partition_range& pr,
         const query::partition_slice& query_slice, streamed_mutation::forwarding fwd) {
-    class reader final : public flat_mutation_reader_v2::impl {
+    class reader final : public reader_from_mutation_base {
         std::vector<mutation> _mutations;
         const dht::partition_range* _pr;
         bool _reversed;
-        const dht::decorated_key* _dk = nullptr;
         std::optional<mutation_consume_cookie> _cookie;
-
-    private:
-        void maybe_emit_partition_start() {
-            if (_dk) {
-                consume(tombstone{}); // flush partition-start
-            }
-        }
-    public:
-        void consume_new_partition(const dht::decorated_key& dk) {
-            _dk = &dk;
-        }
-        void consume(tombstone t) {
-            push_mutation_fragment(*_schema, _permit, partition_start(*_dk, t));
-            _dk = nullptr;
-        }
-        stop_iteration consume(static_row&& sr) {
-            maybe_emit_partition_start();
-            push_mutation_fragment(*_schema, _permit, std::move(sr));
-            return stop_iteration(is_buffer_full());
-        }
-        stop_iteration consume(clustering_row&& cr) {
-            maybe_emit_partition_start();
-            push_mutation_fragment(*_schema, _permit, std::move(cr));
-            return stop_iteration(is_buffer_full());
-        }
-        stop_iteration consume(range_tombstone_change&& rtc) {
-            maybe_emit_partition_start();
-            push_mutation_fragment(*_schema, _permit, std::move(rtc));
-            return stop_iteration(is_buffer_full());
-        }
-        stop_iteration consume_end_of_partition() {
-            if (is_buffer_full()) {
-                return stop_iteration::yes;
-            }
-            maybe_emit_partition_start();
-            push_mutation_fragment(*_schema, _permit, partition_end{});
-            return stop_iteration::no;
-        }
-        void consume_end_of_stream() { }
 
     public:
         reader(schema_ptr schema, reader_permit permit, std::vector<mutation> mutations, const dht::partition_range& pr, bool reversed)
-            : impl(std::move(schema), std::move(permit))
+            : reader_from_mutation_base(std::move(schema), std::move(permit))
             , _mutations(std::move(mutations))
             , _pr(&pr)
             , _reversed(reversed)
@@ -1008,12 +1092,6 @@ make_flat_mutation_reader_from_mutations_v2(schema_ptr s, reader_permit permit, 
             _pr = &pr;
             return make_ready_future<>();
         }
-        virtual future<> fast_forward_to(position_range pr) override {
-            return make_exception_future<>(std::bad_function_call{});
-        }
-        virtual future<> close() noexcept override {
-            return make_ready_future<>();
-        }
     };
     if (mutations.empty()) {
         return make_empty_flat_reader_v2(std::move(s), std::move(permit));
@@ -1034,15 +1112,20 @@ make_flat_mutation_reader_from_mutations_v2(schema_ptr s, reader_permit permit, 
 
 flat_mutation_reader_v2
 make_flat_mutation_reader_from_mutations_v2(schema_ptr s, reader_permit permit, std::vector<mutation> mutations, const dht::partition_range& pr, streamed_mutation::forwarding fwd) {
+    if (mutations.size() == 1) {
+        dht::ring_position_comparator cmp{*s};
+        auto& m = mutations.back();
+        auto& dk = m.decorated_key();
+        if (pr.before(dk, cmp)) {
+            return make_empty_flat_reader_v2(std::move(s), std::move(permit));
+        }
+        if (!pr.after(dk, cmp)) {
+            return make_flat_mutation_reader_from_mutations_v2(std::move(s), std::move(permit), std::move(m), fwd);
+        }
+        // fallthrough to multi-partition reader
+        // since it may be fast_forwarded to include this mutation.
+    }
     return make_flat_mutation_reader_from_mutations_v2(s, std::move(permit), std::move(mutations), pr, s->full_slice(), fwd);
-}
-
-flat_mutation_reader_v2 make_flat_mutation_reader_from_mutations_v2(
-    schema_ptr schema,
-    reader_permit permit,
-    std::vector<mutation> ms,
-    streamed_mutation::forwarding fwd) {
-    return make_flat_mutation_reader_from_mutations_v2(std::move(schema), std::move(permit), std::move(ms), query::full_partition_range, fwd);
 }
 
 flat_mutation_reader_v2

@@ -41,7 +41,7 @@
 
 struct mock_consumer {
     struct result {
-        size_t _depth;
+        ssize_t _depth;
         size_t _consume_new_partition_call_count = 0;
         size_t _consume_tombstone_call_count = 0;
         size_t _consume_end_of_partition_call_count = 0;
@@ -53,36 +53,46 @@ struct mock_consumer {
     result _result;
     mock_consumer(const schema& s, reader_permit permit, size_t depth) : _schema(s), _permit(std::move(permit)) {
         _result._depth = depth;
+        testlog.debug("mock_consumer [{}] constructed: depth={}", fmt::ptr(this), _result._depth);
     }
     stop_iteration update_depth() {
         --_result._depth;
-        return _result._depth < 1 ? stop_iteration::yes : stop_iteration::no;
+        auto stop = _result._depth < 1 ? stop_iteration::yes : stop_iteration::no;
+        testlog.debug("mock_consumer [{}]: update_depth: depth={} stop_iteration={}", fmt::ptr(this), _result._depth, stop);
+        return stop;
     }
     void consume_new_partition(const dht::decorated_key& dk) {
         ++_result._consume_new_partition_call_count;
+        testlog.debug("mock_consumer [{}]: consume_new_partition: {}: {}", fmt::ptr(this), dk, _result._consume_new_partition_call_count);
     }
     stop_iteration consume(tombstone t) {
         ++_result._consume_tombstone_call_count;
+        testlog.debug("mock_consumer [{}]: consume tombstone: {}", fmt::ptr(this), _result._consume_tombstone_call_count);
         return stop_iteration::no;
     }
     stop_iteration consume(static_row&& sr) {
+        testlog.debug("mock_consumer [{}]: consume static_row", fmt::ptr(this));
         _result._fragments.emplace_back(_schema, _permit, std::move(sr));
         return update_depth();
     }
     stop_iteration consume(clustering_row&& cr) {
+        testlog.debug("mock_consumer [{}]: consume clustering_row: {}", fmt::ptr(this), cr.position());
         _result._fragments.emplace_back(_schema, _permit, std::move(cr));
         return update_depth();
     }
     stop_iteration consume(range_tombstone_change&& rtc) {
+        testlog.debug("mock_consumer [{}]: consume range_tombstone_change: {} {}", fmt::ptr(this), rtc.position(), rtc.tombstone());
         _result._fragments.emplace_back(_schema, _permit, std::move(rtc));
         return update_depth();
     }
     stop_iteration consume_end_of_partition() {
         ++_result._consume_end_of_partition_call_count;
+        testlog.debug("mock_consumer [{}]: consume_end_of_partition: {}", fmt::ptr(this), _result._consume_end_of_partition_call_count);
         return update_depth();
     }
     result consume_end_of_stream() {
         _result._consume_end_of_stream_called = true;
+        testlog.debug("mock_consumer [{}]: consume_end_of_stream", fmt::ptr(this));
         return std::move(_result);
     }
 };
@@ -106,14 +116,14 @@ SEASTAR_TEST_CASE(test_flat_mutation_reader_consume_single_partition) {
         for_each_mutation([&] (const mutation& m) {
             size_t fragments_in_m = count_fragments(m);
             for (size_t depth = 1; depth <= fragments_in_m + 1; ++depth) {
-                auto r = make_flat_mutation_reader_from_mutations_v2(m.schema(), semaphore.make_permit(), {m});
+                auto r = make_flat_mutation_reader_from_mutations_v2(m.schema(), semaphore.make_permit(), m);
                 auto close_reader = deferred_close(r);
                 auto result = r.consume(mock_consumer(*m.schema(), semaphore.make_permit(), depth)).get0();
                 BOOST_REQUIRE(result._consume_end_of_stream_called);
                 BOOST_REQUIRE_EQUAL(1, result._consume_new_partition_call_count);
                 BOOST_REQUIRE_EQUAL(1, result._consume_end_of_partition_call_count);
                 BOOST_REQUIRE_EQUAL(m.partition().partition_tombstone() ? 1 : 0, result._consume_tombstone_call_count);
-                auto r2 = assert_that(make_flat_mutation_reader_from_mutations_v2(m.schema(), semaphore.make_permit(), {m}));
+                auto r2 = assert_that(make_flat_mutation_reader_from_mutations_v2(m.schema(), semaphore.make_permit(), m));
                 r2.produces_partition_start(m.decorated_key(), m.partition().partition_tombstone());
                 if (result._fragments.empty()) {
                     continue;
