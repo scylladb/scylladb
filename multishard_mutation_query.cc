@@ -271,7 +271,7 @@ public:
         co_return permit;
     }
 
-    future<> lookup_readers(db::timeout_clock::time_point timeout);
+    future<> lookup_readers(db::timeout_clock::time_point timeout) noexcept;
 
     future<> save_readers(flat_mutation_reader_v2::tracked_buffer unconsumed_buffer, detached_compaction_state compaction_state,
             std::optional<clustering_key_prefix> last_ckey);
@@ -542,11 +542,11 @@ future<> read_context::save_reader(shard_id shard, const dht::decorated_key& las
   });
 }
 
-future<> read_context::lookup_readers(db::timeout_clock::time_point timeout) {
+future<> read_context::lookup_readers(db::timeout_clock::time_point timeout) noexcept {
     if (_cmd.query_uuid == utils::UUID{} || _cmd.is_first_page) {
         return make_ready_future<>();
     }
-
+    try {
         return _db.invoke_on_all([this, cmd = &_cmd, ranges = &_ranges, gs = global_schema_ptr(_schema),
                 gts = tracing::global_trace_state_ptr(_trace_state), timeout] (replica::database& db) mutable {
             auto schema = gs.get();
@@ -577,6 +577,9 @@ future<> read_context::lookup_readers(db::timeout_clock::time_point timeout) {
                     reader_meta::remote_parts(q.permit(), std::move(q).reader_range(), std::move(q).reader_slice(), table.read_in_progress(),
                             std::move(handle)));
         });
+    } catch (...) {
+        return current_exception_as_future();
+    }
 }
 
 future<> read_context::save_readers(flat_mutation_reader_v2::tracked_buffer unconsumed_buffer, detached_compaction_state compaction_state,
