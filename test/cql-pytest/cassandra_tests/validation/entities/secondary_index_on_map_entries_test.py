@@ -147,8 +147,11 @@ def testShouldRecognizeAlteredOrDeletedMapEntries(cql, simple_table_and_index):
     assertRowsForConditions(cql, simple_table_and_index, "v[?]=?", ["common", 31415], bar, baz)
     assertRowsForConditions(cql, simple_table_and_index, "v[?]=?", ["target", 4096], baz)
 
-def testShouldRejectQueriesForNullEntries(cql, simple_table_and_index):
-    assert_invalid(cql, simple_table_and_index, "SELECT * FROM %s WHERE v['somekey'] = null")
+
+# Scylla does not consider "= null" an error, it just matches nothing.
+# See issue #4776.
+#def testShouldRejectQueriesForNullEntries(cql, simple_table_and_index):
+#    assert_invalid(cql, simple_table_and_index, "SELECT * FROM %s WHERE v['somekey'] = null")
 
 def testShouldTreatQueriesAgainstFrozenMapIndexesAsInvalid(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k TEXT PRIMARY KEY, v FROZEN<MAP<TEXT, TEXT>>)") as table:
