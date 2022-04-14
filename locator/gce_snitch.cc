@@ -20,10 +20,10 @@
 
 namespace locator {
 
-gce_snitch::gce_snitch(const sstring& fname, unsigned io_cpuid, const sstring& meta_server_url) : production_snitch_base(fname) {
-    if (this_shard_id() == io_cpuid) {
-        io_cpu_id() = io_cpuid;
-        _meta_server_url = std::move(meta_server_url);
+gce_snitch::gce_snitch(const snitch_config& cfg) : production_snitch_base(cfg) {
+    if (this_shard_id() == cfg.io_cpu_id) {
+        io_cpu_id() = cfg.io_cpu_id;
+        _meta_server_url = cfg.gce_meta_server_url;
     }
 }
 
@@ -61,7 +61,7 @@ future<> gce_snitch::load_config() {
                 _my_dc += datacenter_suffix;
                 logger().info("GCESnitch using region: {}, zone: {}.", _my_dc, _my_rack);
 
-                return _my_distributed->invoke_on_all([this] (snitch_ptr& local_s) {
+                return container().invoke_on_all([this] (snitch_ptr& local_s) {
                     // Distribute the new values on all CPUs but the current one
                     if (this_shard_id() != io_cpu_id()) {
                         local_s->set_my_dc(_my_dc);
@@ -140,20 +140,7 @@ future<sstring> gce_snitch::read_property_file() {
     });
 }
 
-using registry_3_params = class_registrator<i_endpoint_snitch, gce_snitch, const sstring&, const unsigned&, const sstring&>;
-static registry_3_params registrator3("org.apache.cassandra.locator.GoogleCloudSnitch");
-static registry_3_params registrator3_short_name("GoogleCloudSnitch");
-
-using registry_2_params = class_registrator<i_endpoint_snitch, gce_snitch, const sstring&, const unsigned&>;
-static registry_2_params registrator2("org.apache.cassandra.locator.GoogleCloudSnitch");
-static registry_2_params registrator2_short_name("GoogleCloudSnitch");
-
-
-using registry_1_param = class_registrator<i_endpoint_snitch, gce_snitch, const sstring&>;
-static registry_1_param registrator1("org.apache.cassandra.locator.GoogleCloudSnitch");
-static registry_1_param registrator1_short_name("GoogleCloudSnitch");
-
-using registry_default = class_registrator<i_endpoint_snitch, gce_snitch>;
+using registry_default = class_registrator<i_endpoint_snitch, gce_snitch, const snitch_config&>;
 static registry_default registrator_default("org.apache.cassandra.locator.GoogleCloudSnitch");
 static registry_default registrator_default_short_name("GoogleCloudSnitch");
 

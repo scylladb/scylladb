@@ -40,13 +40,11 @@ public:
     static constexpr const char* dc_suffix_property_key    = "dc_suffix";
     const std::unordered_set<sstring> allowed_property_keys;
 
-    production_snitch_base(const sstring& prop_file_name = "");
+    explicit production_snitch_base(snitch_config);
 
     virtual sstring get_rack(inet_address endpoint) override;
     virtual sstring get_datacenter(inet_address endpoint) override;
-    virtual void set_my_distributed(distributed<snitch_ptr>* d) override;
-
-    void reset_io_state();
+    virtual void set_backreference(snitch_ptr& d) override;
 
 private:
     sstring get_endpoint_info(inet_address endpoint, gms::application_state key,
@@ -74,14 +72,18 @@ protected:
     void throw_incomplete_file() const;
 
 protected:
-    promise<> _io_is_stopped;
     std::optional<addr2dc_rack_map> _saved_endpoints;
-    distributed<snitch_ptr>* _my_distributed = nullptr;
     std::string _prop_file_contents;
     sstring _prop_file_name;
     std::unordered_map<sstring, sstring> _prop_values;
 
+    sharded<snitch_ptr>& container() noexcept {
+        assert(_backreference != nullptr);
+        return _backreference->container();
+    }
+
 private:
     size_t _prop_file_size;
+    snitch_ptr* _backreference = nullptr;
 };
 } // namespace locator

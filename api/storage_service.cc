@@ -807,8 +807,9 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::update_snitch.set(r, [](std::unique_ptr<request> req) {
-        auto ep_snitch_class_name = req->get_query_param("ep_snitch_class_name");
-        return locator::i_endpoint_snitch::reset_snitch(ep_snitch_class_name).then([] {
+        locator::snitch_config cfg;
+        cfg.name = req->get_query_param("ep_snitch_class_name");
+        return locator::i_endpoint_snitch::reset_snitch(cfg).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });

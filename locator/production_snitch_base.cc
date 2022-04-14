@@ -25,13 +25,13 @@
 
 namespace locator {
 
-production_snitch_base::production_snitch_base(const sstring& prop_file_name)
+production_snitch_base::production_snitch_base(snitch_config cfg)
         : allowed_property_keys({ dc_property_key,
                           rack_property_key,
                           prefer_local_property_key,
                           dc_suffix_property_key }) {
-    if (!prop_file_name.empty()) {
-        _prop_file_name = prop_file_name;
+    if (!cfg.properties_file_name.empty()) {
+        _prop_file_name = cfg.properties_file_name;
     } else {
         _prop_file_name = db::config::get_conf_sub(snitch_properties_filename).string();
     }
@@ -58,16 +58,8 @@ sstring production_snitch_base::get_datacenter(inet_address endpoint) {
                              default_dc);
 }
 
-void production_snitch_base::set_my_distributed(distributed<snitch_ptr>* d) {
-    _my_distributed = d;
-}
-
-void production_snitch_base::reset_io_state() {
-    //
-    // Reset the promise to allow repeating
-    // start()+stop()/pause_io()+resume_io() call sequences.
-    //
-    _io_is_stopped = promise<>();
+void production_snitch_base::set_backreference(snitch_ptr& d) {
+    _backreference = &d;
 }
 
 sstring production_snitch_base::get_endpoint_info(inet_address endpoint, gms::application_state key,

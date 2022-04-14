@@ -21,6 +21,12 @@ namespace fs = std::filesystem;
 
 static fs::path test_files_subdir("test/resource/snitch_property_files");
 
+static future<> create_snitch(locator::snitch_config cfg) {
+    return locator::i_endpoint_snitch::snitch_instance().start(cfg).then([] {
+        return locator::i_endpoint_snitch::snitch_instance().invoke_on_all(&locator::snitch_ptr::start);
+    });
+}
+
 future<> one_test(const std::string& property_fname, bool exp_result) {
     using namespace locator;
     using namespace std::filesystem;
@@ -37,16 +43,16 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
 
     engine().set_strict_dma(false);
 
-    return i_endpoint_snitch::create_snitch<const sstring&>(
-        "org.apache.cassandra.locator.GossipingPropertyFileSnitch",
-        sstring(fname.string()))
-        .then_wrapped([exp_result] (auto&& f) {
+    snitch_config cfg;
+    cfg.name = "org.apache.cassandra.locator.GossipingPropertyFileSnitch";
+    cfg.properties_file_name = fname.string();
+    return create_snitch(cfg).then_wrapped([exp_result] (auto&& f) -> future<> {
             try {
                 f.get();
                 if (!exp_result) {
                     BOOST_ERROR("Failed to catch an error in a malformed "
                                 "configuration file");
-                    return i_endpoint_snitch::stop_snitch();
+                    return i_endpoint_snitch::snitch_instance().stop();
                 }
                 auto cpu0_dc = make_lw_shared<sstring>();
                 auto cpu0_rack = make_lw_shared<sstring>();
@@ -73,7 +79,7 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
                         } else {
                             BOOST_CHECK(true);
                         }
-                        return i_endpoint_snitch::stop_snitch();
+                        return i_endpoint_snitch::snitch_instance().stop();
                     });
                 });
             } catch (std::exception& e) {

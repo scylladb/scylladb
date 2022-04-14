@@ -39,9 +39,8 @@ future<bool> gossiping_property_file_snitch::property_file_was_modified() {
     });
 }
 
-gossiping_property_file_snitch::gossiping_property_file_snitch(
-    const sstring& fname, unsigned io_cpuid)
-: production_snitch_base(fname), _file_reader_cpu_id(io_cpuid) {
+gossiping_property_file_snitch::gossiping_property_file_snitch(const snitch_config& cfg)
+        : production_snitch_base(cfg), _file_reader_cpu_id(cfg.io_cpu_id) {
     if (this_shard_id() == _file_reader_cpu_id) {
         io_cpu_id() = _file_reader_cpu_id;
     }
@@ -168,9 +167,7 @@ future<> gossiping_property_file_snitch::reload_configuration() {
         _my_rack = new_rack;
         _prefer_local = new_prefer_local;
 
-        assert(_my_distributed);
-
-        return _my_distributed->invoke_on_all(
+        return container().invoke_on_all(
             [this] (snitch_ptr& local_s) {
 
             // Distribute the new values on all CPUs but the current one
@@ -187,14 +184,14 @@ future<> gossiping_property_file_snitch::reload_configuration() {
 
             return seastar::async([this] {
                 // reload Gossiper state (executed on CPU0 only)
-                _my_distributed->invoke_on(0, [] (snitch_ptr& local_snitch_ptr) {
+                container().invoke_on(0, [] (snitch_ptr& local_snitch_ptr) {
                     return local_snitch_ptr->reload_gossiper_state();
                 }).get();
 
                 _reconfigured();
 
                 // spread the word...
-                _my_distributed->invoke_on(0, [] (snitch_ptr& local_snitch_ptr) {
+                container().invoke_on(0, [] (snitch_ptr& local_snitch_ptr) {
                     auto& gossiper = gms::get_local_gossiper();
                     if (gossiper.is_enabled()) {
                         return gossiper.add_local_application_state(local_snitch_ptr->get_app_states());
@@ -283,18 +280,7 @@ future<> gossiping_property_file_snitch::reload_gossiper_state() {
     });
 }
 
-using registry_2_params = class_registrator<i_endpoint_snitch,
-                                   gossiping_property_file_snitch,
-                                   const sstring&, unsigned>;
-static registry_2_params registrator2("org.apache.cassandra.locator.GossipingPropertyFileSnitch");
-
-using registry_1_param = class_registrator<i_endpoint_snitch,
-                                   gossiping_property_file_snitch,
-                                   const sstring&>;
-static registry_1_param registrator1("org.apache.cassandra.locator.GossipingPropertyFileSnitch");
-
-using registry_default = class_registrator<i_endpoint_snitch,
-                                           gossiping_property_file_snitch>;
+using registry_default = class_registrator<i_endpoint_snitch, gossiping_property_file_snitch, const snitch_config&>;
 static registry_default registrator_default("org.apache.cassandra.locator.GossipingPropertyFileSnitch");
 static registry_default registrator_default_short_name("GossipingPropertyFileSnitch");
 } // namespace locator

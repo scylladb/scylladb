@@ -448,8 +448,10 @@ public:
 
             utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
             utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
-            locator::i_endpoint_snitch::create_snitch("SimpleSnitch").get();
-            auto stop_snitch = defer([] { locator::i_endpoint_snitch::stop_snitch().get(); });
+            sharded<locator::snitch_ptr>& snitch = locator::i_endpoint_snitch::snitch_instance();
+            snitch.start(locator::snitch_config{}).get();
+            auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
+            snitch.invoke_on_all(&locator::snitch_ptr::start).get();
 
             sharded<abort_source> abort_sources;
             abort_sources.start().get();

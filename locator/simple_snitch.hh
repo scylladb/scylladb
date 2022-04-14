@@ -21,7 +21,7 @@ namespace locator {
  * which improves cache locality.
  */
 struct simple_snitch : public snitch_base {
-    simple_snitch() {
+    simple_snitch(const snitch_config& cfg) {
         _my_dc = get_datacenter(utils::fb_utilities::get_broadcast_address());
         _my_rack = get_rack(utils::fb_utilities::get_broadcast_address());
 

@@ -175,10 +175,12 @@ void simple_test() {
     utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
 
     // Create the RackInferringSnitch
-    i_endpoint_snitch::create_snitch("RackInferringSnitch").get();
-    auto stop_snitch = defer([] {
-        i_endpoint_snitch::stop_snitch().get();
-    });
+    snitch_config cfg;
+    cfg.name = "RackInferringSnitch";
+    sharded<snitch_ptr>& snitch = i_endpoint_snitch::snitch_instance();
+    snitch.start(cfg).get();
+    auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
+    snitch.invoke_on_all(&snitch_ptr::start).get();
 
     locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); });
 
@@ -252,10 +254,12 @@ void heavy_origin_test() {
     utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
 
     // Create the RackInferringSnitch
-    i_endpoint_snitch::create_snitch("RackInferringSnitch").get();
-    auto stop_snitch = defer([] {
-        i_endpoint_snitch::stop_snitch().get();
-    });
+    snitch_config cfg;
+    cfg.name = "RackInferringSnitch";
+    sharded<snitch_ptr>& snitch = i_endpoint_snitch::snitch_instance();
+    snitch.start(cfg).get();
+    auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
+    snitch.invoke_on_all(&snitch_ptr::start).get();
 
     locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); });
 
@@ -565,10 +569,12 @@ SEASTAR_THREAD_TEST_CASE(testCalculateEndpoints) {
     utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
     utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
 
-    i_endpoint_snitch::create_snitch("RackInferringSnitch").get();
-    auto stop_snitch = defer([] {
-        i_endpoint_snitch::stop_snitch().get();
-    });
+    snitch_config cfg;
+    cfg.name = "RackInferringSnitch";
+    sharded<snitch_ptr>& g_snitch = i_endpoint_snitch::snitch_instance();
+    g_snitch.start(cfg).get();
+    auto stop_snitch = defer([&g_snitch] { g_snitch.stop().get(); });
+    g_snitch.invoke_on_all(&snitch_ptr::start).get();
 
     constexpr size_t NODES = 100;
     constexpr size_t VNODES = 64;

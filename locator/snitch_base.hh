@@ -40,21 +40,20 @@ struct snitch_ptr;
 
 typedef gms::inet_address inet_address;
 
+struct snitch_config {
+    sstring name = "SimpleSnitch";
+    sstring properties_file_name = "";
+    unsigned io_cpu_id = 0;
+
+    // GCE-specific
+    sstring gce_meta_server_url = "";
+};
+
 struct i_endpoint_snitch {
-private:
-    template <typename... A>
-    static future<> init_snitch_obj(
-        distributed<snitch_ptr>& snitch_obj, const sstring& snitch_name, A&&... a);
 public:
     using ptr_type = std::unique_ptr<i_endpoint_snitch>;
 
-    template <typename... A>
-    static future<> create_snitch(const sstring& snitch_name, A&&... a);
-
-    template <typename... A>
-    static future<> reset_snitch(const sstring& snitch_name, A&&... a);
-
-    static future<> stop_snitch();
+    static future<> reset_snitch(snitch_config cfg);
 
     /**
      * returns a String representing the rack this endpoint belongs to
@@ -155,7 +154,7 @@ public:
     virtual sstring get_name() const = 0;
 
     // should be called for production snitches before calling start()
-    virtual void set_my_distributed(distributed<snitch_ptr>* d)  {
+    virtual void set_backreference(snitch_ptr& d)  {
         //noop by default
     }
 
@@ -169,12 +168,12 @@ public:
         return snitch_signal_connection_t();
     }
 
-protected:
     static logging::logger& logger() {
         static logging::logger snitch_logger("snitch_logger");
         return snitch_logger;
     }
 
+protected:
     static unsigned& io_cpu_id() {
         static unsigned id = 0;
         return id;
@@ -191,7 +190,7 @@ protected:
     } _state = snitch_state::initializing;
 };
 
-struct snitch_ptr {
+struct snitch_ptr : public peering_sharded_service<snitch_ptr> {
     using ptr_type = i_endpoint_snitch::ptr_type;
     future<> stop() {
         if (_ptr) {
@@ -229,73 +228,11 @@ struct snitch_ptr {
         return _ptr ? true : false;
     }
 
+    explicit snitch_ptr(const snitch_config cfg);
+
 private:
     ptr_type _ptr;
 };
-
-/**
- * Initializes the distributed<snitch_ptr> object
- *
- * @note The local snitch objects will remain not start()ed.
- *
- * @param snitch_obj distributed<> object to initialize
- * @param snitch_name name of the snitch class to create
- * @param a snitch constructor arguments
- *
- * @return ready future when the snitch has been successfully created
- */
-template <typename... A>
-future<> i_endpoint_snitch::init_snitch_obj(
-    distributed<snitch_ptr>& snitch_obj, const sstring& snitch_name, A&&... a) {
-
-    // First, create the snitch_ptr objects...
-    return snitch_obj.start().then(
-        [&snitch_obj, snitch_name = std::move(snitch_name), a = std::make_tuple(std::forward<A>(a)...)] () {
-        // ...then, create the snitches...
-        return snitch_obj.invoke_on_all(
-            [snitch_name, a, &snitch_obj] (snitch_ptr& local_inst) {
-            try {
-                auto s(std::move(apply([snitch_name] (A&&... a) {
-                    return create_object<i_endpoint_snitch>(snitch_name, std::forward<A>(a)...);
-                }, std::move(a))));
-
-                s->set_my_distributed(&snitch_obj);
-                local_inst = std::move(s);
-            } catch (no_such_class& e) {
-                logger().error("Can't create snitch {}: not supported", snitch_name);
-                throw;
-            } catch (...) {
-                throw;
-            }
-
-            return make_ready_future<>();
-        });
-    });
-}
-/**
- * Creates the distributed i_endpoint_snitch::snitch_instane object
- *
- * @param snitch_name name of the snitch class (comes from the cassandra.yaml)
- *
- * @return ready future when the distributed object is ready.
- */
-template <typename... A>
-future<> i_endpoint_snitch::create_snitch(
-    const sstring& snitch_name, A&&... a) {
-
-    // First, create and "start" the distributed snitch object...
-    return init_snitch_obj(snitch_instance(), snitch_name, std::forward<A>(a)...).then([snitch_name] {
-        // ...and then start each local snitch.
-        return snitch_instance().invoke_on_all([] (snitch_ptr& local_inst) {
-            return local_inst.start();
-        }).handle_exception([snitch_name] (std::exception_ptr eptr) {
-            logger().error("Failed to create {}: {}", snitch_name, eptr);
-            return stop_snitch().finally([eptr = std::move(eptr)] {
-                return make_exception_future<>(eptr);
-            });
-        });
-    });
-}
 
 /**
  * Resets the global snitch instance with the new value
@@ -319,18 +256,12 @@ future<> i_endpoint_snitch::create_snitch(
  *  6) Start the new snitches.
  *  7) Stop() the temporary distributed<snitch_ptr> from (1).
  */
-template <typename... A>
-future<> i_endpoint_snitch::reset_snitch(
-    const sstring& snitch_name, A&&... a) {
-    return seastar::async(
-            [snitch_name, a = std::make_tuple(std::forward<A>(a)...)] {
-
+inline future<> i_endpoint_snitch::reset_snitch(snitch_config cfg) {
+    return seastar::async([cfg = std::move(cfg)] {
         // (1) create a new snitch
         distributed<snitch_ptr> tmp_snitch;
         try {
-            apply([snitch_name,&tmp_snitch](A&& ... a) {
-                return init_snitch_obj(tmp_snitch, snitch_name, std::forward<A>(a)...);
-            }, std::move(a)).get();
+            tmp_snitch.start(cfg).get();
 
             // (2) start the local instances of the new snitch
             tmp_snitch.invoke_on_all([] (snitch_ptr& local_inst) {
@@ -344,10 +275,6 @@ future<> i_endpoint_snitch::reset_snitch(
         // If we've got here then we may not fail
 
         // (3) stop the current snitch instances on all CPUs
-        snitch_instance().invoke_on(io_cpu_id(), [] (snitch_ptr& s) {
-            // stop the instance on an I/O CPU first
-            return s->stop();
-        }).get();
         snitch_instance().invoke_on_all([] (snitch_ptr& s) {
             return s->stop();
         }).get();
@@ -357,10 +284,6 @@ future<> i_endpoint_snitch::reset_snitch(
         // and initialized. We may pause its I/O it now and start moving
         // pointers...
         //
-        tmp_snitch.invoke_on(io_cpu_id(), [] (snitch_ptr& local_inst) {
-            // pause the instance on an I/O CPU first
-            return local_inst->pause_io();
-        }).get();
         tmp_snitch.invoke_on_all([] (snitch_ptr& local_inst) {
             return local_inst->pause_io();
         }).get();
@@ -370,7 +293,7 @@ future<> i_endpoint_snitch::reset_snitch(
         // per-shard level (since users are holding snitch_ptr objects only)
         //
         tmp_snitch.invoke_on_all([] (snitch_ptr& local_inst) {
-            local_inst->set_my_distributed(&snitch_instance());
+            local_inst->set_backreference(snitch_instance().local());
             snitch_instance().local() = std::move(local_inst);
 
             return make_ready_future<>();

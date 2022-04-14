@@ -24,7 +24,7 @@ using inet_address = gms::inet_address;
  * in the 2nd and 3rd octets of the ip address, respectively.
  */
 struct rack_inferring_snitch : public snitch_base {
-    rack_inferring_snitch() {
+    rack_inferring_snitch(const snitch_config& cfg) {
         _my_dc = get_datacenter(utils::fb_utilities::get_broadcast_address());
         _my_rack = get_rack(utils::fb_utilities::get_broadcast_address());
 

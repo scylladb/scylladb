@@ -744,9 +744,16 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 tracing::tracing::tracing_instance().stop().get();
             });
             supervisor::notify("creating snitch");
-            i_endpoint_snitch::create_snitch(cfg->endpoint_snitch()).get();
-            // #293 - do not stop anything
-            // engine().at_exit([] { return i_endpoint_snitch::stop_snitch(); });
+            snitch_config snitch_cfg;
+            snitch_cfg.name = cfg->endpoint_snitch();
+            sharded<locator::snitch_ptr>& snitch = i_endpoint_snitch::snitch_instance();
+            snitch.start(snitch_cfg).get();
+            auto stop_snitch = defer_verbose_shutdown("snitch", [&snitch] {
+                snitch.stop().get();
+            });
+            snitch.invoke_on_all(&locator::snitch_ptr::start).get();
+            // #293 - do not stop anything (unless snitch.on_all(start) fails)
+            stop_snitch->cancel();
 
             auto api_addr = utils::resolve(cfg->api_address || cfg->rpc_address, family, preferred).get0();
             supervisor::notify("starting API server");
