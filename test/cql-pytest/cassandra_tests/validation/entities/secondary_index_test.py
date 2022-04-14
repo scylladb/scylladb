@@ -987,9 +987,8 @@ def testIndexOnNonFrozenCollectionOfFrozenUDT(cql, test_keyspace):
             udt1 = a_tuple(1)
             udt2 = a_tuple(2)
             execute(cql, table, "INSERT INTO %s (k, v) VALUES (?, ?)", 1, {udt1})
-            # Reproduces #2962 - indexing of non-frozen collection is not
-            # yet supported in any form.
-            assert_invalid_message(cql, table, "Cannot create index on keys of column v with non-map type", "CREATE INDEX ON %s (keys(v))")
+
+            assert_invalid_message_re(cql, table, "Cannot create (secondary )?index on keys of column v with non-map type", "CREATE INDEX ON %s (keys(v))")
             assert_invalid_message(cql, table, "full() indexes can only be created on frozen collections", "CREATE INDEX ON %s (full(v))")
             index_name = unique_name()
             # Reproduces #8745:
@@ -1006,8 +1005,11 @@ def testIndexOnNonFrozenCollectionOfFrozenUDT(cql, test_keyspace):
             assert_rows(execute(cql, table, "SELECT * FROM %s WHERE v CONTAINS ?", udt2), [2, {udt2}])
 
             execute(cql, table, f"DROP INDEX {test_keyspace}.{index_name}")
-            assert_invalid_message(cql, table, f"Index '{test_keyspace}.{index_name}' doesn't exist",
-                             f"DROP INDEX {test_keyspace}.{index_name}")
+
+            scylla_message = re.escape(f"Index '{index_name}' could not be found in any of the tables of keyspace '{test_keyspace}'")
+            cassandra_message = re.escape(f"Index '{test_keyspace}.{index_name}' doesn't exist")
+            assert_invalid_message_re(cql, table, f'({scylla_message}|{cassandra_message})', f"DROP INDEX {test_keyspace}.{index_name}")
+
             assert_invalid_message(cql, table, "ALLOW FILTERING",
                              "SELECT * FROM %s WHERE v CONTAINS ?", udt1)
 
