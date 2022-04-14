@@ -216,6 +216,7 @@ def testSelectKeyIn(cql, test_keyspace):
 
         assert_row_count(execute(cql, table, "SELECT firstname, lastname FROM %s WHERE userid IN (?, ?)", id1, id2), 2)
 
+@pytest.mark.xfail(reason="#10358 - Scylla doesn't throw error when UNSET_VALUE is used in WHERE clause")
 def testSetContainsWithIndex(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(account text, id int, categories set<text>, PRIMARY KEY (account, id))") as table:
         execute(cql, table, "CREATE INDEX ON %s(categories)")
@@ -234,8 +235,10 @@ def testSetContainsWithIndex(cql, test_keyspace):
             assert_rows(execute(cql, table, "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS ?", "test", 5, "lmn"),
                        ["test", 5, {"lmn"}])
 
-            assert_invalid_message(cql, table, "Unsupported null value for column categories",
-                                 "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS ?", "test", 5, None)
+            # Scylla does not consider "= null" an error, it just matches nothing.
+            # See issue #4776.
+            #assert_invalid_message(cql, table, "Unsupported null value for column categories",
+            #                     "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS ?", "test", 5, None)
 
             assert_invalid_message(cql, table, "Unsupported unset value for column categories",
                                  "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS ?", "test", 5, UNSET_VALUE)
@@ -244,6 +247,7 @@ def testSetContainsWithIndex(cql, test_keyspace):
                                  "SELECT * FROM %s WHERE account = ? AND categories CONTAINS ? AND categories CONTAINS ?", "xyz", "lmn", "notPresent")
             assert_empty(execute(cql, table, "SELECT * FROM %s WHERE account = ? AND categories CONTAINS ? AND categories CONTAINS ? ALLOW FILTERING", "xyz", "lmn", "notPresent"))
 
+@pytest.mark.xfail(reason="#10358 - Scylla doesn't throw error when UNSET_VALUE is used in WHERE clause")
 def testListContainsWithIndex(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(account text, id int, categories list<text>, PRIMARY KEY (account, id))") as table:
         execute(cql, table, "CREATE INDEX ON %s(categories)")
@@ -261,8 +265,10 @@ def testListContainsWithIndex(cql, test_keyspace):
             assert_rows(execute(cql, table, "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS ?;", "test", 5, "lmn"),
                        ["test", 5, ["lmn"]])
 
-            assert_invalid_message(cql, table, "Unsupported null value for column categories",
-                                 "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS ?", "test", 5, None)
+            # Scylla does not consider "= null" an error, it just matches nothing.
+            # See issue #4776.
+            #assert_invalid_message(cql, table, "Unsupported null value for column categories",
+            #                     "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS ?", "test", 5, None)
 
             assert_invalid_message(cql, table, "Unsupported unset value for column categories",
                                  "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS ?", "test", 5, UNSET_VALUE)
@@ -286,6 +292,7 @@ def testListContainsWithIndexAndFiltering(cql, test_keyspace):
                        [4, ["Dubai"], 3],
                        [3, ["Dubai"], 3])
 
+@pytest.mark.xfail(reason="#10358 - Scylla doesn't throw error when UNSET_VALUE is used in WHERE clause")
 def testMapKeyContainsWithIndex(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(account text, id int, categories map<text, text>, PRIMARY KEY (account, id))") as table:
         execute(cql, table, "CREATE INDEX ON %s(keys(categories))")
@@ -303,8 +310,10 @@ def testMapKeyContainsWithIndex(cql, test_keyspace):
             assert_rows(execute(cql, table, "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS KEY ?", "test", 5, "lmn"),
                        ["test", 5, {"lmn": "foo"}])
 
-            assert_invalid_message(cql, table, "Unsupported null value for column categories",
-                                 "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS KEY ?", "test", 5, None)
+            # Scylla does not consider "= null" an error, it just matches nothing.
+            # See issue #4776.
+            #assert_invalid_message(cql, table, "Unsupported null value for column categories",
+            #                     "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS KEY ?", "test", 5, None)
 
             assert_invalid_message(cql, table, "Unsupported unset value for column categories",
                                  "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS KEY ?", "test", 5, UNSET_VALUE)
@@ -319,6 +328,7 @@ def testMapKeyContainsWithIndex(cql, test_keyspace):
                                  "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS KEY ? AND categories CONTAINS ?",
                                  "test", 5, "lmn", "foo")
 
+@pytest.mark.xfail(reason="#10358 - Scylla doesn't throw error when UNSET_VALUE is used in WHERE clause")
 def testMapValueContainsWithIndex(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(account text, id int, categories map<text, text>, PRIMARY KEY (account, id))") as table:
         execute(cql, table, "CREATE INDEX ON %s(categories)")
@@ -337,8 +347,10 @@ def testMapValueContainsWithIndex(cql, test_keyspace):
             assert_rows(execute(cql, table, "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS ?", "test", 5, "foo"),
                        ["test", 5, {"lmn": "foo"}])
 
-            assert_invalid_message(cql, table, "Unsupported null value for column categories",
-                                 "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS ?", "test", 5, None)
+            # Scylla does not consider "= null" an error, it just matches nothing.
+            # See issue #4776.
+            #assert_invalid_message(cql, table, "Unsupported null value for column categories",
+            #                     "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS ?", "test", 5, None)
 
             assert_invalid_message(cql, table, "Unsupported unset value for column categories",
                                  "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS ?", "test", 5, UNSET_VALUE)
