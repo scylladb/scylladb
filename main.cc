@@ -680,11 +680,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
                 auto ip = utils::resolve(cfg->prometheus_address || cfg->listen_address, family, preferred).get0();
 
-                //FIXME discarded future
                 prometheus::config pctx;
                 pctx.metric_help = "Scylla server statistics";
                 pctx.prefix = cfg->prometheus_prefix();
-                (void)prometheus::start(prometheus_server, pctx);
+                prometheus::start(prometheus_server, pctx).get();
                 with_scheduling_group(maintenance_scheduling_group, [&] {
                   return prometheus_server.listen(socket_address{ip, cfg->prometheus_port()}).handle_exception([&ip, &cfg] (auto ep) {
                     startlog.error("Could not start Prometheus API server on {}:{}: {}", ip, cfg->prometheus_port(), ep);
