@@ -238,7 +238,6 @@ schema_ptr keyspaces() {
         {
             {"durable_writes", boolean_type},
             {"replication", map_type_impl::get_instance(utf8_type, utf8_type, false)},
-            {"storage", map_type_impl::get_instance(utf8_type, utf8_type, false)},
         },
         // static columns
         {},
