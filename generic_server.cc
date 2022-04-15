@@ -178,37 +178,43 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
             auto addr = std::move(cs_sa.remote_address);
             fd.set_nodelay(true);
             fd.set_keepalive(keepalive);
-            auto conn = make_connection(server_addr, std::move(fd), std::move(addr));
-            // Move the processing into the background.
-            (void)futurize_invoke([this, conn] {
-                return advertise_new_connection(conn); // Notify any listeners about new connection.
-            }).then_wrapped([this, conn] (future<> f) {
-                try {
-                    f.get();
-                } catch (...) {
-                    _logger.info("exception while advertising new connection: {}", std::current_exception());
-                }
-                // Block while monitoring for lifetime/errors.
-                return conn->process().then_wrapped([this, conn] (auto f) {
-                    try {
-                        f.get();
-                    } catch (...) {
-                        auto ep = std::current_exception();
-                        if (!is_broken_pipe_or_connection_reset(ep)) {
-                            // some exceptions are expected if another side closes a connection
-                            // or we're shutting down
-                            _logger.info("exception while processing connection: {}", ep);
-                        }
-                    }
-                    return unadvertise_connection(conn);
-                });
-            });
+            auto conn = inject_connection(server_addr, std::move(fd), std::move(addr));
             return stop_iteration::no;
         }).handle_exception([this] (auto ep) {
             _logger.debug("accept failed: {}", ep);
             return stop_iteration::no;
         });
     });
+}
+
+shared_ptr<generic_server::connection>
+server::inject_connection(socket_address server_addr, connected_socket&& fd, socket_address addr) {
+    auto conn = make_connection(server_addr, std::move(fd), addr);
+    // Move the processing into the background.
+    (void)futurize_invoke([this, conn] {
+        return advertise_new_connection(conn); // Notify any listeners about new connection.
+    }).then_wrapped([this, conn] (future<> f) {
+        try {
+            f.get();
+        } catch (...) {
+            _logger.info("exception while advertising new connection: {}", std::current_exception());
+        }
+        // Block while monitoring for lifetime/errors.
+        return conn->process().then_wrapped([this, conn] (auto f) {
+            try {
+                f.get();
+            } catch (...) {
+                auto ep = std::current_exception();
+                if (!is_broken_pipe_or_connection_reset(ep)) {
+                    // some exceptions are expected if another side closes a connection
+                    // or we're shutting down
+                    _logger.info("exception while processing connection: {}", ep);
+                }
+            }
+            return unadvertise_connection(conn);
+        });
+    });
+    return conn;
 }
 
 future<>

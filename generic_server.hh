@@ -104,6 +104,7 @@ public:
 
     future<> do_accepts(int which, bool keepalive, socket_address server_addr);
 
+    shared_ptr<generic_server::connection> inject_connection(socket_address server_addr, connected_socket&& fd, socket_address addr);
 protected:
     virtual seastar::shared_ptr<connection> make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr) = 0;
 
