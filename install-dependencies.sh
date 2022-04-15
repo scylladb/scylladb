@@ -31,6 +31,7 @@ debian_base_packages=(
     clang
     gdb
     liblua5.3-dev
+    python3-aiohttp
     python3-pyparsing
     python3-colorama
     libsnappy-dev
@@ -67,6 +68,7 @@ fedora_packages=(
     maven
     patchelf
     python3
+    python3-aiohttp
     python3-pip
     python3-magic
     python3-colorama
