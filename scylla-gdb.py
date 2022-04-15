@@ -4630,8 +4630,13 @@ class scylla_features(gdb.Command):
         gdb.Command.__init__(self, 'scylla features', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
 
     def invoke(self, arg, for_tty):
-        gossiper = sharded(gdb.parse_and_eval('gms::_the_gossiper')).local()
-        for (name, f) in unordered_map(gossiper['_feature_service']['_registered_features']):
+        try:
+            feature_service = sharded(gdb.parse_and_eval('debug::the_feature_service')).local()
+        except Exception as e:
+            gossiper = sharded(gdb.parse_and_eval('gms::_the_gossiper')).local()
+            feature_service = gossiper['_feature_service']
+
+        for (name, f) in unordered_map(feature_service['_registered_features']):
             f = reference_wrapper(f).get()
             gdb.write('%s: %s\n' % (f['_name'], f['_enabled']))
 

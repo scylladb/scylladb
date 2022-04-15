@@ -414,6 +414,7 @@ sharded<service::migration_manager>* the_migration_manager;
 sharded<service::storage_service>* the_storage_service;
 sharded<replica::database>* the_database;
 sharded<streaming::stream_manager> *the_stream_manager;
+sharded<gms::feature_service> *the_feature_service;
 }
 
 static int scylla_main(int ac, char** av) {
@@ -612,6 +613,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }
             gms::feature_config fcfg = gms::feature_config_from_db_config(*cfg);
 
+            debug::the_feature_service = &feature_service;
             feature_service.start(fcfg).get();
             // FIXME storage_proxy holds a reference on it and is not yet stopped.
             // also the proxy leaves range_slice_read_executor-s hanging around
