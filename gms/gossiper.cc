@@ -925,7 +925,7 @@ void gossiper::run() {
                     _shadow_unreachable_endpoints = _unreachable_endpoints;
                 }
 
-                _the_gossiper.invoke_on_all([this, live_endpoint_changed, unreachable_endpoint_changed, es = endpoint_state_map] (gossiper& local_gossiper) {
+                container().invoke_on_all([this, live_endpoint_changed, unreachable_endpoint_changed, es = endpoint_state_map] (gossiper& local_gossiper) {
                     // Don't copy gossiper(CPU0) maps into themselves!
                     if (this_shard_id() != 0) {
                         if (live_endpoint_changed) {
