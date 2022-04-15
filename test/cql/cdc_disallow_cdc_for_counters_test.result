@@ -1,25 +1,17 @@
-create table tb1 (pk int primary key, c1 counter) with cdc = {'enabled': true};
-{
-	"message" : "exceptions::invalid_request_exception (Cannot create CDC log for table ks.tb1. Counter support not implemented)",
-	"status" : "error"
-}
-
-create table tb2 (pk int primary key, c1 counter);
-{
-	"status" : "ok"
-}
-alter table tb2 with cdc = {'enabled': true};
-{
-	"message" : "exceptions::invalid_request_exception (Cannot create CDC log for table ks.tb2. Counter support not implemented)",
-	"status" : "error"
-}
-
-create table tb3 (pk int primary key) with cdc = {'enabled': true};
-{
-	"status" : "ok"
-}
-alter table tb3 add (c1 counter);
-{
-	"message" : "exceptions::configuration_exception (Cannot add a counter column (c1) in a non counter column family)",
-	"status" : "error"
-}
+> -- Error messages contain a keyspace name. Make the output stable.
+> CREATE KEYSPACE ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
+OK
+> create table ks.tb1 (pk int primary key, c1 counter) with cdc = {'enabled': true};
+Error from server: code=2200 [Invalid query] message="Cannot create CDC log for table ks.tb1. Counter support not implemented"
+> 
+> create table ks.tb2 (pk int primary key, c1 counter);
+OK
+> alter table ks.tb2 with cdc = {'enabled': true};
+Error from server: code=2200 [Invalid query] message="Cannot create CDC log for table ks.tb2. Counter support not implemented"
+> 
+> create table ks.tb3 (pk int primary key) with cdc = {'enabled': true};
+OK
+> alter table ks.tb3 add (c1 counter);
+<Error from server: code=2300 [Query invalid because of configuration issue] message="Cannot add a counter column (c1) in a non counter column family">
+> DROP KEYSPACE ks;
+OK

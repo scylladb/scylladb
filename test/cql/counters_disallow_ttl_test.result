@@ -1,31 +1,15 @@
-create table tb1 (pk int primary key, c1 counter) with default_time_to_live = 100;
-{
-	"message" : "exceptions::invalid_request_exception (Cannot set default_time_to_live on a table with counters)",
-	"status" : "error"
-}
-
-create table tb2 (pk int primary key, c1 counter);
-{
-	"status" : "ok"
-}
-alter table tb2 with default_time_to_live = 100;
-{
-	"message" : "exceptions::invalid_request_exception (Cannot set default_time_to_live on a table with counters)",
-	"status" : "error"
-}
-
-create table tb3 (pk int primary key) with default_time_to_live = 100;
-{
-	"status" : "ok"
-}
-alter table tb3 add (c1 counter);
-{
-	"message" : "exceptions::configuration_exception (Cannot add a counter column (c1) in a non counter column family)",
-	"status" : "error"
-}
-
-create table tb4 (pk int, ck int, cs counter static, primary KEY (pk, ck)) with default_time_to_live = 100;
-{
-	"message" : "exceptions::invalid_request_exception (Cannot set default_time_to_live on a table with counters)",
-	"status" : "error"
-}
+> create table tb1 (pk int primary key, c1 counter) with default_time_to_live = 100;
+Error from server: code=2200 [Invalid query] message="Cannot set default_time_to_live on a table with counters"
+> 
+> create table tb2 (pk int primary key, c1 counter);
+OK
+> alter table tb2 with default_time_to_live = 100;
+Error from server: code=2200 [Invalid query] message="Cannot set default_time_to_live on a table with counters"
+> 
+> create table tb3 (pk int primary key) with default_time_to_live = 100;
+OK
+> alter table tb3 add (c1 counter);
+<Error from server: code=2300 [Query invalid because of configuration issue] message="Cannot add a counter column (c1) in a non counter column family">
+> 
+> create table tb4 (pk int, ck int, cs counter static, primary KEY (pk, ck)) with default_time_to_live = 100;
+Error from server: code=2200 [Invalid query] message="Cannot set default_time_to_live on a table with counters"
