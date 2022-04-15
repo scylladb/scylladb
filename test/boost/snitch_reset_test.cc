@@ -10,6 +10,7 @@
 #include <boost/test/unit_test.hpp>
 #include "locator/gossiping_property_file_snitch.hh"
 #include "utils/fb_utilities.hh"
+#include "gms/gossiper.hh"
 #include <seastar/testing/test_case.hh>
 #include <seastar/util/std-compat.hh>
 #include <vector>
@@ -39,6 +40,7 @@ future<> one_test(const std::string& property_fname1,
         auto cpu0_dc_new = make_lw_shared<sstring>();
         auto cpu0_rack_new = make_lw_shared<sstring>();
         auto my_address = utils::fb_utilities::get_broadcast_address();
+        sharded<gms::gossiper> g;
         sharded<snitch_ptr>& snitch = i_endpoint_snitch::snitch_instance();
 
         try {
@@ -52,7 +54,7 @@ future<> one_test(const std::string& property_fname1,
                 snitch_config cfg;
                 cfg.name = "org.apache.cassandra.locator.GossipingPropertyFileSnitch";
                 cfg.properties_file_name = fname1.string();
-                snitch.start(cfg).get();
+                snitch.start(cfg, std::ref(g)).get();
                 snitch.invoke_on_all(&snitch_ptr::start).get();
             } catch (std::exception& e) {
                 printf("%s\n", e.what());

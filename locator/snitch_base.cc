@@ -117,7 +117,8 @@ std::list<std::pair<gms::application_state, gms::versioned_value>> snitch_base::
     };
 }
 
-snitch_ptr::snitch_ptr(const snitch_config cfg) {
+snitch_ptr::snitch_ptr(const snitch_config cfg, sharded<gms::gossiper>& g)
+        : _gossiper(g) {
     i_endpoint_snitch::ptr_type s;
     try {
         s = create_object<i_endpoint_snitch>(cfg.name, cfg);

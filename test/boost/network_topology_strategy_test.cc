@@ -15,6 +15,7 @@
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/core/sstring.hh>
 #include "log.hh"
+#include "gms/gossiper.hh"
 #include <vector>
 #include <string>
 #include <map>
@@ -177,8 +178,9 @@ void simple_test() {
     // Create the RackInferringSnitch
     snitch_config cfg;
     cfg.name = "RackInferringSnitch";
+    sharded<gms::gossiper> g;
     sharded<snitch_ptr>& snitch = i_endpoint_snitch::snitch_instance();
-    snitch.start(cfg).get();
+    snitch.start(cfg, std::ref(g)).get();
     auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
     snitch.invoke_on_all(&snitch_ptr::start).get();
 
@@ -256,8 +258,9 @@ void heavy_origin_test() {
     // Create the RackInferringSnitch
     snitch_config cfg;
     cfg.name = "RackInferringSnitch";
+    sharded<gms::gossiper> g;
     sharded<snitch_ptr>& snitch = i_endpoint_snitch::snitch_instance();
-    snitch.start(cfg).get();
+    snitch.start(cfg, std::ref(g)).get();
     auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
     snitch.invoke_on_all(&snitch_ptr::start).get();
 
@@ -571,8 +574,9 @@ SEASTAR_THREAD_TEST_CASE(testCalculateEndpoints) {
 
     snitch_config cfg;
     cfg.name = "RackInferringSnitch";
+    sharded<gms::gossiper> g;
     sharded<snitch_ptr>& g_snitch = i_endpoint_snitch::snitch_instance();
-    g_snitch.start(cfg).get();
+    g_snitch.start(cfg, std::ref(g)).get();
     auto stop_snitch = defer([&g_snitch] { g_snitch.stop().get(); });
     g_snitch.invoke_on_all(&snitch_ptr::start).get();
 
