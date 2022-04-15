@@ -1,10 +1,10 @@
-create table tb1 (pk int primary key, v int) with cdc = {'enabled': true};
-{
-	"status" : "ok"
-}
-
-create materialized view tb1_mv as select * from tb1_scylla_cdc_log where v is not null primary key (v);
-{
-	"message" : "exceptions::invalid_request_exception (Materialized views cannot be created on CDC Log tables)",
-	"status" : "error"
-}
+> -- Error messages contain a keyspace name. Make the output stable.
+> CREATE KEYSPACE ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
+OK
+> create table ks.tb1 (pk int primary key, v int) with cdc = {'enabled': true};
+OK
+> 
+> create materialized view ks.tb1_mv as select * from ks.tb1_scylla_cdc_log where v is not null primary key (v);
+Error from server: code=2200 [Invalid query] message="Materialized views cannot be created on CDC Log tables"
+> DROP KEYSPACE ks;
+OK

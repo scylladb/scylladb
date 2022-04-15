@@ -1,3 +1,5 @@
+-- Error messages contain a keyspace name. Make the output stable.
+CREATE KEYSPACE ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
 CREATE TABLE ks.tbl_cnt (pk int PRIMARY KEY, c1 counter);
 
 -- insert some values in one column
@@ -22,7 +24,7 @@ DELETE c1 from ks.tbl_cnt WHERE pk = 1;
 SELECT pk, c1 FROM ks.tbl_cnt WHERE c1 = 1 ALLOW FILTERING;
 SELECT pk, c1 FROM ks.tbl_cnt WHERE c1 <= 1000 ALLOW FILTERING;
 SELECT pk, c1 FROM ks.tbl_cnt WHERE c1 > -1000 ALLOW FILTERING;
-
+DROP KEYSPACE ks;
 
 CREATE TABLE counter_bug (t int, c counter, primary key(t));
 UPDATE counter_bug SET c = c + 9223372036854775807 where t = 0;

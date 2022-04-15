@@ -1,3 +1,5 @@
+-- Error messages contain a keyspace name. Make the output stable.
+CREATE KEYSPACE ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
 create table ks.t (pk int, ck int, vs int static, vc int, primary key (pk, ck)) with cdc = {'enabled': true, 'preimage': true};
 
 -- generates 2 rows: preimage(static), delta(static)
@@ -17,5 +19,6 @@ update ks.t set vc = 4 where pk = 1 and ck = 0;
 update ks.t set vc = 5 where pk = 1 and ck = 0;
 select "cdc$batch_seq_no", "cdc$operation", ck, vs, vc from ks.t_scylla_cdc_log where pk = 1 and ck = 0 allow filtering;
 
--- there should be 16 rows in total
+-- there should be 13 rows in total
 select count(*) from ks.t_scylla_cdc_log;
+DROP KEYSPACE ks;
