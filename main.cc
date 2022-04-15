@@ -1339,7 +1339,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             supervisor::notify("starting load meter");
-            load_meter.init(db, gms::get_local_gossiper()).get();
+            load_meter.init(db, gossiper.local()).get();
             auto stop_load_meter = defer_verbose_shutdown("load meter", [&load_meter] {
                 load_meter.exit().get();
             });
@@ -1355,7 +1355,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             supervisor::notify("starting view update backlog broker");
             static sharded<service::view_update_backlog_broker> view_backlog_broker;
-            view_backlog_broker.start(std::ref(proxy), std::ref(gms::get_gossiper())).get();
+            view_backlog_broker.start(std::ref(proxy), std::ref(gossiper)).get();
             view_backlog_broker.invoke_on_all(&service::view_update_backlog_broker::start).get();
             auto stop_view_backlog_broker = defer_verbose_shutdown("view update backlog broker", [] {
                 view_backlog_broker.stop().get();
@@ -1364,7 +1364,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             //FIXME: discarded future
             (void)api::set_server_cache(ctx);
             startlog.info("Waiting for gossip to settle before accepting client requests...");
-            gms::get_local_gossiper().wait_for_gossip_to_settle().get();
+            gossiper.local().wait_for_gossip_to_settle().get();
             api::set_server_gossip_settle(ctx, gossiper).get();
 
             supervisor::notify("allow replaying hints");
