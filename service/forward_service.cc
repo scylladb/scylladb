@@ -32,6 +32,7 @@
 #include "tracing/trace_state.hh"
 #include "tracing/tracing.hh"
 #include "utils/fb_utilities.hh"
+#include "service/storage_proxy.hh"
 
 #include "cql3/column_identifier.hh"
 #include "cql3/cql_config.hh"
@@ -50,17 +51,6 @@ static logging::logger flogger("forward_service");
 static const dht::token& end_token(const dht::partition_range& r) {
     static const dht::token max_token = dht::maximum_token();
     return r.end() ? r.end()->value().token() : max_token;
-}
-
-static inet_address_vector_replica_set get_live_endpoints(replica::keyspace& ks, const dht::token& token) {
-    auto erm = ks.get_effective_replication_map();
-    auto eps = erm->get_natural_endpoints_without_node_being_replaced(token);
-    auto itend = boost::range::remove_if(
-        eps,
-        std::not_fn(std::bind_front(std::mem_fn(&gms::gossiper::is_alive), &gms::get_local_gossiper()))
-    );
-    eps.erase(itend, eps.end());
-    return eps;
 }
 
 static void retain_local_endpoints(inet_address_vector_replica_set& eps) {
@@ -338,7 +328,7 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
     // Group vnodes by assigned endpoint.
     std::map<netw::messaging_service::msg_addr, dht::partition_range_vector> vnodes_per_addr;
     while (std::optional<dht::partition_range> vnode = next_vnode()) {
-        inet_address_vector_replica_set live_endpoints = get_live_endpoints(ks, end_token(*vnode));
+        inet_address_vector_replica_set live_endpoints = _proxy.get_live_endpoints(ks, end_token(*vnode));
         // Do not choose an endpoint outside the current datacenter if a request has a local consistency
         if (db::is_datacenter_local(req.cl)) {
             retain_local_endpoints(live_endpoints);
