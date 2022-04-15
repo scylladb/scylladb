@@ -82,7 +82,7 @@ future<> ec2_multi_region_snitch::start() {
                 // this invoke_on() was done from the io_cpu_id() which had
                 // already passed through ec2_snitch::load_config() which, in
                 // turn, had already spread the _my_dc accross shards
-                gms::get_local_gossiper().register_(::make_shared<reconnectable_snitch_helper>(_my_dc));
+                local_s.get_local_gossiper().register_(::make_shared<reconnectable_snitch_helper>(_my_dc));
             }).get();
 
             set_snitch_ready();

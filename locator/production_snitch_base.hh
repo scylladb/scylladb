@@ -83,6 +83,16 @@ protected:
         return _backreference->container();
     }
 
+    snitch_ptr& local() noexcept {
+        assert(_backreference != nullptr);
+        return *_backreference;
+    }
+
+    const snitch_ptr& local() const noexcept {
+        assert(_backreference != nullptr);
+        return *_backreference;
+    }
+
 private:
     size_t _prop_file_size;
     snitch_ptr* _backreference = nullptr;

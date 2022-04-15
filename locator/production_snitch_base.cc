@@ -63,7 +63,7 @@ void production_snitch_base::set_backreference(snitch_ptr& d) {
 }
 
 std::optional<sstring> production_snitch_base::get_endpoint_info(inet_address endpoint, gms::application_state key) {
-    gms::gossiper& local_gossiper = gms::get_local_gossiper();
+    gms::gossiper& local_gossiper = local().get_local_gossiper();
     auto* ep_state = local_gossiper.get_application_state_ptr(endpoint, key);
     return ep_state ? std::optional(ep_state->value) : std::nullopt;
 }
@@ -71,7 +71,7 @@ std::optional<sstring> production_snitch_base::get_endpoint_info(inet_address en
 sstring production_snitch_base::get_endpoint_info(inet_address endpoint, gms::application_state key,
                                                   const sstring& default_val) {
     auto val = get_endpoint_info(endpoint, key);
-    auto& gossiper = gms::get_local_gossiper();
+    auto& gossiper = local().get_local_gossiper();
 
     if (val) {
         return *val;
@@ -207,8 +207,8 @@ future<> reconnectable_snitch_helper::reconnect(gms::inet_address public_address
 }
 
 future<> reconnectable_snitch_helper::reconnect(gms::inet_address public_address, gms::inet_address local_address) {
-    netw::messaging_service& ms = gms::get_local_gossiper().get_local_messaging();
     auto& sn_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
+    netw::messaging_service& ms = sn_ptr.get_local_gossiper().get_local_messaging();
 
     if (sn_ptr->get_datacenter(public_address) == _local_dc &&
         ms.get_preferred_ip(public_address) != local_address) {
