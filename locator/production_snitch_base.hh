@@ -47,6 +47,7 @@ public:
     virtual void set_backreference(snitch_ptr& d) override;
 
 private:
+    std::optional<sstring> get_endpoint_info(inet_address endpoint, gms::application_state key);
     sstring get_endpoint_info(inet_address endpoint, gms::application_state key,
                               const sstring& default_val);
     virtual void set_my_dc(const sstring& new_dc) override;

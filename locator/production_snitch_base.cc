@@ -62,9 +62,15 @@ void production_snitch_base::set_backreference(snitch_ptr& d) {
     _backreference = &d;
 }
 
+std::optional<sstring> production_snitch_base::get_endpoint_info(inet_address endpoint, gms::application_state key) {
+    gms::gossiper& local_gossiper = gms::get_local_gossiper();
+    auto* ep_state = local_gossiper.get_application_state_ptr(endpoint, key);
+    return ep_state ? std::optional(ep_state->value) : std::nullopt;
+}
+
 sstring production_snitch_base::get_endpoint_info(inet_address endpoint, gms::application_state key,
                                                   const sstring& default_val) {
-    auto val = snitch_base::get_endpoint_info(endpoint, key);
+    auto val = get_endpoint_info(endpoint, key);
     auto& gossiper = gms::get_local_gossiper();
 
     if (val) {

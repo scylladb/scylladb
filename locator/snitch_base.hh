@@ -338,8 +338,6 @@ private:
     bool has_remote_node(inet_address_vector_replica_set& l);
 
 protected:
-    static std::optional<sstring> get_endpoint_info(inet_address endpoint,
-                                                    gms::application_state key);
     sstring _my_dc;
     sstring _my_rack;
     bool _prefer_local = false;
