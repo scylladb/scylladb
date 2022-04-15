@@ -548,7 +548,7 @@ public:
             feature_service.start(fcfg).get();
             auto stop_feature_service = defer([&] { feature_service.stop().get(); });
 
-            sharded<gms::gossiper>& gossiper = gms::get_gossiper();
+            sharded<gms::gossiper> gossiper;
 
             // Init gossiper
             std::set<gms::inet_address> seeds;

@@ -83,7 +83,7 @@ int main(int ac, char ** av) {
             for (auto s : config["seed"].as<std::vector<std::string>>()) {
                 gcfg.seeds.emplace(std::move(s));
             }
-            sharded<gms::gossiper> gossiper = gms::get_gossiper();
+            sharded<gms::gossiper> gossiper;
             gossiper.start(std::ref(abort_sources), std::ref(feature_service), std::ref(token_metadata), std::ref(messaging), std::ref(sys_ks), std::ref(*cfg), std::move(gcfg)).get();
 
             auto& server = messaging.local();

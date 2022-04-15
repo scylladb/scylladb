@@ -415,6 +415,7 @@ sharded<service::storage_service>* the_storage_service;
 sharded<replica::database>* the_database;
 sharded<streaming::stream_manager> *the_stream_manager;
 sharded<gms::feature_service> *the_feature_service;
+sharded<gms::gossiper> *the_gossiper;
 }
 
 static int scylla_main(int ac, char** av) {
@@ -528,6 +529,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     sharded<sstables_loader> sst_loader;
     sharded<streaming::stream_manager> stream_manager;
     sharded<service::forward_service> forward_service;
+    sharded<gms::gossiper> gossiper;
 
     return app.run(ac, av, [&] () -> future<int> {
 
@@ -555,7 +557,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
         tcp_syncookies_sanity();
 
         return seastar::async([&app, cfg, ext, &db, &qp, &bm, &proxy, &forward_service, &mm, &mm_notifier, &ctx, &opts, &dirs,
-                &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service,
+                &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service, &gossiper,
                 &token_metadata, &erm_factory, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
                 &repair, &sst_loader, &ss, &lifecycle_notifier, &stream_manager] {
           try {
@@ -857,7 +859,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 startlog.warn("Using default cluster name is not recommended. Using a unique cluster name will reduce the chance of adding nodes to the wrong cluster by mistake");
             }
 
-            auto& gossiper = gms::get_gossiper();
+            debug::the_gossiper = &gossiper;
             gossiper.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(feature_service), std::ref(token_metadata), std::ref(messaging), std::ref(sys_ks), std::ref(*cfg), std::ref(gcfg)).get();
             auto stop_gossiper = defer_verbose_shutdown("gossiper", [&gossiper] {
                 // call stop on each instance, but leave the sharded<> pointers alive
