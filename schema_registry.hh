@@ -19,6 +19,10 @@ namespace db {
 class schema_ctxt;
 }
 
+namespace replica {
+class apply_mutation;
+}
+
 class schema_registry;
 
 using async_schema_loader = std::function<future<frozen_schema>(table_schema_version)>;
@@ -154,6 +158,8 @@ class global_schema_ptr {
     schema_ptr _ptr;
     schema_ptr _base_schema;
     unsigned _cpu_of_origin;
+
+    friend class replica::apply_mutation;
 public:
     // Note: the schema_ptr must come from the current shard and can't be nullptr.
     global_schema_ptr(const schema_ptr&);

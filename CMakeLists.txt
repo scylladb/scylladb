@@ -556,6 +556,7 @@ set(scylla_sources
     repair/row_level.cc
     replica/database.cc
     replica/table.cc
+    replica/apply_mutation.cc
     row_cache.cc
     schema.cc
     schema_mutations.cc
