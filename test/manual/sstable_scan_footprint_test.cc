@@ -235,7 +235,7 @@ void test_main_thread(cql_test_env& env) {
 
     for (uint64_t i = 0; i < sstables; ++i) {
         auto m = gen(sstable_size);
-        env.local_db().apply(s, freeze(m), tracing::trace_state_ptr(), db::commitlog::force_sync::no, db::no_timeout).get();
+        env.local_db().apply(replica::apply_mutation(std::move(m)), tracing::trace_state_ptr(), db::commitlog::force_sync::no, db::no_timeout).get();
         tab.flush().get();
         thread::maybe_yield();
     }

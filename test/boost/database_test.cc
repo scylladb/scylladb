@@ -68,7 +68,7 @@ SEASTAR_TEST_CASE(test_safety_after_truncate) {
             mutation m(s, pkey);
             m.set_clustered_cell(clustering_key_prefix::make_empty(), "v", int32_t(42), {});
             pranges.emplace_back(dht::partition_range::make_singular(dht::decorate_key(*s, std::move(pkey))));
-            db.apply(s, freeze(m), tracing::trace_state_ptr(), db::commitlog::force_sync::no, db::no_timeout).get();
+            db.apply(replica::apply_mutation(std::move(m)), tracing::trace_state_ptr(), db::commitlog::force_sync::no, db::no_timeout).get();
         }
 
         auto assert_query_result = [&] (size_t expected_size) {
@@ -104,13 +104,13 @@ SEASTAR_TEST_CASE(test_querying_with_limits) {
                 auto pkey = partition_key::from_single_value(*s, to_bytes(format("key{:d}", i)));
                 mutation m(s, pkey);
                 m.partition().apply(tombstone(api::timestamp_type(1), gc_clock::now()));
-                db.apply(s, freeze(m), tracing::trace_state_ptr(), db::commitlog::force_sync::no, db::no_timeout).get();
+                db.apply(replica::apply_mutation(std::move(m)), tracing::trace_state_ptr(), db::commitlog::force_sync::no, db::no_timeout).get();
             }
             for (uint32_t i = 3; i <= 8; ++i) {
                 auto pkey = partition_key::from_single_value(*s, to_bytes(format("key{:d}", i)));
                 mutation m(s, pkey);
                 m.set_clustered_cell(clustering_key_prefix::make_empty(), "v", int32_t(42), 1);
-                db.apply(s, freeze(m), tracing::trace_state_ptr(), db::commitlog::force_sync::no, db::no_timeout).get();
+                db.apply(replica::apply_mutation(std::move(m)), tracing::trace_state_ptr(), db::commitlog::force_sync::no, db::no_timeout).get();
                 pranges.emplace_back(dht::partition_range::make_singular(dht::decorate_key(*s, std::move(pkey))));
             }
 
@@ -155,7 +155,7 @@ static void test_database(void (*run_tests)(populate_fn_ex, bool)) {
             mm.announce(mm.prepare_new_column_family_announcement(s, ts).get(), std::move(group0_guard)).get();
             replica::column_family& cf = e.local_db().find_column_family(s);
             for (auto&& m : partitions) {
-                e.local_db().apply(cf.schema(), freeze(m), tracing::trace_state_ptr(), db::commitlog::force_sync::no, db::no_timeout).get();
+                e.local_db().apply(replica::apply_mutation(cf.schema(), freeze(m)), tracing::trace_state_ptr(), db::commitlog::force_sync::no, db::no_timeout).get();
             }
             cf.flush().get();
             cf.get_row_cache().invalidate(row_cache::external_updater([] {})).get();

@@ -1696,7 +1696,9 @@ future<> database::apply_in_memory(const mutation& m, column_family& cf, db::rp_
     });
 }
 
-future<mutation> database::apply_counter_update(schema_ptr s, const frozen_mutation& m, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state) {
+future<mutation> database::apply_counter_update(apply_mutation am, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state) {
+    schema_ptr s = am.schema();
+    const frozen_mutation& m = am.get_frozen_mutation();
     if (timeout <= db::timeout_clock::now()) {
         update_write_metrics_for_timed_out_write();
         return make_exception_future<mutation>(timed_out_error{});
@@ -1768,12 +1770,13 @@ future<> database::apply_with_commitlog(column_family& cf, const mutation& m, db
     }
 }
 
-future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout, db::commitlog::force_sync sync) {
+future<> database::do_apply(apply_mutation am, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout, db::commitlog::force_sync sync) {
     // I'm doing a nullcheck here since the init code path for db etc
     // is a little in flux and commitlog is created only when db is
     // initied from datadir.
-    auto uuid = m.column_family_id();
+    auto uuid = am.column_family_id();
     auto& cf = find_column_family(uuid);
+    schema_ptr s = am.schema();
     if (!s->is_synced()) {
         throw std::runtime_error(format("attempted to mutate using not synced schema of {}.{}, version={}", s->ks_name(), s->cf_name(), s->version()));
     }
@@ -1783,6 +1786,7 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::tra
     // Signal to view building code that a write is in progress,
     // so it knows when new writes start being sent to a new view.
     auto op = cf.write_in_progress();
+    const frozen_mutation& m = am.get_frozen_mutation();
 
     row_locker::lock_holder lock;
     if (!cf.views().empty()) {
@@ -1834,29 +1838,31 @@ void database::update_write_metrics_for_timed_out_write() {
     ++_stats->total_writes_timedout;
 }
 
-future<> database::apply(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, db::timeout_clock::time_point timeout) {
+future<> database::apply(apply_mutation am, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, db::timeout_clock::time_point timeout) {
     if (dblog.is_enabled(logging::log_level::trace)) {
-        dblog.trace("apply {}", m.pretty_printer(s));
+        dblog.trace("apply {}", am);
     }
     if (timeout <= db::timeout_clock::now()) {
         update_write_metrics_for_timed_out_write();
         return make_exception_future<>(timed_out_error{});
     }
+    auto s = am.schema();
     if (!s->is_synced()) {
         on_internal_error(dblog, format("attempted to apply mutation using not synced schema of {}.{}, version={}", s->ks_name(), s->cf_name(), s->version()));
     }
-    return update_write_metrics(_apply_stage(this, std::move(s), seastar::cref(m), std::move(tr_state), timeout, sync));
+    return update_write_metrics(_apply_stage(this, std::move(am), std::move(tr_state), timeout, sync));
 }
 
-future<> database::apply_hint(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout) {
+future<> database::apply_hint(apply_mutation am, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout) {
     if (dblog.is_enabled(logging::log_level::trace)) {
-        dblog.trace("apply hint {}", m.pretty_printer(s));
+        dblog.trace("apply hint {}", am);
     }
+    auto s = am.schema();
     if (!s->is_synced()) {
         on_internal_error(dblog, format("attempted to apply hint using not synced schema of {}.{}, version={}", s->ks_name(), s->cf_name(), s->version()));
     }
-    return with_scheduling_group(_dbcfg.streaming_scheduling_group, [this, s = std::move(s), &m, tr_state = std::move(tr_state), timeout] () mutable {
-        return update_write_metrics(_apply_stage(this, std::move(s), seastar::cref(m), std::move(tr_state), timeout, db::commitlog::force_sync::no));
+    return with_scheduling_group(_dbcfg.streaming_scheduling_group, [this, am = std::move(am), tr_state = std::move(tr_state), timeout] () mutable {
+        return update_write_metrics(_apply_stage(this, std::move(am), std::move(tr_state), timeout, db::commitlog::force_sync::no));
     });
 }
 

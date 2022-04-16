@@ -65,13 +65,12 @@
 #include "query_class_config.hh"
 #include "absl-flat_hash_map.hh"
 #include "utils/cross-shard-barrier.hh"
+#include "replica/apply_mutation.hh"
 
 class cell_locker;
 class cell_locker_stats;
 class locked_cell;
-class mutation;
 
-class frozen_mutation;
 class reconcilable_result;
 
 namespace service {
@@ -1275,8 +1274,7 @@ private:
     inheriting_concrete_execution_stage<
             future<>,
             database*,
-            schema_ptr,
-            const frozen_mutation&,
+            apply_mutation,
             tracing::trace_state_ptr,
             db::timeout_clock::time_point,
             db::commitlog_force_sync> _apply_stage;
@@ -1344,7 +1342,7 @@ private:
     void setup_metrics();
     void setup_scylla_memory_diagnostics_producer();
 
-    future<> do_apply(schema_ptr, const frozen_mutation&, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout, db::commitlog_force_sync sync);
+    future<> do_apply(apply_mutation am, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout, db::commitlog_force_sync sync);
     future<> apply_with_commitlog(column_family& cf, const mutation& m, db::timeout_clock::time_point timeout);
 
     future<mutation> do_apply_counter_update(column_family& cf, const frozen_mutation& fm, schema_ptr m_schema, db::timeout_clock::time_point timeout,
@@ -1476,9 +1474,9 @@ public:
                                                 tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout);
     // Apply the mutation atomically.
     // Throws timed_out_error when timeout is reached.
-    future<> apply(schema_ptr, const frozen_mutation&, tracing::trace_state_ptr tr_state, db::commitlog_force_sync sync, db::timeout_clock::time_point timeout);
-    future<> apply_hint(schema_ptr, const frozen_mutation&, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout);
-    future<mutation> apply_counter_update(schema_ptr, const frozen_mutation& m, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state);
+    future<> apply(apply_mutation am, tracing::trace_state_ptr tr_state, db::commitlog_force_sync sync, db::timeout_clock::time_point timeout);
+    future<> apply_hint(apply_mutation am, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout);
+    future<mutation> apply_counter_update(apply_mutation am, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state);
     keyspace::config make_keyspace_config(const keyspace_metadata& ksm);
     const sstring& get_snitch_name() const;
     /*!
