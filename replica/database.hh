@@ -402,8 +402,7 @@ private:
 
     uint64_t _failed_counter_applies_to_memtable = 0;
 
-    template<typename... Args>
-    void do_apply(db::rp_handle&&, Args&&... args);
+    void do_apply(db::rp_handle&&, apply_mutation&&);
 
     lw_shared_ptr<memtable_list> _memtables;
 
@@ -759,15 +758,11 @@ public:
     future<const_row_ptr> find_row(schema_ptr, reader_permit permit, const dht::decorated_key& partition_key, clustering_key clustering_key) const;
     // Applies given mutation to this column family
     // The mutation is always upgraded to current schema.
-    void apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_handle&& h = {}) {
-        do_apply(std::move(h), m, m_schema);
-    }
-    void apply(const mutation& m, db::rp_handle&& h = {}) {
-        do_apply(std::move(h), m);
+    void apply(apply_mutation am, db::rp_handle&& h = {}) {
+        do_apply(std::move(h), std::move(am));
     }
 
-    future<> apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&& h, db::timeout_clock::time_point tmo);
-    future<> apply(const mutation& m, db::rp_handle&& h, db::timeout_clock::time_point tmo);
+    future<> apply(apply_mutation am, db::rp_handle&& h, db::timeout_clock::time_point tmo);
 
     // Returns at most "cmd.limit" rows
     // The saved_querier parameter is an input-output parameter which contains

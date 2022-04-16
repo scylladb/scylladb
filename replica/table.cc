@@ -1894,8 +1894,7 @@ db::replay_position table::set_low_replay_position_mark() {
     return _lowest_allowed_rp;
 }
 
-template<typename... Args>
-void table::do_apply(db::rp_handle&& h, Args&&... args) {
+void table::do_apply(db::rp_handle&& h, apply_mutation&& am_) {
     if (_async_gate.is_closed()) {
         on_internal_error(tlogger, "Table async_gate is closed");
     }
@@ -1903,9 +1902,16 @@ void table::do_apply(db::rp_handle&& h, Args&&... args) {
     utils::latency_counter lc;
     _stats.writes.set_latency(lc);
     db::replay_position rp = h;
-    check_valid_rp(rp);
+    auto am = std::move(am_);
     try {
-        _memtables->active_memtable().apply(std::forward<Args>(args)..., std::move(h));
+        am.visit(
+            [this, h = std::move(h)] (const mutation& m) mutable {
+                _memtables->active_memtable().apply(m, std::move(h));
+            },
+            [this, h = std::move(h)] (schema_ptr m_schema, const frozen_mutation& fm) mutable {
+                _memtables->active_memtable().apply(fm, m_schema, std::move(h));
+            }
+        );
         _highest_rp = std::max(_highest_rp, rp);
     } catch (...) {
         _failed_counter_applies_to_memtable++;
@@ -1917,25 +1923,25 @@ void table::do_apply(db::rp_handle&& h, Args&&... args) {
     }
 }
 
-future<> table::apply(const mutation& m, db::rp_handle&& h, db::timeout_clock::time_point timeout) {
-    return dirty_memory_region_group().run_when_memory_available([this, &m, h = std::move(h)] () mutable {
-        do_apply(std::move(h), m);
-    }, timeout);
-}
-
-template void table::do_apply(db::rp_handle&&, const mutation&);
-
-future<> table::apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&& h, db::timeout_clock::time_point timeout) {
+future<> table::apply(apply_mutation am, db::rp_handle&& h, db::timeout_clock::time_point timeout) {
     if (_virtual_writer) [[unlikely]] {
-        return (*_virtual_writer)(m);
+        return do_with(std::move(am), [this] (apply_mutation& am) {
+            return am.visit(
+                [this] (schema_ptr, const frozen_mutation& fm) {
+                    return (*_virtual_writer)(fm);
+                },
+                [this, &am] (const mutation&) {
+                    tlogger.debug("applying mutation on virtual table is inefficient");
+                    return (*_virtual_writer)(am.get_frozen_mutation());
+                }
+            );
+        });
     }
 
-    return dirty_memory_region_group().run_when_memory_available([this, &m, m_schema = std::move(m_schema), h = std::move(h)]() mutable {
-        do_apply(std::move(h), m, m_schema);
+    return dirty_memory_region_group().run_when_memory_available([this, am = std::move(am), h = std::move(h)]() mutable {
+        do_apply(std::move(h), std::move(am));
     }, timeout);
 }
-
-template void table::do_apply(db::rp_handle&&, const frozen_mutation&, const schema_ptr&);
 
 future<>
 write_memtable_to_sstable(flat_mutation_reader_v2 reader,

@@ -1685,14 +1685,14 @@ future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema
 
     data_listeners().on_write(m_schema, m);
 
-    return with_gate(cf.async_gate(), [this, &m, m_schema = std::move(m_schema), h = std::move(h), &cf, timeout] () mutable -> future<> {
-        return cf.apply(m, std::move(m_schema), std::move(h), timeout);
+    return with_gate(cf.async_gate(), [this, am = apply_mutation(std::move(m_schema), m), h = std::move(h), &cf, timeout] () mutable -> future<> {
+        return cf.apply(std::move(am), std::move(h), timeout);
     });
 }
 
 future<> database::apply_in_memory(const mutation& m, column_family& cf, db::rp_handle&& h, db::timeout_clock::time_point timeout) {
-    return with_gate(cf.async_gate(), [this, &m, h = std::move(h), &cf, timeout]() mutable -> future<> {
-        return cf.apply(m, std::move(h), timeout);
+    return with_gate(cf.async_gate(), [this, am = apply_mutation(m), h = std::move(h), &cf, timeout]() mutable -> future<> {
+        return cf.apply(std::move(am), std::move(h), timeout);
     });
 }
 
