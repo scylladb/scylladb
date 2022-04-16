@@ -15,6 +15,7 @@
 
 #include <variant>
 #include "replica/database_fwd.hh"
+#include "replica/apply_mutation.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "message/messaging_service_fwd.hh"
 #include "query-request.hh"
@@ -468,11 +469,7 @@ public:
 private:
     // Applies mutation on this node.
     // Resolves with timed_out_error when timeout is reached.
-    future<> mutate_locally(mutation&& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout, smp_service_group smp_grp);
-    // Applies mutation on this node.
-    // Resolves with timed_out_error when timeout is reached.
-    future<> mutate_locally(const schema_ptr&, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout,
-            smp_service_group smp_grp);
+    future<> mutate_locally(replica::apply_mutation am, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout, smp_service_group smp_grp);
     // Applies mutations on this node.
     // Resolves with timed_out_error when timeout is reached.
     future<> mutate_locally(std::vector<mutation> mutation, tracing::trace_state_ptr tr_state, clock_type::time_point timeout, smp_service_group smp_grp);
@@ -481,12 +478,12 @@ public:
     // Applies mutation on this node.
     // Resolves with timed_out_error when timeout is reached.
     future<> mutate_locally(mutation&& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout = clock_type::time_point::max()) {
-        return mutate_locally(std::move(m), tr_state, sync, timeout, _write_smp_service_group);
+        return mutate_locally(replica::apply_mutation(std::move(m)), tr_state, sync, timeout, _write_smp_service_group);
     }
     // Applies mutation on this node.
     // Resolves with timed_out_error when timeout is reached.
     future<> mutate_locally(const schema_ptr& s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout = clock_type::time_point::max()) {
-        return mutate_locally(s, m, tr_state, sync, timeout, _write_smp_service_group);
+        return mutate_locally(replica::apply_mutation(s, m), tr_state, sync, timeout, _write_smp_service_group);
     }
     // Applies mutations on this node.
     // Resolves with timed_out_error when timeout is reached.

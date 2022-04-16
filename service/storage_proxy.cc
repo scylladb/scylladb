@@ -1866,34 +1866,24 @@ void storage_proxy::connection_dropped(gms::inet_address addr) {
 }
 
 future<>
-storage_proxy::mutate_locally(mutation&& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout, smp_service_group smp_grp) {
-    auto shard = _db.local().shard_of(m);
+storage_proxy::mutate_locally(replica::apply_mutation am, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout, smp_service_group smp_grp) {
+    auto shard = am.shard_of();
     get_stats().replica_cross_shard_ops += shard != this_shard_id();
     return _db.invoke_on(shard, {smp_grp, timeout},
-            [s = global_schema_ptr(m.schema()),
-             m = freeze(std::move(m)),
+            [gs = global_schema_ptr(am.schema()),
+             am = std::move(am),
              gtr = tracing::global_trace_state_ptr(std::move(tr_state)),
              timeout,
              sync] (replica::database& db) mutable -> future<> {
-        return db.apply(s, m, gtr.get(), sync, timeout);
-    });
-}
-
-future<>
-storage_proxy::mutate_locally(const schema_ptr& s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout,
-        smp_service_group smp_grp) {
-    auto shard = _db.local().shard_of(m);
-    get_stats().replica_cross_shard_ops += shard != this_shard_id();
-    return _db.invoke_on(shard, {smp_grp, timeout},
-            [&m, gs = global_schema_ptr(s), gtr = tracing::global_trace_state_ptr(std::move(tr_state)), timeout, sync] (replica::database& db) mutable -> future<> {
-        return db.apply(gs, m, gtr.get(), sync, timeout);
+        am.set_schema(gs);
+        return db.apply(am.schema(), am.get_frozen_mutation(), gtr.get(), sync, timeout);
     });
 }
 
 future<>
 storage_proxy::mutate_locally(std::vector<mutation> mutations, tracing::trace_state_ptr tr_state, clock_type::time_point timeout, smp_service_group smp_grp) {
     return parallel_for_each(mutations.begin(), mutations.end(), [this, tr_state = std::move(tr_state), timeout, smp_grp] (mutation& m) mutable {
-        return mutate_locally(std::move(m), tr_state, db::commitlog::force_sync::no, timeout, smp_grp);
+        return mutate_locally(replica::apply_mutation(std::move(m)), tr_state, db::commitlog::force_sync::no, timeout, smp_grp);
     });
 }
 
@@ -5030,7 +5020,7 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
                 trace_info ? *trace_info : std::nullopt,
                 /* apply_fn */ [smp_grp] (shared_ptr<storage_proxy>& p, tracing::trace_state_ptr tr_state, schema_ptr s, const frozen_mutation& m,
                         clock_type::time_point timeout) {
-                    return p->mutate_locally(std::move(s), m, std::move(tr_state), db::commitlog::force_sync::no, timeout, smp_grp);
+                    return p->mutate_locally(replica::apply_mutation(std::move(s), m), std::move(tr_state), db::commitlog::force_sync::no, timeout, smp_grp);
                 },
                 /* forward_fn */ [] (shared_ptr<storage_proxy>& p, netw::messaging_service::msg_addr addr, clock_type::time_point timeout, const frozen_mutation& m,
                         gms::inet_address reply_to, unsigned shard, response_id_type response_id,
