@@ -204,9 +204,7 @@ future<> paxos_state::learn(storage_proxy& sp, schema_ptr schema, proposal decis
                         "Trying to upgrade the accepted proposal mutation to the most recent schema version.");
                     return service::get_column_mapping(decision.update.column_family_id(), decision.update.schema_version())
                         .then([&sp, schema, tr_state, timeout, &decision] (const column_mapping& cm) {
-                            return do_with(decision.update.unfreeze_upgrading(schema, cm), [&sp, tr_state, timeout] (const mutation& upgraded) {
-                                return sp.mutate_locally(upgraded, tr_state, db::commitlog::force_sync::yes, timeout);
-                            });
+                            return sp.mutate_locally(decision.update.unfreeze_upgrading(schema, cm), tr_state, db::commitlog::force_sync::yes, timeout);
                         });
                 }
                 return sp.mutate_locally(schema, decision.update, tr_state, db::commitlog::force_sync::yes, timeout);

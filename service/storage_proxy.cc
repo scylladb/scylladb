@@ -1866,12 +1866,12 @@ void storage_proxy::connection_dropped(gms::inet_address addr) {
 }
 
 future<>
-storage_proxy::mutate_locally(const mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout, smp_service_group smp_grp) {
+storage_proxy::mutate_locally(mutation&& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout, smp_service_group smp_grp) {
     auto shard = _db.local().shard_of(m);
     get_stats().replica_cross_shard_ops += shard != this_shard_id();
     return _db.invoke_on(shard, {smp_grp, timeout},
             [s = global_schema_ptr(m.schema()),
-             m = freeze(m),
+             m = freeze(std::move(m)),
              gtr = tracing::global_trace_state_ptr(std::move(tr_state)),
              timeout,
              sync] (replica::database& db) mutable -> future<> {
@@ -1892,10 +1892,8 @@ storage_proxy::mutate_locally(const schema_ptr& s, const frozen_mutation& m, tra
 
 future<>
 storage_proxy::mutate_locally(std::vector<mutation> mutations, tracing::trace_state_ptr tr_state, clock_type::time_point timeout, smp_service_group smp_grp) {
-    return do_with(std::move(mutations), [this, timeout, tr_state = std::move(tr_state), smp_grp] (std::vector<mutation>& pmut) mutable {
-        return parallel_for_each(pmut.begin(), pmut.end(), [this, tr_state = std::move(tr_state), timeout, smp_grp] (const mutation& m) mutable {
-            return mutate_locally(m, tr_state, db::commitlog::force_sync::no, timeout, smp_grp);
-        });
+    return parallel_for_each(mutations.begin(), mutations.end(), [this, tr_state = std::move(tr_state), timeout, smp_grp] (mutation& m) mutable {
+        return mutate_locally(std::move(m), tr_state, db::commitlog::force_sync::no, timeout, smp_grp);
     });
 }
 
