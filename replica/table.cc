@@ -2335,10 +2335,11 @@ future<row_locker::lock_holder> table::push_view_replica_updates(const schema_pt
 }
 
 future<row_locker::lock_holder>
-table::stream_view_replica_updates(const schema_ptr& s, mutation&& m, db::timeout_clock::time_point timeout,
+table::stream_view_replica_updates(mutation&& m, db::timeout_clock::time_point timeout,
         std::vector<sstables::shared_sstable>& excluded_sstables) const {
+    schema_ptr s = m.schema();
     return do_push_view_replica_updates(
-            s,
+            std::move(s),
             std::move(m),
             timeout,
             as_mutation_source_excluding(excluded_sstables),
