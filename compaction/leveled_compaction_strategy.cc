@@ -223,7 +223,7 @@ leveled_compaction_strategy::get_cleanup_compaction_jobs(table_state& table_s, s
     auto levels = leveled_manifest::get_levels(candidates);
 
     ret = size_tiered_compaction_strategy(_stcs_options).get_cleanup_compaction_jobs(table_s, std::move(levels[0]));
-    for (auto level = 1; level < levels.size(); level++) {
+    for (size_t level = 1; level < levels.size(); level++) {
         if (levels[level].empty()) {
             continue;
         }
