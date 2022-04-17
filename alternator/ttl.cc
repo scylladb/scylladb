@@ -379,12 +379,11 @@ static std::vector<std::pair<dht::token_range, gms::inet_address>> get_secondary
 enum primary_or_secondary_t {primary, secondary};
 template<primary_or_secondary_t primary_or_secondary>
 class token_ranges_owned_by_this_shard {
-    template<primary_or_secondary_t> class ranges_holder;
-    // ranges_holder<primary> holds just the primary ranges themselves
-    template<> class ranges_holder<primary> {
+    // ranges_holder_primary holds just the primary ranges themselves
+    class ranges_holder_primary {
         const dht::token_range_vector _token_ranges;
      public:
-        ranges_holder(const locator::effective_replication_map_ptr& erm, gms::inet_address ep)
+        ranges_holder_primary(const locator::effective_replication_map_ptr& erm, gms::inet_address ep)
             : _token_ranges(erm->get_primary_ranges(ep)) {}
         std::size_t size() const { return _token_ranges.size(); }
         const dht::token_range& operator[](std::size_t i) const {
@@ -396,11 +395,11 @@ class token_ranges_owned_by_this_shard {
     };
     // ranges_holder<secondary> holds the secondary token ranges plus each
     // range's primary owner, needed to implement should_skip().
-    template<> class ranges_holder<secondary> {
+    class ranges_holder_secondary {
         std::vector<std::pair<dht::token_range, gms::inet_address>> _token_ranges;
         gms::gossiper& _gossiper;
      public:
-        ranges_holder(const locator::effective_replication_map_ptr& erm, gms::inet_address ep)
+        ranges_holder_secondary(const locator::effective_replication_map_ptr& erm, gms::inet_address ep)
             : _token_ranges(get_secondary_ranges(erm, ep))
             , _gossiper(gms::get_local_gossiper()) {}
         std::size_t size() const { return _token_ranges.size(); }
@@ -417,7 +416,11 @@ class token_ranges_owned_by_this_shard {
     // _token_ranges will contain a list of token ranges owned by this node.
     // We'll further need to split each such range to the pieces owned by
     // the current shard, using _intersecter.
-    const ranges_holder<primary_or_secondary> _token_ranges;
+    using ranges_holder = std::conditional_t<
+            primary_or_secondary == primary_or_secondary_t::primary,
+            ranges_holder_primary,
+            ranges_holder_secondary>;
+    const ranges_holder _token_ranges;
     // NOTICE: _range_idx is used modulo _token_ranges size when accessing
     // the data to ensure that it doesn't go out of bounds
     size_t _range_idx;
