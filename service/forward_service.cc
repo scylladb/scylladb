@@ -57,7 +57,7 @@ static inet_address_vector_replica_set get_live_endpoints(replica::keyspace& ks,
     auto eps = erm->get_natural_endpoints_without_node_being_replaced(token);
     auto itend = boost::range::remove_if(
         eps,
-        std::not1(std::bind1st(std::mem_fn(&gms::gossiper::is_alive), &gms::get_local_gossiper()))
+        std::not_fn(std::bind_front(std::mem_fn(&gms::gossiper::is_alive), &gms::get_local_gossiper()))
     );
     eps.erase(itend, eps.end());
     return eps;
