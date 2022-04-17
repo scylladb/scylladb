@@ -74,6 +74,7 @@
 #include "service/paxos/proposal.hh"
 #include "locator/token_metadata.hh"
 #include "seastar/core/coroutine.hh"
+#include <seastar/coroutine/parallel_for_each.hh>
 #include "locator/abstract_replication_strategy.hh"
 #include "service/paxos/cas_request.hh"
 #include "mutation_partition_view.hh"
@@ -1892,10 +1893,8 @@ storage_proxy::mutate_locally(const schema_ptr& s, const frozen_mutation& m, tra
 
 future<>
 storage_proxy::mutate_locally(std::vector<mutation> mutations, tracing::trace_state_ptr tr_state, clock_type::time_point timeout, smp_service_group smp_grp) {
-    return do_with(std::move(mutations), [this, timeout, tr_state = std::move(tr_state), smp_grp] (std::vector<mutation>& pmut) mutable {
-        return parallel_for_each(pmut.begin(), pmut.end(), [this, tr_state = std::move(tr_state), timeout, smp_grp] (const mutation& m) mutable {
+    co_await coroutine::parallel_for_each(mutations, [&] (const mutation& m) mutable {
             return mutate_locally(m, tr_state, db::commitlog::force_sync::no, timeout, smp_grp);
-        });
     });
 }
 
