@@ -1328,6 +1328,11 @@ warnings = [
     '-Wno-array-bounds',
     '-Wno-nonnull',
     '-Wno-catch-value',
+    '-Wno-stringop-overread', # false positives with gcc 12
+    '-Wno-uninitialized',  # false positives with gcc 12,
+    '-Wno-missing-attributes', # something in seastar's memory.cc, TBD,
+    '-Wno-use-after-free', # false positives with gcc 12
+    '-Wno-dangling-pointer', # false positives with gcc 12
 ]
 
 warnings = [w
