@@ -908,7 +908,7 @@ future<stop_iteration> view_update_builder::stop() const {
 }
 
 future<utils::chunked_vector<frozen_mutation_and_schema>> view_update_builder::build_some() {
-    auto _ = co_await advance_all();
+    (void)co_await advance_all();
     bool do_advance_updates = false;
     bool do_advance_existings = false;
     if (_update && _update->is_partition_start()) {
