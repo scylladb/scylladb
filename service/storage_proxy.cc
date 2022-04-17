@@ -4902,8 +4902,7 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname) {
 
 void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
     _mm = std::move(mm);
-    auto& ms = _messaging;
-    ser::storage_proxy_rpc_verbs::register_counter_mutation(&ms, [this, &ms] (const rpc::client_info& cinfo, rpc::opt_time_point t, std::vector<frozen_mutation> fms, db::consistency_level cl, std::optional<tracing::trace_info> trace_info) {
+    ser::storage_proxy_rpc_verbs::register_counter_mutation(&_messaging, [this] (const rpc::client_info& cinfo, rpc::opt_time_point t, std::vector<frozen_mutation> fms, db::consistency_level cl, std::optional<tracing::trace_info> trace_info) {
         auto src_addr = netw::messaging_service::get_source(cinfo);
 
         tracing::trace_state_ptr trace_state_ptr;
@@ -4914,11 +4913,11 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
         }
 
         return do_with(std::vector<frozen_mutation_and_schema>(),
-                       [this, cl, src_addr, timeout = *t, fms = std::move(fms), trace_state_ptr = std::move(trace_state_ptr), &ms] (std::vector<frozen_mutation_and_schema>& mutations) mutable {
-            return parallel_for_each(std::move(fms), [this, &mutations, src_addr, &ms] (frozen_mutation& fm) {
+                       [this, cl, src_addr, timeout = *t, fms = std::move(fms), trace_state_ptr = std::move(trace_state_ptr)] (std::vector<frozen_mutation_and_schema>& mutations) mutable {
+            return parallel_for_each(std::move(fms), [this, &mutations, src_addr] (frozen_mutation& fm) {
                 // FIXME: optimise for cases when all fms are in the same schema
                 auto schema_version = fm.schema_version();
-                return _mm->get_schema_for_write(schema_version, std::move(src_addr), ms).then([&mutations, fm = std::move(fm)] (schema_ptr s) mutable {
+                return _mm->get_schema_for_write(schema_version, std::move(src_addr), _messaging).then([&mutations, fm = std::move(fm)] (schema_ptr s) mutable {
                     mutations.emplace_back(frozen_mutation_and_schema { std::move(fm), std::move(s) });
                 });
             }).then([trace_state_ptr = std::move(trace_state_ptr), &mutations, cl, timeout] {
@@ -5042,10 +5041,10 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
                                             addr, timeout, m, {}, reply_to, shard, response_id, std::move(trace_info));
                 });
     };
-    ser::storage_proxy_rpc_verbs::register_mutation(&ms, std::bind_front<>(receive_mutation_handler, _write_smp_service_group));
-    ser::storage_proxy_rpc_verbs::register_hint_mutation(&ms, std::bind_front<>(receive_mutation_handler, _hints_write_smp_service_group));
+    ser::storage_proxy_rpc_verbs::register_mutation(&_messaging, std::bind_front<>(receive_mutation_handler, _write_smp_service_group));
+    ser::storage_proxy_rpc_verbs::register_hint_mutation(&_messaging, std::bind_front<>(receive_mutation_handler, _hints_write_smp_service_group));
 
-    ser::storage_proxy_rpc_verbs::register_paxos_learn(&ms, [this, handle_write] (const rpc::client_info& cinfo, rpc::opt_time_point t, paxos::proposal decision,
+    ser::storage_proxy_rpc_verbs::register_paxos_learn(&_messaging, [this, handle_write] (const rpc::client_info& cinfo, rpc::opt_time_point t, paxos::proposal decision,
             inet_address_vector_replica_set forward, gms::inet_address reply_to, unsigned shard,
             storage_proxy::response_id_type response_id, std::optional<tracing::trace_info> trace_info) {
         tracing::trace_state_ptr trace_state_ptr;
@@ -5064,7 +5063,7 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
                     return ser::storage_proxy_rpc_verbs::send_paxos_learn(&p->_messaging, addr, timeout, m, {}, reply_to, shard, response_id, std::move(trace_info));
               });
     });
-    ser::storage_proxy_rpc_verbs::register_mutation_done(&ms, [this] (const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id, rpc::optional<db::view::update_backlog> backlog) {
+    ser::storage_proxy_rpc_verbs::register_mutation_done(&_messaging, [this] (const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id, rpc::optional<db::view::update_backlog> backlog) {
         auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         get_stats().replica_cross_shard_ops += shard != this_shard_id();
         return container().invoke_on(shard, _write_ack_smp_service_group, [from, response_id, backlog = std::move(backlog)] (storage_proxy& sp) mutable {
@@ -5072,7 +5071,7 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
             return netw::messaging_service::no_wait();
         });
     });
-    ser::storage_proxy_rpc_verbs::register_mutation_failed(&ms, [this] (const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id, size_t num_failed, rpc::optional<db::view::update_backlog> backlog) {
+    ser::storage_proxy_rpc_verbs::register_mutation_failed(&_messaging, [this] (const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id, size_t num_failed, rpc::optional<db::view::update_backlog> backlog) {
         auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         get_stats().replica_cross_shard_ops += shard != this_shard_id();
         return container().invoke_on(shard, _write_ack_smp_service_group, [from, response_id, num_failed, backlog = std::move(backlog)] (storage_proxy& sp) mutable {
@@ -5080,7 +5079,7 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
             return netw::messaging_service::no_wait();
         });
     });
-    ser::storage_proxy_rpc_verbs::register_read_data(&ms, [this] (const rpc::client_info& cinfo, rpc::opt_time_point t, query::read_command cmd, ::compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> oda) {
+    ser::storage_proxy_rpc_verbs::register_read_data(&_messaging, [this] (const rpc::client_info& cinfo, rpc::opt_time_point t, query::read_command cmd, ::compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> oda) {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = netw::messaging_service::get_source(cinfo);
         if (cmd.trace_info) {
@@ -5113,7 +5112,7 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
             });
         });
     });
-    ser::storage_proxy_rpc_verbs::register_read_mutation_data(&ms, [this] (const rpc::client_info& cinfo, rpc::opt_time_point t, query::read_command cmd, ::compat::wrapping_partition_range pr) {
+    ser::storage_proxy_rpc_verbs::register_read_mutation_data(&_messaging, [this] (const rpc::client_info& cinfo, rpc::opt_time_point t, query::read_command cmd, ::compat::wrapping_partition_range pr) {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = netw::messaging_service::get_source(cinfo);
         if (cmd.trace_info) {
@@ -5144,7 +5143,7 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
             });
         });
     });
-    ser::storage_proxy_rpc_verbs::register_read_digest(&ms, [this] (const rpc::client_info& cinfo, rpc::opt_time_point t, query::read_command cmd, ::compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> oda) {
+    ser::storage_proxy_rpc_verbs::register_read_digest(&_messaging, [this] (const rpc::client_info& cinfo, rpc::opt_time_point t, query::read_command cmd, ::compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> oda) {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = netw::messaging_service::get_source(cinfo);
         if (cmd.trace_info) {
@@ -5172,7 +5171,7 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
             });
         });
     });
-    ser::storage_proxy_rpc_verbs::register_truncate(&ms, [this](rpc::opt_time_point timeout, sstring ksname, sstring cfname) {
+    ser::storage_proxy_rpc_verbs::register_truncate(&_messaging, [this](rpc::opt_time_point timeout, sstring ksname, sstring cfname) {
         return do_with(utils::make_joinpoint([] { return db_clock::now();}),
                         [this, ksname, cfname](auto& tsf) {
             return container().invoke_on_all(_write_smp_service_group, [ksname, cfname, &tsf](storage_proxy& sp) {
@@ -5182,7 +5181,7 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
     });
 
     // Register PAXOS verb handlers
-    ser::storage_proxy_rpc_verbs::register_paxos_prepare(&ms, [this] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
+    ser::storage_proxy_rpc_verbs::register_paxos_prepare(&_messaging, [this] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
                 query::read_command cmd, partition_key key, utils::UUID ballot, bool only_digest, query::digest_algorithm da,
                 std::optional<tracing::trace_info> trace_info) {
         auto src_addr = netw::messaging_service::get_source(cinfo);
@@ -5214,7 +5213,7 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
             });
         });
     });
-    ser::storage_proxy_rpc_verbs::register_paxos_accept(&ms, [this] (const rpc::client_info& cinfo, rpc::opt_time_point timeout, paxos::proposal proposal,
+    ser::storage_proxy_rpc_verbs::register_paxos_accept(&_messaging, [this] (const rpc::client_info& cinfo, rpc::opt_time_point timeout, paxos::proposal proposal,
             std::optional<tracing::trace_info> trace_info) {
         auto src_addr = netw::messaging_service::get_source(cinfo);
         auto src_ip = src_addr.addr;
@@ -5245,7 +5244,7 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
 
         return f;
     });
-    ser::storage_proxy_rpc_verbs::register_paxos_prune(&ms, [this] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
+    ser::storage_proxy_rpc_verbs::register_paxos_prune(&_messaging, [this] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
                 utils::UUID schema_id, partition_key key, utils::UUID ballot, std::optional<tracing::trace_info> trace_info) {
         static thread_local uint16_t pruning = 0;
         static constexpr uint16_t pruning_limit = 1000; // since PRUNE verb is one way replica side has its own queue limit
