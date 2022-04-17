@@ -65,6 +65,10 @@ public:
     // note: if needed, makes one by freezing the mutation
     const frozen_mutation& get_frozen_mutation();
 
+    // extract a mutation object
+    // note: makes the apply_mutation unusable
+    mutation take_mutation() &&;
+
     // visit either the available mutation or frozen_mutation,
     // mutation first.
     template <typename MutVisitor, typename FrozenMutVisitor>
@@ -90,6 +94,10 @@ public:
 
     // get the owner shard of the mutation
     unsigned shard_of() const;
+
+    // Upgrade the mutation schema,
+    // building a mutation if necessary.
+    void upgrade(schema_ptr new_schema);
 };
 
 std::ostream& operator<<(std::ostream& os, const apply_mutation& am);

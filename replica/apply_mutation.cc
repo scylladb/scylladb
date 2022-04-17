@@ -63,6 +63,23 @@ const frozen_mutation& apply_mutation::get_frozen_mutation() {
     return *_fmp;
 }
 
+mutation apply_mutation::take_mutation() && {
+    if (_m) {
+        // extract unique_ptr<mutation> if available
+        auto p = _m.release();
+        _mp = nullptr;
+        return std::move(*const_cast<mutation*>(p.get()));
+    }
+    if (_mp) {
+        // copy const mutation
+        auto m = mutation(*_mp);
+        _mp = nullptr;
+        return m;
+    }
+    // get mutation by unfreezing the frozen_mutation
+    return _fmp->unfreeze(schema());
+}
+
 utils::UUID apply_mutation::column_family_id() const noexcept {
     return _mp ? _mp->column_family_id() : _fmp->column_family_id();
 }
@@ -86,6 +103,37 @@ std::ostream& operator<<(std::ostream& os, const apply_mutation& am) {
     } else {
         return os << am._fmp->pretty_printer(am.schema());
     }
+}
+
+void apply_mutation::upgrade(schema_ptr new_schema) {
+    if (*_schema == *new_schema) {
+        return;
+    }
+    std::optional<mutation> m_opt;
+    mutation* mp = nullptr;
+    if (_mp) {
+        if (_m) {
+            // upgrade in-place if possible
+            mp = const_cast<mutation*>(_m.get());
+        } else {
+            // copy const mutation
+            m_opt.emplace(*_mp);
+            mp = &*m_opt;
+        }
+    } else {
+        // get mutation by unfreezing the frozen_mutation
+        m_opt.emplace(_fmp->unfreeze(schema()));
+        mp = &*m_opt;
+    }
+    mp->upgrade(new_schema);
+    if (m_opt) {
+        _m = make_foreign(std::make_unique<const mutation>(std::move(*m_opt)));
+        _mp = _m.get();
+    }
+    // cleanup frozen_mutation
+    _fm.reset();
+    _fmp = nullptr;
+    set_schema(std::move(new_schema));
 }
 
 } // namespace replica

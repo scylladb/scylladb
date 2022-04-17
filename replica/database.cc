@@ -1790,7 +1790,7 @@ future<> database::do_apply(apply_mutation am, tracing::trace_state_ptr tr_state
 
     row_locker::lock_holder lock;
     if (!cf.views().empty()) {
-        lock = co_await cf.push_view_replica_updates(s, m, timeout, std::move(tr_state), get_reader_concurrency_semaphore());
+        lock = co_await cf.push_view_replica_updates(apply_mutation(s, m), timeout, std::move(tr_state), get_reader_concurrency_semaphore());
     }
 
     // purposefully manually "inlined" apply_with_commitlog call here to reduce # coroutine
