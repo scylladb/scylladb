@@ -111,6 +111,7 @@ static mutation_fragment_v2::kind to_mutation_fragment_kind_v2(mutation_fragment
         case mutation_fragment::kind::partition_end:
             return mutation_fragment_v2::kind::partition_end;
     }
+    std::abort();
 }
 
 mutation_fragment_stream_validator::mutation_fragment_stream_validator(const ::schema& s)

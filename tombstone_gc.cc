@@ -115,6 +115,7 @@ get_gc_before_for_range_result get_gc_before_for_range(schema_ptr s, const dht::
         return {min_gc_before, max_gc_before, knows_entire_range};
     }
     }
+    std::abort();
 }
 
 gc_clock::time_point get_gc_before_for_key(schema_ptr s, const dht::decorated_key& dk, const gc_clock::time_point& query_time) {
@@ -151,6 +152,7 @@ gc_clock::time_point get_gc_before_for_key(schema_ptr s, const dht::decorated_ke
                 s->ks_name(), s->cf_name(), dk, repair_timestamp, propagation_delay.count(), gc_before);
         return gc_before;
     }
+    std::abort();
 }
 
 void update_repair_time(schema_ptr s, const dht::token_range& range, gc_clock::time_point repair_time) {

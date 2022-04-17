@@ -468,6 +468,7 @@ std::ostream& operator<<(std::ostream& os, locator::replication_strategy_type t)
     case locator::replication_strategy_type::everywhere_topology:
         return os << "everywhere_topology";
     };
+    std::abort();
 }
 
 std::ostream& operator<<(std::ostream& os, const locator::effective_replication_map::factory_key& key) {
