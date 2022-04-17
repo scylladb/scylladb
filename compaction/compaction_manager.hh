@@ -396,7 +396,7 @@ public:
     class compaction_reenabler {
         compaction_manager& _cm;
         replica::table* _table;
-        compaction_state& _compaction_state;
+        compaction_manager::compaction_state& _compaction_state;
         gate::holder _holder;
 
     public:
@@ -409,7 +409,7 @@ public:
             return _table;
         }
 
-        const compaction_state& compaction_state() const noexcept {
+        const compaction_manager::compaction_state& compaction_state() const noexcept {
             return _compaction_state;
         }
     };
