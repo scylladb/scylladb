@@ -618,6 +618,13 @@ void storage_service::bootstrap() {
 
     set_mode(mode::BOOTSTRAP);
     slogger.debug("bootstrap: rbno={} replacing={}", bootstrap_rbno, is_replacing());
+
+    _db.invoke_on_all([this] (replica::database& db) {
+        for (auto& cf : db.get_non_system_column_families()) {
+            cf->notify_bootstrap_or_replace_start();
+        }
+    }).get();
+
     if (!is_replacing()) {
         // Wait until we know tokens of existing node before announcing join status.
         _gossiper.wait_for_range_setup().get();
@@ -687,12 +694,6 @@ void storage_service::bootstrap() {
         _sys_ks.local().remove_endpoint(*replace_addr).get();
         _group0->leave_group0(replace_addr).get();
     }
-
-    _db.invoke_on_all([this] (replica::database& db) {
-        for (auto& cf : db.get_non_system_column_families()) {
-            cf->notify_bootstrap_or_replace_start();
-        }
-    }).get();
 
     slogger.info("Starting to bootstrap...");
     if (is_replacing()) {
