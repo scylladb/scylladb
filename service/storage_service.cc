@@ -679,11 +679,16 @@ void storage_service::bootstrap() {
 
             slogger.info("sleeping {} ms for pending range setup", get_ring_delay().count());
             _gossiper.wait_for_range_setup().get();
+            dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), _bootstrap_tokens, get_token_metadata_ptr());
+            slogger.info("Starting to bootstrap...");
+            bs.bootstrap(streaming::stream_reason::bootstrap, _gossiper).get();
         } else {
             // Even with RBNO bootstrap we need to announce the new CDC generation immediately after it's created.
             _gossiper.add_local_application_state({
                 { gms::application_state::CDC_GENERATION_ID, versioned_value::cdc_generation_id(_cdc_gen_id) },
             }).get();
+            slogger.info("Starting to bootstrap...");
+            run_bootstrap_ops();
         }
     } else {
         // Wait until we know tokens of existing node before announcing replacing status.
@@ -693,25 +698,15 @@ void storage_service::bootstrap() {
         slogger.debug("Removing replaced endpoint {} from system.peers", *replace_addr);
         _sys_ks.local().remove_endpoint(*replace_addr).get();
         _group0->leave_group0(replace_addr).get();
+        slogger.info("Starting to bootstrap...");
+        run_replace_ops();
     }
 
-    slogger.info("Starting to bootstrap...");
-    if (is_replacing()) {
-        run_replace_ops();
-    } else {
-        if (bootstrap_rbno) {
-            run_bootstrap_ops();
-        } else {
-            dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), _bootstrap_tokens, get_token_metadata_ptr());
-            bs.bootstrap(streaming::stream_reason::bootstrap, _gossiper).get();
-        }
-    }
     _db.invoke_on_all([this] (replica::database& db) {
         for (auto& cf : db.get_non_system_column_families()) {
             cf->notify_bootstrap_or_replace_end();
         }
     }).get();
-
 
     slogger.info("Bootstrap completed! for the tokens {}", _bootstrap_tokens);
 }
