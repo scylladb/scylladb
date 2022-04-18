@@ -21,6 +21,20 @@ from scylla_product import PRODUCT
 
 from multiprocessing import cpu_count
 
+def out(cmd, shell=True, timeout=None, encoding='utf-8'):
+    res = subprocess.run(cmd, capture_output=True, shell=shell, timeout=timeout, check=False, encoding=encoding)
+    if res.returncode != 0:
+        print(f'Command \'{cmd}\' returned non-zero exit status: {res.returncode}')
+        print('----------  stdout  ----------')
+        print(res.stdout, end='')
+        print('------------------------------')
+        print('----------  stderr  ----------')
+        print(res.stderr, end='')
+        print('------------------------------')
+        res.check_returncode()
+    return res.stdout.strip()
+
+
 def scriptsdir_p():
     p = Path(sys.argv[0]).resolve()
     if p.parent.name == 'libexec':

@@ -70,7 +70,7 @@ if __name__ == '__main__':
     network_mode = args.mode if args.mode else cfg.get('NETWORK_MODE')
 
     if args.setup_nic_and_disks:
-        res = run('{} --tune net --nic {} --get-cpu-mask'.format(perftune_base_command(), ifname), shell=True, check=True, capture_output=True, encoding='utf-8').stdout
+        res = out('{} --tune net --nic {} --get-cpu-mask'.format(perftune_base_command(), ifname))
         # we need to extract CPU mask from output, since perftune.py may also print warning messages (#10082)
         match = re.match('(.*)(0x[0-9a-f]+)', res, re.DOTALL)
         try:
