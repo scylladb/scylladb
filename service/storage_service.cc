@@ -619,6 +619,10 @@ void storage_service::bootstrap() {
     set_mode(mode::BOOTSTRAP);
     slogger.debug("bootstrap: rbno={} replacing={}", bootstrap_rbno, is_replacing());
 
+    // Wait until we know tokens of existing node before announcing replacing status.
+    slogger.info("Wait until local node knows tokens of peer nodes");
+    _gossiper.wait_for_range_setup().get();
+
     _db.invoke_on_all([this] (replica::database& db) {
         for (auto& cf : db.get_non_system_column_families()) {
             cf->notify_bootstrap_or_replace_start();
@@ -626,8 +630,6 @@ void storage_service::bootstrap() {
     }).get();
 
     if (!is_replacing()) {
-        // Wait until we know tokens of existing node before announcing join status.
-        _gossiper.wait_for_range_setup().get();
         int retry = 0;
         while (get_token_metadata_ptr()->count_normal_token_owners() == 0) {
             if (retry++ < 500) {
@@ -691,9 +693,6 @@ void storage_service::bootstrap() {
             run_bootstrap_ops();
         }
     } else {
-        // Wait until we know tokens of existing node before announcing replacing status.
-        slogger.info("Wait until local node knows tokens of peer nodes");
-        _gossiper.wait_for_range_setup().get();
         auto replace_addr = get_replace_address();
         slogger.debug("Removing replaced endpoint {} from system.peers", *replace_addr);
         _sys_ks.local().remove_endpoint(*replace_addr).get();
