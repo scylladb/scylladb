@@ -39,6 +39,7 @@
 #include <boost/algorithm/string/classification.hpp>
 #include "utils/generation-number.hh"
 #include "locator/token_metadata.hh"
+#include "utils/exceptions.hh"
 
 namespace gms {
 
@@ -531,11 +532,10 @@ future<> gossiper::send_gossip(gossip_digest_syn message, std::set<inet_address>
 }
 
 
-// Runs inside seastar::async context
-void gossiper::do_apply_state_locally(gms::inet_address node, const endpoint_state& remote_state, bool listener_notification) {
+future<> gossiper::do_apply_state_locally(gms::inet_address node, const endpoint_state& remote_state, bool listener_notification) {
     // If state does not exist just add it. If it does then add it if the remote generation is greater.
     // If there is a generation tie, attempt to break it by heartbeat version.
-    auto permit = this->lock_endpoint(node).get0();
+    auto permit = co_await this->lock_endpoint(node);
     auto es = this->get_endpoint_state_for_endpoint_ptr(node);
     if (es) {
         endpoint_state& local_state = *es;
@@ -550,7 +550,7 @@ void gossiper::do_apply_state_locally(gms::inet_address node, const endpoint_sta
             if (listener_notification) {
                 logger.trace("Updating heartbeat state generation to {} from {} for {}", remote_generation, local_generation, node);
                 // major state change will handle the update by inserting the remote state directly
-                this->handle_major_state_change(node, remote_state).get();
+                co_await this->handle_major_state_change(node, remote_state);
             } else {
                 logger.debug("Applying remote_state for node {} (remote generation > local generation)", node);
                 endpoint_state_map[node] = remote_state;
@@ -562,7 +562,7 @@ void gossiper::do_apply_state_locally(gms::inet_address node, const endpoint_sta
                 int remote_max_version = this->get_max_endpoint_state_version(remote_state);
                 if (remote_max_version > local_max_version) {
                     // apply states, but do not notify since there is no major change
-                    this->apply_new_states(node, local_state, remote_state);
+                    co_await this->apply_new_states(node, local_state, remote_state);
                 } else {
                     logger.trace("Ignoring remote version {} <= {} for {}", remote_max_version, local_max_version, node);
                 }
@@ -588,7 +588,7 @@ void gossiper::do_apply_state_locally(gms::inet_address node, const endpoint_sta
         }
     } else {
         if (listener_notification) {
-            this->handle_major_state_change(node, remote_state).get();
+            co_await this->handle_major_state_change(node, remote_state);
         } else {
             logger.debug("Applying remote_state for node {} (new node)", node);
             endpoint_state_map[node] = remote_state;
@@ -596,12 +596,11 @@ void gossiper::do_apply_state_locally(gms::inet_address node, const endpoint_sta
     }
 }
 
-// Runs inside seastar::async context
-void gossiper::apply_state_locally_without_listener_notification(std::unordered_map<inet_address, endpoint_state> map) {
+future<> gossiper::apply_state_locally_without_listener_notification(std::unordered_map<inet_address, endpoint_state> map) {
     for (auto& x : map) {
         const inet_address& node = x.first;
         const endpoint_state& remote_state = x.second;
-        do_apply_state_locally(node, remote_state, false);
+        co_await do_apply_state_locally(node, remote_state, false);
     }
 }
 
@@ -613,25 +612,21 @@ future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state> ma
     boost::partition(endpoints, node_is_seed);
     logger.debug("apply_state_locally_endpoints={}", endpoints);
 
-    return do_with(std::move(endpoints), std::move(map), [this] (auto&& endpoints, auto&& map) {
-        return parallel_for_each(endpoints, [this, &map] (auto&& ep) -> future<> {
-            if (ep == this->get_broadcast_address() && !this->is_in_shadow_round()) {
-                return make_ready_future<>();
-            }
-            if (_just_removed_endpoints.contains(ep)) {
-                logger.trace("Ignoring gossip for {} because it is quarantined", ep);
-                return make_ready_future<>();
-            }
-          return seastar::with_semaphore(_apply_state_locally_semaphore, 1, [this, &ep, &map] () mutable {
-            return seastar::async([this, &ep, &map] () mutable {
-                do_apply_state_locally(ep, map[ep], true);
-            });
-          });
+    co_await parallel_for_each(endpoints, [this, &map] (auto&& ep) -> future<> {
+        if (ep == this->get_broadcast_address() && !this->is_in_shadow_round()) {
+            return make_ready_future<>();
+        }
+        if (_just_removed_endpoints.contains(ep)) {
+            logger.trace("Ignoring gossip for {} because it is quarantined", ep);
+            return make_ready_future<>();
+        }
+        return seastar::with_semaphore(_apply_state_locally_semaphore, 1, [this, &ep, &map] () mutable {
+            return do_apply_state_locally(ep, map[ep], true);
         });
-    }).then([start] {
-            logger.debug("apply_state_locally() took {} ms", std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - start).count());
     });
+
+    logger.debug("apply_state_locally() took {} ms", std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start).count());
 }
 
 future<> gossiper::force_remove_endpoint(inet_address endpoint) {
@@ -1650,8 +1645,7 @@ bool gossiper::is_silent_shutdown_state(const endpoint_state& ep_state) const{
     return false;
 }
 
-// Runs inside seastar::async context
-void gossiper::apply_new_states(inet_address addr, endpoint_state& local_state, const endpoint_state& remote_state) {
+future<> gossiper::apply_new_states(inet_address addr, endpoint_state& local_state, const endpoint_state& remote_state) {
     // don't assert here, since if the node restarts the version will go back to zero
     //int oldVersion = local_state.get_heart_beat_state().get_heart_beat_version();
 
@@ -1664,43 +1658,46 @@ void gossiper::apply_new_states(inet_address addr, endpoint_state& local_state, 
     utils::chunked_vector<application_state> changed;
     auto&& remote_map = remote_state.get_application_state_map();
 
-    // Exceptions thrown from listeners will result in abort because that could leave the node in a bad
-    // state indefinitely. Unless the value changes again, we wouldn't retry notifications.
-    // Some values are set only once, so listeners would never be re-run.
-    // Listeners should decide which failures are non-fatal and swallow them.
-    auto run_listeners = seastar::defer([&] () noexcept {
-        for (auto&& key : changed) {
-            do_on_change_notifications(addr, key, remote_map.at(key)).get();
+    std::exception_ptr ep;
+    try {
+        // we need to make two loops here, one to apply, then another to notify,
+        // this way all states in an update are present and current when the notifications are received
+        for (const auto& remote_entry : remote_map) {
+            const auto& remote_key = remote_entry.first;
+            const auto& remote_value = remote_entry.second;
+            auto remote_gen = remote_state.get_heart_beat_state().get_generation();
+            auto local_gen = local_state.get_heart_beat_state().get_generation();
+            if(remote_gen != local_gen) {
+                auto err = format("Remote generation {:d} != local generation {:d}", remote_gen, local_gen);
+                logger.warn("{}", err);
+                throw std::runtime_error(err);
+            }
+
+            const versioned_value* local_val = local_state.get_application_state_ptr(remote_key);
+            if (!local_val || remote_value.version > local_val->version) {
+                changed.push_back(remote_key);
+                local_state.add_application_state(remote_key, remote_value);
+            }
         }
-    });
+    } catch (...) {
+        ep = std::current_exception();
+    }
 
     // We must replicate endpoint states before listeners run.
     // Exceptions during replication will cause abort because node's state
     // would be inconsistent across shards. Changes listeners depend on state
     // being replicated to all shards.
-    auto replicate_changes = seastar::defer([&] () noexcept {
-        replicate(addr, remote_map, changed).get();
-    });
+    co_await replicate(addr, remote_map, changed);
 
-    // we need to make two loops here, one to apply, then another to notify,
-    // this way all states in an update are present and current when the notifications are received
-    for (const auto& remote_entry : remote_map) {
-        const auto& remote_key = remote_entry.first;
-        const auto& remote_value = remote_entry.second;
-        auto remote_gen = remote_state.get_heart_beat_state().get_generation();
-        auto local_gen = local_state.get_heart_beat_state().get_generation();
-        if(remote_gen != local_gen) {
-            auto err = format("Remote generation {:d} != local generation {:d}", remote_gen, local_gen);
-            logger.warn("{}", err);
-            throw std::runtime_error(err);
-        }
-
-        const versioned_value* local_val = local_state.get_application_state_ptr(remote_key);
-        if (!local_val || remote_value.version > local_val->version) {
-            changed.push_back(remote_key);
-            local_state.add_application_state(remote_key, remote_value);
-        }
+    // Exceptions thrown from listeners will result in abort because that could leave the node in a bad
+    // state indefinitely. Unless the value changes again, we wouldn't retry notifications.
+    // Some values are set only once, so listeners would never be re-run.
+    // Listeners should decide which failures are non-fatal and swallow them.
+    for (auto&& key : changed) {
+        co_await do_on_change_notifications(addr, key, remote_map.at(key));
     }
+
+    maybe_rethrow_exception(std::move(ep));
 }
 
 future<> gossiper::do_before_change_notifications(inet_address addr, const endpoint_state& ep_state, const application_state& ap_state, const versioned_value& new_value) {
@@ -1891,7 +1888,7 @@ future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes) 
                 });
             }).get();
             for (auto& response : responses) {
-                apply_state_locally_without_listener_notification(response.endpoint_state_map);
+                apply_state_locally_without_listener_notification(response.endpoint_state_map).get();
             }
             if (!nodes_talked.empty()) {
                 break;
