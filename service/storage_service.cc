@@ -2080,9 +2080,6 @@ void storage_service::run_bootstrap_ops() {
 
 // Runs inside seastar::async context
 void storage_service::run_replace_ops() {
-    if (!get_replace_address()) {
-        throw std::runtime_error(format("replace_address is empty"));
-    }
     auto replace_address = get_replace_address().value();
     auto uuid = utils::make_random_uuid();
     std::list<gms::inet_address> ignore_nodes = get_ignore_dead_nodes_for_replace();
