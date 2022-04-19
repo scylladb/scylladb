@@ -165,6 +165,9 @@ class fsm {
     fsm_config _config;
     // This is set to true when leadership transfer process is aborted due to a timeout
     bool _abort_leadership_transfer = false;
+    // Set if we want to actively search for a leader.
+    // Can be true only if the leader is not known
+    bool _ping_leader = false;
 
     // Stores the last state observed by get_output().
     // Is updated with the actual state of the FSM after
@@ -383,12 +386,18 @@ public:
         }
     }
 
+    // Ask to search for a leader if one is not known.
+    void ping_leader() {
+        assert(!current_leader());
+        _ping_leader = true;
+    }
+
     // Call this function to wait for the number of log entries to
     // go below  max_log_size.
     // On abort throws `semaphore_aborted`.
     future<> wait_max_log_size(seastar::abort_source* as);
 
-    // Return current configuration. Throws if not a leader.
+    // Return current configuration.
     const configuration& get_configuration() const;
 
     // Add an entry to in-memory log. The entry has to be
@@ -607,6 +616,7 @@ void fsm::step(server_id from, Message&& msg) {
                 // leader to avoid starting an election if the
                 // leader becomes idle.
                 follower_state().current_leader = from;
+                _ping_leader = false;
             }
 
             // 3.4. Leader election

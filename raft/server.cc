@@ -337,6 +337,7 @@ future<> server_impl::wait_for_leader(seastar::abort_source* as) {
     }
 
     logger.trace("[{}] the leader is unknown, waiting through uncertainty", id());
+    _fsm->ping_leader();
     if (!_leader_promise) {
         _leader_promise.emplace();
     }

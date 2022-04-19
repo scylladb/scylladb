@@ -2270,3 +2270,37 @@ BOOST_AUTO_TEST_CASE(test_append_entry_inside_snapshot) {
     communicate(A, B, C);
     BOOST_CHECK(!C.get_log().empty());
 }
+
+BOOST_AUTO_TEST_CASE(test_ping_leader) {
+    discrete_failure_detector fd;
+    server_id A_id = id(), B_id = id(), C_id = id();
+    raft::configuration cfg(raft::server_address_set{
+            raft::server_address{A_id},
+            raft::server_address{B_id},
+            raft::server_address{C_id, false}});
+
+    raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = cfg});
+    auto A = create_follower(A_id, log, fd);
+    auto B = create_follower(B_id, log, fd);
+    auto C = create_follower(C_id, log, fd);
+    election_timeout(A);
+    communicate(A, B, C);
+    BOOST_CHECK(A.is_leader());
+    // Check that non voter forgot a leader after election timeout.
+    // It does not have to be this way, but currently our impl behaves this
+    // way.
+    fd.mark_all_dead();
+    election_timeout(C);
+    BOOST_CHECK(!C.current_leader());
+    // Check that without any new input a node will not find out who leader is
+    // after network repairs.
+    fd.mark_all_alive();
+    communicate(A, B, C);
+    BOOST_CHECK(!C.current_leader());
+    // Check that is we request leader ping then a node is able to find out
+    // the leader after communicating with the cluster.
+    C.ping_leader();
+    C.tick();
+    communicate(A, B, C);
+    BOOST_CHECK(C.current_leader());
+}

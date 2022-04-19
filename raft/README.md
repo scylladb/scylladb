@@ -145,6 +145,11 @@ this:
   groups, hence failure detection RPC could run once on network peer level,
   not sepately for each Raft instance. The library expects an accurate
   `failure_detector` instance from a complying implementation.
+- Since Raft leader no longer sends RPC every  0.1 second there can be a
+  situation when a follower may not know who the leader is for a long time
+  (if the leader is idle). Add an extension that allows a follower to actively
+  search for a leader by sending specially crafted append reply RPC to all voters.
+  A leader will reply with an empty append message to such a message.
 
 ### Pre-voting and protection against disruptive leaders
 

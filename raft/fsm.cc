@@ -158,6 +158,7 @@ void fsm::become_leader() {
     _state.emplace<leader>(_config.max_log_size, *this);
     leader_state().log_limiter_semaphore->consume(_log.in_memory_size());
     _last_election_time = _clock.now();
+    _ping_leader = false;
     // a new leader needs to commit at lease one entry to make sure that
     // all existing entries in its log are committed as well. Also it should
     // send append entries RPC as soon as possible to establish its leadership
@@ -178,6 +179,7 @@ void fsm::become_follower(server_id leader) {
     // assigned. The exchange here guarantis that.
     std::exchange(_state, follower{.current_leader = leader});
     if (leader != server_id{}) {
+        _ping_leader = false;
         _last_election_time = _clock.now();
     }
 }
@@ -583,6 +585,25 @@ void fsm::tick() {
             _current_term, _last_election_time, _clock.now());
         become_candidate(_config.enable_prevoting);
     }
+
+    if (is_follower() && !current_leader() && _ping_leader) {
+        // We are a follower but a leader is not known. It will not be known
+        // until a communication from a leader which (for an idle leader) may
+        // not happen any time soon since we use external failure detector and
+        // our leader does not send periodic empty append messages. By sending
+        // a special append message reject we solicit a reply from a leader.
+        // Non leaders will ignore the append reply.
+        auto& cfg = get_configuration();
+        // If conf is joint it means a leader will send us a non joint one eventually
+        if (!cfg.is_joint() && cfg.current.contains(raft::server_address{_my_id})) {
+            for (auto s : cfg.current) {
+                if (s.can_vote && s.id != _my_id && _failure_detector.is_alive(s.id)) {
+                    logger.trace("tick[{}]: searching for a leader. Pinging {}", _my_id, s.id);
+                    send_to(s.id, append_reply{_current_term, _commit_idx, append_reply::rejected{index_t{0}, index_t{0}}});
+                }
+            }
+        }
+    }
 }
 
 void fsm::append_entries(server_id from, append_request&& request) {
@@ -686,6 +707,15 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
 
         logger.trace("append_entries_reply[{}->{}]: rejected match={} index={}",
             _my_id, from, progress.match_idx, rejected.non_matching_idx);
+
+        // If non_matching_idx and last_idx are zero it means that a follower is looking for a leader
+        // as such message cannot be a result of real missmatch.
+        // Send an empty append message to notify it that we are the leader
+        if (rejected.non_matching_idx == index_t{0} && rejected.last_idx == index_t{0}) {
+            logger.trace("append_entries_reply[{}->{}]: send empty append message", _my_id, from);
+            replicate_to(progress, true);
+            return;
+        }
 
         // check reply validity
         if (progress.is_stray_reject(rejected)) {
