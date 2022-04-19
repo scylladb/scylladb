@@ -201,7 +201,7 @@ future<> stream_transfer_task::execute() {
         auto si = make_lw_shared<send_info>(sm.ms(), plan_id, tbl, std::move(permit), std::move(ranges), id, dst_cpu_id, reason, [&sm, plan_id, addr = id.addr] (size_t sz) {
             sm.update_progress(plan_id, addr, streaming::progress_info::direction::OUT, sz);
         });
-        return si->has_relevant_range_on_this_shard().then([si, plan_id, cf_id] (bool has_relevant_range_on_this_shard) {
+        return si->has_relevant_range_on_this_shard().then([&sm, si, plan_id, cf_id] (bool has_relevant_range_on_this_shard) {
             if (!has_relevant_range_on_this_shard) {
                 sslog.debug("[Stream #{}] stream_transfer_task: cf_id={}: ignore ranges on shard={}",
                         plan_id, cf_id, this_shard_id());
@@ -220,8 +220,20 @@ future<> stream_transfer_task::execute() {
             std::rethrow_exception(ep);
         });
     }).then([this, id, plan_id, cf_id] {
+        _mutation_done_sent = true;
         sslog.debug("[Stream #{}] GOT STREAM_MUTATION_DONE Reply from {}", plan_id, id.addr);
-    }).handle_exception([this, plan_id, id] (auto ep){
+    }).handle_exception([this, plan_id, cf_id, id] (std::exception_ptr ep) {
+        // If the table is dropped during streaming, we can ignore the
+        // errors and make the stream successful. This allows user to
+        // drop tables during node operations like decommission or
+        // bootstrap.
+        if (!session->manager().db().column_family_exists(cf_id)) {
+            sslog.warn("[Stream #{}] Ignore the table with table_id {} which is dropped during streaming: {}", plan_id, cf_id, ep);
+            if (!_mutation_done_sent) {
+                return session->manager().ms().send_stream_mutation_done(id, plan_id, _ranges, cf_id, session->dst_cpu_id);
+            }
+            return make_ready_future<>();
+        }
         sslog.warn("[Stream #{}] stream_transfer_task: Fail to send to {}: {}", plan_id, id, ep);
         std::rethrow_exception(ep);
     });
