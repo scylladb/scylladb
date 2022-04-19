@@ -34,6 +34,7 @@
 #include "utils/estimated_histogram.hh"
 #include "tracing/trace_state.hh"
 #include <seastar/core/metrics.hh>
+#include <seastar/rpc/rpc_types.hh>
 #include "storage_proxy_stats.hh"
 #include "cache_temperature.hh"
 #include "service_permit.hh"
@@ -45,6 +46,7 @@
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include <seastar/core/circular_buffer.hh>
 #include "query_ranges_to_vnodes.hh"
+#include "partition_range_compat.hh"
 #include "exceptions/exceptions.hh"
 #include "exceptions/coordinator_result.hh"
 
@@ -79,6 +81,8 @@ namespace service {
 namespace paxos {
     class prepare_summary;
     class proposal;
+    class promise;
+    using prepare_response = std::variant<utils::UUID, promise>;
 }
 
 class abstract_write_response_handler;
@@ -227,6 +231,8 @@ private:
     gms::gossiper& _gossiper;
     const locator::shared_token_metadata& _shared_token_metadata;
     locator::effective_replication_map_factory& _erm_factory;
+    // _mm is initialized late in init_messaging_service() due to circular dependency
+    shared_ptr<migration_manager> _mm;
     smp_service_group _read_smp_service_group;
     smp_service_group _write_smp_service_group;
     smp_service_group _hints_write_smp_service_group;
@@ -420,6 +426,30 @@ private:
 
     void retire_view_response_handlers(noncopyable_function<bool(const abstract_write_response_handler&)> filter_fun);
     void connection_dropped(gms::inet_address);
+private:
+    future<> handle_counter_mutation(const rpc::client_info& cinfo, rpc::opt_time_point t, std::vector<frozen_mutation> fms, db::consistency_level cl, std::optional<tracing::trace_info> trace_info);
+    future<rpc::no_wait_type> handle_write(netw::msg_addr src_addr, rpc::opt_time_point t,
+                      utils::UUID schema_version, auto in, inet_address_vector_replica_set forward, gms::inet_address reply_to,
+                      unsigned shard, storage_proxy::response_id_type response_id, std::optional<tracing::trace_info> trace_info,
+                      auto&& apply_fn, auto&& forward_fn);
+    future<rpc::no_wait_type> receive_mutation_handler (smp_service_group smp_grp, const rpc::client_info& cinfo, rpc::opt_time_point t, frozen_mutation in, inet_address_vector_replica_set forward,
+            gms::inet_address reply_to, unsigned shard, storage_proxy::response_id_type response_id, rpc::optional<std::optional<tracing::trace_info>> trace_info);
+    future<rpc::no_wait_type> handle_paxos_learn(const rpc::client_info& cinfo, rpc::opt_time_point t, paxos::proposal decision,
+            inet_address_vector_replica_set forward, gms::inet_address reply_to, unsigned shard,
+            storage_proxy::response_id_type response_id, std::optional<tracing::trace_info> trace_info);
+    future<rpc::no_wait_type> handle_mutation_done(const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id, rpc::optional<db::view::update_backlog> backlog);
+    future<rpc::no_wait_type> handle_mutation_failed(const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id, size_t num_failed, rpc::optional<db::view::update_backlog> backlog);
+    future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> handle_read_data(const rpc::client_info& cinfo, rpc::opt_time_point t, query::read_command cmd, ::compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> oda);
+    future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> handle_read_mutation_data(const rpc::client_info& cinfo, rpc::opt_time_point t, query::read_command cmd, ::compat::wrapping_partition_range pr);
+    future<rpc::tuple<query::result_digest, long, cache_temperature>> handle_read_digest(const rpc::client_info& cinfo, rpc::opt_time_point t, query::read_command cmd, ::compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> oda);
+    future<> handle_truncate(rpc::opt_time_point timeout, sstring ksname, sstring cfname);
+    future<foreign_ptr<std::unique_ptr<service::paxos::prepare_response>>> handle_paxos_prepare(const rpc::client_info& cinfo, rpc::opt_time_point timeout,
+                query::read_command cmd, partition_key key, utils::UUID ballot, bool only_digest, query::digest_algorithm da,
+                std::optional<tracing::trace_info> trace_info);
+    future<bool> handle_paxos_accept(const rpc::client_info& cinfo, rpc::opt_time_point timeout, paxos::proposal proposal,
+            std::optional<tracing::trace_info> trace_info);
+    future<rpc::no_wait_type> handle_paxos_prune(const rpc::client_info& cinfo, rpc::opt_time_point timeout,
+                utils::UUID schema_id, partition_key key, utils::UUID ballot, std::optional<tracing::trace_info> trace_info);
 public:
     storage_proxy(distributed<replica::database>& db, gms::gossiper& gossiper, config cfg, db::view::node_update_backlog& max_view_update_backlog,
             scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, locator::effective_replication_map_factory& erm_factory, netw::messaging_service& ms);
