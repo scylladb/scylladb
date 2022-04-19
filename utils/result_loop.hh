@@ -229,7 +229,6 @@ public:
 
 template<typename Iterator, typename Mapper, typename Initial, typename Reducer>
 requires requires (Iterator i, Mapper mapper, Initial initial, Reducer reduce) {
-    ExceptionContainerResult<Initial>;
     *i++;
     { i != i } -> std::convertible_to<bool>;
     { mapper(*i) } -> ExceptionContainerResultFuture<>;

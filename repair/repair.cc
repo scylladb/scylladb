@@ -1090,6 +1090,7 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
                     try {
                         auto& ms = get_messaging();
                         auto resp = co_await ser::partition_checksum_rpc_verbs::send_repair_flush_hints_batchlog(&ms, netw::msg_addr(node), req);
+                        (void)resp; // nothing to do with response yet
                     } catch (...) {
                         rlogger.warn("repair[{}]: Sending repair_flush_hints_batchlog to node={}, participants={}, failed: {}",
                                 uuid, node, participants, std::current_exception());

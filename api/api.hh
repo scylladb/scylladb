@@ -280,7 +280,8 @@ public:
         return get(name);
     }
 
-    template <>
+    template <typename T = sstring>
+    requires std::same_as<T, bool>
     const std::optional<bool> get_as(const char* name) const {
         auto value = get(name);
         if (!value) {

@@ -3087,7 +3087,7 @@ static void check_big_array(const rjson::value& val, int& size_left);
 
 static bool is_big(const rjson::value& val, int big_size = 100'000) {
     if (val.IsString()) {
-        return val.GetStringLength() > big_size;
+        return ssize_t(val.GetStringLength()) > big_size;
     } else if (val.IsObject()) {
         check_big_object(val, big_size);
         return big_size < 0;
