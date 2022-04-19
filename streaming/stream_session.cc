@@ -78,14 +78,12 @@ void stream_manager::init_messaging_service_handler() {
         auto from = netw::messaging_service::get_source(cinfo);
         auto reason = reason_opt ? *reason_opt: stream_reason::unspecified;
         sslog.trace("Got stream_mutation_fragments from {} reason {}", from, int(reason));
-        replica::table& cf = _db.local().find_column_family(cf_id);
         if (!_sys_dist_ks.local_is_initialized() || !_view_update_generator.local_is_initialized()) {
             return make_exception_future<rpc::sink<int>>(std::runtime_error(format("Node {} is not fully initialized for streaming, try again later",
                     utils::fb_utilities::get_broadcast_address())));
         }
-
-        return _mm.local().get_schema_for_write(schema_id, from, _ms.local()).then([this, from, estimated_partitions, plan_id, schema_id, &cf, source, reason] (schema_ptr s) mutable {
-          return _db.local().obtain_reader_permit(cf, "stream-session", db::no_timeout).then([this, from, estimated_partitions, plan_id, schema_id, &cf, source, reason, s] (reader_permit permit) mutable {
+        return _mm.local().get_schema_for_write(schema_id, from, _ms.local()).then([this, from, estimated_partitions, plan_id, cf_id, schema_id, source, reason] (schema_ptr s) mutable {
+          return _db.local().obtain_reader_permit(s, "stream-session", db::no_timeout).then([this, from, estimated_partitions, plan_id, cf_id, schema_id, source, reason, s] (reader_permit permit) mutable {
             auto sink = _ms.local().make_sink_for_stream_mutation_fragments(source);
             struct stream_mutation_fragments_cmd_status {
                 bool got_cmd = false;
@@ -126,11 +124,15 @@ void stream_manager::init_messaging_service_handler() {
                     }
                 });
             };
+          try {
+            // Make sure the table with cf_id is still present at this point.
+            // Close the sink in case the table is dropped.
+            auto op = _db.local().find_column_family(cf_id).stream_in_progress();
             //FIXME: discarded future.
             (void)mutation_writer::distribute_reader_and_consume_on_shards(s,
                 make_generating_reader(s, permit, std::move(get_next_mutation_fragment)),
                 make_streaming_consumer("streaming", _db, _sys_dist_ks, _view_update_generator, estimated_partitions, reason, is_offstrategy_supported(reason)),
-                cf.stream_in_progress()
+                std::move(op)
             ).then_wrapped([s, plan_id, from, sink, estimated_partitions] (future<uint64_t> f) mutable {
                 int32_t status = 0;
                 uint64_t received_partitions = 0;
@@ -152,6 +154,11 @@ void stream_manager::init_messaging_service_handler() {
                 sslog.error("[Stream #{}] Failed to handle STREAM_MUTATION_FRAGMENTS (respond phase) for ks={}, cf={}, peer={}: {}",
                         plan_id, s->ks_name(), s->cf_name(), from.addr, ep);
             });
+          } catch (...) {
+            return sink.close().then([sink, eptr = std::current_exception()] () -> future<rpc::sink<int>> {
+                return make_exception_future<rpc::sink<int>>(eptr);
+            });
+          }
             return make_ready_future<rpc::sink<int>>(sink);
         });
       });

@@ -30,6 +30,7 @@ private:
     dht::token_range_vector _ranges;
     std::map<unsigned, dht::partition_range_vector> _shard_ranges;
     long _total_size;
+    bool _mutation_done_sent = false;
 public:
     using UUID = utils::UUID;
     stream_transfer_task(stream_transfer_task&&) = default;
