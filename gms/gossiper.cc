@@ -1326,15 +1326,6 @@ endpoint_state& gossiper::get_endpoint_state(inet_address ep) {
     return *ptr;
 }
 
-std::optional<endpoint_state> gossiper::get_endpoint_state_for_endpoint(inet_address ep) const noexcept {
-    auto it = endpoint_state_map.find(ep);
-    if (it == endpoint_state_map.end()) {
-        return {};
-    } else {
-        return it->second;
-    }
-}
-
 future<> gossiper::reset_endpoint_state_map() {
     _unreachable_endpoints.clear();
     _live_endpoints.clear();
@@ -1553,7 +1544,11 @@ future<> gossiper::mark_dead(inet_address addr, endpoint_state& local_state) {
 }
 
 future<> gossiper::handle_major_state_change(inet_address ep, const endpoint_state& eps) {
-    auto eps_old = get_endpoint_state_for_endpoint(ep);
+    std::optional<endpoint_state> eps_old;
+    if (auto* p = get_endpoint_state_for_endpoint_ptr(ep); p) {
+        eps_old = *p;
+    }
+
     if (!is_dead_state(eps) && !is_in_shadow_round()) {
         if (endpoint_state_map.contains(ep))  {
             logger.debug("Node {} has restarted, now UP, status = {}", ep, get_gossip_status(eps));

@@ -392,9 +392,6 @@ public:
     const versioned_value* get_application_state_ptr(inet_address endpoint, application_state appstate) const noexcept;
     sstring get_application_state_value(inet_address endpoint, application_state appstate) const;
 
-    // Use with caution, copies might be expensive (see #764)
-    std::optional<endpoint_state> get_endpoint_state_for_endpoint(inet_address ep) const noexcept;
-
     // removes ALL endpoint states; should only be called after shadow gossip
     future<> reset_endpoint_state_map();
 
