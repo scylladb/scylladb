@@ -52,9 +52,7 @@ void set_failure_detector(http_context& ctx, routes& r, gms::gossiper& g) {
     });
 
     fd::get_phi_convict_threshold.set(r, [] (std::unique_ptr<request> req) {
-        return gms::get_phi_convict_threshold().then([](double res) {
-            return make_ready_future<json::json_return_type>(res);
-        });
+        return make_ready_future<json::json_return_type>(8);
     });
 
     fd::get_simple_states.set(r, [&g] (std::unique_ptr<request> req) {
@@ -67,9 +65,7 @@ void set_failure_detector(http_context& ctx, routes& r, gms::gossiper& g) {
 
     fd::set_phi_convict_threshold.set(r, [](std::unique_ptr<request> req) {
         double phi = atof(req->get_query_param("phi").c_str());
-        return gms::set_phi_convict_threshold(phi).then([]() {
-            return make_ready_future<json::json_return_type>("");
-        });
+        return make_ready_future<json::json_return_type>("");
     });
 
     fd::get_endpoint_state.set(r, [&g] (std::unique_ptr<request> req) {

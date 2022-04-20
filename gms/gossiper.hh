@@ -631,18 +631,6 @@ inline future<int> get_all_endpoint_count(gossiper& g) {
     });
 }
 
-inline future<> set_phi_convict_threshold(double phi) {
-    return smp::submit_to(0, [phi] {
-        return make_ready_future<>();
-    });
-}
-
-inline future<double> get_phi_convict_threshold() {
-    return smp::submit_to(0, [] {
-        return make_ready_future<double>(8);
-    });
-}
-
 inline future<std::map<inet_address, arrival_window>> get_arrival_samples() {
     return smp::submit_to(0, [] {
         return make_ready_future<std::map<inet_address, arrival_window>>();
