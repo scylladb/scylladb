@@ -604,7 +604,6 @@ public:
     void append_endpoint_state(std::stringstream& ss, const endpoint_state& state);
 public:
     void check_snitch_name_matches() const;
-    std::map<sstring, sstring> get_simple_states();
     int get_down_endpoint_count() const noexcept;
     int get_up_endpoint_count() const noexcept;
     int get_all_endpoint_count() const noexcept;
@@ -613,12 +612,6 @@ private:
     future<> failure_detector_loop_for_node(gms::inet_address node, int64_t gossip_generation, uint64_t live_endpoints_version);
     future<> update_live_endpoints_version();
 };
-
-inline future<std::map<sstring, sstring>> get_simple_states(gossiper& g) {
-    return g.container().invoke_on(0, [] (gossiper& g) {
-        return g.get_simple_states();
-    });
-}
 
 inline future<int> get_down_endpoint_count(gossiper& g) {
     return g.container().invoke_on(0, [] (gossiper& g) {

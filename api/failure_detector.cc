@@ -58,9 +58,11 @@ void set_failure_detector(http_context& ctx, routes& r, gms::gossiper& g) {
     });
 
     fd::get_simple_states.set(r, [&g] (std::unique_ptr<request> req) {
-        return gms::get_simple_states(g).then([](const std::map<sstring, sstring>& map) {
-            return make_ready_future<json::json_return_type>(map_to_key_value<fd::mapper>(map));
-        });
+        std::map<sstring, sstring> nodes_status;
+        for (auto& entry : g.get_endpoint_states()) {
+            nodes_status.emplace(entry.first.to_sstring(), entry.second.is_alive() ? "UP" : "DOWN");
+        }
+        return make_ready_future<json::json_return_type>(map_to_key_value<fd::mapper>(nodes_status));
     });
 
     fd::set_phi_convict_threshold.set(r, [](std::unique_ptr<request> req) {

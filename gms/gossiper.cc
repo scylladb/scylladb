@@ -2436,23 +2436,6 @@ void gossiper::check_snitch_name_matches() const {
     }
 }
 
-std::map<sstring, sstring> gossiper::get_simple_states() {
-    std::map<sstring, sstring> nodes_status;
-    for (auto& entry : endpoint_state_map) {
-        auto& ep = entry.first;
-        auto& state = entry.second;
-        std::stringstream ss;
-        ss << ep;
-
-        if (state.is_alive()) {
-            nodes_status.emplace(sstring(ss.str()), "UP");
-        } else {
-            nodes_status.emplace(sstring(ss.str()), "DOWN");
-        }
-    }
-    return nodes_status;
-}
-
 int gossiper::get_down_endpoint_count() const noexcept {
     return endpoint_state_map.size() - get_up_endpoint_count();
 }
