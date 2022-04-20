@@ -611,18 +611,11 @@ public:
     int get_down_endpoint_count() const noexcept;
     int get_up_endpoint_count() const noexcept;
     int get_all_endpoint_count() const noexcept;
-    sstring get_endpoint_state(sstring address);
 private:
     future<> failure_detector_loop();
     future<> failure_detector_loop_for_node(gms::inet_address node, int64_t gossip_generation, uint64_t live_endpoints_version);
     future<> update_live_endpoints_version();
 };
-
-inline future<sstring> get_endpoint_state(gossiper& g, sstring address) {
-    return g.container().invoke_on(0, [address] (gossiper& g) {
-        return g.get_endpoint_state(address);
-    });
-}
 
 inline future<std::map<sstring, sstring>> get_simple_states(gossiper& g) {
     return g.container().invoke_on(0, [] (gossiper& g) {

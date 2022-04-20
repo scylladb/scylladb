@@ -2466,17 +2466,6 @@ int gossiper::get_up_endpoint_count() const noexcept {
     return boost::count_if(endpoint_state_map | boost::adaptors::map_values, std::mem_fn(&endpoint_state::is_alive));
 }
 
-sstring gossiper::get_endpoint_state(sstring address) {
-    std::stringstream ss;
-    auto* eps = get_endpoint_state_for_endpoint_ptr(inet_address(address));
-    if (eps) {
-        append_endpoint_state(ss, *eps);
-        return sstring(ss.str());
-    } else {
-        return sstring("unknown endpoint ") + address;
-    }
-}
-
 void gossiper::append_endpoint_state(std::stringstream& ss, const endpoint_state& state) {
     ss << "  generation:" << state.get_heart_beat_state().get_generation() << "\n";
     ss << "  heartbeat:" << state.get_heart_beat_state().get_heart_beat_version() << "\n";
