@@ -404,7 +404,7 @@ class repair_writer_impl : public repair_writer::impl {
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
     sharded<db::view::view_update_generator>& _view_update_generator;
     streaming::stream_reason _reason;
-    flat_mutation_reader _queue_reader;
+    flat_mutation_reader_v2 _queue_reader;
 public:
     repair_writer_impl(
         schema_ptr schema,
@@ -415,7 +415,7 @@ public:
         sharded<db::view::view_update_generator>& view_update_generator,
         streaming::stream_reason reason,
         mutation_fragment_queue queue,
-        flat_mutation_reader queue_reader)
+        flat_mutation_reader_v2 queue_reader)
         : _schema(std::move(schema))
         , _permit(std::move(permit))
         , _estimated_partitions(estimated_partitions)
@@ -465,13 +465,13 @@ future<> repair_writer::write_start_and_mf(lw_shared_ptr<const decorated_key_wit
 };
 
 class queue_reader_handle_adapter : public mutation_fragment_queue::impl {
-    queue_reader_handle _handle;
+    queue_reader_handle_v2 _handle;
 public:
-    queue_reader_handle_adapter(queue_reader_handle handle)
+    queue_reader_handle_adapter(queue_reader_handle_v2 handle)
         : _handle(std::move(handle))
     {}
 
-    virtual future<> push(mutation_fragment mf) override {
+    virtual future<> push(mutation_fragment_v2 mf) override {
         return _handle.push(std::move(mf));
     }
 
@@ -484,8 +484,8 @@ public:
     }
 };
 
-mutation_fragment_queue make_mutation_fragment_queue(queue_reader_handle handle) {
-    return mutation_fragment_queue(seastar::make_shared<queue_reader_handle_adapter>(std::move(handle)));
+mutation_fragment_queue make_mutation_fragment_queue(schema_ptr s, reader_permit permit, queue_reader_handle_v2 handle) {
+    return mutation_fragment_queue(std::move(s), std::move(permit), seastar::make_shared<queue_reader_handle_adapter>(std::move(handle)));
 }
 
 void repair_writer_impl::create_writer(lw_shared_ptr<repair_writer> w) {
@@ -493,7 +493,7 @@ void repair_writer_impl::create_writer(lw_shared_ptr<repair_writer> w) {
         return;
     }
     replica::table& t = _db.local().find_column_family(_schema->id());
-    _writer_done = mutation_writer::distribute_reader_and_consume_on_shards(_schema, upgrade_to_v2(std::move(_queue_reader)),
+    _writer_done = mutation_writer::distribute_reader_and_consume_on_shards(_schema, std::move(_queue_reader),
             streaming::make_streaming_consumer(sstables::repair_origin, _db, _sys_dist_ks, _view_update_generator, _estimated_partitions, _reason, is_offstrategy_supported(_reason)),
     t.stream_in_progress()).then([w] (uint64_t partitions) {
         rlogger.debug("repair_writer: keyspace={}, table={}, managed to write partitions={} to sstable",
@@ -514,8 +514,8 @@ lw_shared_ptr<repair_writer> make_repair_writer(
             sharded<replica::database>& db,
             sharded<db::system_distributed_keyspace>& sys_dist_ks,
             sharded<db::view::view_update_generator>& view_update_generator) {
-    auto [queue_reader, queue_handle] = make_queue_reader(schema, permit);
-    auto queue = make_mutation_fragment_queue(std::move(queue_handle));
+    auto [queue_reader, queue_handle] = make_queue_reader_v2(schema, permit);
+    auto queue = make_mutation_fragment_queue(schema, permit, std::move(queue_handle));
     auto i = std::make_unique<repair_writer_impl>(schema, permit, estimated_partitions, db, sys_dist_ks, view_update_generator, reason, std::move(queue), std::move(queue_reader));
     return make_lw_shared<repair_writer>(schema, permit, std::move(i));
 }

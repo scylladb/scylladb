@@ -21,25 +21,15 @@
 // mutation_fragments in a passed in deque of mutation_fragment_v2.
 // This allows easy reader construction to verify what was sent to the queue
 class test_mutation_fragment_queue_impl : public mutation_fragment_queue::impl, enable_lw_shared_from_this<test_mutation_fragment_queue_impl> {
-    schema_ptr _schema;
-    reader_permit _permit;
     std::deque<mutation_fragment_v2>& _fragments;
-    std::unique_ptr<upgrading_consumer<std::function<void(mutation_fragment_v2&&)>>> _consumer;
 public:
-    test_mutation_fragment_queue_impl(schema_ptr s, reader_permit permit, std::deque<mutation_fragment_v2>& fragments)
+    test_mutation_fragment_queue_impl(std::deque<mutation_fragment_v2>& fragments)
         : mutation_fragment_queue::impl()
-        , _schema(std::move(s))
-        , _permit(std::move(permit))
         , _fragments(fragments)
-    {
-        _consumer = std::make_unique<upgrading_consumer<std::function<void(mutation_fragment_v2&&)>>>
-            (*_schema, _permit, [this](mutation_fragment_v2&& mf) mutable {
-                _fragments.push_back(std::move(mf));
-            });
-    }
+    {}
 
-    virtual future<> push(mutation_fragment mf) override {
-        _consumer->consume(std::move(mf));
+    virtual future<> push(mutation_fragment_v2 mf) override {
+        _fragments.push_back(std::move(mf));
         return make_ready_future();
     }
 
@@ -49,7 +39,7 @@ public:
 };
 
 mutation_fragment_queue make_test_mutation_fragment_queue(schema_ptr s, reader_permit permit, std::deque<mutation_fragment_v2>& fragments) {
-    return mutation_fragment_queue(seastar::make_shared<test_mutation_fragment_queue_impl>(std::move(s), std::move(permit), fragments));
+    return mutation_fragment_queue(std::move(s), std::move(permit), seastar::make_shared<test_mutation_fragment_queue_impl>(fragments));
 }
 
 // repair_writer::impl abstracts away underlying writer that will receive

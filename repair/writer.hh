@@ -9,6 +9,8 @@
 #include "repair/decorated_key_with_hash.hh"
 #include "readers/queue.hh"
 #include "sstables/sstable_set.hh"
+#include "readers/upgrading_consumer.hh"
+#include <seastar/core/coroutine.hh>
 
 using namespace seastar;
 
@@ -22,23 +24,49 @@ namespace db {
 class mutation_fragment_queue {
 public:
     class impl {
+        std::vector<mutation_fragment_v2> _pending;
     public:
-        virtual future<> push(mutation_fragment mf) = 0;
+        virtual future<> push(mutation_fragment_v2 mf) = 0;
         virtual void abort(std::exception_ptr ep) = 0;
         virtual void push_end_of_stream() = 0;
         virtual ~impl() {}
+        future<> flush() {
+            for (auto&& mf : _pending) {
+                co_await push(std::move(mf));
+            }
+            _pending.clear();
+        }
+
+        std::vector<mutation_fragment_v2>& pending() {
+            return _pending;
+        }
     };
 
 private:
+
+    class consumer {
+        std::vector<mutation_fragment_v2>& _fragments;
+    public:
+        explicit consumer(std::vector<mutation_fragment_v2>& fragments)
+            : _fragments(fragments)
+        {}
+
+        void operator()(mutation_fragment_v2 mf) {
+            _fragments.push_back(std::move(mf));
+        }
+    };
     seastar::shared_ptr<impl> _impl;
+    upgrading_consumer<consumer> _consumer;
 
 public:
-    mutation_fragment_queue(seastar::shared_ptr<impl> impl)
+    mutation_fragment_queue(schema_ptr s, reader_permit permit, seastar::shared_ptr<impl> impl)
         : _impl(std::move(impl))
+        , _consumer(*s, std::move(permit), consumer(_impl->pending()))
     {}
 
     future<> push(mutation_fragment mf) {
-        return _impl->push(std::move(mf));
+        _consumer.consume(std::move(mf));
+        return _impl->flush();
     }
 
     void abort(std::exception_ptr ep) {
