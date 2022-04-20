@@ -18,7 +18,7 @@ namespace fd = httpd::failure_detector_json;
 void set_failure_detector(http_context& ctx, routes& r, gms::gossiper& g) {
     fd::get_all_endpoint_states.set(r, [&g](std::unique_ptr<request> req) {
         std::vector<fd::endpoint_state> res;
-        for (auto i : g.endpoint_state_map) {
+        for (auto i : g.get_endpoint_states()) {
             fd::endpoint_state val;
             val.addrs = boost::lexical_cast<std::string>(i.first);
             val.is_alive = i.second.is_alive();

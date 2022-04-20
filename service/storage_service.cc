@@ -1969,7 +1969,7 @@ void storage_service::run_bootstrap_ops() {
     for (;;) {
         sync_nodes.clear();
         // Step 1: Decide who needs to sync data for bootstrap operation
-        for (const auto& x :_gossiper.endpoint_state_map) {
+        for (const auto& x :_gossiper.get_endpoint_states()) {
             seastar::thread::maybe_yield();
             const auto& node = x.first;
             slogger.info("bootstrap[{}]: Check node={}, status={}", uuid, node, _gossiper.get_gossip_status(node));
@@ -2086,7 +2086,7 @@ void storage_service::run_replace_ops() {
     std::list<gms::inet_address> ignore_nodes = get_ignore_dead_nodes_for_replace();
     // Step 1: Decide who needs to sync data for replace operation
     std::list<gms::inet_address> sync_nodes;
-    for (const auto& x :_gossiper.endpoint_state_map) {
+    for (const auto& x :_gossiper.get_endpoint_states()) {
         seastar::thread::maybe_yield();
         const auto& node = x.first;
         slogger.debug("replace[{}]: Check node={}, status={}", uuid, node, _gossiper.get_gossip_status(node));

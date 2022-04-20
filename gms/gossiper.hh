@@ -157,12 +157,14 @@ public:
         semaphore_units<> _units;
     };
     future<endpoint_permit> lock_endpoint(inet_address);
-public:
+
+private:
     /* map where key is the endpoint and value is the state associated with the endpoint */
     std::unordered_map<inet_address, endpoint_state> endpoint_state_map;
     // Used for serializing changes to endpoint_state_map and running of associated change listeners.
     endpoint_locks_map endpoint_locks;
 
+public:
     const std::vector<sstring> DEAD_STATES = {
         versioned_value::REMOVING_TOKEN,
         versioned_value::REMOVED_TOKEN,
