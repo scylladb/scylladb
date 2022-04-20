@@ -1241,10 +1241,6 @@ future<> gossiper::assassinate_endpoint(sstring address) {
     });
 }
 
-bool gossiper::is_known_endpoint(inet_address endpoint) const noexcept {
-    return endpoint_state_map.contains(endpoint);
-}
-
 future<int> gossiper::get_current_generation_number(inet_address endpoint) {
     return container().invoke_on(0, [endpoint] (auto&& gossiper) {
         return gossiper.get_endpoint_state(endpoint).get_heart_beat_state().get_generation();
@@ -2443,17 +2439,6 @@ void gossiper::check_snitch_name_matches() const {
             throw std::runtime_error(format("Snitch check failed. This node cannot join the cluster because it uses {} and not {}", my_snitch_name, remote_snitch_name->value));
         }
     }
-}
-
-sstring gossiper::get_all_endpoint_states() {
-    std::stringstream ss;
-    for (auto& entry : endpoint_state_map) {
-        auto& ep = entry.first;
-        auto& state = entry.second;
-        ss << ep << "\n";
-        append_endpoint_state(ss, state);
-    }
-    return sstring(ss.str());
 }
 
 std::map<sstring, sstring> gossiper::get_simple_states() {

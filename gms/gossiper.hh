@@ -356,8 +356,6 @@ public:
     future<> assassinate_endpoint(sstring address);
 
 public:
-    bool is_known_endpoint(inet_address endpoint) const noexcept;
-
     future<int> get_current_generation_number(inet_address endpoint);
     future<int> get_current_heart_beat_version(inet_address endpoint);
 
@@ -607,7 +605,6 @@ public:
     void append_endpoint_state(std::stringstream& ss, const endpoint_state& state);
 public:
     void check_snitch_name_matches() const;
-    sstring get_all_endpoint_states();
     std::map<sstring, sstring> get_simple_states();
     int get_down_endpoint_count() const noexcept;
     int get_up_endpoint_count() const noexcept;
@@ -618,12 +615,6 @@ private:
     future<> failure_detector_loop_for_node(gms::inet_address node, int64_t gossip_generation, uint64_t live_endpoints_version);
     future<> update_live_endpoints_version();
 };
-
-inline future<sstring> get_all_endpoint_states(gossiper& g) {
-    return g.container().invoke_on(0, [] (gossiper& g) {
-        return g.get_all_endpoint_states();
-    });
-}
 
 inline future<sstring> get_endpoint_state(gossiper& g, sstring address) {
     return g.container().invoke_on(0, [address] (gossiper& g) {
