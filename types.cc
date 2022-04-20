@@ -16,6 +16,7 @@
 #include "cql3/util.hh"
 #include "concrete_types.hh"
 #include <seastar/core/print.hh>
+#include "types.hh"
 #include "utils/exceptions.hh"
 #include "utils/serialization.hh"
 #include "vint-serialization.hh"
@@ -3425,6 +3426,118 @@ data_value::data_value(big_decimal v) : data_value(make_new(decimal_type, v)) {
 }
 
 data_value::data_value(cql_duration d) : data_value(make_new(duration_type, d)) {
+}
+
+sstring data_value::to_parsable_string() const {
+    // For some reason trying to do it using fmt::format refuses to compile
+    // auto to_parsable_str_transform = boost::adaptors::transformed([](const data_value& dv) -> sstring {
+    //     return dv.to_parsable_string();
+    // });
+
+    if (_type->without_reversed().is_list()) {
+        const list_type_impl::native_type* the_list = (const list_type_impl::native_type*)_value;
+        std::ostringstream result;
+        result << "[";
+        for (size_t i = 0; i < the_list->size(); i++) {
+            if (i != 0) {
+                result << ", ";
+            }
+
+            result << (*the_list)[i].to_parsable_string();
+        }
+        result << "]";
+        return result.str();
+        //return fmt::format("[{}]", fmt::join(*the_list | to_parsable_str_transform, ", "));
+    }
+
+    if (_type->without_reversed().is_set()) {
+        const set_type_impl::native_type* the_set = (const set_type_impl::native_type*)_value;
+        std::ostringstream result;
+        result << "{";
+        for (size_t i = 0; i < the_set->size(); i++) {
+            if (i != 0) {
+                result << ", ";
+            }
+
+            result << (*the_set)[i].to_parsable_string();
+        }
+        result << "}";
+        return result.str();
+        //return fmt::format("{{{}}}", fmt::join(*the_set | to_parsable_str_transform, ", "));
+    }
+
+    if (_type->without_reversed().is_map()) {
+        const map_type_impl::native_type* the_map = (const map_type_impl::native_type*)_value;
+        std::ostringstream result;
+        result << "{";
+        for (size_t i = 0; i < the_map->size(); i++) {
+            if (i != 0) {
+                result << ", ";
+            }
+
+            result << (*the_map)[i].first.to_parsable_string() << ":" << (*the_map)[i].second.to_parsable_string();
+        }
+        result << "}";
+        return result.str();
+        //auto to_map_elem_transform = boost::adaptors::transformed(
+        //    [](const std::pair<data_value, data_value>& map_elem) -> sstring {
+        //        return fmt::format("{{{}:{}}}", map_elem.first.to_parsable_string(), map_elem.second.to_parsable_string());
+        //    }
+        //);
+        //
+        //return fmt::format("{{{}}}", fmt::join(*the_map | to_map_elem_transform, ", "));
+    }
+
+    if (_type->without_reversed().is_user_type()) {
+        const user_type_impl* user_typ = dynamic_cast<const user_type_impl*>(&_type->without_reversed());
+        const user_type_impl::native_type* field_values = (const user_type_impl::native_type*)_value;
+        std::ostringstream result;
+        result << "{";
+
+        for (std::size_t i = 0; i < field_values->size(); i++) {
+            if (i != 0) {
+                result << ", ";
+            }
+            result << user_typ->string_field_names().at(i) << ":" << (*field_values)[i].to_parsable_string();
+        }
+        result << "}";
+        return result.str();
+    }
+
+    if (_type->without_reversed().is_tuple()) {
+        const tuple_type_impl::native_type* tuple_elements = (const tuple_type_impl::native_type*)_value;
+        std::ostringstream result;
+        result << "(";
+
+        for (std::size_t i = 0; i < tuple_elements->size(); i++) {
+            if (i != 0) {
+                result << ", ";
+            }
+            result << (*tuple_elements)[i].to_parsable_string();
+        }
+        result << ")";
+        return result.str();
+    }
+
+    abstract_type::kind type_kind = _type->without_reversed().get_kind();
+
+    if (type_kind == abstract_type::kind::date || type_kind == abstract_type::kind::timestamp) {
+        // Put timezone information after a date or timestamp to specify that it's in UTC
+        // Otherwise it will be parsed as a date in the local timezone.
+        return fmt::format("'{}+0000'", *this);
+    }
+
+    if (type_kind == abstract_type::kind::utf8
+        || type_kind == abstract_type::kind::ascii
+        || type_kind == abstract_type::kind::inet
+        || type_kind == abstract_type::kind::time
+    ) {
+        // Put quotes on types that require it
+        return fmt::format("'{}'", *this);
+    }
+
+    // For simple types the default operator<< should work ok
+    return fmt::format("{}", *this);
 }
 
 data_value

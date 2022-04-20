@@ -180,6 +180,12 @@ public:
 
     template <ExpressionElement E>
     friend E* as_if(expression* e);
+
+    // Prints given expression using additional options
+    struct printer {
+        const expression& expr_to_print;
+        bool debug_mode = true;
+    };
 };
 
 // An expression that doesn't contain subexpressions
@@ -487,6 +493,8 @@ extern std::ostream& operator<<(std::ostream&, const column_value&);
 
 extern std::ostream& operator<<(std::ostream&, const expression&);
 
+extern std::ostream& operator<<(std::ostream&, const expression::printer&);
+
 extern bool recurse_until(const expression& e, const noncopyable_function<bool (const expression&)>& predicate_fun);
 
 // Looks into the expression and finds the given expression variant
@@ -708,6 +716,21 @@ struct fmt::formatter<cql3::expr::expression> {
     auto format(const cql3::expr::expression& expr, FormatContext& ctx) {
         std::ostringstream os;
         os << expr;
+        return format_to(ctx.out(), "{}", os.str());
+    }
+};
+
+/// Required for fmt::join() to work on expression::printer.
+template <>
+struct fmt::formatter<cql3::expr::expression::printer> {
+    constexpr auto parse(format_parse_context& ctx) {
+        return ctx.end();
+    }
+
+    template <typename FormatContext>
+    auto format(const cql3::expr::expression::printer& pr, FormatContext& ctx) {
+        std::ostringstream os;
+        os << pr;
         return format_to(ctx.out(), "{}", os.str());
     }
 };
