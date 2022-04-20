@@ -41,12 +41,12 @@ void set_failure_detector(http_context& ctx, routes& r, gms::gossiper& g) {
 
     fd::get_up_endpoint_count.set(r, [&g](std::unique_ptr<request> req) {
         int res = g.get_up_endpoint_count();
-            return make_ready_future<json::json_return_type>(res);
+        return make_ready_future<json::json_return_type>(res);
     });
 
     fd::get_down_endpoint_count.set(r, [&g](std::unique_ptr<request> req) {
         int res = g.get_down_endpoint_count();
-            return make_ready_future<json::json_return_type>(res);
+        return make_ready_future<json::json_return_type>(res);
     });
 
     fd::get_phi_convict_threshold.set(r, [] (std::unique_ptr<request> req) {
