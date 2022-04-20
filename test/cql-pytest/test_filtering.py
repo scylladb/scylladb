@@ -143,3 +143,27 @@ def test_index_with_in_relation(scylla_only, cql, test_keyspace):
             cql.execute(f"insert into {table} (p,c,v) values ({p}, {c}, {v})")
         res = cql.execute(f"select * from {table} where p in (0,1) and v = False ALLOW FILTERING")
         assert set(res) == set([(0,1,False),(0,3,False),(1,1,False), (1,3,False)])
+
+# Test that IN restrictions are supported with filtering and return the
+# correct results.
+# We mark this test "cassandra_bug" because Cassandra could support this
+# feature but doesn't yet: It reports "IN predicates on non-primary-key
+# columns (v) is not yet supported" when v is a regular column, or "IN
+# restrictions are not supported when the query involves filtering" on
+# partition-key columns p1 or p2. By the way, it does support IN restrictions
+# on a clustering-key column.
+def test_filtering_with_in_relation(cql, test_keyspace, cassandra_bug):
+    schema = 'p1 int, p2 int, c int, v int, primary key ((p1, p2),c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"INSERT INTO {table} (p1, p2, c, v) VALUES (1, 2, 3, 4)")
+        cql.execute(f"INSERT INTO {table} (p1, p2, c, v) VALUES (2, 3, 4, 5)")
+        cql.execute(f"INSERT INTO {table} (p1, p2, c, v) VALUES (3, 4, 5, 6)")
+        cql.execute(f"INSERT INTO {table} (p1, p2, c, v) VALUES (4, 5, 6, 7)")
+        res = cql.execute(f"select * from {table} where p1 in (2,4) ALLOW FILTERING")
+        assert set(res) == set([(2,3,4,5), (4,5,6,7)])
+        res = cql.execute(f"select * from {table} where p2 in (2,4) ALLOW FILTERING")
+        assert set(res) == set([(1,2,3,4), (3,4,5,6)])
+        res = cql.execute(f"select * from {table} where c in (3,5) ALLOW FILTERING")
+        assert set(res) == set([(1,2,3,4), (3,4,5,6)])
+        res = cql.execute(f"select * from {table} where v in (5,7) ALLOW FILTERING")
+        assert set(res) == set([(2,3,4,5), (4,5,6,7)])
