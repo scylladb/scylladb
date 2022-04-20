@@ -171,7 +171,16 @@ static managed_bytes_opt get_value(const column_maybe_subscripted& col, const co
             const auto deserialized = cdef->type->deserialize(managed_bytes_view(*data.other_columns[index]));
             const auto& data_map = value_cast<map_type_impl::native_type>(deserialized);
             const auto key = evaluate(s->sub, options);
+            // When s->sub is a constant, we should have already verified
+            // earlier that it has the right type (key.type == col_type->
+            // name_comparator()) and not a null or unset value. If we
+            // find an inappropriate key here, we'll assume it was dynamically
+            // calculated, so this is not an invalid request - it's simply
+            // a non-matching item and we should return std::nullopt.
             auto&& key_type = col_type->name_comparator();
+            if (key.is_null_or_unset() || key_type != key.type) {
+                return std::nullopt;
+            }
             const auto found = key.view().with_linearized([&] (bytes_view key_bv) {
                 using entry = std::pair<data_value, data_value>;
                 return std::find_if(data_map.cbegin(), data_map.cend(), [&] (const entry& element) {

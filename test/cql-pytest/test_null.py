@@ -160,7 +160,15 @@ def test_filtering_null_comparison_no_filtering(cql, table1):
         cql.execute(f"SELECT c FROM {table1} WHERE p='x' AND m CONTAINS KEY NULL")
 
 # Test that null subscript m[null] is caught as the appropriate invalid-
-# request error, and not some internal server error as we had in #10361.
+# request error, and not some internal server error as we had in #10361
+# or crash as in #10399.
+# This test is a subset of test_filtering.py::test_filtering_with_subscript
+# which tests additional cases of subscripts, not just with nulls.
+# However, another difference between this test and the other one is that
+# this test uses a shared table (table1), so when this entire test file is
+# run, the following test sees a non-empty table so it needs to invoke the
+# filtering function. This makes this test able to reproduce #10399 while
+# the other test can't
 @pytest.mark.xfail(reason="Issue #10361")
 def test_map_subscript_null(cql, table1):
     with pytest.raises(InvalidRequest, match='null'):
