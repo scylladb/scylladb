@@ -1397,6 +1397,10 @@ typedef std::unordered_map<truncation_key, truncation_record> truncation_map;
 static constexpr uint8_t current_version = 1;
 
 future<truncation_record> system_keyspace::get_truncation_record(utils::UUID cf_id) {
+    if (qctx->qp().db().get_config().ignore_truncation_record.is_set()) {
+        truncation_record r{truncation_record::current_magic};
+        return make_ready_future<truncation_record>(std::move(r));
+    }
     sstring req = format("SELECT * from system.{} WHERE table_uuid = ?", TRUNCATED);
     return qctx->qp().execute_internal(req, {cf_id}, cql3::query_processor::cache_internal::yes).then([cf_id](::shared_ptr<cql3::untyped_result_set> rs) {
         truncation_record r{truncation_record::current_magic};
@@ -1416,6 +1420,9 @@ future<truncation_record> system_keyspace::get_truncation_record(utils::UUID cf_
 
 // Read system.truncate table and cache last truncation time in `table` object for each table on every shard
 future<> system_keyspace::cache_truncation_record() {
+    if (_db.local().get_config().ignore_truncation_record.is_set()) {
+        return make_ready_future<>();
+    }
     sstring req = format("SELECT DISTINCT table_uuid, truncated_at from system.{}", TRUNCATED);
     return execute_cql(req).then([this] (::shared_ptr<cql3::untyped_result_set> rs) {
         return parallel_for_each(rs->begin(), rs->end(), [this] (const cql3::untyped_result_set_row& row) {
