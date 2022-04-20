@@ -606,30 +606,11 @@ public:
     void check_snitch_name_matches() const;
     int get_down_endpoint_count() const noexcept;
     int get_up_endpoint_count() const noexcept;
-    int get_all_endpoint_count() const noexcept;
 private:
     future<> failure_detector_loop();
     future<> failure_detector_loop_for_node(gms::inet_address node, int64_t gossip_generation, uint64_t live_endpoints_version);
     future<> update_live_endpoints_version();
 };
-
-inline future<int> get_down_endpoint_count(gossiper& g) {
-    return g.container().invoke_on(0, [] (gossiper& g) {
-        return g.get_down_endpoint_count();
-    });
-}
-
-inline future<int> get_up_endpoint_count(gossiper& g) {
-    return g.container().invoke_on(0, [] (gossiper& g) {
-        return g.get_up_endpoint_count();
-    });
-}
-
-inline future<int> get_all_endpoint_count(gossiper& g) {
-    return g.container().invoke_on(0, [] (gossiper& g) {
-        return static_cast<int>(g.get_endpoint_states().size());
-    });
-}
 
 struct gossip_get_endpoint_states_request {
     // Application states the sender requested

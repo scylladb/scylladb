@@ -4293,7 +4293,7 @@ static std::map<sstring, sstring> get_network_topology_options(gms::gossiper& go
 // manually create the keyspace to override this predefined behavior.
 static future<std::vector<mutation>> create_keyspace(std::string_view keyspace_name, service::migration_manager& mm, gms::gossiper& gossiper, api::timestamp_type ts) {
     sstring keyspace_name_str(keyspace_name);
-    int endpoint_count = co_await gms::get_all_endpoint_count(gossiper);
+    int endpoint_count = gossiper.get_endpoint_states().size();
     int rf = 3;
     if (endpoint_count < rf) {
         rf = 1;
