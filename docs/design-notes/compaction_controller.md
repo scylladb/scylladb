@@ -22,9 +22,11 @@ So we need to try to stay in the sweet spot.
 ### How does it work
 
 We will keep track of the current backlog for compaction work. The backlog is an estimate of the
-amount of work that we still have to do in the future to compact everything. Because the various
+amount of work that we still have to do in the future to make the compaction strategy satisfied. Because the various
 compaction strategies compact things very differently and have very different ideas about what it
 means for the data to be "fully compacted", the backlogs are strategy-dependent.
+Each strategy has its own goals on amplification factors, and once those goals are reached, then zero backlog
+will be returned for the underlying table.
 
 Each Table (Column Family) keeps track of the backlog that it has, and those backlogs are then added
 together to create a system-wide backlog.
