@@ -49,7 +49,7 @@ public:
 };
 
 mutation_fragment_queue make_test_mutation_fragment_queue(schema_ptr s, reader_permit permit, std::deque<mutation_fragment_v2>& fragments) {
-    return mutation_fragment_queue(std::make_unique<test_mutation_fragment_queue_impl>(std::move(s), std::move(permit), fragments));
+    return mutation_fragment_queue(seastar::make_shared<test_mutation_fragment_queue_impl>(std::move(s), std::move(permit), fragments));
 }
 
 // repair_writer::impl abstracts away underlying writer that will receive

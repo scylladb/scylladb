@@ -30,10 +30,10 @@ public:
     };
 
 private:
-    std::unique_ptr<impl> _impl;
+    seastar::shared_ptr<impl> _impl;
 
 public:
-    mutation_fragment_queue(std::unique_ptr<impl> impl)
+    mutation_fragment_queue(seastar::shared_ptr<impl> impl)
         : _impl(std::move(impl))
     {}
 
@@ -106,8 +106,6 @@ public:
 
 private:
     future<> write_start_and_mf(lw_shared_ptr<const decorated_key_with_hash> dk, mutation_fragment mf);
-
-
     future<> write_partition_end();
     future<> write_end_of_stream();
 };

@@ -485,7 +485,7 @@ public:
 };
 
 mutation_fragment_queue make_mutation_fragment_queue(queue_reader_handle handle) {
-    return mutation_fragment_queue(std::make_unique<queue_reader_handle_adapter>(std::move(handle)));
+    return mutation_fragment_queue(seastar::make_shared<queue_reader_handle_adapter>(std::move(handle)));
 }
 
 void repair_writer_impl::create_writer(lw_shared_ptr<repair_writer> w) {
@@ -515,7 +515,7 @@ lw_shared_ptr<repair_writer> make_repair_writer(
             sharded<db::system_distributed_keyspace>& sys_dist_ks,
             sharded<db::view::view_update_generator>& view_update_generator) {
     auto [queue_reader, queue_handle] = make_queue_reader(schema, permit);
-    auto queue = mutation_fragment_queue(std::make_unique<queue_reader_handle_adapter>(std::move(queue_handle)));
+    auto queue = make_mutation_fragment_queue(std::move(queue_handle));
     auto i = std::make_unique<repair_writer_impl>(schema, permit, estimated_partitions, db, sys_dist_ks, view_update_generator, reason, std::move(queue), std::move(queue_reader));
     return make_lw_shared<repair_writer>(schema, permit, std::move(i));
 }
