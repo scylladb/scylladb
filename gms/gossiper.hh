@@ -631,12 +631,6 @@ inline future<int> get_all_endpoint_count(gossiper& g) {
     });
 }
 
-inline future<std::map<inet_address, arrival_window>> get_arrival_samples() {
-    return smp::submit_to(0, [] {
-        return make_ready_future<std::map<inet_address, arrival_window>>();
-    });
-}
-
 struct gossip_get_endpoint_states_request {
     // Application states the sender requested
     std::unordered_set<gms::application_state> application_states;
