@@ -2557,16 +2557,11 @@ SEASTAR_TEST_CASE(test_exception_safety_of_update_from_memtable) {
                 .produces(muts2)
                 .produces_end_of_stream();
 
-            /*FIXME: broken by upgrade_to_v2() used inside row_cache::make_reader()
-             * because set_max_buffer_size() applies to the top level upgrading
-             * reader, instead of to the row cache reader, as the test expects.
-             * Will restore once the above has a native v2 implementation.
             rd1_v1.produces(muts[0])
                 .produces(muts2[1])
                 .produces(muts2[2])
                 .produces(muts2[3])
                 .produces_end_of_stream();
-                */
         });
         tracker.cleaner().drain().get();
         BOOST_REQUIRE_EQUAL(0, tracker.get_stats().rows);

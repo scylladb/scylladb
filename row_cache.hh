@@ -257,8 +257,8 @@ private:
     logalloc::allocating_section _update_section;
     logalloc::allocating_section _populate_section;
     logalloc::allocating_section _read_section;
-    flat_mutation_reader create_underlying_reader(cache::read_context&, mutation_source&, const dht::partition_range&);
-    flat_mutation_reader make_scanning_reader(const dht::partition_range&, std::unique_ptr<cache::read_context>);
+    flat_mutation_reader_v2 create_underlying_reader(cache::read_context&, mutation_source&, const dht::partition_range&);
+    flat_mutation_reader_v2 make_scanning_reader(const dht::partition_range&, std::unique_ptr<cache::read_context>);
     void on_partition_hit();
     void on_partition_miss();
     void on_row_hit();

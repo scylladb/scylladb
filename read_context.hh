@@ -25,7 +25,7 @@ namespace cache {
 class autoupdating_underlying_reader final {
     row_cache& _cache;
     read_context& _read_context;
-    flat_mutation_reader_opt _reader;
+    flat_mutation_reader_v2_opt _reader;
     utils::phased_barrier::phase_type _reader_creation_phase = 0;
     dht::partition_range _range = { };
     std::optional<dht::decorated_key> _last_key;
@@ -39,7 +39,7 @@ public:
         : _cache(cache)
         , _read_context(context)
     { }
-    future<mutation_fragment_opt> move_to_next_partition() {
+    future<mutation_fragment_v2_opt> move_to_next_partition() {
         _last_key = std::move(_new_last_key);
         auto start = population_range_start();
         auto phase = _cache.phase_of(start);
@@ -109,7 +109,7 @@ public:
     const dht::partition_range& range() const {
         return _range;
     }
-    flat_mutation_reader& underlying() { return *_reader; }
+    flat_mutation_reader_v2& underlying() { return *_reader; }
     dht::ring_position_view population_range_start() const {
         return _last_key ? dht::ring_position_view::for_after_key(*_last_key)
                          : dht::ring_position_view::for_range_start(_range);
@@ -203,7 +203,7 @@ public:
     future<> ensure_underlying() {
         if (_underlying_snapshot) {
             return create_underlying().then([this] {
-                return _underlying.underlying()().then([this] (mutation_fragment_opt&& mfopt) {
+                return _underlying.underlying()().then([this] (mutation_fragment_v2_opt&& mfopt) {
                     _partition_exists = bool(mfopt);
                 });
             });
