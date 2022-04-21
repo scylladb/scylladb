@@ -106,19 +106,37 @@ read_monitor_generator& default_read_monitor_generator() {
     return noop_read_monitor_generator;
 }
 
-static future<file> open_sstable_component_file_non_checked(std::string_view name, open_flags flags, file_open_options options,
-        bool check_integrity) noexcept {
+future<file> sstable::file_ops::open_file(std::string_view name, open_flags flags, file_open_options options, bool check_integrity) const {
+    if (!uses_filesystem()) {
+        throw std::runtime_error("Operations on non-filesystem-backed storage is not yet supported");
+    }
     if (flags != open_flags::ro && check_integrity) {
         return open_integrity_checked_file_dma(name, flags, options);
     }
     return open_file_dma(name, flags, options);
 }
 
-future<> sstable::rename_new_sstable_component_file(sstring from_name, sstring to_name) {
-    return sstable_write_io_check(rename_file, from_name, to_name).handle_exception([from_name, to_name] (std::exception_ptr ep) {
+future<> sstable::file_ops::rename_file(sstring from_name, sstring to_name) const {
+    if (!uses_filesystem()) {
+        throw std::runtime_error("Operations on non-filesystem-backed storage is not yet supported");
+    }
+    return _owner.sstable_write_io_check(::rename_file, from_name, to_name).handle_exception([from_name, to_name] (std::exception_ptr ep) {
         sstlog.error("Could not rename SSTable component {} to {}. Found exception: {}", from_name, to_name, ep);
         return make_exception_future<>(ep);
     });
+}
+
+bool sstable::file_ops::uses_filesystem() const {
+    return !std::get_if<data_dictionary::storage_options::s3>(&_storage.value);
+}
+
+future<file> sstable::open_sstable_component_file_non_checked(std::string_view name, open_flags flags, file_open_options options,
+        bool check_integrity) noexcept {
+    return _file_ops.open_file(name, flags, options, check_integrity);
+}
+
+future<> sstable::rename_new_sstable_component_file(sstring from_name, sstring to_name) {
+    return _file_ops.rename_file(from_name, to_name);
 }
 
 future<file> sstable::new_sstable_component_file(const io_error_handler& error_handler, component_type type, open_flags flags, file_open_options options) noexcept {
@@ -889,6 +907,7 @@ const char* file_writer::get_filename() const noexcept {
 }
 
 future<file_writer> sstable::make_component_file_writer(component_type c, file_output_stream_options options, open_flags oflags) noexcept {
+    
     // Note: file_writer::make closes the file if file_writer creation fails
     // so we don't need to use with_file_close_on_failure here.
     return futurize_invoke([this, c] { return filename(c); }).then([this, c, options = std::move(options), oflags] (sstring filename) mutable {
@@ -899,6 +918,9 @@ future<file_writer> sstable::make_component_file_writer(component_type c, file_o
 }
 
 void sstable::write_toc(const io_priority_class& pc) {
+    if (!_file_ops.uses_filesystem()) {
+        throw std::runtime_error("Writing TOC is not implemented for non-filesystem-backed storage");
+    }
     touch_temp_dir().get0();
     auto file_path = filename(component_type::TemporaryTOC);
 
@@ -941,6 +963,9 @@ void sstable::write_toc(const io_priority_class& pc) {
 }
 
 future<> sstable::seal_sstable() {
+    if (!_file_ops.uses_filesystem()) {
+        co_await coroutine::return_exception(std::runtime_error("Sealing is not implemented for non-filesystem-backed storage"));
+    }
     // SSTable sealing is about renaming temporary TOC file after guaranteeing
     // that each component reached the disk safely.
     co_await remove_temp_dir();
@@ -1189,6 +1214,9 @@ void sstable::write_statistics(const io_priority_class& pc) {
 }
 
 void sstable::rewrite_statistics(const io_priority_class& pc) {
+    if (!_file_ops.uses_filesystem()) {
+        throw std::runtime_error("Rewriting statistics is not implemented for non-filesystem-backed storage");
+    }
     auto file_path = filename(component_type::TemporaryStatistics);
     sstlog.debug("Rewriting statistics component of sstable {}", get_filename());
 
@@ -1270,6 +1298,9 @@ future<> sstable::open_data() noexcept {
 }
 
 future<> sstable::update_info_for_opened_data() {
+    if (!_file_ops.uses_filesystem()) {
+        return make_exception_future<>(std::runtime_error("Updating info for opened data is not implemented for non-filesystem-backed storage"));
+    }
     return _data_file.stat().then([this] (struct stat st) {
         if (this->has_component(component_type::CompressionInfo)) {
             _components->compression.update(st.st_size);
@@ -2032,6 +2063,9 @@ future<> sstable::check_create_links_replay(const sstring& dst_dir, int64_t dst_
 /// \param generation - the generation of the destination sstable
 /// \param mark_for_removal - mark the sstable for removal after linking it to the destination dir
 future<> sstable::create_links_common(const sstring& dir, int64_t generation, bool mark_for_removal) const {
+    if (!_file_ops.uses_filesystem()) {
+        return make_exception_future<>(std::runtime_error("Creating links is not implemented for non-filesystem-backed storage"));
+    }
     sstlog.trace("create_links: {} -> {} generation={} mark_for_removal={}", get_filename(), dir, generation, mark_for_removal);
     return do_with(dir, all_components(), [this, generation, mark_for_removal] (const sstring& dir, auto& comps) {
         return check_create_links_replay(dir, generation, comps).then([this, &dir, generation, &comps, mark_for_removal] {
@@ -2079,6 +2113,9 @@ future<> sstable::create_links_and_mark_for_removal(const sstring& dir, int64_t 
 }
 
 future<> sstable::set_generation(int64_t new_generation) {
+    if (!_file_ops.uses_filesystem()) {
+        return make_exception_future<>(std::runtime_error("Setting generation is not implemented for non-filesystem-backed storage"));
+    }
     sstlog.debug("Setting generation for {} to generation={}", get_filename(), new_generation);
     return create_links(_dir, new_generation).then([this] {
         return remove_file(filename(component_type::TOC)).then([this] {
@@ -2099,6 +2136,9 @@ future<> sstable::set_generation(int64_t new_generation) {
 }
 
 future<> sstable::move_to_new_dir(sstring new_dir, int64_t new_generation, bool do_sync_dirs) {
+    if (!_file_ops.uses_filesystem()) {
+        co_await coroutine::return_exception(std::runtime_error("Moving to new dir is not implemented for non-filesystem-backed storage"));
+    }
     sstring old_dir = get_dir();
     sstlog.debug("Moving {} old_generation={} to {} new_generation={} do_sync_dirs={}",
             get_filename(), old_dir, _generation, new_dir, new_generation, do_sync_dirs);
@@ -2907,6 +2947,9 @@ delete_sstables(std::vector<sstring> tocs) {
 
 future<>
 sstable::unlink() noexcept {
+    if (!_file_ops.uses_filesystem()) {
+        co_await coroutine::return_exception(std::runtime_error("Unlinking is not implemented for non-filesystem-backed storage"));
+    }
     // We must be able to generate toc_filename()
     // in order to delete the sstable.
     // Running out of memory here will terminate.
@@ -3175,6 +3218,7 @@ sstable::sstable(schema_ptr schema,
         int64_t generation,
         version_types v,
         format_types f,
+        const data_dictionary::storage_options& storage_opts,
         db::large_data_handler& large_data_handler,
         sstables_manager& manager,
         gc_clock::time_point now,
@@ -3186,6 +3230,7 @@ sstable::sstable(schema_ptr schema,
     , _generation(generation)
     , _version(v)
     , _format(f)
+    , _file_ops{storage_opts, *this}
     , _index_cache(std::make_unique<partition_index_cache>(
             manager.get_cache_tracker().get_lru(), manager.get_cache_tracker().region()))
     , _now(now)

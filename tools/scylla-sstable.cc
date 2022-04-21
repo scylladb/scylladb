@@ -125,6 +125,7 @@ partition_set get_partitions(schema_ptr schema, const bpo::variables_map& app_co
 
 const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sstables::sstables_manager& sst_man, const std::vector<sstring>& sstable_names) {
     std::vector<sstables::shared_sstable> sstables;
+    static thread_local data_dictionary::storage_options local_storage_opts;
 
     parallel_for_each(sstable_names, [schema, &sst_man, &sstables] (const sstring& sst_name) -> future<> {
         const auto sst_path = std::filesystem::path(sst_name);
@@ -142,7 +143,7 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
         const auto sst_filename = sst_path.filename();
 
         auto ed = sstables::entry_descriptor::make_descriptor(dir_path.c_str(), sst_filename.c_str(), schema->ks_name(), schema->cf_name());
-        auto sst = sst_man.make_sstable(schema, dir_path.c_str(), ed.generation, ed.version, ed.format);
+        auto sst = sst_man.make_sstable(schema, dir_path.c_str(), ed.generation, ed.version, ed.format, local_storage_opts);
 
         co_await sst->load();
 

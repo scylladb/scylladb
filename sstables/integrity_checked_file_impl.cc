@@ -127,4 +127,12 @@ open_integrity_checked_file_dma(std::string_view name, open_flags flags) noexcep
     });
 }
 
+future<file>
+open_integrity_checked_file_dma(std::string_view name, noncopyable_function<future<file>()> opener) noexcept {
+    return with_file_close_on_failure(opener(), [name] (file f) {
+        return make_ready_future<file>(make_integrity_checked_file(name, f));
+    });
+
+}
+
 }

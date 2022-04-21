@@ -49,6 +49,7 @@
 #include "mutation_fragment_stream_validator.hh"
 #include "readers/flat_mutation_reader_fwd.hh"
 #include "tracing/trace_state.hh"
+#include "data_dictionary/storage_options.hh"
 
 #include <seastar/util/optimized_optional.hh>
 
@@ -135,6 +136,7 @@ public:
             int64_t generation,
             version_types v,
             format_types f,
+            const data_dictionary::storage_options& storage_opts,
             db::large_data_handler& large_data_handler,
             sstables_manager& manager,
             gc_clock::time_point now,
@@ -507,6 +509,20 @@ private:
     version_types _version;
     format_types _format;
 
+    class file_ops {
+        const data_dictionary::storage_options& _storage;
+        const sstable& _owner;
+    public:
+        file_ops(const data_dictionary::storage_options& storage, const sstable& owner)
+                : _storage(storage), _owner(owner) {} 
+
+        future<file> open_file(std::string_view name, open_flags flags, file_open_options options, bool check_integrity) const;
+        future<> rename_file(sstring from_name, sstring to_name) const;
+
+        bool uses_filesystem() const;
+    };
+    file_ops _file_ops;
+
     filter_tracker _filter_tracker;
     std::unique_ptr<partition_index_cache> _index_cache;
 
@@ -583,6 +599,8 @@ private:
     void write_summary(const io_priority_class& pc) {
         write_simple<component_type::Summary>(_components->summary, pc);
     }
+
+    future<file> open_sstable_component_file_non_checked(std::string_view name, open_flags flags, file_open_options options, bool check_integrity) noexcept;
 
     // To be called when we try to load an SSTable that lacks a Summary. Could
     // happen if old tools are being used.
