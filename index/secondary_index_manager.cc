@@ -38,43 +38,44 @@ bool index::depends_on(const column_definition& cdef) const {
     return cdef.name_as_text() == _target_column;
 }
 
-bool index::supports_expression(const column_definition& cdef, const cql3::expr::oper_t op) const {
+index::supports_expression_v index::supports_expression(const column_definition& cdef, const cql3::expr::oper_t op) const {
     using target_type = cql3::statements::index_target::target_type;
+    auto collection_yes = supports_expression_v::from_bool_collection(true);
     if (cdef.name_as_text() != _target_column) {
-        return false;
+        return supports_expression_v::from_bool(false);
     }
 
     switch (op) {
         case cql3::expr::oper_t::EQ:
-            return _target_type == target_type::regular_values;
+            return supports_expression_v::from_bool(_target_type == target_type::regular_values); 
         case cql3::expr::oper_t::CONTAINS:
             if (cdef.type->is_set() && _target_type == target_type::keys) {
-                return true;
+                return collection_yes;
             }
             if (cdef.type->is_list() && _target_type == target_type::collection_values) {
-                return true;
+                return collection_yes;
             }
             if (cdef.type->is_map() && _target_type == target_type::collection_values) {
-                return true;
+                return collection_yes;
             }
-            return false;
+            return supports_expression_v::from_bool(false);
         case cql3::expr::oper_t::CONTAINS_KEY:
             if (cdef.type->is_map() && _target_type == target_type::keys) {
-                return true;
+                return collection_yes;
             }
-            return false;
+            return supports_expression_v::from_bool(false);
         default:
-            return false;
+            return supports_expression_v::from_bool(false);
     }
 }
 
-bool index::supports_subscript_expression(const column_definition& cdef, const cql3::expr::oper_t op) const {
+index::supports_expression_v index::supports_subscript_expression(const column_definition& cdef, const cql3::expr::oper_t op) const {
     using target_type = cql3::statements::index_target::target_type;
     if (cdef.name_as_text() != _target_column) {
-        return false;
+        return supports_expression_v::from_bool(false);
     }
 
-    return op == cql3::expr::oper_t::EQ && _target_type == target_type::keys_and_values;
+    return supports_expression_v::from_bool_collection(op == cql3::expr::oper_t::EQ && _target_type == target_type::keys_and_values);
 }
 
 const index_metadata& index::metadata() const {
