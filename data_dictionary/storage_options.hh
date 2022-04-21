@@ -25,7 +25,12 @@ struct storage_options {
 
         friend auto operator<=>(const s3&, const s3&) = default;
     };
-    using value_type = std::variant<local, s3>;
+    struct shared_filesystem {
+        sstring dir;
+
+        friend auto operator<=>(const shared_filesystem&, const shared_filesystem&) = default;
+    };
+    using value_type = std::variant<local, s3, shared_filesystem>;
     value_type value = local{};
 
     storage_options() = default;

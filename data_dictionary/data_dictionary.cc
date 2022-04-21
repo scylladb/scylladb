@@ -290,6 +290,19 @@ storage_options::value_type storage_options::from_map(std::string_view type, std
         }
         return options;
     }
+    if (type == "SHARED_FILESYSTEM") {
+        shared_filesystem options;
+        if (auto it = values.find("directory"); it != values.end()) {
+            options.dir = it->second;
+        } else {
+            throw std::runtime_error(format("Missing shared filesystem option: directory"));
+        }
+        if (values.size() > 1) {
+            throw std::runtime_error(format("Extraneous options for shared_filesystem: {}; allowed: directory",
+                    boost::algorithm::join(values | boost::adaptors::map_keys, ",")));
+        }
+        return options;
+    }
     throw std::runtime_error(format("Unknown storage type: {}", type));
 }
 
@@ -300,6 +313,9 @@ std::string_view storage_options::type_string() const {
         },
         [] (const storage_options::s3&) {
             return "S3";
+        },
+        [] (const storage_options::shared_filesystem&) {
+            return "SHARED_FILESYSTEM";
         }
     }, value);
 }
@@ -312,6 +328,9 @@ std::map<sstring, sstring> storage_options::to_map() const {
         [&ret] (const storage_options::s3& v) {
             ret.emplace("bucket", v.bucket);
             ret.emplace("endpoint", v.endpoint);
+        },
+        [&ret] (const storage_options::shared_filesystem& v) {
+            ret.emplace("directory", v.dir);
         }
     }, value);
     return ret;

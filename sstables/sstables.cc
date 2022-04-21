@@ -130,9 +130,27 @@ bool sstable::file_ops::uses_filesystem() const {
     return !std::get_if<data_dictionary::storage_options::s3>(&_storage.value);
 }
 
+const data_dictionary::storage_options::value_type& sstable::file_ops::storage_type() const {
+    return _storage.value;
+}
+
 future<file> sstable::open_sstable_component_file_non_checked(std::string_view name, open_flags flags, file_open_options options,
         bool check_integrity) noexcept {
     return _file_ops.open_file(name, flags, options, check_integrity);
+}
+
+const sstring sstable::get_dir() const {
+    return std::visit(overloaded_functor {
+        [this] (const data_dictionary::storage_options::local&) {
+            return _dir;
+        },
+        [] (const data_dictionary::storage_options::s3& v) {
+            return v.bucket;
+        },
+        [] (const data_dictionary::storage_options::shared_filesystem& v) {
+            return v.dir;
+        }
+    }, _file_ops.storage_type());
 }
 
 future<> sstable::rename_new_sstable_component_file(sstring from_name, sstring to_name) {
