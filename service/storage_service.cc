@@ -3277,50 +3277,48 @@ future<sstring> storage_service::get_removal_status() {
 }
 
 future<> storage_service::force_remove_completion() {
-    return run_with_no_api_lock([] (storage_service& ss) {
-        return seastar::async([&ss] {
-            while (!ss._operation_in_progress.empty()) {
-                if (ss._operation_in_progress != sstring("removenode")) {
-                    throw std::runtime_error(format("Operation {} is in progress, try again", ss._operation_in_progress));
-                }
-
-                // This flag will make removenode stop waiting for the confirmation,
-                // wait it to complete
-                slogger.info("Operation removenode is in progress, wait for it to complete");
-                sleep_abortable(std::chrono::seconds(1), ss._abort_source).get();
+    return run_with_no_api_lock([] (storage_service& ss) -> future<> {
+        while (!ss._operation_in_progress.empty()) {
+            if (ss._operation_in_progress != sstring("removenode")) {
+                throw std::runtime_error(format("Operation {} is in progress, try again", ss._operation_in_progress));
             }
-            ss._operation_in_progress = sstring("removenode_force");
 
-            try {
-                const auto& tm = ss.get_token_metadata();
-                if (!ss._replicating_nodes.empty() || !tm.get_leaving_endpoints().empty()) {
-                    auto leaving = tm.get_leaving_endpoints();
-                    slogger.warn("Removal not confirmed for {}, Leaving={}", join(",", ss._replicating_nodes), leaving);
-                    for (auto endpoint : leaving) {
-                        utils::UUID host_id;
-                        auto tokens = tm.get_tokens(endpoint);
-                        try {
-                            host_id = tm.get_host_id(endpoint);
-                        } catch (...) {
-                            slogger.warn("No host_id is found for endpoint {}", endpoint);
-                            continue;
-                        }
-                        ss._gossiper.advertise_token_removed(endpoint, host_id).get();
-                        std::unordered_set<token> tokens_set(tokens.begin(), tokens.end());
-                        ss.excise(tokens_set, endpoint).get();
-                        ss._group0->leave_group0(endpoint).get();
+            // This flag will make removenode stop waiting for the confirmation,
+            // wait it to complete
+            slogger.info("Operation removenode is in progress, wait for it to complete");
+            co_await sleep_abortable(std::chrono::seconds(1), ss._abort_source);
+        }
+        ss._operation_in_progress = sstring("removenode_force");
+
+        try {
+            const auto& tm = ss.get_token_metadata();
+            if (!ss._replicating_nodes.empty() || !tm.get_leaving_endpoints().empty()) {
+                auto leaving = tm.get_leaving_endpoints();
+                slogger.warn("Removal not confirmed for {}, Leaving={}", join(",", ss._replicating_nodes), leaving);
+                for (auto endpoint : leaving) {
+                    utils::UUID host_id;
+                    auto tokens = tm.get_tokens(endpoint);
+                    try {
+                        host_id = tm.get_host_id(endpoint);
+                    } catch (...) {
+                        slogger.warn("No host_id is found for endpoint {}", endpoint);
+                        continue;
                     }
-                    ss._replicating_nodes.clear();
-                    ss._removing_node = std::nullopt;
-                } else {
-                    slogger.warn("No tokens to force removal on, call 'removenode' first");
+                    co_await ss._gossiper.advertise_token_removed(endpoint, host_id);
+                    std::unordered_set<token> tokens_set(tokens.begin(), tokens.end());
+                    co_await ss.excise(tokens_set, endpoint);
+                    co_await ss._group0->leave_group0(endpoint);
                 }
-                ss._operation_in_progress = {};
-            } catch (...) {
-                ss._operation_in_progress = {};
-                throw;
+                ss._replicating_nodes.clear();
+                ss._removing_node = std::nullopt;
+            } else {
+                slogger.warn("No tokens to force removal on, call 'removenode' first");
             }
-        });
+            ss._operation_in_progress = {};
+        } catch (...) {
+            ss._operation_in_progress = {};
+            throw;
+        }
     });
 }
 
