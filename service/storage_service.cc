@@ -2407,7 +2407,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             _node_ops.emplace(ops_uuid, std::move(meta));
         } else if (req.cmd == node_ops_cmd::removenode_heartbeat) {
             slogger.debug("removenode[{}]: Updated heartbeat from coordinator={}", req.ops_uuid,  coordinator);
-            node_ops_update_heartbeat(ops_uuid);
+            node_ops_update_heartbeat(ops_uuid).get();
         } else if (req.cmd == node_ops_cmd::removenode_done) {
             slogger.info("removenode[{}]: Marked ops done from coordinator={}", req.ops_uuid, coordinator);
             node_ops_done(ops_uuid);
@@ -2456,7 +2456,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             _node_ops.emplace(ops_uuid, std::move(meta));
         } else if (req.cmd == node_ops_cmd::decommission_heartbeat) {
             slogger.debug("decommission[{}]: Updated heartbeat from coordinator={}", req.ops_uuid,  coordinator);
-            node_ops_update_heartbeat(ops_uuid);
+            node_ops_update_heartbeat(ops_uuid).get();
         } else if (req.cmd == node_ops_cmd::decommission_done) {
             slogger.info("decommission[{}]: Marked ops done from coordinator={}", req.ops_uuid, coordinator);
             slogger.debug("Triggering off-strategy compaction for all non-system tables on decommission completion");
@@ -2516,7 +2516,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             }).get();
         } else if (req.cmd == node_ops_cmd::replace_heartbeat) {
             slogger.debug("replace[{}]: Updated heartbeat from coordinator={}", req.ops_uuid, coordinator);
-            node_ops_update_heartbeat(ops_uuid);
+            node_ops_update_heartbeat(ops_uuid).get();
         } else if (req.cmd == node_ops_cmd::replace_done) {
             slogger.info("replace[{}]: Marked ops done from coordinator={}", req.ops_uuid, coordinator);
             node_ops_done(ops_uuid);
@@ -2554,7 +2554,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             _node_ops.emplace(ops_uuid, std::move(meta));
         } else if (req.cmd == node_ops_cmd::bootstrap_heartbeat) {
             slogger.debug("bootstrap[{}]: Updated heartbeat from coordinator={}", req.ops_uuid, coordinator);
-            node_ops_update_heartbeat(ops_uuid);
+            node_ops_update_heartbeat(ops_uuid).get();
         } else if (req.cmd == node_ops_cmd::bootstrap_done) {
             slogger.info("bootstrap[{}]: Marked ops done from coordinator={}", req.ops_uuid, coordinator);
             node_ops_done(ops_uuid);
@@ -3604,9 +3604,9 @@ shared_ptr<abort_source> node_ops_meta_data::get_abort_source() {
     return _abort_source;
 }
 
-void storage_service::node_ops_update_heartbeat(utils::UUID ops_uuid) {
+future<> storage_service::node_ops_update_heartbeat(utils::UUID ops_uuid) {
     slogger.debug("node_ops_update_heartbeat: ops_uuid={}", ops_uuid);
-    auto permit = seastar::get_units(_node_ops_abort_sem, 1).get0();
+    auto permit = co_await seastar::get_units(_node_ops_abort_sem, 1);
     auto it = _node_ops.find(ops_uuid);
     if (it != _node_ops.end()) {
         node_ops_meta_data& meta = it->second;
