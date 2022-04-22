@@ -3648,26 +3648,24 @@ void storage_service::node_ops_singal_abort(std::optional<utils::UUID> ops_uuid)
 }
 
 future<> storage_service::node_ops_abort_thread() {
-    return seastar::async([this] {
-        slogger.info("Started node_ops_abort_thread");
-        for (;;) {
-            _node_ops_abort_cond.wait([this] { return !_node_ops_abort_queue.empty(); }).get();
-            slogger.debug("Awoke node_ops_abort_thread: node_ops_abort_queue={}", _node_ops_abort_queue);
-            while (!_node_ops_abort_queue.empty()) {
-                auto uuid_opt = _node_ops_abort_queue.front();
-                _node_ops_abort_queue.pop_front();
-                if (!uuid_opt) {
-                    return;
-                }
-                try {
-                    storage_service::node_ops_abort(*uuid_opt).get();
-                } catch (...) {
-                    slogger.warn("Failed to abort node operation ops_uuid={}: {}", *uuid_opt, std::current_exception());
-                }
+    slogger.info("Started node_ops_abort_thread");
+    for (;;) {
+        co_await _node_ops_abort_cond.wait([this] { return !_node_ops_abort_queue.empty(); });
+        slogger.debug("Awoke node_ops_abort_thread: node_ops_abort_queue={}", _node_ops_abort_queue);
+        while (!_node_ops_abort_queue.empty()) {
+            auto uuid_opt = _node_ops_abort_queue.front();
+            _node_ops_abort_queue.pop_front();
+            if (!uuid_opt) {
+                co_return;
+            }
+            try {
+                co_await node_ops_abort(*uuid_opt);
+            } catch (...) {
+                slogger.warn("Failed to abort node operation ops_uuid={}: {}", *uuid_opt, std::current_exception());
             }
         }
-        slogger.info("Stopped node_ops_abort_thread");
-    });
+    }
+    slogger.info("Stopped node_ops_abort_thread");
 }
 
 future<> storage_service::join_group0() {
