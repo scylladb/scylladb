@@ -38,26 +38,16 @@ sstables_format_selector::sstables_format_selector(gms::gossiper& g, sharded<gms
 { }
 
 future<> sstables_format_selector::maybe_select_format(sstables::sstable_version_types new_format) {
-    return with_gate(_sel, [this, new_format] {
-        return do_maybe_select_format(new_format);
-    });
-}
+    auto hg = _sel.hold();
+    auto units = co_await get_units(_sem, 1);
 
-future<> sstables_format_selector::do_maybe_select_format(sstables::sstable_version_types new_format) {
-    return with_semaphore(_sem, 1, [this, new_format] {
-        if (new_format <= _selected_format) {
-            return make_ready_future<bool>(false);
-        }
-        return db::system_keyspace::set_scylla_local_param(SSTABLE_FORMAT_PARAM_NAME, to_string(new_format)).then([this, new_format] {
-            return select_format(new_format);
-        }).then([] { return true; });
-    }).then([this] (bool update_features) {
-        if (!update_features) {
-            return make_ready_future<>();
-        }
-        return _gossiper.add_local_application_state(gms::application_state::SUPPORTED_FEATURES,
+    if (new_format > _selected_format) {
+        co_await db::system_keyspace::set_scylla_local_param(SSTABLE_FORMAT_PARAM_NAME, to_string(new_format));
+        co_await select_format(new_format);
+        units.return_all();
+        co_await _gossiper.add_local_application_state(gms::application_state::SUPPORTED_FEATURES,
                  gms::versioned_value::supported_features(_features.local().supported_feature_set()));
-    });
+    }
 }
 
 future<> sstables_format_selector::start() {
