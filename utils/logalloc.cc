@@ -432,7 +432,10 @@ public:
     }
 };
 
+class segment_pool;
+
 class tracker::impl {
+    std::unique_ptr<segment_pool> _segment_pool;
     std::optional<background_reclaimer> _background_reclaimer;
     std::vector<region::impl*> _regions;
     seastar::metrics::metric_groups _metrics;
@@ -466,6 +469,9 @@ public:
         } else {
             return make_ready_future<>();
         }
+    }
+    segment_pool& segment_pool() {
+        return *_segment_pool;
     }
     void register_region(region::impl*);
     void unregister_region(region::impl*) noexcept;
@@ -703,7 +709,7 @@ public:
         assert(idx < _segments.size());
         return _segments[idx];
     }
-    size_t idx_from_segment(segment* seg) {
+    size_t idx_from_segment(segment* seg) const {
         // segment 0 is a marker for no segment
         auto i = _segment_indexes.find(seg);
         if (i == _segment_indexes.end()) {
@@ -798,7 +804,7 @@ private:
     segment* segment_from_idx(size_t idx) const {
         return _store.segment_from_idx(idx);
     }
-    size_t idx_from_segment(segment* seg) {
+    size_t idx_from_segment(segment* seg) const {
         return _store.idx_from_segment(seg);
     }
     size_t max_segments() const {
@@ -813,6 +819,7 @@ public:
     void prime(size_t available_memory, size_t min_free_memory);
     segment* new_segment(region::impl* r);
     segment_descriptor& descriptor(segment*);
+    const segment_descriptor& descriptor(segment*) const;
     // Returns segment containing given object or nullptr.
     segment* containing_segment(const void* obj);
     segment* segment_from(const segment_descriptor& desc);
@@ -990,6 +997,12 @@ segment_pool::descriptor(segment* seg) {
     return _segments[index];
 }
 
+const segment_descriptor&
+segment_pool::descriptor(segment* seg) const {
+    uintptr_t index = idx_from_segment(seg);
+    return _segments[index];
+}
+
 segment*
 segment_pool::containing_segment(const void* obj) {
     auto addr = reinterpret_cast<uintptr_t>(obj);
@@ -1104,14 +1117,6 @@ public:
 size_t segment_pool::segments_in_use() const {
     return _segments_in_use;
 }
-
-static segment_pool& get_shard_segment_pool() noexcept {
-    memory::scoped_critical_alloc_section dfg;
-    static thread_local segment_pool obj;
-    return obj;
-}
-
-static thread_local segment_pool& shard_segment_pool = get_shard_segment_pool();
 
 //
 // For interface documentation see logalloc::region and allocation_strategy.
@@ -1290,7 +1295,7 @@ private:
 
         // Align the end of the value so that the next descriptor is aligned
         _active_offset = align_up_for_asan(_active_offset);
-        shard_segment_pool.descriptor(_active).record_alloc(_active_offset - old_active_offset);
+        segment_pool().descriptor(_active).record_alloc(_active_offset - old_active_offset);
         return pos;
     }
 
@@ -1322,7 +1327,7 @@ private:
             auto pos =_active->at<char>(_active_offset);
             desc.encode(pos);
         }
-        auto& desc = shard_segment_pool.descriptor(_active);
+        auto& desc = segment_pool().descriptor(_active);
         llogger.trace("Closing segment {}, used={}, waste={} [B]", fmt::ptr(_active), desc.occupancy(), segment::size - _active_offset);
         _closed_occupancy += desc.occupancy();
 
@@ -1334,7 +1339,7 @@ private:
         if (!_buf_active) {
             return;
         }
-        auto& desc = shard_segment_pool.descriptor(_buf_active);
+        auto& desc = segment_pool().descriptor(_buf_active);
         llogger.trace("Closing buf segment {}, used={}, waste={} [B]", fmt::ptr(_buf_active), desc.occupancy(), segment::size - _buf_active_offset);
         _closed_occupancy += desc.occupancy();
 
@@ -1343,15 +1348,15 @@ private:
     }
 
     void free_segment(segment_descriptor& desc) noexcept {
-        free_segment(shard_segment_pool.segment_from(desc), desc);
+        free_segment(segment_pool().segment_from(desc), desc);
     }
 
     void free_segment(segment* seg) noexcept {
-        free_segment(seg, shard_segment_pool.descriptor(seg));
+        free_segment(seg, segment_pool().descriptor(seg));
     }
 
     void free_segment(segment* seg, segment_descriptor& desc) noexcept {
-        shard_segment_pool.free_segment(seg, desc);
+        segment_pool().free_segment(seg, desc);
         if (_group) {
             _evictable_space -= segment_size;
             _group->decrease_usage(_heap_handle, -segment::size);
@@ -1359,7 +1364,7 @@ private:
     }
 
     segment* new_segment() {
-        segment* seg = shard_segment_pool.new_segment(this);
+        segment* seg = segment_pool().new_segment(this);
         if (_group) {
             _evictable_space += segment_size;
             _group->increase_usage(_heap_handle, segment::size);
@@ -1388,7 +1393,7 @@ private:
         ptr._size = buf_size;
         unpoison(ptr._buf, buf_size);
 
-        segment_descriptor& desc = shard_segment_pool.descriptor(_buf_active);
+        segment_descriptor& desc = segment_pool().descriptor(_buf_active);
         ptr._desc = &desc;
         desc._buf_pointers.emplace_back(entangled::make_paired_with(ptr._link));
         auto alloc_size = align_up(buf_size, buf_align);
@@ -1400,7 +1405,7 @@ private:
 
     void free_buf(lsa_buffer& buf) noexcept {
         segment_descriptor &desc = *buf._desc;
-        segment *seg = shard_segment_pool.segment_from(desc);
+        segment *seg = segment_pool().segment_from(desc);
 
         if (seg != _buf_active) {
             _closed_occupancy -= desc.occupancy();
@@ -1465,7 +1470,7 @@ private:
         }
 
         free_segment(seg, desc);
-        shard_segment_pool.on_segment_compaction(seg_occupancy.used_space());
+        segment_pool().on_segment_compaction(seg_occupancy.used_space());
     }
 
     void close_and_open() {
@@ -1484,7 +1489,7 @@ private:
             close_buf_active();
         }
         assert((uintptr_t)new_active->at(0) % buf_align == 0);
-        segment_descriptor& desc = shard_segment_pool.descriptor(new_active);
+        segment_descriptor& desc = segment_pool().descriptor(new_active);
         desc._buf_pointers = std::move(ptrs);
         desc.set_kind(segment_kind::bufs);
         _buf_active = new_active;
@@ -1541,12 +1546,12 @@ public:
         }
         _closed_occupancy = {};
         if (_active) {
-            assert(shard_segment_pool.descriptor(_active).is_empty());
+            assert(segment_pool().descriptor(_active).is_empty());
             free_segment(_active);
             _active = nullptr;
         }
         if (_buf_active) {
-            assert(shard_segment_pool.descriptor(_buf_active).is_empty());
+            assert(segment_pool().descriptor(_buf_active).is_empty());
             free_segment(_buf_active);
             _buf_active = nullptr;
         }
@@ -1558,6 +1563,10 @@ public:
     region_impl(region_impl&&) = delete;
     region_impl(const region_impl&) = delete;
 
+    logalloc::segment_pool& segment_pool() const {
+        return _tracker.get_impl().segment_pool();
+    }
+
     bool empty() const {
         return occupancy().used_space() == 0;
     }
@@ -1566,10 +1575,10 @@ public:
         occupancy_stats total = _non_lsa_occupancy;
         total += _closed_occupancy;
         if (_active) {
-            total += shard_segment_pool.descriptor(_active).occupancy();
+            total += segment_pool().descriptor(_active).occupancy();
         }
         if (_buf_active) {
-            total += shard_segment_pool.descriptor(_buf_active).occupancy();
+            total += segment_pool().descriptor(_buf_active).occupancy();
         }
         return total;
     }
@@ -1614,7 +1623,8 @@ public:
     virtual void* alloc(allocation_strategy::migrate_fn migrator, size_t size, size_t alignment) override {
         compaction_lock _(*this);
         memory::on_alloc_point();
-        shard_segment_pool.on_memory_allocation(size);
+        auto& pool = segment_pool();
+        pool.on_memory_allocation(size);
         if (size > max_managed_object_size) {
             auto ptr = standard_allocator().alloc(migrator, size + sizeof(non_lsa_object_cookie), alignment);
             // This isn't very acurrate, the correct free_space value would be
@@ -1627,7 +1637,7 @@ public:
                  _evictable_space += allocated_size;
                 _group->increase_usage(_heap_handle, allocated_size);
             }
-            shard_segment_pool.add_non_lsa_memory_in_use(allocated_size);
+            pool.add_non_lsa_memory_in_use(allocated_size);
             return ptr;
         } else {
             auto ptr = alloc_small(object_descriptor(migrator), (segment::size_type) size, alignment);
@@ -1646,12 +1656,12 @@ private:
             _evictable_space -= allocated_size;
             _group->decrease_usage(_heap_handle, allocated_size);
         }
-        shard_segment_pool.subtract_non_lsa_memory_in_use(allocated_size);
+        segment_pool().subtract_non_lsa_memory_in_use(allocated_size);
     }
 public:
     virtual void free(void* obj) noexcept override {
         compaction_lock _(*this);
-        segment* seg = shard_segment_pool.containing_segment(obj);
+        segment* seg = segment_pool().containing_segment(obj);
         if (!seg) {
             on_non_lsa_free(obj);
             standard_allocator().free(obj);
@@ -1665,7 +1675,8 @@ public:
 
     virtual void free(void* obj, size_t size) noexcept override {
         compaction_lock _(*this);
-        segment* seg = shard_segment_pool.containing_segment(obj);
+        auto& pool = segment_pool();
+        segment* seg = pool.containing_segment(obj);
 
         if (!seg) {
             on_non_lsa_free(obj);
@@ -1675,7 +1686,7 @@ public:
 
         _sanitizer.on_free(obj, size);
 
-        segment_descriptor& seg_desc = shard_segment_pool.descriptor(seg);
+        segment_descriptor& seg_desc = pool.descriptor(seg);
 
         auto pos = reinterpret_cast<const char*>(obj);
         auto old_pos = pos;
@@ -1691,7 +1702,7 @@ public:
         }
 
         seg_desc.record_free(dead_size);
-        shard_segment_pool.on_memory_deallocation(dead_size);
+        pool.on_memory_deallocation(dead_size);
 
         if (seg != _active) {
             if (seg_desc.is_empty()) {
@@ -1705,7 +1716,7 @@ public:
     }
 
     virtual size_t object_memory_size_in_allocator(const void* obj) const noexcept override {
-        segment* seg = shard_segment_pool.containing_segment(obj);
+        segment* seg = segment_pool().containing_segment(obj);
 
         if (!seg) {
             return standard_allocator().object_memory_size_in_allocator(obj);
@@ -1730,8 +1741,10 @@ public:
         degroup_temporarily dgt1(this);
         degroup_temporarily dgt2(&other);
 
-        if (_active && shard_segment_pool.descriptor(_active).is_empty()) {
-            shard_segment_pool.free_segment(_active);
+        auto& pool = segment_pool();
+
+        if (_active && pool.descriptor(_active).is_empty()) {
+            pool.free_segment(_active);
             _active = nullptr;
         }
         if (!_active) {
@@ -1739,7 +1752,7 @@ public:
             other._active = nullptr;
             _active_offset = other._active_offset;
             if (_active) {
-                shard_segment_pool.set_region(_active, this);
+                pool.set_region(_active, this);
             }
         } else {
             other.close_active();
@@ -1747,7 +1760,7 @@ public:
         other.close_buf_active();
 
         for (auto& desc : other._segment_descs) {
-            shard_segment_pool.set_region(desc, this);
+            pool.set_region(desc, this);
         }
         _segment_descs.merge(other._segment_descs);
 
@@ -1778,7 +1791,7 @@ public:
         auto& desc = _segment_descs.one_of_largest();
         _segment_descs.pop_one_of_largest();
         _closed_occupancy -= desc.occupancy();
-        segment* seg = shard_segment_pool.segment_from(desc);
+        segment* seg = segment_pool().segment_from(desc);
         compact_segment_locked(seg, desc);
     }
 
@@ -1795,7 +1808,7 @@ public:
         while (!all.empty()) {
             auto& desc = all.one_of_largest();
             all.pop_one_of_largest();
-            compact_segment_locked(shard_segment_pool.segment_from(desc), desc);
+            compact_segment_locked(segment_pool().segment_from(desc), desc);
         }
         llogger.debug("Done, {}", occupancy());
     }
@@ -1827,9 +1840,10 @@ public:
 
     memory::reclaiming_result evict_some() {
         ++_invalidate_counter;
-        auto freed = shard_segment_pool.statistics().memory_freed;
+        auto& pool = segment_pool();
+        auto freed = pool.statistics().memory_freed;
         auto ret = _eviction_fn();
-        shard_segment_pool.on_memory_eviction(shard_segment_pool.statistics().memory_freed - freed);
+        pool.on_memory_eviction(pool.statistics().memory_freed - freed);
         return ret;
     }
 
@@ -2013,7 +2027,7 @@ occupancy_stats tracker::impl::occupancy() {
     reclaiming_lock _(*this);
     auto occ = region_occupancy();
     {
-        auto s = shard_segment_pool.free_segments() * segment::size;
+        auto s = _segment_pool->free_segments() * segment::size;
         occ += occupancy_stats(s, s);
     }
     return occ;
@@ -2023,7 +2037,7 @@ size_t tracker::impl::non_lsa_used_space() {
 #ifdef SEASTAR_DEFAULT_ALLOCATOR
     return 0;
 #else
-    auto free_space_in_lsa = shard_segment_pool.free_segments() * segment_size;
+    auto free_space_in_lsa = _segment_pool->free_segments() * segment_size;
     return memory::stats().allocated_memory() - region_occupancy().total_space() - free_space_in_lsa;
 #endif
 }
@@ -2031,7 +2045,7 @@ size_t tracker::impl::non_lsa_used_space() {
 void tracker::impl::reclaim_all_free_segments()
 {
     llogger.debug("Reclaiming all free segments");
-    shard_segment_pool.reclaim_all_free_segments();
+    _segment_pool->reclaim_all_free_segments();
     llogger.debug("Reclamation done");
 }
 
@@ -2050,16 +2064,16 @@ void tracker::impl::full_compaction() {
 }
 
 static void reclaim_from_evictable(region::impl& r, size_t target_mem_in_use, is_preemptible preempt) {
-    llogger.debug("reclaim_from_evictable: total_memory_in_use={} target={}", shard_segment_pool.total_memory_in_use(), target_mem_in_use);
+    llogger.debug("reclaim_from_evictable: total_memory_in_use={} target={}", r.segment_pool().total_memory_in_use(), target_mem_in_use);
 
     // Before attempting segment compaction, try to evict at least deficit and one segment more so that
     // for workloads in which eviction order matches allocation order we will reclaim full segments
     // without needing to perform expensive compaction.
-    auto deficit = shard_segment_pool.total_memory_in_use() - target_mem_in_use;
+    auto deficit = r.segment_pool().total_memory_in_use() - target_mem_in_use;
     auto used = r.occupancy().used_space();
     auto used_target = used - std::min(used, deficit + segment::size);
 
-    while (shard_segment_pool.total_memory_in_use() > target_mem_in_use) {
+    while (r.segment_pool().total_memory_in_use() > target_mem_in_use) {
         used = r.occupancy().used_space();
         if (used > used_target) {
             llogger.debug("Evicting {} bytes from region {}, occupancy={} in advance",
@@ -2075,7 +2089,7 @@ static void reclaim_from_evictable(region::impl& r, size_t target_mem_in_use, is
                 llogger.debug("Unable to evict more, evicted {} bytes", used - r.occupancy().used_space());
                 return;
             }
-            if (shard_segment_pool.total_memory_in_use() <= target_mem_in_use) {
+            if (r.segment_pool().total_memory_in_use() <= target_mem_in_use) {
                 llogger.debug("Target met after evicting {} bytes", used - r.occupancy().used_space());
                 return;
             }
@@ -2132,7 +2146,7 @@ public:
         if (_debug_enabled) {
             _old_region_occupancy = tracker.region_occupancy();
         }
-        _old_pool_stats = shard_segment_pool.statistics();
+        _old_pool_stats = _tracker.segment_pool().statistics();
     }
 
     size_t set_result(size_t memory_released) noexcept {
@@ -2185,7 +2199,7 @@ private:
                            _old_region_occupancy.used_fraction(), _tracker.region_occupancy().used_fraction());
         }
 
-        auto pool_stats = shard_segment_pool.statistics();
+        auto pool_stats = _tracker.segment_pool().statistics();
         log_if_any_mem(info_level, "evicted memory", pool_stats.memory_evicted - _old_pool_stats.memory_evicted);
         log_if_any(info_level, "compacted segments", pool_stats.segments_compacted - _old_pool_stats.segments_compacted);
         log_if_any_mem(info_level, "compacted memory", pool_stats.memory_compacted - _old_pool_stats.memory_compacted);
@@ -2201,7 +2215,7 @@ idle_cpu_handler_result tracker::impl::compact_on_idle(work_waiting_on_reactor c
     if (_regions.empty()) {
         return idle_cpu_handler_result::no_more_work;
     }
-    segment_pool::reservation_goal open_emergency_pool(shard_segment_pool, 0);
+    segment_pool::reservation_goal open_emergency_pool(*_segment_pool, 0);
 
     auto cmp = [] (region::impl* c1, region::impl* c2) {
         if (c1->is_idle_compactible() != c2->is_idle_compactible()) {
@@ -2243,7 +2257,7 @@ size_t tracker::impl::reclaim_locked(size_t memory_to_release, is_preemptible pr
     // 2. Compact used segments and/or evict data.
     constexpr auto max_bytes = std::numeric_limits<size_t>::max() - segment::size;
     auto segments_to_release = align_up(std::min(max_bytes, memory_to_release), segment::size) >> segment::size_shift;
-    auto nr_released = shard_segment_pool.reclaim_segments(segments_to_release, preempt);
+    auto nr_released = _segment_pool->reclaim_segments(segments_to_release, preempt);
     size_t mem_released = nr_released * segment::size;
     if (mem_released >= memory_to_release) {
         llogger.debug("reclaim_locked() = {}", memory_to_release);
@@ -2254,7 +2268,7 @@ size_t tracker::impl::reclaim_locked(size_t memory_to_release, is_preemptible pr
         return mem_released;
     }
 
-    auto compacted = compact_and_evict_locked(shard_segment_pool.current_emergency_reserve_goal(), memory_to_release - mem_released, preempt);
+    auto compacted = compact_and_evict_locked(_segment_pool->current_emergency_reserve_goal(), memory_to_release - mem_released, preempt);
 
     if (compacted == 0) {
         llogger.debug("reclaim_locked() = {}", mem_released);
@@ -2263,7 +2277,7 @@ size_t tracker::impl::reclaim_locked(size_t memory_to_release, is_preemptible pr
 
     // compact_and_evict_locked() will not return segments to the standard allocator,
     // so do it here:
-    nr_released = shard_segment_pool.reclaim_segments(compacted / segment::size, preempt);
+    nr_released = _segment_pool->reclaim_segments(compacted / segment::size, preempt);
     mem_released += nr_released * segment::size;
 
     llogger.debug("reclaim_locked() = {}", mem_released);
@@ -2302,15 +2316,15 @@ size_t tracker::impl::compact_and_evict_locked(size_t reserve_segments, size_t m
 
     size_t mem_released = 0;
 
-    size_t mem_in_use = shard_segment_pool.total_memory_in_use();
-    memory_to_release += (reserve_segments - std::min(reserve_segments, shard_segment_pool.free_segments())) * segment::size;
+    size_t mem_in_use = _segment_pool->total_memory_in_use();
+    memory_to_release += (reserve_segments - std::min(reserve_segments, _segment_pool->free_segments())) * segment::size;
     auto target_mem = mem_in_use - std::min(mem_in_use, memory_to_release - mem_released);
 
     llogger.debug("Compacting, requested {} bytes, {} bytes in use, target is {}",
         memory_to_release, mem_in_use, target_mem);
 
     // Allow dipping into reserves while compacting
-    segment_pool::reservation_goal open_emergency_pool(shard_segment_pool, 0);
+    segment_pool::reservation_goal open_emergency_pool(*_segment_pool, 0);
 
     auto cmp = [] (region::impl* c1, region::impl* c2) {
         if (c1->is_compactible() != c2->is_compactible()) {
@@ -2328,7 +2342,7 @@ size_t tracker::impl::compact_and_evict_locked(size_t reserve_segments, size_t m
         }
     }
 
-    while (shard_segment_pool.total_memory_in_use() > target_mem) {
+    while (_segment_pool->total_memory_in_use() > target_mem) {
         boost::range::pop_heap(_regions, cmp);
         region::impl* r = _regions.back();
 
@@ -2354,9 +2368,9 @@ size_t tracker::impl::compact_and_evict_locked(size_t reserve_segments, size_t m
         }
     }
 
-    auto released_during_compaction = mem_in_use - shard_segment_pool.total_memory_in_use();
+    auto released_during_compaction = mem_in_use - _segment_pool->total_memory_in_use();
 
-    if (shard_segment_pool.total_memory_in_use() > target_mem) {
+    if (_segment_pool->total_memory_in_use() > target_mem) {
         llogger.debug("Considering evictable regions.");
         // FIXME: Fair eviction
         for (region::impl* r : _regions) {
@@ -2365,14 +2379,14 @@ size_t tracker::impl::compact_and_evict_locked(size_t reserve_segments, size_t m
             }
             if (r->is_evictable()) {
                 reclaim_from_evictable(*r, target_mem, preempt);
-                if (shard_segment_pool.total_memory_in_use() <= target_mem) {
+                if (_segment_pool->total_memory_in_use() <= target_mem) {
                     break;
                 }
             }
         }
     }
 
-    mem_released += mem_in_use - shard_segment_pool.total_memory_in_use();
+    mem_released += mem_in_use - _segment_pool->total_memory_in_use();
 
     llogger.debug("Released {} bytes (wanted {}), {} during compaction",
         mem_released, memory_to_release, released_during_compaction);
@@ -2403,7 +2417,7 @@ void tracker::impl::unregister_region(region::impl* r) noexcept {
     _regions.erase(std::remove(_regions.begin(), _regions.end(), r), _regions.end());
 }
 
-tracker::impl::impl() {
+tracker::impl::impl() : _segment_pool(std::make_unique<logalloc::segment_pool>()) {
     namespace sm = seastar::metrics;
 
     _metrics.add_group("lsa", {
@@ -2413,37 +2427,37 @@ tracker::impl::impl() {
         sm::make_gauge("used_space_bytes", [this] { return region_occupancy().used_space(); },
                        sm::description("Holds a current amount of used memory in bytes.")),
 
-        sm::make_gauge("small_objects_total_space_bytes", [this] { return region_occupancy().total_space() - shard_segment_pool.non_lsa_memory_in_use(); },
+        sm::make_gauge("small_objects_total_space_bytes", [this] { return region_occupancy().total_space() - _segment_pool->non_lsa_memory_in_use(); },
                        sm::description("Holds a current size of \"small objects\" memory region in bytes.")),
 
-        sm::make_gauge("small_objects_used_space_bytes", [this] { return region_occupancy().used_space() - shard_segment_pool.non_lsa_memory_in_use(); },
+        sm::make_gauge("small_objects_used_space_bytes", [this] { return region_occupancy().used_space() - _segment_pool->non_lsa_memory_in_use(); },
                        sm::description("Holds a current amount of used \"small objects\" memory in bytes.")),
 
-        sm::make_gauge("large_objects_total_space_bytes", [] { return shard_segment_pool.non_lsa_memory_in_use(); },
+        sm::make_gauge("large_objects_total_space_bytes", [this] { return _segment_pool->non_lsa_memory_in_use(); },
                        sm::description("Holds a current size of allocated non-LSA memory.")),
 
         sm::make_gauge("non_lsa_used_space_bytes", [this] { return non_lsa_used_space(); },
                        sm::description("Holds a current amount of used non-LSA memory.")),
 
-        sm::make_gauge("free_space", [] { return shard_segment_pool.unreserved_free_segments() * segment_size; },
+        sm::make_gauge("free_space", [this] { return _segment_pool->unreserved_free_segments() * segment_size; },
                        sm::description("Holds a current amount of free memory that is under lsa control.")),
 
         sm::make_gauge("occupancy", [this] { return region_occupancy().used_fraction() * 100; },
                        sm::description("Holds a current portion (in percents) of the used memory.")),
 
-        sm::make_counter("segments_compacted", [] { return shard_segment_pool.statistics().segments_compacted; },
+        sm::make_counter("segments_compacted", [this] { return _segment_pool->statistics().segments_compacted; },
                         sm::description("Counts a number of compacted segments.")),
 
-        sm::make_counter("memory_compacted", [] { return shard_segment_pool.statistics().memory_compacted; },
+        sm::make_counter("memory_compacted", [this] { return _segment_pool->statistics().memory_compacted; },
                         sm::description("Counts number of bytes which were copied as part of segment compaction.")),
 
-        sm::make_counter("memory_allocated", [] { return shard_segment_pool.statistics().memory_allocated; },
+        sm::make_counter("memory_allocated", [this] { return _segment_pool->statistics().memory_allocated; },
                         sm::description("Counts number of bytes which were requested from LSA.")),
 
-        sm::make_counter("memory_evicted", [] { return shard_segment_pool.statistics().memory_evicted; },
+        sm::make_counter("memory_evicted", [this] { return _segment_pool->statistics().memory_evicted; },
                         sm::description("Counts number of bytes which were evicted.")),
 
-        sm::make_counter("memory_freed", [] { return shard_segment_pool.statistics().memory_freed; },
+        sm::make_counter("memory_freed", [this] { return _segment_pool->statistics().memory_freed; },
                         sm::description("Counts number of bytes which were requested to be freed in LSA.")),
     });
 }
@@ -2600,11 +2614,11 @@ void region_group::update(ssize_t delta) {
 }
 
 allocating_section::guard::guard()
-    : _prev(shard_segment_pool.emergency_reserve_max())
+    : _prev(shard_tracker().get_impl().segment_pool().emergency_reserve_max())
 { }
 
 allocating_section::guard::~guard() {
-    shard_segment_pool.set_emergency_reserve_max(_prev);
+    shard_tracker().get_impl().segment_pool().set_emergency_reserve_max(_prev);
 }
 
 void allocating_section::maybe_decay_reserve() {
@@ -2636,9 +2650,10 @@ void allocating_section::maybe_decay_reserve() {
 }
 
 void allocating_section::reserve() {
+    auto& pool = shard_tracker().get_impl().segment_pool();
   try {
-    shard_segment_pool.set_emergency_reserve_max(std::max(_lsa_reserve, _minimum_lsa_emergency_reserve));
-    shard_segment_pool.refill_emergency_reserve();
+    pool.set_emergency_reserve_max(std::max(_lsa_reserve, _minimum_lsa_emergency_reserve));
+    pool.refill_emergency_reserve();
 
     while (true) {
         size_t free = memory::stats().free_memory();
@@ -2650,7 +2665,7 @@ void allocating_section::reserve() {
         }
     }
 
-    shard_segment_pool.clear_allocation_failure_flag();
+    pool.clear_allocation_failure_flag();
   } catch (const std::bad_alloc&) {
         if (shard_tracker().should_abort_on_bad_alloc()) {
             llogger.error("Aborting due to allocation failure");
@@ -2662,7 +2677,7 @@ void allocating_section::reserve() {
 
 void allocating_section::on_alloc_failure(logalloc::region& r) {
     r.allocator().invalidate_references();
-    if (shard_segment_pool.allocation_failure_flag()) {
+    if (shard_tracker().get_impl().segment_pool().allocation_failure_flag()) {
         _lsa_reserve *= 2;
         llogger.debug("LSA allocation failure, increasing reserve in section {} to {} segments", fmt::ptr(this), _lsa_reserve);
     } else {
@@ -2686,28 +2701,29 @@ void region_group::on_request_expiry::operator()(std::unique_ptr<allocating_func
 
 future<> prime_segment_pool(size_t available_memory, size_t min_free_memory) {
     return smp::invoke_on_all([=] {
-        shard_segment_pool.prime(available_memory, min_free_memory);
+        shard_tracker().get_impl().segment_pool().prime(available_memory, min_free_memory);
     });
 }
 
 uint64_t memory_allocated() {
-    return shard_segment_pool.statistics().memory_allocated;
+    return shard_tracker().get_impl().segment_pool().statistics().memory_allocated;
 }
 
 uint64_t memory_freed() {
-    return shard_segment_pool.statistics().memory_freed;
+    return shard_tracker().get_impl().segment_pool().statistics().memory_freed;
 }
 
 uint64_t memory_compacted() {
-    return shard_segment_pool.statistics().memory_compacted;
+    return shard_tracker().get_impl().segment_pool().statistics().memory_compacted;
 }
 
 uint64_t memory_evicted() {
-    return shard_segment_pool.statistics().memory_evicted;
+    return shard_tracker().get_impl().segment_pool().statistics().memory_evicted;
 }
 
 occupancy_stats lsa_global_occupancy_stats() {
-    return occupancy_stats(shard_segment_pool.total_free_memory(), shard_segment_pool.total_memory_in_use());
+    auto& pool = shard_tracker().get_impl().segment_pool();
+    return occupancy_stats(pool.total_free_memory(), pool.total_memory_in_use());
 }
 
 }
