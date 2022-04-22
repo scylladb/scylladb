@@ -574,11 +574,6 @@ struct alignas(segment_size) segment {
         return reinterpret_cast<T*>(data + offset);
     }
 
-    bool is_empty() const noexcept;
-    void record_alloc(size_type size) noexcept;
-    void record_free(size_type size) noexcept;
-    occupancy_stats occupancy() const noexcept;
-
     static void* operator new(size_t size) = delete;
     static void* operator new(size_t, void* ptr) noexcept { return ptr; }
     static void operator delete(void* ptr) = delete;
@@ -1258,26 +1253,6 @@ static segment_pool& get_shard_segment_pool() noexcept {
 
 static thread_local segment_pool& shard_segment_pool = get_shard_segment_pool();
 
-void segment::record_alloc(segment::size_type size) noexcept {
-    shard_segment_pool.descriptor(this).record_alloc(size);
-}
-
-void segment::record_free(segment::size_type size) noexcept {
-    shard_segment_pool.descriptor(this).record_free(size);
-}
-
-bool segment::is_empty() const noexcept {
-    return shard_segment_pool.descriptor(this).is_empty();
-}
-
-// Note: allocation is disallowed in this path
-// since we don't instantiate reclaiming_lock
-// while traversing _regions
-occupancy_stats
-segment::occupancy() const noexcept {
-    return { shard_segment_pool.descriptor(this).free_space(), segment::size };
-}
-
 thread_local reclaim_timer* reclaim_timer::_active_timer;
 thread_local clock::duration reclaim_timer::_duration_threshold = clock::duration::zero();
 
@@ -1535,7 +1510,7 @@ private:
 
         // Align the end of the value so that the next descriptor is aligned
         _active_offset = align_up_for_asan(_active_offset);
-        _active->record_alloc(_active_offset - old_active_offset);
+        shard_segment_pool.descriptor(_active).record_alloc(_active_offset - old_active_offset);
         return pos;
     }
 
@@ -1567,10 +1542,11 @@ private:
             auto pos =_active->at<char>(_active_offset);
             desc.encode(pos);
         }
-        llogger.trace("Closing segment {}, used={}, waste={} [B]", fmt::ptr(_active), _active->occupancy(), segment::size - _active_offset);
-        _closed_occupancy += _active->occupancy();
+        auto& desc = shard_segment_pool.descriptor(_active);
+        llogger.trace("Closing segment {}, used={}, waste={} [B]", fmt::ptr(_active), desc.occupancy(), segment::size - _active_offset);
+        _closed_occupancy += desc.occupancy();
 
-        _segment_descs.push(shard_segment_pool.descriptor(_active));
+        _segment_descs.push(desc);
         _active = nullptr;
     }
 
@@ -1578,10 +1554,11 @@ private:
         if (!_buf_active) {
             return;
         }
-        llogger.trace("Closing buf segment {}, used={}, waste={} [B]", fmt::ptr(_buf_active), _buf_active->occupancy(), segment::size - _buf_active_offset);
-        _closed_occupancy += _buf_active->occupancy();
+        auto& desc = shard_segment_pool.descriptor(_buf_active);
+        llogger.trace("Closing buf segment {}, used={}, waste={} [B]", fmt::ptr(_buf_active), desc.occupancy(), segment::size - _buf_active_offset);
+        _closed_occupancy += desc.occupancy();
 
-        _segment_descs.push(shard_segment_pool.descriptor(_buf_active));
+        _segment_descs.push(desc);
         _buf_active = nullptr;
     }
 
@@ -1646,7 +1623,7 @@ private:
         segment *seg = shard_segment_pool.segment_from(desc);
 
         if (seg != _buf_active) {
-            _closed_occupancy -= seg->occupancy();
+            _closed_occupancy -= desc.occupancy();
         }
 
         auto alloc_size = align_up(buf._size, buf_align);
@@ -1776,12 +1753,12 @@ public:
         }
         _closed_occupancy = {};
         if (_active) {
-            assert(_active->is_empty());
+            assert(shard_segment_pool.descriptor(_active).is_empty());
             free_segment(_active);
             _active = nullptr;
         }
         if (_buf_active) {
-            assert(_buf_active->is_empty());
+            assert(shard_segment_pool.descriptor(_buf_active).is_empty());
             free_segment(_buf_active);
             _buf_active = nullptr;
         }
@@ -1823,10 +1800,10 @@ public:
         occupancy_stats total = _non_lsa_occupancy;
         total += _closed_occupancy;
         if (_active) {
-            total += _active->occupancy();
+            total += shard_segment_pool.descriptor(_active).occupancy();
         }
         if (_buf_active) {
-            total += _buf_active->occupancy();
+            total += shard_segment_pool.descriptor(_buf_active).occupancy();
         }
         return total;
     }
@@ -1940,7 +1917,7 @@ public:
         poison(pos, dead_size);
 
         if (seg != _active) {
-            _closed_occupancy -= seg->occupancy();
+            _closed_occupancy -= seg_desc.occupancy();
         }
 
         seg_desc.record_free(dead_size);
@@ -1983,7 +1960,7 @@ public:
         unlisten_temporarily ult1(this);
         unlisten_temporarily ult2(&other);
 
-        if (_active && _active->is_empty()) {
+        if (_active && shard_segment_pool.descriptor(_active).is_empty()) {
             shard_segment_pool.free_segment(_active);
             _active = nullptr;
         }
