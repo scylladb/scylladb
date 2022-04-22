@@ -2428,7 +2428,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 }
             }
         } else if (req.cmd == node_ops_cmd::removenode_abort) {
-            node_ops_abort(ops_uuid);
+            node_ops_abort(ops_uuid).get();
         } else if (req.cmd == node_ops_cmd::decommission_prepare) {
             if (req.leaving_nodes.size() > 1) {
                 auto msg = format("decommission[{}]: Could not decommission more than one node at a time: leaving_nodes={}", req.ops_uuid, req.leaving_nodes);
@@ -2467,7 +2467,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             }).get();
             node_ops_done(ops_uuid).get();
         } else if (req.cmd == node_ops_cmd::decommission_abort) {
-            node_ops_abort(ops_uuid);
+            node_ops_abort(ops_uuid).get();
         } else if (req.cmd == node_ops_cmd::replace_prepare) {
             // Mark the replacing node as replacing
             if (req.replace_nodes.size() > 1) {
@@ -2521,7 +2521,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             slogger.info("replace[{}]: Marked ops done from coordinator={}", req.ops_uuid, coordinator);
             node_ops_done(ops_uuid).get();
         } else if (req.cmd == node_ops_cmd::replace_abort) {
-            node_ops_abort(ops_uuid);
+            node_ops_abort(ops_uuid).get();
         } else if (req.cmd == node_ops_cmd::bootstrap_prepare) {
             // Mark the bootstrap node as bootstrapping
             if (req.bootstrap_nodes.size() > 1) {
@@ -2559,7 +2559,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             slogger.info("bootstrap[{}]: Marked ops done from coordinator={}", req.ops_uuid, coordinator);
             node_ops_done(ops_uuid).get();
         } else if (req.cmd == node_ops_cmd::bootstrap_abort) {
-            node_ops_abort(ops_uuid);
+            node_ops_abort(ops_uuid).get();
         } else {
             auto msg = format("node_ops_cmd_handler: ops_uuid={}, unknown cmd={}", req.ops_uuid, req.cmd);
             slogger.warn("{}", msg);
@@ -3625,18 +3625,18 @@ future<> storage_service::node_ops_done(utils::UUID ops_uuid) {
     }
 }
 
-void storage_service::node_ops_abort(utils::UUID ops_uuid) {
+future<> storage_service::node_ops_abort(utils::UUID ops_uuid) {
     slogger.debug("node_ops_abort: ops_uuid={}", ops_uuid);
-    auto permit = seastar::get_units(_node_ops_abort_sem, 1).get0();
+    auto permit = co_await seastar::get_units(_node_ops_abort_sem, 1);
     auto it = _node_ops.find(ops_uuid);
     if (it != _node_ops.end()) {
         node_ops_meta_data& meta = it->second;
-        meta.abort().get();
+        co_await meta.abort();
         auto as = meta.get_abort_source();
         if (as && !as->abort_requested()) {
             as->request_abort();
         }
-        _repair.local().abort_repair_node_ops(ops_uuid).get();
+        co_await _repair.local().abort_repair_node_ops(ops_uuid);
         _node_ops.erase(it);
     }
 }
@@ -3660,7 +3660,7 @@ future<> storage_service::node_ops_abort_thread() {
                     return;
                 }
                 try {
-                    storage_service::node_ops_abort(*uuid_opt);
+                    storage_service::node_ops_abort(*uuid_opt).get();
                 } catch (...) {
                     slogger.warn("Failed to abort node operation ops_uuid={}: {}", *uuid_opt, std::current_exception());
                 }
