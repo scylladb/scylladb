@@ -140,7 +140,7 @@ void migration_manager::init_messaging_service()
         auto features = self._feat.cluster_schema_features();
         auto& proxy = self._storage_proxy.container();
         auto cm = co_await db::schema_tables::convert_schema_to_mutations(proxy, features);
-        if (self._raft_gr.is_enabled() && options->group0_snapshot_transfer) {
+        if (self.is_raft_enabled() && options->group0_snapshot_transfer) {
             // if `group0_snapshot_transfer` is `true`, the sender must also understand canonical mutations
             // (`group0_snapshot_transfer` was added more recently).
             if (!cm_retval_supported) {
@@ -1077,7 +1077,7 @@ future<> migration_manager::announce_without_raft(std::vector<mutation> schema) 
 
 // Returns a future on the local application of the schema
 future<> migration_manager::announce(std::vector<mutation> schema, group0_guard guard, std::string_view description) {
-    if (_raft_gr.is_enabled()) {
+    if (is_raft_enabled()) {
         if (this_shard_id() != 0) {
             // This should not happen since all places which construct `group0_guard` also check that they are on shard 0.
             // Note: `group0_guard::impl` is private to this module, making this easy to verify.
@@ -1109,7 +1109,7 @@ static utils::UUID generate_group0_state_id(utils::UUID prev_state_id) {
 }
 
 future<group0_guard> migration_manager::start_group0_operation() {
-    if (_raft_gr.is_enabled()) {
+    if (is_raft_enabled()) {
         if (this_shard_id() != 0) {
             on_internal_error(mlogger, "start_group0_operation: must run on shard 0");
         }

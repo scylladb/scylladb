@@ -193,7 +193,7 @@ public:
     future<group0_guard> start_group0_operation();
 
     // used to check if raft is enabled on the cluster
-    bool is_raft_enabled() { return _raft_gr.is_enabled(); }
+    bool is_raft_enabled() { return _raft_gr.joined_group0(); }
 
     // Apply a group 0 change.
     // The future resolves after the change is applied locally.
