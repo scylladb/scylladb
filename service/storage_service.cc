@@ -2410,7 +2410,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             node_ops_update_heartbeat(ops_uuid).get();
         } else if (req.cmd == node_ops_cmd::removenode_done) {
             slogger.info("removenode[{}]: Marked ops done from coordinator={}", req.ops_uuid, coordinator);
-            node_ops_done(ops_uuid);
+            node_ops_done(ops_uuid).get();
         } else if (req.cmd == node_ops_cmd::removenode_sync_data) {
             auto it = _node_ops.find(ops_uuid);
             if (it == _node_ops.end()) {
@@ -2465,7 +2465,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                     table->trigger_offstrategy_compaction();
                 }
             }).get();
-            node_ops_done(ops_uuid);
+            node_ops_done(ops_uuid).get();
         } else if (req.cmd == node_ops_cmd::decommission_abort) {
             node_ops_abort(ops_uuid);
         } else if (req.cmd == node_ops_cmd::replace_prepare) {
@@ -2519,7 +2519,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             node_ops_update_heartbeat(ops_uuid).get();
         } else if (req.cmd == node_ops_cmd::replace_done) {
             slogger.info("replace[{}]: Marked ops done from coordinator={}", req.ops_uuid, coordinator);
-            node_ops_done(ops_uuid);
+            node_ops_done(ops_uuid).get();
         } else if (req.cmd == node_ops_cmd::replace_abort) {
             node_ops_abort(ops_uuid);
         } else if (req.cmd == node_ops_cmd::bootstrap_prepare) {
@@ -2557,7 +2557,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             node_ops_update_heartbeat(ops_uuid).get();
         } else if (req.cmd == node_ops_cmd::bootstrap_done) {
             slogger.info("bootstrap[{}]: Marked ops done from coordinator={}", req.ops_uuid, coordinator);
-            node_ops_done(ops_uuid);
+            node_ops_done(ops_uuid).get();
         } else if (req.cmd == node_ops_cmd::bootstrap_abort) {
             node_ops_abort(ops_uuid);
         } else {
@@ -3614,9 +3614,9 @@ future<> storage_service::node_ops_update_heartbeat(utils::UUID ops_uuid) {
     }
 }
 
-void storage_service::node_ops_done(utils::UUID ops_uuid) {
+future<> storage_service::node_ops_done(utils::UUID ops_uuid) {
     slogger.debug("node_ops_done: ops_uuid={}", ops_uuid);
-    auto permit = seastar::get_units(_node_ops_abort_sem, 1).get0();
+    auto permit = co_await seastar::get_units(_node_ops_abort_sem, 1);
     auto it = _node_ops.find(ops_uuid);
     if (it != _node_ops.end()) {
         node_ops_meta_data& meta = it->second;

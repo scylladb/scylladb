@@ -164,7 +164,7 @@ private:
     named_semaphore _node_ops_abort_sem{1, named_semaphore_exception_factory{"node_ops_abort_sem"}};
     future<> _node_ops_abort_thread;
     future<> node_ops_update_heartbeat(utils::UUID ops_uuid);
-    void node_ops_done(utils::UUID ops_uuid);
+    future<> node_ops_done(utils::UUID ops_uuid);
     void node_ops_abort(utils::UUID ops_uuid);
     void node_ops_singal_abort(std::optional<utils::UUID> ops_uuid);
     future<> node_ops_abort_thread();
