@@ -704,7 +704,7 @@ private:
      */
     future<> start_leaving();
     future<> leave_ring();
-    void unbootstrap();
+    future<> unbootstrap();
 
 public:
     future<> move(sstring new_token) {

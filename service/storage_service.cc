@@ -1911,7 +1911,7 @@ future<> storage_service::decommission() {
 
                 // Step 5: Start to sync data
                 slogger.info("DECOMMISSIONING: unbootstrap starts");
-                ss.unbootstrap();
+                ss.unbootstrap().get();
                 slogger.info("DECOMMISSIONING: unbootstrap done");
 
                 // Step 6: Finish
@@ -2708,17 +2708,16 @@ future<std::unordered_multimap<dht::token_range, inet_address>> storage_service:
     co_return changed_ranges;
 }
 
-// Runs inside seastar::async context
-void storage_service::unbootstrap() {
-    get_batchlog_manager().local().do_batch_log_replay().get();
+future<> storage_service::unbootstrap() {
+    co_await get_batchlog_manager().local().do_batch_log_replay();
     if (is_repair_based_node_ops_enabled(streaming::stream_reason::decommission)) {
-        _repair.local().decommission_with_repair(get_token_metadata_ptr()).get();
+        co_await _repair.local().decommission_with_repair(get_token_metadata_ptr());
     } else {
         std::unordered_map<sstring, std::unordered_multimap<dht::token_range, inet_address>> ranges_to_stream;
 
         auto non_system_keyspaces = _db.local().get_non_system_keyspaces();
         for (const auto& keyspace_name : non_system_keyspaces) {
-            auto ranges_mm = get_changed_ranges_for_leaving(keyspace_name, get_broadcast_address()).get0();
+            auto ranges_mm = co_await get_changed_ranges_for_leaving(keyspace_name, get_broadcast_address());
             if (slogger.is_enabled(logging::log_level::debug)) {
                 std::vector<range<token>> ranges;
                 for (auto& x : ranges_mm) {
@@ -2735,21 +2734,21 @@ void storage_service::unbootstrap() {
         // Wait for batch log to complete before streaming hints.
         slogger.debug("waiting for batch log processing.");
         // Start with BatchLog replay, which may create hints but no writes since this is no longer a valid endpoint.
-        get_batchlog_manager().local().do_batch_log_replay().get();
+        co_await get_batchlog_manager().local().do_batch_log_replay();
 
         slogger.info("streaming hints to other nodes");
 
         // wait for the transfer runnables to signal the latch.
         slogger.debug("waiting for stream acks.");
         try {
-            stream_success.get();
+            co_await std::move(stream_success);
         } catch (...) {
             slogger.warn("unbootstrap fails to stream : {}", std::current_exception());
             throw;
         }
         slogger.debug("stream acks all received.");
     }
-    leave_ring().get();
+    co_await leave_ring();
 }
 
 // Runs inside seastar::async context
