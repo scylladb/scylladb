@@ -1319,6 +1319,8 @@ future<> storage_service::init_server(cql3::query_processor& qp) {
         _group0 = std::make_unique<raft_group0>(_abort_source, _raft_gr, _messaging.local(),
             _gossiper, qp, _migration_manager.local());
 
+        _raft_gr.bind_group0_discovery_impl(*_group0);
+
         std::unordered_set<inet_address> loaded_endpoints;
         if (_db.local().get_config().load_ring_state()) {
             slogger.info("Loading persisted ring state");

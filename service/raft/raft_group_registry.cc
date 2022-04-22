@@ -8,6 +8,7 @@
 #include "service/raft/raft_group_registry.hh"
 #include "service/raft/raft_rpc.hh"
 #include "service/raft/raft_gossip_failure_detector.hh"
+#include "service/raft/raft_group0.hh"
 #include "message/messaging_service.hh"
 #include "serializer_impl.hh"
 #include "idl/raft.dist.hh"
@@ -24,8 +25,10 @@ raft_group_registry::raft_group_registry(bool is_enabled, netw::messaging_servic
     : _is_enabled(is_enabled)
     , _ms(ms)
     , _fd(make_shared<raft_gossip_failure_detector>(gossiper, _srv_address_mappings))
-    , _raft_support_listener(feat.cluster_supports_raft_cluster_mgmt().when_enabled([] {
-        // TODO: join group 0 on upgrade
+    , _raft_support_listener(feat.cluster_supports_raft_cluster_mgmt().when_enabled([this] {
+        if (_group0) {
+            _group0->join_group0().get();
+        }
     }))
 {
 }

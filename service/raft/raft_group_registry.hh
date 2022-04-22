@@ -24,6 +24,7 @@ namespace service {
 class raft_rpc;
 class raft_sys_table_storage;
 class raft_gossip_failure_detector;
+class raft_group0;
 
 struct raft_group_not_found: public raft::error {
     raft::group_id gid;
@@ -68,6 +69,9 @@ private:
     // Group 0 id, valid only on shard 0 after boot is over
     std::optional<raft::group_id> _group0_id;
 
+    // Is set in `storage_service::init_server()`
+    service::raft_group0* _group0 = nullptr;
+
     gms::feature::listener_registration _raft_support_listener;
 
 public:
@@ -100,6 +104,8 @@ public:
     raft_address_map<>& address_map() { return _srv_address_mappings; }
 
     bool is_enabled() const { return _is_enabled; }
+
+    void bind_group0_discovery_impl(service::raft_group0& gr0) { _group0 = &gr0; }
 };
 
 } // end of namespace service
