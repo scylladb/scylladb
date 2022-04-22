@@ -1754,24 +1754,28 @@ future<bool> storage_service::is_gossip_running() {
 }
 
 future<> storage_service::start_gossiping() {
-    return run_with_api_lock(sstring("start_gossiping"), [] (storage_service& ss) {
-        return seastar::async([&ss] {
-            if (!ss._gossiper.is_enabled()) {
-                slogger.warn("Starting gossip by operator request");
-                ss._gossiper.container().invoke_on_all(&gms::gossiper::start).get();
-                auto undo = defer([&ss] { ss._gossiper.container().invoke_on_all(&gms::gossiper::stop).get(); });
-                auto cdc_gen_ts = db::system_keyspace::get_cdc_generation_id().get0();
+    return run_with_api_lock(sstring("start_gossiping"), [] (storage_service& ss) -> future<> {
+        if (!ss._gossiper.is_enabled()) {
+            slogger.warn("Starting gossip by operator request");
+            co_await ss._gossiper.container().invoke_on_all(&gms::gossiper::start);
+            bool should_stop_gossiper = false; // undo action
+            try {
+                auto cdc_gen_ts = co_await db::system_keyspace::get_cdc_generation_id();
                 if (!cdc_gen_ts) {
                     cdc_log.warn("CDC generation timestamp missing when starting gossip");
                 }
-                set_gossip_tokens(ss._gossiper,
-                        db::system_keyspace::get_local_tokens().get0(),
-                        cdc_gen_ts).get();
+                co_await set_gossip_tokens(ss._gossiper,
+                        co_await db::system_keyspace::get_local_tokens(),
+                        cdc_gen_ts);
                 ss._gossiper.force_newer_generation();
-                ss._gossiper.start_gossiping(utils::get_generation_number()).get();
-                undo.cancel();
+                co_await ss._gossiper.start_gossiping(utils::get_generation_number());
+            } catch (...) {
+                should_stop_gossiper = true;
             }
-        });
+            if (should_stop_gossiper) {
+                co_await ss._gossiper.container().invoke_on_all(&gms::gossiper::stop);
+            }
+        }
     });
 }
 
