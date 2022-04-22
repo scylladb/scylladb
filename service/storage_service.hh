@@ -387,7 +387,7 @@ private:
     std::optional<gms::inet_address> get_replace_address();
     bool is_replacing();
     bool is_first_node();
-    void prepare_to_join(
+    future<> prepare_to_join(
             std::unordered_set<gms::inet_address> initial_contact_nodes,
             std::unordered_set<gms::inet_address> loaded_endpoints,
             std::unordered_map<gms::inet_address, sstring> loaded_peer_features);

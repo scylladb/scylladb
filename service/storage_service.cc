@@ -222,8 +222,7 @@ future<> storage_service::snitch_reconfigured() {
     return update_topology(utils::fb_utilities::get_broadcast_address());
 }
 
-// Runs inside seastar::async context
-void storage_service::prepare_to_join(
+future<> storage_service::prepare_to_join(
         std::unordered_set<gms::inet_address> initial_contact_nodes,
         std::unordered_set<gms::inet_address> loaded_endpoints,
         std::unordered_map<gms::inet_address, sstring> loaded_peer_features) {
@@ -231,7 +230,7 @@ void storage_service::prepare_to_join(
     if (_sys_ks.local().was_decommissioned()) {
         if (_db.local().get_config().override_decommission()) {
             slogger.warn("This node was decommissioned, but overriding by operator request.");
-            _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED).get();
+            co_await _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED);
         } else {
             auto msg = sstring("This node was decommissioned and will not rejoin the ring unless override_decommission=true has been set,"
                                "or all existing data is removed and the node is bootstrapped again");
@@ -242,13 +241,13 @@ void storage_service::prepare_to_join(
 
     bool replacing_a_node_with_same_ip = false;
     bool replacing_a_node_with_diff_ip = false;
-    auto tmlock = std::make_unique<token_metadata_lock>(get_token_metadata_lock().get0());
-    auto tmptr = get_mutable_token_metadata_ptr().get0();
+    auto tmlock = std::make_unique<token_metadata_lock>(co_await get_token_metadata_lock());
+    auto tmptr = co_await get_mutable_token_metadata_ptr();
     if (is_replacing()) {
         if (_sys_ks.local().bootstrap_complete()) {
             throw std::runtime_error("Cannot replace address with a node that is already bootstrapped");
         }
-        _bootstrap_tokens = prepare_replacement_info(initial_contact_nodes, loaded_peer_features).get0();
+        _bootstrap_tokens = co_await prepare_replacement_info(initial_contact_nodes, loaded_peer_features);
         auto replace_address = get_replace_address();
         replacing_a_node_with_same_ip = *replace_address == get_broadcast_address();
         replacing_a_node_with_diff_ip = *replace_address != get_broadcast_address();
@@ -256,18 +255,18 @@ void storage_service::prepare_to_join(
         slogger.info("Replacing a node with {} IP address, my address={}, node being replaced={}",
             get_broadcast_address() == *replace_address ? "the same" : "a different",
             get_broadcast_address(), *replace_address);
-        tmptr->update_normal_tokens(_bootstrap_tokens, *replace_address).get();
+        co_await tmptr->update_normal_tokens(_bootstrap_tokens, *replace_address);
     } else if (should_bootstrap()) {
-        check_for_endpoint_collision(initial_contact_nodes, loaded_peer_features).get();
+        co_await check_for_endpoint_collision(initial_contact_nodes, loaded_peer_features);
     } else {
         auto local_features = _feature_service.known_feature_set();
         slogger.info("Checking remote features with gossip, initial_contact_nodes={}", initial_contact_nodes);
-        _gossiper.do_shadow_round(initial_contact_nodes).get();
+        co_await _gossiper.do_shadow_round(initial_contact_nodes);
         _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
         _gossiper.check_snitch_name_matches();
-        _gossiper.reset_endpoint_state_map().get();
+        co_await _gossiper.reset_endpoint_state_map();
         for (auto ep : loaded_endpoints) {
-            _gossiper.add_saved_endpoint(ep).get();
+            co_await _gossiper.add_saved_endpoint(ep);
         }
     }
     auto features = _feature_service.supported_feature_set();
@@ -275,19 +274,19 @@ void storage_service::prepare_to_join(
     // Save the advertised feature set to system.local table after
     // all remote feature checks are complete and after gossip shadow rounds are done.
     // At this point, the final feature set is already determined before the node joins the ring.
-    db::system_keyspace::save_local_supported_features(features).get0();
+    co_await db::system_keyspace::save_local_supported_features(features);
 
     // If this is a restarting node, we should update tokens before gossip starts
-    auto my_tokens = db::system_keyspace::get_saved_tokens().get0();
+    auto my_tokens = co_await db::system_keyspace::get_saved_tokens();
     bool restarting_normal_node = _sys_ks.local().bootstrap_complete() && !is_replacing() && !my_tokens.empty();
     if (restarting_normal_node) {
         slogger.info("Restarting a node in NORMAL status");
         // This node must know about its chosen tokens before other nodes do
         // since they may start sending writes to this node after it gossips status = NORMAL.
         // Therefore we update _token_metadata now, before gossip starts.
-        tmptr->update_normal_tokens(my_tokens, get_broadcast_address()).get();
+        co_await tmptr->update_normal_tokens(my_tokens, get_broadcast_address());
 
-        _cdc_gen_id = db::system_keyspace::get_cdc_generation_id().get0();
+        _cdc_gen_id = co_await db::system_keyspace::get_cdc_generation_id();
         if (!_cdc_gen_id) {
             // We could not have completed joining if we didn't generate and persist a CDC streams timestamp,
             // unless we are restarting after upgrading from non-CDC supported version.
@@ -314,13 +313,13 @@ void storage_service::prepare_to_join(
     // Replicate the tokens early because once gossip runs other nodes
     // might send reads/writes to this node. Replicate it early to make
     // sure the tokens are valid on all the shards.
-    replicate_to_all_cores(std::move(tmptr)).get();
+    co_await replicate_to_all_cores(std::move(tmptr));
     tmlock.reset();
 
     auto broadcast_rpc_address = utils::fb_utilities::get_broadcast_rpc_address();
     auto& proxy = service::get_storage_proxy();
     // Ensure we know our own actual Schema UUID in preparation for updates
-    db::schema_tables::recalculate_schema_version(_sys_ks, proxy, _feature_service).get0();
+    co_await db::schema_tables::recalculate_schema_version(_sys_ks, proxy, _feature_service);
     app_states.emplace(gms::application_state::NET_VERSION, versioned_value::network_version());
     app_states.emplace(gms::application_state::HOST_ID, versioned_value::host_id(local_host_id));
     app_states.emplace(gms::application_state::RPC_ADDRESS, versioned_value::rpcaddress(broadcast_rpc_address));
@@ -352,9 +351,9 @@ void storage_service::prepare_to_join(
 
     slogger.info("Starting up server gossip");
 
-    auto generation_number = db::system_keyspace::increment_and_get_generation().get0();
+    auto generation_number = co_await db::system_keyspace::increment_and_get_generation();
     auto advertise = gms::advertise_myself(!replacing_a_node_with_same_ip);
-    _gossiper.start_gossiping(generation_number, app_states, advertise).get();
+    co_await _gossiper.start_gossiping(generation_number, app_states, advertise);
 }
 
 void storage_service::start_sys_dist_ks() {
@@ -1367,7 +1366,7 @@ future<> storage_service::init_server(cql3::query_processor& qp) {
         for (auto& x : loaded_peer_features) {
             slogger.info("peer={}, supported_features={}", x.first, x.second);
         }
-        prepare_to_join(std::move(initial_contact_nodes), std::move(loaded_endpoints), std::move(loaded_peer_features));
+        prepare_to_join(std::move(initial_contact_nodes), std::move(loaded_endpoints), std::move(loaded_peer_features)).get();
     });
 }
 
