@@ -24,8 +24,7 @@ static const sstring SSTABLE_FORMAT_PARAM_NAME = "sstable_format";
 void feature_enabled_listener::on_enabled() {
     if (!_started) {
         _started = true;
-        // FIXME -- discarded future
-        (void)_selector.maybe_select_format(_format);
+        _selector.maybe_select_format(_format).get();
     }
 }
 
@@ -44,9 +43,9 @@ future<> sstables_format_selector::maybe_select_format(sstables::sstable_version
     if (new_format > _selected_format) {
         co_await db::system_keyspace::set_scylla_local_param(SSTABLE_FORMAT_PARAM_NAME, to_string(new_format));
         co_await select_format(new_format);
-        units.return_all();
-        co_await _gossiper.add_local_application_state(gms::application_state::SUPPORTED_FEATURES,
-                 gms::versioned_value::supported_features(_features.local().supported_feature_set()));
+        // FIXME discarded future
+        (void)_gossiper.add_local_application_state(gms::application_state::SUPPORTED_FEATURES,
+                 gms::versioned_value::supported_features(_features.local().supported_feature_set())).finally([h = std::move(hg)] {});
     }
 }
 

@@ -1289,7 +1289,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 mm.local().passive_announce(std::move(schema_version));
             });
             gossiper.local().wait_for_gossip_to_settle().get();
-            sst_format_selector.sync();
 
             with_scheduling_group(maintenance_scheduling_group, [&] {
                 return ss.local().join_cluster();
