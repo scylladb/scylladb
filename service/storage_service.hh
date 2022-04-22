@@ -392,7 +392,7 @@ private:
             std::unordered_set<gms::inet_address> loaded_endpoints,
             std::unordered_map<gms::inet_address, sstring> loaded_peer_features);
     void join_token_ring(std::chrono::milliseconds);
-    void start_sys_dist_ks();
+    future<> start_sys_dist_ks();
 public:
 
     future<> rebuild(sstring source_dc);
