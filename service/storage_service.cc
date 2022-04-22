@@ -2751,12 +2751,11 @@ future<> storage_service::unbootstrap() {
     co_await leave_ring();
 }
 
-// Runs inside seastar::async context
-void storage_service::removenode_add_ranges(lw_shared_ptr<dht::range_streamer> streamer, gms::inet_address leaving_node) {
+future<> storage_service::removenode_add_ranges(lw_shared_ptr<dht::range_streamer> streamer, gms::inet_address leaving_node) {
     auto my_address = get_broadcast_address();
     auto non_system_keyspaces = _db.local().get_non_system_keyspaces();
     for (const auto& keyspace_name : non_system_keyspaces) {
-        std::unordered_multimap<dht::token_range, inet_address> changed_ranges = get_changed_ranges_for_leaving(keyspace_name, leaving_node).get0();
+        std::unordered_multimap<dht::token_range, inet_address> changed_ranges = co_await get_changed_ranges_for_leaving(keyspace_name, leaving_node);
         dht::token_range_vector my_new_ranges;
         for (auto& x : changed_ranges) {
             if (x.second == my_address) {
@@ -2790,7 +2789,7 @@ future<> storage_service::removenode_with_stream(gms::inet_address leaving_node,
             }
         });
         auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, as, get_broadcast_address(), "Removenode", streaming::stream_reason::removenode);
-        removenode_add_ranges(streamer, leaving_node);
+        removenode_add_ranges(streamer, leaving_node).get();
         try {
             streamer->stream_async().get();
         } catch (...) {
@@ -2817,7 +2816,7 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
         }
     });
     auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, as, get_broadcast_address(), "Restore_replica_count", streaming::stream_reason::removenode);
-    removenode_add_ranges(streamer, endpoint);
+    removenode_add_ranges(streamer, endpoint).get();
     auto status_checker = seastar::async([this, endpoint, &as] {
         slogger.info("restore_replica_count: Started status checker for removing node {}", endpoint);
         while (!as.abort_requested()) {
