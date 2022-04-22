@@ -249,4 +249,8 @@ unsigned raft_group_registry::shard_for_group(const raft::group_id& gid) const {
     return 0; // schema raft server is always owned by shard 0
 }
 
+bool raft_group_registry::joined_group0() const {
+    return _group0 && _group0->joined_group0();
+}
+
 } // end of namespace service

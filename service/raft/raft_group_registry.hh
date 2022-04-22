@@ -106,6 +106,8 @@ public:
     bool is_enabled() const { return _is_enabled; }
 
     void bind_group0_discovery_impl(service::raft_group0& gr0) { _group0 = &gr0; }
+
+    bool joined_group0() const;
 };
 
 } // end of namespace service
