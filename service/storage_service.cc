@@ -2975,12 +2975,11 @@ storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multim
 }
 
 future<> storage_service::start_leaving() {
-    return _gossiper.add_local_application_state(application_state::STATUS, versioned_value::leaving(db::system_keyspace::get_local_tokens().get0())).then([this] {
-        return mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) {
-            auto endpoint = get_broadcast_address();
-            tmptr->add_leaving_endpoint(endpoint);
-            return update_pending_ranges(std::move(tmptr), format("start_leaving {}", endpoint));
-        });
+    co_await _gossiper.add_local_application_state(application_state::STATUS, versioned_value::leaving(co_await db::system_keyspace::get_local_tokens()));
+    co_await mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) {
+        auto endpoint = get_broadcast_address();
+        tmptr->add_leaving_endpoint(endpoint);
+        return update_pending_ranges(std::move(tmptr), format("start_leaving {}", endpoint));
     });
 }
 
