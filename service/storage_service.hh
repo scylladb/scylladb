@@ -748,7 +748,7 @@ public:
     future<> removenode(sstring host_id_string, std::list<gms::inet_address> ignore_nodes);
     future<node_ops_cmd_response> node_ops_cmd_handler(gms::inet_address coordinator, node_ops_cmd_request req);
     void node_ops_cmd_check(gms::inet_address coordinator, const node_ops_cmd_request& req);
-    future<> node_ops_cmd_heartbeat_updater(const node_ops_cmd& cmd, utils::UUID uuid, std::list<gms::inet_address> nodes, lw_shared_ptr<bool> heartbeat_updater_done);
+    future<> node_ops_cmd_heartbeat_updater(node_ops_cmd cmd, utils::UUID uuid, std::list<gms::inet_address> nodes, lw_shared_ptr<bool> heartbeat_updater_done);
 
     future<mode> get_operation_mode();
 
