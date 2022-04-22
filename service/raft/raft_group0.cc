@@ -177,7 +177,7 @@ future<> raft_group0::join_group0() {
     // do nothing either if raft group registry is not enabled or we've already
     // finished joining some existing group0, so that subsequent calls
     // to the function are safe.
-    if (!_raft_gr.is_enabled() || std::holds_alternative<raft::group_id>(_group0)) {
+    if (!_raft_gr.is_enabled() || joined_group0()) {
         co_return;
     }
     auto my_addr = co_await load_or_create_my_addr();
@@ -326,6 +326,10 @@ future<group0_peer_exchange> raft_group0::peer_exchange(discovery::peer_list pee
             }};
         }
     }, _group0);
+}
+
+bool raft_group0::joined_group0() const {
+    return std::holds_alternative<raft::group_id>(_group0);
 }
 
 static constexpr auto DISCOVERY_KEY = "peers";

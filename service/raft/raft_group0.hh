@@ -114,6 +114,8 @@ public:
 
     // Handle peer_exchange RPC
     future<group0_peer_exchange> peer_exchange(discovery::peer_list peers);
+
+    bool joined_group0() const;
 };
 
 } // end of namespace service
