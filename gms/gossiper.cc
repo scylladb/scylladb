@@ -2323,19 +2323,12 @@ future<> gossiper::wait_for_gossip(std::chrono::milliseconds initial_delay, std:
 
 future<> gossiper::wait_for_gossip_to_settle() {
     auto force_after = _gcfg.skip_wait_for_gossip_to_settle;
-    auto do_enable_features = [this] {
-        return async([this] {
-            if (!std::exchange(_gossip_settled, true)) {
-               maybe_enable_features().get();
-            }
-        });
-    };
-    if (force_after == 0) {
-        return do_enable_features();
+    if (force_after != 0) {
+        co_await wait_for_gossip(GOSSIP_SETTLE_MIN_WAIT_MS, force_after);
     }
-    return wait_for_gossip(GOSSIP_SETTLE_MIN_WAIT_MS, force_after).then([this, do_enable_features] {
-        return do_enable_features();
-    });
+    if (!std::exchange(_gossip_settled, true)) {
+        co_await maybe_enable_features();
+    }
 }
 
 future<> gossiper::wait_for_range_setup() {
