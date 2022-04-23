@@ -172,7 +172,7 @@ SYSTEM_PARTITION_UUIDS = [
 ]
 
 def get_partition_uuid(dev):
-    return run(f'lsblk -n -oPARTTYPE {dev}', shell=True, check=True, capture_output=True, encoding='utf-8').stdout.strip()
+    return out(f'lsblk -n -oPARTTYPE {dev}')
 
 def is_system_partition(dev):
     uuid = get_partition_uuid(dev)
@@ -268,7 +268,7 @@ def get_set_nic_and_disks_config_value(cfg):
 
 
 def swap_exists():
-    swaps = run('swapon --noheadings --raw', shell=True, check=True, capture_output=True, encoding='utf-8').stdout.strip()
+    swaps = out('swapon --noheadings --raw')
     return True if swaps != '' else False
 
 def pkg_error_exit(pkg):
@@ -378,7 +378,7 @@ class systemd_unit:
         return run('systemctl {} disable {}'.format(self.ctlparam, self._unit), shell=True, check=True)
 
     def is_active(self):
-        return run('systemctl {} is-active {}'.format(self.ctlparam, self._unit), shell=True, capture_output=True, encoding='utf-8').stdout.strip()
+        return out('systemctl {} is-active {}'.format(self.ctlparam, self._unit))
 
     def mask(self):
         return run('systemctl {} mask {}'.format(self.ctlparam, self._unit), shell=True, check=True)
