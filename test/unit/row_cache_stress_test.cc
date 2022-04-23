@@ -159,8 +159,8 @@ struct table {
         }
         rd.push_back(mt->make_flat_reader(s.schema(), permit, r->pr, r->slice, default_priority_class(), nullptr,
             streamed_mutation::forwarding::no, mutation_reader::forwarding::no));
-        rd.push_back(upgrade_to_v2(cache.make_reader(s.schema(), permit, r->pr, r->slice, default_priority_class(), nullptr,
-            streamed_mutation::forwarding::no, mutation_reader::forwarding::no)));
+        rd.push_back(cache.make_reader(s.schema(), permit, r->pr, r->slice, default_priority_class(), nullptr,
+            streamed_mutation::forwarding::no, mutation_reader::forwarding::no));
         r->rd = downgrade_to_v1(make_combined_reader(s.schema(), permit, std::move(rd), streamed_mutation::forwarding::no, mutation_reader::forwarding::no));
         return r;
     }

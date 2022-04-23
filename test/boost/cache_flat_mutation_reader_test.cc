@@ -74,16 +74,17 @@ static query::partition_slice make_slice(std::vector<query::clustering_range> ra
 }
 
 struct expected_fragment {
-    std::variant<int, range_tombstone> f;
+    std::variant<int, range_tombstone_change> f;
 
     expected_fragment(int row_key) : f(row_key) { }
-    expected_fragment(range_tombstone rt) : f(rt) { }
+    expected_fragment(range_tombstone_change rtc) : f(std::move(rtc)) { }
+    expected_fragment(position_in_partition_view pos, tombstone tomb) : expected_fragment(range_tombstone_change(pos, tomb)) { }
 
-    void check(flat_reader_assertions& r, const query::clustering_row_ranges& ranges) {
+    void check(flat_reader_assertions_v2& r) {
         if (f.index() == 0) {
             r.produces_row_with_key(make_ck(std::get<int>(f)));
         } else {
-            r.produces_range_tombstone(std::get<range_tombstone>(f), ranges);
+            r.produces_range_tombstone_change(std::get<range_tombstone_change>(f));
         }
     }
 };
@@ -188,13 +189,12 @@ public:
 };
 
 static void check_produces_only(const dht::decorated_key& dk,
-                                flat_mutation_reader r,
-                                std::deque<expected_fragment> expected,
-                                const query::clustering_row_ranges& ranges) {
+                                flat_mutation_reader_v2 r,
+                                std::deque<expected_fragment> expected) {
     auto ra = assert_that(std::move(r));
     ra.produces_partition_start(dk);
     for (auto&& e : expected) {
-        e.check(ra, ranges);
+        e.check(ra);
     }
     ra.produces_partition_end();
     ra.produces_end_of_stream();
@@ -220,7 +220,7 @@ void test_slice_single_version(mutation& underlying,
         auto range = dht::partition_range::make_singular(DK);
         auto reader = cache.make_reader(SCHEMA, semaphore.make_permit(), range, slice);
 
-        check_produces_only(DK, std::move(reader), expected_sm_fragments, slice.row_ranges(*SCHEMA, DK.key()));
+        check_produces_only(DK, std::move(reader), expected_sm_fragments);
 
         auto snp = cache_tester::snapshot_for_key(cache, DK);
         assert_single_version(snp);
@@ -1287,8 +1287,9 @@ SEASTAR_TEST_CASE(test_single_row_and_tombstone_not_cached_single_row_range1) {
         auto slice = make_slice({ query::clustering_range::make_singular(make_ck(ck1)) });
 
         test_slice_single_version(underlying, cache, slice, {
-            expected_fragment(rt),
-            expected_fragment(1)
+            expected_fragment(position_in_partition::before_key(make_ck(1)), rt.tomb),
+            expected_fragment(1),
+            expected_fragment(position_in_partition::after_key(make_ck(1)), {}),
         }, {
             expected_row(1, is_continuous::no),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
@@ -1310,7 +1311,8 @@ SEASTAR_TEST_CASE(test_single_row_and_tombstone_not_cached_single_row_range2) {
         auto slice = make_slice({ query::clustering_range::make(make_ck(0), {make_ck(1), false}) });
 
         test_slice_single_version(underlying, cache, slice, {
-            expected_fragment(rt),
+            expected_fragment(position_in_partition_view::before_key(make_ck(0)), rt.tomb),
+            expected_fragment(position_in_partition_view::before_key(make_ck(1)), {}),
         }, {
             before_notc(0),
             before_cont(1),
@@ -1333,7 +1335,8 @@ SEASTAR_TEST_CASE(test_single_row_and_tombstone_not_cached_single_row_range3) {
         auto slice = make_slice({ query::clustering_range::make(make_ck(0), make_ck(5)) });
 
         test_slice_single_version(underlying, cache, slice, {
-            expected_fragment(rt),
+            expected_fragment(position_in_partition_view::before_key(make_ck(0)), rt.tomb),
+            expected_fragment(position_in_partition_view::after_key(make_ck(2)), {}),
             expected_fragment(4)
         }, {
             before_notc(0),

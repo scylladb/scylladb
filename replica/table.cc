@@ -194,7 +194,7 @@ table::make_reader_v2(schema_ptr s,
     const auto bypass_cache = slice.options.contains(query::partition_slice::option::bypass_cache);
     if (cache_enabled() && !bypass_cache && !(reversed && _config.reversed_reads_auto_bypass_cache())) {
         if (auto reader_opt = _cache.make_reader_opt(s, permit, range, slice, pc, std::move(trace_state), fwd, fwd_mr)) {
-            readers.emplace_back(upgrade_to_v2(std::move(*reader_opt)));
+            readers.emplace_back(std::move(*reader_opt));
         }
     } else {
         readers.emplace_back(make_sstable_reader(s, permit, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr));

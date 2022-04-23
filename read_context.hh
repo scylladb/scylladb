@@ -25,7 +25,7 @@ namespace cache {
 class autoupdating_underlying_reader final {
     row_cache& _cache;
     read_context& _read_context;
-    flat_mutation_reader_opt _reader;
+    flat_mutation_reader_v2_opt _reader;
     utils::phased_barrier::phase_type _reader_creation_phase = 0;
     dht::partition_range _range = { };
     std::optional<dht::decorated_key> _last_key;
@@ -39,19 +39,17 @@ public:
         : _cache(cache)
         , _read_context(context)
     { }
-    future<mutation_fragment_opt> move_to_next_partition() {
+    future<mutation_fragment_v2_opt> move_to_next_partition() {
         _last_key = std::move(_new_last_key);
         auto start = population_range_start();
         auto phase = _cache.phase_of(start);
-        auto refresh_reader = make_ready_future<>();
         if (!_reader || _reader_creation_phase != phase) {
             if (_last_key) {
                 auto cmp = dht::ring_position_comparator(*_cache._schema);
                 auto&& new_range = _range.split_after(*_last_key, cmp);
                 if (!new_range) {
-                  return close_reader().then([] {
-                    return make_ready_future<mutation_fragment_opt>();
-                  });
+                    co_await close_reader();
+                    co_return std::nullopt;
                 }
                 _range = std::move(*new_range);
                 _last_key = {};
@@ -60,27 +58,26 @@ public:
                 ++_cache._tracker._stats.underlying_recreations;
             }
             auto old_reader = std::move(*_reader);
-          refresh_reader = futurize_invoke([this, phase] () {
-            _reader = _cache.create_underlying_reader(_read_context, _cache.snapshot_for_phase(phase), _range);
-            _reader_creation_phase = phase;
-          }).finally([rd = std::move(old_reader)] () mutable {
-            return rd.close();
-          });
-        }
-     return refresh_reader.then([this] {
-      return _reader->next_partition().then([this] {
-        if (_reader->is_end_of_stream() && _reader->is_buffer_empty()) {
-            return make_ready_future<mutation_fragment_opt>();
-        }
-        return (*_reader)().then([this] (auto&& mfopt) {
-            if (mfopt) {
-                assert(mfopt->is_partition_start());
-                _new_last_key = mfopt->as_partition_start().key();
+            std::exception_ptr ex;
+            try {
+                _reader = _cache.create_underlying_reader(_read_context, _cache.snapshot_for_phase(phase), _range);
+                _reader_creation_phase = phase;
+            } catch(...) {
+                  ex = std::current_exception();
             }
-            return std::move(mfopt);
-        });
-      });
-     });
+            co_await old_reader.close();
+            maybe_rethrow_exception(std::move(ex));
+        }
+        co_await _reader->next_partition();
+        if (_reader->is_end_of_stream() && _reader->is_buffer_empty()) {
+            co_return std::nullopt;
+        }
+        auto mfopt = co_await (*_reader)();
+        if (mfopt) {
+            assert(mfopt->is_partition_start());
+            _new_last_key = mfopt->as_partition_start().key();
+        }
+        co_return std::move(mfopt);
     }
     future<> fast_forward_to(dht::partition_range&& range) {
         auto snapshot_and_phase = _cache.snapshot_of(dht::ring_position_view::for_range_start(_range));
@@ -112,7 +109,7 @@ public:
     const dht::partition_range& range() const {
         return _range;
     }
-    flat_mutation_reader& underlying() { return *_reader; }
+    flat_mutation_reader_v2& underlying() { return *_reader; }
     dht::ring_position_view population_range_start() const {
         return _last_key ? dht::ring_position_view::for_after_key(*_last_key)
                          : dht::ring_position_view::for_range_start(_range);
@@ -206,7 +203,7 @@ public:
     future<> ensure_underlying() {
         if (_underlying_snapshot) {
             return create_underlying().then([this] {
-                return _underlying.underlying()().then([this] (mutation_fragment_opt&& mfopt) {
+                return _underlying.underlying()().then([this] (mutation_fragment_v2_opt&& mfopt) {
                     _partition_exists = bool(mfopt);
                 });
             });

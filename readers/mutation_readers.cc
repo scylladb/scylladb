@@ -78,7 +78,7 @@ future<> delegating_reader::close() noexcept {
     return _underlying_holder ? _underlying_holder->close() : make_ready_future<>();
 }
 
-flat_mutation_reader_v2 make_delegating_reader_v2(flat_mutation_reader_v2& r) {
+flat_mutation_reader_v2 make_delegating_reader(flat_mutation_reader_v2& r) {
     return make_flat_mutation_reader_v2<delegating_reader_v2>(r);
 }
 
@@ -537,9 +537,9 @@ flat_mutation_reader_v2 make_reversing_reader(flat_mutation_reader_v2 original, 
     return make_flat_mutation_reader_v2<partition_reversing_mutation_reader>(std::move(original), max_size, std::move(slice));
 }
 
-flat_mutation_reader make_nonforwardable(flat_mutation_reader r, bool single_partition) {
-    class reader : public flat_mutation_reader::impl {
-        flat_mutation_reader _underlying;
+flat_mutation_reader_v2 make_nonforwardable(flat_mutation_reader_v2 r, bool single_partition) {
+    class reader : public flat_mutation_reader_v2::impl {
+        flat_mutation_reader_v2 _underlying;
         bool _single_partition;
         bool _static_row_done = false;
         bool is_end_end_of_underlying_stream() const {
@@ -563,7 +563,7 @@ flat_mutation_reader make_nonforwardable(flat_mutation_reader r, bool single_par
           });
         }
     public:
-        reader(flat_mutation_reader r, bool single_partition)
+        reader(flat_mutation_reader_v2 r, bool single_partition)
             : impl(r.schema(), r.permit())
             , _underlying(std::move(r))
             , _single_partition(single_partition)
@@ -600,7 +600,7 @@ flat_mutation_reader make_nonforwardable(flat_mutation_reader r, bool single_par
             return _underlying.close();
         }
     };
-    return make_flat_mutation_reader<reader>(std::move(r), single_partition);
+    return make_flat_mutation_reader_v2<reader>(std::move(r), single_partition);
 }
 
 template<typename Generator>

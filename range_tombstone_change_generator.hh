@@ -65,7 +65,8 @@ public:
     }
 
     // Emits range_tombstone_change fragments with positions smaller than upper_bound
-    // for accumulated range tombstones.
+    // for accumulated range tombstones. If end_of_range = true, range tombstone
+    // change fragments with position equal to upper_bound may also be emitted.
     // After this, only range_tombstones with positions >= upper_bound may be added,
     // which guarantees that they won't affect the output of this flush.
     //
@@ -75,16 +76,24 @@ public:
     //
     // FIXME: respect preemption
     template<RangeTombstoneChangeConsumer C>
-    void flush(const position_in_partition_view upper_bound, C consumer) {
+    void flush(const position_in_partition_view upper_bound, C consumer, bool end_of_range = false) {
         if (_range_tombstones.empty()) {
             return;
         }
 
         position_in_partition::tri_compare cmp(_schema);
         std::optional<range_tombstone> prev;
-        bool flush_all = cmp(upper_bound, position_in_partition::after_all_clustered_rows()) == 0;
+        const bool allow_eq = end_of_range || upper_bound.is_after_all_clustered_rows(_schema);
+        const auto should_flush = [&] (position_in_partition_view pos) {
+            const auto res = cmp(pos, upper_bound);
+            if (allow_eq) {
+                return res <= 0;
+            } else {
+                return res < 0;
+            }
+        };
 
-        while (!_range_tombstones.empty() && (flush_all || (cmp(_range_tombstones.begin()->end_position(), upper_bound) < 0))) {
+        while (!_range_tombstones.empty() && should_flush(_range_tombstones.begin()->end_position())) {
             auto rt = _range_tombstones.pop(_range_tombstones.begin());
 
             if (prev && (cmp(prev->end_position(), rt.position()) < 0)) { // [1]
@@ -116,6 +125,15 @@ public:
             && (cmp(_range_tombstones.begin()->position(), _lower_bound) >= 0)) {
             consumer(range_tombstone_change(
                     _range_tombstones.begin()->position(), _range_tombstones.begin()->tombstone().tomb));
+        }
+
+        // Close current tombstone (if any) at upper_bound if end_of_range is
+        // set, so a sliced read will have properly closed range tombstone bounds
+        // at each range end
+        if (!_range_tombstones.empty()
+                && end_of_range
+                && (cmp(_range_tombstones.begin()->position(), upper_bound) < 0)) {
+            consumer(range_tombstone_change(upper_bound, tombstone()));
         }
 
         _lower_bound = upper_bound;
