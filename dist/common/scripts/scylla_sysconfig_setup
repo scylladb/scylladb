@@ -88,7 +88,7 @@ if __name__ == '__main__':
     ethdrv = ''
     ethpciid = ''
     if network_mode == 'dpdk':
-        dpdk_status = run('/opt/scylladb/scripts/dpdk-devbind.py --status', shell=True, check=True, capture_output=True, encoding='utf-8').stdout.strip()
+        dpdk_status = out('/opt/scylladb/scripts/dpdk-devbind.py --status')
         match = re.search('if={} drv=(\S+)'.format(ifname), dpdk_status, flags=re.MULTILINE)
         ethdrv = match.group(1)
         match = re.search('^(\\S+:\\S+:\\S+\.\\S+) [^\n]+ if={} '.format(ifname), dpdk_status, flags=re.MULTILINE)

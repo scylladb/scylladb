@@ -22,7 +22,7 @@ if __name__ == '__main__':
         print("scylla_selinux_setup only supports Red Hat variants")
         sys.exit(0)
 
-    res = run('sestatus', shell=True, check=True, capture_output=True, encoding='utf-8').stdout.strip()
+    res = out('sestatus')
     if res.split(None)[2] != 'disabled':
         run('setenforce 0', shell=True, check=True)
         cfg = sysconfig_parser('/etc/sysconfig/selinux')
