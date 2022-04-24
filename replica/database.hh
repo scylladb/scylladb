@@ -1475,8 +1475,6 @@ public:
     future<> stop();
     future<> close_tables(table_kind kind_to_close);
 
-    unsigned shard_of(const mutation& m);
-    unsigned shard_of(const frozen_mutation& m);
     future<std::tuple<lw_shared_ptr<query::result>, cache_temperature>> query(schema_ptr, const query::read_command& cmd, query::result_options opts,
                                                                   const dht::partition_range_vector& ranges, tracing::trace_state_ptr trace_state,
                                                                   db::timeout_clock::time_point timeout);

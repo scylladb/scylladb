@@ -246,7 +246,8 @@ future<> db::commitlog_replayer::impl::process(stats* s, commitlog::buffer_and_r
             return make_ready_future<>();
         }
 
-        auto shard = _db.local().shard_of(fm);
+        const auto& schema = *_db.local().find_column_family(uuid).schema();
+        auto shard = fm.shard_of(schema);
         return _db.invoke_on(shard, [this, cer = std::move(cer), &src_cm, rp, shard, s] (replica::database& db) mutable -> future<> {
             auto& fm = cer.mutation();
             // TODO: might need better verification that the deserialized mutation

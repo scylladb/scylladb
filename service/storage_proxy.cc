@@ -1868,7 +1868,7 @@ void storage_proxy::connection_dropped(gms::inet_address addr) {
 
 future<>
 storage_proxy::mutate_locally(const mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout, smp_service_group smp_grp) {
-    auto shard = _db.local().shard_of(m);
+    auto shard = m.shard_of();
     get_stats().replica_cross_shard_ops += shard != this_shard_id();
     return _db.invoke_on(shard, {smp_grp, timeout},
             [s = global_schema_ptr(m.schema()),
@@ -1883,7 +1883,7 @@ storage_proxy::mutate_locally(const mutation& m, tracing::trace_state_ptr tr_sta
 future<>
 storage_proxy::mutate_locally(const schema_ptr& s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout,
         smp_service_group smp_grp) {
-    auto shard = _db.local().shard_of(m);
+    auto shard = m.shard_of(*s);
     get_stats().replica_cross_shard_ops += shard != this_shard_id();
     return _db.invoke_on(shard, {smp_grp, timeout},
             [&m, gs = global_schema_ptr(s), gtr = tracing::global_trace_state_ptr(std::move(tr_state)), timeout, sync] (replica::database& db) mutable -> future<> {
@@ -1904,7 +1904,7 @@ storage_proxy::mutate_locally(std::vector<mutation> mutation, tracing::trace_sta
 }
 future<>
 storage_proxy::mutate_hint(const schema_ptr& s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, clock_type::time_point timeout) {
-    auto shard = _db.local().shard_of(m);
+    auto shard = m.shard_of(*s);
     get_stats().replica_cross_shard_ops += shard != this_shard_id();
     return _db.invoke_on(shard, {_hints_write_smp_service_group, timeout}, [&m, gs = global_schema_ptr(s), tr_state = std::move(tr_state), timeout] (replica::database& db) mutable -> future<> {
         return db.apply_hint(gs, m, std::move(tr_state), timeout);
@@ -1925,7 +1925,7 @@ storage_proxy::mutate_counters_on_leader(std::vector<frozen_mutation_and_schema>
 future<>
 storage_proxy::mutate_counter_on_leader_and_replicate(const schema_ptr& s, frozen_mutation fm, db::consistency_level cl, clock_type::time_point timeout,
                                                       tracing::trace_state_ptr trace_state, service_permit permit) {
-    auto shard = _db.local().shard_of(fm);
+    auto shard = fm.shard_of(*s);
     bool local = shard == this_shard_id();
     get_stats().replica_cross_shard_ops += !local;
     return _db.invoke_on(shard, {_write_smp_service_group, timeout}, [&proxy = container(), gs = global_schema_ptr(s), fm = std::move(fm), cl, timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state)), permit = std::move(permit), local] (replica::database& db) {

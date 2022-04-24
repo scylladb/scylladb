@@ -182,6 +182,10 @@ public:
     // Returns a subset of this mutation holding only information relevant for given clustering ranges.
     // Range tombstones will be trimmed to the boundaries of the clustering ranges.
     mutation sliced(const query::clustering_row_ranges&) const;
+
+    unsigned shard_of() const {
+        return dht::shard_of(*schema(), token());
+    }
 private:
     friend std::ostream& operator<<(std::ostream& os, const mutation& m);
 };

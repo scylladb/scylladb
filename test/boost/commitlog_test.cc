@@ -618,7 +618,7 @@ SEASTAR_TEST_CASE(test_commitlog_replay_invalid_key){
             auto fm = freeze(m);
             commitlog_entry_writer cew(s, fm, db::commitlog::force_sync::yes);
             cl.add_entry(m.column_family_id(), cew, db::no_timeout).get();
-            return db.shard_of(m);
+            return m.shard_of();
         };
 
         const auto shard = add_entry(bytes{});
