@@ -1581,13 +1581,14 @@ bool table::can_flush() const {
 }
 
 future<> table::clear() {
+    auto permits = co_await _config.dirty_memory_manager->get_all_flush_permits();
     if (_commitlog) {
         for (auto& t : *_memtables) {
             _commitlog->discard_completed_segments(_schema->id(), t->get_and_discard_rp_set());
         }
     }
     _memtables->clear_and_add();
-    return _cache.invalidate(row_cache::external_updater([] { /* There is no underlying mutation source */ }));
+    co_await _cache.invalidate(row_cache::external_updater([] { /* There is no underlying mutation source */ }));
 }
 
 // NOTE: does not need to be futurized, but might eventually, depending on
