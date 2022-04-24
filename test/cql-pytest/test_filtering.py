@@ -11,6 +11,7 @@
 # is or isn't necessary.
 
 import pytest
+import re
 from util import new_test_table
 from cassandra.protocol import InvalidRequest
 from cassandra.connection import DRIVER_NAME, DRIVER_VERSION
@@ -170,12 +171,21 @@ def test_filtering_with_in_relation(cql, test_keyspace, cassandra_bug):
         assert set(res) == set([(2,3,4,5), (4,5,6,7)])
 
 # Test that subscripts in expressions work as expected. They should only work
-# on map columns, and must have the correct type.
+# on map columns, and must have the correct type. Test that they also work
+# as expected for null or unset subscripts.
+# Cassandra considers the null subscript 'm[null]' to be an invalid request.
+# In Scylla we decided to it differently (we think better): m[null] is simply
+# a null, so the filter 'WHERE m[null] = 2' is not an error - it just doesn't
+# match anything. This is more consistent with our usual null handling
+# (null[2] and null < 2 are both defined as returning null), and will also
+# allow us in the future to support non-constant subscript - for example m[a]
+# where the column a can be null for some rows and non-null for other rows.
+# Because we decided that our behavior is better than Cassandra's, this test
+# fails on Cassandra and is marked with cassandra_bug.
 # This test is a superset of test test_null.py::test_map_subscript_null which
 # tests only the special case of a null subscript.
 # Reproduces #10361
-@pytest.mark.xfail(reason="Issue #10361")
-def test_filtering_with_subscript(cql, test_keyspace):
+def test_filtering_with_subscript(cql, test_keyspace, cassandra_bug):
     with new_test_table(cql, test_keyspace,
             "p int, m1 map<int, int>, m2 map<text, text>, s set<int>, PRIMARY KEY (p)") as table:
         # Check for *errors* in subscript expressions - such as wrong type or
@@ -187,24 +197,28 @@ def test_filtering_with_subscript(cql, test_keyspace):
         with pytest.raises(InvalidRequest, match='cannot be used as a map'):
             cql.execute(f"SELECT p FROM {table} WHERE s[2] = 3 ALLOW FILTERING")
         # A wrong type is passed for the subscript is not allowed
-        with pytest.raises(InvalidRequest, match='key\(m1\)'):
+        with pytest.raises(InvalidRequest, match=re.escape('key(m1)')):
             cql.execute(f"select p from {table} where m1['black'] = 2 ALLOW FILTERING")
-        with pytest.raises(InvalidRequest, match='key\(m2\)'):
+        with pytest.raises(InvalidRequest, match=re.escape('key(m2)')):
             cql.execute(f"select p from {table} where m2[1] = 2 ALLOW FILTERING")
-        # A "null" is not allowed as a key (reproduces #10361)
-        with pytest.raises(InvalidRequest, match='Unsupported null map key for column m1'):
-            cql.execute(f"select p from {table} where m1[null] = 2 ALLOW FILTERING")
-        with pytest.raises(InvalidRequest, match='Unsupported null map key for column m2'):
-            cql.execute(f"select p from {table} where m2[null] = 'hi' ALLOW FILTERING")
+        # See discussion of m1[null] above. Reproduces #10361, and fails
+        # on Cassandra (Cassandra deliberately returns an error here -
+        # an InvalidRequest with "Unsupported null map key for column m1"
+        assert list(cql.execute(f"select p from {table} where m1[null] = 2 ALLOW FILTERING")) == []
+        assert list(cql.execute(f"select p from {table} where m2[null] = 'hi' ALLOW FILTERING")) == []
         # Similar to above checks, but using a prepared statement. We can't
         # cause the driver to send the wrong type to a bound variable, so we
         # can't check that case unfortunately, but we have a new UNSET_VALUE
         # case.
         stmt = cql.prepare(f"select p from {table} where m1[?] = 2 ALLOW FILTERING")
-        with pytest.raises(InvalidRequest, match='Unsupported null map key for column m1'):
-            cql.execute(stmt, [None])
-        with pytest.raises(InvalidRequest, match='Unsupported unset map key for column m1'):
-            cql.execute(stmt, [UNSET_VALUE])
+        assert list(cql.execute(stmt, [None])) == []
+        # The expression m1[UNSET_VALUE] should be an error, but because the
+        # table is empty, we do not actually need to evaluate the expression
+        # and the error might might not be caught. So this test is commented
+        # out. We'll do it below, after we add some data to ensure that the
+        # expression does need to be evaluated.
+        #with pytest.raises(InvalidRequest, match='Unsupported unset map key for column m1'):
+        #    cql.execute(stmt, [UNSET_VALUE])
 
         # Finally, check for sucessful filtering with subscripts. For that we
         # need to add some data:
@@ -221,8 +235,9 @@ def test_filtering_with_subscript(cql, test_keyspace):
         # earlier when there was no data in the table. Now there is, and
         # the scan brings up several rows, it may exercise different code
         # paths.
-        with pytest.raises(InvalidRequest, match='Unsupported null map key for column m1'):
-            cql.execute(f"select p from {table} where m1[null] = 2 ALLOW FILTERING")
+        assert list(cql.execute(f"select p from {table} where m1[null] = 2 ALLOW FILTERING")) == []
+        with pytest.raises(InvalidRequest, match='Unsupported unset map key for column m1'):
+            cql.execute(stmt, [UNSET_VALUE])
 
 # Beyond the tests of map subscript expressions above, also test what happens
 # when the expression is fine (e.g., m[2] = 3) but the *data* itself is null.
