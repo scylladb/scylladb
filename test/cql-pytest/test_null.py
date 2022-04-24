@@ -175,9 +175,16 @@ def test_empty_string_key2(cql, test_keyspace):
         cql.execute(f"INSERT INTO {table} (p1,p2,c,v) VALUES ('x', 'y', 'z', 'dog')")
         assert list(cql.execute(f"SELECT v FROM {table} WHERE p1='' AND p2='' AND c=''")) == [('cat',)]
 
-# Test that null subscript m[null] is caught as the appropriate invalid-
-# request error, and not some internal server error or crash as we had in
-# #10361, #10399 and #10417.
+# Cassandra considers the null subscript 'm[null]' to be an invalid request.
+# In Scylla we decided to it differently (we think better): m[null] is simply
+# a null, so the filter 'WHERE m[null] = 3' is not an error - it just doesn't
+# match anything. This is more consistent with our usual null handling (null[2]
+# and null < 2 are both defined as returning null), and will also allow us
+# in the future to support non-constant subscript - for example m[a] where
+# the column a can be null for some rows and non-null for other rows.
+# Before we implemented the above decision, we had multiple bugs in this case,
+# resulting in bizarre errors and even crashes (see #10361, #10399 and #10417).
+#
 # Because this test uses a shared table (table1), then depending on how it's
 # run, it sometimes sees an empty table and sometimes a table with data
 # (and null values for the map m...), so this test mixes several different
@@ -185,9 +192,6 @@ def test_empty_string_key2(cql, test_keyspace):
 # by test_filtering.py::test_filtering_with_subscript and
 # test_filtering.py::test_filtering_null_map_with_subscript so this test
 # should eventually be deleted.
-@pytest.mark.xfail(reason="Issue #10361, #10399")
-def test_map_subscript_null(cql, table1):
-    with pytest.raises(InvalidRequest, match='null'):
-        cql.execute(f"SELECT p FROM {table1} WHERE m[null] = 3 ALLOW FILTERING")
-    with pytest.raises(InvalidRequest, match='null'):
-        cql.execute(cql.prepare(f"SELECT p FROM {table1} WHERE m[?] = 3 ALLOW FILTERING"), [None])
+def test_map_subscript_null(cql, table1, cassandra_bug):
+    assert list(cql.execute(f"SELECT p FROM {table1} WHERE m[null] = 3 ALLOW FILTERING")) == []
+    assert list(cql.execute(cql.prepare(f"SELECT p FROM {table1} WHERE m[?] = 3 ALLOW FILTERING"), [None])) == []
