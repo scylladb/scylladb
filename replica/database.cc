@@ -820,20 +820,6 @@ database::init_commitlog() {
     });
 }
 
-unsigned
-database::shard_of(const mutation& m) {
-    return dht::shard_of(*m.schema(), m.token());
-}
-
-unsigned
-database::shard_of(const frozen_mutation& m) {
-    // FIXME: This lookup wouldn't be necessary if we
-    // sent the partition key in legacy form or together
-    // with token.
-    schema_ptr schema = find_schema(m.column_family_id());
-    return dht::shard_of(*schema, dht::get_token(*schema, m.key()));
-}
-
 future<> database::update_keyspace(sharded<service::storage_proxy>& proxy, const sstring& name) {
     auto v = co_await db::schema_tables::read_schema_partition_for_keyspace(proxy, db::schema_tables::KEYSPACES, name);
     auto& ks = find_keyspace(name);
