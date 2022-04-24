@@ -567,21 +567,27 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
     });
 }
 
-future<> distributed_loader::init_system_keyspace(distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, db::config& cfg) {
-    return seastar::async([&db, &ss, &cfg, &g] {
-        db.invoke_on_all([&db, &ss, &cfg, &g] (replica::database&) {
-            return db::system_keyspace::make(db, ss, g, cfg);
+future<> distributed_loader::init_system_keyspace(distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, db::config& cfg, db::table_selector& tables) {
+    return seastar::async([&db, &ss, &cfg, &g, &tables] {
+        db.invoke_on_all([&db, &ss, &cfg, &g, &tables] (replica::database&) {
+            return db::system_keyspace::make(db, ss, g, cfg, tables);
         }).get();
 
         const auto& cfg = db.local().get_config();
         for (auto& data_dir : cfg.data_file_directories()) {
             for (auto ksname : system_keyspaces) {
+                if (!tables.contains_keyspace(ksname)) {
+                    continue;
+                }
                 distributed_loader::populate_keyspace(db, data_dir, sstring(ksname)).get();
             }
         }
 
-        db.invoke_on_all([] (replica::database& db) {
+        db.invoke_on_all([&tables] (replica::database& db) {
             for (auto ksname : system_keyspaces) {
+                if (!tables.contains_keyspace(ksname)) {
+                    continue;
+                }
                 auto& ks = db.find_keyspace(ksname);
                 for (auto& pair : ks.metadata()->cf_meta_data()) {
                     auto cfm = pair.second;

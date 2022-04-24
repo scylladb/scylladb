@@ -1349,6 +1349,38 @@ struct truncation_record {
     db_clock::time_point time_stamp;
 };
 
+table_selector& table_selector::all() {
+    class all_selector : public table_selector {
+    public:
+        bool contains(const schema_ptr&) override {
+            return true;
+        }
+
+        bool contains_keyspace(std::string_view) override {
+            return true;
+        }
+    };
+    static all_selector instance;
+    return instance;
+}
+
+std::unique_ptr<table_selector> table_selector::all_in_keyspace(sstring name) {
+    class keyspace_selector : public table_selector {
+        sstring _name;
+    public:
+        keyspace_selector(sstring name) : _name(std::move(name)) {}
+
+        bool contains(const schema_ptr& s) override {
+            return s->ks_name() == _name;
+        }
+
+        bool contains_keyspace(std::string_view name) override {
+            return name == _name;
+        }
+    };
+    return std::make_unique<keyspace_selector>(name);
+}
+
 }
 
 #include "idl/replay_position.dist.hh"
@@ -2682,14 +2714,19 @@ static bool maybe_write_in_user_memory(schema_ptr s) {
             || s == system_keyspace::raft();
 }
 
-future<> system_keyspace_make(distributed<replica::database>& dist_db, distributed<service::storage_service>& dist_ss, sharded<gms::gossiper>& dist_gossiper, db::config& cfg) {
-    register_virtual_tables(dist_db, dist_ss, dist_gossiper, cfg);
+future<> system_keyspace_make(distributed<replica::database>& dist_db, distributed<service::storage_service>& dist_ss, sharded<gms::gossiper>& dist_gossiper, db::config& cfg, table_selector& tables) {
+    if (tables.contains_keyspace(system_keyspace::NAME)) {
+        register_virtual_tables(dist_db, dist_ss, dist_gossiper, cfg);
+    }
 
     auto& db = dist_db.local();
     auto& db_config = db.get_config();
     auto enable_cache = db_config.enable_cache();
     bool durable = db_config.data_file_directories().size() > 0;
     for (auto&& table : system_keyspace::all_tables(db_config)) {
+        if (!tables.contains(table)) {
+            continue;
+        }
         auto ks_name = table->ks_name();
         if (!db.has_keyspace(ks_name)) {
             auto ksm = make_lw_shared<keyspace_metadata>(ks_name,
@@ -2710,11 +2747,13 @@ future<> system_keyspace_make(distributed<replica::database>& dist_db, distribut
         db.add_column_family(ks, table, std::move(cfg));
     }
 
-    install_virtual_readers(db);
+    if (tables.contains_keyspace(system_keyspace::NAME)) {
+        install_virtual_readers(db);
+    }
 }
 
-future<> system_keyspace::make(distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, db::config& cfg) {
-    return system_keyspace_make(db, ss, g, cfg);
+future<> system_keyspace::make(distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, db::config& cfg, table_selector& tables) {
+    return system_keyspace_make(db, ss, g, cfg, tables);
 }
 
 future<utils::UUID> system_keyspace::load_local_host_id() {
