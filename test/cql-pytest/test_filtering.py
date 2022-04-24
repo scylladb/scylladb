@@ -14,6 +14,7 @@ import pytest
 from util import new_test_table
 from cassandra.protocol import InvalidRequest
 from cassandra.connection import DRIVER_NAME, DRIVER_VERSION
+from cassandra.query import UNSET_VALUE
 
 # When filtering for "x > 0" or "x < 0", rows with an unset value for x
 # should not match the filter.
@@ -138,3 +139,95 @@ def test_filter_like_on_desc_column(cql, test_keyspace):
         cql.execute(f"INSERT INTO {table} (a, b) VALUES (1, 'one')")
         res = cql.execute(f"SELECT b FROM {table} WHERE b LIKE '%%%' ALLOW FILTERING")
         assert res.one().b == "one"
+
+# Test that IN restrictions are supported with filtering and return the
+# correct results.
+# We mark this test "cassandra_bug" because Cassandra could support this
+# feature but doesn't yet: It reports "IN predicates on non-primary-key
+# columns (v) is not yet supported" when v is a regular column, or "IN
+# restrictions are not supported when the query involves filtering" on
+# partition-key columns p1 or p2. By the way, it does support IN restrictions
+# on a clustering-key column.
+def test_filtering_with_in_relation(cql, test_keyspace, cassandra_bug):
+    schema = 'p1 int, p2 int, c int, v int, primary key ((p1, p2),c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"INSERT INTO {table} (p1, p2, c, v) VALUES (1, 2, 3, 4)")
+        cql.execute(f"INSERT INTO {table} (p1, p2, c, v) VALUES (2, 3, 4, 5)")
+        cql.execute(f"INSERT INTO {table} (p1, p2, c, v) VALUES (3, 4, 5, 6)")
+        cql.execute(f"INSERT INTO {table} (p1, p2, c, v) VALUES (4, 5, 6, 7)")
+        res = cql.execute(f"select * from {table} where p1 in (2,4) ALLOW FILTERING")
+        assert set(res) == set([(2,3,4,5), (4,5,6,7)])
+        res = cql.execute(f"select * from {table} where p2 in (2,4) ALLOW FILTERING")
+        assert set(res) == set([(1,2,3,4), (3,4,5,6)])
+        res = cql.execute(f"select * from {table} where c in (3,5) ALLOW FILTERING")
+        assert set(res) == set([(1,2,3,4), (3,4,5,6)])
+        res = cql.execute(f"select * from {table} where v in (5,7) ALLOW FILTERING")
+        assert set(res) == set([(2,3,4,5), (4,5,6,7)])
+
+# Test that subscripts in expressions work as expected. They should only work
+# on map columns, and must have the correct type.
+# This test is a superset of test test_null.py::test_map_subscript_null which
+# tests only the special case of a null subscript.
+# Reproduces #10361
+@pytest.mark.xfail(reason="Issue #10361")
+def test_filtering_with_subscript(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace,
+            "p int, m1 map<int, int>, m2 map<text, text>, s set<int>, PRIMARY KEY (p)") as table:
+        # Check for *errors* in subscript expressions - such as wrong type or
+        # null - with an empty table. This will force the implementation to
+        # check for these errors before actually evaluating the filter
+        # expression - because there will be no rows to filter.
+
+        # A subscript is not allowed on a non-map column (in this case, a set)
+        with pytest.raises(InvalidRequest, match='cannot be used as a map'):
+            cql.execute(f"SELECT p FROM {table} WHERE s[2] = 3 ALLOW FILTERING")
+        # A wrong type is passed for the subscript is not allowed
+        with pytest.raises(InvalidRequest, match='key\(m1\)'):
+            cql.execute(f"select p from {table} where m1['black'] = 2 ALLOW FILTERING")
+        with pytest.raises(InvalidRequest, match='key\(m2\)'):
+            cql.execute(f"select p from {table} where m2[1] = 2 ALLOW FILTERING")
+        # A "null" is not allowed as a key (reproduces #10361)
+        with pytest.raises(InvalidRequest, match='Unsupported null map key for column m1'):
+            cql.execute(f"select p from {table} where m1[null] = 2 ALLOW FILTERING")
+        with pytest.raises(InvalidRequest, match='Unsupported null map key for column m2'):
+            cql.execute(f"select p from {table} where m2[null] = 'hi' ALLOW FILTERING")
+        # Similar to above checks, but using a prepared statement. We can't
+        # cause the driver to send the wrong type to a bound variable, so we
+        # can't check that case unfortunately, but we have a new UNSET_VALUE
+        # case.
+        stmt = cql.prepare(f"select p from {table} where m1[?] = 2 ALLOW FILTERING")
+        with pytest.raises(InvalidRequest, match='Unsupported null map key for column m1'):
+            cql.execute(stmt, [None])
+        with pytest.raises(InvalidRequest, match='Unsupported unset map key for column m1'):
+            cql.execute(stmt, [UNSET_VALUE])
+
+        # Finally, check for sucessful filtering with subscripts. For that we
+        # need to add some data:
+        cql.execute("INSERT INTO "+table+" (p, m1, m2) VALUES (1, {1:2, 3:4}, {'dog':'cat', 'hi':'hello'})")
+        cql.execute("INSERT INTO "+table+" (p, m1, m2) VALUES (2, {2:3, 4:5}, {'man':'woman', 'black':'white'})")
+        res = cql.execute(f"select p from {table} where m1[1] = 2 ALLOW FILTERING")
+        assert list(res) == [(1,)]
+        res = cql.execute(f"select p from {table} where m2['black'] = 'white' ALLOW FILTERING")
+        assert list(res) == [(2,)]
+        res = cql.execute(stmt, [1])
+        assert list(res) == [(1,)]
+
+        # Try again the null-key request (reproduces #10361) that we did
+        # earlier when there was no data in the table. Now there is, and
+        # the scan brings up several rows, it may exercise different code
+        # paths.
+        with pytest.raises(InvalidRequest, match='Unsupported null map key for column m1'):
+            cql.execute(f"select p from {table} where m1[null] = 2 ALLOW FILTERING")
+
+# Beyond the tests of map subscript expressions above, also test what happens
+# when the expression is fine (e.g., m[2] = 3) but the *data* itself is null.
+# We used to have a bug there where we attempted to incorrectly deserialize
+# this null and get marshaling errors or even crashes - see issue #10417.
+# This test reproduces #10417, but not always - run with "--count" to
+# reproduce failures.
+@pytest.mark.xfail(reason="Issue #10417")
+def test_filtering_null_map_with_subscript(cql, test_keyspace):
+    schema = 'p text primary key, m map<int, int>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"INSERT INTO {table} (p) VALUES ('dog')")
+        assert list(cql.execute(f"SELECT p FROM {table} WHERE m[2] = 3 ALLOW FILTERING")) == []

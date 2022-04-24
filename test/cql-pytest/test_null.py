@@ -174,3 +174,20 @@ def test_empty_string_key2(cql, test_keyspace):
         cql.execute(f"INSERT INTO {table} (p1,p2,c,v) VALUES ('', '', '', 'cat')")
         cql.execute(f"INSERT INTO {table} (p1,p2,c,v) VALUES ('x', 'y', 'z', 'dog')")
         assert list(cql.execute(f"SELECT v FROM {table} WHERE p1='' AND p2='' AND c=''")) == [('cat',)]
+
+# Test that null subscript m[null] is caught as the appropriate invalid-
+# request error, and not some internal server error or crash as we had in
+# #10361, #10399 and #10417.
+# Because this test uses a shared table (table1), then depending on how it's
+# run, it sometimes sees an empty table and sometimes a table with data
+# (and null values for the map m...), so this test mixes several different
+# concerns and problems. The same problems are better covered separately
+# by test_filtering.py::test_filtering_with_subscript and
+# test_filtering.py::test_filtering_null_map_with_subscript so this test
+# should eventually be deleted.
+@pytest.mark.xfail(reason="Issue #10361, #10399, 10417")
+def test_map_subscript_null(cql, table1):
+    with pytest.raises(InvalidRequest, match='null'):
+        cql.execute(f"SELECT p FROM {table1} WHERE m[null] = 3 ALLOW FILTERING")
+    with pytest.raises(InvalidRequest, match='null'):
+        cql.execute(cql.prepare(f"SELECT p FROM {table1} WHERE m[?] = 3 ALLOW FILTERING"), [None])
