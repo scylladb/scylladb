@@ -225,6 +225,7 @@ time_window_compaction_strategy::get_sstables_for_compaction(column_family& cf, 
     auto gc_before = gc_clock::now() - cf.schema()->gc_grace_seconds();
 
     if (candidates.empty()) {
+        _estimated_remaining_tasks = 0;
         return compaction_descriptor();
     }
 
