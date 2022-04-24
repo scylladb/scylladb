@@ -225,7 +225,6 @@ def test_filtering_with_subscript(cql, test_keyspace):
 # this null and get marshaling errors or even crashes - see issue #10417.
 # This test reproduces #10417, but not always - run with "--count" to
 # reproduce failures.
-@pytest.mark.xfail(reason="Issue #10417")
 def test_filtering_null_map_with_subscript(cql, test_keyspace):
     schema = 'p text primary key, m map<int, int>'
     with new_test_table(cql, test_keyspace, schema) as table:
