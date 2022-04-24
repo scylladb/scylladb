@@ -168,7 +168,12 @@ static managed_bytes_opt get_value(const column_maybe_subscripted& col, const co
                         format("Column definition {} does not match any column in the query selection",
                         cdef->name_as_text()));
             }
-            const auto deserialized = cdef->type->deserialize(managed_bytes_view(*data.other_columns[index]));
+            const managed_bytes_opt& serialized = data.other_columns[index];
+            if (!serialized) {
+                // For null[i] we return null.
+                return std::nullopt;
+            }
+            const auto deserialized = cdef->type->deserialize(managed_bytes_view(*serialized));
             const auto& data_map = value_cast<map_type_impl::native_type>(deserialized);
             const auto key = evaluate(s->sub, options);
             auto&& key_type = col_type->name_comparator();

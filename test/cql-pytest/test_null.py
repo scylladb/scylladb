@@ -169,7 +169,7 @@ def test_filtering_null_comparison_no_filtering(cql, table1):
 # by test_filtering.py::test_filtering_with_subscript and
 # test_filtering.py::test_filtering_null_map_with_subscript so this test
 # should eventually be deleted.
-@pytest.mark.xfail(reason="Issue #10361, #10399, 10417")
+@pytest.mark.xfail(reason="Issue #10361, #10399")
 def test_map_subscript_null(cql, table1):
     with pytest.raises(InvalidRequest, match='null'):
         cql.execute(f"SELECT p FROM {table1} WHERE m[null] = 3 ALLOW FILTERING")
