@@ -217,6 +217,7 @@ time_window_compaction_strategy::get_sstables_for_compaction(table_state& table_
     auto compaction_time = gc_clock::now();
 
     if (candidates.empty()) {
+        _estimated_remaining_tasks = 0;
         return compaction_descriptor();
     }
 
