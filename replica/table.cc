@@ -1496,6 +1496,7 @@ bool table::can_flush() const {
 }
 
 future<> table::clear() {
+    auto permits = co_await _config.dirty_memory_manager->get_all_flush_permits();
     if (_commitlog) {
         for (auto& t : *_memtables) {
             _commitlog->discard_completed_segments(_schema->id(), t->get_and_discard_rp_set());

@@ -202,6 +202,12 @@ public:
         });
     }
 
+    future<flush_permit> get_all_flush_permits() {
+        return get_units(_background_work_flush_serializer, _max_background_work).then([this] (auto&& units) {
+            return this->get_flush_permit(std::move(units));
+        });
+    }
+
     bool has_extraneous_flushes_requested() const {
         return _extraneous_flushes > 0;
     }
