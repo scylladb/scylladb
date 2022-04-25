@@ -1502,8 +1502,8 @@ future<> table::clear() {
             _commitlog->discard_completed_segments(_schema->id(), t->get_and_discard_rp_set());
         }
     }
-    _memtables->clear_and_add();
-    return _cache.invalidate(row_cache::external_updater([] { /* There is no underlying mutation source */ }));
+    co_await _memtables->clear_and_add();
+    co_await _cache.invalidate(row_cache::external_updater([] { /* There is no underlying mutation source */ }));
 }
 
 // NOTE: does not need to be futurized, but might eventually, depending on

@@ -1574,6 +1574,20 @@ lw_shared_ptr<memtable> memtable_list::new_memtable() {
     return make_lw_shared<memtable>(_current_schema(), *_dirty_memory_manager, _table_stats, this, _compaction_scheduling_group);
 }
 
+// Synchronously swaps the active memtable with a new, empty one,
+// then, clears the existing memtable(s) asynchronously.
+// Exception safe.
+future<> memtable_list::clear_and_add() {
+    std::vector<replica::shared_memtable> new_memtables;
+    new_memtables.emplace_back(new_memtable());
+    auto old_memtables = std::exchange(_memtables, std::move(new_memtables));
+    // Now that the existing _memtables vector is swapped with new_memtables
+    // the function can yield for clearing the old_memtables.
+    for (auto& smt : old_memtables) {
+        co_await smt->clear_gently();
+    }
+}
+
 } // namespace replica
 
 future<flush_permit> flush_permit::reacquire_sstable_write_permit() && {
