@@ -53,7 +53,7 @@ public:
     // tombstone will cover data, i.e. compacting the mutation will not result
     // in any changes.
     explicit random_mutation_generator(generate_counters, local_shard_only lso = local_shard_only::yes,
-            generate_uncompactable uc = generate_uncompactable::no, std::optional<uint32_t> seed_opt = std::nullopt);
+            generate_uncompactable uc = generate_uncompactable::no, std::optional<uint32_t> seed_opt = std::nullopt, const char* ks_name="ks", const char* cf_name="cf");
     random_mutation_generator(generate_counters gc, uint32_t seed)
             : random_mutation_generator(gc, local_shard_only::yes, generate_uncompactable::no, seed) {}
     ~random_mutation_generator();
