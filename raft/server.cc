@@ -332,6 +332,11 @@ future<> server_impl::start() {
 }
 
 future<> server_impl::wait_for_leader(seastar::abort_source* as) {
+    if (_fsm->current_leader()) {
+        co_return;
+    }
+
+    logger.trace("[{}] the leader is unknown, waiting through uncertainty", id());
     if (!_leader_promise) {
         _leader_promise.emplace();
     }
@@ -480,7 +485,6 @@ future<> server_impl::add_entry(command command, wait_type type, seastar::abort_
             throw request_aborted();
         }
         if (leader == server_id{}) {
-            logger.trace("[{}] the leader is unknown, waiting through uncertainty", id());
             co_await wait_for_leader(as);
             leader = _fsm->current_leader();
         } else {
