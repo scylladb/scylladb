@@ -17,6 +17,7 @@
 #include "test/lib/exception_utils.hh"
 #include "cql3/statements/select_statement.hh"
 #include "test/lib/select_statement_utils.hh"
+#include "utils/error_injection.hh"
 
 using namespace std::chrono_literals;
 
@@ -1932,5 +1933,22 @@ SEASTAR_TEST_CASE(test_deleting_ghost_rows) {
                 {int32_type->decompose(6), int32_type->decompose(2), int32_type->decompose(4)}
             });
         });
+    });
+}
+
+SEASTAR_TEST_CASE(test_returning_failure_from_ghost_rows_deletion) {
+    return do_with_cql_env_thread([] (auto& e) {
+        cquery_nofail(e, "CREATE TABLE t (p int, c int, v int, PRIMARY KEY (p, c))");
+        cquery_nofail(e, "CREATE MATERIALIZED VIEW tv AS SELECT v, p, c FROM t WHERE v IS NOT NULL AND c IS NOT NULL PRIMARY KEY (v, p, c);");
+        cquery_nofail(e, "INSERT INTO t (p,c,v) VALUES (1,1,1)");
+        cquery_nofail(e, "INSERT INTO t (p,c,v) VALUES (1,2,3)");
+        cquery_nofail(e, "INSERT INTO t (p,c,v) VALUES (2,4,6)");
+        utils::get_local_injector().enable("storage_proxy_query_failure", true);
+        // If error injection is disabled, this check is skipped
+        if (!utils::get_local_injector().enabled_injections().empty()) {
+            // Test that when a single query to the base table fails, it is propagated
+            // to the user
+            BOOST_REQUIRE_THROW(e.execute_cql("PRUNE MATERIALIZED VIEW tv").get0(), std::runtime_error);
+        }
     });
 }
