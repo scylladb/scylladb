@@ -633,11 +633,6 @@ public:
         clock_type::time_point timeout,
         tracing::trace_state_ptr trace_state = nullptr);
 
-    future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> query_mutations_locally(
-            schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range_vector& pr,
-            clock_type::time_point timeout,
-            tracing::trace_state_ptr trace_state = nullptr);
-
     future<bool> cas(schema_ptr schema, shared_ptr<cas_request> request, lw_shared_ptr<query::read_command> cmd,
             dht::partition_range_vector partition_ranges, coordinator_query_options query_options,
             db::consistency_level cl_for_paxos, db::consistency_level cl_for_learn,
