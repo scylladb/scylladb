@@ -2663,10 +2663,11 @@ static inline sstring parent_path(const sstring& fname) {
     return fs::canonical(fs::path(fname)).parent_path().string();
 }
 
+// Must be called on a directory.
 future<>
-fsync_directory(const io_error_handler& error_handler, sstring fname) {
+fsync_directory(const io_error_handler& error_handler, sstring dirname) {
     return ::sstable_io_check(error_handler, [&] {
-        return open_checked_directory(error_handler, parent_path(fname)).then([] (file f) {
+        return open_checked_directory(error_handler, dirname).then([] (file f) {
             return do_with(std::move(f), [] (file& f) {
                 return f.flush().then([&f] {
                     return f.close();
