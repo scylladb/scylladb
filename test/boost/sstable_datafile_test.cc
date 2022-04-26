@@ -3069,3 +3069,24 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
         return make_ready_future<>();
     });
 }
+
+SEASTAR_TEST_CASE(partial_sstable_deletion_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        auto pks = ss.make_pkeys(1);
+        auto tmp = tmpdir();
+        auto sst_gen = [&env, s, &tmp] () {
+            return env.make_sstable(s, tmp.path().string(), 1, sstables::get_highest_sstable_version(), big);
+        };
+
+        auto mut1 = mutation(s, pks[0]);
+        mut1.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
+        auto sst = make_sstable_containing(sst_gen, {std::move(mut1)});
+
+        // Rename TOC into TMP toc, to stress deletion path for partial files
+        rename_file(sst->toc_filename(), sst->filename(sstables::component_type::TemporaryTOC)).get();
+
+        sst->unlink().get();
+    });
+}
