@@ -8,8 +8,8 @@
 
 #pragma once
 
-#include "seastar/core/shared_ptr.hh"
-#include "seastar/core/future.hh"
+#include <seastar/core/shared_ptr.hh>
+#include <seastar/core/future.hh>
 #include "bytes.hh"
 #include "gc_clock.hh"
 #include "query-request.hh"

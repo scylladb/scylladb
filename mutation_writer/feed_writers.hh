@@ -10,7 +10,7 @@
 
 #include "readers/flat_mutation_reader.hh"
 #include "readers/queue.hh"
-#include "seastar/core/coroutine.hh"
+#include <seastar/core/coroutine.hh>
 
 namespace mutation_writer {
 

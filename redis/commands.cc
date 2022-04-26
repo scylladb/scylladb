@@ -7,7 +7,7 @@
  */
 
 #include "redis/commands.hh"
-#include "seastar/core/shared_ptr.hh"
+#include <seastar/core/shared_ptr.hh>
 #include "redis/request.hh"
 #include "redis/reply.hh"
 #include "types.hh"

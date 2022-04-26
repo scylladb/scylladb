@@ -8,9 +8,9 @@
 
 #pragma once
 
-#include "seastar/core/future.hh"
-#include "seastar/core/sleep.hh"
-#include "seastar/core/seastar.hh"
+#include <seastar/core/future.hh>
+#include <seastar/core/sleep.hh>
+#include <seastar/core/seastar.hh>
 #include <seastar/core/smp.hh>
 #include "seastarx.hh"
 

@@ -27,7 +27,7 @@
 #include "replica/database.hh"
 #include "schema.hh"
 #include "schema_registry.hh"
-#include "seastar/core/do_with.hh"
+#include <seastar/core/do_with.hh>
 #include "service/pager/query_pagers.hh"
 #include "tracing/trace_state.hh"
 #include "tracing/tracing.hh"

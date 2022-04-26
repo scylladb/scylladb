@@ -14,7 +14,7 @@
 #include "db/config.hh"
 #include "utils/histogram.hh"
 #include "replica/database.hh"
-#include "seastar/core/scheduling_specific.hh"
+#include <seastar/core/scheduling_specific.hh>
 
 namespace api {
 
