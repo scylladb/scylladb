@@ -996,11 +996,11 @@ def read_log(log_filename):
         return "===Error reading log {}===".format(e)
 
 
-def print_summary(failed_tests):
+def print_summary(failed_tests, options):
     if failed_tests:
         print("The following test(s) have failed: {}".format(
             palette.path(" ".join([t.name for t in failed_tests]))))
-        if not output_is_a_tty:
+        if options.verbose:
             for test in failed_tests:
                 test.print_summary()
                 print("-"*78)
@@ -1112,7 +1112,7 @@ async def main():
 
     failed_tests = [t for t in TestSuite.tests() if t.success is not True]
 
-    print_summary(failed_tests)
+    print_summary(failed_tests, options)
 
     for mode in options.modes:
         write_junit_report(options.tmpdir, mode)
