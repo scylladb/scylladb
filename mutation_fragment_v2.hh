@@ -58,8 +58,17 @@ public:
     size_t external_memory_usage(const schema& s) const {
         return _pos.external_memory_usage();
     }
+    size_t minimal_external_memory_usage(const schema&) const noexcept {
+        if (_pos.has_key()) {
+            return _pos.key().minimal_external_memory_usage();
+        }
+        return 0;
+    }
     size_t memory_usage(const schema& s) const noexcept {
         return sizeof(range_tombstone_change) + external_memory_usage(s);
+    }
+    size_t minimal_memory_usage(const schema& s) const noexcept {
+        return sizeof(range_tombstone_change) + minimal_external_memory_usage(s);
     }
     bool equal(const schema& s, const range_tombstone_change& other) const {
         position_in_partition::equal_compare eq(s);
