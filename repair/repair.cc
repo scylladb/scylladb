@@ -329,10 +329,13 @@ tracker::tracker(size_t max_repair_memory)
 }
 
 void tracker::start(repair_uniq_id id) {
+    _pending_repairs.insert(id.uuid);
     _status[id.id] = repair_status::RUNNING;
 }
 
 void tracker::done(repair_uniq_id id, bool succeeded) {
+    _pending_repairs.erase(id.uuid);
+    _aborted_pending_repairs.erase(id.uuid);
     if (succeeded) {
         _status.erase(id.id);
     } else {
@@ -429,13 +432,17 @@ size_t tracker::nr_running_repair_jobs() {
     return count;
 }
 
+bool tracker::is_aborted(const utils::UUID& uuid) {
+    return _aborted_pending_repairs.contains(uuid);
+}
+
 void tracker::abort_all_repairs() {
-    size_t count = nr_running_repair_jobs();
+    _aborted_pending_repairs = _pending_repairs;
     for (auto& x : _repairs) {
         auto& ri = x.second;
         ri->abort();
     }
-    rlogger.info0("Aborted {} repair job(s)", count);
+    rlogger.info0("Aborted {} repair job(s), aborted={}", _aborted_pending_repairs.size(), _aborted_pending_repairs);
 }
 
 void tracker::abort_repair_node_ops(utils::UUID ops_uuid) {
@@ -1183,6 +1190,10 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
             }
         });
 
+        if (repair_tracker().is_aborted(id.uuid)) {
+            throw std::runtime_error("aborted by user request");
+        }
+
         for (auto shard : boost::irange(unsigned(0), smp::count)) {
             auto f = container().invoke_on(shard, [keyspace, table_ids, id, ranges, hints_batchlog_flushed,
                     data_centers = options.data_centers, hosts = options.hosts, ignore_nodes] (repair_service& local_repair) mutable {
@@ -1284,6 +1295,9 @@ future<> repair_service::do_sync_data_using_repair(
         auto table_ids = get_table_ids(db.local(), keyspace, cfs);
         std::vector<future<>> repair_results;
         repair_results.reserve(smp::count);
+        if (repair_tracker().is_aborted(id.uuid)) {
+            throw std::runtime_error("aborted by user request");
+        }
         for (auto shard : boost::irange(unsigned(0), smp::count)) {
             auto f = container().invoke_on(shard, [keyspace, table_ids, id, ranges, neighbors, reason, ops_uuid] (repair_service& local_repair) mutable {
                 auto data_centers = std::vector<sstring>();
