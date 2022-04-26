@@ -12,7 +12,7 @@
 #include "types.hh"
 #include "exceptions/exceptions.hh"
 #include "cql3/statements/ks_prop_defs.hh"
-#include "seastar/core/future.hh"
+#include <seastar/core/future.hh>
 #include <memory>
 #include "log.hh"
 #include "db/query_context.hh"

@@ -73,7 +73,7 @@
 #include "service/migration_manager.hh"
 #include "service/paxos/proposal.hh"
 #include "locator/token_metadata.hh"
-#include "seastar/core/coroutine.hh"
+#include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "locator/abstract_replication_strategy.hh"
 #include "service/paxos/cas_request.hh"

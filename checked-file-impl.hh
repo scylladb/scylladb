@@ -8,8 +8,8 @@
 
 #pragma once
 
-#include "seastar/core/file.hh"
-#include "seastar/core/seastar.hh"
+#include <seastar/core/file.hh>
+#include <seastar/core/seastar.hh>
 #include "utils/disk-error-handler.hh"
 
 #include "seastarx.hh"

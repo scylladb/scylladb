@@ -7,7 +7,7 @@
 /*
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-#include "seastar/core/coroutine.hh"
+#include <seastar/core/coroutine.hh>
 #include "service/storage_proxy.hh"
 #include "service/paxos/proposal.hh"
 #include "service/paxos/paxos_state.hh"

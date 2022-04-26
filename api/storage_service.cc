@@ -24,7 +24,7 @@
 #include "db/commitlog/commitlog.hh"
 #include "gms/gossiper.hh"
 #include "db/system_keyspace.hh"
-#include "seastar/http/exception.hh"
+#include <seastar/http/exception.hh>
 #include <seastar/core/coroutine.hh>
 #include "repair/row_level.hh"
 #include "locator/snitch_base.hh"

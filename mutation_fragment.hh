@@ -14,7 +14,7 @@
 #include <optional>
 #include <seastar/util/optimized_optional.hh>
 
-#include "seastar/core/future-util.hh"
+#include <seastar/core/future-util.hh>
 
 #include "db/timeout_clock.hh"
 #include "reader_permit.hh"

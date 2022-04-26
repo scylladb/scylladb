@@ -12,7 +12,7 @@
 #include <seastar/http/exception.hh>
 #include "log.hh"
 #include "utils/error_injection.hh"
-#include "seastar/core/future-util.hh"
+#include <seastar/core/future-util.hh>
 
 namespace api {
 

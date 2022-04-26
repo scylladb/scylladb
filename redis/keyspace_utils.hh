@@ -8,8 +8,8 @@
 
 #pragma once
 
-#include "seastar/core/sharded.hh"
-#include "seastar/core/future.hh"
+#include <seastar/core/sharded.hh>
+#include <seastar/core/future.hh>
 
 namespace service {
 class migration_manager;

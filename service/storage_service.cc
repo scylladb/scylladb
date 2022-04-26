@@ -17,7 +17,7 @@
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/consistency_level.hh"
-#include "seastar/core/smp.hh"
+#include <seastar/core/smp.hh>
 #include "utils/UUID.hh"
 #include "gms/inet_address.hh"
 #include "log.hh"

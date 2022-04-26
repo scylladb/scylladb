@@ -8,8 +8,8 @@
 
 #pragma once
 #include "bytes.hh"
-#include "seastar/core/future.hh"
-#include "seastar/core/sstring.hh"
+#include <seastar/core/future.hh>
+#include <seastar/core/sstring.hh>
 #include "redis/request.hh"
 #include "redis/reply.hh"
 #include "db/consistency_level_type.hh"
