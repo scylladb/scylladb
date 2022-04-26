@@ -226,6 +226,8 @@ private:
     std::atomic_bool _shutdown alignas(seastar::cache_line_size);
     // Map repair id into repair_info.
     std::unordered_map<int, lw_shared_ptr<repair_info>> _repairs;
+    std::unordered_set<utils::UUID> _pending_repairs;
+    std::unordered_set<utils::UUID> _aborted_pending_repairs;
     // The semaphore used to control the maximum
     // ranges that can be repaired in parallel.
     named_semaphore _range_parallelism_semaphore;
@@ -251,6 +253,7 @@ public:
     future<repair_status> repair_await_completion(int id, std::chrono::steady_clock::time_point timeout);
     float report_progress(streaming::stream_reason reason);
     void abort_repair_node_ops(utils::UUID ops_uuid);
+    bool is_aborted(const utils::UUID& uuid);
 };
 
 future<uint64_t> estimate_partitions(seastar::sharded<replica::database>& db, const sstring& keyspace,
