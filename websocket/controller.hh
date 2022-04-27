@@ -10,6 +10,10 @@
 
 #include "seastarx.hh"
 
+namespace db {
+class config;
+};
+
 namespace websocket {
 
 constexpr const char* version = "RFC 6455";
@@ -17,9 +21,10 @@ constexpr const char* version = "RFC 6455";
 class controller : public protocol_server {
     sharded<experimental::websocket::server> _server;
     sharded<cql_transport::cql_server>& _cql_server;
+    socket_address _server_addr;
     std::vector<socket_address> _listen_addresses;
 public:
-    controller(sharded<cql_transport::cql_server>& cql_server) : _cql_server(cql_server) {}
+    controller(sharded<cql_transport::cql_server>& cql_server, socket_address server_addr) : _cql_server(cql_server), _server_addr(server_addr) {}
     virtual sstring name() const override;
     virtual sstring protocol() const override;
     virtual sstring protocol_version() const override;

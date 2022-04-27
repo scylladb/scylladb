@@ -1579,6 +1579,18 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }
             ss.local().register_protocol_server(redis_ctl);
 
+            websocket::controller websocket_ctl(cql_server_ctl.server(), socket_address{cfg->cql_over_websocket_addr(), cfg->cql_over_websocket_port()});
+            if (cfg->cql_over_websocket_port()) {
+                if (cfg->start_native_transport()) {
+                    with_scheduling_group(dbcfg.statement_scheduling_group, [&websocket_ctl] {
+                        return websocket_ctl.start_server();
+                    }).get();
+                    ss.local().register_protocol_server(websocket_ctl);
+                } else {
+                    supervisor::notify("CQL must be enabled for CQL over websocket.");
+                }
+            }
+
             seastar::set_abort_on_ebadf(cfg->abort_on_ebadf());
             api::set_server_done(ctx).get();
             supervisor::notify("serving");

@@ -1,5 +1,6 @@
 #include "websocket/controller.hh"
 #include <seastar/core/coroutine.hh>
+#include "db/config.hh"
 
 namespace websocket {
 
@@ -50,7 +51,7 @@ future<> controller::start_server() {
 
             co_await std::move(write_loop);
         });
-        ws.listen(socket_address(ipv4_addr("127.0.0.1", 8222)));
+        ws.listen(_server_addr);
     });
 }
 

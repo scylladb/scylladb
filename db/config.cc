@@ -875,6 +875,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         60*60*24,
         "The default period for Alternator's expiration scan. Alternator attempts to scan every table within that period.")
     , abort_on_ebadf(this, "abort_on_ebadf", value_status::Used, true, "Abort the server on incorrect file descriptor access. Throws exception when disabled.")
+    , cql_over_websocket_port(this, "cql_over_websocket_port", value_status::Used, 0, "Port on which the CQL over WEBSOCKET server listens for clients.")
+    , cql_over_websocket_addr(this, "cql_over_websocket_addr", value_status::Used, "127.0.0.1", "Address on which the CQL over WEBSOCKET server listens for clients.")
     , redis_port(this, "redis_port", value_status::Used, 0, "Port on which the REDIS transport listens for clients.")
     , redis_ssl_port(this, "redis_ssl_port", value_status::Used, 0, "Port on which the REDIS TLS native transport listens for clients.")
     , redis_read_consistency_level(this, "redis_read_consistency_level", value_status::Used, "LOCAL_QUORUM", "Consistency level for read operations for redis.")
