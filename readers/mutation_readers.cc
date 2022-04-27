@@ -19,7 +19,6 @@
 #include "readers/empty_v2.hh"
 #include "readers/flat_mutation_reader.hh"
 #include "readers/flat_mutation_reader_v2.hh"
-#include "readers/forwardable.hh"
 #include "readers/forwardable_v2.hh"
 #include "readers/from_fragments_v2.hh"
 #include "readers/from_mutations_v2.hh"
@@ -99,79 +98,6 @@ public:
 
 flat_mutation_reader_v2 make_empty_flat_reader_v2(schema_ptr s, reader_permit permit) {
     return make_flat_mutation_reader_v2<empty_flat_reader_v2>(std::move(s), std::move(permit));
-}
-
-flat_mutation_reader make_forwardable(flat_mutation_reader m) {
-    class reader : public flat_mutation_reader::impl {
-        flat_mutation_reader _underlying;
-        position_range _current;
-        mutation_fragment_opt _next;
-        // When resolves, _next is engaged or _end_of_stream is set.
-        future<> ensure_next() {
-            if (_next) {
-                co_return;
-            }
-            _next = co_await _underlying();
-            if (!_next) {
-                _end_of_stream = true;
-            }
-        }
-    public:
-        reader(flat_mutation_reader r) : impl(r.schema(), r.permit()), _underlying(std::move(r)), _current({
-            position_in_partition(position_in_partition::partition_start_tag_t()),
-            position_in_partition(position_in_partition::after_static_row_tag_t())
-        }) { }
-        virtual future<> fill_buffer() override {
-            while (!is_buffer_full()) {
-                co_await ensure_next();
-                if (is_end_of_stream()) {
-                    break;
-                }
-                position_in_partition::less_compare cmp(*_schema);
-                if (!cmp(_next->position(), _current.end())) {
-                    _end_of_stream = true;
-                    // keep _next, it may be relevant for next range
-                    break;
-                }
-                if (_next->relevant_for_range(*_schema, _current.start())) {
-                    push_mutation_fragment(std::move(*_next));
-                }
-                _next = {};
-            }
-        }
-        virtual future<> fast_forward_to(position_range pr) override {
-            _current = std::move(pr);
-            _end_of_stream = false;
-            forward_buffer_to(_current.start());
-            return make_ready_future<>();
-        }
-        virtual future<> next_partition() override {
-            _end_of_stream = false;
-            if (!_next || !_next->is_partition_start()) {
-                co_await _underlying.next_partition();
-                _next = {};
-            }
-            clear_buffer_to_next_partition();
-            _current = {
-                position_in_partition(position_in_partition::partition_start_tag_t()),
-                position_in_partition(position_in_partition::after_static_row_tag_t())
-            };
-        }
-        virtual future<> fast_forward_to(const dht::partition_range& pr) override {
-            _end_of_stream = false;
-            clear_buffer();
-            _next = {};
-            _current = {
-                position_in_partition(position_in_partition::partition_start_tag_t()),
-                position_in_partition(position_in_partition::after_static_row_tag_t())
-            };
-            return _underlying.fast_forward_to(pr);
-        }
-        virtual future<> close() noexcept override {
-            return _underlying.close();
-        }
-    };
-    return make_flat_mutation_reader<reader>(std::move(m));
 }
 
 flat_mutation_reader_v2 make_forwardable(flat_mutation_reader_v2 m) {

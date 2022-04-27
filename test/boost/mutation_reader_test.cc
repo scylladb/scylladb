@@ -49,7 +49,6 @@
 #include <boost/range/algorithm/sort.hpp>
 #include "readers/from_mutations_v2.hh"
 #include "readers/forwardable_v2.hh"
-#include "readers/forwardable.hh"
 #include "readers/from_fragments_v2.hh"
 #include "readers/generating_v2.hh"
 #include "readers/empty_v2.hh"

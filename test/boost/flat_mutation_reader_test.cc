@@ -17,7 +17,6 @@
 #include "test/lib/mutation_source_test.hh"
 #include "readers/flat_mutation_reader.hh"
 #include "readers/reversing_v2.hh"
-#include "readers/forwardable.hh"
 #include "readers/delegating_v2.hh"
 #include "readers/multi_range.hh"
 #include "schema_builder.hh"
