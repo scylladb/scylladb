@@ -613,7 +613,6 @@ bind_variable
 bind_variable_scalar_prepare_expression(const bind_variable& bv, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver)
 {   
     return bind_variable {
-        .shape = bind_variable::shape_type::scalar,
         .bind_index = bv.bind_index,
         .receiver = receiver
     };
@@ -876,7 +875,6 @@ test_assignment(const expression& expr, data_dictionary::database db, const sstr
             return null_test_assignment(db, keyspace, receiver);
         },
         [&] (const bind_variable& bv) -> test_result {
-            // Same for all bind_variable::shape:s
             return bind_variable_test_assignment(bv, db, keyspace, receiver);
         },
         [&] (const untyped_constant& uc) -> test_result {

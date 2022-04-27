@@ -21,7 +21,6 @@ using namespace cql3::expr;
 
 bind_variable new_bind_variable(int bind_index) {
     return bind_variable {
-        .shape = bind_variable::shape_type::scalar,
         .bind_index = bind_index,
         .receiver = nullptr
     };

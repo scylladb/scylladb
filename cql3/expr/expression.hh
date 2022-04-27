@@ -321,9 +321,6 @@ struct null {
 };
 
 struct bind_variable {
-    enum class shape_type { scalar, scalar_in, tuple, tuple_in };
-    // FIXME: infer shape from expression rather than from grammar
-    shape_type shape;
     int32_t bind_index;
 
     // Describes where this bound value will be assigned.

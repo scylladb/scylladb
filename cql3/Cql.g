@@ -153,30 +153,11 @@ struct uninitialized {
 
     bind_variable new_bind_variables(shared_ptr<cql3::column_identifier> name)
     {
-        auto marker = bind_variable{bind_variable::shape_type::scalar, _bind_variables.size()};
+        auto marker = bind_variable{_bind_variables.size()};
         _bind_variables.push_back(name);
         return marker;
     }
 
-    bind_variable new_in_bind_variables(shared_ptr<cql3::column_identifier> name) {
-        auto marker = bind_variable{bind_variable::shape_type::scalar_in, _bind_variables.size()};
-        _bind_variables.push_back(std::move(name));
-        return marker;
-    }
-
-    bind_variable new_tuple_bind_variables(shared_ptr<cql3::column_identifier> name)
-    {
-        auto marker = bind_variable{bind_variable::shape_type::tuple, _bind_variables.size()};
-        _bind_variables.push_back(std::move(name));
-        return marker;
-    }
-
-    bind_variable new_tuple_in_bind_variables(shared_ptr<cql3::column_identifier> name)
-    {
-        auto marker = bind_variable{bind_variable::shape_type::tuple_in, _bind_variables.size()};
-        _bind_variables.push_back(std::move(name));
-        return marker;
-    }
 
     void set_error_listener(listener_type& listener) {
         this->listener = &listener;
@@ -1726,8 +1707,8 @@ relation[std::vector<expression>& clauses]
     ;
 
 inMarker returns [expression marker]
-    : QMARK { $marker = new_in_bind_variables(nullptr); }
-    | ':' name=ident { $marker = new_in_bind_variables(name); }
+    : QMARK { $marker = new_bind_variables(nullptr); }
+    | ':' name=ident { $marker = new_bind_variables(name); }
     ;
 
 tupleOfIdentifiers returns [tuple_constructor tup]
@@ -1747,8 +1728,8 @@ tupleOfTupleLiterals returns [std::vector<expression> literals]
     ;
 
 markerForTuple returns [expression marker]
-    : QMARK { $marker = new_tuple_bind_variables(nullptr); }
-    | ':' name=ident { $marker = new_tuple_bind_variables(name); }
+    : QMARK { $marker = new_bind_variables(nullptr); }
+    | ':' name=ident { $marker = new_bind_variables(name); }
     ;
 
 tupleOfMarkersForTuples returns [std::vector<expression> markers]
@@ -1756,8 +1737,8 @@ tupleOfMarkersForTuples returns [std::vector<expression> markers]
     ;
 
 inMarkerForTuple returns [expression marker]
-    : QMARK { $marker = new_tuple_in_bind_variables(nullptr); }
-    | ':' name=ident { $marker = new_tuple_in_bind_variables(name); }
+    : QMARK { $marker = new_bind_variables(nullptr); }
+    | ':' name=ident { $marker = new_bind_variables(name); }
     ;
 
 // The comparator_type rule is used for users' queries (internal=false)
