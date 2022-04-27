@@ -15,7 +15,6 @@
 #include "range_tombstone_assembler.hh"
 #include "range_tombstone_splitter.hh"
 #include "readers/combined.hh"
-#include "readers/delegating.hh"
 #include "readers/delegating_v2.hh"
 #include "readers/empty.hh"
 #include "readers/empty_v2.hh"
@@ -36,47 +35,6 @@
 #include <stack>
 
 extern logging::logger mrlog;
-
-flat_mutation_reader make_delegating_reader(flat_mutation_reader& r) {
-    return make_flat_mutation_reader<delegating_reader>(r);
-}
-
-future<> delegating_reader::fill_buffer() {
-    if (is_buffer_full()) {
-        return make_ready_future<>();
-    }
-    return _underlying->fill_buffer().then([this] {
-        _end_of_stream = _underlying->is_end_of_stream();
-        _underlying->move_buffer_content_to(*this);
-    });
-}
-
-future<> delegating_reader::fast_forward_to(position_range pr) {
-    _end_of_stream = false;
-    forward_buffer_to(pr.start());
-    return _underlying->fast_forward_to(std::move(pr));
-}
-
-future<> delegating_reader::next_partition() {
-    clear_buffer_to_next_partition();
-    auto maybe_next_partition = make_ready_future<>();
-    if (is_buffer_empty()) {
-        maybe_next_partition = _underlying->next_partition();
-    }
-    return maybe_next_partition.then([this] {
-        _end_of_stream = _underlying->is_end_of_stream() && _underlying->is_buffer_empty();
-    });
-}
-
-future<> delegating_reader::fast_forward_to(const dht::partition_range& pr) {
-    _end_of_stream = false;
-    clear_buffer();
-    return _underlying->fast_forward_to(pr);
-}
-
-future<> delegating_reader::close() noexcept {
-    return _underlying_holder ? _underlying_holder->close() : make_ready_future<>();
-}
 
 flat_mutation_reader_v2 make_delegating_reader(flat_mutation_reader_v2& r) {
     return make_flat_mutation_reader_v2<delegating_reader_v2>(r);
