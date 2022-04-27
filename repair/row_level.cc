@@ -44,7 +44,7 @@
 #include "service/storage_proxy.hh"
 #include "db/batchlog_manager.hh"
 #include "idl/partition_checksum.dist.hh"
-#include "readers/empty.hh"
+#include "readers/empty_v2.hh"
 #include "readers/evictable.hh"
 #include "readers/queue.hh"
 #include "repair/hash.hh"
@@ -357,7 +357,7 @@ public:
 
     future<> on_end_of_stream() noexcept {
       return _reader.close().then([this] {
-        _reader = make_empty_flat_reader(_schema, _permit);
+        _reader = downgrade_to_v1(make_empty_flat_reader_v2(_schema, _permit));
         _reader_handle.reset();
       });
     }
