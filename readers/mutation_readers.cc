@@ -1229,7 +1229,7 @@ flat_mutation_reader downgrade_to_v1(flat_mutation_reader_v2 r) {
     }
 }
 
-flat_mutation_reader_v2 upgrade_to_v2(flat_mutation_reader r) {
+flat_mutation_reader_v2 mutation_source::upgrade_to_v2(flat_mutation_reader r) {
     class transforming_reader : public flat_mutation_reader_v2::impl {
         flat_mutation_reader _reader;
         struct consumer {
@@ -1302,13 +1302,7 @@ flat_mutation_reader_v2 upgrade_to_v2(flat_mutation_reader r) {
         }
     };
 
-    if (auto original_opt = r.get_original()) {
-        auto original = std::move(*original_opt);
-        r._impl.reset();
-        return original;
-    } else {
-        return make_flat_mutation_reader_v2<transforming_reader>(std::move(r));
-    }
+    return make_flat_mutation_reader_v2<transforming_reader>(std::move(r));
 }
 
 flat_mutation_reader_v2 make_next_partition_adaptor(flat_mutation_reader_v2&& rd) {

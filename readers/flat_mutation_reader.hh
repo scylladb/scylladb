@@ -395,7 +395,6 @@ private:
         return _impl->get_original();
     }
     friend flat_mutation_reader downgrade_to_v1(flat_mutation_reader_v2);
-    friend flat_mutation_reader_v2 upgrade_to_v2(flat_mutation_reader);
 public:
 
     flat_mutation_reader(std::unique_ptr<impl> impl) noexcept : _impl(std::move(impl)) {}
