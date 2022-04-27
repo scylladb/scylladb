@@ -387,7 +387,7 @@ public:
         }
     }
     void operator()(const static_row& sr) {}
-    void operator()(const range_tombstone& rt) {
+    void operator()(const range_tombstone_change& rt) {
         ++_mt._table_stats.memtable_range_tombstone_reads;
     }
     void operator()(const partition_start& ph) {}
@@ -565,8 +565,8 @@ public:
     // partition_snapshot_reader may compose them. In doing so, we move memory to the standard
     // allocation. As long as our size read here is lesser or equal to the size in the memtables, we
     // are safe, and worst case we will allow a bit fewer requests in.
-    void operator()(const range_tombstone& rt) {
-        _accounter.update_bytes_read(rt.minimal_memory_usage(_schema));
+    void operator()(const range_tombstone_change& rtc) {
+        _accounter.update_bytes_read(rtc.minimal_memory_usage(_schema));
     }
 
     void operator()(const static_row& sr) {
