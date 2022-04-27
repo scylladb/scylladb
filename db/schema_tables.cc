@@ -33,6 +33,8 @@
 #include "system_distributed_keyspace.hh"
 #include "cql3/cql3_type.hh"
 #include "cql3/functions/functions.hh"
+#include "cql3/functions/user_function.hh"
+#include "cql3/functions/user_aggregate.hh"
 #include "cql3/util.hh"
 #include "types/list.hh"
 #include "types/set.hh"

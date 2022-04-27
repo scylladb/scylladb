@@ -31,6 +31,7 @@
 #include "types/user.hh"
 #include "db/system_keyspace.hh"
 #include "cql3/functions/user_aggregate.hh"
+#include "cql3/functions/user_function.hh"
 
 #include "serialization_visitors.hh"
 #include "serializer.hh"

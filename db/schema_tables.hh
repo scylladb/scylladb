@@ -13,8 +13,6 @@
 #pragma once
 
 #include "mutation.hh"
-#include "cql3/functions/user_function.hh"
-#include "cql3/functions/user_aggregate.hh"
 #include "schema_fwd.hh"
 #include "schema_features.hh"
 #include "hashing.hh"
@@ -51,6 +49,13 @@ class storage_proxy;
 namespace gms {
 
 class feature_service;
+
+}
+
+namespace cql3::functions {
+
+class user_function;
+class user_aggregate;
 
 }
 

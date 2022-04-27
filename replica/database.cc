@@ -16,6 +16,7 @@
 #include "db/config.hh"
 #include "to_string.hh"
 #include "cql3/functions/functions.hh"
+#include "cql3/functions/user_function.hh"
 #include <seastar/core/seastar.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/reactor.hh>
@@ -61,6 +62,8 @@
 #include "replica/data_dictionary_impl.hh"
 #include "readers/multi_range.hh"
 #include "readers/multishard.hh"
+
+#include "lang/wasm.hh"
 
 using namespace std::chrono_literals;
 using namespace db;
