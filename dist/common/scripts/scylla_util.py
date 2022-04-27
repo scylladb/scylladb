@@ -21,6 +21,23 @@ from scylla_product import PRODUCT
 
 from multiprocessing import cpu_count
 
+import traceback
+import traceback_with_variables
+import logging
+
+
+def scylla_excepthook(etype, value, tb):
+    traceback.print_exception(etype, value, tb)
+    exc_logger = logging.getLogger(__name__)
+    exc_logger.setLevel(logging.DEBUG)
+    exc_logger_file = f'/var/tmp/{os.path.basename(sys.argv[0])}-{os.getpid()}-debug.log'
+    exc_logger.addHandler(logging.FileHandler(exc_logger_file))
+    traceback_with_variables.print_exc(e=value, file_=traceback_with_variables.LoggerAsFile(exc_logger))
+    print(f'Debug log created: {exc_logger_file}')
+
+sys.excepthook = scylla_excepthook
+
+
 def out(cmd, shell=True, timeout=None, encoding='utf-8'):
     res = subprocess.run(cmd, capture_output=True, shell=shell, timeout=timeout, check=False, encoding=encoding)
     if res.returncode != 0:

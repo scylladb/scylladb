@@ -12,7 +12,6 @@ import sys
 import glob
 import platform
 import distro
-import traceback
 
 from scylla_util import *
 from subprocess import run
@@ -131,6 +130,6 @@ if __name__ == '__main__':
                 run("{} --options-file /etc/scylla.d/perftune.yaml".format(perftune_base_command()), shell=True, check=True)
         except Exception as e:
             print(f'Exception occurred while creating perftune.yaml:\n')
-            traceback.print_exc()
+            scylla_excepthook(*sys.exc_info())
             print('\nTo fix the error, please re-run scylla_setup.')
             sys.exit(1)

@@ -123,6 +123,7 @@ fedora_python3_packages=(
 pip_packages=(
     scylla-driver
     geomet
+    traceback-with-variables
 )
 
 centos_packages=(
@@ -293,6 +294,7 @@ elif [ "$ID" = "fedora" ]; then
     pip3 install "geomet<0.3,>=0.1"
     # Disable C extensions
     pip3 install scylla-driver --install-option="--no-murmur3" --install-option="--no-libev" --install-option="--no-cython"
+    pip3 install traceback-with-variables
 
     cargo install cxxbridge-cmd --root /usr/local
     if [ -f "$(node_exporter_fullpath)" ] && node_exporter_checksum; then
