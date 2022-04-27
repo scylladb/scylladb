@@ -2167,16 +2167,16 @@ sstable::make_reader(
         // The kl reader does not support reversed queries at all.
         // Perform a forward query on it, then reverse the result.
         // Note: we can pass a half-reversed slice, the kl reader performs an unreversed query nevertheless.
-        auto rd = make_reversing_reader(upgrade_to_v2(kl::make_reader(shared_from_this(), schema->make_reversed(), std::move(permit),
-                    range, slice, pc, std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr, mon)), max_result_size);
+        auto rd = make_reversing_reader(kl::make_reader(shared_from_this(), schema->make_reversed(), std::move(permit),
+                    range, slice, pc, std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr, mon), max_result_size);
         if (fwd) {
             rd = make_forwardable(std::move(rd));
         }
         return rd;
     }
 
-    return upgrade_to_v2(kl::make_reader(shared_from_this(), schema, std::move(permit),
-                range, slice, pc, std::move(trace_state), fwd, fwd_mr, mon));
+    return kl::make_reader(shared_from_this(), schema, std::move(permit),
+                range, slice, pc, std::move(trace_state), fwd, fwd_mr, mon);
 }
 
 flat_mutation_reader_v2
@@ -2189,7 +2189,7 @@ sstable::make_crawling_reader(
     if (_version >= version_types::mc) {
         return mx::make_crawling_reader(shared_from_this(), std::move(schema), std::move(permit), pc, std::move(trace_state), monitor);
     }
-    return upgrade_to_v2(kl::make_crawling_reader(shared_from_this(), std::move(schema), std::move(permit), pc, std::move(trace_state), monitor));
+    return kl::make_crawling_reader(shared_from_this(), std::move(schema), std::move(permit), pc, std::move(trace_state), monitor);
 }
 
 static entry_descriptor make_entry_descriptor(sstring sstdir, sstring fname, sstring* const provided_ks, sstring* const provided_cf) {

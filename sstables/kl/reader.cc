@@ -13,6 +13,7 @@
 #include "sstables/sstables.hh"
 #include "sstables/types.hh"
 #include "concrete_types.hh"
+#include "readers/flat_mutation_reader.hh"
 
 namespace sstables {
 namespace kl {
@@ -1461,7 +1462,7 @@ public:
     }
 };
 
-flat_mutation_reader make_reader(
+flat_mutation_reader_v2 make_reader(
         shared_sstable sstable,
         schema_ptr schema,
         reader_permit permit,
@@ -1472,8 +1473,8 @@ flat_mutation_reader make_reader(
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr,
         read_monitor& monitor) {
-    return make_flat_mutation_reader<sstable_mutation_reader>(
-        std::move(sstable), std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, monitor);
+    return upgrade_to_v2(make_flat_mutation_reader<sstable_mutation_reader>(
+        std::move(sstable), std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, monitor));
 }
 
 class crawling_sstable_mutation_reader : public mp_row_consumer_reader_k_l {
@@ -1529,15 +1530,15 @@ public:
     }
 };
 
-flat_mutation_reader make_crawling_reader(
+flat_mutation_reader_v2 make_crawling_reader(
         shared_sstable sstable,
         schema_ptr schema,
         reader_permit permit,
         const io_priority_class& pc,
         tracing::trace_state_ptr trace_state,
         read_monitor& monitor) {
-    return make_flat_mutation_reader<crawling_sstable_mutation_reader>(std::move(sstable), std::move(schema), std::move(permit), pc,
-            std::move(trace_state), monitor);
+    return upgrade_to_v2(make_flat_mutation_reader<crawling_sstable_mutation_reader>(std::move(sstable), std::move(schema), std::move(permit), pc,
+            std::move(trace_state), monitor));
 }
 
 } // namespace kl
