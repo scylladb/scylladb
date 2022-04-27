@@ -11,6 +11,7 @@
 #include <string>
 #include <map>
 #include <seastar/core/sstring.hh>
+#include "seastarx.hh"
 
 namespace data_dictionary {
 
