@@ -23,6 +23,25 @@ static inline bytes_view pop_back(std::vector<bytes_view>& vec) {
     return b;
 }
 
+class mp_row_consumer_reader_k_l : public mp_row_consumer_reader_base, public flat_mutation_reader::impl {
+    friend class sstables::kl::mp_row_consumer_k_l;
+public:
+    mp_row_consumer_reader_k_l(schema_ptr s, reader_permit permit, shared_sstable sst)
+        : mp_row_consumer_reader_base(std::move(sst))
+        , impl(std::move(s), std::move(permit))
+    {}
+
+    void on_next_partition(dht::decorated_key key, tombstone tomb) {
+        _partition_finished = false;
+        _before_partition = false;
+        _end_of_stream = false;
+        _current_partition_key = std::move(key);
+        push_mutation_fragment(
+            mutation_fragment(*_schema, _permit, partition_start(*_current_partition_key, tomb)));
+        _sst->get_stats().on_partition_read();
+    }
+};
+
 // Important note: the row key, column name and column value, passed to the
 // consume_* functions, are passed as a "bytes_view" object, which points to
 // internal data held by the feeder. This internal data is only valid for the

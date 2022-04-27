@@ -22,8 +22,6 @@
 #include "clustering_ranges_walker.hh"
 #include "binary_search.hh"
 #include "../dht/i_partitioner.hh"
-#include "readers/flat_mutation_reader_v2.hh"
-#include "readers/flat_mutation_reader.hh"
 #include "sstables/mx/partition_reversing_data_source.hh"
 
 namespace sstables {
@@ -64,17 +62,6 @@ public:
     // If no skipping is required, this method may not be called before transitioning
     // to the next partition.
     virtual void on_out_of_clustering_range() = 0;
-};
-
-class mp_row_consumer_reader_k_l : public mp_row_consumer_reader_base, public flat_mutation_reader::impl {
-    friend class sstables::kl::mp_row_consumer_k_l;
-public:
-    mp_row_consumer_reader_k_l(schema_ptr s, reader_permit permit, shared_sstable sst)
-        : mp_row_consumer_reader_base(std::move(sst))
-        , impl(std::move(s), std::move(permit))
-    {}
-
-    void on_next_partition(dht::decorated_key, tombstone);
 };
 
 inline atomic_cell make_atomic_cell(const abstract_type& type,
