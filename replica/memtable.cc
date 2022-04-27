@@ -26,7 +26,7 @@ static flat_mutation_reader_v2 make_partition_snapshot_flat_reader_from_snp_sche
         bool digest_requested,
         logalloc::region& region,
         logalloc::allocating_section& read_section,
-        boost::any pointer_to_container,
+        std::any pointer_to_container,
         streamed_mutation::forwarding fwd, memtable& memtable);
 
 void memtable::memtable_encoding_stats_collector::update_timestamp(api::timestamp_type ts) {
@@ -597,7 +597,7 @@ static flat_mutation_reader_v2 make_partition_snapshot_flat_reader_from_snp_sche
         bool digest_requested,
         logalloc::region& region,
         logalloc::allocating_section& read_section,
-        boost::any pointer_to_container,
+        std::any pointer_to_container,
         streamed_mutation::forwarding fwd, memtable& memtable) {
     if (is_reversed) {
         schema_ptr rev_snp_schema = snp->schema()->make_reversed();
