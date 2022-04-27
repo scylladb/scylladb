@@ -211,7 +211,7 @@ future<authenticated_user> password_authenticator::authenticate(
                 consistency_for_user(username),
                 internal_distributed_query_state(),
                 {username},
-                true);
+                cql3::query_processor::cache_internal::yes);
     }).then_wrapped([=](future<::shared_ptr<cql3::untyped_result_set>> f) {
         try {
             auto res = f.get0();

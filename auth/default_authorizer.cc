@@ -77,7 +77,7 @@ future<bool> default_authorizer::any_granted() const {
             query,
             db::consistency_level::LOCAL_ONE,
             {},
-            true).then([this](::shared_ptr<cql3::untyped_result_set> results) {
+            cql3::query_processor::cache_internal::yes).then([this](::shared_ptr<cql3::untyped_result_set> results) {
         return !results->empty();
     });
 }
@@ -223,7 +223,7 @@ future<std::vector<permission_details>> default_authorizer::list_all() const {
             db::consistency_level::ONE,
             internal_distributed_query_state(),
             {},
-            true).then([](::shared_ptr<cql3::untyped_result_set> results) {
+            cql3::query_processor::cache_internal::yes).then([](::shared_ptr<cql3::untyped_result_set> results) {
         std::vector<permission_details> all_details;
 
         for (const auto& row : *results) {

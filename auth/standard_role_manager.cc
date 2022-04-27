@@ -95,7 +95,7 @@ static future<std::optional<record>> find_record(cql3::query_processor& qp, std:
             consistency_for_role(role_name),
             internal_distributed_query_state(),
             {sstring(role_name)},
-            true).then([](::shared_ptr<cql3::untyped_result_set> results) {
+            cql3::query_processor::cache_internal::yes).then([](::shared_ptr<cql3::untyped_result_set> results) {
         if (results->empty()) {
             return std::optional<record>();
         }
@@ -267,7 +267,7 @@ future<> standard_role_manager::create_or_replace(std::string_view role_name, co
             consistency_for_role(role_name),
             internal_distributed_query_state(),
             {sstring(role_name), c.is_superuser, c.can_login},
-            true).discard_result();
+            cql3::query_processor::cache_internal::yes).discard_result();
 }
 
 future<>

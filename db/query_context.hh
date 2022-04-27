@@ -56,7 +56,7 @@ struct query_context {
                 cql3::query_options::DEFAULT.get_consistency(),
                 tctx.query_state,
                 { data_value(std::forward<Args>(args))... },
-                true);
+                cql3::query_processor::cache_internal::yes);
         });
     }
 

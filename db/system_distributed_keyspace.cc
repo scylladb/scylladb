@@ -349,7 +349,7 @@ future<std::unordered_map<utils::UUID, sstring>> system_distributed_keyspace::vi
             db::consistency_level::ONE,
             internal_distributed_query_state(),
             { std::move(ks_name), std::move(view_name) },
-            false).then([this] (::shared_ptr<cql3::untyped_result_set> cql_result) {
+            cql3::query_processor::cache_internal::no).then([this] (::shared_ptr<cql3::untyped_result_set> cql_result) {
         return boost::copy_range<std::unordered_map<utils::UUID, sstring>>(*cql_result
                 | boost::adaptors::transformed([] (const cql3::untyped_result_set::row& row) {
                     auto host_id = row.get_as<utils::UUID>("host_id");
@@ -366,7 +366,7 @@ future<> system_distributed_keyspace::start_view_build(sstring ks_name, sstring 
             db::consistency_level::ONE,
             internal_distributed_query_state(),
             { std::move(ks_name), std::move(view_name), std::move(host_id), "STARTED" },
-            false).discard_result();
+            cql3::query_processor::cache_internal::no).discard_result();
 }
 
 future<> system_distributed_keyspace::finish_view_build(sstring ks_name, sstring view_name) const {
@@ -376,7 +376,7 @@ future<> system_distributed_keyspace::finish_view_build(sstring ks_name, sstring
             db::consistency_level::ONE,
             internal_distributed_query_state(),
             { "SUCCESS", std::move(ks_name), std::move(view_name), std::move(host_id) },
-            false).discard_result();
+            cql3::query_processor::cache_internal::no).discard_result();
 }
 
 future<> system_distributed_keyspace::remove_view(sstring ks_name, sstring view_name) const {
@@ -385,7 +385,7 @@ future<> system_distributed_keyspace::remove_view(sstring ks_name, sstring view_
             db::consistency_level::ONE,
             internal_distributed_query_state(),
             { std::move(ks_name), std::move(view_name) },
-            false).discard_result();
+            cql3::query_processor::cache_internal::no).discard_result();
 }
 
 /* We want to make sure that writes/reads to/from CDC management-related distributed tables
@@ -458,7 +458,7 @@ system_distributed_keyspace::insert_cdc_topology_description(
             quorum_if_many(ctx.num_token_owners),
             internal_distributed_query_state(),
             { gen_id.ts, make_list_value(cdc_generation_description_type, prepare_cdc_generation_description(description)) },
-            false).discard_result();
+            cql3::query_processor::cache_internal::no).discard_result();
 }
 
 future<std::optional<cdc::topology_description>>
@@ -471,7 +471,7 @@ system_distributed_keyspace::read_cdc_topology_description(
             quorum_if_many(ctx.num_token_owners),
             internal_distributed_query_state(),
             { gen_id.ts },
-            false
+            cql3::query_processor::cache_internal::no
     ).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) -> std::optional<cdc::topology_description> {
         if (cql_result->empty() || !cql_result->one().has("description")) {
             return {};
@@ -669,7 +669,7 @@ system_distributed_keyspace::create_cdc_desc(
             quorum_if_many(ctx.num_token_owners),
             internal_distributed_query_state(),
             { CDC_TIMESTAMPS_KEY, time },
-            false).discard_result();
+            cql3::query_processor::cache_internal::no).discard_result();
 }
 
 future<bool>
@@ -714,7 +714,7 @@ system_distributed_keyspace::cdc_desc_exists(
             quorum_if_many(ctx.num_token_owners),
             internal_distributed_query_state(),
             { CDC_TIMESTAMPS_KEY, streams_ts },
-            false
+            cql3::query_processor::cache_internal::no
     ).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) -> bool {
         return !cql_result->empty() && cql_result->one().has("time");
     });
@@ -727,7 +727,7 @@ system_distributed_keyspace::cdc_get_versioned_streams(db_clock::time_point not_
             quorum_if_many(ctx.num_token_owners),
             internal_distributed_query_state(),
             { CDC_TIMESTAMPS_KEY },
-            false);
+            cql3::query_processor::cache_internal::no);
 
     std::vector<db_clock::time_point> timestamps;
     timestamps.reserve(timestamps_cql->size());
@@ -749,7 +749,7 @@ system_distributed_keyspace::cdc_get_versioned_streams(db_clock::time_point not_
                 quorum_if_many(ctx.num_token_owners),
                 internal_distributed_query_state(),
                 { ts },
-                false);
+                cql3::query_processor::cache_internal::no);
 
         utils::chunked_vector<cdc::stream_id> ids;
         for (auto& row : *streams_cql) {
@@ -770,7 +770,7 @@ system_distributed_keyspace::cdc_current_generation_timestamp(context ctx) {
             quorum_if_many(ctx.num_token_owners),
             internal_distributed_query_state(),
             { CDC_TIMESTAMPS_KEY },
-            false);
+            cql3::query_processor::cache_internal::no);
 
     co_return timestamp_cql->one().get_as<db_clock::time_point>("time");
 }

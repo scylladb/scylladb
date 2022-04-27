@@ -808,7 +808,7 @@ query_processor::execute_internal(
         const sstring& query_string,
         db::consistency_level cl,
         const std::initializer_list<data_value>& values,
-        bool cache) {
+        cache_internal cache) {
     return execute_internal(query_string, cl, *_internal_state, values, cache);
 }
 
@@ -818,7 +818,7 @@ query_processor::execute_internal(
         db::consistency_level cl,
         service::query_state& query_state,
         const std::initializer_list<data_value>& values,
-        bool cache) {
+        cache_internal cache) {
 
     if (log.is_enabled(logging::log_level::trace)) {
         log.trace("execute_internal: {}\"{}\" ({})", cache ? "(cached) " : "", query_string, ::join(", ", values));
