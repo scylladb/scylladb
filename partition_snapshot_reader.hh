@@ -14,6 +14,7 @@
 #include "clustering_key_filter.hh"
 #include "query-request.hh"
 #include <boost/range/algorithm/heap_algorithm.hpp>
+#include <any>
 
 template <bool Reversing, typename Accounter>
 class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public Accounter {
@@ -319,7 +320,7 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
 private:
     // Keeps shared pointer to the container we read mutation from to make sure
     // that its lifetime is appropriately extended.
-    boost::any _container_guard;
+    std::any _container_guard;
 
     // Each range from _ck_ranges are taken to be in snapshot clustering key
     // order, i.e. given a comparator derived from snapshot schema, for each ck_range from
@@ -442,7 +443,7 @@ public:
     partition_snapshot_flat_reader(schema_ptr s, reader_permit permit, dht::decorated_key dk, partition_snapshot_ptr snp,
                               query::clustering_key_filter_ranges crr, bool digest_requested,
                               logalloc::region& region, logalloc::allocating_section& read_section,
-                              boost::any pointer_to_container, Args&&... args)
+                              std::any pointer_to_container, Args&&... args)
         : impl(std::move(s), std::move(permit))
         , Accounter(std::forward<Args>(args)...)
         , _container_guard(std::move(pointer_to_container))
@@ -498,7 +499,7 @@ make_partition_snapshot_flat_reader(schema_ptr s,
                                     bool digest_requested,
                                     logalloc::region& region,
                                     logalloc::allocating_section& read_section,
-                                    boost::any pointer_to_container,
+                                    std::any pointer_to_container,
                                     streamed_mutation::forwarding fwd,
                                     Args&&... args)
 {
