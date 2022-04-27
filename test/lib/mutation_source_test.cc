@@ -1618,12 +1618,6 @@ void test_reader_conversions(tests::reader_concurrency_semaphore_wrapper& semaph
             assert_that(downgrade_to_v1(std::move(rd)))
                     .produces_compacted(m_compacted, query_time);
         }
-
-        {
-            auto rd = ms.make_reader(m.schema(), semaphore.make_permit());
-            assert_that(upgrade_to_v2(std::move(rd)))
-                    .produces_compacted(m_compacted, query_time);
-        }
     });
 }
 
@@ -1703,7 +1697,6 @@ void run_mutation_source_tests(populate_fn populate, bool with_partition_range_f
 void run_mutation_source_tests(populate_fn_ex populate, bool with_partition_range_forwarding) {
     run_mutation_source_tests_plain(populate, with_partition_range_forwarding);
     run_mutation_source_tests_downgrade(populate, with_partition_range_forwarding);
-    run_mutation_source_tests_upgrade(populate, with_partition_range_forwarding);
     run_mutation_source_tests_reverse(populate, with_partition_range_forwarding);
     // Some tests call the sub-types individually, mind checking them
     // if adding new stuff here
@@ -1728,24 +1721,6 @@ void run_mutation_source_tests_downgrade(populate_fn_ex populate, bool with_part
                                               mutation_reader::forwarding mr_fwd) {
             return downgrade_to_v1(
                     ms.make_reader_v2(s, std::move(permit), pr, slice, pc, std::move(tr), fwd, mr_fwd));
-        });
-    }, with_partition_range_forwarding);
-}
-
-void run_mutation_source_tests_upgrade(populate_fn_ex populate, bool with_partition_range_forwarding) {
-    testlog.info(__PRETTY_FUNCTION__);
-    // ? -> v1 -> v2 -> *
-    run_mutation_reader_tests([populate] (schema_ptr s, const std::vector<mutation>& m, gc_clock::time_point t) -> mutation_source {
-        return mutation_source([ms = populate(s, m, t)] (schema_ptr s,
-                                              reader_permit permit,
-                                              const dht::partition_range& pr,
-                                              const query::partition_slice& slice,
-                                              const io_priority_class& pc,
-                                              tracing::trace_state_ptr tr,
-                                              streamed_mutation::forwarding fwd,
-                                              mutation_reader::forwarding mr_fwd) {
-            return upgrade_to_v2(
-                    ms.make_reader(s, std::move(permit), pr, slice, pc, std::move(tr), fwd, mr_fwd));
         });
     }, with_partition_range_forwarding);
 }
