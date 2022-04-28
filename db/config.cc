@@ -1020,6 +1020,8 @@ logging::settings db::config::logging_settings(const log_cli::options& opts) con
         , value(default_log_level, opts.default_log_level)
         , value(log_to_stdout, opts.log_to_stdout)
         , value(log_to_syslog, opts.log_to_syslog)
+        , opts.logger_stdout_timestamps.get_value()
+        , opts.logger_ostream_type.get_value()
     };
 }
 
