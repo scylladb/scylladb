@@ -8,14 +8,15 @@
 
 #pragma once
 
-#include "readers/flat_mutation_reader.hh"
+#include "readers/flat_mutation_reader_fwd.hh"
+#include "readers/flat_mutation_reader_v2.hh"
 #include "sstables/progress_monitor.hh"
 #include <seastar/core/io_priority_class.hh>
 
 namespace sstables {
 namespace kl {
 
-flat_mutation_reader make_reader(
+flat_mutation_reader_v2 make_reader(
         shared_sstable sstable,
         schema_ptr schema,
         reader_permit permit,
@@ -29,7 +30,7 @@ flat_mutation_reader make_reader(
 
 // A reader which doesn't use the index at all. It reads everything from the
 // sstable and it doesn't support skipping.
-flat_mutation_reader make_crawling_reader(
+flat_mutation_reader_v2 make_crawling_reader(
         shared_sstable sstable,
         schema_ptr schema,
         reader_permit permit,

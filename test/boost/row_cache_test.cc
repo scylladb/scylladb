@@ -35,7 +35,6 @@
 
 #include <boost/range/algorithm/min_element.hpp>
 #include "readers/from_mutations_v2.hh"
-#include "readers/delegating.hh"
 #include "readers/delegating_v2.hh"
 #include "readers/empty_v2.hh"
 
@@ -1276,15 +1275,15 @@ private:
         mutation_source _underlying;
         ::throttle& _throttle;
     private:
-        class reader : public delegating_reader {
+        class reader : public delegating_reader_v2 {
             throttle& _throttle;
         public:
-            reader(throttle& t, flat_mutation_reader r)
-                    : delegating_reader(std::move(r))
+            reader(throttle& t, flat_mutation_reader_v2 r)
+                    : delegating_reader_v2(std::move(r))
                     , _throttle(t)
             {}
             virtual future<> fill_buffer() override {
-                return delegating_reader::fill_buffer().finally([this] () {
+                return delegating_reader_v2::fill_buffer().finally([this] () {
                     return _throttle.enter();
                 });
             }
@@ -1295,9 +1294,9 @@ private:
             , _throttle(t)
         { }
 
-        flat_mutation_reader make_reader(schema_ptr s, reader_permit permit, const dht::partition_range& pr,
+        flat_mutation_reader_v2 make_reader(schema_ptr s, reader_permit permit, const dht::partition_range& pr,
                 const query::partition_slice& slice, const io_priority_class& pc, tracing::trace_state_ptr trace, streamed_mutation::forwarding fwd) {
-            return make_flat_mutation_reader<reader>(_throttle, _underlying.make_reader(s, std::move(permit), pr, slice, pc, std::move(trace), std::move(fwd)));
+            return make_flat_mutation_reader_v2<reader>(_throttle, _underlying.make_reader_v2(s, std::move(permit), pr, slice, pc, std::move(trace), std::move(fwd)));
         }
     };
     lw_shared_ptr<impl> _impl;

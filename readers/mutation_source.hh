@@ -66,6 +66,7 @@ class mutation_source {
     lw_shared_ptr<flat_reader_v2_factory_type> _fn_v2;
     lw_shared_ptr<std::function<partition_presence_checker()>> _presence_checker_factory;
 private:
+    static flat_mutation_reader_v2 upgrade_to_v2(flat_mutation_reader rd);
     mutation_source() = default;
     explicit operator bool() const { return bool(_fn) || bool(_fn_v2); }
     friend class optimized_optional<mutation_source>;

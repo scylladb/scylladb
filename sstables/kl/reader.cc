@@ -23,6 +23,53 @@ static inline bytes_view pop_back(std::vector<bytes_view>& vec) {
     return b;
 }
 
+class mp_row_consumer_reader_k_l : public mp_row_consumer_reader_base, public flat_mutation_reader_v2::impl {
+    friend class sstables::kl::mp_row_consumer_k_l;
+private:
+    range_tombstone_change_generator _rtc_gen;
+public:
+    mp_row_consumer_reader_k_l(schema_ptr s, reader_permit permit, shared_sstable sst)
+        : mp_row_consumer_reader_base(std::move(sst))
+        , impl(std::move(s), std::move(permit))
+        , _rtc_gen(*_schema)
+    {}
+
+    void on_next_partition(dht::decorated_key key, tombstone tomb) {
+        _partition_finished = false;
+        _before_partition = false;
+        _end_of_stream = false;
+        _current_partition_key = std::move(key);
+        _rtc_gen.reset();
+        impl::push_mutation_fragment(*_schema, _permit, partition_start(*_current_partition_key, tomb));
+        _sst->get_stats().on_partition_read();
+    }
+    void flush_tombstones(position_in_partition_view pos) {
+        _rtc_gen.flush(pos, [this] (range_tombstone_change&& rtc) {
+            impl::push_mutation_fragment(*_schema, _permit, std::move(rtc));
+        });
+    }
+    void push_mutation_fragment(mutation_fragment&& mf) {
+        flush_tombstones(mf.position());
+        switch (mf.mutation_fragment_kind()) {
+            case mutation_fragment::kind::partition_start:
+                impl::push_mutation_fragment(*_schema, _permit, std::move(mf).as_partition_start());
+                break;
+            case mutation_fragment::kind::static_row:
+                impl::push_mutation_fragment(*_schema, _permit, std::move(mf).as_static_row());
+                break;
+            case mutation_fragment::kind::clustering_row:
+                impl::push_mutation_fragment(*_schema, _permit, std::move(mf).as_clustering_row());
+                break;
+            case mutation_fragment::kind::range_tombstone:
+                _rtc_gen.consume(std::move(mf).as_range_tombstone());
+                break;
+            case mutation_fragment::kind::partition_end:
+                impl::push_mutation_fragment(*_schema, _permit, std::move(mf).as_end_of_partition());
+                break;
+        }
+    }
+};
+
 // Important note: the row key, column name and column value, passed to the
 // consume_* functions, are passed as a "bytes_view" object, which points to
 // internal data held by the feeder. This internal data is only valid for the
@@ -1442,7 +1489,7 @@ public:
     }
 };
 
-flat_mutation_reader make_reader(
+flat_mutation_reader_v2 make_reader(
         shared_sstable sstable,
         schema_ptr schema,
         reader_permit permit,
@@ -1453,7 +1500,7 @@ flat_mutation_reader make_reader(
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr,
         read_monitor& monitor) {
-    return make_flat_mutation_reader<sstable_mutation_reader>(
+    return make_flat_mutation_reader_v2<sstable_mutation_reader>(
         std::move(sstable), std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, monitor);
 }
 
@@ -1510,14 +1557,14 @@ public:
     }
 };
 
-flat_mutation_reader make_crawling_reader(
+flat_mutation_reader_v2 make_crawling_reader(
         shared_sstable sstable,
         schema_ptr schema,
         reader_permit permit,
         const io_priority_class& pc,
         tracing::trace_state_ptr trace_state,
         read_monitor& monitor) {
-    return make_flat_mutation_reader<crawling_sstable_mutation_reader>(std::move(sstable), std::move(schema), std::move(permit), pc,
+    return make_flat_mutation_reader_v2<crawling_sstable_mutation_reader>(std::move(sstable), std::move(schema), std::move(permit), pc,
             std::move(trace_state), monitor);
 }
 

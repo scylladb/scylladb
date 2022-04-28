@@ -20,7 +20,6 @@
 #include "dirty_memory_manager.hh"
 #include "cache_flat_mutation_reader.hh"
 #include "real_dirty_memory_accounter.hh"
-#include "readers/empty.hh"
 #include "readers/forwardable_v2.hh"
 #include "readers/nonforwardable.hh"
 
