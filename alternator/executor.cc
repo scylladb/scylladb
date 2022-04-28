@@ -1543,7 +1543,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
                 if (!m) {
                     return make_ready_future<executor::request_return_type>(api_error::conditional_check_failed("Failed condition."));
                 }
-                return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit)).then([this] () mutable {
+                return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes).then([this] () mutable {
                     return rmw_operation_return(std::move(_return_attributes));
                 });
             });
@@ -1551,7 +1551,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
     } else if (_write_isolation != write_isolation::LWT_ALWAYS) {
         std::optional<mutation> m = apply(nullptr, api::new_timestamp());
         assert(m); // !needs_read_before_write, so apply() did not check a condition
-        return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit)).then([this] () mutable {
+        return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes).then([this] () mutable {
             return rmw_operation_return(std::move(_return_attributes));
         });
     }
@@ -1896,7 +1896,8 @@ static future<> do_batch_write(service::storage_proxy& proxy,
                 db::consistency_level::LOCAL_QUORUM,
                 executor::default_timeout(),
                 trace_state,
-                std::move(permit));
+                std::move(permit),
+                db::allow_per_partition_rate_limit::yes);
     } else {
         // Do the write via LWT:
         // Multiple mutations may be destined for the same partition, adding

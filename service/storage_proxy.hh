@@ -271,6 +271,7 @@ private:
             tracing::trace_state_ptr,
             service_permit,
             bool,
+            db::allow_per_partition_rate_limit,
             lw_shared_ptr<cdc::operation_result_tracker>> _mutate_stage;
     netw::connection_drop_slot_t _connection_dropped;
     netw::connection_drop_registration_t _condrop_registration;
@@ -404,7 +405,7 @@ private:
 
     gms::inet_address find_leader_for_counter_update(const mutation& m, db::consistency_level cl);
 
-    future<result<>> do_mutate(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, bool, lw_shared_ptr<cdc::operation_result_tracker> cdc_tracker);
+    future<result<>> do_mutate(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, bool, db::allow_per_partition_rate_limit allow_limit, lw_shared_ptr<cdc::operation_result_tracker> cdc_tracker);
 
     future<> send_to_endpoint(
             std::unique_ptr<mutation_holder> m,
@@ -537,14 +538,14 @@ public:
     * @param consistency_level the consistency level for the operation
     * @param tr_state trace state handle
     */
-    future<> mutate(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, bool raw_counters = false);
+    future<> mutate(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters = false);
 
     /**
     * See mutate. Does the same, but returns some exceptions
     * through the result<>, which allows for efficient inspection
     * of the exception on the exception handling path.
     */
-    future<result<>> mutate_result(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, bool raw_counters = false);
+    future<result<>> mutate_result(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters = false);
 
     paxos_participants
     get_paxos_participants(const sstring& ks_name, const dht::token& token, db::consistency_level consistency_for_paxos);
@@ -553,7 +554,8 @@ public:
                                            clock_type::time_point timeout, service_permit permit);
 
     future<result<>> mutate_with_triggers(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout,
-                                          bool should_mutate_atomically, tracing::trace_state_ptr tr_state, service_permit permit, bool raw_counters = false);
+                                          bool should_mutate_atomically, tracing::trace_state_ptr tr_state, service_permit permit,
+                                          db::allow_per_partition_rate_limit allow_limit, bool raw_counters = false);
 
     /**
     * See mutate. Adds additional steps before and after writing a batch.

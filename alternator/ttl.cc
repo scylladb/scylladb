@@ -284,7 +284,8 @@ static future<> expire_item(service::storage_proxy& proxy,
     return proxy.mutate(std::vector<mutation>{std::move(m)},
         db::consistency_level::LOCAL_QUORUM,
         executor::default_timeout(), // FIXME - which timeout?
-        qs.get_trace_state(), qs.get_permit());
+        qs.get_trace_state(), qs.get_permit(),
+        db::allow_per_partition_rate_limit::no);
 }
 
 static size_t random_offset(size_t min, size_t max) {

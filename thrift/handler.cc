@@ -511,7 +511,7 @@ public:
             add_to_mutation(*schema, column, m_to_apply);
             return _query_state.get_client_state().has_schema_access(_db, *schema, auth::permission::MODIFY).then([this, m_to_apply = std::move(m_to_apply), consistency_level, permit = std::move(permit)] () mutable {
                 auto timeout = db::timeout_clock::now() + _timeout_config.write_timeout;
-                return _proxy.local().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit));
+                return _proxy.local().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit), db::allow_per_partition_rate_limit::yes);
             });
         });
     }
@@ -527,7 +527,7 @@ public:
             add_to_mutation(*schema, column, m_to_apply);
             return _query_state.get_client_state().has_schema_access(_db, *schema, auth::permission::MODIFY).then([this, m_to_apply = std::move(m_to_apply), consistency_level, permit = std::move(permit)] () mutable {
                 auto timeout = db::timeout_clock::now() + _timeout_config.write_timeout;
-                return _proxy.local().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit));
+                return _proxy.local().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit), db::allow_per_partition_rate_limit::yes);
             });
         });
     }
@@ -564,7 +564,7 @@ public:
 
             return _query_state.get_client_state().has_schema_access(_db, *schema, auth::permission::MODIFY).then([this, m_to_apply = std::move(m_to_apply), consistency_level, permit = std::move(permit)] () mutable {
                 auto timeout = db::timeout_clock::now() + _timeout_config.write_timeout;
-                return _proxy.local().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit));
+                return _proxy.local().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit), db::allow_per_partition_rate_limit::yes);
             });
         });
     }
@@ -591,7 +591,7 @@ public:
             return _query_state.get_client_state().has_schema_access(_db, *schema, auth::permission::MODIFY).then([this, m_to_apply = std::move(m_to_apply), consistency_level, permit = std::move(permit)] () mutable {
                 // This mutation contains only counter tombstones so it can be applied like non-counter mutations.
                 auto timeout = db::timeout_clock::now() + _timeout_config.counter_write_timeout;
-                return _proxy.local().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit));
+                return _proxy.local().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit), db::allow_per_partition_rate_limit::yes);
             });
         });
     }
@@ -604,7 +604,7 @@ public:
                 return _query_state.get_client_state().has_schema_access(_db, *schema, auth::permission::MODIFY);
             }).then([this, muts = std::move(p.first), consistency_level, permit = std::move(permit)] () mutable {
                 auto timeout = db::timeout_clock::now() + _timeout_config.write_timeout;
-                return _proxy.local().mutate(std::move(muts), cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit));
+                return _proxy.local().mutate(std::move(muts), cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit), db::allow_per_partition_rate_limit::yes);
             });
         });
     }

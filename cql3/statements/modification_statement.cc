@@ -284,7 +284,7 @@ modification_statement::execute_without_condition(query_processor& qp, service::
             return make_ready_future<coordinator_result<>>(bo::success());
         }
         
-        return qp.proxy().mutate_with_triggers(std::move(mutations), cl, timeout, false, qs.get_trace_state(), qs.get_permit(), this->is_raw_counter_shard_write());
+        return qp.proxy().mutate_with_triggers(std::move(mutations), cl, timeout, false, qs.get_trace_state(), qs.get_permit(), db::allow_per_partition_rate_limit::yes, this->is_raw_counter_shard_write());
     });
 }
 
