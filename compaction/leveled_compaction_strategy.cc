@@ -184,7 +184,7 @@ leveled_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input
         };
 
         auto total_bytes = std::max(leveled_manifest::get_total_bytes(level_info[0]), uint64_t(max_sstable_size_in_bytes));
-        unsigned ideal_level = std::ceil(log_fanout(total_bytes / max_sstable_size_in_bytes));
+        unsigned ideal_level = std::ceil(log_fanout((total_bytes + max_sstable_size_in_bytes - 1) / max_sstable_size_in_bytes));
 
         leveled_manifest::logger.info("Reshaping {} disjoint sstables in level 0 into level {}", level_info[0].size(), ideal_level);
         compaction_descriptor desc(std::move(input), iop, ideal_level, max_sstable_size_in_bytes);
