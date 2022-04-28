@@ -423,39 +423,6 @@ public:
         return _impl->consume(std::move(consumer));
     }
 
-    class filter {
-    private:
-        std::function<bool (const dht::decorated_key&)> _partition_filter = [] (const dht::decorated_key&) { return true; };
-        std::function<bool (const mutation_fragment&)> _mutation_fragment_filter = [] (const mutation_fragment&) { return true; };
-    public:
-        filter() = default;
-
-        filter(std::function<bool (const dht::decorated_key&)>&& pf)
-            : _partition_filter(std::move(pf))
-        { }
-
-        filter(std::function<bool (const dht::decorated_key&)>&& pf,
-               std::function<bool (const mutation_fragment&)>&& mf)
-            : _partition_filter(std::move(pf))
-            , _mutation_fragment_filter(std::move(mf))
-        { }
-
-        template <typename Functor>
-        filter(Functor&& f)
-            : _partition_filter(std::forward<Functor>(f))
-        { }
-
-        bool operator()(const dht::decorated_key& dk) const {
-            return _partition_filter(dk);
-        }
-
-        bool operator()(const mutation_fragment& mf) const {
-            return _mutation_fragment_filter(mf);
-        }
-
-        void on_end_of_stream() const { }
-    };
-
     struct no_filter {
         bool operator()(const dht::decorated_key& dk) const {
             return true;
