@@ -1150,7 +1150,7 @@ public:
         return "Cleaned";
     }
 
-    flat_mutation_reader::filter make_partition_filter() const {
+    flat_mutation_reader_v2::filter make_partition_filter() const {
         return [this] (const dht::decorated_key& dk) {
 #ifdef SEASTAR_DEBUG
             // sstables should never be shared with other shards at this point.
