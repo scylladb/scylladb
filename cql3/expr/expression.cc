@@ -1820,16 +1820,16 @@ static constant evaluate_list(const collection_constructor& collection,
     for (const expression& element : collection.elements) {
         constant evaluated_element = evaluate(element, options);
 
+        if (evaluated_element.is_unset_value()) {
+            throw exceptions::invalid_request_exception("unset value is not supported inside collections");
+        }
+
         if (evaluated_element.is_null()) {
             if (skip_null) {
                 continue;
             }
 
             throw exceptions::invalid_request_exception("null is not supported inside collections");
-        }
-
-        if (evaluated_element.is_unset_value()) {
-            return constant::make_unset_value(collection.type);
         }
 
         evaluated_elements.emplace_back(std::move(evaluated_element).value.to_managed_bytes());
@@ -1851,7 +1851,7 @@ static constant evaluate_set(const collection_constructor& collection, const que
         }
 
         if (evaluated_element.is_unset_value()) {
-            return constant::make_unset_value(collection.type);
+            throw exceptions::invalid_request_exception("unset value is not supported inside collections");
         }
 
         if (evaluated_element.view().size_bytes() > std::numeric_limits<uint16_t>::max()) {
@@ -1884,12 +1884,8 @@ static constant evaluate_map(const collection_constructor& collection, const que
                 throw exceptions::invalid_request_exception("null is not supported inside collections");
             }
 
-            if (key.is_unset_value()) {
+            if (key.is_unset_value() || value.is_unset_value()) {
                 throw exceptions::invalid_request_exception("unset value is not supported inside collections");
-            }
-
-            if (value.is_unset_value()) {
-                return constant::make_unset_value(collection.type);
             }
 
             if (key.view().size_bytes() > std::numeric_limits<uint16_t>::max()) {
