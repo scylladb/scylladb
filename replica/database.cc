@@ -52,6 +52,7 @@
 
 #include "data_dictionary/user_types_metadata.hh"
 #include <seastar/core/shared_ptr_incomplete.hh>
+#include <seastar/coroutine/as_future.hh>
 #include <seastar/util/memory_diagnostics.hh>
 
 #include "locator/abstract_replication_strategy.hh"
@@ -929,11 +930,10 @@ future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_
     dblog.debug("Dropping {}.{}", ks_name, cf_name);
     co_await remove(*cf);
     cf->clear_views();
-    co_return co_await cf->await_pending_ops().then([this, &ks, cf, tsf = std::move(tsf), snapshot] {
-        return truncate(ks, *cf, std::move(tsf), snapshot).finally([this, cf] {
-            return cf->stop();
-        });
-    }).finally([cf] {});
+    co_await cf->await_pending_ops();
+    auto f = co_await coroutine::as_future(truncate(ks, *cf, std::move(tsf), snapshot));
+    co_await cf->stop();
+    f.get(); // re-throw exception from truncate() if any
 }
 
 const utils::UUID& database::find_uuid(std::string_view ks, std::string_view cf) const {
