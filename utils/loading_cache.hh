@@ -438,11 +438,11 @@ private:
         }
 
         if (lru_entry.touch_count() < SectionHitThreshold) {
-            _logger.trace("Putting key {} into the unpriviledged section", lru_entry.key());
+            _logger.trace("Putting key {} into the unprivileged section", lru_entry.key());
             _unprivileged_lru_list.push_front(lru_entry);
             lru_entry.inc_touch_count();
         } else {
-            _logger.trace("Putting key {} into the priviledged section", lru_entry.key());
+            _logger.trace("Putting key {} into the privileged section", lru_entry.key());
             _lru_list.push_front(lru_entry);
 
             // Bump it up only once to avoid a wrap around
@@ -516,7 +516,7 @@ private:
 
         while (_current_size >= _max_size && !_unprivileged_lru_list.empty()) {
             ts_value_lru_entry& lru_entry = *_unprivileged_lru_list.rbegin();
-            _logger.trace("shrink(): {}: dropping the unpriviledged entry: ms since last_read {}", lru_entry.key(), duration_cast<milliseconds>(loading_cache_clock_type::now() - lru_entry.timestamped_value().last_read()).count());
+            _logger.trace("shrink(): {}: dropping the unprivileged entry: ms since last_read {}", lru_entry.key(), duration_cast<milliseconds>(loading_cache_clock_type::now() - lru_entry.timestamped_value().last_read()).count());
             loading_cache::destroy_ts_value(&lru_entry);
             LoadingCacheStats::inc_unprivileged_on_cache_size_eviction();
         }
