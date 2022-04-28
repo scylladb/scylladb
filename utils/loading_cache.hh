@@ -542,12 +542,31 @@ private:
             LoadingCacheStats::inc_unprivileged_on_cache_size_eviction();
         };
 
-        while (memory_footprint() >= _max_size && !_unprivileged_lru_list.empty()) {
+        // When cache entries need to be evicted due to a size restriction,
+        // unprivileged section entries are evicted first.
+        //
+        // However, we make sure that the unprivileged section does not get
+        // too small, because this could lead to starving the unprivileged section.
+        // For example if the cache could store at most 50 entries and there are 49 entries in
+        // privileged section, after adding 5 entries (that would go to unprivileged
+        // section) 4 of them would get evicted and only the 5th one would stay.
+        // This caused problems with BATCH statements where all prepared statements
+        // in the batch have to stay in cache at the same time for the batch to correctly
+        // execute.
+        auto minimum_unprivileged_section_size = _max_size / 2;
+        while (memory_footprint() >= _max_size && _unprivileged_section_size > minimum_unprivileged_section_size) {
             drop_unprivileged_entry();
         }
 
-        while (memory_footprint() >= _max_size) {
+        while (memory_footprint() >= _max_size && !_lru_list.empty()) {
             drop_privileged_entry();
+        }
+
+        // If dropping entries from privileged section did not help,
+        // we have to drop entries from unprivileged section,
+        // going below minimum_unprivileged_section_size.
+        while (memory_footprint() >= _max_size) {
+            drop_unprivileged_entry();
         }
     }
 

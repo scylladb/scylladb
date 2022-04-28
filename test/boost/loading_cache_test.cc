@@ -428,6 +428,163 @@ SEASTAR_TEST_CASE(test_loading_cache_eviction_unprivileged) {
     });
 }
 
+SEASTAR_TEST_CASE(test_loading_cache_eviction_unprivileged_minimum_size) {
+    return seastar::async([] {
+        // Test that unprivileged section is not starved.
+        //
+        // This scenario is tested: cache max_size is 50 and there are 49 entries in
+        // privileged section. After adding 5 elements (that go to unprivileged
+        // section) all of them should stay in unprivileged section and elements
+        // in privileged section should get evicted.
+        //
+        // Wrong handling of this situation caused problems with BATCH statements 
+        // where all prepared statements in the batch have to stay in cache at 
+        // the same time for the batch to correctly execute.
+
+        using namespace std::chrono;
+        utils::loading_cache<int, sstring, 1> loading_cache(50, 1h, testlog);
+        auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
+
+        prepare().get();
+
+        // Add 49 elements to privileged section
+        for (int i = 0; i < 49; i++) {
+            // Touch the value with the key "i" twice
+            loading_cache.get_ptr(i, loader).discard_result().get();
+            loading_cache.find(i);
+        }
+
+        // Add 5 elements to unprivileged section
+        for (int i = 50; i < 55; i++) {
+            loading_cache.get_ptr(i, loader).discard_result().get();            
+        }
+
+        // Make sure that none of 5 elements were evicted
+        for (int i = 50; i < 55; i++) {
+            BOOST_REQUIRE(loading_cache.find(i) != nullptr);
+        } 
+
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 50);
+    });
+}
+
+struct sstring_length_entry_size {
+    size_t operator()(const sstring& val) {
+        return val.size();
+    }
+};
+
+SEASTAR_TEST_CASE(test_loading_cache_section_size_correctly_calculated) {
+    return seastar::async([] {
+        auto load_len1 =  [] (const int& key) { return make_ready_future<sstring>(tests::random::get_sstring(1)); };
+        auto load_len5 =  [] (const int& key) { return make_ready_future<sstring>(tests::random::get_sstring(5)); };
+        auto load_len10 = [] (const int& key) { return make_ready_future<sstring>(tests::random::get_sstring(10)); };
+        auto load_len95 = [] (const int& key) { return make_ready_future<sstring>(tests::random::get_sstring(95)); };
+
+        using namespace std::chrono;
+        utils::loading_cache<int, sstring, 1, utils::loading_cache_reload_enabled::no, sstring_length_entry_size> loading_cache(100, 1h, testlog);
+        auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
+
+        BOOST_REQUIRE_EQUAL(loading_cache.privileged_section_memory_footprint(), 0);
+        BOOST_REQUIRE_EQUAL(loading_cache.unprivileged_section_memory_footprint(), 0);
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 0);
+
+        loading_cache.get_ptr(1, load_len1).discard_result().get();
+        BOOST_REQUIRE_EQUAL(loading_cache.privileged_section_memory_footprint(), 0);
+        BOOST_REQUIRE_EQUAL(loading_cache.unprivileged_section_memory_footprint(), 1);
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 1);
+
+        loading_cache.get_ptr(2, load_len5).discard_result().get();
+        BOOST_REQUIRE_EQUAL(loading_cache.privileged_section_memory_footprint(), 0);
+        BOOST_REQUIRE_EQUAL(loading_cache.unprivileged_section_memory_footprint(), 6);
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 2);
+
+        // Move "2" to privileged section by touching it the second time.
+        loading_cache.get_ptr(2, load_len5).discard_result().get();
+        BOOST_REQUIRE_EQUAL(loading_cache.privileged_section_memory_footprint(), 5);
+        BOOST_REQUIRE_EQUAL(loading_cache.unprivileged_section_memory_footprint(), 1);
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 2);
+
+        loading_cache.get_ptr(3, load_len10).discard_result().get();
+        BOOST_REQUIRE_EQUAL(loading_cache.privileged_section_memory_footprint(), 5);
+        BOOST_REQUIRE_EQUAL(loading_cache.unprivileged_section_memory_footprint(), 11);
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 3);
+
+        // Move "1" to privileged section. load_len10 should not get executed, as "1"
+        // is already in the cache.
+        loading_cache.get_ptr(1, load_len10).discard_result().get();
+        BOOST_REQUIRE_EQUAL(loading_cache.privileged_section_memory_footprint(), 6);
+        BOOST_REQUIRE_EQUAL(loading_cache.unprivileged_section_memory_footprint(), 10);
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 3);
+
+        // Flood cache with elements of size 10,
+        // unprivileged. "1" and "2" should stay in the privileged section.
+        for (int i = 11; i < 30; i++) {
+            loading_cache.get_ptr(i, load_len10).discard_result().get();
+        }
+        BOOST_REQUIRE_EQUAL(loading_cache.privileged_section_memory_footprint(), 6);
+        // We shrink the cache BEFORE adding element,
+        // so after adding the element, the cache
+        // can exceed max_size...
+        BOOST_REQUIRE_EQUAL(loading_cache.unprivileged_section_memory_footprint(), 100); 
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 12);
+
+        // Flood cache with elements of size 10, privileged.
+        for (int i = 11; i < 30; i++) {
+            loading_cache.get_ptr(i, load_len10).discard_result().get();
+            loading_cache.get_ptr(i, load_len10).discard_result().get();
+        }
+        BOOST_REQUIRE_EQUAL(loading_cache.privileged_section_memory_footprint(), 100);
+        BOOST_REQUIRE_EQUAL(loading_cache.unprivileged_section_memory_footprint(), 0);
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 10);
+
+        // Add one new unprivileged entry.
+        loading_cache.get_ptr(31, load_len1).discard_result().get();
+        BOOST_REQUIRE_EQUAL(loading_cache.privileged_section_memory_footprint(), 90);
+        BOOST_REQUIRE_EQUAL(loading_cache.unprivileged_section_memory_footprint(), 1);
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 10);
+
+        // Add another unprivileged entry, privileged entry should get evicted.
+        loading_cache.get_ptr(32, load_len5).discard_result().get();
+        BOOST_REQUIRE_EQUAL(loading_cache.privileged_section_memory_footprint(), 90);
+        BOOST_REQUIRE_EQUAL(loading_cache.unprivileged_section_memory_footprint(), 6);
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 11);
+
+        // Make it privileged by touching it again.
+        loading_cache.get_ptr(32, load_len5).discard_result().get();
+        BOOST_REQUIRE_EQUAL(loading_cache.privileged_section_memory_footprint(), 95);
+        BOOST_REQUIRE_EQUAL(loading_cache.unprivileged_section_memory_footprint(), 1);
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 11);
+
+        // Add another unprivileged entry.
+        loading_cache.get_ptr(33, load_len10).discard_result().get();
+        BOOST_REQUIRE_EQUAL(loading_cache.privileged_section_memory_footprint(), 95);
+        // We shrink the cache BEFORE adding element,
+        // so after adding the element, the cache
+        // can exceed max_size...
+        BOOST_REQUIRE_EQUAL(loading_cache.unprivileged_section_memory_footprint(), 11);
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 12);
+
+        // Add another unprivileged entry, privileged entry should get evicted.
+        loading_cache.get_ptr(34, load_len10).discard_result().get();
+        BOOST_REQUIRE_EQUAL(loading_cache.privileged_section_memory_footprint(), 85);
+        // We shrink the cache BEFORE adding element,
+        // so after adding the element, the cache
+        // can exceed max_size...
+        BOOST_REQUIRE_EQUAL(loading_cache.unprivileged_section_memory_footprint(), 21);
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 12);
+
+        // Add a big unprivileged entry, filling almost entire cache.
+        loading_cache.get_ptr(35, load_len95).discard_result().get();
+        BOOST_REQUIRE_EQUAL(loading_cache.privileged_section_memory_footprint(), 75);
+        // We shrink the cache BEFORE adding element,
+        // so after adding the element, the cache
+        // can exceed max_size...
+        BOOST_REQUIRE_EQUAL(loading_cache.unprivileged_section_memory_footprint(), 95 + 21);
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 12);
+    });
+}
+
 SEASTAR_TEST_CASE(test_loading_cache_reload_during_eviction) {
     return seastar::async([] {
         using namespace std::chrono;
