@@ -529,17 +529,25 @@ private:
     void shrink() {
         using namespace std::chrono;
 
-        while (memory_footprint() >= _max_size && !_unprivileged_lru_list.empty()) {
+        auto drop_privileged_entry = [&] {
+            ts_value_lru_entry& lru_entry = *_lru_list.rbegin();
+            _logger.trace("shrink(): {}: dropping the entry: ms since last_read {}", lru_entry.key(), duration_cast<milliseconds>(loading_cache_clock_type::now() - lru_entry.timestamped_value().last_read()).count());
+            loading_cache::destroy_ts_value(&lru_entry);
+        };
+
+        auto drop_unprivileged_entry = [&] {
             ts_value_lru_entry& lru_entry = *_unprivileged_lru_list.rbegin();
             _logger.trace("shrink(): {}: dropping the unprivileged entry: ms since last_read {}", lru_entry.key(), duration_cast<milliseconds>(loading_cache_clock_type::now() - lru_entry.timestamped_value().last_read()).count());
             loading_cache::destroy_ts_value(&lru_entry);
             LoadingCacheStats::inc_unprivileged_on_cache_size_eviction();
+        };
+
+        while (memory_footprint() >= _max_size && !_unprivileged_lru_list.empty()) {
+            drop_unprivileged_entry();
         }
 
         while (memory_footprint() >= _max_size) {
-            ts_value_lru_entry& lru_entry = *_lru_list.rbegin();
-            _logger.trace("shrink(): {}: dropping the entry: ms since last_read {}", lru_entry.key(), duration_cast<milliseconds>(loading_cache_clock_type::now() - lru_entry.timestamped_value().last_read()).count());
-            loading_cache::destroy_ts_value(&lru_entry);
+            drop_privileged_entry();
         }
     }
 
