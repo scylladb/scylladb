@@ -617,7 +617,6 @@ extern expression search_and_replace(const expression& e,
         const noncopyable_function<std::optional<expression> (const expression& candidate)>& replace_candidate);
 
 extern expression prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver);
-extern expression prepare_expression_multi_column(const expression& expr, data_dictionary::database db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers);
 
 // Prepares a binary operator received from the parser.
 // Does some basic type checks but no advanced validation.

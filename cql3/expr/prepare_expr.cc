@@ -482,35 +482,6 @@ tuple_constructor_prepare_nontuple(const tuple_constructor& tc, data_dictionary:
 }
 
 static
-expression
-tuple_constructor_prepare_tuple(const tuple_constructor& tc, data_dictionary::database db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers) {
-    if (tc.elements.size() != receivers.size()) {
-        throw exceptions::invalid_request_exception(format("Expected {:d} elements in value tuple, but got {:d}: {}", receivers.size(), tc.elements.size(), tc));
-    }
-
-    std::vector<expression> values;
-    std::vector<data_type> types;
-    bool all_terminal = true;
-    for (size_t i = 0; i < tc.elements.size(); ++i) {
-        expression elem = prepare_expression(tc.elements[i], db, keyspace, receivers[i]);
-        if (!is<constant>(elem)) {
-            all_terminal = false;
-        }
-        values.push_back(std::move(elem));
-        types.push_back(receivers[i]->type);
-    }
-    tuple_constructor value {
-        .elements = std::move(values),
-        .type = tuple_type_impl::get_instance(std::move(types))
-    };
-    if (all_terminal) {
-        return evaluate(value, query_options::DEFAULT);
-    } else {
-        return value;
-    }
-}
-
-static
 std::ostream&
 operator<<(std::ostream&out, untyped_constant::type_class t)
 {
@@ -645,71 +616,6 @@ bind_variable_scalar_prepare_expression(const bind_variable& bv, data_dictionary
         .shape = bind_variable::shape_type::scalar,
         .bind_index = bv.bind_index,
         .receiver = receiver
-    };
-}
-
-static
-lw_shared_ptr<column_specification>
-bind_variable_tuple_make_receiver(const std::vector<lw_shared_ptr<column_specification>>& receivers) {
-    std::vector<data_type> types;
-    types.reserve(receivers.size());
-    sstring in_name = "(";
-    for (auto&& receiver : receivers) {
-        in_name += receiver->name->text();
-        if (receiver != receivers.back()) {
-            in_name += ",";
-        }
-        types.push_back(receiver->type);
-    }
-    in_name += ")";
-
-    auto identifier = ::make_shared<column_identifier>(in_name, true);
-    auto type = tuple_type_impl::get_instance(types);
-    return make_lw_shared<column_specification>(receivers.front()->ks_name, receivers.front()->cf_name, identifier, type);
-}
-
-static
-bind_variable
-bind_variable_tuple_prepare_expression(const bind_variable& bv, data_dictionary::database db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers) {
-    return bind_variable {
-        .shape = bind_variable::shape_type::tuple,
-        .bind_index = bv.bind_index,
-        .receiver = bind_variable_tuple_make_receiver(receivers)
-    };
-}
-
-static
-lw_shared_ptr<column_specification>
-bind_variable_tuple_in_make_receiver(const std::vector<lw_shared_ptr<column_specification>>& receivers) {
-    std::vector<data_type> types;
-    types.reserve(receivers.size());
-    sstring in_name = "in(";
-    for (auto&& receiver : receivers) {
-        in_name += receiver->name->text();
-        if (receiver != receivers.back()) {
-            in_name += ",";
-        }
-
-        if (receiver->type->is_collection() && receiver->type->is_multi_cell()) {
-            throw exceptions::invalid_request_exception("Non-frozen collection columns do not support IN relations");
-        }
-
-        types.emplace_back(receiver->type);
-    }
-    in_name += ")";
-
-    auto identifier = ::make_shared<column_identifier>(in_name, true);
-    auto type = tuple_type_impl::get_instance(types);
-    return make_lw_shared<column_specification>(receivers.front()->ks_name, receivers.front()->cf_name, identifier, list_type_impl::get_instance(type, false));
-}
-
-static
-bind_variable
-bind_variable_tuple_in_prepare_expression(const bind_variable& bv, data_dictionary::database db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers) {
-    return bind_variable {
-        .shape = bind_variable::shape_type::tuple_in,
-        .bind_index = bv.bind_index,
-        .receiver = bind_variable_tuple_in_make_receiver(receivers)
     };
 }
 
@@ -924,27 +830,6 @@ prepare_expression(const expression& expr, data_dictionary::database db, const s
         },
         [&] (const usertype_constructor& uc) -> expression {
             return usertype_constructor_prepare_expression(uc, db, keyspace, receiver);
-        },
-    }, expr);
-}
-
-expression
-prepare_expression_multi_column(const expression& expr, data_dictionary::database db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers) {
-    return expr::visit(overloaded_functor{
-        [&] (const bind_variable& bv) -> expression {
-            switch (bv.shape) {
-            case expr::bind_variable::shape_type::scalar: on_internal_error(expr_logger, "prepare_expression_multi_column(bind_variable(scalar))");
-            case expr::bind_variable::shape_type::scalar_in: on_internal_error(expr_logger, "prepare_expression_multi_column(bind_variable(scalar_in))");
-            case expr::bind_variable::shape_type::tuple: return bind_variable_tuple_prepare_expression(bv, db, keyspace, receivers);
-            case expr::bind_variable::shape_type::tuple_in: return bind_variable_tuple_in_prepare_expression(bv, db, keyspace, receivers);
-            }
-            on_internal_error(expr_logger, "unexpected shape in bind_variable");
-        },
-        [&] (const tuple_constructor& tc) -> expression {
-            return tuple_constructor_prepare_tuple(tc, db, keyspace, receivers);
-        },
-        [] (const auto& default_case) -> expression {
-            on_internal_error(expr_logger, fmt::format("prepare_expression_multi_column({})", typeid(default_case).name()));
         },
     }, expr);
 }
