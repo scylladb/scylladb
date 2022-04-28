@@ -133,8 +133,8 @@ protected:
             const auto& ty = *column_def.type;
 
             check_false(ty.is_collection(), "Slice restrictions are not supported on collections containing durations");
-            check_false(ty.is_tuple(), "Slice restrictions are not supported on tuples containing durations");
             check_false(ty.is_user_type(), "Slice restrictions are not supported on UDTs containing durations");
+            check_false(ty.is_tuple(), "Slice restrictions are not supported on tuples containing durations");
 
             // We're a duration.
             throw exceptions::invalid_request_exception("Slice restrictions are not supported on duration columns");
