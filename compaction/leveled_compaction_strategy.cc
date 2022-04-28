@@ -178,13 +178,7 @@ leveled_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input
     // The best possible level can be calculated with the formula: log (base fan_out) of (L0_total_bytes / max_sstable_size)
     auto [l0_disjoint, _] = is_disjoint(level_info[0], 0);
     if (mode == reshape_mode::strict && level_info[0].size() >= offstrategy_threshold && level_info[0].size() == input.size() && l0_disjoint) {
-        auto log_fanout = [fanout = leveled_manifest::leveled_fan_out] (double x) {
-            double inv_log_fanout = 1.0f / std::log(fanout);
-            return log(x) * inv_log_fanout;
-        };
-
-        auto total_bytes = std::max(leveled_manifest::get_total_bytes(level_info[0]), uint64_t(max_sstable_size_in_bytes));
-        unsigned ideal_level = std::ceil(log_fanout((total_bytes + max_sstable_size_in_bytes - 1) / max_sstable_size_in_bytes));
+        unsigned ideal_level = ideal_level_for_input(level_info[0], max_sstable_size_in_bytes);
 
         leveled_manifest::logger.info("Reshaping {} disjoint sstables in level 0 into level {}", level_info[0].size(), ideal_level);
         compaction_descriptor desc(std::move(input), iop, ideal_level, max_sstable_size_in_bytes);
@@ -230,6 +224,15 @@ leveled_compaction_strategy::get_cleanup_compaction_jobs(table_state& table_s, s
         ret.push_back(compaction_descriptor(std::move(levels[level]), service::get_local_compaction_priority(), level, _max_sstable_size_in_mb * 1024 * 1024));
     }
     return ret;
+}
+
+unsigned leveled_compaction_strategy::ideal_level_for_input(const std::vector<sstables::shared_sstable>& input, uint64_t max_sstable_size) {
+    auto log_fanout = [fanout = leveled_manifest::leveled_fan_out] (double x) {
+        double inv_log_fanout = 1.0f / std::log(fanout);
+        return log(x) * inv_log_fanout;
+    };
+    uint64_t total_bytes = std::max(leveled_manifest::get_total_bytes(input), max_sstable_size);
+    return std::ceil(log_fanout((total_bytes + max_sstable_size - 1) / max_sstable_size));
 }
 
 }
