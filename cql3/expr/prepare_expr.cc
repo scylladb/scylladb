@@ -204,11 +204,7 @@ map_prepare_expression(const collection_constructor& c, data_dictionary::databas
         expression k = prepare_expression(entry_tuple.elements[0], db, keyspace, key_spec);
         expression v = prepare_expression(entry_tuple.elements[1], db, keyspace, value_spec);
 
-        if (contains_bind_marker(k) || contains_bind_marker(k)) {
-            throw exceptions::invalid_request_exception(format("Invalid map literal for {}: bind variables are not supported inside collection literals", *receiver->name));
-        }
-
-        // Even when there are no bind markers, the value can still contain a nonpure function
+        // Check if one of values contains a nonpure function
         if (!is<constant>(k) || !is<constant>(v)) {
             all_terminal = false;
         }
@@ -316,10 +312,6 @@ set_prepare_expression(const collection_constructor& c, data_dictionary::databas
     {
         expression elem = prepare_expression(e, db, keyspace, value_spec);
 
-        if (contains_bind_marker(elem)) {
-            throw exceptions::invalid_request_exception(format("Invalid set literal for {}: bind variables are not supported inside collection literals", *receiver->name));
-        }
-
         if (!is<constant>(elem)) {
             all_terminal = false;
         }
@@ -401,9 +393,6 @@ list_prepare_expression(const collection_constructor& c, data_dictionary::databa
     for (auto& e : c.elements) {
         expression elem = prepare_expression(e, db, keyspace, value_spec);
 
-        if (contains_bind_marker(elem)) {
-            throw exceptions::invalid_request_exception(format("Invalid list literal for {}: bind variables are not supported inside collection literals", *receiver->name));
-        }
         if (!is<constant>(elem)) {
             all_terminal = false;
         }
