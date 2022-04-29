@@ -53,6 +53,7 @@
 
 #include "data_dictionary/user_types_metadata.hh"
 #include <seastar/core/shared_ptr_incomplete.hh>
+#include <seastar/coroutine/as_future.hh>
 #include <seastar/util/memory_diagnostics.hh>
 
 #include "locator/abstract_replication_strategy.hh"
@@ -903,10 +904,9 @@ bool database::update_column_family(schema_ptr new_schema) {
     return columns_changed;
 }
 
-future<> database::remove(const column_family& cf) noexcept {
+void database::remove(const table& cf) noexcept {
     auto s = cf.schema();
     auto& ks = find_keyspace(s->ks_name());
-    co_await _querier_cache.evict_all_for_table(s->id());
     _column_families.erase(s->id());
     ks.metadata()->remove_column_family(s);
     _ks_cf_to_uuid.erase(std::make_pair(s->ks_name(), s->cf_name()));
@@ -930,13 +930,13 @@ future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_
         on_internal_error(dblog, fmt::format("drop_column_family {}.{}: UUID={} not found", ks_name, cf_name, uuid));
     }
     dblog.debug("Dropping {}.{}", ks_name, cf_name);
-    co_await remove(*cf);
+    remove(*cf);
     cf->clear_views();
-    co_return co_await cf->await_pending_ops().then([this, &ks, cf, tsf = std::move(tsf), snapshot] {
-        return truncate(ks, *cf, std::move(tsf), snapshot).finally([this, cf] {
-            return cf->stop();
-        });
-    }).finally([cf] {});
+    co_await cf->await_pending_ops();
+    co_await _querier_cache.evict_all_for_table(cf->schema()->id());
+    auto f = co_await coroutine::as_future(truncate(ks, *cf, std::move(tsf), snapshot));
+    co_await cf->stop();
+    f.get(); // re-throw exception from truncate() if any
 }
 
 const utils::UUID& database::find_uuid(std::string_view ks, std::string_view cf) const {
