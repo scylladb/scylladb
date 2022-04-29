@@ -985,3 +985,38 @@ SEASTAR_TEST_CASE(snapshot_with_quarantine_works) {
         BOOST_REQUIRE(expected.empty());
     });
 }
+
+SEASTAR_TEST_CASE(database_drop_column_family_clears_querier_cache) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create table ks.cf (k text, v int, primary key (k));").get();
+        auto& db = e.local_db();
+        const auto ts = db_clock::now();
+        auto& tbl = db.find_column_family("ks", "cf");
+
+        auto op = std::optional(tbl.read_in_progress());
+        auto s = tbl.schema();
+        auto q = query::data_querier(
+                tbl.as_mutation_source(),
+                tbl.schema(),
+                database_test(db).get_user_read_concurrency_semaphore().make_tracking_only_permit(s.get(), "test", db::no_timeout),
+                query::full_partition_range,
+                s->full_slice(),
+                default_priority_class(),
+                nullptr);
+
+        auto f = e.db().invoke_on_all([ts] (replica::database& db) {
+            return db.drop_column_family("ks", "cf", [ts] { return make_ready_future<db_clock::time_point>(ts); });
+        });
+
+        // we add a querier to the querier cache while the drop is ongoing
+        auto& qc = db.get_querier_cache();
+        qc.insert(utils::make_random_uuid(), std::move(q), nullptr);
+        BOOST_REQUIRE_EQUAL(qc.get_stats().population, 1);
+
+        op.reset(); // this should allow the drop to finish
+        f.get();
+
+        // the drop should have cleaned up all entries belonging to that table
+        BOOST_REQUIRE_EQUAL(qc.get_stats().population, 0);
+    });
+}
