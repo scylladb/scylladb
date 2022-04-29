@@ -139,9 +139,9 @@ class loading_cache {
 
             _value = std::move(new_val);
             _loaded = loading_cache_clock_type::now();
-            _lru_entry_ptr->cache_size() -= _size;
+            _lru_entry_ptr->owning_section_size() -= _size;
             _size = EntrySize()(_value);
-            _lru_entry_ptr->cache_size() += _size;
+            _lru_entry_ptr->owning_section_size() += _size;
             return *this;
         }
 
@@ -380,9 +380,18 @@ public:
 
     /// \brief returns the memory size the currently cached entries occupy according to the EntrySize predicate.
     size_t memory_footprint() const {
-        return _current_size;
+        return _unprivileged_section_size + _privileged_section_size;
     }
 
+    /// \brief returns the memory size the currently cached entries occupy in the privileged section according to the EntrySize predicate.
+    size_t privileged_section_memory_footprint() const noexcept {
+        return _privileged_section_size;
+    }
+
+    /// \brief returns the memory size the currently cached entries occupy in the unprivileged section according to the EntrySize predicate.
+    size_t unprivileged_section_memory_footprint() const noexcept {
+        return _unprivileged_section_size;
+    }
 private:
     void remove_ts_value(timestamped_val_ptr ts_ptr) {
         if (!ts_ptr) {
@@ -447,7 +456,13 @@ private:
 
             // Bump it up only once to avoid a wrap around
             if (lru_entry.touch_count() == SectionHitThreshold) {
+                // This code will run only once, when a promotion
+                // from unprivileged to privileged section happens.
+                // Update section size bookkeeping.
+                
+                lru_entry.owning_section_size() -= lru_entry.timestamped_value().size();
                 lru_entry.inc_touch_count();
+                lru_entry.owning_section_size() += lru_entry.timestamped_value().size();
             }
         }
     }
@@ -514,14 +529,14 @@ private:
     void shrink() {
         using namespace std::chrono;
 
-        while (_current_size >= _max_size && !_unprivileged_lru_list.empty()) {
+        while (memory_footprint() >= _max_size && !_unprivileged_lru_list.empty()) {
             ts_value_lru_entry& lru_entry = *_unprivileged_lru_list.rbegin();
             _logger.trace("shrink(): {}: dropping the unprivileged entry: ms since last_read {}", lru_entry.key(), duration_cast<milliseconds>(loading_cache_clock_type::now() - lru_entry.timestamped_value().last_read()).count());
             loading_cache::destroy_ts_value(&lru_entry);
             LoadingCacheStats::inc_unprivileged_on_cache_size_eviction();
         }
 
-        while (_current_size >= _max_size) {
+        while (memory_footprint() >= _max_size) {
             ts_value_lru_entry& lru_entry = *_lru_list.rbegin();
             _logger.trace("shrink(): {}: dropping the entry: ms since last_read {}", lru_entry.key(), duration_cast<milliseconds>(loading_cache_clock_type::now() - lru_entry.timestamped_value().last_read()).count());
             loading_cache::destroy_ts_value(&lru_entry);
@@ -577,7 +592,8 @@ private:
     loading_values_type _loading_values;
     lru_list_type _lru_list;              // list containing "privileged" section entries
     lru_list_type _unprivileged_lru_list; // list containing "unprivileged" section entries
-    size_t _current_size = 0;
+    size_t _privileged_section_size = 0;
+    size_t _unprivileged_section_size = 0;
     size_t _max_size = 0;
     loading_cache_clock_type::duration _expiry;
     loading_cache_clock_type::duration _refresh;
@@ -643,7 +659,7 @@ public:
         static_assert(SectionHitThreshold <= std::numeric_limits<typeof(_touch_count)>::max() / 2, "SectionHitThreshold value is too big");
 
         _ts_val_ptr->set_anchor_back_reference(this);
-        cache_size() += _ts_val_ptr->size();
+        owning_section_size() += _ts_val_ptr->size();
     }
 
     void inc_touch_count() noexcept {
@@ -659,12 +675,12 @@ public:
             lru_list_type& lru_list = _parent.container_list(*this);
             lru_list.erase(lru_list.iterator_to(*this));
         }
-        cache_size() -= _ts_val_ptr->size();
+        owning_section_size() -= _ts_val_ptr->size();
         _ts_val_ptr->set_anchor_back_reference(nullptr);
     }
 
-    size_t& cache_size() noexcept {
-        return _parent._current_size;
+    size_t& owning_section_size() noexcept {
+        return _touch_count <= SectionHitThreshold ? _parent._unprivileged_section_size : _parent._privileged_section_size;
     }
 
     void touch() noexcept {
