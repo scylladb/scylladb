@@ -65,6 +65,44 @@ public:
         scheduling_group background_reclaim_sched_group;
     };
 
+    struct stats {
+        size_t segments_compacted;
+        size_t lsa_buffer_segments;
+        uint64_t memory_allocated;
+        uint64_t memory_freed;
+        uint64_t memory_compacted;
+        uint64_t memory_evicted;
+
+        friend stats operator+(const stats& s1, const stats& s2) {
+            stats result(s1);
+            result += s2;
+            return result;
+        }
+        friend stats operator-(const stats& s1, const stats& s2) {
+            stats result(s1);
+            result -= s2;
+            return result;
+        }
+        stats& operator+=(const stats& other) {
+            segments_compacted += other.segments_compacted;
+            lsa_buffer_segments += other.lsa_buffer_segments;
+            memory_allocated += other.memory_allocated;
+            memory_freed += other.memory_freed;
+            memory_compacted += other.memory_compacted;
+            memory_evicted += other.memory_evicted;
+            return *this;
+        }
+        stats& operator-=(const stats& other) {
+            segments_compacted -= other.segments_compacted;
+            lsa_buffer_segments -= other.lsa_buffer_segments;
+            memory_allocated -= other.memory_allocated;
+            memory_freed -= other.memory_freed;
+            memory_compacted -= other.memory_compacted;
+            memory_evicted -= other.memory_evicted;
+            return *this;
+        }
+    };
+
     void configure(const config& cfg);
     future<> stop();
 
@@ -78,6 +116,8 @@ private:
 public:
     tracker();
     ~tracker();
+
+    stats statistics() const;
 
     //
     // Tries to reclaim given amount of bytes in total using all compactible
@@ -95,6 +135,8 @@ public:
     void full_compaction();
 
     void reclaim_all_free_segments();
+
+    occupancy_stats global_occupancy() const noexcept;
 
     // Returns aggregate statistics for all pools.
     occupancy_stats region_occupancy() const noexcept;
@@ -481,12 +523,5 @@ public:
 };
 
 future<> prime_segment_pool(size_t available_memory, size_t min_free_memory);
-
-uint64_t memory_allocated() noexcept;
-uint64_t memory_freed() noexcept;
-uint64_t memory_compacted() noexcept;
-uint64_t memory_evicted() noexcept;
-
-occupancy_stats lsa_global_occupancy_stats() noexcept;
 
 }

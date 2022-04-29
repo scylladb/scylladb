@@ -489,6 +489,7 @@ public:
     size_t compact_and_evict(size_t reserve_segments, size_t bytes, is_preemptible p);
     void full_compaction();
     void reclaim_all_free_segments();
+    occupancy_stats global_occupancy() const noexcept;
     occupancy_stats region_occupancy() const noexcept;
     occupancy_stats occupancy() const noexcept;
     size_t non_lsa_used_space() const noexcept;
@@ -534,6 +535,10 @@ tracker::stop() {
 
 size_t tracker::reclaim(size_t bytes) {
     return _impl->reclaim(bytes, is_preemptible::no);
+}
+
+occupancy_stats tracker::global_occupancy() const noexcept {
+    return _impl->global_occupancy();
 }
 
 occupancy_stats tracker::region_occupancy() const noexcept {
@@ -887,47 +892,10 @@ public:
         reclaim_segments(std::numeric_limits<size_t>::max(), is_preemptible::no);
     }
 
-    struct stats {
-        size_t segments_compacted;
-        size_t lsa_buffer_segments;
-        uint64_t memory_allocated;
-        uint64_t memory_freed;
-        uint64_t memory_compacted;
-        uint64_t memory_evicted;
-
-        friend stats operator+(const stats& s1, const stats& s2) {
-            stats result(s1);
-            result += s2;
-            return result;
-        }
-        friend stats operator-(const stats& s1, const stats& s2) {
-            stats result(s1);
-            result -= s2;
-            return result;
-        }
-        stats& operator+=(const stats& other) {
-            segments_compacted += other.segments_compacted;
-            lsa_buffer_segments += other.lsa_buffer_segments;
-            memory_allocated += other.memory_allocated;
-            memory_freed += other.memory_freed;
-            memory_compacted += other.memory_compacted;
-            memory_evicted += other.memory_evicted;
-            return *this;
-        }
-        stats& operator-=(const stats& other) {
-            segments_compacted -= other.segments_compacted;
-            lsa_buffer_segments -= other.lsa_buffer_segments;
-            memory_allocated -= other.memory_allocated;
-            memory_freed -= other.memory_freed;
-            memory_compacted -= other.memory_compacted;
-            memory_evicted -= other.memory_evicted;
-            return *this;
-        }
-    };
 private:
-    stats _stats{};
+    tracker::stats _stats{};
 public:
-    const stats& statistics() const noexcept { return _stats; }
+    const tracker::stats& statistics() const noexcept { return _stats; }
     inline void on_segment_compaction(size_t used_size) noexcept;
     inline void on_memory_allocation(size_t size) noexcept;
     inline void on_memory_deallocation(size_t size) noexcept;
@@ -942,7 +910,7 @@ private:
     using clock = utils::coarse_steady_clock;
     struct stats {
         occupancy_stats region_occupancy;
-        segment_pool::stats pool_stats;
+        tracker::stats pool_stats;
 
         friend stats operator+(const stats& s1, const stats& s2) {
             stats result(s1);
@@ -1029,6 +997,10 @@ private:
 
     void report() const noexcept;
 };
+
+tracker::stats tracker::statistics() const {
+    return _impl->segment_pool().statistics();
+}
 
 size_t segment_pool::reclaim_segments(size_t target, is_preemptible preempt) {
     // Reclaimer tries to release segments occupying lower parts of the address
@@ -2241,6 +2213,10 @@ std::ostream& operator<<(std::ostream& out, const occupancy_stats& stats) {
         stats.used_fraction() * 100, stats.used_space(), stats.total_space());
 }
 
+occupancy_stats tracker::impl::global_occupancy() const noexcept {
+    return occupancy_stats(_segment_pool->total_free_memory(), _segment_pool->total_memory_in_use());
+}
+
 // Note: allocation is disallowed in this path
 // since we don't instantiate reclaiming_lock
 // while traversing _regions
@@ -2725,27 +2701,6 @@ future<> prime_segment_pool(size_t available_memory, size_t min_free_memory) {
     return smp::invoke_on_all([=] {
         shard_tracker().get_impl().segment_pool().prime(available_memory, min_free_memory);
     });
-}
-
-uint64_t memory_allocated() noexcept {
-    return shard_tracker().get_impl().segment_pool().statistics().memory_allocated;
-}
-
-uint64_t memory_freed() noexcept {
-    return shard_tracker().get_impl().segment_pool().statistics().memory_freed;
-}
-
-uint64_t memory_compacted() noexcept {
-    return shard_tracker().get_impl().segment_pool().statistics().memory_compacted;
-}
-
-uint64_t memory_evicted() noexcept {
-    return shard_tracker().get_impl().segment_pool().statistics().memory_evicted;
-}
-
-occupancy_stats lsa_global_occupancy_stats() noexcept {
-    auto& pool = shard_tracker().get_impl().segment_pool();
-    return occupancy_stats(pool.total_free_memory(), pool.total_memory_in_use());
 }
 
 }

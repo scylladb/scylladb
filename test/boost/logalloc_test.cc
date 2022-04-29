@@ -748,10 +748,10 @@ SEASTAR_THREAD_TEST_CASE(background_reclaim) {
     std::vector<managed_bytes> std_allocs;
     size_t std_alloc_size = 1000000; // note that managed_bytes fragments these, even in std
     for (int i = 0; i < 50; ++i) {
-        auto compacted_pre = logalloc::memory_compacted();
+        auto compacted_pre = logalloc::shard_tracker().statistics().memory_compacted;
         fmt::print("compacted {} items {} (pre)\n", compacted_pre, evictable_allocs.size());
         std_allocs.emplace_back(managed_bytes::initialized_later(), std_alloc_size);
-        auto compacted_post = logalloc::memory_compacted();
+        auto compacted_post = logalloc::shard_tracker().statistics().memory_compacted;
         fmt::print("compacted {} items {} (post)\n", compacted_post, evictable_allocs.size());
         BOOST_REQUIRE_EQUAL(compacted_pre, compacted_post);
     

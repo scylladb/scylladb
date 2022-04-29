@@ -40,8 +40,9 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
 
     for (int i = 0; i < update_iterations; ++i) {
         auto MB = 1024 * 1024;
-        auto prefill_compacted = logalloc::memory_compacted();
-        auto prefill_allocated = logalloc::memory_allocated();
+        const auto prefill_stats = logalloc::shard_tracker().statistics();
+        auto prefill_compacted = prefill_stats.memory_compacted;
+        auto prefill_allocated = prefill_stats.memory_allocated;
 
         scheduling_latency_measurer memtable_slm;
         memtable_slm.start();
@@ -66,8 +67,9 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
         });
         std::cout << format("took {:.6f} [ms]", drain_d.count() * 1000) << std::endl;
 
-        auto prev_compacted = logalloc::memory_compacted();
-        auto prev_allocated = logalloc::memory_allocated();
+        const auto prev_stats = logalloc::shard_tracker().statistics();
+        auto prev_compacted = prev_stats.memory_compacted;
+        auto prev_allocated = prev_stats.memory_allocated;
         auto prev_rows_processed_from_memtable = tracker.get_stats().rows_processed_from_memtable;
         auto prev_rows_merged_from_memtable = tracker.get_stats().rows_merged_from_memtable;
         auto prev_rows_dropped_from_memtable = tracker.get_stats().rows_dropped_from_memtable;
@@ -109,8 +111,9 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
 
         slm.stop();
 
-        auto compacted = logalloc::memory_compacted() - prev_compacted;
-        auto allocated = logalloc::memory_allocated() - prev_allocated;
+        const auto stats = logalloc::shard_tracker().statistics();
+        auto compacted = stats.memory_compacted - prev_compacted;
+        auto allocated = stats.memory_allocated - prev_allocated;
 
         std::cout << format("update: {:.6f} [ms], preemption: {}, cache: {:d}/{:d} [MB], alloc/comp: {:d}/{:d} [MB] (amp: {:.3f}), pr/me/dr {:d}/{:d}/{:d}\n",
             d.count() * 1000,
