@@ -25,6 +25,7 @@
 #include "test/lib/tmpdir.hh"
 #include "test/lib/log.hh"
 #include "test/lib/random_utils.hh"
+#include "test/lib/cql_test_env.hh"
 
 #include <vector>
 #include <numeric>
@@ -689,4 +690,86 @@ SEASTAR_THREAD_TEST_CASE(test_loading_cache_remove_leaves_no_old_entries_behind)
         BOOST_REQUIRE_EQUAL(*ptr2, "v3");
         ptr2 = nullptr;
     }
+}
+
+SEASTAR_TEST_CASE(test_prepared_statement_small_cache) {
+    // CQL prepared statement cache uses loading_cache
+    // internally.
+    constexpr auto CACHE_SIZE = 950000;
+
+    cql_test_config small_cache_config;
+    small_cache_config.qp_mcfg = {CACHE_SIZE, CACHE_SIZE};
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("CREATE TABLE tbl1 (a int, b int, PRIMARY KEY (a))").get();
+
+        auto current_uid = 0;
+
+        // Prepare 100 queries and execute them twice,
+        // filling "privileged section" of loading_cache.
+        std::vector<cql3::prepared_cache_key_type> prepared_ids_privileged;
+        for (int i = 0; i < 100; i++) {
+            auto prepared_id = e.prepare(fmt::format("SELECT * FROM tbl1 WHERE a = {}", current_uid++)).get0();
+            e.execute_prepared(prepared_id, {}).get();
+            e.execute_prepared(prepared_id, {}).get();
+            prepared_ids_privileged.push_back(prepared_id);
+        }
+
+        int how_many_in_cache = 0;
+        for (auto& prepared_id : prepared_ids_privileged) {
+            if (e.local_qp().get_prepared(prepared_id)) {
+                how_many_in_cache++;
+            }
+        }
+
+        // Assumption: CACHE_SIZE should hold at least 50 queries,
+        // but not more than 99 queries. Other checks in this 
+        // test rely on that fact.
+        BOOST_REQUIRE(how_many_in_cache >= 50);
+        BOOST_REQUIRE(how_many_in_cache <= 99);
+
+        // Then prepare 5 queries and execute them one time,
+        // which will occupy "unprivileged section" of loading_cache.
+        std::vector<cql3::prepared_cache_key_type> prepared_ids_unprivileged;
+        for (int i = 0; i < 5; i++) {
+            auto prepared_id = e.prepare(fmt::format("SELECT * FROM tbl1 WHERE a = {}", current_uid++)).get0();
+            e.execute_prepared(prepared_id, {}).get();
+            prepared_ids_unprivileged.push_back(prepared_id);
+        }
+
+        // Check that all of those prepared queries can still be
+        // executed. This simulates as if you wanted to execute
+        // a BATCH with all of them, which requires all of those
+        // prepared statements to be executable (in the cache).
+        for (auto& prepared_id : prepared_ids_unprivileged) {
+            e.execute_prepared(prepared_id, {}).get();
+        } 
+
+        // Deterministic random for reproducibility.
+        testing::local_random_engine.seed(12345);
+
+        // Prepare 500 queries and execute them a random number of times.
+        for (int i = 0; i < 500; i++) {
+            auto prepared_id = e.prepare(fmt::format("SELECT * FROM tbl1 WHERE a = {}", current_uid++)).get0();
+            auto times = rand_int(4);
+            for (int j = 0; j < times; j++) {
+                e.execute_prepared(prepared_id, {}).get();
+            }
+        }
+
+        // Prepare 100 simulated "batches" and execute them 
+        // a random number of times.
+        for (int i = 0; i < 100; i++) {
+            std::vector<cql3::prepared_cache_key_type> prepared_ids_batch;
+            for (int j = 0; j < 5; j++) {
+                auto prepared_id = e.prepare(fmt::format("SELECT * FROM tbl1 WHERE a = {}", current_uid++)).get0();
+                prepared_ids_batch.push_back(prepared_id);
+            }
+            auto times = rand_int(4);
+            for (int j = 0; j < times; j++) {
+                for (auto& prepared_id : prepared_ids_batch) {
+                    e.execute_prepared(prepared_id, {}).get();
+                } 
+            }
+        }        
+    }, small_cache_config);
 }

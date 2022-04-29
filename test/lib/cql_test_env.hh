@@ -21,6 +21,7 @@
 #include "cql3/query_options_fwd.hh"
 #include "cql3/values.hh"
 #include "cql3/prepared_statements_cache.hh"
+#include "cql3/query_processor.hh"
 #include "bytes.hh"
 #include "schema.hh"
 #include "test/lib/eventually.hh"
@@ -85,6 +86,7 @@ public:
     // Scheduling groups are overwritten unconditionally, see get_scheduling_groups().
     std::optional<replica::database_config> dbcfg;
     std::set<sstring> disabled_features;
+    std::optional<cql3::query_processor::memory_config> qp_mcfg;
 
     cql_test_config();
     cql_test_config(const cql_test_config&);
