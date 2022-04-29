@@ -236,7 +236,7 @@ class partition_snapshot_flat_reader : public flat_mutation_reader_v2::impl, pub
 
         template<typename Function>
         decltype(auto) with_reserve(Function&& fn) {
-            return _read_section.with_reserve(std::forward<Function>(fn));
+            return _read_section.with_reserve(_region, std::forward<Function>(fn));
         }
 
         tombstone partition_tombstone() {

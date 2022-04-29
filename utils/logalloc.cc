@@ -2639,12 +2639,12 @@ bool segment_pool::compact_segment(segment* seg) {
     return true;
 }
 
-allocating_section::guard::guard() noexcept
-    : _prev(shard_tracker().get_impl().segment_pool().emergency_reserve_max())
+allocating_section::guard::guard(tracker::impl& tracker) noexcept
+    : _tracker(tracker), _prev(_tracker.segment_pool().emergency_reserve_max())
 { }
 
 allocating_section::guard::~guard() {
-    shard_tracker().get_impl().segment_pool().set_emergency_reserve_max(_prev);
+    _tracker.segment_pool().set_emergency_reserve_max(_prev);
 }
 
 void allocating_section::maybe_decay_reserve() noexcept {
@@ -2675,8 +2675,8 @@ void allocating_section::maybe_decay_reserve() noexcept {
     }
 }
 
-void allocating_section::reserve() {
-    auto& pool = shard_tracker().get_impl().segment_pool();
+void allocating_section::reserve(tracker::impl& tracker) {
+    auto& pool = tracker.segment_pool();
   try {
     pool.set_emergency_reserve_max(std::max(_lsa_reserve, _minimum_lsa_emergency_reserve));
     pool.refill_emergency_reserve();
@@ -2686,14 +2686,14 @@ void allocating_section::reserve() {
         if (free >= _std_reserve) {
             break;
         }
-        if (!tracker_instance.reclaim(_std_reserve - free)) {
+        if (!tracker.reclaim(_std_reserve - free, is_preemptible::no)) {
             throw std::bad_alloc();
         }
     }
 
     pool.clear_allocation_failure_flag();
   } catch (const std::bad_alloc&) {
-        if (shard_tracker().should_abort_on_bad_alloc()) {
+        if (tracker.should_abort_on_bad_alloc()) {
             llogger.error("Aborting due to allocation failure");
             abort();
         }
@@ -2703,14 +2703,14 @@ void allocating_section::reserve() {
 
 void allocating_section::on_alloc_failure(logalloc::region& r) {
     r.allocator().invalidate_references();
-    if (shard_tracker().get_impl().segment_pool().allocation_failure_flag()) {
+    if (r.get_tracker().get_impl().segment_pool().allocation_failure_flag()) {
         _lsa_reserve *= 2;
         llogger.debug("LSA allocation failure, increasing reserve in section {} to {} segments", fmt::ptr(this), _lsa_reserve);
     } else {
         _std_reserve *= 2;
         llogger.debug("Standard allocator failure, increasing head-room in section {} to {} [B]", fmt::ptr(this), _std_reserve);
     }
-    reserve();
+    reserve(r.get_tracker().get_impl());
 }
 
 void allocating_section::set_lsa_reserve(size_t reserve) noexcept {

@@ -397,11 +397,12 @@ class allocating_section {
     int _remaining_lsa_segments_until_decay = s_segments_per_decay;
 private:
     struct guard {
+        tracker::impl& _tracker;
         size_t _prev;
-        guard() noexcept;
+        explicit guard(tracker::impl& tracker) noexcept;
         ~guard();
     };
-    void reserve();
+    void reserve(tracker::impl& tracker);
     void maybe_decay_reserve() noexcept;
     void on_alloc_failure(logalloc::region&);
 public:
@@ -416,13 +417,13 @@ public:
     // Throws std::bad_alloc when reserves can't be increased to a sufficient level.
     //
     template<typename Func>
-    decltype(auto) with_reserve(Func&& fn) {
+    decltype(auto) with_reserve(region& r, Func&& fn) {
         auto prev_lsa_reserve = _lsa_reserve;
         auto prev_std_reserve = _std_reserve;
         try {
-            guard g;
+            guard g(r.get_tracker().get_impl());
             _minimum_lsa_emergency_reserve = g._prev;
-            reserve();
+            reserve(r.get_tracker().get_impl());
             return fn();
         } catch (const std::bad_alloc&) {
             // roll-back limits to protect against pathological requests
@@ -473,7 +474,7 @@ public:
     //
     template<typename Func>
     decltype(auto) operator()(logalloc::region& r, Func&& func) {
-        return with_reserve([this, &r, &func] {
+        return with_reserve(r, [this, &r, &func] {
             return with_reclaiming_disabled(r, func);
         });
     }
