@@ -1732,8 +1732,8 @@ private:
     };
 
 public:
-    explicit region_impl(region* region)
-        : _region(region), _id(next_id())
+    explicit region_impl(tracker& tracker, region* region)
+        : basic_region_impl(tracker), _region(region), _id(next_id())
     {
         _buf_ptrs_for_compact_segment.reserve(segment::size / buf_align);
         _preferred_max_contiguous_allocation = max_managed_object_size;
@@ -1743,7 +1743,7 @@ public:
     virtual ~region_impl() {
         _sanitizer.on_region_destruction();
 
-        tracker_instance._impl->unregister_region(this);
+        _tracker.get_impl().unregister_region(this);
 
         while (!_segment_descs.empty()) {
             auto& desc = _segment_descs.one_of_largest();
@@ -2118,7 +2118,7 @@ memory::reclaiming_result tracker::reclaim(seastar::memory::reclaimer::request r
 }
 
 region::region()
-    : _impl(make_shared<impl>(this))
+    : _impl(make_shared<impl>(shard_tracker(), this))
 { }
 
 void
