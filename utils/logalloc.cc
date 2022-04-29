@@ -486,6 +486,7 @@ public:
     size_t compact_and_evict(size_t reserve_segments, size_t bytes, is_preemptible p);
     void full_compaction();
     void reclaim_all_free_segments();
+    occupancy_stats global_occupancy();
     occupancy_stats region_occupancy();
     occupancy_stats occupancy();
     size_t non_lsa_used_space();
@@ -529,6 +530,10 @@ tracker::stop() {
 
 size_t tracker::reclaim(size_t bytes) {
     return _impl->reclaim(bytes, is_preemptible::no);
+}
+
+occupancy_stats tracker::global_occupancy() {
+    return _impl->global_occupancy();
 }
 
 occupancy_stats tracker::region_occupancy() {
@@ -862,18 +867,10 @@ public:
         reclaim_segments(std::numeric_limits<size_t>::max(), is_preemptible::no);
     }
 
-    struct stats {
-        size_t segments_compacted;
-        size_t lsa_buffer_segments;
-        uint64_t memory_allocated;
-        uint64_t memory_freed;
-        uint64_t memory_compacted;
-        uint64_t memory_evicted;
-    };
 private:
-    stats _stats{};
+    tracker::stats _stats{};
 public:
-    const stats& statistics() const { return _stats; }
+    const tracker::stats& statistics() const { return _stats; }
     void on_segment_compaction(size_t used_size);
     void on_memory_allocation(size_t size);
     void on_memory_deallocation(size_t size);
@@ -1119,6 +1116,11 @@ public:
 size_t segment_pool::segments_in_use() const {
     return _segments_in_use;
 }
+
+tracker::stats tracker::statistics() const {
+    return _impl->segment_pool().statistics();
+}
+
 
 //
 // For interface documentation see logalloc::region and allocation_strategy.
@@ -2016,6 +2018,10 @@ std::ostream& operator<<(std::ostream& out, const occupancy_stats& stats) {
         stats.used_fraction() * 100, stats.used_space(), stats.total_space());
 }
 
+occupancy_stats tracker::impl::global_occupancy() {
+    return occupancy_stats(_segment_pool->total_free_memory(), _segment_pool->total_memory_in_use());
+}
+
 occupancy_stats tracker::impl::region_occupancy() {
     reclaiming_lock _(*this);
     occupancy_stats total{};
@@ -2134,7 +2140,7 @@ class reclaim_timer {
     clock::time_point _start;
     clock::duration _duration;
     occupancy_stats _old_region_occupancy;
-    segment_pool::stats _old_pool_stats;
+    tracker::stats _old_pool_stats;
 
 public:
     reclaim_timer(is_preemptible preemptible, size_t memory_to_release, size_t reserve_segments, tracker::impl& tracker)
@@ -2705,27 +2711,6 @@ future<> prime_segment_pool(size_t available_memory, size_t min_free_memory) {
     return smp::invoke_on_all([=] {
         shard_tracker().get_impl().segment_pool().prime(available_memory, min_free_memory);
     });
-}
-
-uint64_t memory_allocated() {
-    return shard_tracker().get_impl().segment_pool().statistics().memory_allocated;
-}
-
-uint64_t memory_freed() {
-    return shard_tracker().get_impl().segment_pool().statistics().memory_freed;
-}
-
-uint64_t memory_compacted() {
-    return shard_tracker().get_impl().segment_pool().statistics().memory_compacted;
-}
-
-uint64_t memory_evicted() {
-    return shard_tracker().get_impl().segment_pool().statistics().memory_evicted;
-}
-
-occupancy_stats lsa_global_occupancy_stats() {
-    auto& pool = shard_tracker().get_impl().segment_pool();
-    return occupancy_stats(pool.total_free_memory(), pool.total_memory_in_use());
 }
 
 }

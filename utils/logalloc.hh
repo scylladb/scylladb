@@ -424,6 +424,15 @@ public:
         scheduling_group background_reclaim_sched_group;
     };
 
+    struct stats {
+        size_t segments_compacted;
+        size_t lsa_buffer_segments;
+        uint64_t memory_allocated;
+        uint64_t memory_freed;
+        uint64_t memory_compacted;
+        uint64_t memory_evicted;
+    };
+
     void configure(const config& cfg);
     future<> stop();
 
@@ -437,6 +446,8 @@ private:
 public:
     tracker();
     ~tracker();
+
+    stats statistics() const;
 
     //
     // Tries to reclaim given amount of bytes in total using all compactible
@@ -454,6 +465,8 @@ public:
     void full_compaction();
 
     void reclaim_all_free_segments();
+
+    occupancy_stats global_occupancy();
 
     // Returns aggregate statistics for all pools.
     occupancy_stats region_occupancy();
@@ -832,12 +845,5 @@ public:
 };
 
 future<> prime_segment_pool(size_t available_memory, size_t min_free_memory);
-
-uint64_t memory_allocated();
-uint64_t memory_freed();
-uint64_t memory_compacted();
-uint64_t memory_evicted();
-
-occupancy_stats lsa_global_occupancy_stats();
 
 }
