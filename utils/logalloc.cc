@@ -772,6 +772,7 @@ public:
 // We prefer using high-address segments, and returning low-address segments to the seastar
 // allocator in order to segregate lsa and non-lsa memory, to reduce fragmentation.
 class segment_pool {
+    tracker::impl& _tracker;
     segment_store _store;
     std::vector<segment_descriptor> _segments;
     size_t _segments_in_use{};
@@ -833,7 +834,8 @@ private:
     }
     bool compact_segment(segment* seg);
 public:
-    segment_pool();
+    explicit segment_pool(tracker::impl& tracker);
+    tracker::impl& tracker() { return _tracker; }
     void prime(size_t available_memory, size_t min_free_memory);
     segment* new_segment(region::impl* r);
     const segment_descriptor& descriptor(const segment* seg) const noexcept {
@@ -973,7 +975,7 @@ private:
     const size_t _memory_to_release;
     const size_t _segments_to_release;
     const size_t _reserve_goal, _reserve_max;
-    tracker::impl* _tracker;
+    tracker::impl& _tracker;
     segment_pool& _segment_pool;
     extra_logger _extra_logs;
 
@@ -987,15 +989,15 @@ private:
 
     clock::duration _duration;
 
-    inline reclaim_timer(const char* name, is_preemptible preemptible, size_t memory_to_release, size_t segments_to_release, tracker::impl* tracker, segment_pool& segment_pool, extra_logger extra_logs);
+    inline reclaim_timer(const char* name, is_preemptible preemptible, size_t memory_to_release, size_t segments_to_release, tracker::impl& tracker, segment_pool& segment_pool, extra_logger extra_logs);
 
 public:
     inline reclaim_timer(const char* name, is_preemptible preemptible, size_t memory_to_release, size_t segments_to_release, tracker::impl& tracker, extra_logger extra_logs = [](log_level){})
-        : reclaim_timer(name, preemptible, memory_to_release, segments_to_release, &tracker, tracker.segment_pool(), std::move(extra_logs))
+        : reclaim_timer(name, preemptible, memory_to_release, segments_to_release, tracker, tracker.segment_pool(), std::move(extra_logs))
     {}
 
     inline reclaim_timer(const char* name, is_preemptible preemptible, size_t memory_to_release, size_t segments_to_release, segment_pool& segment_pool, extra_logger extra_logs = [](log_level){})
-        : reclaim_timer(name, preemptible, memory_to_release, segments_to_release, nullptr, segment_pool, std::move(extra_logs))
+        : reclaim_timer(name, preemptible, memory_to_release, segments_to_release, segment_pool.tracker(), segment_pool, std::move(extra_logs))
     {}
 
     inline ~reclaim_timer();
@@ -1120,7 +1122,7 @@ segment* segment_pool::allocate_segment(size_t reserve)
             _lsa_owned_segments_bitmap.set(idx);
             return seg;
         }
-    } while (shard_tracker().get_impl().compact_and_evict(reserve, shard_tracker().reclamation_step() * segment::size, is_preemptible::no));
+    } while (_tracker.compact_and_evict(reserve, _tracker.reclamation_step() * segment::size, is_preemptible::no));
     return nullptr;
 }
 
@@ -1195,8 +1197,9 @@ void segment_pool::free_segment(segment* seg, segment_descriptor& desc) noexcept
     --_segments_in_use;
 }
 
-segment_pool::segment_pool()
-    : _segments(max_segments())
+segment_pool::segment_pool(tracker::impl& tracker)
+    : _tracker(tracker)
+    , _segments(max_segments())
     , _lsa_owned_segments_bitmap(max_segments())
     , _lsa_free_segments_bitmap(max_segments())
 {
@@ -1260,7 +1263,7 @@ size_t segment_pool::segments_in_use() const noexcept {
 thread_local reclaim_timer* reclaim_timer::_active_timer;
 thread_local clock::duration reclaim_timer::_duration_threshold = clock::duration::zero();
 
-reclaim_timer::reclaim_timer(const char* name, is_preemptible preemptible, size_t memory_to_release, size_t segments_to_release, tracker::impl* tracker, segment_pool& segment_pool, extra_logger extra_logs)
+reclaim_timer::reclaim_timer(const char* name, is_preemptible preemptible, size_t memory_to_release, size_t segments_to_release, tracker::impl& tracker, segment_pool& segment_pool, extra_logger extra_logs)
     : _name(name)
     , _preemptible(preemptible)
     , _memory_to_release(memory_to_release)
@@ -1302,8 +1305,8 @@ reclaim_timer::~reclaim_timer() {
 }
 
 void reclaim_timer::sample_stats(stats& data) {
-    if (_debug_enabled && _tracker) {
-        data.region_occupancy = _tracker->region_occupancy();
+    if (_debug_enabled) {
+        data.region_occupancy = _tracker.region_occupancy();
     }
     data.pool_stats = _segment_pool.statistics();
 }
@@ -1326,7 +1329,7 @@ void reclaim_timer::report() const noexcept {
         timing_logger.log(info_level, "- reclamation rate = {} MiB/s", format("{:.3f}", bytes_per_second / MiB));
     }
 
-    if (_debug_enabled && _tracker) {
+    if (_debug_enabled) {
         log_if_changed(info_level, "occupancy of regions",
                         _start_stats.region_occupancy.used_fraction(), _end_stats.region_occupancy.used_fraction());
     }
@@ -2565,7 +2568,7 @@ void tracker::impl::unregister_region(region::impl* r) noexcept {
     _regions.erase(std::remove(_regions.begin(), _regions.end(), r), _regions.end());
 }
 
-tracker::impl::impl() : _segment_pool(std::make_unique<logalloc::segment_pool>()) {
+tracker::impl::impl() : _segment_pool(std::make_unique<logalloc::segment_pool>(*this)) {
     namespace sm = seastar::metrics;
 
     _metrics.add_group("lsa", {
