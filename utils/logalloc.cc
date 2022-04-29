@@ -756,6 +756,7 @@ public:
 // We prefer using high-address segments, and returning low-address segments to the seastar
 // allocator in order to segregate lsa and non-lsa memory, to reduce fragmentation.
 class segment_pool {
+    tracker::impl& _tracker;
     segment_store _store;
     std::vector<segment_descriptor> _segments;
     size_t _segments_in_use{};
@@ -815,7 +816,7 @@ private:
     }
     bool compact_segment(segment* seg);
 public:
-    segment_pool();
+    explicit segment_pool(tracker::impl& tracker);
     void prime(size_t available_memory, size_t min_free_memory);
     segment* new_segment(region::impl* r);
     segment_descriptor& descriptor(segment*);
@@ -969,7 +970,7 @@ segment* segment_pool::allocate_segment(size_t reserve)
             _lsa_owned_segments_bitmap.set(idx);
             return seg;
         }
-    } while (shard_tracker().get_impl().compact_and_evict(reserve, shard_tracker().reclamation_step() * segment::size, is_preemptible::no));
+    } while (_tracker.compact_and_evict(reserve, _tracker.reclamation_step() * segment::size, is_preemptible::no));
     return nullptr;
 }
 
@@ -1056,8 +1057,9 @@ void segment_pool::free_segment(segment* seg, segment_descriptor& desc) noexcept
     --_segments_in_use;
 }
 
-segment_pool::segment_pool()
-    : _segments(max_segments())
+segment_pool::segment_pool(tracker::impl& tracker)
+    : _tracker(tracker)
+    , _segments(max_segments())
     , _lsa_owned_segments_bitmap(max_segments())
     , _lsa_free_segments_bitmap(max_segments())
 {
@@ -2417,7 +2419,7 @@ void tracker::impl::unregister_region(region::impl* r) noexcept {
     _regions.erase(std::remove(_regions.begin(), _regions.end(), r), _regions.end());
 }
 
-tracker::impl::impl() : _segment_pool(std::make_unique<logalloc::segment_pool>()) {
+tracker::impl::impl() : _segment_pool(std::make_unique<logalloc::segment_pool>(*this)) {
     namespace sm = seastar::metrics;
 
     _metrics.add_group("lsa", {
