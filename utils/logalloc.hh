@@ -601,9 +601,15 @@ public:
 
 class basic_region_impl : public allocation_strategy {
 protected:
+    tracker& _tracker;
     bool _reclaiming_enabled = true;
     seastar::shard_id _cpu = this_shard_id();
 public:
+    basic_region_impl(tracker& tracker) : _tracker(tracker)
+    { }
+
+    tracker& get_tracker() { return _tracker; }
+
     void set_reclaiming_enabled(bool enabled) {
         assert(this_shard_id() == _cpu);
         _reclaiming_enabled = enabled;
@@ -644,6 +650,10 @@ public:
     region(region&& other);
     region& operator=(region&& other);
     region(const region& other) = delete;
+
+    tracker& get_tracker() const {
+        return _impl->get_tracker();
+    }
 
     occupancy_stats occupancy() const;
 

@@ -1512,18 +1512,18 @@ private:
     };
 
 public:
-    explicit region_impl(region* region, region_group* group = nullptr)
-        : _region(region), _group(group), _id(next_id())
+    explicit region_impl(tracker& tracker, region* region, region_group* group = nullptr)
+        : basic_region_impl(tracker), _region(region), _group(group), _id(next_id())
     {
         _buf_ptrs_for_compact_segment.reserve(segment::size / buf_align);
         _preferred_max_contiguous_allocation = max_managed_object_size;
-        tracker_instance._impl->register_region(this);
+        _tracker.get_impl().register_region(this);
         try {
             if (group) {
                 group->add(this);
             }
         } catch (...) {
-            tracker_instance._impl->unregister_region(this);
+            _tracker.get_impl().unregister_region(this);
             throw;
         }
     }
@@ -1531,7 +1531,7 @@ public:
     virtual ~region_impl() {
         _sanitizer.on_region_destruction();
 
-        tracker_instance._impl->unregister_region(this);
+        _tracker.get_impl().unregister_region(this);
 
         while (!_segment_descs.empty()) {
             auto& desc = _segment_descs.one_of_largest();
@@ -1921,11 +1921,11 @@ region_group::region_evictable_occupancy_ascending_less_comparator::operator()(r
 }
 
 region::region()
-    : _impl(make_shared<impl>(this))
+    : _impl(make_shared<impl>(shard_tracker(), this))
 { }
 
 region::region(region_group& group)
-        : _impl(make_shared<impl>(this, &group)) {
+        : _impl(make_shared<impl>(shard_tracker(), this, &group)) {
 }
 
 region_impl& region::get_impl() {
