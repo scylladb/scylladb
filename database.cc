@@ -926,10 +926,9 @@ bool database::update_column_family(schema_ptr new_schema) {
     return columns_changed;
 }
 
-future<> database::remove(const column_family& cf) noexcept {
+void database::remove(const table& cf) noexcept {
     auto s = cf.schema();
     auto& ks = find_keyspace(s->ks_name());
-    co_await _querier_cache.evict_all_for_table(s->id());
     _column_families.erase(s->id());
     ks.metadata()->remove_column_family(s);
     _ks_cf_to_uuid.erase(std::make_pair(s->ks_name(), s->cf_name()));
@@ -946,13 +945,20 @@ future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_
     auto& ks = find_keyspace(ks_name);
     auto uuid = find_uuid(ks_name, cf_name);
     auto cf = _column_families.at(uuid);
-    co_await remove(*cf);
+    remove(*cf);
     cf->clear_views();
-    co_return co_await cf->await_pending_ops().then([this, &ks, cf, tsf = std::move(tsf), snapshot] {
-        return truncate(ks, *cf, std::move(tsf), snapshot).finally([this, cf] {
-            return cf->stop();
-        });
-    }).finally([cf] {});
+    co_await cf->await_pending_ops();
+    co_await _querier_cache.evict_all_for_table(cf->schema()->id());
+    std::exception_ptr ex;
+    try {
+        co_await truncate(ks, *cf, std::move(tsf), snapshot);
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await cf->stop();
+    if (ex) {
+        std::rethrow_exception(std::move(ex));
+    }
 }
 
 const utils::UUID& database::find_uuid(std::string_view ks, std::string_view cf) const {
