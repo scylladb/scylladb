@@ -1834,6 +1834,6 @@ std::ostream& operator<<(std::ostream& out, node_ops_cmd cmd) {
         case node_ops_cmd::repair_updater:
             return out << "repair_updater";
         default:
-            return out << "unknown cmd (" << cmd << ")";
+            return out << "unknown cmd (" << static_cast<std::underlying_type_t<node_ops_cmd>>(cmd) << ")";
     }
 }
