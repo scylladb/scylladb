@@ -236,17 +236,6 @@ public:
             service::query_state& query_state,
             query_options& options);
 
-    // NOTICE: Internal queries should be used with care, as they are expected
-    // to be used for local tables (e.g. from the `system` keyspace).
-    // Data modifications will usually be performed with consistency level ONE
-    // and schema changes will not be announced to other nodes.
-    // Because of that, changing global schema state (e.g. modifying non-local tables,
-    // creating namespaces, etc) is explicitly forbidden via this interface.
-    future<::shared_ptr<untyped_result_set>>
-    execute_internal(const sstring& query_string, const std::initializer_list<data_value>& values = { }) {
-        return execute_internal(query_string, db::consistency_level::ONE, values, cache_internal::yes);
-    }
-
     statements::prepared_statement::checked_weak_ptr prepare_internal(const sstring& query);
 
     /*!
@@ -300,6 +289,7 @@ public:
 
     class cache_internal_tag;
     using cache_internal = bool_class<cache_internal_tag>;
+    
     // NOTICE: Internal queries should be used with care, as they are expected
     // to be used for local tables (e.g. from the `system` keyspace).
     // Data modifications will usually be performed with consistency level ONE
@@ -309,15 +299,35 @@ public:
     future<::shared_ptr<untyped_result_set>> execute_internal(
             const sstring& query_string,
             db::consistency_level,
-            const std::initializer_list<data_value>& = { },
-            cache_internal cache = cache_internal::no);
+            const std::initializer_list<data_value>&,
+            cache_internal cache);
     future<::shared_ptr<untyped_result_set>> execute_internal(
             const sstring& query_string,
             db::consistency_level,
             service::query_state& query_state,
-            const std::initializer_list<data_value>& = { },
-            cache_internal cache = cache_internal::no);
-
+            const std::initializer_list<data_value>&,
+            cache_internal cache);
+    future<::shared_ptr<untyped_result_set>> execute_internal(
+            const sstring& query_string,
+            db::consistency_level cl,
+            cache_internal cache) {
+        return execute_internal(query_string, cl, {}, cache);
+    }
+    future<::shared_ptr<untyped_result_set>> execute_internal(
+            const sstring& query_string,
+            db::consistency_level cl,
+            service::query_state& query_state,
+            cache_internal cache) {
+        return execute_internal(query_string, cl, query_state, {}, cache);
+    }
+    future<::shared_ptr<untyped_result_set>>
+    execute_internal(const sstring& query_string, const std::initializer_list<data_value>& values, cache_internal cache) {
+        return execute_internal(query_string, db::consistency_level::ONE, values, cache);
+    }
+    future<::shared_ptr<untyped_result_set>>
+    execute_internal(const sstring& query_string, cache_internal cache) {
+        return execute_internal(query_string, db::consistency_level::ONE, {}, cache);
+    }
     future<::shared_ptr<untyped_result_set>> execute_with_params(
             statements::prepared_statement::checked_weak_ptr p,
             db::consistency_level,

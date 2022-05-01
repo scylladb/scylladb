@@ -219,7 +219,8 @@ future<bool> service::has_existing_legacy_users() const {
 
             return _qp.execute_internal(
                     all_users_query,
-                    db::consistency_level::QUORUM).then([](auto results) {
+                    db::consistency_level::QUORUM,
+                    cql3::query_processor::cache_internal::no).then([](auto results) {
                 return make_ready_future<bool>(!results->empty());
             });
         });
