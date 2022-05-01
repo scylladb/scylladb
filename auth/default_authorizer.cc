@@ -170,7 +170,7 @@ default_authorizer::authorize(const role_or_anonymous& maybe_role, const resourc
             query,
             db::consistency_level::LOCAL_ONE,
             {*maybe_role.name, r.name()},
-            cql3::query_processor::cache_internal::no).then([](::shared_ptr<cql3::untyped_result_set> results) {
+            cql3::query_processor::cache_internal::yes).then([](::shared_ptr<cql3::untyped_result_set> results) {
         if (results->empty()) {
             return permissions::NONE;
         }

@@ -803,7 +803,7 @@ static qos::service_level_options::timeout_type get_duration(const cql3::untyped
 future<qos::service_levels_info> system_distributed_keyspace::get_service_levels() const {
     static sstring prepared_query = format("SELECT * FROM {}.{};", NAME, SERVICE_LEVELS);
 
-    return _qp.execute_internal(prepared_query, db::consistency_level::ONE, internal_distributed_query_state(), {}).then([] (shared_ptr<cql3::untyped_result_set> result_set) {
+    return _qp.execute_internal(prepared_query, db::consistency_level::ONE, internal_distributed_query_state(), cql3::query_processor::cache_internal::yes).then([] (shared_ptr<cql3::untyped_result_set> result_set) {
         qos::service_levels_info service_levels;
         for (auto &&row : *result_set) {
             try {
@@ -824,7 +824,7 @@ future<qos::service_levels_info> system_distributed_keyspace::get_service_levels
 
 future<qos::service_levels_info> system_distributed_keyspace::get_service_level(sstring service_level_name) const {
     static sstring prepared_query = format("SELECT * FROM {}.{} WHERE service_level = ?;", NAME, SERVICE_LEVELS);
-    return _qp.execute_internal(prepared_query, db::consistency_level::ONE, internal_distributed_query_state(), {service_level_name}, cql3::query_processor::cache_internal::no).then(
+    return _qp.execute_internal(prepared_query, db::consistency_level::ONE, internal_distributed_query_state(), {service_level_name}, cql3::query_processor::cache_internal::yes).then(
                 [service_level_name = std::move(service_level_name)] (shared_ptr<cql3::untyped_result_set> result_set) {
         qos::service_levels_info service_levels;
         if (!result_set->empty()) {

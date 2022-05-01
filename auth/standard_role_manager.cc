@@ -531,7 +531,7 @@ future<role_set> standard_role_manager::query_all() {
             query,
             db::consistency_level::QUORUM,
             internal_distributed_query_state(),
-            cql3::query_processor::cache_internal::no).then([](::shared_ptr<cql3::untyped_result_set> results) {
+            cql3::query_processor::cache_internal::yes).then([](::shared_ptr<cql3::untyped_result_set> results) {
         role_set roles;
 
         std::transform(

@@ -3343,7 +3343,7 @@ future<bool> column_mapping_exists(utils::UUID table_id, table_schema_version ve
         GET_COLUMN_MAPPING_QUERY,
         db::consistency_level::LOCAL_ONE,
         {table_id, version},
-        cql3::query_processor::cache_internal::no
+        cql3::query_processor::cache_internal::yes
     );
     co_return !results->empty();
 }
