@@ -141,7 +141,7 @@ future<> db::batchlog_manager::stop() {
 
 future<size_t> db::batchlog_manager::count_all_batches() const {
     sstring query = format("SELECT count(*) FROM {}.{}", system_keyspace::NAME, system_keyspace::BATCHLOG);
-    return _qp.execute_internal(query).then([](::shared_ptr<cql3::untyped_result_set> rs) {
+    return _qp.execute_internal(query, cql3::query_processor::cache_internal::yes).then([](::shared_ptr<cql3::untyped_result_set> rs) {
        return size_t(rs->one().get_as<int64_t>("count"));
     });
 }
@@ -273,7 +273,7 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
 
         typedef ::shared_ptr<cql3::untyped_result_set> page_ptr;
         sstring query = format("SELECT id, data, written_at, version FROM {}.{} LIMIT {:d}", system_keyspace::NAME, system_keyspace::BATCHLOG, page_size);
-        return _qp.execute_internal(query).then([this, batch = std::move(batch)](page_ptr page) {
+        return _qp.execute_internal(query, cql3::query_processor::cache_internal::yes).then([this, batch = std::move(batch)](page_ptr page) {
             return do_with(std::move(page), [this, batch = std::move(batch)](page_ptr & page) mutable {
                 return repeat([this, &page, batch = std::move(batch)]() mutable {
                     if (page->empty()) {
@@ -288,7 +288,7 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
                                 system_keyspace::NAME,
                                 system_keyspace::BATCHLOG,
                                 page_size);
-                        return _qp.execute_internal(query, {id}).then([&page](auto res) {
+                        return _qp.execute_internal(query, {id}, cql3::query_processor::cache_internal::yes).then([&page](auto res) {
                                     page = std::move(res);
                                     return make_ready_future<stop_iteration>(stop_iteration::no);
                                 });

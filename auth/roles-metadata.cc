@@ -56,14 +56,14 @@ future<bool> default_role_row_satisfies(
                 query,
                 db::consistency_level::ONE,
                 {meta::DEFAULT_SUPERUSER_NAME},
-                true).then([&qp, &p](::shared_ptr<cql3::untyped_result_set> results) {
+                cql3::query_processor::cache_internal::yes).then([&qp, &p](::shared_ptr<cql3::untyped_result_set> results) {
             if (results->empty()) {
                 return qp.execute_internal(
                         query,
                         db::consistency_level::QUORUM,
                         internal_distributed_query_state(),
                         {meta::DEFAULT_SUPERUSER_NAME},
-                        true).then([&p](::shared_ptr<cql3::untyped_result_set> results) {
+                        cql3::query_processor::cache_internal::yes).then([&p](::shared_ptr<cql3::untyped_result_set> results) {
                     if (results->empty()) {
                         return make_ready_future<bool>(false);
                     }
@@ -86,7 +86,8 @@ future<bool> any_nondefault_role_row_satisfies(
         return qp.execute_internal(
                 query,
                 db::consistency_level::QUORUM,
-                internal_distributed_query_state()).then([&p](::shared_ptr<cql3::untyped_result_set> results) {
+                internal_distributed_query_state(),
+                cql3::query_processor::cache_internal::no).then([&p](::shared_ptr<cql3::untyped_result_set> results) {
             if (results->empty()) {
                 return false;
             }

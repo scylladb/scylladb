@@ -136,9 +136,9 @@ public:
 
         typedef std::tuple<future<result_set_type>, future<result_set_type>, future<result_set_type>, future<db::schema_tables::legacy::schema_mutations>> result_tuple;
 
-        return when_all(_qp.execute_internal(tq, { dst.name, cf_name }),
-                        _qp.execute_internal(cq, { dst.name, cf_name }),
-                        _qp.execute_internal(zq, { dst.name, cf_name }),
+        return when_all(_qp.execute_internal(tq, { dst.name, cf_name }, cql3::query_processor::cache_internal::yes),
+                        _qp.execute_internal(cq, { dst.name, cf_name }, cql3::query_processor::cache_internal::yes),
+                        _qp.execute_internal(zq, { dst.name, cf_name }, cql3::query_processor::cache_internal::yes),
                         db::schema_tables::legacy::read_table_mutations(_sp, dst.name, cf_name, db::system_keyspace::legacy::column_families()))
                     .then([this, &dst, cf_name, timestamp](result_tuple&& t) {
 
@@ -441,7 +441,7 @@ public:
     future<> read_tables(keyspace& dst) {
         auto query = fmt_query("SELECT columnfamily_name, writeTime(type) AS timestamp FROM {}.{} WHERE keyspace_name = ?",
                         db::system_keyspace::legacy::COLUMNFAMILIES);
-        return _qp.execute_internal(query, {dst.name}).then([this, &dst](result_set_type result) {
+        return _qp.execute_internal(query, {dst.name}, cql3::query_processor::cache_internal::yes).then([this, &dst](result_set_type result) {
             return parallel_for_each(*result, [this, &dst](row_type& row) {
                 return read_table(dst, row.get_as<sstring>("columnfamily_name"), row.get_as<time_point>("timestamp"));
             }).finally([result] {});
@@ -458,7 +458,7 @@ public:
 
     future<> read_types(keyspace& dst) {
         auto query = fmt_query("SELECT * FROM {}.{} WHERE keyspace_name = ?", db::system_keyspace::legacy::USERTYPES);
-        return _qp.execute_internal(query, {dst.name}).then([this, &dst](result_set_type result) {
+        return _qp.execute_internal(query, {dst.name}, cql3::query_processor::cache_internal::yes).then([this, &dst](result_set_type result) {
             return parallel_for_each(*result, [this, &dst](row_type& row) {
                 auto name = row.get_blob("type_name");
                 auto columns = row.get_list<bytes>("field_names");
@@ -477,7 +477,7 @@ public:
 
     future<> read_functions(keyspace& dst) {
         auto query = fmt_query("SELECT * FROM {}.{} WHERE keyspace_name = ?", db::system_keyspace::legacy::FUNCTIONS);
-        return _qp.execute_internal(query, {dst.name}).then([this, &dst](result_set_type result) {
+        return _qp.execute_internal(query, {dst.name}, cql3::query_processor::cache_internal::yes).then([this, &dst](result_set_type result) {
             if (!result->empty()) {
                 throw unsupported_feature("functions");
             }
@@ -486,7 +486,7 @@ public:
 
     future<> read_aggregates(keyspace& dst) {
         auto query = fmt_query("SELECT * FROM {}.{} WHERE keyspace_name = ?", db::system_keyspace::legacy::AGGREGATES);
-        return _qp.execute_internal(query, {dst.name}).then([this, &dst](result_set_type result) {
+        return _qp.execute_internal(query, {dst.name}, cql3::query_processor::cache_internal::yes).then([this, &dst](result_set_type result) {
             if (!result->empty()) {
                 throw unsupported_feature("aggregates");
             }
@@ -519,7 +519,7 @@ public:
         auto query = fmt_query("SELECT keyspace_name, durable_writes, strategy_options, strategy_class, writeTime(durable_writes) AS timestamp FROM {}.{}",
                         db::system_keyspace::legacy::KEYSPACES);
 
-        return _qp.execute_internal(query).then([this](result_set_type result) {
+        return _qp.execute_internal(query, cql3::query_processor::cache_internal::yes).then([this](result_set_type result) {
             auto i = boost::make_filter_iterator(ks_filter, result->begin(), result->end());
             auto e = boost::make_filter_iterator(ks_filter, result->end(), result->end());
             return parallel_for_each(i, e, [this](row_type& row) {

@@ -60,7 +60,7 @@ SEASTAR_TEST_CASE(test_execute_batch) {
                 });
             });
         }).then([&qp] {
-            return qp.execute_internal("select * from ks.cf where p1 = ? and c1 = ?;", { sstring("key1"), 1 }).then([](auto rs) {
+            return qp.execute_internal("select * from ks.cf where p1 = ? and c1 = ?;", { sstring("key1"), 1 }, cql3::query_processor::cache_internal::yes).then([](auto rs) {
                 BOOST_REQUIRE(!rs->empty());
                 auto i = rs->one().template get_as<int32_t>("r1");
                 BOOST_CHECK_EQUAL(i, int32_t(100));

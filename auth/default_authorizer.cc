@@ -77,7 +77,7 @@ future<bool> default_authorizer::any_granted() const {
             query,
             db::consistency_level::LOCAL_ONE,
             {},
-            true).then([this](::shared_ptr<cql3::untyped_result_set> results) {
+            cql3::query_processor::cache_internal::yes).then([this](::shared_ptr<cql3::untyped_result_set> results) {
         return !results->empty();
     });
 }
@@ -88,7 +88,8 @@ future<> default_authorizer::migrate_legacy_metadata() const {
 
     return _qp.execute_internal(
             query,
-            db::consistency_level::LOCAL_ONE).then([this](::shared_ptr<cql3::untyped_result_set> results) {
+            db::consistency_level::LOCAL_ONE,
+            cql3::query_processor::cache_internal::no).then([this](::shared_ptr<cql3::untyped_result_set> results) {
         return do_for_each(*results, [this](const cql3::untyped_result_set_row& row) {
             return do_with(
                     row.get_as<sstring>("username"),
@@ -168,7 +169,8 @@ default_authorizer::authorize(const role_or_anonymous& maybe_role, const resourc
     return _qp.execute_internal(
             query,
             db::consistency_level::LOCAL_ONE,
-            {*maybe_role.name, r.name()}).then([](::shared_ptr<cql3::untyped_result_set> results) {
+            {*maybe_role.name, r.name()},
+            cql3::query_processor::cache_internal::yes).then([](::shared_ptr<cql3::untyped_result_set> results) {
         if (results->empty()) {
             return permissions::NONE;
         }
@@ -197,7 +199,8 @@ default_authorizer::modify(
                 query,
                 db::consistency_level::ONE,
                 internal_distributed_query_state(),
-                {permissions::to_strings(set), sstring(role_name), resource.name()}).discard_result();
+                {permissions::to_strings(set), sstring(role_name), resource.name()},
+                cql3::query_processor::cache_internal::no).discard_result();
     });
 }
 
@@ -223,7 +226,7 @@ future<std::vector<permission_details>> default_authorizer::list_all() const {
             db::consistency_level::ONE,
             internal_distributed_query_state(),
             {},
-            true).then([](::shared_ptr<cql3::untyped_result_set> results) {
+            cql3::query_processor::cache_internal::yes).then([](::shared_ptr<cql3::untyped_result_set> results) {
         std::vector<permission_details> all_details;
 
         for (const auto& row : *results) {
@@ -249,7 +252,8 @@ future<> default_authorizer::revoke_all(std::string_view role_name) const {
             query,
             db::consistency_level::ONE,
             internal_distributed_query_state(),
-            {sstring(role_name)}).discard_result().handle_exception([role_name](auto ep) {
+            {sstring(role_name)},
+            cql3::query_processor::cache_internal::no).discard_result().handle_exception([role_name](auto ep) {
         try {
             std::rethrow_exception(ep);
         } catch (exceptions::request_execution_exception& e) {
@@ -268,7 +272,8 @@ future<> default_authorizer::revoke_all(const resource& resource) const {
     return _qp.execute_internal(
             query,
             db::consistency_level::LOCAL_ONE,
-            {resource.name()}).then_wrapped([this, resource](future<::shared_ptr<cql3::untyped_result_set>> f) {
+            {resource.name()},
+            cql3::query_processor::cache_internal::no).then_wrapped([this, resource](future<::shared_ptr<cql3::untyped_result_set>> f) {
         try {
             auto res = f.get0();
             return parallel_for_each(
@@ -284,7 +289,8 @@ future<> default_authorizer::revoke_all(const resource& resource) const {
                 return _qp.execute_internal(
                         query,
                         db::consistency_level::LOCAL_ONE,
-                        {r.get_as<sstring>(ROLE_NAME), resource.name()}).discard_result().handle_exception(
+                        {r.get_as<sstring>(ROLE_NAME), resource.name()},
+                        cql3::query_processor::cache_internal::no).discard_result().handle_exception(
                                 [resource](auto ep) {
                     try {
                         std::rethrow_exception(ep);

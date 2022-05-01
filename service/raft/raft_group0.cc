@@ -354,7 +354,7 @@ static future<discovery::peer_set> load_discovered_peers(cql3::query_processor& 
     static const auto load_cql = format(
             "SELECT server_info, raft_id FROM system.{} WHERE key = '{}'",
             db::system_keyspace::DISCOVERY, DISCOVERY_KEY);
-    auto rs = co_await qp.execute_internal(load_cql);
+    auto rs = co_await qp.execute_internal(load_cql, cql3::query_processor::cache_internal::yes);
     assert(rs);
 
     discovery::peer_set peers;

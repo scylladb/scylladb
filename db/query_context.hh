@@ -29,7 +29,7 @@ struct query_context {
 
     template <typename... Args>
     future<::shared_ptr<cql3::untyped_result_set>> execute_cql(sstring req, Args&&... args) {
-        return _qp.local().execute_internal(req, { data_value(std::forward<Args>(args))... });
+        return _qp.local().execute_internal(req, { data_value(std::forward<Args>(args))... }, cql3::query_processor::cache_internal::yes);
     }
 
     template <typename... Args>
@@ -56,7 +56,7 @@ struct query_context {
                 cql3::query_options::DEFAULT.get_consistency(),
                 tctx.query_state,
                 { data_value(std::forward<Args>(args))... },
-                true);
+                cql3::query_processor::cache_internal::yes);
         });
     }
 

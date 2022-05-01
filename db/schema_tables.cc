@@ -3301,7 +3301,8 @@ future<column_mapping> get_column_mapping(utils::UUID table_id, table_schema_ver
     shared_ptr<cql3::untyped_result_set> results = co_await qctx->qp().execute_internal(
         GET_COLUMN_MAPPING_QUERY,
         db::consistency_level::LOCAL_ONE,
-        {table_id, version}
+        {table_id, version},
+        cql3::query_processor::cache_internal::no
     );
     if (results->empty()) {
         // If we don't have a stored column_mapping for an obsolete schema version
@@ -3341,7 +3342,8 @@ future<bool> column_mapping_exists(utils::UUID table_id, table_schema_version ve
     shared_ptr<cql3::untyped_result_set> results = co_await qctx->qp().execute_internal(
         GET_COLUMN_MAPPING_QUERY,
         db::consistency_level::LOCAL_ONE,
-        {table_id, version}
+        {table_id, version},
+        cql3::query_processor::cache_internal::yes
     );
     co_return !results->empty();
 }
@@ -3353,7 +3355,8 @@ future<> drop_column_mapping(utils::UUID table_id, table_schema_version version)
     co_await qctx->qp().execute_internal(
         DEL_COLUMN_MAPPING_QUERY,
         db::consistency_level::LOCAL_ONE,
-        {table_id, version});
+        {table_id, version},
+        cql3::query_processor::cache_internal::no);
 }
 
 } // namespace schema_tables

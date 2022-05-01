@@ -1369,7 +1369,7 @@ static constexpr uint8_t current_version = 1;
 
 future<truncation_record> system_keyspace::get_truncation_record(utils::UUID cf_id) {
     sstring req = format("SELECT * from system.{} WHERE table_uuid = ?", TRUNCATED);
-    return qctx->qp().execute_internal(req, {cf_id}).then([cf_id](::shared_ptr<cql3::untyped_result_set> rs) {
+    return qctx->qp().execute_internal(req, {cf_id}, cql3::query_processor::cache_internal::yes).then([cf_id](::shared_ptr<cql3::untyped_result_set> rs) {
         truncation_record r{truncation_record::current_magic};
 
         for (const cql3::untyped_result_set_row& row : *rs) {
@@ -1407,7 +1407,7 @@ future<> system_keyspace::cache_truncation_record() {
 
 future<> system_keyspace::save_truncation_record(utils::UUID id, db_clock::time_point truncated_at, db::replay_position rp) {
     sstring req = format("INSERT INTO system.{} (table_uuid, shard, position, segment_id, truncated_at) VALUES(?,?,?,?,?)", TRUNCATED);
-    return qctx->qp().execute_internal(req, {id, int32_t(rp.shard_id()), int32_t(rp.pos), int64_t(rp.base_id()), truncated_at}).discard_result().then([] {
+    return qctx->qp().execute_internal(req, {id, int32_t(rp.shard_id()), int32_t(rp.pos), int64_t(rp.base_id()), truncated_at}, cql3::query_processor::cache_internal::yes).discard_result().then([] {
         return force_blocking_flush(TRUNCATED);
     });
 }
@@ -2850,7 +2850,7 @@ future<> system_keyspace::get_repair_history(utils::UUID table_id, repair_histor
 
 future<int> system_keyspace::increment_and_get_generation() {
     auto req = format("SELECT gossip_generation FROM system.{} WHERE key='{}'", LOCAL, LOCAL);
-    return qctx->qp().execute_internal(req).then([] (auto rs) {
+    return qctx->qp().execute_internal(req, cql3::query_processor::cache_internal::yes).then([] (auto rs) {
         int generation;
         if (rs->empty() || !rs->one().has("gossip_generation")) {
             // seconds-since-epoch isn't a foolproof new generation
@@ -2870,7 +2870,7 @@ future<int> system_keyspace::increment_and_get_generation() {
             }
         }
         auto req = format("INSERT INTO system.{} (key, gossip_generation) VALUES ('{}', ?)", LOCAL, LOCAL);
-        return qctx->qp().execute_internal(req, {generation}).then([generation] (auto rs) {
+        return qctx->qp().execute_internal(req, {generation}, cql3::query_processor::cache_internal::yes).then([generation] (auto rs) {
             return force_blocking_flush(LOCAL);
         }).then([generation] {
             return make_ready_future<int>(generation);
@@ -3244,7 +3244,7 @@ future<> system_keyspace::stop() {
 }
 
 future<::shared_ptr<cql3::untyped_result_set>> system_keyspace::execute_cql(const sstring& query_string, const std::initializer_list<data_value>& values) {
-    return _qp.local().execute_internal(query_string, values);
+    return _qp.local().execute_internal(query_string, values, cql3::query_processor::cache_internal::yes);
 }
 
 } // namespace db
