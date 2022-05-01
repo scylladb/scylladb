@@ -139,9 +139,9 @@ class loading_cache {
 
             _value = std::move(new_val);
             _loaded = loading_cache_clock_type::now();
-            _lru_entry_ptr->cache_size() -= _size;
+            _lru_entry_ptr->owning_section_size() -= _size;
             _size = EntrySize()(_value);
-            _lru_entry_ptr->cache_size() += _size;
+            _lru_entry_ptr->owning_section_size() += _size;
             return *this;
         }
 
@@ -380,9 +380,18 @@ public:
 
     /// \brief returns the memory size the currently cached entries occupy according to the EntrySize predicate.
     size_t memory_footprint() const {
-        return _current_size;
+        return _unprivileged_section_size + _privileged_section_size;
     }
 
+    /// \brief returns the memory size the currently cached entries occupy in the privileged section according to the EntrySize predicate.
+    size_t privileged_section_memory_footprint() const noexcept {
+        return _privileged_section_size;
+    }
+
+    /// \brief returns the memory size the currently cached entries occupy in the unprivileged section according to the EntrySize predicate.
+    size_t unprivileged_section_memory_footprint() const noexcept {
+        return _unprivileged_section_size;
+    }
 private:
     void remove_ts_value(timestamped_val_ptr ts_ptr) {
         if (!ts_ptr) {
@@ -438,16 +447,22 @@ private:
         }
 
         if (lru_entry.touch_count() < SectionHitThreshold) {
-            _logger.trace("Putting key {} into the unpriviledged section", lru_entry.key());
+            _logger.trace("Putting key {} into the unprivileged section", lru_entry.key());
             _unprivileged_lru_list.push_front(lru_entry);
             lru_entry.inc_touch_count();
         } else {
-            _logger.trace("Putting key {} into the priviledged section", lru_entry.key());
+            _logger.trace("Putting key {} into the privileged section", lru_entry.key());
             _lru_list.push_front(lru_entry);
 
             // Bump it up only once to avoid a wrap around
             if (lru_entry.touch_count() == SectionHitThreshold) {
+                // This code will run only once, when a promotion
+                // from unprivileged to privileged section happens.
+                // Update section size bookkeeping.
+                
+                lru_entry.owning_section_size() -= lru_entry.timestamped_value().size();
                 lru_entry.inc_touch_count();
+                lru_entry.owning_section_size() += lru_entry.timestamped_value().size();
             }
         }
     }
@@ -514,17 +529,44 @@ private:
     void shrink() {
         using namespace std::chrono;
 
-        while (_current_size >= _max_size && !_unprivileged_lru_list.empty()) {
-            ts_value_lru_entry& lru_entry = *_unprivileged_lru_list.rbegin();
-            _logger.trace("shrink(): {}: dropping the unpriviledged entry: ms since last_read {}", lru_entry.key(), duration_cast<milliseconds>(loading_cache_clock_type::now() - lru_entry.timestamped_value().last_read()).count());
-            loading_cache::destroy_ts_value(&lru_entry);
-            LoadingCacheStats::inc_unprivileged_on_cache_size_eviction();
-        }
-
-        while (_current_size >= _max_size) {
+        auto drop_privileged_entry = [&] {
             ts_value_lru_entry& lru_entry = *_lru_list.rbegin();
             _logger.trace("shrink(): {}: dropping the entry: ms since last_read {}", lru_entry.key(), duration_cast<milliseconds>(loading_cache_clock_type::now() - lru_entry.timestamped_value().last_read()).count());
             loading_cache::destroy_ts_value(&lru_entry);
+        };
+
+        auto drop_unprivileged_entry = [&] {
+            ts_value_lru_entry& lru_entry = *_unprivileged_lru_list.rbegin();
+            _logger.trace("shrink(): {}: dropping the unprivileged entry: ms since last_read {}", lru_entry.key(), duration_cast<milliseconds>(loading_cache_clock_type::now() - lru_entry.timestamped_value().last_read()).count());
+            loading_cache::destroy_ts_value(&lru_entry);
+            LoadingCacheStats::inc_unprivileged_on_cache_size_eviction();
+        };
+
+        // When cache entries need to be evicted due to a size restriction,
+        // unprivileged section entries are evicted first.
+        //
+        // However, we make sure that the unprivileged section does not get
+        // too small, because this could lead to starving the unprivileged section.
+        // For example if the cache could store at most 50 entries and there are 49 entries in
+        // privileged section, after adding 5 entries (that would go to unprivileged
+        // section) 4 of them would get evicted and only the 5th one would stay.
+        // This caused problems with BATCH statements where all prepared statements
+        // in the batch have to stay in cache at the same time for the batch to correctly
+        // execute.
+        auto minimum_unprivileged_section_size = _max_size / 2;
+        while (memory_footprint() >= _max_size && _unprivileged_section_size > minimum_unprivileged_section_size) {
+            drop_unprivileged_entry();
+        }
+
+        while (memory_footprint() >= _max_size && !_lru_list.empty()) {
+            drop_privileged_entry();
+        }
+
+        // If dropping entries from privileged section did not help,
+        // we have to drop entries from unprivileged section,
+        // going below minimum_unprivileged_section_size.
+        while (memory_footprint() >= _max_size) {
+            drop_unprivileged_entry();
         }
     }
 
@@ -577,7 +619,8 @@ private:
     loading_values_type _loading_values;
     lru_list_type _lru_list;              // list containing "privileged" section entries
     lru_list_type _unprivileged_lru_list; // list containing "unprivileged" section entries
-    size_t _current_size = 0;
+    size_t _privileged_section_size = 0;
+    size_t _unprivileged_section_size = 0;
     size_t _max_size = 0;
     loading_cache_clock_type::duration _expiry;
     loading_cache_clock_type::duration _refresh;
@@ -643,7 +686,7 @@ public:
         static_assert(SectionHitThreshold <= std::numeric_limits<typeof(_touch_count)>::max() / 2, "SectionHitThreshold value is too big");
 
         _ts_val_ptr->set_anchor_back_reference(this);
-        cache_size() += _ts_val_ptr->size();
+        owning_section_size() += _ts_val_ptr->size();
     }
 
     void inc_touch_count() noexcept {
@@ -659,12 +702,12 @@ public:
             lru_list_type& lru_list = _parent.container_list(*this);
             lru_list.erase(lru_list.iterator_to(*this));
         }
-        cache_size() -= _ts_val_ptr->size();
+        owning_section_size() -= _ts_val_ptr->size();
         _ts_val_ptr->set_anchor_back_reference(nullptr);
     }
 
-    size_t& cache_size() noexcept {
-        return _parent._current_size;
+    size_t& owning_section_size() noexcept {
+        return _touch_count <= SectionHitThreshold ? _parent._unprivileged_section_size : _parent._privileged_section_size;
     }
 
     void touch() noexcept {
