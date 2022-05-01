@@ -25,6 +25,7 @@
 #include "test/lib/tmpdir.hh"
 #include "test/lib/log.hh"
 #include "test/lib/random_utils.hh"
+#include "test/lib/cql_test_env.hh"
 
 #include <vector>
 #include <numeric>
@@ -428,6 +429,163 @@ SEASTAR_TEST_CASE(test_loading_cache_eviction_unprivileged) {
     });
 }
 
+SEASTAR_TEST_CASE(test_loading_cache_eviction_unprivileged_minimum_size) {
+    return seastar::async([] {
+        // Test that unprivileged section is not starved.
+        //
+        // This scenario is tested: cache max_size is 50 and there are 49 entries in
+        // privileged section. After adding 5 elements (that go to unprivileged
+        // section) all of them should stay in unprivileged section and elements
+        // in privileged section should get evicted.
+        //
+        // Wrong handling of this situation caused problems with BATCH statements 
+        // where all prepared statements in the batch have to stay in cache at 
+        // the same time for the batch to correctly execute.
+
+        using namespace std::chrono;
+        utils::loading_cache<int, sstring, 1> loading_cache(50, 1h, testlog);
+        auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
+
+        prepare().get();
+
+        // Add 49 elements to privileged section
+        for (int i = 0; i < 49; i++) {
+            // Touch the value with the key "i" twice
+            loading_cache.get_ptr(i, loader).discard_result().get();
+            loading_cache.find(i);
+        }
+
+        // Add 5 elements to unprivileged section
+        for (int i = 50; i < 55; i++) {
+            loading_cache.get_ptr(i, loader).discard_result().get();            
+        }
+
+        // Make sure that none of 5 elements were evicted
+        for (int i = 50; i < 55; i++) {
+            BOOST_REQUIRE(loading_cache.find(i) != nullptr);
+        } 
+
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 50);
+    });
+}
+
+struct sstring_length_entry_size {
+    size_t operator()(const sstring& val) {
+        return val.size();
+    }
+};
+
+SEASTAR_TEST_CASE(test_loading_cache_section_size_correctly_calculated) {
+    return seastar::async([] {
+        auto load_len1 =  [] (const int& key) { return make_ready_future<sstring>(tests::random::get_sstring(1)); };
+        auto load_len5 =  [] (const int& key) { return make_ready_future<sstring>(tests::random::get_sstring(5)); };
+        auto load_len10 = [] (const int& key) { return make_ready_future<sstring>(tests::random::get_sstring(10)); };
+        auto load_len95 = [] (const int& key) { return make_ready_future<sstring>(tests::random::get_sstring(95)); };
+
+        using namespace std::chrono;
+        utils::loading_cache<int, sstring, 1, utils::loading_cache_reload_enabled::no, sstring_length_entry_size> loading_cache(100, 1h, testlog);
+        auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
+
+        BOOST_REQUIRE_EQUAL(loading_cache.privileged_section_memory_footprint(), 0);
+        BOOST_REQUIRE_EQUAL(loading_cache.unprivileged_section_memory_footprint(), 0);
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 0);
+
+        loading_cache.get_ptr(1, load_len1).discard_result().get();
+        BOOST_REQUIRE_EQUAL(loading_cache.privileged_section_memory_footprint(), 0);
+        BOOST_REQUIRE_EQUAL(loading_cache.unprivileged_section_memory_footprint(), 1);
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 1);
+
+        loading_cache.get_ptr(2, load_len5).discard_result().get();
+        BOOST_REQUIRE_EQUAL(loading_cache.privileged_section_memory_footprint(), 0);
+        BOOST_REQUIRE_EQUAL(loading_cache.unprivileged_section_memory_footprint(), 6);
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 2);
+
+        // Move "2" to privileged section by touching it the second time.
+        loading_cache.get_ptr(2, load_len5).discard_result().get();
+        BOOST_REQUIRE_EQUAL(loading_cache.privileged_section_memory_footprint(), 5);
+        BOOST_REQUIRE_EQUAL(loading_cache.unprivileged_section_memory_footprint(), 1);
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 2);
+
+        loading_cache.get_ptr(3, load_len10).discard_result().get();
+        BOOST_REQUIRE_EQUAL(loading_cache.privileged_section_memory_footprint(), 5);
+        BOOST_REQUIRE_EQUAL(loading_cache.unprivileged_section_memory_footprint(), 11);
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 3);
+
+        // Move "1" to privileged section. load_len10 should not get executed, as "1"
+        // is already in the cache.
+        loading_cache.get_ptr(1, load_len10).discard_result().get();
+        BOOST_REQUIRE_EQUAL(loading_cache.privileged_section_memory_footprint(), 6);
+        BOOST_REQUIRE_EQUAL(loading_cache.unprivileged_section_memory_footprint(), 10);
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 3);
+
+        // Flood cache with elements of size 10,
+        // unprivileged. "1" and "2" should stay in the privileged section.
+        for (int i = 11; i < 30; i++) {
+            loading_cache.get_ptr(i, load_len10).discard_result().get();
+        }
+        BOOST_REQUIRE_EQUAL(loading_cache.privileged_section_memory_footprint(), 6);
+        // We shrink the cache BEFORE adding element,
+        // so after adding the element, the cache
+        // can exceed max_size...
+        BOOST_REQUIRE_EQUAL(loading_cache.unprivileged_section_memory_footprint(), 100); 
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 12);
+
+        // Flood cache with elements of size 10, privileged.
+        for (int i = 11; i < 30; i++) {
+            loading_cache.get_ptr(i, load_len10).discard_result().get();
+            loading_cache.get_ptr(i, load_len10).discard_result().get();
+        }
+        BOOST_REQUIRE_EQUAL(loading_cache.privileged_section_memory_footprint(), 100);
+        BOOST_REQUIRE_EQUAL(loading_cache.unprivileged_section_memory_footprint(), 0);
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 10);
+
+        // Add one new unprivileged entry.
+        loading_cache.get_ptr(31, load_len1).discard_result().get();
+        BOOST_REQUIRE_EQUAL(loading_cache.privileged_section_memory_footprint(), 90);
+        BOOST_REQUIRE_EQUAL(loading_cache.unprivileged_section_memory_footprint(), 1);
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 10);
+
+        // Add another unprivileged entry, privileged entry should get evicted.
+        loading_cache.get_ptr(32, load_len5).discard_result().get();
+        BOOST_REQUIRE_EQUAL(loading_cache.privileged_section_memory_footprint(), 90);
+        BOOST_REQUIRE_EQUAL(loading_cache.unprivileged_section_memory_footprint(), 6);
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 11);
+
+        // Make it privileged by touching it again.
+        loading_cache.get_ptr(32, load_len5).discard_result().get();
+        BOOST_REQUIRE_EQUAL(loading_cache.privileged_section_memory_footprint(), 95);
+        BOOST_REQUIRE_EQUAL(loading_cache.unprivileged_section_memory_footprint(), 1);
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 11);
+
+        // Add another unprivileged entry.
+        loading_cache.get_ptr(33, load_len10).discard_result().get();
+        BOOST_REQUIRE_EQUAL(loading_cache.privileged_section_memory_footprint(), 95);
+        // We shrink the cache BEFORE adding element,
+        // so after adding the element, the cache
+        // can exceed max_size...
+        BOOST_REQUIRE_EQUAL(loading_cache.unprivileged_section_memory_footprint(), 11);
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 12);
+
+        // Add another unprivileged entry, privileged entry should get evicted.
+        loading_cache.get_ptr(34, load_len10).discard_result().get();
+        BOOST_REQUIRE_EQUAL(loading_cache.privileged_section_memory_footprint(), 85);
+        // We shrink the cache BEFORE adding element,
+        // so after adding the element, the cache
+        // can exceed max_size...
+        BOOST_REQUIRE_EQUAL(loading_cache.unprivileged_section_memory_footprint(), 21);
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 12);
+
+        // Add a big unprivileged entry, filling almost entire cache.
+        loading_cache.get_ptr(35, load_len95).discard_result().get();
+        BOOST_REQUIRE_EQUAL(loading_cache.privileged_section_memory_footprint(), 75);
+        // We shrink the cache BEFORE adding element,
+        // so after adding the element, the cache
+        // can exceed max_size...
+        BOOST_REQUIRE_EQUAL(loading_cache.unprivileged_section_memory_footprint(), 95 + 21);
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 12);
+    });
+}
+
 SEASTAR_TEST_CASE(test_loading_cache_reload_during_eviction) {
     return seastar::async([] {
         using namespace std::chrono;
@@ -532,4 +690,86 @@ SEASTAR_THREAD_TEST_CASE(test_loading_cache_remove_leaves_no_old_entries_behind)
         BOOST_REQUIRE_EQUAL(*ptr2, "v3");
         ptr2 = nullptr;
     }
+}
+
+SEASTAR_TEST_CASE(test_prepared_statement_small_cache) {
+    // CQL prepared statement cache uses loading_cache
+    // internally.
+    constexpr auto CACHE_SIZE = 950000;
+
+    cql_test_config small_cache_config;
+    small_cache_config.qp_mcfg = {CACHE_SIZE, CACHE_SIZE};
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("CREATE TABLE tbl1 (a int, b int, PRIMARY KEY (a))").get();
+
+        auto current_uid = 0;
+
+        // Prepare 100 queries and execute them twice,
+        // filling "privileged section" of loading_cache.
+        std::vector<cql3::prepared_cache_key_type> prepared_ids_privileged;
+        for (int i = 0; i < 100; i++) {
+            auto prepared_id = e.prepare(fmt::format("SELECT * FROM tbl1 WHERE a = {}", current_uid++)).get0();
+            e.execute_prepared(prepared_id, {}).get();
+            e.execute_prepared(prepared_id, {}).get();
+            prepared_ids_privileged.push_back(prepared_id);
+        }
+
+        int how_many_in_cache = 0;
+        for (auto& prepared_id : prepared_ids_privileged) {
+            if (e.local_qp().get_prepared(prepared_id)) {
+                how_many_in_cache++;
+            }
+        }
+
+        // Assumption: CACHE_SIZE should hold at least 50 queries,
+        // but not more than 99 queries. Other checks in this 
+        // test rely on that fact.
+        BOOST_REQUIRE(how_many_in_cache >= 50);
+        BOOST_REQUIRE(how_many_in_cache <= 99);
+
+        // Then prepare 5 queries and execute them one time,
+        // which will occupy "unprivileged section" of loading_cache.
+        std::vector<cql3::prepared_cache_key_type> prepared_ids_unprivileged;
+        for (int i = 0; i < 5; i++) {
+            auto prepared_id = e.prepare(fmt::format("SELECT * FROM tbl1 WHERE a = {}", current_uid++)).get0();
+            e.execute_prepared(prepared_id, {}).get();
+            prepared_ids_unprivileged.push_back(prepared_id);
+        }
+
+        // Check that all of those prepared queries can still be
+        // executed. This simulates as if you wanted to execute
+        // a BATCH with all of them, which requires all of those
+        // prepared statements to be executable (in the cache).
+        for (auto& prepared_id : prepared_ids_unprivileged) {
+            e.execute_prepared(prepared_id, {}).get();
+        } 
+
+        // Deterministic random for reproducibility.
+        testing::local_random_engine.seed(12345);
+
+        // Prepare 500 queries and execute them a random number of times.
+        for (int i = 0; i < 500; i++) {
+            auto prepared_id = e.prepare(fmt::format("SELECT * FROM tbl1 WHERE a = {}", current_uid++)).get0();
+            auto times = rand_int(4);
+            for (int j = 0; j < times; j++) {
+                e.execute_prepared(prepared_id, {}).get();
+            }
+        }
+
+        // Prepare 100 simulated "batches" and execute them 
+        // a random number of times.
+        for (int i = 0; i < 100; i++) {
+            std::vector<cql3::prepared_cache_key_type> prepared_ids_batch;
+            for (int j = 0; j < 5; j++) {
+                auto prepared_id = e.prepare(fmt::format("SELECT * FROM tbl1 WHERE a = {}", current_uid++)).get0();
+                prepared_ids_batch.push_back(prepared_id);
+            }
+            auto times = rand_int(4);
+            for (int j = 0; j < times; j++) {
+                for (auto& prepared_id : prepared_ids_batch) {
+                    e.execute_prepared(prepared_id, {}).get();
+                } 
+            }
+        }        
+    }, small_cache_config);
 }

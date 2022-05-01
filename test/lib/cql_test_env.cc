@@ -626,7 +626,12 @@ public:
             mm.start(std::ref(mm_notif), std::ref(feature_service), std::ref(ms), std::ref(proxy), std::ref(gossiper), std::ref(raft_gr)).get();
             auto stop_mm = defer([&mm] { mm.stop().get(); });
 
-            cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
+            cql3::query_processor::memory_config qp_mcfg;
+            if (cfg_in.qp_mcfg) {
+                qp_mcfg = *cfg_in.qp_mcfg;
+            } else {
+                qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
+            }
             auto local_data_dict = seastar::sharded_parameter([] (const replica::database& db) { return db.as_data_dictionary(); }, std::ref(db));
             qp.start(std::ref(proxy), std::move(local_data_dict), std::ref(mm_notif), std::ref(mm), qp_mcfg, std::ref(cql_config)).get();
             auto stop_qp = defer([&qp] { qp.stop().get(); });
