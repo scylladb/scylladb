@@ -38,9 +38,9 @@ def scylla_excepthook(etype, value, tb):
 sys.excepthook = scylla_excepthook
 
 
-def out(cmd, shell=True, timeout=None, user=None, group=None, encoding='utf-8'):
-    res = subprocess.run(cmd, capture_output=True, shell=shell, timeout=timeout, user=user, group=group, check=False, encoding=encoding)
-    if res.returncode != 0:
+def out(cmd, shell=True, timeout=None, encoding='utf-8', ignore_error=False):
+    res = subprocess.run(cmd, capture_output=True, shell=shell, timeout=timeout, check=False, encoding=encoding)
+    if not ignore_error and res.returncode != 0:
         print(f'Command \'{cmd}\' returned non-zero exit status: {res.returncode}')
         print('----------  stdout  ----------')
         print(res.stdout, end='')
@@ -395,7 +395,7 @@ class systemd_unit:
         return run('systemctl {} disable {}'.format(self.ctlparam, self._unit), shell=True, check=True)
 
     def is_active(self):
-        return out('systemctl {} is-active {}'.format(self.ctlparam, self._unit))
+        return out('systemctl {} is-active {}'.format(self.ctlparam, self._unit), ignore_error=True)
 
     def mask(self):
         return run('systemctl {} mask {}'.format(self.ctlparam, self._unit), shell=True, check=True)
