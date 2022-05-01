@@ -19,7 +19,6 @@
 #include <seastar/core/thread.hh>
 #include <seastar/core/abort_source.hh>
 
-class flat_mutation_reader;
 using namespace compaction;
 
 namespace sstables {
