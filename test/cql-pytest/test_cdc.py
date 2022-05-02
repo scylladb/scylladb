@@ -6,6 +6,7 @@ from cassandra.cluster import ConsistencyLevel
 from cassandra.query import SimpleStatement
 
 from util import new_test_table
+from nodetool import flush
 
 def test_cdc_log_entries_use_cdc_streams(scylla_only, cql, test_keyspace):
     '''Test that the stream IDs chosen for CDC log entries come from the CDC generation
@@ -31,3 +32,18 @@ def test_cdc_log_entries_use_cdc_streams(scylla_only, cql, test_keyspace):
 
     assert(log_stream_ids.issubset(stream_ids))
 
+
+# Test for #10473 - reading logs (from sstable) after dropping 
+# column in base.
+def test_cdc_alter_table_drop_column(scylla_only, cql, test_keyspace):
+    schema = "pk int primary key, v int"
+    extra = " with cdc = {'enabled': true}"
+    with new_test_table(cql, test_keyspace, schema, extra) as table:
+        stmt = cql.prepare(f"insert into {table} (pk, v) values (?, ?)")
+        cql.execute(stmt, [0, 0])
+        flush(cql, table)
+        flush(cql, table + "_scylla_cdc_log")
+        stmt = cql.prepare(f"alter table {table} drop v")
+        cql.execute(stmt)
+        stmt = cql.prepare(f"select * from {table}_scylla_cdc_log")
+        cql.execute(stmt)

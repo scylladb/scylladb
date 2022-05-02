@@ -59,7 +59,7 @@ using namespace std::chrono_literals;
 logging::logger cdc_log("cdc");
 
 namespace cdc {
-static schema_ptr create_log_schema(const schema&, std::optional<utils::UUID> = {});
+static schema_ptr create_log_schema(const schema&, std::optional<utils::UUID> = {}, schema_ptr = nullptr);
 }
 
 static constexpr auto cdc_group_name = "cdc";
@@ -205,7 +205,7 @@ public:
                 return;
             }
 
-            auto new_log_schema = create_log_schema(new_schema, log_schema ? std::make_optional(log_schema->id()) : std::nullopt);
+            auto new_log_schema = create_log_schema(new_schema, log_schema ? std::make_optional(log_schema->id()) : std::nullopt, log_schema);
 
             auto log_mut = log_schema 
                 ? db::schema_tables::make_update_table_mutations(db, keyspace.metadata(), log_schema, new_log_schema, timestamp, false)
@@ -483,7 +483,7 @@ bytes log_data_column_deleted_elements_name_bytes(const bytes& column_name) {
     return to_bytes(cdc_deleted_elements_column_prefix) + column_name;
 }
 
-static schema_ptr create_log_schema(const schema& s, std::optional<utils::UUID> uuid) {
+static schema_ptr create_log_schema(const schema& s, std::optional<utils::UUID> uuid, schema_ptr old) {
     schema_builder b(s.ks_name(), log_name(s.cf_name()));
     b.with_partitioner("com.scylladb.dht.CDCPartitioner");
     b.set_compaction_strategy(sstables::compaction_strategy_type::time_window);
@@ -568,6 +568,20 @@ static schema_ptr create_log_schema(const schema& s, std::optional<utils::UUID> 
 
     if (uuid) {
         b.set_uuid(*uuid);
+    }
+
+    /**
+     * #10473 - if we are redefining the log table, we need to ensure any dropped
+     * columns are registered in "dropped_columns" table, otherwise clients will not
+     * be able to read data older than now.
+     */
+    if (old) {
+        // not super efficient, but we don't do this often.
+        for (auto& col : old->all_columns()) {
+            if (!b.has_column({col.name(), col.name_as_text() })) {
+                b.without_column(col.name_as_text(), col.type, api::new_timestamp());
+            }
+        }
     }
 
     return b.build();
