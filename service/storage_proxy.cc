@@ -224,7 +224,8 @@ public:
             return ser::storage_proxy_rpc_verbs::send_mutation(&sp._messaging,
                                     netw::messaging_service::msg_addr{ep, 0}, timeout, *m,
                                     std::move(forward), utils::fb_utilities::get_broadcast_address(), this_shard_id(),
-                                    response_id, tracing::make_trace_info(tr_state));
+                                    response_id, tracing::make_trace_info(tr_state),
+                                    std::monostate()); // TODO: propagate the correct flag
         }
         sp.got_response(response_id, ep, std::nullopt);
         return make_ready_future<>();
@@ -271,7 +272,8 @@ public:
         return ser::storage_proxy_rpc_verbs::send_mutation(&sp._messaging,
                 netw::messaging_service::msg_addr{ep, 0}, timeout, *_mutation,
                 std::move(forward), utils::fb_utilities::get_broadcast_address(), this_shard_id(),
-                response_id, tracing::make_trace_info(tr_state));
+                response_id, tracing::make_trace_info(tr_state),
+                std::monostate()); // TODO: propagate the correct flag
     }
     virtual bool is_shared() override {
         return true;
@@ -4944,7 +4946,7 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
     _mm = std::move(mm);
     ser::storage_proxy_rpc_verbs::register_counter_mutation(&_messaging, std::bind_front(&storage_proxy::handle_counter_mutation, this));
     ser::storage_proxy_rpc_verbs::register_mutation(&_messaging, std::bind_front(&storage_proxy::receive_mutation_handler, this, _write_smp_service_group));
-    ser::storage_proxy_rpc_verbs::register_hint_mutation(&_messaging, std::bind_front(&storage_proxy::receive_mutation_handler, this, _hints_write_smp_service_group));
+    ser::storage_proxy_rpc_verbs::register_hint_mutation(&_messaging, [this] <typename... Args>(Args&&... args) { return receive_mutation_handler(_hints_write_smp_service_group, std::forward<Args>(args)..., std::monostate()); });
     ser::storage_proxy_rpc_verbs::register_paxos_learn(&_messaging, std::bind_front(&storage_proxy::handle_paxos_learn, this));
     ser::storage_proxy_rpc_verbs::register_mutation_done(&_messaging, std::bind_front(&storage_proxy::handle_mutation_done, this));
     ser::storage_proxy_rpc_verbs::register_mutation_failed(&_messaging, std::bind_front(&storage_proxy::handle_mutation_failed, this));
@@ -5089,22 +5091,24 @@ storage_proxy::handle_write(netw::messaging_service::msg_addr src_addr, rpc::opt
 
 future<rpc::no_wait_type>
 storage_proxy::receive_mutation_handler(smp_service_group smp_grp, const rpc::client_info& cinfo, rpc::opt_time_point t, frozen_mutation in, inet_address_vector_replica_set forward,
-            gms::inet_address reply_to, unsigned shard, storage_proxy::response_id_type response_id, rpc::optional<std::optional<tracing::trace_info>> trace_info) {
+            gms::inet_address reply_to, unsigned shard, storage_proxy::response_id_type response_id, rpc::optional<std::optional<tracing::trace_info>> trace_info,
+            rpc::optional<db::per_partition_rate_limit::info> rate_limit_info_opt) {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = netw::messaging_service::get_source(cinfo);
+        auto rate_limit_info = rate_limit_info_opt.value_or(std::monostate());
 
         utils::UUID schema_version = in.schema_version();
         return handle_write(src_addr, t, schema_version, std::move(in), std::move(forward), reply_to, shard, response_id,
                 trace_info ? *trace_info : std::nullopt,
-                /* apply_fn */ [smp_grp] (shared_ptr<storage_proxy>& p, tracing::trace_state_ptr tr_state, schema_ptr s, const frozen_mutation& m,
+                /* apply_fn */ [smp_grp, rate_limit_info] (shared_ptr<storage_proxy>& p, tracing::trace_state_ptr tr_state, schema_ptr s, const frozen_mutation& m,
                         clock_type::time_point timeout) {
-                    return p->mutate_locally(std::move(s), m, std::move(tr_state), db::commitlog::force_sync::no, timeout, smp_grp, std::monostate()); // TODO: Pass the correct rate limit info
+                    return p->mutate_locally(std::move(s), m, std::move(tr_state), db::commitlog::force_sync::no, timeout, smp_grp, rate_limit_info);
                 },
-                /* forward_fn */ [] (shared_ptr<storage_proxy>& p, netw::messaging_service::msg_addr addr, clock_type::time_point timeout, const frozen_mutation& m,
+                /* forward_fn */ [rate_limit_info] (shared_ptr<storage_proxy>& p, netw::messaging_service::msg_addr addr, clock_type::time_point timeout, const frozen_mutation& m,
                         gms::inet_address reply_to, unsigned shard, response_id_type response_id,
                         std::optional<tracing::trace_info> trace_info) {
                     return ser::storage_proxy_rpc_verbs::send_mutation(&p->_messaging,
-                                            addr, timeout, m, {}, reply_to, shard, response_id, std::move(trace_info));
+                                            addr, timeout, m, {}, reply_to, shard, response_id, std::move(trace_info), rate_limit_info);
                 });
 }
 
