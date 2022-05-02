@@ -1869,7 +1869,7 @@ void storage_proxy::connection_dropped(gms::inet_address addr) {
 }
 
 future<>
-storage_proxy::mutate_locally(const mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout, smp_service_group smp_grp) {
+storage_proxy::mutate_locally(const mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout, smp_service_group smp_grp, db::per_partition_rate_limit::info rate_limit_info) {
     auto shard = m.shard_of();
     get_stats().replica_cross_shard_ops += shard != this_shard_id();
     return _db.invoke_on(shard, {smp_grp, timeout},
@@ -1877,32 +1877,33 @@ storage_proxy::mutate_locally(const mutation& m, tracing::trace_state_ptr tr_sta
              m = freeze(m),
              gtr = tracing::global_trace_state_ptr(std::move(tr_state)),
              timeout,
-             sync] (replica::database& db) mutable -> future<> {
-        return db.apply(s, m, gtr.get(), sync, timeout);
+             sync,
+             rate_limit_info] (replica::database& db) mutable -> future<> {
+        return db.apply(s, m, gtr.get(), sync, timeout, rate_limit_info);
     });
 }
 
 future<>
 storage_proxy::mutate_locally(const schema_ptr& s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout,
-        smp_service_group smp_grp) {
+        smp_service_group smp_grp, db::per_partition_rate_limit::info rate_limit_info) {
     auto shard = m.shard_of(*s);
     get_stats().replica_cross_shard_ops += shard != this_shard_id();
     return _db.invoke_on(shard, {smp_grp, timeout},
-            [&m, gs = global_schema_ptr(s), gtr = tracing::global_trace_state_ptr(std::move(tr_state)), timeout, sync] (replica::database& db) mutable -> future<> {
-        return db.apply(gs, m, gtr.get(), sync, timeout);
+            [&m, gs = global_schema_ptr(s), gtr = tracing::global_trace_state_ptr(std::move(tr_state)), timeout, sync, rate_limit_info] (replica::database& db) mutable -> future<> {
+        return db.apply(gs, m, gtr.get(), sync, timeout, rate_limit_info);
     });
 }
 
 future<>
-storage_proxy::mutate_locally(std::vector<mutation> mutations, tracing::trace_state_ptr tr_state, clock_type::time_point timeout, smp_service_group smp_grp) {
+storage_proxy::mutate_locally(std::vector<mutation> mutations, tracing::trace_state_ptr tr_state, clock_type::time_point timeout, smp_service_group smp_grp, db::per_partition_rate_limit::info rate_limit_info) {
     co_await coroutine::parallel_for_each(mutations, [&] (const mutation& m) mutable {
-            return mutate_locally(m, tr_state, db::commitlog::force_sync::no, timeout, smp_grp);
+            return mutate_locally(m, tr_state, db::commitlog::force_sync::no, timeout, smp_grp, rate_limit_info);
     });
 }
 
 future<> 
-storage_proxy::mutate_locally(std::vector<mutation> mutation, tracing::trace_state_ptr tr_state, clock_type::time_point timeout) {
-        return mutate_locally(std::move(mutation), tr_state, timeout, _write_smp_service_group);
+storage_proxy::mutate_locally(std::vector<mutation> mutation, tracing::trace_state_ptr tr_state, clock_type::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
+        return mutate_locally(std::move(mutation), tr_state, timeout, _write_smp_service_group, rate_limit_info);
 }
 future<>
 storage_proxy::mutate_hint(const schema_ptr& s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, clock_type::time_point timeout) {
@@ -5097,7 +5098,7 @@ storage_proxy::receive_mutation_handler(smp_service_group smp_grp, const rpc::cl
                 trace_info ? *trace_info : std::nullopt,
                 /* apply_fn */ [smp_grp] (shared_ptr<storage_proxy>& p, tracing::trace_state_ptr tr_state, schema_ptr s, const frozen_mutation& m,
                         clock_type::time_point timeout) {
-                    return p->mutate_locally(std::move(s), m, std::move(tr_state), db::commitlog::force_sync::no, timeout, smp_grp);
+                    return p->mutate_locally(std::move(s), m, std::move(tr_state), db::commitlog::force_sync::no, timeout, smp_grp, std::monostate()); // TODO: Pass the correct rate limit info
                 },
                 /* forward_fn */ [] (shared_ptr<storage_proxy>& p, netw::messaging_service::msg_addr addr, clock_type::time_point timeout, const frozen_mutation& m,
                         gms::inet_address reply_to, unsigned shard, response_id_type response_id,
