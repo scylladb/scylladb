@@ -163,9 +163,9 @@ private:
     seastar::condition_variable _node_ops_abort_cond;
     named_semaphore _node_ops_abort_sem{1, named_semaphore_exception_factory{"node_ops_abort_sem"}};
     future<> _node_ops_abort_thread;
-    void node_ops_update_heartbeat(utils::UUID ops_uuid);
-    void node_ops_done(utils::UUID ops_uuid);
-    void node_ops_abort(utils::UUID ops_uuid);
+    future<> node_ops_update_heartbeat(utils::UUID ops_uuid);
+    future<> node_ops_done(utils::UUID ops_uuid);
+    future<> node_ops_abort(utils::UUID ops_uuid);
     void node_ops_singal_abort(std::optional<utils::UUID> ops_uuid);
     future<> node_ops_abort_thread();
 public:
@@ -387,12 +387,12 @@ private:
     std::optional<gms::inet_address> get_replace_address();
     bool is_replacing();
     bool is_first_node();
-    void prepare_to_join(
+    future<> prepare_to_join(
             std::unordered_set<gms::inet_address> initial_contact_nodes,
             std::unordered_set<gms::inet_address> loaded_endpoints,
             std::unordered_map<gms::inet_address, sstring> loaded_peer_features);
     void join_token_ring(std::chrono::milliseconds);
-    void start_sys_dist_ks();
+    future<> start_sys_dist_ks();
 public:
 
     future<> rebuild(sstring source_dc);
@@ -636,10 +636,10 @@ private:
      */
     future<> restore_replica_count(inet_address endpoint, inet_address notify_endpoint);
     future<> removenode_with_stream(gms::inet_address leaving_node, shared_ptr<abort_source> as_ptr);
-    void removenode_add_ranges(lw_shared_ptr<dht::range_streamer> streamer, gms::inet_address leaving_node);
+    future<> removenode_add_ranges(lw_shared_ptr<dht::range_streamer> streamer, gms::inet_address leaving_node);
 
     // needs to be modified to accept either a keyspace or ARS.
-    std::unordered_multimap<dht::token_range, inet_address> get_changed_ranges_for_leaving(sstring keyspace_name, inet_address endpoint);
+    future<std::unordered_multimap<dht::token_range, inet_address>> get_changed_ranges_for_leaving(sstring keyspace_name, inet_address endpoint);
 
 public:
 
@@ -704,7 +704,7 @@ private:
      */
     future<> start_leaving();
     future<> leave_ring();
-    void unbootstrap();
+    future<> unbootstrap();
 
 public:
     future<> move(sstring new_token) {
@@ -748,7 +748,7 @@ public:
     future<> removenode(sstring host_id_string, std::list<gms::inet_address> ignore_nodes);
     future<node_ops_cmd_response> node_ops_cmd_handler(gms::inet_address coordinator, node_ops_cmd_request req);
     void node_ops_cmd_check(gms::inet_address coordinator, const node_ops_cmd_request& req);
-    future<> node_ops_cmd_heartbeat_updater(const node_ops_cmd& cmd, utils::UUID uuid, std::list<gms::inet_address> nodes, lw_shared_ptr<bool> heartbeat_updater_done);
+    future<> node_ops_cmd_heartbeat_updater(node_ops_cmd cmd, utils::UUID uuid, std::list<gms::inet_address> nodes, lw_shared_ptr<bool> heartbeat_updater_done);
 
     future<mode> get_operation_mode();
 
