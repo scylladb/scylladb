@@ -610,7 +610,7 @@ bind_variable_test_assignment(const bind_variable& bv, data_dictionary::database
 
 static
 bind_variable
-bind_variable_scalar_prepare_expression(const bind_variable& bv, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver)
+bind_variable_prepare_expression(const bind_variable& bv, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver)
 {   
     return bind_variable {
         .bind_index = bv.bind_index,
@@ -811,7 +811,7 @@ prepare_expression(const expression& expr, data_dictionary::database db, const s
             return null_prepare_expression(db, keyspace, receiver);
         },
         [&] (const bind_variable& bv) -> expression {
-            return bind_variable_scalar_prepare_expression(bv, db, keyspace, receiver);
+            return bind_variable_prepare_expression(bv, db, keyspace, receiver);
         },
         [&] (const untyped_constant& uc) -> expression {
             return untyped_constant_prepare_expression(uc, db, keyspace, receiver);
