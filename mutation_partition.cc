@@ -2080,11 +2080,10 @@ to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::pa
     if (reverse == consume_in_reverse::no) {
         frozen_mutation_consumer_adaptor adaptor(s, consumer);
         for (const partition& p : r.partitions()) {
-            const auto res = p.mut().consume(s, adaptor);
+            const auto res = co_await p.mut().consume_gently(s, adaptor);
             if (res.stop == stop_iteration::yes) {
                 break;
             }
-            co_await coroutine::maybe_yield();
         }
     } else {
         for (const partition& p : r.partitions()) {
