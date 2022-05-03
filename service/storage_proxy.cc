@@ -3334,7 +3334,7 @@ public:
     bool all_reached_end() const {
         return _all_reached_end;
     }
-    std::optional<reconcilable_result> resolve(schema_ptr schema, const query::read_command& cmd, uint64_t original_row_limit, uint64_t original_per_partition_limit,
+    future<std::optional<reconcilable_result>> resolve(schema_ptr schema, const query::read_command& cmd, uint64_t original_row_limit, uint64_t original_per_partition_limit,
             uint32_t original_partition_limit) {
         assert(_data_results.size());
 
@@ -3343,7 +3343,7 @@ public:
             // should happen only for range reads since single key reads will not
             // try to reconcile for CL=ONE
             auto& p = _data_results[0].result;
-            return reconcilable_result(p->row_count(), p->partitions(), p->is_short_read());
+            co_return reconcilable_result(p->row_count(), p->partitions(), p->is_short_read());
         }
 
         const auto& s = *schema;
@@ -3406,28 +3406,24 @@ public:
         reconciled_partitions.reserve(versions.size());
 
         // reconcile all versions
-        boost::range::transform(boost::make_iterator_range(versions.begin(), versions.end()), std::back_inserter(reconciled_partitions),
-                                [this, schema, original_per_partition_limit] (std::vector<version>& v) {
+        for (std::vector<version>& v : versions) {
             auto it = boost::range::find_if(v, [] (auto&& ver) {
                     return bool(ver.par);
             });
-#if __cplusplus <= 201703L
-            using mutation_ref = mutation&;
-#else
-            using mutation_ref = mutation&&;
-#endif
-            auto m = boost::accumulate(v, mutation(schema, it->par->mut().key()), [this, schema] (mutation_ref m, const version& ver) {
+            auto m = mutation(schema, it->par->mut().key());
+            for (const version& ver : v) {
                 if (ver.par) {
                     mutation_application_stats app_stats;
                     m.partition().apply(*schema, ver.par->mut().partition(), *schema, app_stats);
+                    co_await coroutine::maybe_yield();
                 }
-                return std::move(m);
-            });
+            }
             auto live_row_count = m.live_row_count();
             _total_live_count += live_row_count;
             _live_partition_count += !!live_row_count;
-            return mutation_and_live_row_count { std::move(m), live_row_count };
-        });
+            reconciled_partitions.emplace_back(mutation_and_live_row_count{ std::move(m), live_row_count });
+            co_await coroutine::maybe_yield();
+        }
         _partition_count = reconciled_partitions.size();
 
         bool has_diff = false;
@@ -3454,13 +3450,14 @@ public:
                         }
                     }
                 }
+                co_await coroutine::maybe_yield();
             }
         }
 
         if (has_diff) {
             if (got_incomplete_information(*schema, cmd, original_row_limit, original_per_partition_limit,
                                            original_partition_limit, reconciled_partitions, versions)) {
-                return {};
+                co_return std::nullopt;
             }
             // filter out partitions with empty diffs
             for (auto it = _diffs.begin(); it != _diffs.end();) {
@@ -3486,12 +3483,14 @@ public:
         // build reconcilable_result from reconciled data
         // traverse backwards since large keys are at the start
         utils::chunked_vector<partition> vec;
-        auto r = boost::accumulate(reconciled_partitions | boost::adaptors::reversed, std::ref(vec), [] (utils::chunked_vector<partition>& a, const mutation_and_live_row_count& m_a_rc) {
-            a.emplace_back(partition(m_a_rc.live_row_count, freeze(m_a_rc.mut)));
-            return std::ref(a);
-        });
+        vec.reserve(_partition_count);
+        for (auto it = reconciled_partitions.rbegin(); it != reconciled_partitions.rend(); it++) {
+            const mutation_and_live_row_count& m_a_rc = *it;
+            vec.emplace_back(partition(m_a_rc.live_row_count, freeze(m_a_rc.mut)));
+            co_await coroutine::maybe_yield();
+        }
 
-        return reconcilable_result(_total_live_count, std::move(r.get()), _is_short_read);
+        co_return reconcilable_result(_total_live_count, std::move(vec), _is_short_read);
     }
     auto total_live_count() const {
         return _total_live_count;
@@ -3685,15 +3684,22 @@ protected:
         make_mutation_data_requests(cmd, data_resolver, _targets.begin(), _targets.end(), timeout);
 
         // Waited on indirectly.
-        (void)data_resolver->done().then_wrapped([this, exec, data_resolver, cmd = std::move(cmd), cl, timeout] (future<result<>> f) {
+        (void)data_resolver->done().then_wrapped([this, exec_ = std::move(exec), data_resolver_ = std::move(data_resolver), cmd_ = std::move(cmd), cl_ = cl, timeout_ = timeout] (future<result<>> f) mutable -> future<> {
+            // move captures to coroutine stack frame
+            // to prevent use after free
+            auto exec = std::move(exec_);
+            auto data_resolver = std::move(data_resolver_);
+            auto cmd = std::move(cmd_);
+            auto cl = cl_;
+            auto timeout = timeout_;
             try {
                 result<> res = f.get();
                 if (!res) {
                     _result_promise.set_value(std::move(res).as_failure());
                     on_read_resolved();
-                    return;
+                    co_return;
                 }
-                auto rr_opt = data_resolver->resolve(_schema, *cmd, original_row_limit(), original_per_partition_row_limit(), original_partition_limit()); // reconciliation happens here
+                auto rr_opt = co_await data_resolver->resolve(_schema, *cmd, original_row_limit(), original_per_partition_row_limit(), original_partition_limit()); // reconciliation happens here
 
                 // We generate a retry if at least one node reply with count live columns but after merge we have less
                 // than the total number of column we are interested in (which may be < count on a retry).
