@@ -18,6 +18,7 @@
 #include "types/set.hh"
 #include "types/map.hh"
 #include "types/user.hh"
+#include "exceptions/unrecognized_entity_exception.hh"
 
 #include <boost/range/algorithm/count.hpp>
 
@@ -1044,6 +1045,183 @@ public:
 
 ::shared_ptr<assignment_testable> as_assignment_testable(expression e) {
     return ::make_shared<assignment_testable_expression>(std::move(e));
+}
+
+// Finds column_defintion for given column name in the schema.
+// Second argument is a relation to print in the error message in case of failure.
+static const column_value resolve_column(const unresolved_identifier& col_ident, const schema& schema, const binary_operator& printable_relation) {
+    ::shared_ptr<column_identifier> id = col_ident.ident->prepare_column_identifier(schema);
+    const column_definition* def = get_column_definition(schema, *id);
+    if (!def || def->is_hidden_from_cql()) {
+        throw exceptions::unrecognized_entity_exception(*id, fmt::format("{}", printable_relation));
+    }
+    return column_value(def);
+}
+
+// Resolves columns on LHS of binary_operator and prepares the index in case of a subscripted column.
+// Last argument is a relation to print in the error message in case of failure.
+static expression prepare_binop_lhs(const expression& lhs, data_dictionary::database db, const schema& schema, const binary_operator& printable_relation) {
+    return expr::visit(overloaded_functor{
+        [&](const unresolved_identifier& unin) -> expression {
+            return resolve_column(unin, schema, printable_relation);
+        },
+        [](const column_value& cv) -> expression { return cv; },
+        [&](const tuple_constructor& tc) -> expression {
+            std::vector<expression> new_elements;
+            new_elements.reserve(tc.elements.size());
+
+            for (const expression& elem : tc.elements) {
+                new_elements.emplace_back(prepare_binop_lhs(elem, db, schema, printable_relation));
+            }
+
+            return tuple_constructor {
+                .elements = std::move(new_elements)
+            };
+        },
+        [&](const token& tk) -> expression {
+            std::vector<expression> prepared_token_args;
+            prepared_token_args.reserve(tk.args.size());
+
+            for (const expression& arg : tk.args) {
+                prepared_token_args.emplace_back(prepare_binop_lhs(arg, db, schema, printable_relation));
+            }
+
+            return token(std::move(prepared_token_args));
+        },
+        [&](const subscript& sub) -> expression {
+            const column_definition* sub_col = expr::visit(overloaded_functor {
+                [&](const unresolved_identifier& unin) -> const column_definition* {
+                    return resolve_column(unin, schema, printable_relation).col;
+                },
+                [](const column_value& cv) -> const column_definition* {
+                    return cv.col;
+                },
+                [](const auto& e) -> const column_definition* {
+                    on_internal_error(expr_logger,
+                        fmt::format("Only columns can be subscripted using the [] operator, got {}", e));
+                }
+            }, sub.val);
+
+            const abstract_type& sub_col_type = sub_col->column_specification->type->without_reversed();
+            if (!sub_col_type.is_map()) {
+                throw exceptions::invalid_request_exception(format("Column {} is not a map, cannot be used as a map", sub_col->name_as_text()));
+            }
+
+            return subscript {
+                .val = column_value(sub_col),
+                .sub = prepare_expression(sub.sub, db, schema.ks_name(), map_key_spec_of(*sub_col->column_specification))
+            };
+        },
+        [](const auto& e) -> expression {
+            on_internal_error(expr_logger, format("prepare_binop_lhs: Unhandled expression: {}", e));
+        }
+    }, lhs);
+}
+
+// Finds the type of a prepared LHS of binary_operator and creates a receiver with it.
+static lw_shared_ptr<column_specification> get_lhs_receiver(const expression& prepared_lhs, const schema& schema) {
+    return expr::visit(overloaded_functor{
+        [](const column_value& col_val) -> lw_shared_ptr<column_specification> {
+            return col_val.col->column_specification;
+        },
+        [](const subscript& col_val) -> lw_shared_ptr<column_specification> {
+            const column_value& sub_col = get_subscripted_column(col_val);
+            return map_value_spec_of(*sub_col.col->column_specification);
+        },
+        [&](const tuple_constructor& tup) -> lw_shared_ptr<column_specification> {
+            std::ostringstream tuple_name;
+            tuple_name << "(";
+            std::vector<data_type> tuple_types;
+            tuple_types.reserve(tup.elements.size());
+
+            for (std::size_t i = 0; i < tup.elements.size(); i++) {
+                lw_shared_ptr<column_specification> elem_receiver = get_lhs_receiver(tup.elements[i], schema);
+                tuple_name << elem_receiver->name->text();
+                if (i+1 != tup.elements.size()) {
+                    tuple_name << ",";
+                }
+
+                tuple_types.push_back(elem_receiver->type->underlying_type());
+            }
+
+            tuple_name << ")";
+
+            shared_ptr<column_identifier> identifier = ::make_shared<column_identifier>(tuple_name.str(), true);
+            data_type tuple_type = tuple_type_impl::get_instance(tuple_types);
+            return make_lw_shared<column_specification>(schema.ks_name(), schema.cf_name(), std::move(identifier), std::move(tuple_type));
+        },
+        [&](const token& col_val) -> lw_shared_ptr<column_specification> {
+            return make_lw_shared<column_specification>(schema.ks_name(),
+                                                        schema.cf_name(),
+                                                        ::make_shared<column_identifier>("partition key token", true),
+                                                        dht::token::get_token_validator());
+        },
+        [](const auto& other) -> lw_shared_ptr<column_specification> {
+            on_internal_error(expr_logger, format("get_lhs_receiver: unexpected expression: {}", other));
+        },
+    }, prepared_lhs);
+}
+
+// Given type of LHS and the operation finds the expected type of RHS.
+// The type will be the same as LHS for simple operations like =, but it will be different for more complex ones like IN or CONTAINS.
+static lw_shared_ptr<column_specification> get_rhs_receiver(lw_shared_ptr<column_specification>& lhs_receiver, oper_t oper) {
+    const data_type& lhs_type = lhs_receiver->type->underlying_type();
+
+    if (oper == oper_t::IN) {
+        data_type rhs_receiver_type = list_type_impl::get_instance(std::move(lhs_type), false);
+        auto in_name = ::make_shared<column_identifier>(format("in({})", lhs_receiver->name->text()), true);
+        return make_lw_shared<column_specification>(lhs_receiver->ks_name,
+                                                    lhs_receiver->cf_name,
+                                                    in_name,
+                                                    std::move(rhs_receiver_type));
+    } else if (oper == oper_t::CONTAINS) {
+        if (lhs_type->is_list()) {
+            return list_value_spec_of(*lhs_receiver);
+        } else if (lhs_type->is_set()) {
+            return set_value_spec_of(*lhs_receiver);
+        } else if (lhs_type->is_map()) {
+            return map_value_spec_of(*lhs_receiver);
+        } else {
+            throw exceptions::invalid_request_exception(format("Cannot use CONTAINS on non-collection column \"{}\"",
+                                                                     lhs_receiver->name));
+        }
+    } else if (oper == oper_t::CONTAINS_KEY) {
+        if (lhs_type->is_map()) {
+            return map_key_spec_of(*lhs_receiver);
+        } else {
+            throw exceptions::invalid_request_exception(format("Cannot use CONTAINS KEY on non-map column {}",
+                                                               lhs_receiver->name));
+        }
+    } else if (oper == oper_t::LIKE) {
+        if (!lhs_type->is_string()) {
+            throw exceptions::invalid_request_exception(
+                format("LIKE is allowed only on string types, which {} is not", lhs_receiver->name->text()));
+        }
+        return lhs_receiver;
+    } else {
+        return lhs_receiver;
+    }
+}
+
+static expression prepare_binop_rhs(const expression& rhs, const lw_shared_ptr<column_specification>& rhs_receiver, oper_t oper, data_dictionary::database db, const sstring& keyspace) {
+    // Lists of IN values must be handled separately during preparation
+    // because they might contain nulls and bind markers.
+    if (oper == oper_t::IN && is<collection_constructor>(rhs)) {
+        const collection_constructor& rhs_in_list = as<collection_constructor>(rhs);
+        return list_prepare_expression(rhs_in_list, db, keyspace, rhs_receiver, true);
+    }
+
+    return prepare_expression(rhs, db, keyspace, rhs_receiver);
+}
+
+binary_operator prepare_binary_operator(const binary_operator& binop, data_dictionary::database db, schema_ptr schema, prepare_context& ctx) {
+    expression prepared_lhs = prepare_binop_lhs(binop.lhs, db, *schema, binop);
+    lw_shared_ptr<column_specification> lhs_receiver = get_lhs_receiver(prepared_lhs, *schema);
+
+    lw_shared_ptr<column_specification> rhs_receiver = get_rhs_receiver(lhs_receiver, binop.op);
+    expression prepared_rhs = prepare_binop_rhs(binop.rhs, rhs_receiver, binop.op, db, schema->ks_name());
+
+    return binary_operator(std::move(prepared_lhs), binop.op, std::move(prepared_rhs), binop.order);
 }
 
 }

@@ -607,6 +607,10 @@ extern expression search_and_replace(const expression& e,
 extern expression prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver);
 extern expression prepare_expression_multi_column(const expression& expr, data_dictionary::database db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers);
 
+// Prepares a binary operator received from the parser.
+// Does some basic type checks but no advanced validation.
+extern binary_operator prepare_binary_operator(const binary_operator& binop, data_dictionary::database db, schema_ptr schema, prepare_context& ctx);
+
 
 /**
  * @return whether this object can be assigned to the provided receiver. We distinguish
