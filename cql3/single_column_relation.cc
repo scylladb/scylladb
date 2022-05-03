@@ -13,6 +13,7 @@
 #include "cql3/statements/request_validations.hh"
 #include "cql3/cql3_type.hh"
 #include "cql3/lists.hh"
+#include "seastar/core/on_internal_error.hh"
 #include "unimplemented.hh"
 #include "types/map.hh"
 #include "types/list.hh"
@@ -22,6 +23,9 @@
 using namespace cql3::expr;
 
 namespace cql3 {
+namespace expr {
+    extern logging::logger expr_logger;
+}
 
 expression
 single_column_relation::to_expression(const std::vector<lw_shared_ptr<column_specification>>& receivers,
@@ -58,6 +62,28 @@ single_column_relation::new_EQ_restriction(data_dictionary::database db, schema_
     return r;
 }
 
+expression
+static prepare_in_bind_marker(const std::vector<lw_shared_ptr<column_specification>>& receivers,
+                              const expr::expression& raw,
+                              data_dictionary::database db,
+                              const sstring& keyspace,
+                              prepare_context& ctx) {
+    if(receivers.size() != 1) {
+        on_internal_error(expr_logger, format("prepare_in_bind_marker - bad receivers.size(): {}", receivers.size()));
+    }
+    shared_ptr<column_identifier> in_name =
+        ::make_shared<column_identifier>(format("in({})", receivers[0]->name->text()), true);
+    data_type in_list_type = list_type_impl::get_instance(receivers[0]->type->underlying_type(), false);
+    lw_shared_ptr<column_specification> in_receiver =
+        make_lw_shared<column_specification>(receivers[0]->ks_name,
+                                             receivers[0]->cf_name,
+                                             std::move(in_name),
+                                             std::move(in_list_type));
+    auto expr = prepare_expression(raw, db, keyspace, in_receiver);
+    expr::fill_prepare_context(expr, ctx);
+    return expr;
+}
+
 ::shared_ptr<restrictions::restriction>
 single_column_relation::new_IN_restriction(data_dictionary::database db, schema_ptr schema, prepare_context& ctx) {
     using namespace restrictions;
@@ -69,7 +95,7 @@ single_column_relation::new_IN_restriction(data_dictionary::database db, schema_
     auto receivers = to_receivers(*schema, column_def);
     assert(_in_values.empty() || !_value);
     if (_value) {
-        auto e = to_expression(receivers, *_value, db, schema->ks_name(), ctx);
+        auto e = prepare_in_bind_marker(receivers, *_value, db, schema->ks_name(), ctx);
         auto r = ::make_shared<single_column_restriction>(column_def);
         r->expression = binary_operator{column_value{&column_def}, expr::oper_t::IN, std::move(e)};
         return r;

@@ -649,23 +649,6 @@ bind_variable_scalar_prepare_expression(const bind_variable& bv, data_dictionary
 
 static
 lw_shared_ptr<column_specification>
-bind_variable_scalar_in_make_receiver(const column_specification& receiver) {
-    auto in_name = ::make_shared<column_identifier>(sstring("in(") + receiver.name->to_string() + sstring(")"), true);
-    return make_lw_shared<column_specification>(receiver.ks_name, receiver.cf_name, in_name, list_type_impl::get_instance(receiver.type, false));
-}
-
-static
-bind_variable
-bind_variable_scalar_in_prepare_expression(const bind_variable& bv, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
-    return bind_variable {
-        .shape = bind_variable::shape_type::scalar,
-        .bind_index = bv.bind_index,
-        .receiver = bind_variable_scalar_in_make_receiver(*receiver)
-    };
-}
-
-static
-lw_shared_ptr<column_specification>
 bind_variable_tuple_make_receiver(const std::vector<lw_shared_ptr<column_specification>>& receivers) {
     std::vector<data_type> types;
     types.reserve(receivers.size());
@@ -922,13 +905,7 @@ prepare_expression(const expression& expr, data_dictionary::database db, const s
             return null_prepare_expression(db, keyspace, receiver);
         },
         [&] (const bind_variable& bv) -> expression {
-            switch (bv.shape) {
-            case expr::bind_variable::shape_type::scalar:  return bind_variable_scalar_prepare_expression(bv, db, keyspace, receiver);
-            case expr::bind_variable::shape_type::scalar_in: return bind_variable_scalar_in_prepare_expression(bv, db, keyspace, receiver);
-            case expr::bind_variable::shape_type::tuple: on_internal_error(expr_logger, "prepare_expression(bind_variable(tuple))");
-            case expr::bind_variable::shape_type::tuple_in: on_internal_error(expr_logger, "prepare_expression(bind_variable(tuple_in))");
-            }
-            on_internal_error(expr_logger, "unexpected shape in bind_variable");
+            return bind_variable_scalar_prepare_expression(bv, db, keyspace, receiver);
         },
         [&] (const untyped_constant& uc) -> expression {
             return untyped_constant_prepare_expression(uc, db, keyspace, receiver);
