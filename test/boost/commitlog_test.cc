@@ -428,6 +428,12 @@ static future<> corrupt_segment(sstring seg, uint64_t off, uint32_t value) {
     });
 }
 
+static future<> truncate_segment(sstring seg, uint64_t off) {
+    auto f = co_await open_file_dma(seg, open_flags::rw);
+    co_await f.truncate(off);
+    co_await f.close();
+}
+
 SEASTAR_TEST_CASE(test_commitlog_entry_corruption){
     commitlog::config cfg;
     cfg.commitlog_segment_size_in_mb = 1;
@@ -540,6 +546,46 @@ SEASTAR_TEST_CASE(test_commitlog_reader_produce_exception){
                                 // ok.
                                 BOOST_FAIL("Wrong exception");
                             }
+                        });
+                    });
+        });
+}
+
+SEASTAR_TEST_CASE(test_commitlog_segment_truncation){
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    return cl_test(cfg, [](commitlog& log) {
+        auto rps = make_lw_shared<std::vector<db::replay_position>>();
+        return do_until([rps]() {return rps->size() > 1;},
+                    [&log, rps]() {
+                        auto uuid = utils::UUID_gen::get_time_UUID();
+                        sstring tmp = "hej bubba cow";
+                        return log.add_mutation(uuid, tmp.size(), db::commitlog::force_sync::no, [tmp](db::commitlog::output& dst) {
+                                    dst.write(tmp.data(), tmp.size());
+                                }).then([&log, rps](rp_handle h) {
+                                    BOOST_CHECK_NE(h.rp(), db::replay_position());
+                                    rps->push_back(h.release());
+                                });
+                    }).then([&log]() {
+                        return log.sync_all_segments();
+                    }).then([&log, rps] {
+                        auto segments = log.get_active_segment_names();
+                        BOOST_REQUIRE(!segments.empty());
+                        auto seg = segments[0];
+                        // must truncate past header size, otherwise entry is discarded.
+                        return truncate_segment(seg, rps->at(1).pos + 12).then([seg, rps, &log] {
+                            return db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX, service::get_local_commitlog_priority(), [rps](db::commitlog::buffer_and_replay_position buf_rp) {
+                                auto&& [buf, rp] = buf_rp;
+                                BOOST_CHECK_EQUAL(rp, rps->at(0));
+                                return make_ready_future<>();
+                            }).then_wrapped([](auto&& f) {
+                                try {
+                                    f.get();
+                                    BOOST_FAIL("Expected exception");
+                                } catch (commitlog::file_truncated_error& e) {
+                                    // ok.
+                                }
+                            });
                         });
                     });
         });

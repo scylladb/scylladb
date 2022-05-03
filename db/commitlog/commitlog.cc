@@ -2693,6 +2693,9 @@ db::commitlog::read_log_file(sstring filename, sstring pfx, seastar::io_priority
                 if (corrupt_size > 0) {
                     throw segment_data_corruption_error("Data corruption", corrupt_size);
                 }
+            } catch (std::out_of_range&) {
+                // if we get an underflow, the file is somehow truncated/not fully created
+                p = std::make_exception_ptr(file_truncated_error{});
             } catch (...) {
                 p = std::current_exception();
             }

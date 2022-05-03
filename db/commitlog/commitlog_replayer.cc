@@ -205,9 +205,18 @@ db::commitlog_replayer::impl::recover(sstring file, const sstring& fname_prefix)
                 p, &exts);
     } catch (commitlog::segment_data_corruption_error& e) {
         s.corrupt_bytes += e.bytes();
-    } catch (...) {
-        throw;
+    } catch (commitlog::segment_error&) {
+        // #6653 - should only get here if we have things like truncated files, in which case
+        // we literally have no idea how much data was corrupted/lost (if any), since
+        // we probably hit a buffer underflow.
+        // In any case, we should probably just warn and continue with next file,
+        // instead of propagating the exception and fail the whole server.
+        // CMH: should we restrict this to out_of_range (or make replayer)
+        rlogger.warn("Exception processing {}: {}. Potential data loss.", file, std::current_exception());
     }
+    // any other exception should be considered unexpected and failing startup is probably the
+    // way to go...
+
     co_return s;
 }
 

@@ -391,6 +391,14 @@ public:
         }
     };
 
+    class file_truncated_error : public segment_error {
+        static constexpr const char* _msg = "File truncated";
+    public:
+        virtual const char* what() const noexcept {
+            return _msg;
+        }
+    };
+
     static future<> read_log_file(sstring filename, sstring prefix, seastar::io_priority_class read_io_prio_class, commit_load_reader_func, position_type = 0, const db::extensions* = nullptr);
 private:
     commitlog(config);
