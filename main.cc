@@ -414,6 +414,8 @@ sharded<service::migration_manager>* the_migration_manager;
 sharded<service::storage_service>* the_storage_service;
 sharded<replica::database>* the_database;
 sharded<streaming::stream_manager> *the_stream_manager;
+sharded<gms::feature_service> *the_feature_service;
+sharded<gms::gossiper> *the_gossiper;
 }
 
 static int scylla_main(int ac, char** av) {
@@ -527,6 +529,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     sharded<sstables_loader> sst_loader;
     sharded<streaming::stream_manager> stream_manager;
     sharded<service::forward_service> forward_service;
+    sharded<gms::gossiper> gossiper;
 
     return app.run(ac, av, [&] () -> future<int> {
 
@@ -554,7 +557,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
         tcp_syncookies_sanity();
 
         return seastar::async([&app, cfg, ext, &db, &qp, &bm, &proxy, &forward_service, &mm, &mm_notifier, &ctx, &opts, &dirs,
-                &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service,
+                &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service, &gossiper,
                 &token_metadata, &erm_factory, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
                 &repair, &sst_loader, &ss, &lifecycle_notifier, &stream_manager] {
           try {
@@ -612,6 +615,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }
             gms::feature_config fcfg = gms::feature_config_from_db_config(*cfg);
 
+            debug::the_feature_service = &feature_service;
             feature_service.start(fcfg).get();
             // FIXME storage_proxy holds a reference on it and is not yet stopped.
             // also the proxy leaves range_slice_read_executor-s hanging around
@@ -742,17 +746,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto destroy_tracing = defer_verbose_shutdown("tracing instance", [] {
                 tracing::tracing::tracing_instance().stop().get();
             });
-            supervisor::notify("creating snitch");
-            snitch_config snitch_cfg;
-            snitch_cfg.name = cfg->endpoint_snitch();
-            sharded<locator::snitch_ptr>& snitch = i_endpoint_snitch::snitch_instance();
-            snitch.start(snitch_cfg).get();
-            auto stop_snitch = defer_verbose_shutdown("snitch", [&snitch] {
-                snitch.stop().get();
-            });
-            snitch.invoke_on_all(&locator::snitch_ptr::start).get();
-            // #293 - do not stop anything (unless snitch.on_all(start) fails)
-            stop_snitch->cancel();
 
             auto api_addr = utils::resolve(cfg->api_address || cfg->rpc_address, family, preferred).get0();
             supervisor::notify("starting API server");
@@ -866,7 +859,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 startlog.warn("Using default cluster name is not recommended. Using a unique cluster name will reduce the chance of adding nodes to the wrong cluster by mistake");
             }
 
-            auto& gossiper = gms::get_gossiper();
+            debug::the_gossiper = &gossiper;
             gossiper.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(feature_service), std::ref(token_metadata), std::ref(messaging), std::ref(sys_ks), std::ref(*cfg), std::ref(gcfg)).get();
             auto stop_gossiper = defer_verbose_shutdown("gossiper", [&gossiper] {
                 // call stop on each instance, but leave the sharded<> pointers alive
@@ -874,6 +867,17 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
             gossiper.invoke_on_all(&gms::gossiper::start).get();
 
+            supervisor::notify("creating snitch");
+            snitch_config snitch_cfg;
+            snitch_cfg.name = cfg->endpoint_snitch();
+            sharded<locator::snitch_ptr>& snitch = i_endpoint_snitch::snitch_instance();
+            snitch.start(snitch_cfg, std::ref(gossiper)).get();
+            auto stop_snitch = defer_verbose_shutdown("snitch", [&snitch] {
+                snitch.stop().get();
+            });
+            snitch.invoke_on_all(&locator::snitch_ptr::start).get();
+            // #293 - do not stop anything (unless snitch.on_all(start) fails)
+            stop_snitch->cancel();
 
             raft_gr.start(cfg->check_experimental(db::experimental_features_t::RAFT),
                 std::ref(messaging), std::ref(gossiper), std::ref(feature_service)).get();
@@ -1339,7 +1343,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             supervisor::notify("starting load meter");
-            load_meter.init(db, gms::get_local_gossiper()).get();
+            load_meter.init(db, gossiper.local()).get();
             auto stop_load_meter = defer_verbose_shutdown("load meter", [&load_meter] {
                 load_meter.exit().get();
             });
@@ -1355,7 +1359,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             supervisor::notify("starting view update backlog broker");
             static sharded<service::view_update_backlog_broker> view_backlog_broker;
-            view_backlog_broker.start(std::ref(proxy), std::ref(gms::get_gossiper())).get();
+            view_backlog_broker.start(std::ref(proxy), std::ref(gossiper)).get();
             view_backlog_broker.invoke_on_all(&service::view_update_backlog_broker::start).get();
             auto stop_view_backlog_broker = defer_verbose_shutdown("view update backlog broker", [] {
                 view_backlog_broker.stop().get();
@@ -1364,7 +1368,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             //FIXME: discarded future
             (void)api::set_server_cache(ctx);
             startlog.info("Waiting for gossip to settle before accepting client requests...");
-            gms::get_local_gossiper().wait_for_gossip_to_settle().get();
+            gossiper.local().wait_for_gossip_to_settle().get();
             api::set_server_gossip_settle(ctx, gossiper).get();
 
             supervisor::notify("allow replaying hints");

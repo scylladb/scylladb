@@ -130,6 +130,7 @@ private:
     sharded<qos::service_level_controller>& _sl_controller;
     sharded<service::migration_manager>& _mm;
     sharded<db::batchlog_manager>& _batchlog_manager;
+    sharded<gms::gossiper>& _gossiper;
 private:
     struct core_local_state {
         service::client_state client_state;
@@ -178,7 +179,8 @@ public:
             sharded<service::migration_notifier>& mnotifier,
             sharded<service::migration_manager>& mm,
             sharded<qos::service_level_controller> &sl_controller,
-            sharded<db::batchlog_manager>& batchlog_manager)
+            sharded<db::batchlog_manager>& batchlog_manager,
+            sharded<gms::gossiper>& gossiper)
             : _db(db)
             , _qp(qp)
             , _auth_service(auth_service)
@@ -188,6 +190,7 @@ public:
             , _sl_controller(sl_controller)
             , _mm(mm)
             , _batchlog_manager(batchlog_manager)
+            , _gossiper(gossiper)
     {
         adjust_rlimit();
     }
@@ -399,6 +402,10 @@ public:
         return _batchlog_manager;
     }
 
+    virtual sharded<gms::gossiper>& gossiper() override {
+        return _gossiper;
+    }
+
     virtual future<> refresh_client_state() override {
         return _core_local.invoke_on_all([] (core_local_state& state) {
             return state.client_state.maybe_update_per_service_level_params();
@@ -448,10 +455,6 @@ public:
 
             utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
             utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
-            sharded<locator::snitch_ptr>& snitch = locator::i_endpoint_snitch::snitch_instance();
-            snitch.start(locator::snitch_config{}).get();
-            auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
-            snitch.invoke_on_all(&locator::snitch_ptr::start).get();
 
             sharded<abort_source> abort_sources;
             abort_sources.start().get();
@@ -545,7 +548,7 @@ public:
             feature_service.start(fcfg).get();
             auto stop_feature_service = defer([&] { feature_service.stop().get(); });
 
-            sharded<gms::gossiper>& gossiper = gms::get_gossiper();
+            sharded<gms::gossiper> gossiper;
 
             // Init gossiper
             std::set<gms::inet_address> seeds;
@@ -572,6 +575,11 @@ public:
             });
             gossiper.invoke_on_all(&gms::gossiper::start).get();
 
+            sharded<locator::snitch_ptr>& snitch = locator::i_endpoint_snitch::snitch_instance();
+            snitch.start(locator::snitch_config{}, std::ref(gossiper)).get();
+            auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
+            snitch.invoke_on_all(&locator::snitch_ptr::start).get();
+
             distributed<service::storage_proxy>& proxy = service::get_storage_proxy();
             distributed<service::migration_manager> mm;
             sharded<cql3::cql_config> cql_config;
@@ -590,7 +598,7 @@ public:
             auto stop_raft_gr = deferred_stop(raft_gr);
             raft_gr.invoke_on_all(&service::raft_group_registry::start).get();
 
-            stream_manager.start(std::ref(db), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(ms), std::ref(mm), std::ref(gms::get_gossiper())).get();
+            stream_manager.start(std::ref(db), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(ms), std::ref(mm), std::ref(gossiper)).get();
             auto stop_streaming = defer([&stream_manager] { stream_manager.stop().get(); });
 
             sharded<semaphore> sst_dir_semaphore;
@@ -808,7 +816,7 @@ public:
                 // The default user may already exist if this `cql_test_env` is starting with previously populated data.
             }
 
-            single_node_cql_env env(db, qp, auth_service, view_builder, view_update_generator, mm_notif, mm, std::ref(sl_controller), bm);
+            single_node_cql_env env(db, qp, auth_service, view_builder, view_update_generator, mm_notif, mm, std::ref(sl_controller), bm, gossiper);
             env.start().get();
             auto stop_env = defer([&env] { env.stop().get(); });
 

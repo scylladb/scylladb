@@ -159,6 +159,8 @@ public:
 
     virtual sharded<db::batchlog_manager>& batchlog_manager() = 0;
 
+    virtual sharded<gms::gossiper>& gossiper() = 0;
+
     virtual future<> refresh_client_state() = 0;
 
     data_dictionary::database data_dictionary();

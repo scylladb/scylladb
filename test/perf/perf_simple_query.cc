@@ -349,11 +349,12 @@ static std::vector<perf_result> do_alternator_test(std::string isolation_level,
         service::client_state& state,
         sharded<cql3::query_processor>& qp,
         sharded<service::migration_manager>& mm,
+        sharded<gms::gossiper>& gossiper,
         test_config& cfg) {
     assert(cfg.frontend == test_config::frontend_type::alternator);
     std::cout << "Running test with config: " << cfg << std::endl;
 
-    alternator_test_env env(gms::get_gossiper(), qp.local().proxy().container(), mm, qp);
+    alternator_test_env env(gossiper, qp.local().proxy().container(), mm, qp);
     env.start(isolation_level).get();
     auto stop_env = defer([&] {
         env.stop().get();
@@ -536,7 +537,7 @@ int main(int argc, char** argv) {
             auto results = cfg.frontend == test_config::frontend_type::cql
                     ? do_cql_test(env, cfg)
                     : do_alternator_test(app.configuration()["alternator"].as<std::string>(),
-                            env.local_client_state(), env.qp(), env.migration_manager(), cfg);
+                            env.local_client_state(), env.qp(), env.migration_manager(), env.gossiper(), cfg);
 
             auto compare_throughput = [] (perf_result a, perf_result b) { return a.throughput < b.throughput; };
             std::sort(results.begin(), results.end(), compare_throughput);

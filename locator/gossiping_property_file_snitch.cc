@@ -102,7 +102,7 @@ void gossiping_property_file_snitch::periodic_reader_callback() {
 }
 
 std::list<std::pair<gms::application_state, gms::versioned_value>> gossiping_property_file_snitch::get_app_states() const {
-    sstring ip = format("{}", gms::get_local_gossiper().get_local_messaging().listen_address());
+    sstring ip = format("{}", local().get_local_gossiper().get_local_messaging().listen_address());
     return {
         {gms::application_state::DC, gms::versioned_value::datacenter(_my_dc)},
         {gms::application_state::RACK, gms::versioned_value::rack(_my_rack)},
@@ -178,7 +178,7 @@ future<> gossiping_property_file_snitch::reload_configuration() {
             }
         }).then([this] {
             // FIXME -- tests don't start gossiper
-            if (!gms::get_gossiper().local_is_initialized()) {
+            if (!local().get_gossiper().local_is_initialized()) {
                 return make_ready_future<>();
             }
 
@@ -192,7 +192,7 @@ future<> gossiping_property_file_snitch::reload_configuration() {
 
                 // spread the word...
                 container().invoke_on(0, [] (snitch_ptr& local_snitch_ptr) {
-                    auto& gossiper = gms::get_local_gossiper();
+                    auto& gossiper = local_snitch_ptr.get_local_gossiper();
                     if (gossiper.is_enabled()) {
                         return gossiper.add_local_application_state(local_snitch_ptr->get_app_states());
                     }
@@ -267,7 +267,7 @@ future<> gossiping_property_file_snitch::pause_io() {
 future<> gossiping_property_file_snitch::reload_gossiper_state() {
     future<> ret = make_ready_future<>();
     if (_reconnectable_helper) {
-        ret = gms::get_local_gossiper().unregister_(_reconnectable_helper);
+        ret = local().get_local_gossiper().unregister_(_reconnectable_helper);
     }
 
     if (!_prefer_local) {
@@ -276,7 +276,7 @@ future<> gossiping_property_file_snitch::reload_gossiper_state() {
 
     return ret.then([this] {
         _reconnectable_helper = ::make_shared<reconnectable_snitch_helper>(_my_dc);
-        gms::get_local_gossiper().register_(_reconnectable_helper);
+        local().get_local_gossiper().register_(_reconnectable_helper);
     });
 }
 

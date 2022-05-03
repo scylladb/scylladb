@@ -225,6 +225,7 @@ public:
     locator::token_metadata_ptr get_token_metadata_ptr() const noexcept;
 
     query::max_result_size get_max_result_size(const query::partition_slice& slice) const;
+    inet_address_vector_replica_set get_live_endpoints(replica::keyspace& ks, const dht::token& token) const;
 
 private:
     distributed<replica::database>& _db;
@@ -330,7 +331,6 @@ private:
     bool cannot_hint(const Range& targets, db::write_type type) const;
     bool hints_enabled(db::write_type type) const noexcept;
     db::hints::manager& hints_manager_for(db::write_type type);
-    inet_address_vector_replica_set get_live_endpoints(replica::keyspace& ks, const dht::token& token) const;
     static void sort_endpoints_by_proximity(inet_address_vector_replica_set& eps);
     inet_address_vector_replica_set get_live_sorted_endpoints(replica::keyspace& ks, const dht::token& token) const;
     db::read_repair_decision new_read_repair_decision(const schema& s);

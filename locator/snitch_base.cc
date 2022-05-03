@@ -13,14 +13,6 @@
 #include "gms/application_state.hh"
 
 namespace locator {
-std::optional<sstring>
-snitch_base::get_endpoint_info(inet_address endpoint,
-                               gms::application_state key) {
-    gms::gossiper& local_gossiper = gms::get_local_gossiper();
-    auto* ep_state = local_gossiper.get_application_state_ptr(endpoint, key);
-    return ep_state ? std::optional(ep_state->value) : std::nullopt;
-}
-
 inet_address_vector_replica_set snitch_base::get_sorted_list_by_proximity(
     inet_address address,
     inet_address_vector_replica_set& unsorted_address) {
@@ -125,7 +117,8 @@ std::list<std::pair<gms::application_state, gms::versioned_value>> snitch_base::
     };
 }
 
-snitch_ptr::snitch_ptr(const snitch_config cfg) {
+snitch_ptr::snitch_ptr(const snitch_config cfg, sharded<gms::gossiper>& g)
+        : _gossiper(g) {
     i_endpoint_snitch::ptr_type s;
     try {
         s = create_object<i_endpoint_snitch>(cfg.name, cfg);
