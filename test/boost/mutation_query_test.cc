@@ -74,8 +74,9 @@ static query::result_memory_accounter make_accounter() {
     return query::result_memory_accounter{ query::result_memory_limiter::unlimited_result_size };
 }
 
+// Called from a seastar thread
 query::result_set to_result_set(const reconcilable_result& r, schema_ptr s, const query::partition_slice& slice) {
-    return query::result_set::from_raw_result(s, slice, to_data_query_result(r, s, slice, inf32, inf32));
+    return query::result_set::from_raw_result(s, slice, to_data_query_result(r, s, slice, inf32, inf32).get0());
 }
 
 static reconcilable_result mutation_query(schema_ptr s, reader_permit permit, const mutation_source& source, const dht::partition_range& range,
@@ -460,28 +461,28 @@ SEASTAR_TEST_CASE(test_result_row_count) {
             auto src = make_source({m1});
 
             auto r = to_data_query_result(mutation_query(s, semaphore.make_permit(), make_source({m1}), query::full_partition_range, slice, 10000, query::max_partitions, now),
-                    s, slice, inf32, inf32);
+                    s, slice, inf32, inf32).get0();
             BOOST_REQUIRE_EQUAL(r.row_count().value(), 0);
 
             m1.set_static_cell("s1", data_value(bytes("S_v1")), 1);
             r = to_data_query_result(mutation_query(s, semaphore.make_permit(), make_source({m1}), query::full_partition_range, slice, 10000, query::max_partitions, now),
-                    s, slice, inf32, inf32);
+                    s, slice, inf32, inf32).get0();
             BOOST_REQUIRE_EQUAL(r.row_count().value(), 1);
 
             m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("A")), "v1", data_value(bytes("A_v1")), 1);
             r = to_data_query_result(mutation_query(s, semaphore.make_permit(), make_source({m1}), query::full_partition_range, slice, 10000, query::max_partitions, now),
-                    s, slice, inf32, inf32);
+                    s, slice, inf32, inf32).get0();
             BOOST_REQUIRE_EQUAL(r.row_count().value(), 1);
 
             m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("B")), "v1", data_value(bytes("B_v1")), 1);
             r = to_data_query_result(mutation_query(s, semaphore.make_permit(), make_source({m1}), query::full_partition_range, slice, 10000, query::max_partitions, now),
-                    s, slice, inf32, inf32);
+                    s, slice, inf32, inf32).get0();
             BOOST_REQUIRE_EQUAL(r.row_count().value(), 2);
 
             mutation m2(s, partition_key::from_single_value(*s, "key2"));
             m2.set_static_cell("s1", data_value(bytes("S_v1")), 1);
             r = to_data_query_result(mutation_query(s, semaphore.make_permit(), make_source({m1, m2}), query::full_partition_range, slice, 10000, query::max_partitions, now),
-                    s, slice, inf32, inf32);
+                    s, slice, inf32, inf32).get0();
             BOOST_REQUIRE_EQUAL(r.row_count().value(), 3);
     });
 }

@@ -3709,7 +3709,7 @@ protected:
                                || data_resolver->live_partition_count() >= original_partition_limit())
                         && !data_resolver->any_partition_short_read()) {
                     auto result = ::make_foreign(::make_lw_shared<query::result>(
-                            to_data_query_result(std::move(*rr_opt), _schema, _cmd->slice, _cmd->get_row_limit(), cmd->partition_limit)));
+                            co_await to_data_query_result(std::move(*rr_opt), _schema, _cmd->slice, _cmd->get_row_limit(), cmd->partition_limit)));
                     // wait for write to complete before returning result to prevent multiple concurrent read requests to
                     // trigger repair multiple times and to prevent quorum read to return an old value, even after a quorum
                     // another read had returned a newer value (but the newer value had not yet been sent to the other replicas)
@@ -5382,7 +5382,7 @@ storage_proxy::query_nonsingular_data_locally(schema_ptr s, lw_shared_ptr<query:
         ret = co_await query_data_on_all_shards(_db, std::move(s), *local_cmd, ranges, opts, std::move(trace_state), timeout);
     } else {
         auto res = co_await query_mutations_on_all_shards(_db, s, *local_cmd, ranges, std::move(trace_state), timeout);
-        ret = rpc::tuple(make_foreign(make_lw_shared<query::result>(to_data_query_result(std::move(*std::get<0>(res)), std::move(s), local_cmd->slice,
+        ret = rpc::tuple(make_foreign(make_lw_shared<query::result>(co_await to_data_query_result(std::move(*std::get<0>(res)), std::move(s), local_cmd->slice,
                 local_cmd->get_row_limit(), local_cmd->partition_limit, opts))), std::get<1>(res));
     }
     co_return ret;

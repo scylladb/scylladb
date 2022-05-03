@@ -6,6 +6,9 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
+
 #include <boost/range/adaptor/reversed.hpp>
 #include "mutation_partition.hh"
 #include "clustering_interval_set.hh"
@@ -2064,7 +2067,7 @@ reconcilable_result reconcilable_result_builder::consume_end_of_stream() {
                                std::move(_memory_accounter).done());
 }
 
-query::result
+future<query::result>
 to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::partition_slice& slice, uint64_t max_rows, uint32_t max_partitions,
         query::result_options opts) {
     // This result was already built with a limit, don't apply another one.
@@ -2081,10 +2084,12 @@ to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::pa
             if (res.stop == stop_iteration::yes) {
                 break;
             }
+            co_await coroutine::maybe_yield();
         }
     } else {
         for (const partition& p : r.partitions()) {
-            const auto res = p.mut().unfreeze(s).consume(consumer, reverse);
+            auto m = co_await p.mut().unfreeze_gently(s);
+            const auto res = std::move(m).consume(consumer, reverse);
             if (res.stop == stop_iteration::yes) {
                 break;
             }
@@ -2093,7 +2098,7 @@ to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::pa
     if (r.is_short_read()) {
         builder.mark_as_short_read();
     }
-    return builder.build();
+    co_return builder.build();
 }
 
 query::result
