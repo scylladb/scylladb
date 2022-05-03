@@ -939,6 +939,7 @@ private:
 size_t segment_pool::reclaim_segments(size_t target, is_preemptible preempt) {
     // Reclaimer tries to release segments occupying lower parts of the address
     // space.
+    reclaim_timer timing_guard("reclaim_segments", preempt, target * segment::size, target);
 
     llogger.debug("Trying to reclaim {} segments", target);
 
@@ -985,6 +986,7 @@ size_t segment_pool::reclaim_segments(size_t target, is_preemptible preempt) {
     }
 
     llogger.debug("Reclaimed {} segments (requested {})", reclaimed_segments, target);
+    timing_guard.set_memory_released(reclaimed_segments * segment::size);
     return reclaimed_segments;
 }
 
