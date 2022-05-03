@@ -2193,9 +2193,11 @@ private:
         auto time_level = _stall_detected ? log_level::warn : log_level::debug;
         auto info_level = _stall_detected ? log_level::info : log_level::debug;
         auto MiB = 1024*1024;
+        auto msg_extra = _stall_detected ? fmt::format(", at {}", current_backtrace()) : "";
 
-        timing_logger.log(time_level, "{} took {} us, trying to release {:.3f} MiB {}preemptibly",
-                          _name, (_duration + 500ns) / 1us, (float)_memory_to_release / MiB, _preemptible ? "" : "non-");
+        timing_logger.log(time_level, "{} took {} us, trying to release {:.3f} MiB {}preemptibly{}",
+                          _name, (_duration + 500ns) / 1us, (float)_memory_to_release / MiB, _preemptible ? "" : "non-",
+                          msg_extra);
         log_if_any(info_level, "segments to release", _segments_to_release);
         if (_memory_released > 0) {
             auto bytes_per_second =
