@@ -68,6 +68,7 @@
 #include "sstables/generation_type.hh"
 #include "db/rate_limiter.hh"
 #include "db/per_partition_rate_limit_info.hh"
+#include "db/operation_type.hh"
 
 class cell_locker;
 class cell_locker_stats;
@@ -1511,6 +1512,20 @@ public:
     future<> shutdown();
     future<> stop();
     future<> close_tables(table_kind kind_to_close);
+
+    /// Checks whether per-partition rate limit can be applied to the operation or not.
+    bool can_apply_per_partition_rate_limit(const schema& s, db::operation_type op_type) const;
+
+    /// Tries to account given operation to the rate limit when the coordinator is a replica.
+    /// This function can be called ONLY when rate limiting can be applied to the operation (see `can_apply_per_partition_rate_limit`)
+    /// AND the current node/shard is a replica for the given operation.
+    ///
+    /// nullopt -> the decision should be delegated to replicas
+    /// can_proceed::no -> operation should be rejected
+    /// can_proceed::yes -> operation should be accepted
+    std::optional<db::rate_limiter::can_proceed> account_coordinator_operation_to_rate_limit(table& tbl, const dht::token& token,
+            db::per_partition_rate_limit::account_and_enforce account_and_enforce_info,
+            db::operation_type op_type);
 
     future<std::tuple<lw_shared_ptr<query::result>, cache_temperature>> query(schema_ptr, const query::read_command& cmd, query::result_options opts,
                                                                   const dht::partition_range_vector& ranges, tracing::trace_state_ptr trace_state,

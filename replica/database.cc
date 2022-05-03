@@ -1320,6 +1320,23 @@ request_class classify_request(const database_config& _dbcfg) {
 
 } // anonymous namespace
 
+static bool can_apply_per_partition_rate_limit(const schema& s, const database_config& dbcfg, db::operation_type op_type) {
+    return s.per_partition_rate_limit_options().get_max_ops_per_second(op_type).has_value()
+            && classify_request(dbcfg) == request_class::user;
+}
+
+bool database::can_apply_per_partition_rate_limit(const schema& s, db::operation_type op_type) const {
+    return replica::can_apply_per_partition_rate_limit(s, _dbcfg, op_type);
+}
+
+std::optional<db::rate_limiter::can_proceed> database::account_coordinator_operation_to_rate_limit(table& tbl, const dht::token& token,
+        db::per_partition_rate_limit::account_and_enforce account_and_enforce_info,
+        db::operation_type op_type) {
+
+    std::optional<uint32_t> table_limit = tbl.schema()->per_partition_rate_limit_options().get_max_ops_per_second(op_type);
+    db::rate_limiter::label& lbl = tbl.get_rate_limiter_label_for_op_type(op_type);
+    return _rate_limiter.account_operation(lbl, dht::token::to_int64(token), *table_limit, account_and_enforce_info);
+}
 
 static db::rate_limiter::can_proceed account_singular_ranges_to_rate_limit(
         db::rate_limiter& limiter, column_family& cf,
