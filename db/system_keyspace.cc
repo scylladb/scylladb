@@ -2482,10 +2482,14 @@ class db_config_table final : public streaming_virtual_table {
             for (auto& c_ref : cfg.values()) {
                 auto& c = c_ref.get();
                 if (c.name() == name) {
-                    if (c.set_value(value, utils::config_file::config_source::CQL)) {
-                        return cfg.broadcast_to_all_shards();
-                    } else {
-                        return make_exception_future<>(virtual_table_update_exception("option is not live-updateable"));
+                    try {
+                        if (c.set_value(value, utils::config_file::config_source::CQL)) {
+                            return cfg.broadcast_to_all_shards();
+                        } else {
+                            return make_exception_future<>(virtual_table_update_exception("option is not live-updateable"));
+                        }
+                    } catch (boost::bad_lexical_cast&) {
+                        return make_exception_future<>(virtual_table_update_exception("cannot parse option value"));
                     }
                 }
             }
