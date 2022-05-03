@@ -2303,11 +2303,12 @@ size_t tracker::impl::compact_and_evict(size_t reserve_segments, size_t memory_t
         return 0;
     }
     reclaiming_lock rl(*this);
-    reclaim_timer timing_guard("compact_and_evict", preempt, memory_to_release, reserve_segments, this);
-    return timing_guard.set_memory_released(compact_and_evict_locked(reserve_segments, memory_to_release, preempt));
+    return compact_and_evict_locked(reserve_segments, memory_to_release, preempt);
 }
 
 size_t tracker::impl::compact_and_evict_locked(size_t reserve_segments, size_t memory_to_release, is_preemptible preempt) {
+    reclaim_timer timing_guard("compact_and_evict_locked", preempt, memory_to_release, reserve_segments, this);
+
     llogger.debug("compact_and_evict_locked({}, {}, {})", reserve_segments, memory_to_release, int(bool(preempt)));
     //
     // Algorithm outline.
@@ -2405,7 +2406,7 @@ size_t tracker::impl::compact_and_evict_locked(size_t reserve_segments, size_t m
     llogger.debug("Released {} bytes (wanted {}), {} during compaction",
         mem_released, memory_to_release, released_during_compaction);
 
-    return mem_released;
+    return timing_guard.set_memory_released(mem_released);
 }
 
 void tracker::impl::register_region(region::impl* r) {
