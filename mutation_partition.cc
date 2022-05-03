@@ -2088,7 +2088,7 @@ to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::pa
     } else {
         for (const partition& p : r.partitions()) {
             auto m = co_await p.mut().unfreeze_gently(s);
-            const auto res = std::move(m).consume(consumer, reverse);
+            const auto res = co_await std::move(m).consume_gently(consumer, reverse);
             if (res.stop == stop_iteration::yes) {
                 break;
             }

@@ -18,9 +18,11 @@
 #include "mutation_fragment_v2.hh"
 #include "mutation_consumer_concepts.hh"
 #include "range_tombstone_change_generator.hh"
+#include "utils/preempt.hh"
 
 #include <seastar/util/optimized_optional.hh>
-
+#include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 
 struct mutation_consume_cookie {
     using crs_iterator_type = mutation_partition::rows_type::iterator;
@@ -168,6 +170,9 @@ public:
     template<FlattenedConsumerV2 Consumer>
     auto consume(Consumer& consumer, consume_in_reverse reverse, mutation_consume_cookie cookie = {}) && -> mutation_consume_result<decltype(consumer.consume_end_of_stream())>;
 
+    template<FlattenedConsumerV2 Consumer>
+    auto consume_gently(Consumer& consumer, consume_in_reverse reverse, mutation_consume_cookie cookie = {}) && -> future<mutation_consume_result<decltype(consumer.consume_end_of_stream())>>;
+
     // See mutation_partition::live_row_count()
     uint64_t live_row_count(gc_clock::time_point query_time = gc_clock::time_point::min()) const;
 
@@ -193,7 +198,7 @@ private:
 namespace {
 
 template<consume_in_reverse reverse, FlattenedConsumerV2 Consumer>
-stop_iteration consume_clustering_fragments(schema_ptr s, mutation_partition& partition, Consumer& consumer, mutation_consume_cookie& cookie) {
+std::optional<stop_iteration> consume_clustering_fragments(schema_ptr s, mutation_partition& partition, Consumer& consumer, mutation_consume_cookie& cookie, is_preemptible preempt = is_preemptible::no) {
     constexpr bool crs_in_reverse = reverse == consume_in_reverse::legacy_half_reverse || reverse == consume_in_reverse::yes;
     constexpr bool rts_in_reverse = reverse == consume_in_reverse::legacy_half_reverse;
 
@@ -280,6 +285,9 @@ stop_iteration consume_clustering_fragments(schema_ptr s, mutation_partition& pa
             }
             ++crs_it;
         }
+        if (preempt && need_preempt()) {
+            break;
+        }
     }
 
     if constexpr (crs_in_reverse) {
@@ -299,7 +307,12 @@ stop_iteration consume_clustering_fragments(schema_ptr s, mutation_partition& pa
     }
 
     if (!stop) {
+      if (crs_it == crs_end && rts_it == rts_end) {
         flush_tombstones(position_in_partition::after_all_clustered_rows());
+      } else {
+        assert(preempt && need_preempt());
+        return std::nullopt;
+      }
     }
 
     return stop;
@@ -330,11 +343,11 @@ auto mutation::consume(Consumer& consumer, consume_in_reverse reverse, mutation_
     cookie.static_row_consumed = true;
 
     if (reverse == consume_in_reverse::yes) {
-        stop = consume_clustering_fragments<consume_in_reverse::yes>(_ptr->_schema, partition, consumer, cookie);
+        stop = *consume_clustering_fragments<consume_in_reverse::yes>(_ptr->_schema, partition, consumer, cookie);
     } else if (reverse == consume_in_reverse::legacy_half_reverse) {
-        stop = consume_clustering_fragments<consume_in_reverse::legacy_half_reverse>(_ptr->_schema, partition, consumer, cookie);
+        stop = *consume_clustering_fragments<consume_in_reverse::legacy_half_reverse>(_ptr->_schema, partition, consumer, cookie);
     } else {
-        stop = consume_clustering_fragments<consume_in_reverse::no>(_ptr->_schema, partition, consumer, cookie);
+        stop = *consume_clustering_fragments<consume_in_reverse::no>(_ptr->_schema, partition, consumer, cookie);
     }
 
     const auto stop_consuming = consumer.consume_end_of_partition();
@@ -344,6 +357,54 @@ auto mutation::consume(Consumer& consumer, consume_in_reverse reverse, mutation_
         return mutation_consume_result<void>{stop_consuming, std::move(cookie)};
     } else {
         return mutation_consume_result<consume_res_type>{stop_consuming, consumer.consume_end_of_stream(), std::move(cookie)};
+    }
+}
+
+template<FlattenedConsumerV2 Consumer>
+auto mutation::consume_gently(Consumer& consumer, consume_in_reverse reverse, mutation_consume_cookie cookie) &&
+        -> future<mutation_consume_result<decltype(consumer.consume_end_of_stream())>> {
+    if (!cookie.partition_start_consumed) {
+        consumer.consume_new_partition(_ptr->_dk);
+    }
+
+    auto& partition = _ptr->_p;
+
+    if (!cookie.partition_start_consumed && partition.partition_tombstone()) {
+        consumer.consume(partition.partition_tombstone());
+    }
+
+    cookie.partition_start_consumed = true;
+
+    stop_iteration stop = stop_iteration::no;
+    if (!cookie.static_row_consumed && !partition.static_row().empty()) {
+        stop = consumer.consume(static_row(std::move(partition.static_row().get_existing())));
+    }
+
+    cookie.static_row_consumed = true;
+
+    std::optional<stop_iteration> stop_opt;
+    if (reverse == consume_in_reverse::yes) {
+        while (!(stop_opt = consume_clustering_fragments<consume_in_reverse::yes>(_ptr->_schema, partition, consumer, cookie, is_preemptible::yes))) {
+            co_await yield();
+        }
+    } else if (reverse == consume_in_reverse::legacy_half_reverse) {
+        while (!(stop_opt = consume_clustering_fragments<consume_in_reverse::legacy_half_reverse>(_ptr->_schema, partition, consumer, cookie, is_preemptible::yes))) {
+            co_await yield();
+        }
+    } else {
+        while (!(stop_opt = consume_clustering_fragments<consume_in_reverse::no>(_ptr->_schema, partition, consumer, cookie, is_preemptible::yes))) {
+            co_await yield();
+        }
+    }
+    stop = *stop_opt;
+
+    const auto stop_consuming = consumer.consume_end_of_partition();
+    using consume_res_type = decltype(consumer.consume_end_of_stream());
+    if constexpr (std::is_same_v<consume_res_type, void>) {
+        consumer.consume_end_of_stream();
+        co_return mutation_consume_result<void>{stop_consuming, std::move(cookie)};
+    } else {
+        co_return mutation_consume_result<consume_res_type>{stop_consuming, consumer.consume_end_of_stream(), std::move(cookie)};
     }
 }
 
