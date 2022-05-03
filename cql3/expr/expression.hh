@@ -182,7 +182,6 @@ public:
 template <typename E>
 concept LeafExpression
         = std::same_as<bool, E>
-        || std::same_as<token, E> 
         || std::same_as<unresolved_identifier, E> 
         || std::same_as<null, E> 
         || std::same_as<bind_variable, E> 
@@ -214,10 +213,15 @@ const column_value& get_subscripted_column(const subscript&);
 /// Only columns can be subscripted in CQL, so we can expect that the subscripted expression is a column_value.
 const column_value& get_subscripted_column(const expression&);
 
+/// Represents token(c1, c2) function on LHS of an operator relation.
+/// args contains arguments to the token function.
+struct token {
+    std::vector<expression> args;
 
-/// Represents token function on LHS of an operator relation.  No need to list column definitions
-/// here -- token takes exactly the partition key as its argument.
-struct token {};
+    explicit token(std::vector<expression>);
+    explicit token(const std::vector<const column_definition*>&);
+    explicit token(const std::vector<::shared_ptr<column_identifier_raw>>&);
+};
 
 enum class oper_t { EQ, NEQ, LT, LTE, GTE, GT, IN, CONTAINS, CONTAINS_KEY, IS_NOT, LIKE };
 

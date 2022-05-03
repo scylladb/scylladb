@@ -55,6 +55,24 @@ expression::operator=(const expression& o) {
     return *this;
 }
 
+token::token(std::vector<expression> args_in)
+    : args(std::move(args_in)) {
+}
+
+token::token(const std::vector<const column_definition*>& col_defs) {
+    args.reserve(col_defs.size());
+    for (const column_definition* col_def : col_defs) {
+        args.push_back(column_value(col_def));
+    }
+}
+
+token::token(const std::vector<::shared_ptr<column_identifier_raw>>& cols) {
+    args.reserve(cols.size());
+    for(const ::shared_ptr<column_identifier_raw>& col : cols) {
+        args.push_back(unresolved_identifier{col});
+    }
+}
+
 binary_operator::binary_operator(expression lhs, oper_t op, expression rhs, comparison_order order)
             : lhs(std::move(lhs))
             , op(op)
@@ -1088,7 +1106,9 @@ std::ostream& operator<<(std::ostream& os, const expression& expr) {
             [&] (const binary_operator& opr) {
                 os << "(" << opr.lhs << ") " << opr.op << ' ' << opr.rhs;
             },
-            [&] (const token& t) { os << "TOKEN"; },
+            [&] (const token& t) {
+                fmt::print(os, "token({})", fmt::join(t.args, ", "));
+            },
             [&] (const column_value& col) {
                 fmt::print(os, "{}", col);
             },
@@ -1363,6 +1383,14 @@ bool recurse_until(const expression& e, const noncopyable_function<bool (const e
                 }
                 return false;
             },
+            [&] (const token& tok) {
+                for (auto& a : tok.args) {
+                    if (auto found = recurse_until(a, predicate_fun)) {
+                        return found;
+                    }
+                }
+                return false;
+            },
             [](LeafExpression auto const&) {
                 return false;
             }
@@ -1437,6 +1465,13 @@ expression search_and_replace(const expression& e,
                         .sub = recurse(s.sub)
                     };
                     throw std::runtime_error("expr: search_and_replace - subscript not added to expression yet");
+                },
+                [&](const token& tok) -> expression {
+                    return token {
+                        boost::copy_range<std::vector<expression>>(
+                            tok.args | boost::adaptors::transformed(recurse)
+                        )
+                    };
                 },
                 [&] (LeafExpression auto const& e) -> expression {
                     return e;
@@ -2179,7 +2214,11 @@ void fill_prepare_context(expression& e, prepare_context& ctx) {
                 fill_prepare_context(child, ctx);
             }
         },
-        [](token&) {},
+        [&](token& tok) {
+            for (expression& arg : tok.args) {
+                fill_prepare_context(arg, ctx);
+            }
+        },
         [](unresolved_identifier&) {},
         [&](column_mutation_attribute& a) {
             fill_prepare_context(a.column, ctx);
