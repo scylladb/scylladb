@@ -347,11 +347,13 @@ private:
     future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> query_result_local(schema_ptr, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr,
                                                                            query::result_options opts,
                                                                            tracing::trace_state_ptr trace_state,
-                                                                           clock_type::time_point timeout);
+                                                                           clock_type::time_point timeout,
+                                                                           db::per_partition_rate_limit::info rate_limit_info);
     future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>> query_result_local_digest(schema_ptr, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr,
                                                                                                    tracing::trace_state_ptr trace_state,
                                                                                                    clock_type::time_point timeout,
-                                                                                                   query::digest_algorithm da);
+                                                                                                   query::digest_algorithm da,
+                                                                                                   db::per_partition_rate_limit::info rate_limit_info);
     future<result<coordinator_query_result>> query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
             dht::partition_range_vector partition_ranges,
             db::consistency_level cl,

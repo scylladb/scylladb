@@ -3689,7 +3689,7 @@ protected:
                   : query::result_options{query::result_request::only_result, query::digest_algorithm::none};
         if (fbu::is_me(ep)) {
             tracing::trace(_trace_state, "read_data: querying locally");
-            return _proxy->query_result_local(_schema, _cmd, _partition_range, opts, _trace_state, timeout);
+            return _proxy->query_result_local(_schema, _cmd, _partition_range, opts, _trace_state, timeout, std::monostate()); // TODO: Pass the correct rate limit type
         } else {
             tracing::trace(_trace_state, "read_data: sending a message to /{}", ep);
             return ser::storage_proxy_rpc_verbs::send_read_data(&_proxy->_messaging, netw::messaging_service::msg_addr{ep, 0}, timeout, *_cmd, _partition_range, opts.digest_algo).then([this, ep](rpc::tuple<query::result, rpc::optional<cache_temperature>, rpc::optional<replica::exception_variant>> result_hit_rate) {
@@ -3707,7 +3707,7 @@ protected:
         if (fbu::is_me(ep)) {
             tracing::trace(_trace_state, "read_digest: querying locally");
             return _proxy->query_result_local_digest(_schema, _cmd, _partition_range, _trace_state,
-                        timeout, digest_algorithm(*_proxy));
+                        timeout, digest_algorithm(*_proxy), std::monostate()); // TODO: Pass the correct rate limit type
         } else {
             tracing::trace(_trace_state, "read_digest: sending a message to /{}", ep);
             return ser::storage_proxy_rpc_verbs::send_read_digest(&_proxy->_messaging, netw::messaging_service::msg_addr{ep, 0}, timeout, *_cmd,
@@ -4169,8 +4169,8 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
 }
 
 future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>>
-storage_proxy::query_result_local_digest(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr, tracing::trace_state_ptr trace_state, storage_proxy::clock_type::time_point timeout, query::digest_algorithm da) {
-    return query_result_local(std::move(s), std::move(cmd), pr, query::result_options::only_digest(da), std::move(trace_state), timeout).then([] (rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature> result_and_hit_rate) {
+storage_proxy::query_result_local_digest(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr, tracing::trace_state_ptr trace_state, storage_proxy::clock_type::time_point timeout, query::digest_algorithm da, db::per_partition_rate_limit::info rate_limit_info) {
+    return query_result_local(std::move(s), std::move(cmd), pr, query::result_options::only_digest(da), std::move(trace_state), timeout, rate_limit_info).then([] (rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature> result_and_hit_rate) {
         auto&& [result, hit_rate] = result_and_hit_rate;
         return make_ready_future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>>(rpc::tuple(*result->digest(), result->last_modified(), hit_rate));
     });
@@ -4178,15 +4178,15 @@ storage_proxy::query_result_local_digest(schema_ptr s, lw_shared_ptr<query::read
 
 future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>
 storage_proxy::query_result_local(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr, query::result_options opts,
-                                  tracing::trace_state_ptr trace_state, storage_proxy::clock_type::time_point timeout) {
+                                  tracing::trace_state_ptr trace_state, storage_proxy::clock_type::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
     cmd->slice.options.set_if<query::partition_slice::option::with_digest>(opts.request != query::result_request::only_result);
     if (pr.is_singular()) {
         unsigned shard = dht::shard_of(*s, pr.start()->value().token());
         get_stats().replica_cross_shard_ops += shard != this_shard_id();
-        return _db.invoke_on(shard, _read_smp_service_group, [gs = global_schema_ptr(s), prv = dht::partition_range_vector({pr}) /* FIXME: pr is copied */, cmd, opts, timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state))] (replica::database& db) mutable {
+        return _db.invoke_on(shard, _read_smp_service_group, [gs = global_schema_ptr(s), prv = dht::partition_range_vector({pr}) /* FIXME: pr is copied */, cmd, opts, timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state)), rate_limit_info] (replica::database& db) mutable {
             auto trace_state = gt.get();
             tracing::trace(trace_state, "Start querying singular range {}", prv.front());
-            return db.query(gs, *cmd, opts, prv, trace_state, timeout).then([trace_state](std::tuple<lw_shared_ptr<query::result>, cache_temperature>&& f_ht) {
+            return db.query(gs, *cmd, opts, prv, trace_state, timeout, rate_limit_info).then([trace_state](std::tuple<lw_shared_ptr<query::result>, cache_temperature>&& f_ht) {
                 auto&& [f, ht] = f_ht;
                 tracing::trace(trace_state, "Querying is done");
                 return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>(rpc::tuple(make_foreign(std::move(f)), ht));
@@ -5291,7 +5291,7 @@ storage_proxy::handle_read_data(const rpc::client_info& cinfo, rpc::opt_time_poi
                 opts.digest_algo = da;
                 opts.request = da == query::digest_algorithm::none ? query::result_request::only_result : query::result_request::result_and_digest;
                 auto timeout = t ? *t : db::no_timeout;
-                return p->query_result_local(std::move(s), cmd, std::move(pr2.first), opts, trace_state_ptr, timeout);
+                return p->query_result_local(std::move(s), cmd, std::move(pr2.first), opts, trace_state_ptr, timeout, std::monostate()); // TODO: Pass the correct rate limit info
             }).then_wrapped([this, &trace_state_ptr, src_ip] (future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> f) mutable {
                 tracing::trace(trace_state_ptr, "read_data handling is done, sending a response to /{}", src_ip);
                 return encode_replica_exception_for_rpc(std::move(f), [] { return std::make_tuple(foreign_ptr(make_lw_shared<query::result>()), cache_temperature::invalid()); });
@@ -5356,7 +5356,7 @@ storage_proxy::handle_read_digest(const rpc::client_info& cinfo, rpc::opt_time_p
                     throw std::runtime_error("READ_DIGEST called with wrapping range");
                 }
                 auto timeout = t ? *t : db::no_timeout;
-                return p->query_result_local_digest(std::move(s), cmd, std::move(pr2.first), trace_state_ptr, timeout, da);
+                return p->query_result_local_digest(std::move(s), cmd, std::move(pr2.first), trace_state_ptr, timeout, da, std::monostate()); // TODO: Pass the correct rate limit info
             }).then_wrapped([this, &trace_state_ptr, src_ip] (future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>> f) mutable {
                 tracing::trace(trace_state_ptr, "read_digest handling is done, sending a response to /{}", src_ip);
                 return encode_replica_exception_for_rpc(std::move(f), [] { return std::make_tuple(query::result_digest(), api::missing_timestamp, cache_temperature::invalid()); });
