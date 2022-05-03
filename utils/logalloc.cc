@@ -2193,7 +2193,7 @@ private:
         auto MiB = 1024*1024;
 
         timing_logger.log(time_level, "Reclamation cycle took {} us, trying to release {:.3f} MiB {}preemptibly",
-                          _duration / 1us, (float)_memory_to_release / MiB, _preemptible ? "" : "non-");
+                          (_duration + 500ns) / 1us, (float)_memory_to_release / MiB, _preemptible ? "" : "non-");
         log_if_any(info_level, "reserved segments", _reserve_segments);
         if (_memory_released > 0) {
             auto bytes_per_second =
