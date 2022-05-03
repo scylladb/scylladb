@@ -163,10 +163,10 @@ public:
     virtual ~mutation_holder() {}
     virtual bool store_hint(db::hints::manager& hm, gms::inet_address ep, tracing::trace_state_ptr tr_state) = 0;
     virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
-            tracing::trace_state_ptr tr_state) = 0;
+            tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info) = 0;
     virtual future<> apply_remotely(storage_proxy& sp, gms::inet_address ep, inet_address_vector_replica_set&& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
-            tracing::trace_state_ptr tr_state) = 0;
+            tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info) = 0;
     virtual bool is_shared() = 0;
     size_t size() const {
         return _size;
@@ -207,17 +207,17 @@ public:
         }
     }
     virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
-            tracing::trace_state_ptr tr_state) override {
+            tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info) override {
         auto m = _mutations[utils::fb_utilities::get_broadcast_address()];
         if (m) {
             tracing::trace(tr_state, "Executing a mutation locally");
-            return sp.mutate_locally(_schema, *m, std::move(tr_state), db::commitlog::force_sync::no, timeout);
+            return sp.mutate_locally(_schema, *m, std::move(tr_state), db::commitlog::force_sync::no, timeout, rate_limit_info);
         }
         return make_ready_future<>();
     }
     virtual future<> apply_remotely(storage_proxy& sp, gms::inet_address ep, inet_address_vector_replica_set&& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
-            tracing::trace_state_ptr tr_state) override {
+            tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info) override {
         auto m = _mutations[ep];
         if (m) {
             tracing::trace(tr_state, "Sending a mutation to /{}", ep);
@@ -225,7 +225,7 @@ public:
                                     netw::messaging_service::msg_addr{ep, 0}, timeout, *m,
                                     std::move(forward), utils::fb_utilities::get_broadcast_address(), this_shard_id(),
                                     response_id, tracing::make_trace_info(tr_state),
-                                    std::monostate()); // TODO: propagate the correct flag
+                                    rate_limit_info);
         }
         sp.got_response(response_id, ep, std::nullopt);
         return make_ready_future<>();
@@ -261,19 +261,19 @@ public:
             return hm.store_hint(ep, _schema, _mutation, tr_state);
     }
     virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
-            tracing::trace_state_ptr tr_state) override {
+            tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info) override {
         tracing::trace(tr_state, "Executing a mutation locally");
-        return sp.mutate_locally(_schema, *_mutation, std::move(tr_state), db::commitlog::force_sync::no, timeout);
+        return sp.mutate_locally(_schema, *_mutation, std::move(tr_state), db::commitlog::force_sync::no, timeout, rate_limit_info);
     }
     virtual future<> apply_remotely(storage_proxy& sp, gms::inet_address ep, inet_address_vector_replica_set&& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
-            tracing::trace_state_ptr tr_state) override {
+            tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info) override {
         tracing::trace(tr_state, "Sending a mutation to /{}", ep);
         return ser::storage_proxy_rpc_verbs::send_mutation(&sp._messaging,
                 netw::messaging_service::msg_addr{ep, 0}, timeout, *_mutation,
                 std::move(forward), utils::fb_utilities::get_broadcast_address(), this_shard_id(),
                 response_id, tracing::make_trace_info(tr_state),
-                std::monostate()); // TODO: propagate the correct flag
+                rate_limit_info);
     }
     virtual bool is_shared() override {
         return true;
@@ -291,14 +291,14 @@ public:
         throw std::runtime_error("Attempted to store a hint for a hint");
     }
     virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
-            tracing::trace_state_ptr tr_state) override {
+            tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info) override {
         // A hint will be sent to all relevant endpoints when the endpoint it was originally intended for
         // becomes unavailable - this might include the current node
         return sp.mutate_hint(_schema, *_mutation, std::move(tr_state), timeout);
     }
     virtual future<> apply_remotely(storage_proxy& sp, gms::inet_address ep, inet_address_vector_replica_set&& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
-            tracing::trace_state_ptr tr_state) override {
+            tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info) override {
         tracing::trace(tr_state, "Sending a hint to /{}", ep);
         return ser::storage_proxy_rpc_verbs::send_hint_mutation(&sp._messaging,
                 netw::messaging_service::msg_addr{ep, 0}, timeout, *_mutation,
@@ -320,14 +320,16 @@ public:
             return false; // CAS does not save hints yet
     }
     virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
-            tracing::trace_state_ptr tr_state) override {
+            tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info) override {
         tracing::trace(tr_state, "Executing a learn locally");
+        // TODO: Enforce per partition rate limiting in paxos
         return paxos::paxos_state::learn(sp, _schema, *_proposal, timeout, tr_state);
     }
     virtual future<> apply_remotely(storage_proxy& sp, gms::inet_address ep, inet_address_vector_replica_set&& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
-            tracing::trace_state_ptr tr_state) override {
+            tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info) override {
         tracing::trace(tr_state, "Sending a learn to /{}", ep);
+        // TODO: Enforce per partition rate limiting in paxos
         return ser::storage_proxy_rpc_verbs::send_paxos_learn(&sp._messaging, netw::messaging_service::msg_addr{ep, 0}, timeout,
                                 *_proposal, std::move(forward), utils::fb_utilities::get_broadcast_address(),
                                 this_shard_id(), response_id, tracing::make_trace_info(tr_state));
@@ -609,12 +611,12 @@ public:
         return _mutation_holder->store_hint(hm, ep, tr_state);
     }
     future<> apply_locally(storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state) {
-        return _mutation_holder->apply_locally(*_proxy, timeout, std::move(tr_state));
+        return _mutation_holder->apply_locally(*_proxy, timeout, std::move(tr_state), std::monostate()); // TODO: Pass the correct info
     }
     future<> apply_remotely(gms::inet_address ep, inet_address_vector_replica_set&& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state) {
-        return _mutation_holder->apply_remotely(*_proxy, ep, std::move(forward), response_id, timeout, std::move(tr_state));
+        return _mutation_holder->apply_remotely(*_proxy, ep, std::move(forward), response_id, timeout, std::move(tr_state), std::monostate()); // TODO: Pass the correct info
     }
     const schema_ptr& get_schema() const {
         return _mutation_holder->schema();
