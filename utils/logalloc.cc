@@ -2125,6 +2125,7 @@ static void reclaim_from_evictable(region::impl& r, size_t target_mem_in_use, is
 class reclaim_timer {
     using clock = utils::coarse_steady_clock;
 
+    const char* _name;
     const is_preemptible _preemptible;
     const size_t _memory_to_release;
     const size_t _segments_to_release;
@@ -2141,8 +2142,9 @@ class reclaim_timer {
     segment_pool::stats _old_pool_stats;
 
 public:
-    reclaim_timer(is_preemptible preemptible, size_t memory_to_release, size_t segments_to_release, tracker::impl& tracker)
-        : _preemptible(preemptible)
+    reclaim_timer(const char* name, is_preemptible preemptible, size_t memory_to_release, size_t segments_to_release, tracker::impl& tracker)
+        : _name(name)
+        , _preemptible(preemptible)
         , _memory_to_release(memory_to_release)
         , _segments_to_release(segments_to_release)
         , _tracker(tracker)
@@ -2192,8 +2194,8 @@ private:
         auto info_level = _stall_detected ? log_level::info : log_level::debug;
         auto MiB = 1024*1024;
 
-        timing_logger.log(time_level, "Reclamation cycle took {} us, trying to release {:.3f} MiB {}preemptibly",
-                          (_duration + 500ns) / 1us, (float)_memory_to_release / MiB, _preemptible ? "" : "non-");
+        timing_logger.log(time_level, "{} took {} us, trying to release {:.3f} MiB {}preemptibly",
+                          _name, (_duration + 500ns) / 1us, (float)_memory_to_release / MiB, _preemptible ? "" : "non-");
         log_if_any(info_level, "segments to release", _segments_to_release);
         if (_memory_released > 0) {
             auto bytes_per_second =
@@ -2252,7 +2254,7 @@ size_t tracker::impl::reclaim(size_t memory_to_release, is_preemptible preempt) 
         return 0;
     }
     reclaiming_lock rl(*this);
-    reclaim_timer timing_guard(preempt, memory_to_release, 0, *this);
+    reclaim_timer timing_guard("reclaim", preempt, memory_to_release, 0, *this);
     return timing_guard.set_memory_released(reclaim_locked(memory_to_release, preempt));
 }
 
@@ -2295,7 +2297,7 @@ size_t tracker::impl::compact_and_evict(size_t reserve_segments, size_t memory_t
         return 0;
     }
     reclaiming_lock rl(*this);
-    reclaim_timer timing_guard(preempt, memory_to_release, reserve_segments, *this);
+    reclaim_timer timing_guard("compact_and_evict", preempt, memory_to_release, reserve_segments, *this);
     return timing_guard.set_memory_released(compact_and_evict_locked(reserve_segments, memory_to_release, preempt));
 }
 
