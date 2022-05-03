@@ -2129,7 +2129,7 @@ class reclaim_timer {
     const is_preemptible _preemptible;
     const size_t _memory_to_release;
     const size_t _segments_to_release;
-    tracker::impl& _tracker;
+    tracker::impl* _tracker;
 
     const bool _debug_enabled;
     bool _stall_detected = false;
@@ -2142,7 +2142,7 @@ class reclaim_timer {
     segment_pool::stats _old_pool_stats;
 
 public:
-    reclaim_timer(const char* name, is_preemptible preemptible, size_t memory_to_release, size_t segments_to_release, tracker::impl& tracker)
+    reclaim_timer(const char* name, is_preemptible preemptible, size_t memory_to_release, size_t segments_to_release, tracker::impl* tracker = nullptr)
         : _name(name)
         , _preemptible(preemptible)
         , _memory_to_release(memory_to_release)
@@ -2151,8 +2151,8 @@ public:
         , _debug_enabled(timing_logger.is_enabled(logging::log_level::debug))
     {
         _start = clock::now();
-        if (_debug_enabled) {
-            _old_region_occupancy = tracker.region_occupancy();
+        if (_debug_enabled && tracker) {
+            _old_region_occupancy = tracker->region_occupancy();
         }
         _old_pool_stats = shard_segment_pool.statistics();
     }
@@ -2204,9 +2204,9 @@ private:
                 static_cast<float>(_memory_released) / std::chrono::duration_cast<std::chrono::duration<float>>(_duration).count();
             timing_logger.log(info_level, "- reclamation rate = {} MiB/s", format("{:.3f}", bytes_per_second / MiB));
         }
-        if (_debug_enabled) {
+        if (_debug_enabled && _tracker) {
             log_if_changed(info_level, "occupancy of regions",
-                           _old_region_occupancy.used_fraction(), _tracker.region_occupancy().used_fraction());
+                           _old_region_occupancy.used_fraction(), _tracker->region_occupancy().used_fraction());
         }
 
         auto pool_stats = shard_segment_pool.statistics();
@@ -2256,7 +2256,7 @@ size_t tracker::impl::reclaim(size_t memory_to_release, is_preemptible preempt) 
         return 0;
     }
     reclaiming_lock rl(*this);
-    reclaim_timer timing_guard("reclaim", preempt, memory_to_release, 0, *this);
+    reclaim_timer timing_guard("reclaim", preempt, memory_to_release, 0, this);
     return timing_guard.set_memory_released(reclaim_locked(memory_to_release, preempt));
 }
 
@@ -2299,7 +2299,7 @@ size_t tracker::impl::compact_and_evict(size_t reserve_segments, size_t memory_t
         return 0;
     }
     reclaiming_lock rl(*this);
-    reclaim_timer timing_guard("compact_and_evict", preempt, memory_to_release, reserve_segments, *this);
+    reclaim_timer timing_guard("compact_and_evict", preempt, memory_to_release, reserve_segments, this);
     return timing_guard.set_memory_released(compact_and_evict_locked(reserve_segments, memory_to_release, preempt));
 }
 
