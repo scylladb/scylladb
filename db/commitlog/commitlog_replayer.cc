@@ -186,30 +186,29 @@ db::commitlog_replayer::impl::recover(sstring file, const sstring& fname_prefix)
     replay_position rp{commitlog::descriptor(file, fname_prefix)};
     auto gp = min_pos(rp.shard_id());
 
+    stats s;
+
     if (rp.id < gp.id) {
         rlogger.debug("skipping replay of fully-flushed {}", file);
-        return make_ready_future<stats>();
+        co_return s;
     }
     position_type p = 0;
     if (rp.id == gp.id) {
         p = gp.pos;
     }
 
-    auto s = make_lw_shared<stats>();
     auto& exts = _db.local().extensions();
 
-    return db::commitlog::read_log_file(file, fname_prefix, service::get_local_commitlog_priority(),
-            std::bind(&impl::process, this, s.get(), std::placeholders::_1),
-            p, &exts).then_wrapped([s](future<> f) {
-        try {
-            f.get();
-        } catch (commitlog::segment_data_corruption_error& e) {
-            s->corrupt_bytes += e.bytes();
-        } catch (...) {
-            throw;
-        }
-        return make_ready_future<stats>(*s);
-    });
+    try {
+        co_await db::commitlog::read_log_file(file, fname_prefix, service::get_local_commitlog_priority(),
+                std::bind(&impl::process, this, &s, std::placeholders::_1),
+                p, &exts);
+    } catch (commitlog::segment_data_corruption_error& e) {
+        s.corrupt_bytes += e.bytes();
+    } catch (...) {
+        throw;
+    }
+    co_return s;
 }
 
 future<> db::commitlog_replayer::impl::process(stats* s, commitlog::buffer_and_replay_position buf_rp) const {
@@ -324,58 +323,58 @@ future<db::commitlog_replayer> db::commitlog_replayer::create_replayer(seastar::
     });
 }
 
-future<> db::commitlog_replayer::recover(std::vector<sstring> files, sstring fname_prefix) {
-    typedef std::unordered_multimap<unsigned, sstring> shard_file_map;
+future<> db::commitlog_replayer::recover(std::vector<sstring> files, sstring fname_prefix_in) {
+    using shard_file_map = std::unordered_multimap<unsigned, sstring>;
 
     rlogger.info("Replaying {}", join(", ", files));
 
     // pre-compute work per shard already.
-    auto map = ::make_lw_shared<shard_file_map>();
+    auto fname_prefix = std::move(fname_prefix_in);
+    shard_file_map map;
+
     for (auto& f : files) {
         commitlog::descriptor d(f, fname_prefix);
         replay_position p = d;
-        map->emplace(p.shard_id() % smp::count, std::move(f));
+        map.emplace(p.shard_id() % smp::count, std::move(f));
     }
 
-    return do_with(std::move(fname_prefix), [this, map] (sstring& fname_prefix) {
-        return _impl->start().then([this, map, &fname_prefix] {
-            return map_reduce(smp::all_cpus(), [this, map, &fname_prefix] (unsigned id) {
-                return smp::submit_to(id, [this, id, map, &fname_prefix] () {
-                    auto total = ::make_lw_shared<impl::stats>();
-                    // TODO: or something. For now, we do this serialized per shard,
-                    // to reduce mutation congestion. We could probably (says avi)
-                    // do 2 segments in parallel or something, but lets use this first.
-                    auto range = map->equal_range(id);
-                    return do_for_each(range.first, range.second, [this, total, &fname_prefix] (const std::pair<unsigned, sstring>& p) {
-                        auto&f = p.second;
-                        rlogger.debug("Replaying {}", f);
-                        return _impl->recover(f, fname_prefix).then([f, total](impl::stats stats) {
-                            if (stats.corrupt_bytes != 0) {
-                                rlogger.warn("Corrupted file: {}. {} bytes skipped.", f, stats.corrupt_bytes);
-                            }
-                            rlogger.debug("Log replay of {} complete, {} replayed mutations ({} invalid, {} skipped)"
-                                            , f
-                                            , stats.applied_mutations
-                                            , stats.invalid_mutations
-                                            , stats.skipped_mutations
-                            );
-                            *total += stats;
-                        });
-                    }).then([total] {
-                        return make_ready_future<impl::stats>(*total);
-                    });
-                });
-            }, impl::stats(), std::plus<impl::stats>()).then([](impl::stats totals) {
-                rlogger.info("Log replay complete, {} replayed mutations ({} invalid, {} skipped)"
-                                , totals.applied_mutations
-                                , totals.invalid_mutations
-                                , totals.skipped_mutations
+    co_await _impl->start();
+    auto totals = co_await map_reduce(smp::all_cpus(), [&] (unsigned id) -> future<impl::stats> {
+        co_return co_await smp::submit_to(id, [this, id, map, &fname_prefix] () -> future<impl::stats> {
+            impl::stats total;
+            // TODO: or something. For now, we do this serialized per shard,
+            // to reduce mutation congestion. We could probably (says avi)
+            // do 2 segments in parallel or something, but lets use this first.
+            auto range = map.equal_range(id);
+            for (auto i = range.first; i != range.second; ++i) {
+                const std::pair<unsigned, sstring>& p = *i;
+                auto&f = p.second;
+                rlogger.debug("Replaying {}", f);
+
+                auto stats = co_await _impl->recover(f, fname_prefix);
+
+                if (stats.corrupt_bytes != 0) {
+                    rlogger.warn("Corrupted file: {}. {} bytes skipped.", f, stats.corrupt_bytes);
+                }
+                rlogger.debug("Log replay of {} complete, {} replayed mutations ({} invalid, {} skipped)"
+                                , f
+                                , stats.applied_mutations
+                                , stats.invalid_mutations
+                                , stats.skipped_mutations
                 );
-            });
-        }).finally([this] {
-            return _impl->stop();
+                total += stats;
+            }
+            co_return total;
         });
-    });
+    }, impl::stats(), std::plus<impl::stats>());
+    
+    rlogger.info("Log replay complete, {} replayed mutations ({} invalid, {} skipped)"
+                , totals.applied_mutations
+                , totals.invalid_mutations
+                , totals.skipped_mutations
+    );
+
+    co_await _impl->stop();
 }
 
 future<> db::commitlog_replayer::recover(sstring f, sstring fname_prefix) {
