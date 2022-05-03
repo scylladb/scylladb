@@ -173,6 +173,9 @@ public:
 
     template <ExpressionElement E>
     friend const E* as_if(const expression* e);
+
+    template <ExpressionElement E>
+    friend E* as_if(expression* e);
 };
 
 // An expression that doesn't contain subexpressions
@@ -415,6 +418,11 @@ const E& as(const expression& e) {
 
 template <ExpressionElement E>
 const E* as_if(const expression* e) {
+    return std::get_if<E>(&e->_v->v);
+}
+
+template <ExpressionElement E>
+E* as_if(expression* e) {
     return std::get_if<E>(&e->_v->v);
 }
 
