@@ -2155,7 +2155,7 @@ public:
         _old_pool_stats = shard_segment_pool.statistics();
     }
 
-    size_t set_result(size_t memory_released) noexcept {
+    size_t set_memory_released(size_t memory_released) noexcept {
         return this->_memory_released = memory_released;
     }
 
@@ -2253,7 +2253,7 @@ size_t tracker::impl::reclaim(size_t memory_to_release, is_preemptible preempt) 
     }
     reclaiming_lock rl(*this);
     reclaim_timer timing_guard(preempt, memory_to_release, 0, *this);
-    return timing_guard.set_result(reclaim_locked(memory_to_release, preempt));
+    return timing_guard.set_memory_released(reclaim_locked(memory_to_release, preempt));
 }
 
 size_t tracker::impl::reclaim_locked(size_t memory_to_release, is_preemptible preempt) {
@@ -2296,7 +2296,7 @@ size_t tracker::impl::compact_and_evict(size_t reserve_segments, size_t memory_t
     }
     reclaiming_lock rl(*this);
     reclaim_timer timing_guard(preempt, memory_to_release, reserve_segments, *this);
-    return timing_guard.set_result(compact_and_evict_locked(reserve_segments, memory_to_release, preempt));
+    return timing_guard.set_memory_released(compact_and_evict_locked(reserve_segments, memory_to_release, preempt));
 }
 
 size_t tracker::impl::compact_and_evict_locked(size_t reserve_segments, size_t memory_to_release, is_preemptible preempt) {
