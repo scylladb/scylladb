@@ -58,14 +58,21 @@ private:
     template<typename Visitor>
     requires MutationViewVisitor<Visitor>
     void do_accept(const column_mapping&, Visitor& visitor) const;
+
+    template<typename Visitor>
+    requires MutationViewVisitor<Visitor>
+    future<> do_accept_gently(const column_mapping&, Visitor& visitor) const;
 public:
     static mutation_partition_view from_stream(utils::input_stream v) {
         return { v };
     }
     static mutation_partition_view from_view(ser::mutation_partition_view v);
     void accept(const schema& schema, partition_builder& visitor) const;
+    future<> accept_gently(const schema& schema, partition_builder& visitor) const;
     void accept(const column_mapping&, converting_mutation_partition_applier& visitor) const;
+    future<> accept_gently(const column_mapping&, converting_mutation_partition_applier& visitor) const;
     void accept(const column_mapping&, mutation_partition_view_virtual_visitor& mpvvv) const;
+    future<> accept_gently(const column_mapping&, mutation_partition_view_virtual_visitor& mpvvv) const;
 
     std::optional<clustering_key> first_row_key() const;
     std::optional<clustering_key> last_row_key() const;
