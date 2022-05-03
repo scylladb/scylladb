@@ -11,6 +11,7 @@ import shutil
 import time
 import aiohttp
 from typing import Optional, List
+from cassandra import InvalidRequest                    # type: ignore
 from cassandra.auth import PlainTextAuthProvider        # type: ignore
 from cassandra.cluster import Cluster, NoHostAvailable  # type: ignore
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT     # type: ignore
@@ -215,9 +216,18 @@ class ScyllaServer:
         try:
             with Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},
                          contact_points=[self.hostname], auth_provider=auth) as cluster:
-                with cluster.connect():
+                with cluster.connect() as session:
+                    # auth::standard_role_manager creates "cassandra" role in an
+                    # async loop auth::do_after_system_ready(), which retries
+                    # role creation with an exponential back-off. In other
+                    # words, even after CQL port is up, Scylla may still be
+                    # initializing. When the role is ready, queries begin to
+                    # work, so rely on this "side effect".
+                    session.execute("CREATE KEYSPACE k WITH REPLICATION = {" +
+                                    "'class' : 'SimpleStrategy', 'replication_factor' : 1 }")
+                    session.execute("DROP KEYSPACE k")
                     return True
-        except NoHostAvailable:
+        except (NoHostAvailable, InvalidRequest):
             return False
         finally:
             caslog.setLevel(oldlevel)
