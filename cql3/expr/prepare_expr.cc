@@ -375,7 +375,7 @@ list_test_assignment(const collection_constructor& c, data_dictionary::database 
 
 static
 expression
-list_prepare_expression(const collection_constructor& c, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
+list_prepare_expression(const collection_constructor& c, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver, bool is_in_list) {
     list_validate_assignable_to(c, db, keyspace, *receiver);
 
     // In Cassandra, an empty (unfrozen) map/set/list is equivalent to the column being null. In
@@ -404,7 +404,11 @@ list_prepare_expression(const collection_constructor& c, data_dictionary::databa
         .type = receiver->type
     };
     if (all_terminal) {
-        return evaluate(value, query_options::DEFAULT);
+        if (is_in_list) {
+            return evaluate_IN_list(value, query_options::DEFAULT);
+        } else {
+            return evaluate(value, query_options::DEFAULT);
+        }
     } else {
         return value;
     }
@@ -934,7 +938,7 @@ prepare_expression(const expression& expr, data_dictionary::database db, const s
         },
         [&] (const collection_constructor& c) -> expression {
             switch (c.style) {
-            case collection_constructor::style_type::list: return list_prepare_expression(c, db, keyspace, receiver);
+            case collection_constructor::style_type::list: return list_prepare_expression(c, db, keyspace, receiver, false);
             case collection_constructor::style_type::set: return set_prepare_expression(c, db, keyspace, receiver);
             case collection_constructor::style_type::map: return map_prepare_expression(c, db, keyspace, receiver);
             }
