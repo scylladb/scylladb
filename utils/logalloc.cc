@@ -2127,7 +2127,7 @@ class reclaim_timer {
 
     const is_preemptible _preemptible;
     const size_t _memory_to_release;
-    const size_t _reserve_segments;
+    const size_t _segments_to_release;
     tracker::impl& _tracker;
 
     const bool _debug_enabled;
@@ -2141,10 +2141,10 @@ class reclaim_timer {
     segment_pool::stats _old_pool_stats;
 
 public:
-    reclaim_timer(is_preemptible preemptible, size_t memory_to_release, size_t reserve_segments, tracker::impl& tracker)
+    reclaim_timer(is_preemptible preemptible, size_t memory_to_release, size_t segments_to_release, tracker::impl& tracker)
         : _preemptible(preemptible)
         , _memory_to_release(memory_to_release)
-        , _reserve_segments(reserve_segments)
+        , _segments_to_release(segments_to_release)
         , _tracker(tracker)
         , _debug_enabled(timing_logger.is_enabled(logging::log_level::debug))
     {
@@ -2194,7 +2194,7 @@ private:
 
         timing_logger.log(time_level, "Reclamation cycle took {} us, trying to release {:.3f} MiB {}preemptibly",
                           (_duration + 500ns) / 1us, (float)_memory_to_release / MiB, _preemptible ? "" : "non-");
-        log_if_any(info_level, "reserved segments", _reserve_segments);
+        log_if_any(info_level, "segments to release", _segments_to_release);
         if (_memory_released > 0) {
             auto bytes_per_second =
                 static_cast<float>(_memory_released) / std::chrono::duration_cast<std::chrono::duration<float>>(_duration).count();
