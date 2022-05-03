@@ -879,6 +879,63 @@ public:
     size_t free_segments() const { return _free_segments; }
 };
 
+class reclaim_timer {
+    using clock = utils::coarse_steady_clock;
+
+    const char* _name;
+    const is_preemptible _preemptible;
+    const size_t _memory_to_release;
+    const size_t _segments_to_release;
+    tracker::impl* _tracker;
+
+    const bool _debug_enabled;
+    bool _stall_detected = false;
+
+    size_t _memory_released = 0;
+
+    clock::time_point _start;
+    clock::duration _duration;
+    occupancy_stats _old_region_occupancy;
+    segment_pool::stats _old_pool_stats;
+
+public:
+    inline reclaim_timer(const char* name, is_preemptible preemptible, size_t memory_to_release, size_t segments_to_release, tracker::impl* tracker = nullptr);
+
+    ~reclaim_timer() {
+        _duration = clock::now() - _start;
+        _stall_detected = _duration >= engine().get_blocked_reactor_notify_ms();
+        if (_debug_enabled || _stall_detected) {
+            report();
+        }
+    }
+
+    size_t set_memory_released(size_t memory_released) noexcept {
+        return this->_memory_released = memory_released;
+    }
+
+private:
+    template <typename T>
+    void log_if_changed(log_level level, const char* name, T before, T now) const noexcept {
+        if (now != before) {
+            timing_logger.log(level, "- {}: {:.3f} -> {:.3f}", name, before, now);
+        }
+    }
+    template <typename T>
+    void log_if_any(log_level level, const char* name, T value) const noexcept {
+        if (value != 0) {
+            timing_logger.log(level, "- {}: {}", name, value);
+        }
+    }
+    template <typename T>
+    void log_if_any_mem(log_level level, const char* name, T value) const noexcept {
+        if (value != 0) {
+            timing_logger.log(level, "- {}: {:.3f} MiB", name, (float)value / (1024*1024));
+        }
+    }
+
+    void report() const noexcept;
+};
+
 size_t segment_pool::reclaim_segments(size_t target, is_preemptible preempt) {
     // Reclaimer tries to release segments occupying lower parts of the address
     // space.
@@ -1133,6 +1190,48 @@ bool segment::is_empty() {
 occupancy_stats
 segment::occupancy() {
     return { shard_segment_pool.descriptor(this).free_space(), segment::size };
+}
+
+reclaim_timer::reclaim_timer(const char* name, is_preemptible preemptible, size_t memory_to_release, size_t segments_to_release, tracker::impl* tracker)
+    : _name(name)
+    , _preemptible(preemptible)
+    , _memory_to_release(memory_to_release)
+    , _segments_to_release(segments_to_release)
+    , _tracker(tracker)
+    , _debug_enabled(timing_logger.is_enabled(logging::log_level::debug))
+{
+    _start = clock::now();
+    if (_debug_enabled && tracker) {
+        _old_region_occupancy = tracker->region_occupancy();
+    }
+    _old_pool_stats = shard_segment_pool.statistics();
+}
+
+void reclaim_timer::report() const noexcept {
+    auto time_level = _stall_detected ? log_level::warn : log_level::debug;
+    auto info_level = _stall_detected ? log_level::info : log_level::debug;
+    auto MiB = 1024*1024;
+    auto msg_extra = _stall_detected ? fmt::format(", at {}", current_backtrace()) : "";
+
+    timing_logger.log(time_level, "{} took {} us, trying to release {:.3f} MiB {}preemptibly{}",
+                        _name, (_duration + 500ns) / 1us, (float)_memory_to_release / MiB, _preemptible ? "" : "non-",
+                        msg_extra);
+    log_if_any(info_level, "segments to release", _segments_to_release);
+    if (_memory_released > 0) {
+        auto bytes_per_second =
+            static_cast<float>(_memory_released) / std::chrono::duration_cast<std::chrono::duration<float>>(_duration).count();
+        timing_logger.log(info_level, "- reclamation rate = {} MiB/s", format("{:.3f}", bytes_per_second / MiB));
+    }
+    if (_debug_enabled && _tracker) {
+        log_if_changed(info_level, "occupancy of regions",
+                        _old_region_occupancy.used_fraction(), _tracker->region_occupancy().used_fraction());
+    }
+
+    auto pool_stats = shard_segment_pool.statistics();
+    log_if_any_mem(info_level, "evicted memory", pool_stats.memory_evicted - _old_pool_stats.memory_evicted);
+    log_if_any(info_level, "compacted segments", pool_stats.segments_compacted - _old_pool_stats.segments_compacted);
+    log_if_any_mem(info_level, "compacted memory", pool_stats.memory_compacted - _old_pool_stats.memory_compacted);
+    log_if_any_mem(info_level, "allocated memory", pool_stats.memory_allocated - _old_pool_stats.memory_allocated);
 }
 
 //
@@ -2121,101 +2220,6 @@ static void reclaim_from_evictable(region::impl& r, size_t target_mem_in_use, is
         r.compact();
     }
 }
-
-class reclaim_timer {
-    using clock = utils::coarse_steady_clock;
-
-    const char* _name;
-    const is_preemptible _preemptible;
-    const size_t _memory_to_release;
-    const size_t _segments_to_release;
-    tracker::impl* _tracker;
-
-    const bool _debug_enabled;
-    bool _stall_detected = false;
-
-    size_t _memory_released = 0;
-
-    clock::time_point _start;
-    clock::duration _duration;
-    occupancy_stats _old_region_occupancy;
-    segment_pool::stats _old_pool_stats;
-
-public:
-    reclaim_timer(const char* name, is_preemptible preemptible, size_t memory_to_release, size_t segments_to_release, tracker::impl* tracker = nullptr)
-        : _name(name)
-        , _preemptible(preemptible)
-        , _memory_to_release(memory_to_release)
-        , _segments_to_release(segments_to_release)
-        , _tracker(tracker)
-        , _debug_enabled(timing_logger.is_enabled(logging::log_level::debug))
-    {
-        _start = clock::now();
-        if (_debug_enabled && tracker) {
-            _old_region_occupancy = tracker->region_occupancy();
-        }
-        _old_pool_stats = shard_segment_pool.statistics();
-    }
-
-    size_t set_memory_released(size_t memory_released) noexcept {
-        return this->_memory_released = memory_released;
-    }
-
-    ~reclaim_timer() {
-        _duration = clock::now() - _start;
-        _stall_detected = _duration >= engine().get_blocked_reactor_notify_ms();
-        if (_debug_enabled || _stall_detected) {
-            report();
-        }
-    }
-
-private:
-    template <typename T>
-    void log_if_changed(log_level level, const char* name, T before, T now) const noexcept {
-        if (now != before) {
-            timing_logger.log(level, "- {}: {:.3f} -> {:.3f}", name, before, now);
-        }
-    }
-    template <typename T>
-    void log_if_any(log_level level, const char* name, T value) const noexcept {
-        if (value != 0) {
-            timing_logger.log(level, "- {}: {}", name, value);
-        }
-    }
-    template <typename T>
-    void log_if_any_mem(log_level level, const char* name, T value) const noexcept {
-        if (value != 0) {
-            timing_logger.log(level, "- {}: {:.3f} MiB", name, (float)value / (1024*1024));
-        }
-    }
-
-    void report() const noexcept {
-        auto time_level = _stall_detected ? log_level::warn : log_level::debug;
-        auto info_level = _stall_detected ? log_level::info : log_level::debug;
-        auto MiB = 1024*1024;
-        auto msg_extra = _stall_detected ? fmt::format(", at {}", current_backtrace()) : "";
-
-        timing_logger.log(time_level, "{} took {} us, trying to release {:.3f} MiB {}preemptibly{}",
-                          _name, (_duration + 500ns) / 1us, (float)_memory_to_release / MiB, _preemptible ? "" : "non-",
-                          msg_extra);
-        log_if_any(info_level, "segments to release", _segments_to_release);
-        if (_memory_released > 0) {
-            auto bytes_per_second =
-                static_cast<float>(_memory_released) / std::chrono::duration_cast<std::chrono::duration<float>>(_duration).count();
-            timing_logger.log(info_level, "- reclamation rate = {} MiB/s", format("{:.3f}", bytes_per_second / MiB));
-        }
-        if (_debug_enabled && _tracker) {
-            log_if_changed(info_level, "occupancy of regions",
-                           _old_region_occupancy.used_fraction(), _tracker->region_occupancy().used_fraction());
-        }
-
-        auto pool_stats = shard_segment_pool.statistics();
-        log_if_any_mem(info_level, "evicted memory", pool_stats.memory_evicted - _old_pool_stats.memory_evicted);
-        log_if_any(info_level, "compacted segments", pool_stats.segments_compacted - _old_pool_stats.segments_compacted);
-        log_if_any_mem(info_level, "compacted memory", pool_stats.memory_compacted - _old_pool_stats.memory_compacted);
-        log_if_any_mem(info_level, "allocated memory", pool_stats.memory_allocated - _old_pool_stats.memory_allocated);
-    }
-};
 
 idle_cpu_handler_result tracker::impl::compact_on_idle(work_waiting_on_reactor check_for_work) {
     if (!_reclaiming_enabled) {
