@@ -473,10 +473,12 @@ public:
 
     // Can be called only when cursor is valid and pointing at a row.
     clustering_row row() const {
-        clustering_row cr(key());
-        consume_row([&] (const deletable_row& row) {
-            cr.apply(_schema, row);
-        });
+        // Note: if the precondition ("cursor is valid and pointing at a row") is fulfilled
+        // then _current_row is not empty, so the below is valid.
+        clustering_row cr(key(), deletable_row(_schema, _current_row[0].it->row()));
+        for (size_t i = 1; i < _current_row.size(); ++i) {
+            cr.apply(_schema, _current_row[i].it->row());
+        }
         return cr;
     }
 
