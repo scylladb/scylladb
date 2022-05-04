@@ -121,12 +121,12 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
         cp.validate();
     }
 
-    if (auto caching_options = get_caching_options(); caching_options && !caching_options->enabled() && !db.features().cluster_supports_per_table_caching()) {
+    if (auto caching_options = get_caching_options(); caching_options && !caching_options->enabled() && !db.features().per_table_caching) {
         throw exceptions::configuration_exception(KW_CACHING + " can't contain \"'enabled':false\" unless whole cluster supports it");
     }
 
     auto cdc_options = get_cdc_options(schema_extensions);
-    if (cdc_options && cdc_options->enabled() && !db.features().cluster_supports_cdc()) {
+    if (cdc_options && cdc_options->enabled() && !db.features().cdc) {
         throw exceptions::configuration_exception("CDC not supported by the cluster");
     }
 

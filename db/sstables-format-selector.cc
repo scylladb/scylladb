@@ -62,8 +62,8 @@ future<> sstables_format_selector::do_maybe_select_format(sstables::sstable_vers
 future<> sstables_format_selector::start() {
     assert(this_shard_id() == 0);
     return read_sstables_format().then([this] {
-        _features.local().cluster_supports_me_sstable().when_enabled(_me_feature_listener);
-        _features.local().cluster_supports_md_sstable().when_enabled(_md_feature_listener);
+        _features.local().me_sstable.when_enabled(_me_feature_listener);
+        _features.local().md_sstable.when_enabled(_md_feature_listener);
         return make_ready_future<>();
     });
 }

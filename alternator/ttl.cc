@@ -64,7 +64,7 @@ static const sstring TTL_TAG_KEY("system:ttl_attribute");
 
 future<executor::request_return_type> executor::update_time_to_live(client_state& client_state, service_permit permit, rjson::value request) {
     _stats.api_operations.update_time_to_live++;
-    if (!_proxy.data_dictionary().features().cluster_supports_alternator_ttl()) {
+    if (!_proxy.data_dictionary().features().alternator_ttl) {
         co_return api_error::unknown_operation("UpdateTimeToLive not yet supported. Experimental support is available if the 'alternator-ttl' experimental feature is enabled on all nodes.");
     }
 
@@ -118,7 +118,7 @@ future<executor::request_return_type> executor::update_time_to_live(client_state
 
 future<executor::request_return_type> executor::describe_time_to_live(client_state& client_state, service_permit permit, rjson::value request) {
     _stats.api_operations.describe_time_to_live++;
-    if (!_proxy.data_dictionary().features().cluster_supports_alternator_ttl()) {
+    if (!_proxy.data_dictionary().features().alternator_ttl) {
         co_return api_error::unknown_operation("DescribeTimeToLive not yet supported. Experimental support is available if the 'alternator_ttl' experimental feature is enabled on all nodes.");
     }
     schema_ptr schema = get_table(_proxy, request);
@@ -782,7 +782,7 @@ future<> expiration_service::run() {
 future<> expiration_service::start() {
     // Called by main() on each shard to start the expiration-service
     // thread. Just runs run() in the background and allows stop().
-    if (_db.features().cluster_supports_alternator_ttl()) {
+    if (_db.features().alternator_ttl) {
         if (!shutting_down()) {
             _end = run().handle_exception([] (std::exception_ptr ep) {
                 tlogger.error("expiration_service failed: {}", ep);

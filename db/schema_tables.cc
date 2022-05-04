@@ -2257,7 +2257,7 @@ static void make_update_indices_mutations(
     mutation indices_mutation(indexes(), partition_key::from_singular(*indexes(), old_table->ks_name()));
 
     auto diff = difference(old_table->all_indices(), new_table->all_indices());
-    bool new_token_column_computation = db.features().cluster_supports_correct_idx_token_in_secondary_index();
+    bool new_token_column_computation = db.features().correct_idx_token_in_secondary_index;
 
     // indices that are no longer needed
     for (auto&& name : diff.entries_only_on_left) {

@@ -199,12 +199,12 @@ void feature::enable() {
 
 db::schema_features feature_service::cluster_schema_features() const {
     db::schema_features f;
-    f.set_if<db::schema_feature::VIEW_VIRTUAL_COLUMNS>(bool(_view_virtual_columns));
-    f.set_if<db::schema_feature::DIGEST_INSENSITIVE_TO_EXPIRY>(bool(_digest_insensitive_to_expiry));
-    f.set_if<db::schema_feature::COMPUTED_COLUMNS>(bool(_computed_columns));
-    f.set_if<db::schema_feature::CDC_OPTIONS>(bool(_cdc_feature));
-    f.set_if<db::schema_feature::PER_TABLE_PARTITIONERS>(bool(_per_table_partitioners_feature));
-    f.set_if<db::schema_feature::SCYLLA_KEYSPACES>(bool(_keyspace_storage_options));
+    f.set_if<db::schema_feature::VIEW_VIRTUAL_COLUMNS>(view_virtual_columns);
+    f.set_if<db::schema_feature::DIGEST_INSENSITIVE_TO_EXPIRY>(digest_insensitive_to_expiry);
+    f.set_if<db::schema_feature::COMPUTED_COLUMNS>(computed_columns);
+    f.set_if<db::schema_feature::CDC_OPTIONS>(cdc);
+    f.set_if<db::schema_feature::PER_TABLE_PARTITIONERS>(per_table_partitioners);
+    f.set_if<db::schema_feature::SCYLLA_KEYSPACES>(keyspace_storage_options);
     return f;
 }
 

@@ -128,7 +128,7 @@ using fbu = utils::fb_utilities;
 
 static inline
 query::digest_algorithm digest_algorithm(service::storage_proxy& proxy) {
-    return proxy.features().cluster_supports_digest_for_null_values()
+    return proxy.features().digest_for_null_values
             ? query::digest_algorithm::xxHash
             : query::digest_algorithm::legacy_xxHash_without_null_digest;
 }
@@ -796,7 +796,7 @@ static future<> sleep_approx_50ms() {
  */
 future<paxos_response_handler::ballot_and_data>
 paxos_response_handler::begin_and_repair_paxos(client_state& cs, unsigned& contentions, bool is_write) {
-    if (!_proxy->features().cluster_supports_lwt()) {
+    if (!_proxy->features().lwt) {
         co_return coroutine::make_exception(std::runtime_error("The cluster does not support Paxos. Upgrade all the nodes to the version with LWT support."));
     }
 
@@ -1331,7 +1331,7 @@ endpoints_to_replica_ids(const locator::token_metadata& tm, const inet_address_v
 }
 
 query::max_result_size storage_proxy::get_max_result_size(const query::partition_slice& slice) const {
-    if (_features.cluster_supports_separate_page_size_and_safety_limit()) {
+    if (_features.separate_page_size_and_safety_limit) {
         auto max_size = _db.local().get_unlimited_query_max_result_size();
         return query::max_result_size(max_size.soft_limit, max_size.hard_limit, query::result_memory_limiter::maximum_result_size);
     }
@@ -2669,7 +2669,7 @@ future<> storage_proxy::send_to_endpoint(
 }
 
 future<> storage_proxy::send_hint_to_endpoint(frozen_mutation_and_schema fm_a_s, gms::inet_address target) {
-    if (!_features.cluster_supports_hinted_handoff_separate_connection()) {
+    if (!_features.hinted_handoff_separate_connection) {
         return send_to_endpoint(
                 std::make_unique<shared_mutation>(std::move(fm_a_s)),
                 std::move(target),
@@ -2691,7 +2691,7 @@ future<> storage_proxy::send_hint_to_endpoint(frozen_mutation_and_schema fm_a_s,
 }
 
 future<> storage_proxy::send_hint_to_all_replicas(frozen_mutation_and_schema fm_a_s) {
-    if (!_features.cluster_supports_hinted_handoff_separate_connection()) {
+    if (!_features.hinted_handoff_separate_connection) {
         std::array<mutation, 1> ms{fm_a_s.fm.unfreeze(fm_a_s.s)};
         return mutate_internal(std::move(ms), db::consistency_level::ALL, false, nullptr, empty_service_permit())
                 .then(utils::result_into_future<result<>>);
@@ -4216,7 +4216,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
     std::unordered_map<abstract_read_executor*, std::vector<dht::token_range>> ranges_per_exec;
     const auto tmptr = get_token_metadata_ptr();
 
-    if (_features.cluster_supports_range_scan_data_variant()) {
+    if (_features.range_scan_data_variant) {
         cmd->slice.options.set<query::partition_slice::option::range_scan_data_variant>();
     }
 

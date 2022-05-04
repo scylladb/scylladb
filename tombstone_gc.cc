@@ -175,7 +175,7 @@ void validate_tombstone_gc_options(const tombstone_gc_options* options, data_dic
     if (!options) {
         return;
     }
-    if (!db.features().cluster_supports_tombstone_gc_options()) {
+    if (!db.features().tombstone_gc_options) {
         throw exceptions::configuration_exception("tombstone_gc option not supported by the cluster");
     }
 

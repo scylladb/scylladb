@@ -24,7 +24,7 @@ raft_group_registry::raft_group_registry(bool is_enabled, netw::messaging_servic
     : _is_enabled(is_enabled)
     , _ms(ms)
     , _fd(make_shared<raft_gossip_failure_detector>(gossiper, _srv_address_mappings))
-    , _raft_support_listener(feat.cluster_supports_raft_cluster_mgmt().when_enabled([] {
+    , _raft_support_listener(feat.uses_raft_cluster_mgmt.when_enabled([] {
         // TODO: join group 0 on upgrade
     }))
 {

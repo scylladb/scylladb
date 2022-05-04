@@ -23,7 +23,7 @@ namespace cql3 {
 namespace statements {
 
 shared_ptr<functions::function> create_aggregate_statement::create(query_processor& qp, functions::function* old) const {
-    if (!qp.proxy().features().cluster_supports_user_defined_aggregates()) {
+    if (!qp.proxy().features().user_defined_aggregates) {
         throw exceptions::invalid_request_exception("Cluster does not support user-defined aggregates, upgrade the whole cluster in order to use UDA");
     }
     if (old && !dynamic_cast<functions::user_aggregate*>(old)) {

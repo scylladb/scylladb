@@ -340,7 +340,7 @@ future<cdc::generation_id> generation_service::make_new_generation(const std::un
     auto normal_token_owners = tmptr->count_normal_token_owners();
     assert(normal_token_owners);
 
-    if (_feature_service.cluster_supports_cdc_generations_v2()) {
+    if (_feature_service.cdc_generations_v2) {
         auto uuid = utils::make_random_uuid();
         cdc_log.info("Inserting new generation data at UUID {}", uuid);
         // This may take a while.
@@ -778,7 +778,7 @@ future<> generation_service::check_and_repair_cdc_streams() {
         cdc_log.warn("check_and_repair_cdc_streams: no generation observed in gossip");
         should_regenerate = true;
     } else if (std::holds_alternative<cdc::generation_id_v1>(*latest)
-            && _feature_service.cluster_supports_cdc_generations_v2()) {
+            && _feature_service.cdc_generations_v2) {
         cdc_log.info(
             "Cluster still using CDC generation storage format V1 (id: {}), even though it already understands the V2 format."
             " Creating a new generation using V2.", *latest);
