@@ -273,7 +273,7 @@ distributed_loader::make_sstables_available(sstables::sstable_directory& dir, sh
         return dir.do_for_each_sstable([&table, datadir = std::move(datadir), &new_sstables] (sstables::shared_sstable sst) {
             auto gen = table.calculate_generation_for_new_table();
             dblog.trace("Loading {} into {}, new generation {}", sst->get_filename(), datadir.native(), gen);
-            return sst->move_to_new_dir(datadir.native(), gen,  true).then([&table, &new_sstables, sst] {
+            return sst->move_to_new_dir(datadir.native(), gen, true).then([&table, &new_sstables, sst] {
                 // When loading an imported sst, set level to 0 because it may overlap with existing ssts on higher levels.
                 sst->set_sstable_level(0);
                 new_sstables.push_back(std::move(sst));
@@ -322,7 +322,7 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
             sstables::sstable_directory::lack_of_toc_fatal::no,
             sstables::sstable_directory::enable_dangerous_direct_import_of_cassandra_counters(db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters()),
             sstables::sstable_directory::allow_loading_materialized_view::no,
-            [&global_table] (fs::path dir, int64_t gen, sstables::sstable_version_types v, sstables::sstable_format_types f) {
+            [&global_table] (fs::path dir, sstables::generation_type gen, sstables::sstable_version_types v, sstables::sstable_format_types f) {
                 return global_table->make_sstable(dir.native(), gen, v, f, &error_handler_gen_for_upload_dir);
 
         }).get();
@@ -388,7 +388,7 @@ distributed_loader::get_sstables_from_upload_dir(distributed<replica::database>&
             sstables::sstable_directory::lack_of_toc_fatal::no,
             sstables::sstable_directory::enable_dangerous_direct_import_of_cassandra_counters(db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters()),
             sstables::sstable_directory::allow_loading_materialized_view::no,
-            [&global_table] (fs::path dir, int64_t gen, sstables::sstable_version_types v, sstables::sstable_format_types f) {
+            [&global_table] (fs::path dir, sstables::generation_type gen, sstables::sstable_version_types v, sstables::sstable_format_types f) {
                 return global_table->make_sstable(dir.native(), gen, v, f, &error_handler_gen_for_upload_dir);
 
         }).get();
@@ -480,7 +480,7 @@ future<> distributed_loader::populate_column_family(distributed<replica::databas
             sstables::sstable_directory::lack_of_toc_fatal::yes,
             sstables::sstable_directory::enable_dangerous_direct_import_of_cassandra_counters(db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters()),
             sstables::sstable_directory::allow_loading_materialized_view::yes,
-            [&global_table] (fs::path dir, int64_t gen, sstables::sstable_version_types v, sstables::sstable_format_types f) {
+            [&global_table] (fs::path dir, sstables::generation_type gen, sstables::sstable_version_types v, sstables::sstable_format_types f) {
                 return global_table->make_sstable(dir.native(), gen, v, f);
         }).get();
 
