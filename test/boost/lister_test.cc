@@ -12,6 +12,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/file.hh>
+#include <seastar/core/loop.hh>
 
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
@@ -190,4 +191,41 @@ SEASTAR_TEST_CASE(test_directory_lister_extra_get) {
     }
 
     BOOST_REQUIRE_THROW(co_await dl.get(), seastar::broken_pipe_exception);
+}
+
+SEASTAR_TEST_CASE(test_lister_large_dir) {
+    auto tmp = tmpdir();
+
+    std::unordered_set<std::string> file_names;
+    std::unordered_set<std::string> dir_names;
+
+    BOOST_TEST_MESSAGE("test_lister_rmdir: generating tree");
+    auto gen_count = co_await generate_random_content(tmp.path(), file_names, dir_names, 100, 1000);
+    co_await parallel_for_each(dir_names, [base = tmp.path(), &gen_count] (const std::string& dir) -> future<> {
+        std::unordered_set<std::string> dir_file_names;
+        std::unordered_set<std::string> dir_dir_names;
+        gen_count += co_await generate_random_content(base / dir, dir_file_names, dir_dir_names, 10, 100);
+    });
+    BOOST_TEST_MESSAGE(fmt::format("test_lister_rmdir: generated {} entries", gen_count));
+
+    class scan_count {
+        fs::path _dir;
+        size_t _count = 0;
+    public:
+        scan_count(fs::path dir)
+            : _dir(std::move(dir))
+            , _count(0)
+        {}
+        future<size_t> operator()() {
+            co_await lister::scan_dir(_dir, { directory_entry_type::directory, directory_entry_type::regular }, [this] (fs::path dir, directory_entry de) -> future<> {
+                ++_count;
+                if (de.type == directory_entry_type::directory) {
+                    _count += co_await scan_count(dir / de.name)();
+                }
+            });
+            co_return _count;
+        }
+    };
+
+    BOOST_REQUIRE_EQUAL(co_await scan_count(tmp.path())(), gen_count);
 }
