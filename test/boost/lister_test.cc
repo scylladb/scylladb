@@ -9,6 +9,8 @@
 #include <unordered_set>
 #include <fmt/format.h>
 
+#include <boost/range/irange.hpp>
+
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/file.hh>

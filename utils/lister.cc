@@ -63,16 +63,19 @@ future<> lister::scan_dir(fs::path dir, lister::dir_entry_types type, lister::sh
 
 future<> lister::rmdir(fs::path dir) {
     // first, kill the contents of the directory
+    llogger.debug("rmdir: {}", dir);
     return lister::scan_dir(dir, {}, show_hidden::yes, [] (fs::path parent_dir, directory_entry de) mutable {
         fs::path current_entry_path(parent_dir / de.name.c_str());
 
         if (de.type.value() == directory_entry_type::directory) {
             return rmdir(std::move(current_entry_path));
         } else {
+            llogger.debug("rmdir: remove_file {}", current_entry_path);
             return remove_file(current_entry_path.native());
         }
     }).then([dir] {
         // ...then kill the directory itself
+        llogger.debug("rmdir: {}: done", dir);
         return remove_file(dir.native());
     });
 }
