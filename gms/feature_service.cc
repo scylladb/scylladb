@@ -17,6 +17,7 @@
 #include "to_string.hh"
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>
+#include <boost/range/adaptor/map.hpp>
 
 namespace gms {
 
@@ -229,34 +230,7 @@ void feature_service::persist_enabled_feature_info(const gms::feature& f) const 
 }
 
 void feature_service::enable(const std::set<std::string_view>& list) {
-    for (gms::feature& f : {
-        std::ref(_udf_feature),
-        std::ref(_md_sstable_feature),
-        std::ref(_me_sstable_feature),
-        std::ref(_view_virtual_columns),
-        std::ref(_digest_insensitive_to_expiry),
-        std::ref(_computed_columns),
-        std::ref(_cdc_feature),
-        std::ref(_nonfrozen_udts),
-        std::ref(_hinted_handoff_separate_connection),
-        std::ref(_lwt_feature),
-        std::ref(_per_table_partitioners_feature),
-        std::ref(_per_table_caching_feature),
-        std::ref(_digest_for_null_values_feature),
-        std::ref(_correct_idx_token_in_secondary_index_feature),
-        std::ref(_alternator_streams_feature),
-        std::ref(_alternator_ttl_feature),
-        std::ref(_range_scan_data_variant),
-        std::ref(_cdc_generations_v2),
-        std::ref(_uda),
-        std::ref(_separate_page_size_and_safety_limit),
-        std::ref(_supports_raft_cluster_mgmt),
-        std::ref(_uses_raft_cluster_mgmt),
-        std::ref(_tombstone_gc_options),
-        std::ref(_parallelized_aggregation),
-        std::ref(_keyspace_storage_options),
-    })
-    {
+    for (gms::feature& f : _registered_features | boost::adaptors::map_values) {
         if (list.contains(f.name())) {
             if (db::qctx && !f) {
                 persist_enabled_feature_info(f);
