@@ -22,64 +22,37 @@ using namespace std::literals;
 
 namespace gms {
 
-// Up-to-date features
-constexpr std::string_view features::UDF = "UDF";
-constexpr std::string_view features::MD_SSTABLE = "MD_SSTABLE_FORMAT";
-constexpr std::string_view features::ME_SSTABLE = "ME_SSTABLE_FORMAT";
-constexpr std::string_view features::VIEW_VIRTUAL_COLUMNS = "VIEW_VIRTUAL_COLUMNS";
-constexpr std::string_view features::DIGEST_INSENSITIVE_TO_EXPIRY = "DIGEST_INSENSITIVE_TO_EXPIRY";
-constexpr std::string_view features::COMPUTED_COLUMNS = "COMPUTED_COLUMNS";
-constexpr std::string_view features::CDC = "CDC";
-constexpr std::string_view features::NONFROZEN_UDTS = "NONFROZEN_UDTS";
-constexpr std::string_view features::HINTED_HANDOFF_SEPARATE_CONNECTION = "HINTED_HANDOFF_SEPARATE_CONNECTION";
-constexpr std::string_view features::LWT = "LWT";
-constexpr std::string_view features::PER_TABLE_PARTITIONERS = "PER_TABLE_PARTITIONERS";
-constexpr std::string_view features::PER_TABLE_CACHING = "PER_TABLE_CACHING";
-constexpr std::string_view features::DIGEST_FOR_NULL_VALUES = "DIGEST_FOR_NULL_VALUES";
-constexpr std::string_view features::CORRECT_IDX_TOKEN_IN_SECONDARY_INDEX = "CORRECT_IDX_TOKEN_IN_SECONDARY_INDEX";
-constexpr std::string_view features::ALTERNATOR_STREAMS = "ALTERNATOR_STREAMS";
-constexpr std::string_view features::ALTERNATOR_TTL = "ALTERNATOR_TTL";
-constexpr std::string_view features::RANGE_SCAN_DATA_VARIANT = "RANGE_SCAN_DATA_VARIANT";
-constexpr std::string_view features::CDC_GENERATIONS_V2 = "CDC_GENERATIONS_V2";
-constexpr std::string_view features::UDA = "UDA";
-constexpr std::string_view features::SEPARATE_PAGE_SIZE_AND_SAFETY_LIMIT = "SEPARATE_PAGE_SIZE_AND_SAFETY_LIMIT";
-constexpr std::string_view features::SUPPORTS_RAFT_CLUSTER_MANAGEMENT = "SUPPORTS_RAFT_CLUSTER_MANAGEMENT";
-constexpr std::string_view features::USES_RAFT_CLUSTER_MANAGEMENT = "USES_RAFT_CLUSTER_MANAGEMENT";
-constexpr std::string_view features::TOMBSTONE_GC_OPTIONS = "TOMBSTONE_GC_OPTIONS";
-constexpr std::string_view features::PARALLELIZED_AGGREGATION = "PARALLELIZED_AGGREGATION";
-constexpr std::string_view features::KEYSPACE_STORAGE_OPTIONS = "KEYSPACE_STORAGE_OPTIONS";
-
 static logging::logger logger("features");
 
 feature_config::feature_config() {
 }
 
 feature_service::feature_service(feature_config cfg) : _config(cfg)
-        , _udf_feature(*this, features::UDF)
-        , _md_sstable_feature(*this, features::MD_SSTABLE)
-        , _me_sstable_feature(*this, features::ME_SSTABLE)
-        , _view_virtual_columns(*this, features::VIEW_VIRTUAL_COLUMNS)
-        , _digest_insensitive_to_expiry(*this, features::DIGEST_INSENSITIVE_TO_EXPIRY)
-        , _computed_columns(*this, features::COMPUTED_COLUMNS)
-        , _cdc_feature(*this, features::CDC)
-        , _nonfrozen_udts(*this, features::NONFROZEN_UDTS)
-        , _hinted_handoff_separate_connection(*this, features::HINTED_HANDOFF_SEPARATE_CONNECTION)
-        , _lwt_feature(*this, features::LWT)
-        , _per_table_partitioners_feature(*this, features::PER_TABLE_PARTITIONERS)
-        , _per_table_caching_feature(*this, features::PER_TABLE_CACHING)
-        , _digest_for_null_values_feature(*this, features::DIGEST_FOR_NULL_VALUES)
-        , _correct_idx_token_in_secondary_index_feature(*this, features::CORRECT_IDX_TOKEN_IN_SECONDARY_INDEX)
-        , _alternator_streams_feature(*this, features::ALTERNATOR_STREAMS)
-        , _alternator_ttl_feature(*this, features::ALTERNATOR_TTL)
-        , _range_scan_data_variant(*this, features::RANGE_SCAN_DATA_VARIANT)
-        , _cdc_generations_v2(*this, features::CDC_GENERATIONS_V2)
-        , _uda(*this, features::UDA)
-        , _separate_page_size_and_safety_limit(*this, features::SEPARATE_PAGE_SIZE_AND_SAFETY_LIMIT)
-        , _supports_raft_cluster_mgmt(*this, features::SUPPORTS_RAFT_CLUSTER_MANAGEMENT)
-        , _uses_raft_cluster_mgmt(*this, features::USES_RAFT_CLUSTER_MANAGEMENT)
-        , _tombstone_gc_options(*this, features::TOMBSTONE_GC_OPTIONS)
-        , _parallelized_aggregation(*this, features::PARALLELIZED_AGGREGATION)
-        , _keyspace_storage_options(*this, features::KEYSPACE_STORAGE_OPTIONS)
+        , _udf_feature(*this, "UDF"sv)
+        , _md_sstable_feature(*this, "MD_SSTABLE_FORMAT"sv)
+        , _me_sstable_feature(*this, "ME_SSTABLE_FORMAT"sv)
+        , _view_virtual_columns(*this, "VIEW_VIRTUAL_COLUMNS"sv)
+        , _digest_insensitive_to_expiry(*this, "DIGEST_INSENSITIVE_TO_EXPIRY"sv)
+        , _computed_columns(*this, "COMPUTED_COLUMNS"sv)
+        , _cdc_feature(*this, "CDC"sv)
+        , _nonfrozen_udts(*this, "NONFROZEN_UDTS"sv)
+        , _hinted_handoff_separate_connection(*this, "HINTED_HANDOFF_SEPARATE_CONNECTION"sv)
+        , _lwt_feature(*this, "LWT"sv)
+        , _per_table_partitioners_feature(*this, "PER_TABLE_PARTITIONERS"sv)
+        , _per_table_caching_feature(*this, "PER_TABLE_CACHING"sv)
+        , _digest_for_null_values_feature(*this, "DIGEST_FOR_NULL_VALUES"sv)
+        , _correct_idx_token_in_secondary_index_feature(*this, "CORRECT_IDX_TOKEN_IN_SECONDARY_INDEX"sv)
+        , _alternator_streams_feature(*this, "ALTERNATOR_STREAMS"sv)
+        , _alternator_ttl_feature(*this, "ALTERNATOR_TTL"sv)
+        , _range_scan_data_variant(*this, "RANGE_SCAN_DATA_VARIANT"sv)
+        , _cdc_generations_v2(*this, "CDC_GENERATIONS_V2"sv)
+        , _uda(*this, "UDA"sv)
+        , _separate_page_size_and_safety_limit(*this, "SEPARATE_PAGE_SIZE_AND_SAFETY_LIMIT"sv)
+        , _supports_raft_cluster_mgmt(*this, "SUPPORTS_RAFT_CLUSTER_MANAGEMENT"sv)
+        , _uses_raft_cluster_mgmt(*this, "USES_RAFT_CLUSTER_MANAGEMENT"sv)
+        , _tombstone_gc_options(*this, "TOMBSTONE_GC_OPTIONS"sv)
+        , _parallelized_aggregation(*this, "PARALLELIZED_AGGREGATION"sv)
+        , _keyspace_storage_options(*this, "KEYSPACE_STORAGE_OPTIONS"sv)
 {}
 
 feature_config feature_config_from_db_config(db::config& cfg, std::set<sstring> disabled) {
@@ -91,17 +64,17 @@ feature_config feature_config_from_db_config(db::config& cfg, std::set<sstring> 
     case sstables::sstable_version_types::ka:
     case sstables::sstable_version_types::la:
     case sstables::sstable_version_types::mc:
-        fcfg._disabled_features.insert(sstring(gms::features::MD_SSTABLE));
+        fcfg._disabled_features.insert("MD_SSTABLE_FORMAT"s);
         [[fallthrough]];
     case sstables::sstable_version_types::md:
-        fcfg._disabled_features.insert(sstring(gms::features::ME_SSTABLE));
+        fcfg._disabled_features.insert("ME_SSTABLE_FORMAT"s);
         [[fallthrough]];
     case sstables::sstable_version_types::me:
         break;
     }
 
     if (!cfg.enable_user_defined_functions()) {
-        fcfg._disabled_features.insert(sstring(gms::features::UDF));
+        fcfg._disabled_features.insert("UDF");
     } else {
         if (!cfg.check_experimental(db::experimental_features_t::UDF)) {
             throw std::runtime_error(
@@ -111,23 +84,23 @@ feature_config feature_config_from_db_config(db::config& cfg, std::set<sstring> 
     }
 
     if (!cfg.check_experimental(db::experimental_features_t::ALTERNATOR_STREAMS)) {
-        fcfg._disabled_features.insert(sstring(gms::features::ALTERNATOR_STREAMS));
+        fcfg._disabled_features.insert("ALTERNATOR_STREAMS"s);
     }
     if (!cfg.check_experimental(db::experimental_features_t::ALTERNATOR_TTL)) {
-        fcfg._disabled_features.insert(sstring(gms::features::ALTERNATOR_TTL));
+        fcfg._disabled_features.insert("ALTERNATOR_TTL"s);
     }
     if (!cfg.check_experimental(db::experimental_features_t::RAFT)) {
-        fcfg._disabled_features.insert(sstring(gms::features::SUPPORTS_RAFT_CLUSTER_MANAGEMENT));
-        fcfg._disabled_features.insert(sstring(gms::features::USES_RAFT_CLUSTER_MANAGEMENT));
+        fcfg._disabled_features.insert("SUPPORTS_RAFT_CLUSTER_MANAGEMENT"s);
+        fcfg._disabled_features.insert("USES_RAFT_CLUSTER_MANAGEMENT"s);
     } else {
         // Disable support for using raft cluster management so that it cannot
         // be enabled by accident.
         // This prevents the `USES_RAFT_CLUSTER_MANAGEMENT` feature from being
         // advertised via gossip ahead of time.
-        fcfg._masked_features.insert(sstring(gms::features::USES_RAFT_CLUSTER_MANAGEMENT));
+        fcfg._masked_features.insert("USES_RAFT_CLUSTER_MANAGEMENT"s);
     }
     if (!cfg.check_experimental(db::experimental_features_t::KEYSPACE_STORAGE_OPTIONS)) {
-        fcfg._disabled_features.insert(sstring(gms::features::KEYSPACE_STORAGE_OPTIONS));
+        fcfg._disabled_features.insert("KEYSPACE_STORAGE_OPTIONS"s);
     }
 
     return fcfg;

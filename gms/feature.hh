@@ -96,34 +96,4 @@ public:
     }
 };
 
-namespace features {
-
-extern const std::string_view UDF;
-extern const std::string_view MD_SSTABLE;
-extern const std::string_view ME_SSTABLE;
-extern const std::string_view VIEW_VIRTUAL_COLUMNS;
-extern const std::string_view DIGEST_INSENSITIVE_TO_EXPIRY;
-extern const std::string_view COMPUTED_COLUMNS;
-extern const std::string_view CDC;
-extern const std::string_view NONFROZEN_UDTS;
-extern const std::string_view HINTED_HANDOFF_SEPARATE_CONNECTION;
-extern const std::string_view LWT;
-extern const std::string_view PER_TABLE_PARTITIONERS;
-extern const std::string_view PER_TABLE_CACHING;
-extern const std::string_view DIGEST_FOR_NULL_VALUES;
-extern const std::string_view CORRECT_IDX_TOKEN_IN_SECONDARY_INDEX;
-extern const std::string_view ALTERNATOR_STREAMS;
-extern const std::string_view ALTERNATOR_TTL;
-extern const std::string_view RANGE_SCAN_DATA_VARIANT;
-extern const std::string_view CDC_GENERATIONS_V2;
-extern const std::string_view UDA;
-extern const std::string_view SEPARATE_PAGE_SIZE_AND_SAFETY_LIMIT;
-extern const std::string_view SUPPORTS_RAFT_CLUSTER_MANAGEMENT;
-extern const std::string_view USES_RAFT_CLUSTER_MANAGEMENT;
-extern const std::string_view TOMBSTONE_GC_OPTIONS;
-extern const std::string_view PARALLELIZED_AGGREGATION;
-extern const std::string_view KEYSPACE_STORAGE_OPTIONS;
-
-}
-
 } // namespace gms
