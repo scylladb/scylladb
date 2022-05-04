@@ -231,3 +231,31 @@ SEASTAR_TEST_CASE(test_lister_large_dir) {
 
     BOOST_REQUIRE_EQUAL(co_await scan_count(tmp.path())(), gen_count);
 }
+
+SEASTAR_TEST_CASE(test_lister_parallel_rmdir) {
+    auto tmp = tmpdir();
+
+    std::unordered_set<std::string> file_names;
+    std::unordered_set<std::string> dir_names;
+
+    BOOST_TEST_MESSAGE("test_lister_rmdir: generating tree");
+    auto count = co_await generate_random_content(tmp.path(), file_names, dir_names, 100, 1000);
+    co_await parallel_for_each(dir_names, [base = tmp.path(), &count] (const std::string& dir) -> future<> {
+        std::unordered_set<std::string> dir_file_names;
+        std::unordered_set<std::string> dir_dir_names;
+        count += co_await generate_random_content(base / dir, dir_file_names, dir_dir_names, 10, 100);
+    });
+    BOOST_TEST_MESSAGE(fmt::format("test_lister_rmdir: generated {} entries", count));
+
+    try {
+        int n = 5;
+        BOOST_TEST_MESSAGE(fmt::format("test_lister_rmdir: removing dirs in {} parallel fibers", n));
+        co_await parallel_for_each(boost::irange(n), [&] (int) {
+            return lister::rmdir(tmp.path());
+        });
+    } catch (const std::filesystem::filesystem_error& e) {
+        BOOST_TEST_MESSAGE(fmt::format("test_lister_rmdir: expected error: {}", e.what()));
+    }
+
+    BOOST_REQUIRE(!co_await file_exists(tmp.path().native()));
+}
