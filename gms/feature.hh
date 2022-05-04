@@ -98,28 +98,9 @@ public:
 
 namespace features {
 
-extern const std::string_view RANGE_TOMBSTONES;
-extern const std::string_view LARGE_PARTITIONS;
-extern const std::string_view MATERIALIZED_VIEWS;
-extern const std::string_view COUNTERS;
-extern const std::string_view INDEXES;
-extern const std::string_view DIGEST_MULTIPARTITION_READ;
-extern const std::string_view CORRECT_COUNTER_ORDER;
-extern const std::string_view SCHEMA_TABLES_V3;
-extern const std::string_view CORRECT_NON_COMPOUND_RANGE_TOMBSTONES;
-extern const std::string_view WRITE_FAILURE_REPLY;
-extern const std::string_view XXHASH;
 extern const std::string_view UDF;
-extern const std::string_view ROLES;
-extern const std::string_view LA_SSTABLE;
-extern const std::string_view STREAM_WITH_RPC_STREAM;
-extern const std::string_view MC_SSTABLE;
 extern const std::string_view MD_SSTABLE;
 extern const std::string_view ME_SSTABLE;
-extern const std::string_view ROW_LEVEL_REPAIR;
-extern const std::string_view TRUNCATION_TABLE;
-extern const std::string_view CORRECT_STATIC_COMPACT_IN_MC;
-extern const std::string_view UNBOUNDED_RANGE_TOMBSTONES;
 extern const std::string_view VIEW_VIRTUAL_COLUMNS;
 extern const std::string_view DIGEST_INSENSITIVE_TO_EXPIRY;
 extern const std::string_view COMPUTED_COLUMNS;

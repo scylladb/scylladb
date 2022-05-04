@@ -18,28 +18,9 @@
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>
 
-namespace gms {
+using namespace std::literals;
 
-// Deprecated features - sent to other nodes via gossip, but assumed true in the code
-constexpr std::string_view features::RANGE_TOMBSTONES = "RANGE_TOMBSTONES";
-constexpr std::string_view features::LARGE_PARTITIONS = "LARGE_PARTITIONS";
-constexpr std::string_view features::MATERIALIZED_VIEWS = "MATERIALIZED_VIEWS";
-constexpr std::string_view features::COUNTERS = "COUNTERS";
-constexpr std::string_view features::INDEXES = "INDEXES";
-constexpr std::string_view features::DIGEST_MULTIPARTITION_READ = "DIGEST_MULTIPARTITION_READ";
-constexpr std::string_view features::CORRECT_COUNTER_ORDER = "CORRECT_COUNTER_ORDER";
-constexpr std::string_view features::SCHEMA_TABLES_V3 = "SCHEMA_TABLES_V3";
-constexpr std::string_view features::CORRECT_NON_COMPOUND_RANGE_TOMBSTONES = "CORRECT_NON_COMPOUND_RANGE_TOMBSTONES";
-constexpr std::string_view features::WRITE_FAILURE_REPLY = "WRITE_FAILURE_REPLY";
-constexpr std::string_view features::XXHASH = "XXHASH";
-constexpr std::string_view features::ROLES = "ROLES";
-constexpr std::string_view features::LA_SSTABLE = "LA_SSTABLE_FORMAT";
-constexpr std::string_view features::STREAM_WITH_RPC_STREAM = "STREAM_WITH_RPC_STREAM";
-constexpr std::string_view features::ROW_LEVEL_REPAIR = "ROW_LEVEL_REPAIR";
-constexpr std::string_view features::TRUNCATION_TABLE = "TRUNCATION_TABLE";
-constexpr std::string_view features::CORRECT_STATIC_COMPACT_IN_MC = "CORRECT_STATIC_COMPACT_IN_MC";
-constexpr std::string_view features::UNBOUNDED_RANGE_TOMBSTONES = "UNBOUNDED_RANGE_TOMBSTONES";
-constexpr std::string_view features::MC_SSTABLE = "MC_SSTABLE_FORMAT";
+namespace gms {
 
 // Up-to-date features
 constexpr std::string_view features::UDF = "UDF";
@@ -192,25 +173,25 @@ std::set<std::string_view> feature_service::known_feature_set() {
     // return sstring("FEATURE1,FEATURE2")
     std::set<std::string_view> features = {
         // Deprecated features - sent to other nodes via gossip, but assumed true in the code
-        gms::features::RANGE_TOMBSTONES,
-        gms::features::LARGE_PARTITIONS,
-        gms::features::COUNTERS,
-        gms::features::DIGEST_MULTIPARTITION_READ,
-        gms::features::CORRECT_COUNTER_ORDER,
-        gms::features::SCHEMA_TABLES_V3,
-        gms::features::CORRECT_NON_COMPOUND_RANGE_TOMBSTONES,
-        gms::features::WRITE_FAILURE_REPLY,
-        gms::features::XXHASH,
-        gms::features::ROLES,
-        gms::features::LA_SSTABLE,
-        gms::features::STREAM_WITH_RPC_STREAM,
-        gms::features::MATERIALIZED_VIEWS,
-        gms::features::INDEXES,
-        gms::features::ROW_LEVEL_REPAIR,
-        gms::features::TRUNCATION_TABLE,
-        gms::features::CORRECT_STATIC_COMPACT_IN_MC,
-        gms::features::UNBOUNDED_RANGE_TOMBSTONES,
-        gms::features::MC_SSTABLE,
+        "RANGE_TOMBSTONES"sv,
+        "LARGE_PARTITIONS"sv,
+        "COUNTERS"sv,
+        "DIGEST_MULTIPARTITION_READ"sv,
+        "CORRECT_COUNTER_ORDER"sv,
+        "SCHEMA_TABLES_V3"sv,
+        "CORRECT_NON_COMPOUND_RANGE_TOMBSTONES"sv,
+        "WRITE_FAILURE_REPLY"sv,
+        "XXHASH"sv,
+        "ROLES"sv,
+        "LA_SSTABLE_FORMAT"sv,
+        "STREAM_WITH_RPC_STREAM"sv,
+        "MATERIALIZED_VIEWS"sv,
+        "INDEXES"sv,
+        "ROW_LEVEL_REPAIR"sv,
+        "TRUNCATION_TABLE"sv,
+        "CORRECT_STATIC_COMPACT_IN_MC"sv,
+        "UNBOUNDED_RANGE_TOMBSTONES"sv,
+        "MC_SSTABLE_FORMAT"sv,
     };
 
     for (auto& [name, f_ref] : _registered_features) {
