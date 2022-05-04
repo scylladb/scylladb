@@ -38,6 +38,8 @@ private:
 
 feature_config feature_config_from_db_config(db::config& cfg, std::set<sstring> disabled = {});
 
+using namespace std::literals;
+
 /**
  * A gossip feature tracks whether all the nodes the current one is
  * aware of support the specified feature.
@@ -69,31 +71,31 @@ public:
     static constexpr const char* ENABLED_FEATURES_KEY = "enabled_features";
 
 private:
-    gms::feature _udf_feature;
-    gms::feature _md_sstable_feature;
-    gms::feature _me_sstable_feature;
-    gms::feature _view_virtual_columns;
-    gms::feature _digest_insensitive_to_expiry;
-    gms::feature _computed_columns;
-    gms::feature _cdc_feature;
-    gms::feature _nonfrozen_udts;
-    gms::feature _hinted_handoff_separate_connection;
-    gms::feature _lwt_feature;
-    gms::feature _per_table_partitioners_feature;
-    gms::feature _per_table_caching_feature;
-    gms::feature _digest_for_null_values_feature;
-    gms::feature _correct_idx_token_in_secondary_index_feature;
-    gms::feature _alternator_streams_feature;
-    gms::feature _alternator_ttl_feature;
-    gms::feature _range_scan_data_variant;
-    gms::feature _cdc_generations_v2;
-    gms::feature _uda;
-    gms::feature _separate_page_size_and_safety_limit;
-    gms::feature _supports_raft_cluster_mgmt;
-    gms::feature _uses_raft_cluster_mgmt;
-    gms::feature _tombstone_gc_options;
-    gms::feature _parallelized_aggregation;
-    gms::feature _keyspace_storage_options;
+    gms::feature _udf_feature { *this, "UDF"sv };
+    gms::feature _md_sstable_feature { *this, "MD_SSTABLE_FORMAT"sv };
+    gms::feature _me_sstable_feature { *this, "ME_SSTABLE_FORMAT"sv };
+    gms::feature _view_virtual_columns { *this, "VIEW_VIRTUAL_COLUMNS"sv };
+    gms::feature _digest_insensitive_to_expiry { *this, "DIGEST_INSENSITIVE_TO_EXPIRY"sv };
+    gms::feature _computed_columns { *this, "COMPUTED_COLUMNS"sv };
+    gms::feature _cdc_feature { *this, "CDC"sv };
+    gms::feature _nonfrozen_udts { *this, "NONFROZEN_UDTS"sv };
+    gms::feature _hinted_handoff_separate_connection { *this, "HINTED_HANDOFF_SEPARATE_CONNECTION"sv };
+    gms::feature _lwt_feature { *this, "LWT"sv };
+    gms::feature _per_table_partitioners_feature { *this, "PER_TABLE_PARTITIONERS"sv };
+    gms::feature _per_table_caching_feature { *this, "PER_TABLE_CACHING"sv };
+    gms::feature _digest_for_null_values_feature { *this, "DIGEST_FOR_NULL_VALUES"sv };
+    gms::feature _correct_idx_token_in_secondary_index_feature { *this, "CORRECT_IDX_TOKEN_IN_SECONDARY_INDEX"sv };
+    gms::feature _alternator_streams_feature { *this, "ALTERNATOR_STREAMS"sv };
+    gms::feature _alternator_ttl_feature { *this, "ALTERNATOR_TTL"sv };
+    gms::feature _range_scan_data_variant { *this, "RANGE_SCAN_DATA_VARIANT"sv };
+    gms::feature _cdc_generations_v2 { *this, "CDC_GENERATIONS_V2"sv };
+    gms::feature _uda { *this, "UDA"sv };
+    gms::feature _separate_page_size_and_safety_limit { *this, "SEPARATE_PAGE_SIZE_AND_SAFETY_LIMIT"sv };
+    gms::feature _supports_raft_cluster_mgmt { *this, "SUPPORTS_RAFT_CLUSTER_MANAGEMENT"sv };
+    gms::feature _uses_raft_cluster_mgmt { *this, "USES_RAFT_CLUSTER_MANAGEMENT"sv };
+    gms::feature _tombstone_gc_options { *this, "TOMBSTONE_GC_OPTIONS"sv };
+    gms::feature _parallelized_aggregation { *this, "PARALLELIZED_AGGREGATION"sv };
+    gms::feature _keyspace_storage_options { *this, "KEYSPACE_STORAGE_OPTIONS"sv };
 
 public:
 

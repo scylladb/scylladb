@@ -18,8 +18,6 @@
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>
 
-using namespace std::literals;
-
 namespace gms {
 
 static logging::logger logger("features");
@@ -28,31 +26,6 @@ feature_config::feature_config() {
 }
 
 feature_service::feature_service(feature_config cfg) : _config(cfg)
-        , _udf_feature(*this, "UDF"sv)
-        , _md_sstable_feature(*this, "MD_SSTABLE_FORMAT"sv)
-        , _me_sstable_feature(*this, "ME_SSTABLE_FORMAT"sv)
-        , _view_virtual_columns(*this, "VIEW_VIRTUAL_COLUMNS"sv)
-        , _digest_insensitive_to_expiry(*this, "DIGEST_INSENSITIVE_TO_EXPIRY"sv)
-        , _computed_columns(*this, "COMPUTED_COLUMNS"sv)
-        , _cdc_feature(*this, "CDC"sv)
-        , _nonfrozen_udts(*this, "NONFROZEN_UDTS"sv)
-        , _hinted_handoff_separate_connection(*this, "HINTED_HANDOFF_SEPARATE_CONNECTION"sv)
-        , _lwt_feature(*this, "LWT"sv)
-        , _per_table_partitioners_feature(*this, "PER_TABLE_PARTITIONERS"sv)
-        , _per_table_caching_feature(*this, "PER_TABLE_CACHING"sv)
-        , _digest_for_null_values_feature(*this, "DIGEST_FOR_NULL_VALUES"sv)
-        , _correct_idx_token_in_secondary_index_feature(*this, "CORRECT_IDX_TOKEN_IN_SECONDARY_INDEX"sv)
-        , _alternator_streams_feature(*this, "ALTERNATOR_STREAMS"sv)
-        , _alternator_ttl_feature(*this, "ALTERNATOR_TTL"sv)
-        , _range_scan_data_variant(*this, "RANGE_SCAN_DATA_VARIANT"sv)
-        , _cdc_generations_v2(*this, "CDC_GENERATIONS_V2"sv)
-        , _uda(*this, "UDA"sv)
-        , _separate_page_size_and_safety_limit(*this, "SEPARATE_PAGE_SIZE_AND_SAFETY_LIMIT"sv)
-        , _supports_raft_cluster_mgmt(*this, "SUPPORTS_RAFT_CLUSTER_MANAGEMENT"sv)
-        , _uses_raft_cluster_mgmt(*this, "USES_RAFT_CLUSTER_MANAGEMENT"sv)
-        , _tombstone_gc_options(*this, "TOMBSTONE_GC_OPTIONS"sv)
-        , _parallelized_aggregation(*this, "PARALLELIZED_AGGREGATION"sv)
-        , _keyspace_storage_options(*this, "KEYSPACE_STORAGE_OPTIONS"sv)
 {}
 
 feature_config feature_config_from_db_config(db::config& cfg, std::set<sstring> disabled) {
