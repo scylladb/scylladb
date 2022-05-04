@@ -239,6 +239,33 @@ void validate_multi_column_relation(const std::vector<const column_definition*>&
                       fmt::format("new_multi_column_restriction operation type: {} not handled", oper));
 }
 
+void validate_token_relation(const std::vector<const column_definition*> column_defs, oper_t oper, const schema& schema) {
+    auto pk = schema.partition_key_columns();
+    if (!std::equal(column_defs.begin(), column_defs.end(), pk.begin(),
+            pk.end(), [](auto* c1, auto& c2) {
+                return c1 == &c2; // same, not "equal".
+        })) {
+
+        throw exceptions::invalid_request_exception(
+                format("The token function arguments must be in the partition key order: {}",
+                        std::to_string(column_defs)));
+    }
+}
+
+::shared_ptr<restrictions::restriction> new_token_restriction(token&& prepared_lhs_token,
+                                                              oper_t oper,
+                                                              expression&& prepared_rhs,
+                                                              comparison_order order,
+                                                              const schema& schema) {
+    std::vector<const column_definition*> column_defs = to_column_definitions(prepared_lhs_token.args);
+    validate_token_relation(column_defs, oper, schema);
+
+    ::shared_ptr<restrictions::restriction> r = ::make_shared<restrictions::token_restriction>(column_defs);
+    r->expression = binary_operator(std::move(prepared_lhs_token), oper, std::move(prepared_rhs));
+
+    return r;
+}
+
 void preliminary_binop_vaidation_checks(const binary_operator& binop) {
     if (auto lhs_tup = as_if<tuple_constructor>(&binop.lhs)) {
         if (binop.op == oper_t::CONTAINS) {
@@ -259,6 +286,24 @@ void preliminary_binop_vaidation_checks(const binary_operator& binop) {
                     format("Expected {} elements in value tuple, but got {}: {}",
                                   lhs_tup->elements.size(), rhs_tup->elements.size(), *rhs_tup));
             }
+        }
+    }
+
+    if (is<token>(binop.lhs)) {
+        if (binop.op == oper_t::IN) {
+            throw exceptions::invalid_request_exception("IN cannot be used with the token function");
+        }
+
+        if (binop.op == oper_t::LIKE) {
+            throw exceptions::invalid_request_exception("LIKE cannot be used with the token function");
+        }
+
+        if (binop.op == oper_t::CONTAINS) {
+            throw exceptions::invalid_request_exception("CONTAINS cannot be used with the token function");
+        }
+
+        if (binop.op == oper_t::CONTAINS_KEY) {
+            throw exceptions::invalid_request_exception("CONTAINS_KEY cannot be used with the token function");
         }
     }
 }
@@ -321,6 +366,10 @@ void preliminary_binop_vaidation_checks(const binary_operator& binop) {
 
     if (auto multi_col_tuple = as_if<tuple_constructor>(&prepared_binop.lhs)) {
         return new_multi_column_restriction(*multi_col_tuple, prepared_binop.op, std::move(prepared_binop.rhs), prepared_binop.order, schema);
+    }
+
+    if (auto lhs_token = as_if<token>(&prepared_binop.lhs)) {
+        return new_token_restriction(std::move(*lhs_token), prepared_binop.op, std::move(prepared_binop.rhs), prepared_binop.order, *schema);
     }
 
     on_internal_error(expr_logger, format("expr::to_restriction unhandled case: {}", e));
