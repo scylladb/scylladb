@@ -58,7 +58,7 @@ static future<> touch_file(fs::path filename, open_flags flags = open_flags::wo 
     co_await f.close();
 }
 
-static future<size_t> generate_random_content(tmpdir& tmp, std::unordered_set<std::string>& file_names, std::unordered_set<std::string>& dir_names, size_t min_count = 1, size_t max_count = 1000) {
+static future<size_t> generate_random_content(fs::path dir, std::unordered_set<std::string>& file_names, std::unordered_set<std::string>& dir_names, size_t min_count = 1, size_t max_count = 1000) {
     size_t count = tests::random::get_int<size_t>(min_count, max_count);
     for (size_t i = 0; i < count; i++) {
         auto name = tests::random::get_sstring(tests::random::get_int(1, 8));
@@ -74,10 +74,10 @@ static future<size_t> generate_random_content(tmpdir& tmp, std::unordered_set<st
     }
 
     for (const auto& name : file_names) {
-        co_await touch_file(tmp.path() / name);
+        co_await touch_file(dir / name);
     }
     for (const auto& name : dir_names) {
-        co_await touch_directory((tmp.path() / name).native());
+        co_await touch_directory((dir / name).native());
     }
 
     co_return file_names.size() + dir_names.size();
@@ -88,7 +88,7 @@ SEASTAR_TEST_CASE(test_lister_abort) {
     std::unordered_set<std::string> file_names;
     std::unordered_set<std::string> dir_names;
 
-    auto count = co_await generate_random_content(tmp, file_names, dir_names, 1, tests::random::get_int(100, 1000));
+    auto count = co_await generate_random_content(tmp.path(), file_names, dir_names, 1, tests::random::get_int(100, 1000));
     assert(count > 0);
     BOOST_TEST_MESSAGE(fmt::format("Generated {} dir entries", count));
 
@@ -127,7 +127,7 @@ SEASTAR_TEST_CASE(test_directory_lister) {
     std::unordered_set<std::string> file_names;
     std::unordered_set<std::string> dir_names;
 
-    auto count = co_await generate_random_content(tmp, file_names, dir_names);
+    auto count = co_await generate_random_content(tmp.path(), file_names, dir_names);
     BOOST_TEST_MESSAGE(fmt::format("Generated {} dir entries", count));
 
     std::unordered_set<std::string> found_file_names;
@@ -162,7 +162,7 @@ SEASTAR_TEST_CASE(test_directory_lister_close) {
     std::unordered_set<std::string> file_names;
     std::unordered_set<std::string> dir_names;
 
-    auto count = co_await generate_random_content(tmp, file_names, dir_names, tests::random::get_int(100, 1000));
+    auto count = co_await generate_random_content(tmp.path(), file_names, dir_names, tests::random::get_int(100, 1000));
     BOOST_TEST_MESSAGE(fmt::format("Generated {} dir entries", count));
 
     auto dl = directory_lister(tmp.path());
@@ -182,7 +182,7 @@ SEASTAR_TEST_CASE(test_directory_lister_extra_get) {
     std::unordered_set<std::string> file_names;
     std::unordered_set<std::string> dir_names;
 
-    auto count = co_await generate_random_content(tmp, file_names, dir_names, tests::random::get_int(100, 1000));
+    auto count = co_await generate_random_content(tmp.path(), file_names, dir_names, tests::random::get_int(100, 1000));
     BOOST_TEST_MESSAGE(fmt::format("Generated {} dir entries", count));
 
     auto dl = directory_lister(tmp.path());
