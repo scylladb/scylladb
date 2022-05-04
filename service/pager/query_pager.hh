@@ -62,7 +62,7 @@ protected:
     uint64_t _per_partition_limit;
 
     std::optional<partition_key> _last_pkey;
-    std::optional<clustering_key> _last_ckey;
+    position_in_partition _last_pos;
     std::optional<utils::UUID> _query_uuid;
 
     shared_ptr<service::storage_proxy> _proxy;

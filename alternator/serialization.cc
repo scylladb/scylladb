@@ -14,6 +14,7 @@
 #include "rapidjson/writer.h"
 #include "concrete_types.hh"
 #include "cql3/type_json.hh"
+#include "position_in_partition.hh"
 
 static logging::logger slogger("alternator-serialization");
 
@@ -246,6 +247,36 @@ clustering_key ck_from_json(const rjson::value& item, schema_ptr schema) {
     }
 
     return clustering_key::from_exploded(raw_ck);
+}
+
+position_in_partition pos_from_json(const rjson::value& item, schema_ptr schema) {
+    auto ck = ck_from_json(item, schema);
+    const auto region_item = rjson::find(item, scylla_paging_region);
+    const auto weight_item = rjson::find(item, scylla_paging_weight);
+    if (bool(region_item) != bool(weight_item)) {
+        throw api_error::validation("Malformed value object: region and weight has to be either both missing or both present");
+    }
+    partition_region region;
+    bound_weight weight;
+    if (region_item) {
+        auto region_view = rjson::to_string_view(get_typed_value(*region_item, "S", scylla_paging_region, "key region"));
+        auto weight_view = rjson::to_string_view(get_typed_value(*weight_item, "N", scylla_paging_weight, "key weight"));
+        auto region = parse_partition_region(region_view);
+        if (weight_view == "-1") {
+            weight = bound_weight::before_all_prefixed;
+        } else if (weight_view == "0") {
+            weight = bound_weight::equal;
+        } else if (weight_view == "1") {
+            weight = bound_weight::after_all_prefixed;
+        } else {
+            throw std::runtime_error(fmt::format("Invalid value for weight: {}", weight_view));
+        }
+        return position_in_partition(region, weight, region == partition_region::clustered ? std::optional(std::move(ck)) : std::nullopt);
+    }
+    if (ck.is_empty()) {
+        return position_in_partition(position_in_partition::partition_start_tag_t());
+    }
+    return position_in_partition::for_key(std::move(ck));
 }
 
 big_decimal unwrap_number(const rjson::value& v, std::string_view diagnostic) {
