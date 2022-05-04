@@ -40,6 +40,7 @@
 #include "db/config.hh"
 #include "db/commitlog/commitlog.hh"
 #include "utils/lister.hh"
+#include "utils/UUID_gen.hh"
 
 #include <boost/range/algorithm/remove_if.hpp>
 #include <boost/range/algorithm.hpp>
@@ -337,23 +338,27 @@ static bool belongs_to_other_shard(const std::vector<shard_id>& shards) {
     return shards.size() != size_t(belongs_to_current_shard(shards));
 }
 
-sstables::shared_sstable table::make_sstable(sstring dir, int64_t generation, sstables::sstable_version_types v, sstables::sstable_format_types f,
+sstables::shared_sstable table::make_sstable(sstring dir, int64_t generation, utils::UUID uuid_generation, sstables::sstable_version_types v, sstables::sstable_format_types f,
         io_error_handler_gen error_handler_gen) {
-    return get_sstables_manager().make_sstable(_schema, dir, generation, v, f, gc_clock::now(), error_handler_gen);
+    return get_sstables_manager().make_sstable(_schema, dir, generation, uuid_generation, v, f, gc_clock::now(), error_handler_gen);
 }
 
-sstables::shared_sstable table::make_sstable(sstring dir, int64_t generation,
+sstables::shared_sstable table::make_sstable(sstring dir, int64_t generation, utils::UUID uuid_generation,
         sstables::sstable_version_types v, sstables::sstable_format_types f) {
-    return get_sstables_manager().make_sstable(_schema, dir, generation, v, f);
+    return get_sstables_manager().make_sstable(_schema, dir, generation, uuid_generation, v, f);
 }
 
 sstables::shared_sstable table::make_sstable(sstring dir) {
-    return make_sstable(dir, calculate_generation_for_new_table(),
+    return make_sstable(dir, calculate_generation_for_new_table(), calculate_uuid_generation_for_new_table(),
                         get_sstables_manager().get_highest_supported_format(), sstables::sstable::format_types::big);
 }
 
 sstables::shared_sstable table::make_sstable() {
     return make_sstable(_config.datadir);
+}
+
+utils::UUID table::calculate_uuid_generation_for_new_table() {
+    return utils::UUID_gen::get_time_UUID();
 }
 
 void table::notify_bootstrap_or_replace_start() {
@@ -2234,7 +2239,7 @@ future<> table::move_sstables_from_staging(std::vector<sstables::shared_sstable>
     for (auto sst : sstables) {
         dirs_to_sync.emplace(sst->get_dir());
         try {
-            co_await sst->move_to_new_dir(dir(), sst->generation(), false);
+            co_await sst->move_to_new_dir(dir(), sst->generation(), sst->uuid_generation(), false);
             _sstables_staging.erase(sst->generation());
             // Maintenance SSTables being moved from staging shouldn't be added to tracker because they're off-strategy
             if (main_sstables->contains(sst)) {

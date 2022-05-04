@@ -508,9 +508,9 @@ public:
                                           sstables::offstrategy offstrategy = sstables::offstrategy::no);
     future<> add_sstables_and_update_cache(const std::vector<sstables::shared_sstable>& ssts);
     future<> move_sstables_from_staging(std::vector<sstables::shared_sstable>);
-    sstables::shared_sstable make_sstable(sstring dir, int64_t generation, sstables::sstable_version_types v, sstables::sstable_format_types f,
+    sstables::shared_sstable make_sstable(sstring dir, int64_t generation, utils::UUID uuid_generation, sstables::sstable_version_types v, sstables::sstable_format_types f,
             io_error_handler_gen error_handler_gen);
-    sstables::shared_sstable make_sstable(sstring dir, int64_t generation, sstables::sstable_version_types v, sstables::sstable_format_types f);
+    sstables::shared_sstable make_sstable(sstring dir, int64_t generation, utils::UUID uuid_generation, sstables::sstable_version_types v, sstables::sstable_format_types f);
     sstables::shared_sstable make_sstable(sstring dir);
     sstables::shared_sstable make_sstable();
     void cache_truncation_record(db_clock::time_point truncated_at) {
@@ -583,6 +583,8 @@ private:
         // overwrite an existing table.
         return (*_sstable_generation)++ * smp::count + this_shard_id();
     }
+
+    utils::UUID calculate_uuid_generation_for_new_table();
 
     // inverse of calculate_generation_for_new_table(), used to determine which
     // shard a sstable should be opened at.

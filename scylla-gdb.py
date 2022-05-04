@@ -1852,7 +1852,6 @@ class scylla_memory(gdb.Command):
                           sys_virt_dirty=dirty_mem_mgr(db['_system_dirty_memory_manager']).virt_dirty()))
 
         scylla_memory.print_coordinator_stats()
-        scylla_memory.print_replica_stats()
 
         gdb.write('Small pools:\n')
         small_pools = cpu_mem['small_pools']
@@ -4480,7 +4479,7 @@ class scylla_read_stats(gdb.Command):
             semaphores = [gdb.parse_and_eval(arg) for arg in args.split(' ')]
         else:
             db = find_db()
-            semaphores = [db["_read_concurrency_sem"], db["_streaming_concurrency_sem"], db["_system_read_concurrency_sem"]]
+            semaphores = [db["_streaming_concurrency_sem"], db["_system_read_concurrency_sem"]]
             try:
                 semaphores.append(db["_compaction_concurrency_sem"])
             except gdb.error:

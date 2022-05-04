@@ -73,6 +73,7 @@ public:
     shared_sstable make_sstable(schema_ptr schema,
             sstring dir,
             int64_t generation,
+            utils::UUID uuid_generation,
             sstable_version_types v,
             sstable_format_types f,
             gc_clock::time_point now = gc_clock::now(),

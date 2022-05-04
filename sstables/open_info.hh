@@ -25,6 +25,7 @@ struct entry_descriptor {
     sstring ks;
     sstring cf;
     int64_t generation;
+    utils::UUID uuid_generation;
     sstable_version_types version;
     sstable_format_types format;
     component_type component;
@@ -35,10 +36,10 @@ struct entry_descriptor {
     // This allows loading sstables from any path, but the filename still has to be valid.
     static entry_descriptor make_descriptor(sstring sstdir, sstring fname, sstring ks, sstring cf);
 
-    entry_descriptor(sstring sstdir, sstring ks, sstring cf, int64_t generation,
+    entry_descriptor(sstring sstdir, sstring ks, sstring cf, int64_t generation, utils::UUID uuid_generation,
                      sstable_version_types version, sstable_format_types format,
                      component_type component)
-        : sstdir(sstdir), ks(ks), cf(cf), generation(generation), version(version), format(format), component(component) {}
+        : sstdir(sstdir), ks(ks), cf(cf), generation(generation), uuid_generation(uuid_generation), version(version), format(format), component(component) {}
 };
 
 // contains data for loading a sstable using components shared by a single shard;
@@ -49,6 +50,7 @@ struct foreign_sstable_open_info {
     seastar::file_handle data;
     seastar::file_handle index;
     uint64_t generation;
+    utils::UUID uuid_generation;
     sstable_version_types version;
     sstable_format_types format;
     uint64_t uncompressed_data_size;

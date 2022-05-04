@@ -41,6 +41,7 @@ public:
     using sstable_object_from_existing_fn =
         noncopyable_function<sstables::shared_sstable(std::filesystem::path,
                                                       int64_t,
+                                                      utils::UUID,
                                                       sstables::sstable_version_types,
                                                       sstables::sstable_format_types)>;
 

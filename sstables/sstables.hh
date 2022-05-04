@@ -133,6 +133,7 @@ public:
     sstable(schema_ptr schema,
             sstring dir,
             int64_t generation,
+            utils::UUID uuid_generation,
             version_types v,
             format_types f,
             db::large_data_handler& large_data_handler,
@@ -166,13 +167,13 @@ public:
     static version_types version_from_sstring(sstring& s);
     static format_types format_from_sstring(sstring& s);
     static sstring component_basename(const sstring& ks, const sstring& cf, version_types version, int64_t generation,
-                                      format_types format, component_type component);
+                                      utils::UUID uuid_generation, format_types format, component_type component);
     static sstring component_basename(const sstring& ks, const sstring& cf, version_types version, int64_t generation,
-                                      format_types format, sstring component);
+                                      utils::UUID uuid_generation, format_types format, sstring component);
     static sstring filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, int64_t generation,
-                            format_types format, component_type component);
+                            utils::UUID uuid_generation, format_types format, component_type component);
     static sstring filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, int64_t generation,
-                            format_types format, sstring component);
+                            utils::UUID uuid_generation, format_types format, sstring component);
 
     // load sstable using components shared by a shard
     future<> load(foreign_sstable_open_info info) noexcept;
@@ -188,7 +189,8 @@ public:
     future<> destroy();
 
     future<> set_generation(int64_t generation);
-    future<> move_to_new_dir(sstring new_dir, int64_t generation, bool do_sync_dirs = true);
+    future<> set_uuid_generation(utils::UUID generation);
+    future<> move_to_new_dir(sstring new_dir, int64_t generation, utils::UUID uuid_generation, bool do_sync_dirs = true);
 
     // Move the sstable to the quarantine_dir
     //
@@ -202,6 +204,10 @@ public:
 
     int64_t generation() const {
         return _generation;
+    }
+
+    utils::UUID uuid_generation() const {
+        return _uuid_generation;
     }
 
     // Returns a mutation_reader for given range of partitions.
@@ -336,11 +342,11 @@ public:
     int compare_by_max_timestamp(const sstable& other) const;
 
     sstring component_basename(component_type f) const {
-        return component_basename(_schema->ks_name(), _schema->cf_name(), _version, _generation, _format, f);
+        return component_basename(_schema->ks_name(), _schema->cf_name(), _version, _generation, _uuid_generation, _format, f);
     }
 
     sstring filename(const sstring& dir, component_type f) const {
-        return filename(dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, f);
+        return filename(dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _uuid_generation, _format, f);
     }
 
     sstring filename(component_type f) const {
@@ -397,10 +403,10 @@ public:
 
     std::vector<std::pair<component_type, sstring>> all_components() const;
 
-    future<> create_links(const sstring& dir, int64_t generation) const;
+    future<> create_links(const sstring& dir, int64_t generation, utils::UUID uuid_generation) const;
 
     future<> create_links(const sstring& dir) const {
-        return create_links(dir, _generation);
+        return create_links(dir, _generation, _uuid_generation);
     }
 
     // Delete the sstable by unlinking all sstable files
@@ -504,6 +510,8 @@ private:
     sstring _dir;
     std::optional<sstring> _temp_dir; // Valid while the sstable is being created, until sealed
     unsigned long _generation = 0;
+    utils::UUID _uuid_generation;
+
     version_types _version;
     format_types _format;
 
@@ -613,6 +621,8 @@ private:
 
     future<> create_data() noexcept;
 
+    future<> update_generations(int64_t generation, utils::UUID uuid_generation);
+
 public:
     // Return an input_stream which reads exactly the specified byte range
     // from the data file (after uncompression, if the file is compressed).
@@ -663,9 +673,9 @@ private:
 
     future<> open_or_create_data(open_flags oflags, file_open_options options = {}) noexcept;
 
-    future<> check_create_links_replay(const sstring& dst_dir, int64_t dst_gen, const std::vector<std::pair<sstables::component_type, sstring>>& comps) const;
-    future<> create_links_common(const sstring& dst_dir, int64_t dst_gen, bool mark_for_removal) const;
-    future<> create_links_and_mark_for_removal(const sstring& dst_dir, int64_t dst_gen) const;
+    future<> check_create_links_replay(const sstring& dst_dir, int64_t dst_gen, utils::UUID dst_uuid_gen, const std::vector<std::pair<sstables::component_type, sstring>>& comps) const;
+    future<> create_links_common(const sstring& dst_dir, int64_t dst_gen, utils::UUID dst_uuid_gen, bool mark_for_removal) const;
+    future<> create_links_and_mark_for_removal(const sstring& dst_dir, int64_t dst_gen, utils::UUID dst_uuid_gen) const;
 public:
     future<> read_toc() noexcept;
 

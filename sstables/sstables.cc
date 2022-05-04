@@ -955,7 +955,7 @@ future<> sstable::seal_sstable() {
         _marked_for_deletion = mark_for_deletion::none;
     }
     // If this point was reached, sstable should be safe in disk.
-    sstlog.debug("SSTable with generation {} of {}.{} was sealed successfully.", _generation, _schema->ks_name(), _schema->cf_name());
+    sstlog.debug("SSTable with generation {}/{} of {}.{} was sealed successfully.", _generation, _uuid_generation, _schema->ks_name(), _schema->cf_name());
 }
 
 void sstable::write_crc(const checksum& c) {
@@ -1413,7 +1413,7 @@ future<> sstable::load(sstables::foreign_sstable_open_info info) noexcept {
 future<foreign_sstable_open_info> sstable::get_open_info() & {
     return _components.copy().then([this] (auto c) mutable {
         return foreign_sstable_open_info{std::move(c), this->get_shards_for_this_sstable(), _data_file.dup(), _index_file.dup(),
-            _generation, _version, _format, data_size()};
+            _generation, _uuid_generation, _version, _format, data_size()};
     });
 }
 
@@ -1880,9 +1880,9 @@ bool sstable::is_uploaded() const noexcept {
 }
 
 sstring sstable::component_basename(const sstring& ks, const sstring& cf, version_types version, int64_t generation,
-                                    format_types format, sstring component) {
+                                    utils::UUID uuid_generation, format_types format, sstring component) {
     sstring v = _version_string.at(version);
-    sstring g = to_sstring(generation);
+    sstring g = uuid_generation.is_null() ? to_sstring(generation) : uuid_generation.to_sstring();
     sstring f = _format_string.at(format);
     switch (version) {
     case sstable::version_types::ka:
@@ -1898,19 +1898,19 @@ sstring sstable::component_basename(const sstring& ks, const sstring& cf, versio
 }
 
 sstring sstable::component_basename(const sstring& ks, const sstring& cf, version_types version, int64_t generation,
-                          format_types format, component_type component) {
-    return component_basename(ks, cf, version, generation, format,
+                          utils::UUID uuid_generation, format_types format, component_type component) {
+    return component_basename(ks, cf, version, generation, uuid_generation, format,
             sstable_version_constants::get_component_map(version).at(component));
 }
 
 sstring sstable::filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, int64_t generation,
-                          format_types format, component_type component) {
-    return dir + "/" + component_basename(ks, cf, version, generation, format, component);
+                          utils::UUID uuid_generation, format_types format, component_type component) {
+    return dir + "/" + component_basename(ks, cf, version, generation, uuid_generation, format, component);
 }
 
 sstring sstable::filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, int64_t generation,
-                          format_types format, sstring component) {
-    return dir + "/" + component_basename(ks, cf, version, generation, format, component);
+                          utils::UUID uuid_generation, format_types format, sstring component) {
+    return dir + "/" + component_basename(ks, cf, version, generation, uuid_generation, format, component);
 }
 
 std::vector<std::pair<component_type, sstring>> sstable::all_components() const {
@@ -1963,12 +1963,12 @@ future<> idempotent_link_file(sstring oldpath, sstring newpath) noexcept {
 // from staging to the base dir, for example, right after create_links completes,
 // and right before deleting the source links.
 // We end up in two valid sstables in this case, so make create_links idempotent.
-future<> sstable::check_create_links_replay(const sstring& dst_dir, int64_t dst_gen,
+future<> sstable::check_create_links_replay(const sstring& dst_dir, int64_t dst_gen, utils::UUID dst_uuid_gen,
         const std::vector<std::pair<sstables::component_type, sstring>>& comps) const {
-    return parallel_for_each(comps, [this, &dst_dir, dst_gen] (const auto& p) mutable {
+    return parallel_for_each(comps, [this, &dst_dir, dst_gen, dst_uuid_gen] (const auto& p) mutable {
         auto comp = p.second;
-        auto src = sstable::filename(_dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, comp);
-        auto dst = sstable::filename(dst_dir, _schema->ks_name(), _schema->cf_name(), _version, dst_gen, _format, comp);
+        auto src = sstable::filename(_dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _uuid_generation, _format, comp);
+        auto dst = sstable::filename(dst_dir, _schema->ks_name(), _schema->cf_name(), _version, dst_gen, dst_uuid_gen, _format, comp);
         return do_with(std::move(src), std::move(dst), [this] (const sstring& src, const sstring& dst) mutable {
             return file_exists(dst).then([&, this] (bool exists) mutable {
                 if (!exists) {
@@ -2031,29 +2031,29 @@ future<> sstable::check_create_links_replay(const sstring& dst_dir, int64_t dst_
 /// \param dir - the destination directory.
 /// \param generation - the generation of the destination sstable
 /// \param mark_for_removal - mark the sstable for removal after linking it to the destination dir
-future<> sstable::create_links_common(const sstring& dir, int64_t generation, bool mark_for_removal) const {
+future<> sstable::create_links_common(const sstring& dir, int64_t generation, utils::UUID uuid_generation, bool mark_for_removal) const {
     sstlog.trace("create_links: {} -> {} generation={} mark_for_removal={}", get_filename(), dir, generation, mark_for_removal);
-    return do_with(dir, all_components(), [this, generation, mark_for_removal] (const sstring& dir, auto& comps) {
-        return check_create_links_replay(dir, generation, comps).then([this, &dir, generation, &comps, mark_for_removal] {
+    return do_with(dir, all_components(), [this, generation, uuid_generation, mark_for_removal] (const sstring& dir, auto& comps) {
+        return check_create_links_replay(dir, generation, uuid_generation, comps).then([this, &dir, generation, uuid_generation, &comps, mark_for_removal] {
             // TemporaryTOC is always first, TOC is always last
-            auto dst = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, component_type::TemporaryTOC);
+            auto dst = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, uuid_generation, _format, component_type::TemporaryTOC);
             return sstable_write_io_check(idempotent_link_file, filename(component_type::TOC), std::move(dst)).then([this, &dir] {
                 return sstable_write_io_check(sync_directory, dir);
-            }).then([this, &dir, generation, &comps] {
-                return parallel_for_each(comps, [this, &dir, generation] (auto p) {
-                    auto src = sstable::filename(_dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, p.second);
-                    auto dst = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, p.second);
+            }).then([this, &dir, generation, uuid_generation, &comps] {
+                return parallel_for_each(comps, [this, &dir, generation, uuid_generation] (auto p) {
+                    auto src = sstable::filename(_dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _uuid_generation, _format, p.second);
+                    auto dst = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, uuid_generation, _format, p.second);
                     return sstable_write_io_check(idempotent_link_file, std::move(src), std::move(dst));
                 });
             }).then([this, &dir] {
                 return sstable_write_io_check(sync_directory, dir);
             });
-        }).then([this, &dir, generation, mark_for_removal] {
-            auto dst_temp_toc = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, component_type::TemporaryTOC);
+        }).then([this, &dir, generation, uuid_generation, mark_for_removal] {
+            auto dst_temp_toc = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, uuid_generation, _format, component_type::TemporaryTOC);
             if (mark_for_removal) {
                 // Now that the source sstable is linked to new_dir, mark the source links for
                 // deletion by leaving a TemporaryTOC file in the source directory.
-                auto src_temp_toc = sstable::filename(_dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, component_type::TemporaryTOC);
+                auto src_temp_toc = sstable::filename(_dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _uuid_generation, _format, component_type::TemporaryTOC);
                 return sstable_write_io_check(rename_file, std::move(dst_temp_toc), std::move(src_temp_toc)).then([this] {
                     return sstable_write_io_check(sync_directory, _dir);
                 });
@@ -2070,17 +2070,17 @@ future<> sstable::create_links_common(const sstring& dir, int64_t generation, bo
     });
 }
 
-future<> sstable::create_links(const sstring& dir, int64_t generation) const {
-    return create_links_common(dir, generation, false /* mark_for_removal */);
+future<> sstable::create_links(const sstring& dir, int64_t generation, utils::UUID uuid_generation) const {
+    return create_links_common(dir, generation, uuid_generation, false /* mark_for_removal */);
 }
 
-future<> sstable::create_links_and_mark_for_removal(const sstring& dir, int64_t generation) const {
-    return create_links_common(dir, generation, true /* mark_for_removal */);
+future<> sstable::create_links_and_mark_for_removal(const sstring& dir, int64_t generation, utils::UUID uuid_generation) const {
+    return create_links_common(dir, generation, uuid_generation, true /* mark_for_removal */);
 }
 
-future<> sstable::set_generation(int64_t new_generation) {
+future<> sstable::update_generations(int64_t new_generation, utils::UUID new_uuid_generation) {
     sstlog.debug("Setting generation for {} to generation={}", get_filename(), new_generation);
-    return create_links(_dir, new_generation).then([this] {
+    return create_links(_dir, new_generation, new_uuid_generation).then([this] {
         return remove_file(filename(component_type::TOC)).then([this] {
             return sstable_write_io_check(sync_directory, _dir);
         }).then([this] {
@@ -2088,7 +2088,7 @@ future<> sstable::set_generation(int64_t new_generation) {
                 if (p.first == component_type::TOC) {
                     return make_ready_future<>();
                 }
-                return remove_file(sstable::filename(_dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, p.second));
+                return remove_file(sstable::filename(_dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _uuid_generation, _format, p.second));
             });
         });
     }).then([this, new_generation] {
@@ -2098,18 +2098,27 @@ future<> sstable::set_generation(int64_t new_generation) {
     });
 }
 
-future<> sstable::move_to_new_dir(sstring new_dir, int64_t new_generation, bool do_sync_dirs) {
+future<> sstable::set_generation(int64_t new_generation) {
+    return update_generations(new_generation, utils::null_uuid());
+}
+
+future<> sstable::set_uuid_generation(utils::UUID new_generation) {
+    return update_generations(-1, new_generation);
+}
+
+future<> sstable::move_to_new_dir(sstring new_dir, int64_t new_generation, utils::UUID new_uuid_generation, bool do_sync_dirs) {
     sstring old_dir = get_dir();
     sstlog.debug("Moving {} old_generation={} to {} new_generation={} do_sync_dirs={}",
-            get_filename(), old_dir, _generation, new_dir, new_generation, do_sync_dirs);
-    co_await create_links_and_mark_for_removal(new_dir, new_generation);
+            get_filename(), old_dir, _generation, new_dir, new_generation, new_uuid_generation, do_sync_dirs);
+    co_await create_links_and_mark_for_removal(new_dir, new_generation, new_uuid_generation);
     _dir = new_dir;
     int64_t old_generation = std::exchange(_generation, new_generation);
-    co_await parallel_for_each(all_components(), [this, old_generation, old_dir] (auto p) {
-        return sstable_write_io_check(remove_file, sstable::filename(old_dir, _schema->ks_name(), _schema->cf_name(), _version, old_generation, _format, p.second));
+    utils::UUID old_uuid_generation = std::exchange(_uuid_generation, new_uuid_generation);
+    co_await parallel_for_each(all_components(), [this, old_generation, old_uuid_generation, old_dir] (auto p) {
+        return sstable_write_io_check(remove_file, sstable::filename(old_dir, _schema->ks_name(), _schema->cf_name(), _version, old_generation, old_uuid_generation, _format, p.second));
     });
     auto temp_toc = sstable_version_constants::get_component_map(_version).at(component_type::TemporaryTOC);
-    co_await sstable_write_io_check(remove_file, sstable::filename(old_dir, _schema->ks_name(), _schema->cf_name(), _version, old_generation, _format, temp_toc));
+    co_await sstable_write_io_check(remove_file, sstable::filename(old_dir, _schema->ks_name(), _schema->cf_name(), _version, old_generation, old_uuid_generation, _format, temp_toc));
     if (do_sync_dirs) {
         co_await when_all(sstable_write_io_check(sync_directory, old_dir), sstable_write_io_check(sync_directory, new_dir)).discard_result();
     }
@@ -2128,7 +2137,7 @@ future<> sstable::move_to_quarantine(bool do_sync_dirs) {
     auto new_dir = (path / sstables::quarantine_dir).native();
     sstlog.info("Moving SSTable {} to quarantine in {}", get_filename(), new_dir);
     co_await touch_directory(new_dir);
-    co_await move_to_new_dir(std::move(new_dir), generation(), do_sync_dirs);
+    co_await move_to_new_dir(std::move(new_dir), generation(), utils::null_uuid(), do_sync_dirs);
 }
 
 flat_mutation_reader_v2
@@ -2193,6 +2202,7 @@ sstable::make_crawling_reader(
 }
 
 static entry_descriptor make_entry_descriptor(sstring sstdir, sstring fname, sstring* const provided_ks, sstring* const provided_cf) {
+    static std::regex mx_uuid("(m[cde])-(\\w+)-(\\w+)-(\\w+)-(\\w+)-(\\w+)-(\\w+)-(.*)");
     static std::regex la_mx("(la|m[cde])-(\\d+)-(\\w+)-(.*)");
     static std::regex ka("(\\w+)-(\\w+)-ka-(\\d+)-(.*)");
 
@@ -2206,6 +2216,7 @@ static entry_descriptor make_entry_descriptor(sstring sstdir, sstring fname, sst
     const auto ks_cf_provided = provided_ks && provided_cf;
 
     sstring generation;
+    sstring uuid_generation;
     sstring format;
     sstring component;
     sstring ks;
@@ -2217,7 +2228,24 @@ static entry_descriptor make_entry_descriptor(sstring sstdir, sstring fname, sst
 
     sstlog.debug("Make descriptor sstdir: {}; fname: {}", sstdir, fname);
     std::string s(fname);
-    if (std::regex_match(s, match, la_mx)) {
+    if (std::regex_match(s, match, mx_uuid)) {
+        std::string sdir(sstdir);
+        std::smatch dirmatch;
+        if (!ks_cf_provided) {
+            if (std::regex_match(sdir, dirmatch, dir)) {
+                ks = dirmatch[1].str();
+                cf = dirmatch[2].str();
+            } else {
+                sstlog.warn("Not provided ks/cf");
+                throw malformed_sstable_exception(seastar::format("invalid path for file {}: {}. Path doesn't match known pattern.", fname, sstdir));
+            }
+        }
+        version = from_string(match[1].str());
+        uuid_generation = seastar::format("{}-{}-{}-{}-{}", match[2].str(), match[3].str(), match[4].str(), match[5].str(), match[6].str());
+        format = sstring(match[7].str());
+        component = sstring(match[8].str());
+        sstlog.trace("parsed uuid generation: {}", uuid_generation);
+    } else if (std::regex_match(s, match, la_mx)) {
         std::string sdir(sstdir);
         std::smatch dirmatch;
         if (!ks_cf_provided) {
@@ -2244,7 +2272,9 @@ static entry_descriptor make_entry_descriptor(sstring sstdir, sstring fname, sst
     } else {
         throw malformed_sstable_exception(seastar::format("invalid version for file {}. Name doesn't match any known version.", fname));
     }
-    return entry_descriptor(sstdir, ks, cf, boost::lexical_cast<unsigned long>(generation), version, sstable::format_from_sstring(format), sstable::component_from_sstring(version, component));
+    unsigned long gen = generation.empty() ? 0UL : boost::lexical_cast<unsigned long>(generation);
+    utils::UUID uuid_gen = uuid_generation.empty() ? utils::null_uuid() : utils::UUID{uuid_generation};
+    return entry_descriptor(sstdir, ks, cf, gen, utils::UUID(uuid_generation), version, sstable::format_from_sstring(format), sstable::component_from_sstring(version, component));
 }
 
 entry_descriptor entry_descriptor::make_descriptor(sstring sstdir, sstring fname) {
@@ -3173,6 +3203,7 @@ mutation_source sstable::as_mutation_source() {
 sstable::sstable(schema_ptr schema,
         sstring dir,
         int64_t generation,
+        utils::UUID uuid_generation,
         version_types v,
         format_types f,
         db::large_data_handler& large_data_handler,
@@ -3184,6 +3215,7 @@ sstable::sstable(schema_ptr schema,
     , _schema(std::move(schema))
     , _dir(std::move(dir))
     , _generation(generation)
+    , _uuid_generation(uuid_generation)
     , _version(v)
     , _format(f)
     , _index_cache(std::make_unique<partition_index_cache>(

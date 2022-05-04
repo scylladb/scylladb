@@ -36,12 +36,13 @@ const utils::UUID& sstables_manager::get_local_host_id() const {
 shared_sstable sstables_manager::make_sstable(schema_ptr schema,
         sstring dir,
         int64_t generation,
+        utils::UUID uuid_generation,
         sstable_version_types v,
         sstable_format_types f,
         gc_clock::time_point now,
         io_error_handler_gen error_handler_gen,
         size_t buffer_size) {
-    return make_lw_shared<sstable>(std::move(schema), std::move(dir), generation, v, f, get_large_data_handler(), *this, now, std::move(error_handler_gen), buffer_size);
+    return make_lw_shared<sstable>(std::move(schema), std::move(dir), generation, uuid_generation, v, f, get_large_data_handler(), *this, now, std::move(error_handler_gen), buffer_size);
 }
 
 sstable_writer_config sstables_manager::configure_writer(sstring origin) const {

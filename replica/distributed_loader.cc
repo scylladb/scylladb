@@ -28,6 +28,7 @@
 #include <boost/range/algorithm/min_element.hpp>
 #include "db/view/view_update_generator.hh"
 #include "utils/directories.hh"
+#include "utils/UUID_gen.hh"
 
 extern logging::logger dblog;
 
@@ -272,8 +273,9 @@ distributed_loader::make_sstables_available(sstables::sstable_directory& dir, sh
             [&table, &dir, &view_update_generator, datadir = std::move(datadir)] (std::vector<sstables::shared_sstable>& new_sstables) {
         return dir.do_for_each_sstable([&table, datadir = std::move(datadir), &new_sstables] (sstables::shared_sstable sst) {
             auto gen = table.calculate_generation_for_new_table();
-            dblog.trace("Loading {} into {}, new generation {}", sst->get_filename(), datadir.native(), gen);
-            return sst->move_to_new_dir(datadir.native(), gen,  true).then([&table, &new_sstables, sst] {
+            auto uuid_gen = table.calculate_uuid_generation_for_new_table();
+            dblog.trace("Loading {} into {}, new generation {}, new uuid_generation {}", sst->get_filename(), datadir.native(), gen, uuid_gen);
+            return sst->move_to_new_dir(datadir.native(), gen, uuid_gen, true).then([&table, &new_sstables, sst] {
                 // When loading an imported sst, set level to 0 because it may overlap with existing ssts on higher levels.
                 sst->set_sstable_level(0);
                 new_sstables.push_back(std::move(sst));
@@ -322,8 +324,8 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
             sstables::sstable_directory::lack_of_toc_fatal::no,
             sstables::sstable_directory::enable_dangerous_direct_import_of_cassandra_counters(db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters()),
             sstables::sstable_directory::allow_loading_materialized_view::no,
-            [&global_table] (fs::path dir, int64_t gen, sstables::sstable_version_types v, sstables::sstable_format_types f) {
-                return global_table->make_sstable(dir.native(), gen, v, f, &error_handler_gen_for_upload_dir);
+            [&global_table] (fs::path dir, int64_t gen, utils::UUID uuid_gen, sstables::sstable_version_types v, sstables::sstable_format_types f) {
+                return global_table->make_sstable(dir.native(), gen, uuid_gen, v, f, &error_handler_gen_for_upload_dir);
 
         }).get();
 
@@ -345,15 +347,17 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
         reshard(directory, db, ks, cf, [&global_table, upload, &shard_gen] (shard_id shard) mutable {
             // we need generation calculated by instance of cf at requested shard
             auto gen = shard_gen[shard].fetch_add(smp::count, std::memory_order_relaxed);
+            auto uuid_gen = utils::UUID_gen::get_time_UUID();
 
-            return global_table->make_sstable(upload.native(), gen,
+            return global_table->make_sstable(upload.native(), gen, uuid_gen,
                     global_table->get_sstables_manager().get_highest_supported_format(),
                     sstables::sstable::format_types::big, &error_handler_gen_for_upload_dir);
         }).get();
 
         reshape(directory, db, sstables::reshape_mode::strict, ks, cf, [global_table, upload, &shard_gen] (shard_id shard) {
             auto gen = shard_gen[shard].fetch_add(smp::count, std::memory_order_relaxed);
-            return global_table->make_sstable(upload.native(), gen,
+            auto uuid_gen = utils::UUID_gen::get_time_UUID();
+            return global_table->make_sstable(upload.native(), gen, uuid_gen,
                   global_table->get_sstables_manager().get_highest_supported_format(),
                   sstables::sstable::format_types::big,
                   &error_handler_gen_for_upload_dir);
@@ -388,8 +392,8 @@ distributed_loader::get_sstables_from_upload_dir(distributed<replica::database>&
             sstables::sstable_directory::lack_of_toc_fatal::no,
             sstables::sstable_directory::enable_dangerous_direct_import_of_cassandra_counters(db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters()),
             sstables::sstable_directory::allow_loading_materialized_view::no,
-            [&global_table] (fs::path dir, int64_t gen, sstables::sstable_version_types v, sstables::sstable_format_types f) {
-                return global_table->make_sstable(dir.native(), gen, v, f, &error_handler_gen_for_upload_dir);
+            [&global_table] (fs::path dir, int64_t gen, utils::UUID uuid_gen, sstables::sstable_version_types v, sstables::sstable_format_types f) {
+                return global_table->make_sstable(dir.native(), gen, uuid_gen, v, f, &error_handler_gen_for_upload_dir);
 
         }).get();
 
@@ -480,8 +484,8 @@ future<> distributed_loader::populate_column_family(distributed<replica::databas
             sstables::sstable_directory::lack_of_toc_fatal::yes,
             sstables::sstable_directory::enable_dangerous_direct_import_of_cassandra_counters(db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters()),
             sstables::sstable_directory::allow_loading_materialized_view::yes,
-            [&global_table] (fs::path dir, int64_t gen, sstables::sstable_version_types v, sstables::sstable_format_types f) {
-                return global_table->make_sstable(dir.native(), gen, v, f);
+            [&global_table] (fs::path dir, int64_t gen, utils::UUID uuid_gen, sstables::sstable_version_types v, sstables::sstable_format_types f) {
+                return global_table->make_sstable(dir.native(), gen, uuid_gen, v, f);
         }).get();
 
         auto stop = deferred_stop(directory);
@@ -504,11 +508,11 @@ future<> distributed_loader::populate_column_family(distributed<replica::databas
         }).get();
 
         reshard(directory, db, ks, cf, [&global_table, sstdir, sst_version] (shard_id shard) mutable {
-            auto gen = smp::submit_to(shard, [&global_table] () {
-                return global_table->calculate_generation_for_new_table();
+            auto [gen, uuid_gen] = smp::submit_to(shard, [&global_table] () {
+                return std::make_pair(global_table->calculate_generation_for_new_table(), utils::UUID_gen::get_time_UUID());
             }).get0();
 
-            return global_table->make_sstable(sstdir, gen, sst_version, sstables::sstable::format_types::big);
+            return global_table->make_sstable(sstdir, gen, uuid_gen, sst_version, sstables::sstable::format_types::big);
         }).get();
 
         // The node is offline at this point so we are very lenient with what we consider
@@ -525,7 +529,8 @@ future<> distributed_loader::populate_column_family(distributed<replica::databas
 
         reshape(directory, db, sstables::reshape_mode::relaxed, ks, cf, [global_table, sstdir, sst_version] (shard_id shard) {
             auto gen = global_table->calculate_generation_for_new_table();
-            return global_table->make_sstable(sstdir, gen, sst_version, sstables::sstable::format_types::big);
+            auto uuid_gen = utils::UUID_gen::get_time_UUID();
+            return global_table->make_sstable(sstdir, gen, uuid_gen, sst_version, sstables::sstable::format_types::big);
         }, eligible_for_reshape_on_boot).get();
 
         directory.invoke_on_all([global_table, &eligible_for_reshape_on_boot, do_allow_offstrategy_compaction] (sstables::sstable_directory& dir) {
