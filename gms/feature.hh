@@ -70,7 +70,7 @@ public:
     const sstring& name() const {
         return _name;
     }
-    explicit operator bool() const {
+    operator bool() const {
         return _enabled;
     }
     friend inline std::ostream& operator<<(std::ostream& os, const feature& f) {
