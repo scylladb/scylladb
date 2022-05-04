@@ -22,6 +22,7 @@
 #include "sstables/open_info.hh"                 // for entry_descriptor and foreign_sstable_open_info, chunked_vector wants to know if they are move constructible
 #include "utils/chunked_vector.hh"
 #include "utils/phased_barrier.hh"
+#include "sstables/generation_type.hh"
 
 class compaction_manager;
 
@@ -40,7 +41,7 @@ public:
 
     using sstable_object_from_existing_fn =
         noncopyable_function<sstables::shared_sstable(std::filesystem::path,
-                                                      int64_t,
+                                                      sstables::generation_type,
                                                       sstables::sstable_version_types,
                                                       sstables::sstable_format_types)>;
 
@@ -48,9 +49,9 @@ public:
     // of elements.
     using sstable_info_vector = utils::chunked_vector<sstables::foreign_sstable_open_info>;
 private:
-    using scan_multimap = std::unordered_multimap<int64_t, std::filesystem::path>;
+    using scan_multimap = std::unordered_multimap<generation_type, std::filesystem::path>;
     using scan_descriptors = utils::chunked_vector<sstables::entry_descriptor>;
-    using scan_descriptors_map = std::unordered_map<int64_t, sstables::entry_descriptor>;
+    using scan_descriptors_map = std::unordered_map<generation_type, sstables::entry_descriptor>;
 
     struct scan_state {
         scan_multimap generations_found;

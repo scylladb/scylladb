@@ -1879,7 +1879,7 @@ bool sstable::is_uploaded() const noexcept {
     return boost::algorithm::ends_with(_dir, upload_dir);
 }
 
-sstring sstable::component_basename(const sstring& ks, const sstring& cf, version_types version, int64_t generation,
+sstring sstable::component_basename(const sstring& ks, const sstring& cf, version_types version, generation_type generation,
                                     format_types format, sstring component) {
     sstring v = _version_string.at(version);
     sstring g = to_sstring(generation);
@@ -1897,18 +1897,18 @@ sstring sstable::component_basename(const sstring& ks, const sstring& cf, versio
     assert(0 && "invalid version");
 }
 
-sstring sstable::component_basename(const sstring& ks, const sstring& cf, version_types version, int64_t generation,
+sstring sstable::component_basename(const sstring& ks, const sstring& cf, version_types version, generation_type generation,
                           format_types format, component_type component) {
     return component_basename(ks, cf, version, generation, format,
             sstable_version_constants::get_component_map(version).at(component));
 }
 
-sstring sstable::filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, int64_t generation,
+sstring sstable::filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, generation_type generation,
                           format_types format, component_type component) {
     return dir + "/" + component_basename(ks, cf, version, generation, format, component);
 }
 
-sstring sstable::filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, int64_t generation,
+sstring sstable::filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, generation_type generation,
                           format_types format, sstring component) {
     return dir + "/" + component_basename(ks, cf, version, generation, format, component);
 }
@@ -1963,7 +1963,7 @@ future<> idempotent_link_file(sstring oldpath, sstring newpath) noexcept {
 // from staging to the base dir, for example, right after create_links completes,
 // and right before deleting the source links.
 // We end up in two valid sstables in this case, so make create_links idempotent.
-future<> sstable::check_create_links_replay(const sstring& dst_dir, int64_t dst_gen,
+future<> sstable::check_create_links_replay(const sstring& dst_dir, generation_type dst_gen,
         const std::vector<std::pair<sstables::component_type, sstring>>& comps) const {
     return parallel_for_each(comps, [this, &dst_dir, dst_gen] (const auto& p) mutable {
         auto comp = p.second;
@@ -2031,7 +2031,7 @@ future<> sstable::check_create_links_replay(const sstring& dst_dir, int64_t dst_
 /// \param dir - the destination directory.
 /// \param generation - the generation of the destination sstable
 /// \param mark_for_removal - mark the sstable for removal after linking it to the destination dir
-future<> sstable::create_links_common(const sstring& dir, int64_t generation, bool mark_for_removal) const {
+future<> sstable::create_links_common(const sstring& dir, generation_type generation, bool mark_for_removal) const {
     sstlog.trace("create_links: {} -> {} generation={} mark_for_removal={}", get_filename(), dir, generation, mark_for_removal);
     return do_with(dir, all_components(), [this, generation, mark_for_removal] (const sstring& dir, auto& comps) {
         return check_create_links_replay(dir, generation, comps).then([this, &dir, generation, &comps, mark_for_removal] {
@@ -2070,15 +2070,15 @@ future<> sstable::create_links_common(const sstring& dir, int64_t generation, bo
     });
 }
 
-future<> sstable::create_links(const sstring& dir, int64_t generation) const {
+future<> sstable::create_links(const sstring& dir, generation_type generation) const {
     return create_links_common(dir, generation, false /* mark_for_removal */);
 }
 
-future<> sstable::create_links_and_mark_for_removal(const sstring& dir, int64_t generation) const {
+future<> sstable::create_links_and_mark_for_removal(const sstring& dir, generation_type generation) const {
     return create_links_common(dir, generation, true /* mark_for_removal */);
 }
 
-future<> sstable::set_generation(int64_t new_generation) {
+future<> sstable::set_generation(generation_type new_generation) {
     sstlog.debug("Setting generation for {} to generation={}", get_filename(), new_generation);
     return create_links(_dir, new_generation).then([this] {
         return remove_file(filename(component_type::TOC)).then([this] {
@@ -2098,13 +2098,13 @@ future<> sstable::set_generation(int64_t new_generation) {
     });
 }
 
-future<> sstable::move_to_new_dir(sstring new_dir, int64_t new_generation, bool do_sync_dirs) {
+future<> sstable::move_to_new_dir(sstring new_dir, generation_type new_generation, bool do_sync_dirs) {
     sstring old_dir = get_dir();
     sstlog.debug("Moving {} old_generation={} to {} new_generation={} do_sync_dirs={}",
             get_filename(), old_dir, _generation, new_dir, new_generation, do_sync_dirs);
     co_await create_links_and_mark_for_removal(new_dir, new_generation);
     _dir = new_dir;
-    int64_t old_generation = std::exchange(_generation, new_generation);
+    generation_type old_generation = std::exchange(_generation, new_generation);
     co_await parallel_for_each(all_components(), [this, old_generation, old_dir] (auto p) {
         return sstable_write_io_check(remove_file, sstable::filename(old_dir, _schema->ks_name(), _schema->cf_name(), _version, old_generation, _format, p.second));
     });
@@ -2949,7 +2949,7 @@ delete_atomically(std::vector<shared_sstable> ssts) {
     }
     return seastar::async([ssts = std::move(ssts)] {
         sstring sstdir;
-        min_max_tracker<int64_t> gen_tracker;
+        min_max_tracker<generation_type> gen_tracker;
 
         for (const auto& sst : ssts) {
             gen_tracker.update(sst->generation());
@@ -3172,7 +3172,7 @@ mutation_source sstable::as_mutation_source() {
 
 sstable::sstable(schema_ptr schema,
         sstring dir,
-        int64_t generation,
+        generation_type generation,
         version_types v,
         format_types f,
         db::large_data_handler& large_data_handler,

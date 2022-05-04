@@ -45,6 +45,7 @@
 #include "utils/observable.hh"
 #include "sstables/shareable_components.hh"
 #include "sstables/open_info.hh"
+#include "sstables/generation_type.hh"
 #include "query-request.hh"
 #include "mutation_fragment_stream_validator.hh"
 #include "readers/flat_mutation_reader_fwd.hh"
@@ -132,7 +133,7 @@ public:
 public:
     sstable(schema_ptr schema,
             sstring dir,
-            int64_t generation,
+            generation_type generation,
             version_types v,
             format_types f,
             db::large_data_handler& large_data_handler,
@@ -165,13 +166,13 @@ public:
     static component_type component_from_sstring(version_types version, sstring& s);
     static version_types version_from_sstring(sstring& s);
     static format_types format_from_sstring(sstring& s);
-    static sstring component_basename(const sstring& ks, const sstring& cf, version_types version, int64_t generation,
+    static sstring component_basename(const sstring& ks, const sstring& cf, version_types version, generation_type generation,
                                       format_types format, component_type component);
-    static sstring component_basename(const sstring& ks, const sstring& cf, version_types version, int64_t generation,
+    static sstring component_basename(const sstring& ks, const sstring& cf, version_types version, generation_type generation,
                                       format_types format, sstring component);
-    static sstring filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, int64_t generation,
+    static sstring filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, generation_type generation,
                             format_types format, component_type component);
-    static sstring filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, int64_t generation,
+    static sstring filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, generation_type generation,
                             format_types format, sstring component);
 
     // load sstable using components shared by a shard
@@ -187,8 +188,8 @@ public:
     // No other uses of the object can happen at this point.
     future<> destroy();
 
-    future<> set_generation(int64_t generation);
-    future<> move_to_new_dir(sstring new_dir, int64_t generation, bool do_sync_dirs = true);
+    future<> set_generation(generation_type generation);
+    future<> move_to_new_dir(sstring new_dir, generation_type generation, bool do_sync_dirs = true);
 
     // Move the sstable to the quarantine_dir
     //
@@ -200,7 +201,7 @@ public:
     // will move it into a quarantine_dir subdirectory of its current directory.
     future<> move_to_quarantine(bool do_sync_dirs = true);
 
-    int64_t generation() const {
+    generation_type generation() const {
         return _generation;
     }
 
@@ -284,7 +285,7 @@ public:
         return _compaction_ancestors;
     }
 
-    void add_ancestor(int64_t generation) {
+    void add_ancestor(generation_type generation) {
         _compaction_ancestors.insert(generation);
     }
 
@@ -359,11 +360,11 @@ public:
         return filename(component_type::TOC);
     }
 
-    static sstring sst_dir_basename(unsigned long gen) {
-        return fmt::format("{:016d}.sstable", gen);
+    static sstring sst_dir_basename(generation_type gen) {
+        return fmt::format("{}.sstable", gen);
     }
 
-    static sstring temp_sst_dir(const sstring& dir, unsigned long gen) {
+    static sstring temp_sst_dir(const sstring& dir, generation_type gen) {
         return dir + "/" + sst_dir_basename(gen);
     }
 
@@ -397,7 +398,7 @@ public:
 
     std::vector<std::pair<component_type, sstring>> all_components() const;
 
-    future<> create_links(const sstring& dir, int64_t generation) const;
+    future<> create_links(const sstring& dir, generation_type generation) const;
 
     future<> create_links(const sstring& dir) const {
         return create_links(dir, _generation);
@@ -503,7 +504,8 @@ private:
     schema_ptr _schema;
     sstring _dir;
     std::optional<sstring> _temp_dir; // Valid while the sstable is being created, until sealed
-    unsigned long _generation = 0;
+    generation_type _generation = 0;
+
     version_types _version;
     format_types _format;
 
@@ -663,9 +665,9 @@ private:
 
     future<> open_or_create_data(open_flags oflags, file_open_options options = {}) noexcept;
 
-    future<> check_create_links_replay(const sstring& dst_dir, int64_t dst_gen, const std::vector<std::pair<sstables::component_type, sstring>>& comps) const;
-    future<> create_links_common(const sstring& dst_dir, int64_t dst_gen, bool mark_for_removal) const;
-    future<> create_links_and_mark_for_removal(const sstring& dst_dir, int64_t dst_gen) const;
+    future<> check_create_links_replay(const sstring& dst_dir, generation_type dst_gen, const std::vector<std::pair<sstables::component_type, sstring>>& comps) const;
+    future<> create_links_common(const sstring& dst_dir, generation_type dst_gen, bool mark_for_removal) const;
+    future<> create_links_and_mark_for_removal(const sstring& dst_dir, generation_type dst_gen) const;
 public:
     future<> read_toc() noexcept;
 

@@ -65,6 +65,7 @@
 #include "query_class_config.hh"
 #include "absl-flat_hash_map.hh"
 #include "utils/cross-shard-barrier.hh"
+#include "sstables/generation_type.hh"
 
 class cell_locker;
 class cell_locker_stats;
@@ -501,9 +502,9 @@ public:
                                           sstables::offstrategy offstrategy = sstables::offstrategy::no);
     future<> add_sstables_and_update_cache(const std::vector<sstables::shared_sstable>& ssts);
     future<> move_sstables_from_staging(std::vector<sstables::shared_sstable>);
-    sstables::shared_sstable make_sstable(sstring dir, int64_t generation, sstables::sstable_version_types v, sstables::sstable_format_types f,
+    sstables::shared_sstable make_sstable(sstring dir, sstables::generation_type generation, sstables::sstable_version_types v, sstables::sstable_format_types f,
             io_error_handler_gen error_handler_gen);
-    sstables::shared_sstable make_sstable(sstring dir, int64_t generation, sstables::sstable_version_types v, sstables::sstable_format_types f);
+    sstables::shared_sstable make_sstable(sstring dir, sstables::generation_type generation, sstables::sstable_version_types v, sstables::sstable_format_types f);
     sstables::shared_sstable make_sstable(sstring dir);
     sstables::shared_sstable make_sstable();
     void cache_truncation_record(db_clock::time_point truncated_at) {
@@ -570,7 +571,7 @@ private:
         _sstable_generation = std::max<uint64_t>(*_sstable_generation, generation /  smp::count + 1);
     }
 
-    uint64_t calculate_generation_for_new_table() {
+    sstables::generation_type calculate_generation_for_new_table() {
         assert(_sstable_generation);
         // FIXME: better way of ensuring we don't attempt to
         // overwrite an existing table.

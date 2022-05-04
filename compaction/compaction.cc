@@ -391,7 +391,7 @@ struct compaction_read_monitor_generator final : public read_monitor_generator {
     }
 private:
     table_state& _table_s;
-    std::unordered_map<int64_t, compaction_read_monitor> _generated_monitors;
+    std::unordered_map<generation_type, compaction_read_monitor> _generated_monitors;
 };
 
 class formatted_sstables_list {
@@ -431,7 +431,7 @@ protected:
     schema_ptr _schema;
     reader_permit _permit;
     std::vector<shared_sstable> _sstables;
-    std::vector<unsigned long> _input_sstable_generations;
+    std::vector<generation_type> _input_sstable_generations;
     // Unused sstables are tracked because if compaction is interrupted we can only delete them.
     // Deleting used sstables could potentially result in data loss.
     std::unordered_set<shared_sstable> _new_partial_sstables;
@@ -1751,7 +1751,7 @@ get_fully_expired_sstables(const table_state& table_s, const std::vector<sstable
         }
     }
 
-    auto compacted_undeleted_gens = boost::copy_range<std::unordered_set<int64_t>>(table_s.compacted_undeleted_sstables()
+    auto compacted_undeleted_gens = boost::copy_range<std::unordered_set<generation_type>>(table_s.compacted_undeleted_sstables()
         | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::generation)));
     auto has_undeleted_ancestor = [&compacted_undeleted_gens] (auto& candidate) {
         // Get ancestors from sstable which is empty after restart. It works for this purpose because
