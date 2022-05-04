@@ -6,11 +6,13 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "cql3/column_specification.hh"
 #include "expression.hh"
 #include "cql3/restrictions/single_column_restriction.hh"
 #include "cql3/restrictions/multi_column_restriction.hh"
 #include "cql3/restrictions/token_restriction.hh"
 #include "cql3/prepare_context.hh"
+#include "schema.hh"
 
 namespace cql3 {
 namespace expr {
@@ -111,6 +113,156 @@ void validate_single_column_relation(const column_value& lhs, oper_t oper, const
     return r;
 }
 
+std::vector<const column_definition*> to_column_definitions(const std::vector<expression>& cols) {
+    std::vector<const column_definition*> result;
+    result.reserve(cols.size());
+
+    for (const expression& col : cols) {
+        if (auto col_val = as_if<column_value>(&col)) {
+            result.push_back(col_val->col);
+        } else {
+            on_internal_error(expr_logger, format("to_column_definitions bad expression: {}", col));
+        }
+    }
+
+    return result;
+}
+
+void validate_multi_column_relation(const std::vector<const column_definition*>& lhs, oper_t oper) {
+    using namespace statements::request_validations;
+    int previous_position = -1;
+    for (const column_definition* col_def : lhs) {
+        check_true(col_def->is_clustering_key(),
+                   "Multi-column relations can only be applied to clustering columns but was applied to: {}",
+                   col_def->name_as_text());
+
+        // FIXME: the following restriction should be removed (CASSANDRA-8613)
+        if (col_def->position() != unsigned(previous_position + 1)) {
+            check_false(previous_position == -1, "Clustering columns may not be skipped in multi-column relations. "
+                                                 "They should appear in the PRIMARY KEY order"); // TODO: More detailed messages?
+            throw exceptions::invalid_request_exception(format("Clustering columns must appear in the PRIMARY KEY order in multi-column relations"));
+        }
+        previous_position = col_def->position();
+    }
+}
+
+::shared_ptr<restrictions::restriction> new_multi_column_restriction(const tuple_constructor& prepared_lhs_tuple,
+                                                                     oper_t oper,
+                                                                     expression&& prepared_rhs,
+                                                                     comparison_order order,
+                                                                     const schema_ptr& schema) {
+    std::vector<const column_definition*> lhs_cols = to_column_definitions(prepared_lhs_tuple.elements);
+    std::vector<lw_shared_ptr<column_specification>> lhs_col_specs;
+    lhs_col_specs.reserve(prepared_lhs_tuple.elements.size());
+
+    for (const column_definition* col_def : lhs_cols) {
+        lhs_col_specs.push_back(col_def->column_specification);
+    }
+
+    validate_multi_column_relation(lhs_cols, oper);
+
+    if (oper == oper_t::EQ) {
+        return ::make_shared<restrictions::multi_column_restriction::EQ>(schema,
+                                                                         std::move(lhs_cols),
+                                                                         std::move(prepared_rhs));
+    }
+
+    if (oper == oper_t::LT) {
+        return ::make_shared<restrictions::multi_column_restriction::slice>(schema,
+                                                                            std::move(lhs_cols),
+                                                                            statements::bound::END,
+                                                                            false,
+                                                                            std::move(prepared_rhs),
+                                                                            order);
+    }
+
+    if (oper == oper_t::LTE) {
+        return ::make_shared<restrictions::multi_column_restriction::slice>(schema,
+                                                                            std::move(lhs_cols),
+                                                                            statements::bound::END,
+                                                                            true,
+                                                                            std::move(prepared_rhs),
+                                                                            order);
+    }
+
+    if (oper == oper_t::GT) {
+        return ::make_shared<restrictions::multi_column_restriction::slice>(schema,
+                                                                            std::move(lhs_cols),
+                                                                            statements::bound::START,
+                                                                            false,
+                                                                            std::move(prepared_rhs),
+                                                                            order);
+    }
+
+    if (oper == oper_t::GTE) {
+        return ::make_shared<restrictions::multi_column_restriction::slice>(schema,
+                                                                            std::move(lhs_cols),
+                                                                            statements::bound::START,
+                                                                            true,
+                                                                            std::move(prepared_rhs),
+                                                                            order);
+    }
+
+    if (oper == oper_t::IN) {
+        if (auto rhs_marker = as_if<bind_variable>(&prepared_rhs)) {
+            return ::make_shared<restrictions::multi_column_restriction::IN_with_marker>(schema,
+                                                                                         std::move(lhs_cols),
+                                                                                         std::move(*rhs_marker));
+        }
+
+        if (auto rhs_list = as_if<collection_constructor>(&prepared_rhs)) {
+            return ::make_shared<restrictions::multi_column_restriction::IN_with_values>(schema,
+                                                                                         std::move(lhs_cols),
+                                                                                         std::move(rhs_list->elements));
+        }
+
+        if (auto rhs_list = as_if<constant>(&prepared_rhs)) {
+            const list_type_impl* list_type = dynamic_cast<const list_type_impl*>(&rhs_list->type->without_reversed());
+            const data_type& elements_type = list_type->get_elements_type();
+
+            utils::chunked_vector<managed_bytes> raw_elems = get_list_elements(*rhs_list);
+            std::vector<expression> list_elems;
+            list_elems.reserve(raw_elems.size());
+
+            for (managed_bytes elem : std::move(raw_elems)) {
+                raw_value elem_val = raw_value::make_value(std::move(elem));
+                list_elems.emplace_back(constant(elem_val, elements_type));
+            }
+
+            return ::make_shared<restrictions::multi_column_restriction::IN_with_values>(schema,
+                                                                                         std::move(lhs_cols),
+                                                                                         std::move(list_elems));
+        }
+    }
+
+    on_internal_error(expr_logger,
+                      fmt::format("new_multi_column_restriction operation type: {} not handled", oper));
+}
+
+void preliminary_binop_vaidation_checks(const binary_operator& binop) {
+    if (auto lhs_tup = as_if<tuple_constructor>(&binop.lhs)) {
+        if (binop.op == oper_t::CONTAINS) {
+            throw exceptions::invalid_request_exception("CONTAINS cannot be used for Multi-column relations");
+        }
+
+        if (binop.op == oper_t::CONTAINS_KEY) {
+            throw exceptions::invalid_request_exception("CONTAINS_KEY cannot be used for Multi-column relations");
+        }
+
+        if (binop.op == oper_t::LIKE) {
+            throw exceptions::invalid_request_exception("LIKE cannot be used for Multi-column relations");
+        }
+
+        if (auto rhs_tup = as_if<tuple_constructor>(&binop.rhs)) {
+            if (lhs_tup->elements.size() != rhs_tup->elements.size()) {
+                throw exceptions::invalid_request_exception(
+                    format("Expected {} elements in value tuple, but got {}: {}",
+                                  lhs_tup->elements.size(), rhs_tup->elements.size(), *rhs_tup));
+            }
+        }
+    }
+}
+
 } // anonymous namespace
 
 ::shared_ptr<restrictions::restriction> to_restriction(const expression& e,
@@ -125,6 +277,8 @@ void validate_single_column_relation(const column_value& lhs, oper_t oper, const
         throw exceptions::invalid_request_exception("Restriction must be a binary operator");
     }
     binary_operator binop_to_prepare = as<binary_operator>(e);
+
+    preliminary_binop_vaidation_checks(binop_to_prepare);
 
     // Convert single element IN relation to an EQ relation
     if (binop_to_prepare.op == oper_t::IN && is<collection_constructor>(binop_to_prepare.rhs)) {
@@ -163,6 +317,10 @@ void validate_single_column_relation(const column_value& lhs, oper_t oper, const
 
     if (auto sub = as_if<subscript>(&prepared_binop.lhs)) {
         return new_subscripted_column_restriction(std::move(*sub), prepared_binop.op, std::move(prepared_binop.rhs), prepared_binop.order, *schema);
+    }
+
+    if (auto multi_col_tuple = as_if<tuple_constructor>(&prepared_binop.lhs)) {
+        return new_multi_column_restriction(*multi_col_tuple, prepared_binop.op, std::move(prepared_binop.rhs), prepared_binop.order, schema);
     }
 
     on_internal_error(expr_logger, format("expr::to_restriction unhandled case: {}", e));
