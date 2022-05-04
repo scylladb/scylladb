@@ -211,34 +211,11 @@ std::set<std::string_view> feature_service::known_feature_set() {
         gms::features::CORRECT_STATIC_COMPACT_IN_MC,
         gms::features::UNBOUNDED_RANGE_TOMBSTONES,
         gms::features::MC_SSTABLE,
-
-        // Up-to-date features
-        gms::features::VIEW_VIRTUAL_COLUMNS,
-        gms::features::DIGEST_INSENSITIVE_TO_EXPIRY,
-        gms::features::COMPUTED_COLUMNS,
-        gms::features::NONFROZEN_UDTS,
-        gms::features::HINTED_HANDOFF_SEPARATE_CONNECTION,
-        gms::features::PER_TABLE_PARTITIONERS,
-        gms::features::PER_TABLE_CACHING,
-        gms::features::LWT,
-        gms::features::MD_SSTABLE,
-        gms::features::ME_SSTABLE,
-        gms::features::UDF,
-        gms::features::CDC,
-        gms::features::DIGEST_FOR_NULL_VALUES,
-        gms::features::CORRECT_IDX_TOKEN_IN_SECONDARY_INDEX,
-        gms::features::ALTERNATOR_STREAMS,
-        gms::features::ALTERNATOR_TTL,
-        gms::features::RANGE_SCAN_DATA_VARIANT,
-        gms::features::CDC_GENERATIONS_V2,
-        gms::features::UDA,
-        gms::features::SEPARATE_PAGE_SIZE_AND_SAFETY_LIMIT,
-        gms::features::SUPPORTS_RAFT_CLUSTER_MANAGEMENT,
-        gms::features::USES_RAFT_CLUSTER_MANAGEMENT,
-        gms::features::TOMBSTONE_GC_OPTIONS,
-        gms::features::PARALLELIZED_AGGREGATION,
-        gms::features::KEYSPACE_STORAGE_OPTIONS,
     };
+
+    for (auto& [name, f_ref] : _registered_features) {
+        features.insert(name);
+    }
 
     for (const sstring& s : _config._disabled_features) {
         features.erase(s);
