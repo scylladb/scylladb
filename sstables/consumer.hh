@@ -220,8 +220,9 @@ public:
     }
     inline read_status read_bytes(temporary_buffer<char>& data, uint32_t len, fragmented_temporary_buffer& where) {
         if (data.size() >= len) {
-            std::vector<temporary_buffer<char>> fragments;
-            fragments.push_back(data.share(0,len));
+            auto fragments = std::move(where).release();
+            fragments.clear();
+            fragments.push_back(data.share(0, len));
             where = fragmented_temporary_buffer(std::move(fragments), len);
             data.trim_front(len);
             return read_status::ready;
