@@ -165,6 +165,7 @@ using computed_columns_map = std::unordered_map<bytes, column_computation_ptr>;
 static computed_columns_map get_computed_columns(const schema_mutations& sm);
 
 static std::vector<column_definition> create_columns_from_column_rows(
+                const schema_ctxt& ctxt,
                 const query::result_set& rows, const sstring& keyspace,
                 const sstring& table, bool is_super, column_view_virtual is_view_virtual, const computed_columns_map& computed_columns);
 
@@ -1507,7 +1508,7 @@ static future<user_types_to_drop> merge_types(distributed<service::storage_proxy
     }};
 }
 
-static std::vector<data_type> read_arg_types(const query::result_set_row& row, const sstring& keyspace) {
+static std::vector<data_type> read_arg_types(replica::database& db, const query::result_set_row& row, const sstring& keyspace) {
     std::vector<data_type> arg_types;
     for (const auto& arg : get_list<sstring>(row, "argument_types")) {
         arg_types.push_back(db::cql_type_parser::parse(keyspace, arg));
@@ -1573,7 +1574,7 @@ static std::vector<data_type> read_arg_types(const query::result_set_row& row, c
 static shared_ptr<cql3::functions::user_function> create_func(replica::database& db, const query::result_set_row& row) {
     cql3::functions::function_name name{
             row.get_nonnull<sstring>("keyspace_name"), row.get_nonnull<sstring>("function_name")};
-    auto arg_types = read_arg_types(row, name.keyspace);
+    auto arg_types = read_arg_types(db, row, name.keyspace);
     data_type return_type = db::cql_type_parser::parse(name.keyspace, row.get_nonnull<sstring>("return_type"));
 
     // FIXME: We already computed the bitcode in
@@ -1611,7 +1612,7 @@ static shared_ptr<cql3::functions::user_function> create_func(replica::database&
 static shared_ptr<cql3::functions::user_aggregate> create_aggregate(replica::database& db, const query::result_set_row& row) {
     cql3::functions::function_name name{
             row.get_nonnull<sstring>("keyspace_name"), row.get_nonnull<sstring>("aggregate_name")};
-    auto arg_types = read_arg_types(row, name.keyspace);
+    auto arg_types = read_arg_types(db, row, name.keyspace);
     data_type state_type = db::cql_type_parser::parse(name.keyspace, row.get_nonnull<sstring>("state_type"));
     sstring sfunc = row.get_nonnull<sstring>("state_func");
     auto ffunc = row.get<sstring>("final_func");
@@ -2662,6 +2663,7 @@ schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations
 
     auto computed_columns = get_computed_columns(sm);
     std::vector<column_definition> column_defs = create_columns_from_column_rows(
+            ctxt,
             query::result_set(sm.columns_mutation()),
             ks_name,
             cf_name,/*,
@@ -2843,7 +2845,8 @@ static computed_columns_map get_computed_columns(const schema_mutations& sm) {
     }));
 }
 
-static std::vector<column_definition> create_columns_from_column_rows(const query::result_set& rows,
+static std::vector<column_definition> create_columns_from_column_rows(const schema_ctxt& ctxt,
+                                                               const query::result_set& rows,
                                                                const sstring& keyspace,
                                                                const sstring& table, /*,
                                                                AbstractType<?> rawComparator, */
@@ -2917,12 +2920,12 @@ view_ptr create_view_from_mutations(const schema_ctxt& ctxt, schema_mutations sm
     prepare_builder_from_table_row(ctxt, builder, row);
 
     auto computed_columns = get_computed_columns(sm);
-    auto column_defs = create_columns_from_column_rows(query::result_set(sm.columns_mutation()), ks_name, cf_name, false, column_view_virtual::no, computed_columns);
+    auto column_defs = create_columns_from_column_rows(ctxt, query::result_set(sm.columns_mutation()), ks_name, cf_name, false, column_view_virtual::no, computed_columns);
     for (auto&& cdef : column_defs) {
         builder.with_column_ordered(cdef);
     }
     if (sm.view_virtual_columns_mutation()) {
-        column_defs = create_columns_from_column_rows(query::result_set(*sm.view_virtual_columns_mutation()), ks_name, cf_name, false, column_view_virtual::yes, computed_columns);
+        column_defs = create_columns_from_column_rows(ctxt, query::result_set(*sm.view_virtual_columns_mutation()), ks_name, cf_name, false, column_view_virtual::yes, computed_columns);
         for (auto&& cdef : column_defs) {
             builder.with_column_ordered(cdef);
         }
