@@ -2139,9 +2139,8 @@ future<result<>> storage_proxy::mutate_begin(unique_response_handler_vector ids,
 future<result<>> storage_proxy::mutate_end(future<result<>> mutate_result, utils::latency_counter lc, write_stats& stats, tracing::trace_state_ptr trace_state) {
     assert(mutate_result.available());
     stats.write.mark(lc.stop().latency());
-    if (lc.is_start()) {
-        stats.estimated_write.add(lc.latency());
-    }
+    stats.estimated_write.add(lc.latency());
+
     return utils::result_futurize_try([&] {
         auto&& res = mutate_result.get();
         if (res) {
@@ -4544,9 +4543,7 @@ storage_proxy::do_query(schema_ptr s,
                         cl,
                         std::move(query_options)).finally([lc, p] () mutable {
                     p->get_stats().read.mark(lc.stop().latency());
-                    if (lc.is_start()) {
-                        p->get_stats().estimated_read.add(lc.latency());
-                    }
+                    p->get_stats().estimated_read.add(lc.latency());
                 });
             } catch (const replica::no_such_column_family&) {
                 get_stats().read.mark(lc.stop().latency());
@@ -4559,9 +4556,7 @@ storage_proxy::do_query(schema_ptr s,
                 cl,
                 std::move(query_options)).finally([lc, p] () mutable {
             p->get_stats().range.mark(lc.stop().latency());
-            if (lc.is_start()) {
-                p->get_stats().estimated_range.add(lc.latency());
-            }
+            p->get_stats().estimated_range.add(lc.latency());
         });
     }
 }
@@ -4713,10 +4708,8 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
         auto update_stats = seastar::defer ([&] {
             get_stats().cas_foreground--;
             write ? get_stats().cas_write.mark(lc.stop().latency()) : get_stats().cas_read.mark(lc.stop().latency());
-            if (lc.is_start()) {
-                write ? get_stats().estimated_cas_write.add(lc.latency()) :
-                        get_stats().estimated_cas_read.add(lc.latency());
-            }
+            write ? get_stats().estimated_cas_write.add(lc.latency()) :
+                    get_stats().estimated_cas_read.add(lc.latency());
             if (contentions > 0) {
                 write ? get_stats().cas_write_contention.add(contentions) : get_stats().cas_read_contention.add(contentions);
             }

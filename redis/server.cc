@@ -127,9 +127,7 @@ future<> redis_server::connection::process_request() {
                 }
                 ++_server._stats._requests_served;
                 _server._stats._requests.mark(lc.stop().latency());
-                if (lc.is_start()) {
-                    _server._stats._estimated_requests_latency.add(lc.latency(), _server._stats._requests.hist.count);
-                }
+                _server._stats._estimated_requests_latency.add(lc.latency(), _server._stats._requests.hist.count);
             } catch (...) {
                 logging.error("request processing failed: {}", std::current_exception());
             }
