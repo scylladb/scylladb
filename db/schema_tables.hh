@@ -27,6 +27,7 @@
 
 namespace data_dictionary {
 class keyspace_metadata;
+class user_types_storage;
 }
 
 using keyspace_metadata = data_dictionary::keyspace_metadata;
@@ -67,7 +68,7 @@ class config;
 
 class schema_ctxt {
 public:
-    schema_ctxt(const config&);
+    schema_ctxt(const config&, std::shared_ptr<data_dictionary::user_types_storage> uts);
     schema_ctxt(const replica::database&);
     schema_ctxt(distributed<replica::database>&);
     schema_ctxt(distributed<service::storage_proxy>&);
@@ -88,6 +89,7 @@ private:
     const db::extensions& _extensions;
     const unsigned _murmur3_partitioner_ignore_msb_bits;
     const uint32_t _schema_registry_grace_period;
+    const std::shared_ptr<data_dictionary::user_types_storage> _user_types;
 };
 
 namespace schema_tables {

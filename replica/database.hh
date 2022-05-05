@@ -1206,6 +1206,8 @@ struct string_pair_eq {
     bool operator()(spair lhs, spair rhs) const;
 };
 
+class db_user_types_storage;
+
 // Policy for distributed<database>:
 //   broadcast metadata writes
 //   local metadata reads
@@ -1260,6 +1262,7 @@ private:
     };
 
     lw_shared_ptr<db_stats> _stats;
+    std::shared_ptr<db_user_types_storage> _user_types;
     std::unique_ptr<cell_locker_stats> _cl_stats;
 
     const db::config& _cfg;
@@ -1327,6 +1330,7 @@ private:
 
 public:
     data_dictionary::database as_data_dictionary() const;
+    std::shared_ptr<data_dictionary::user_types_storage> as_user_types_storage() const noexcept;
     future<> init_commitlog();
     const gms::feature_service& features() const { return _feat; }
     future<> apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&&, db::timeout_clock::time_point timeout);
