@@ -242,4 +242,7 @@ future<std::vector<mutation>> generate_random_mutations(
         std::uniform_int_distribution<size_t> clustering_row_count_dist = std::uniform_int_distribution<size_t>(16, 128),
         std::uniform_int_distribution<size_t> range_tombstone_count_dist = std::uniform_int_distribution<size_t>(4, 16));
 
+/// Generate exactly partition_count partitions. See the more general overload above.
+future<std::vector<mutation>> generate_random_mutations(tests::random_schema& random_schema, size_t partition_count);
+
 } // namespace tests

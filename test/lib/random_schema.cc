@@ -1103,4 +1103,12 @@ future<std::vector<mutation>> generate_random_mutations(
     });
 }
 
+future<std::vector<mutation>> generate_random_mutations(tests::random_schema& random_schema, size_t partition_count) {
+    return generate_random_mutations(
+            random_schema,
+            default_timestamp_generator(),
+            no_expiry_expiry_generator(),
+            std::uniform_int_distribution<size_t>(partition_count, partition_count));
+}
+
 } // namespace tests
