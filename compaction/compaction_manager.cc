@@ -883,7 +883,11 @@ protected:
             std::exception_ptr ex;
 
             try {
-                co_await compact_sstables_and_update_history(std::move(descriptor), _compaction_data, std::move(release_exhausted));
+                bool should_update_history = this->should_update_history(descriptor.options.type());
+                sstables::compaction_result res = co_await compact_sstables(std::move(descriptor), _compaction_data, std::move(release_exhausted));
+                if (should_update_history) {
+                    co_await update_history(*_compacting_table, res, _compaction_data);
+                }
                 finish_compaction();
                 _cm.reevaluate_postponed_compactions();
                 continue;
