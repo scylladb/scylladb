@@ -399,6 +399,10 @@ std::shared_ptr<data_dictionary::user_types_storage> database::as_user_types_sto
     return _user_types;
 }
 
+const data_dictionary::user_types_storage& database::user_types() const noexcept {
+    return *_user_types;
+}
+
 } // namespace replica
 
 void backlog_controller::adjust() {

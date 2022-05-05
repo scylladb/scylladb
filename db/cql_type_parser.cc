@@ -14,7 +14,6 @@
 #include <boost/range/adaptor/sliced.hpp>
 
 #include "replica/database.hh"
-#include "service/storage_proxy.hh"
 #include "cql3/CqlParser.hpp"
 #include "cql3/util.hh"
 #include "cql_type_parser.hh"
@@ -28,7 +27,7 @@ static ::shared_ptr<cql3::cql3_type::raw> parse_raw(const sstring& str) {
         });
 }
 
-data_type db::cql_type_parser::parse(const sstring& keyspace, const sstring& str) {
+data_type db::cql_type_parser::parse(const sstring& keyspace, const sstring& str, const data_dictionary::user_types_storage& uts) {
     static const thread_local std::unordered_map<sstring, cql3::cql3_type> native_types = []{
         std::unordered_map<sstring, cql3::cql3_type> res;
         for (auto& nt : cql3::cql3_type::values()) {
@@ -42,12 +41,8 @@ data_type db::cql_type_parser::parse(const sstring& keyspace, const sstring& str
         return i->second.get_type();
     }
 
-    const auto& sp = service::get_storage_proxy();
-    const replica::user_types_metadata& user_types =
-            sp.local_is_initialized() ? sp.local().get_db().local().find_keyspace(keyspace).metadata()->user_types()
-                                      : replica::user_types_metadata{};
     auto raw = parse_raw(str);
-    return raw->prepare_internal(keyspace, user_types).get_type();
+    return raw->prepare_internal(keyspace, uts.get(keyspace)).get_type();
 }
 
 class db::cql_type_parser::raw_builder::impl {

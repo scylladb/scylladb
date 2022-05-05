@@ -85,6 +85,10 @@ public:
         return _schema_registry_grace_period;
     }
 
+    const data_dictionary::user_types_storage& user_types() const noexcept {
+        return *_user_types;
+    }
+
 private:
     const db::extensions& _extensions;
     const unsigned _murmur3_partitioner_ignore_msb_bits;
