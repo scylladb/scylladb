@@ -1045,10 +1045,10 @@ void executor::add_stream_options(const rjson::value& stream_specification, sche
     if (stream_enabled->GetBool()) {
         auto db = sp.data_dictionary();
 
-        if (!db.features().cluster_supports_cdc()) {
+        if (!db.features().cdc) {
             throw api_error::validation("StreamSpecification: streams (CDC) feature not enabled in cluster.");
         }
-        if (!db.features().cluster_supports_alternator_streams()) {
+        if (!db.features().alternator_streams) {
             throw api_error::validation("StreamSpecification: alternator streams feature not enabled in cluster.");
         }
 

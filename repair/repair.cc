@@ -1062,7 +1062,7 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
         auto uuid = id.uuid;
 
         bool needs_flush_before_repair = false;
-        if (db.local().features().cluster_supports_tombstone_gc_options()) {
+        if (db.local().features().tombstone_gc_options) {
             for (auto& table: cfs) {
                 auto s = db.local().find_column_family(keyspace, table).schema();
                 const auto& options = s->tombstone_gc_options();

@@ -209,7 +209,7 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
                     }
                 }
 
-                if (!db.features().cluster_supports_nonfrozen_udts()) {
+                if (!db.features().nonfrozen_udts) {
                     throw exceptions::invalid_request_exception("Non-frozen UDT support is not enabled");
                 }
             }
