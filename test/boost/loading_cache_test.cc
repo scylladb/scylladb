@@ -111,6 +111,53 @@ SEASTAR_TEST_CASE(test_loading_shared_values_parallel_loading_same_key) {
     });
 }
 
+SEASTAR_TEST_CASE(test_loading_shared_values_inserting) {
+    return seastar::async([] {
+        utils::loading_shared_values<int, sstring> shared_values;
+        prepare().get();
+        load_count = 0;
+
+        // Test that inserting a value works, and that it is not overwritten by loading or inserting agin
+        auto entry_ptr = shared_values.get_or_insert(0, "v1");
+        BOOST_REQUIRE(shared_values.find(0) != nullptr);
+        BOOST_REQUIRE_EQUAL(shared_values.size(), 1);
+        BOOST_REQUIRE_EQUAL(*entry_ptr, "v1");
+
+        auto entry_ptr2 = shared_values.get_or_load(0, loader).get0();
+        BOOST_REQUIRE_EQUAL(load_count, 0);
+        BOOST_REQUIRE_EQUAL(shared_values.size(), 1);
+        BOOST_REQUIRE_EQUAL(*entry_ptr2, "v1");
+
+        auto entry_ptr3 = shared_values.get_or_insert(0, "v2");
+        BOOST_REQUIRE(shared_values.find(0) != nullptr);
+        BOOST_REQUIRE_EQUAL(shared_values.size(), 1);
+        BOOST_REQUIRE_EQUAL(*entry_ptr3, "v1");
+
+        shared_values.remove(0);
+
+        BOOST_REQUIRE_EQUAL(shared_values.find(0), nullptr);
+        BOOST_REQUIRE_EQUAL(shared_values.size(), 0);
+
+        // Test that when entry is inserted while loading, the inserted value remains
+        auto f = shared_values.get_or_load(0, [&](auto key) {
+            return yield().then([&] {
+                return make_ready_future<sstring>("v3");
+            });
+        });
+
+        auto entry_ptr4 = shared_values.get_or_insert(0, "v4");
+
+        BOOST_REQUIRE(shared_values.find(0) != nullptr);
+        BOOST_REQUIRE_EQUAL(shared_values.size(), 1);
+
+        auto ptr1 = f.get0();
+
+        BOOST_REQUIRE(shared_values.find(0) != nullptr);
+        BOOST_REQUIRE_EQUAL(shared_values.size(), 1);
+        BOOST_REQUIRE_EQUAL(*shared_values.find(0), "v4");
+    });
+}
+
 SEASTAR_TEST_CASE(test_loading_shared_values_parallel_loading_different_keys) {
     return seastar::async([] {
         std::vector<int> ivec(num_loaders);
@@ -148,9 +195,16 @@ SEASTAR_TEST_CASE(test_loading_shared_values_rehash) {
 
         // verify that load factor is always in the (0.25, 0.75) range
         for (int k = 0; k < num_loaders; ++k) {
-            shared_values.get_or_load(k, loader).then([&] (auto entry_ptr) {
+            if (k % 2 == 0) {
+                shared_values.get_or_load(k, loader).then([&] (auto entry_ptr) {
+                    anchors_list.emplace_back(std::move(entry_ptr));
+                }).get();
+            } else {
+                // verify also when inserting values synchronously
+                auto value = format("v{}", k);
+                auto entry_ptr = shared_values.get_or_insert(k, value);
                 anchors_list.emplace_back(std::move(entry_ptr));
-            }).get();
+            }
             BOOST_REQUIRE_LE(shared_values.size(), 3 * shared_values.buckets_count() / 4);
         }
 
@@ -248,6 +302,69 @@ SEASTAR_TEST_CASE(test_loading_cache_loading_different_keys) {
 
         BOOST_REQUIRE_EQUAL(load_count, num_loaders);
         BOOST_REQUIRE_EQUAL(loading_cache.size(), num_loaders);
+    });
+}
+
+
+SEASTAR_TEST_CASE(test_loading_cache_inserting) {
+    return seastar::async([] {
+        using namespace std::chrono;
+        utils::loading_cache<int, sstring> loading_cache(1, 1h, testlog);
+        auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
+        prepare().get();
+        load_count = 0;
+
+        // Test that inserting a value works, and that it is not overwritten by loading or inserting agin
+        loading_cache.put(0, "v1");
+        BOOST_REQUIRE(loading_cache.find(0) != nullptr);
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 1);
+        BOOST_REQUIRE_EQUAL(loading_cache.memory_footprint(), 1);
+        BOOST_REQUIRE_EQUAL(*loading_cache.find(0), "v1");
+
+        auto entry_ptr2 = loading_cache.get_ptr(0, loader).get0();
+        BOOST_REQUIRE_EQUAL(load_count, 0);
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 1);
+        BOOST_REQUIRE_EQUAL(loading_cache.memory_footprint(), 1);
+        BOOST_REQUIRE_EQUAL(*entry_ptr2, "v1");
+
+        loading_cache.put(0, "v2");
+        BOOST_REQUIRE(loading_cache.find(0) != nullptr);
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 1);
+        BOOST_REQUIRE_EQUAL(loading_cache.memory_footprint(), 1);
+        BOOST_REQUIRE_EQUAL(*loading_cache.find(0), "v1");
+
+        loading_cache.remove(0);
+
+        BOOST_REQUIRE_EQUAL(loading_cache.find(0), nullptr);
+        BOOST_REQUIRE_EQUAL(loading_cache.memory_footprint(), 0);
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 0);
+
+        // Test that when entry is inserted while loading, the inserted value remains
+        auto f = loading_cache.get_ptr(0, [&](auto key) {
+            return yield().then([&] {
+                return make_ready_future<sstring>("v3");
+            });
+        });
+
+        loading_cache.put(0, "v4");
+
+        BOOST_REQUIRE(loading_cache.find(0) != nullptr);
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 1);
+        BOOST_REQUIRE_EQUAL(loading_cache.memory_footprint(), 1);
+
+        auto ptr1 = f.get0();
+
+        BOOST_REQUIRE(loading_cache.find(0) != nullptr);
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 1);
+        BOOST_REQUIRE_EQUAL(*loading_cache.find(0), "v4");
+        BOOST_REQUIRE_EQUAL(loading_cache.memory_footprint(), 1);
+
+        // Test that room is made for new entry ()
+        loading_cache.put(1, "v5");
+        BOOST_REQUIRE(loading_cache.find(1) != nullptr);
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 1);
+        BOOST_REQUIRE_EQUAL(loading_cache.memory_footprint(), 1);
+        BOOST_REQUIRE_EQUAL(*loading_cache.find(1), "v5");
     });
 }
 

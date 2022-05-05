@@ -260,6 +260,30 @@ public:
         }
     }
 
+    /// \brief
+    /// Returns an entry_ptr for the given key. If the value is already present, it is returned.
+    /// If the entry is loading, or it is missing, the parameter is used as the value.
+    entry_ptr get_or_insert(const key_type& key, value_type value) {
+        auto i = _set.find(key, Hash(), key_eq<key_type, EqualPred>());
+        if (i != _set.end()) {
+            lw_shared_ptr<entry> e = i->shared_from_this();
+            if (e->ready()) {
+                Stats::inc_hits();
+                return entry_ptr(std::move(e));
+            }
+            // entry is loading, but we want to return a ready value,
+            // so we replace the entry with the value from the parameter
+            _set.erase(i);
+        }
+        Stats::inc_misses();
+        lw_shared_ptr<entry> e = make_lw_shared<entry>(*this, key);
+        rehash_before_insert();
+        _set.insert(*e);
+        e->set_value(std::move(value));
+        e->loaded().set_value();
+        return entry_ptr(std::move(e));
+    }
+
     /// \brief Try to rehash the container so that the load factor is between 0.25 and 0.75.
     /// \throw May throw if allocation of a new buckets array throws.
     void rehash() {

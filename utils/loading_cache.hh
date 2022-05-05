@@ -290,6 +290,31 @@ public:
         });
     }
 
+    void put(const Key& k, value_type value) {
+        // We shouldn't be here if caching is disabled
+        assert(caching_enabled());
+
+        timestamped_val_ptr ts_val_ptr = _loading_values.get_or_insert(k, std::move(value));
+        // check again since it could have already been inserted and initialized
+        if (!ts_val_ptr->ready() && !ts_val_ptr.orphaned()) {
+            _logger.trace("{}: putting the value for the first time", k);
+
+            if (ts_val_ptr->size() > _max_size) {
+                throw entry_is_too_big();
+            }
+
+            ts_value_lru_entry* new_lru_entry = Alloc().template allocate_object<ts_value_lru_entry>();
+
+            // Remove the least recently used items if map is too big.
+            shrink();
+
+            new(new_lru_entry) ts_value_lru_entry(std::move(ts_val_ptr), *this);
+
+            // This will "touch" the entry and add it to the LRU list.
+            value_ptr vp(new_lru_entry->timestamped_value_ptr());
+        }
+    }
+
     future<value_ptr> get_ptr(const Key& k) {
         static_assert(ReloadEnabled == loading_cache_reload_enabled::yes, "");
         return get_ptr(k, _load);
