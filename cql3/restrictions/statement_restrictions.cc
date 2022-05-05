@@ -1767,8 +1767,8 @@ static bool has_eq_null(const query_options& options, const expression& expr) {
 }
 
 bool statement_restrictions::range_or_slice_eq_null(const query_options& options) const {
-    return boost::algorithm::any_of(_partition_range_restrictions, std::bind_front(has_eq_null, options))
-            || boost::algorithm::any_of(_clustering_prefix_restrictions, std::bind_front(has_eq_null, options));
+    return boost::algorithm::any_of(_partition_range_restrictions, std::bind_front(has_eq_null, std::cref(options)))
+            || boost::algorithm::any_of(_clustering_prefix_restrictions, std::bind_front(has_eq_null, std::cref(options)));
 }
 } // namespace restrictions
 } // namespace cql3
