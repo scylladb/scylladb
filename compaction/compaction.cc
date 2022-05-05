@@ -729,6 +729,7 @@ private:
         compaction_result ret {
             .new_sstables = std::move(_all_new_sstables),
             .ended_at = ended_at,
+            .start_size = _start_size,
             .end_size = _end_size,
         };
 
