@@ -21,6 +21,7 @@
 #include "cql3/authorized_prepared_statements_cache.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "exceptions/exceptions.hh"
+#include "lang/wasm_instance_cache.hh"
 #include "service/migration_listener.hh"
 #include "transport/messages/result_message.hh"
 #include "service/qos/service_level_controller.hh"
@@ -122,6 +123,7 @@ private:
     // don't bother with expiration on those.
     std::unordered_map<sstring, std::unique_ptr<statements::prepared_statement>> _internal_statements;
 
+    wasm::instance_cache* _wasm_instance_cache;
 public:
     static const sstring CQL_VERSION;
 
@@ -161,6 +163,14 @@ public:
 
     cql_stats& get_cql_stats() {
         return _cql_stats;
+    }
+
+    wasm::instance_cache* get_wasm_instance_cache() {
+        return _wasm_instance_cache;
+    }
+
+    void set_wasm_instance_cache(wasm::instance_cache* cache) {
+        _wasm_instance_cache = cache;
     }
 
     statements::prepared_statement::checked_weak_ptr get_prepared(const std::optional<auth::authenticated_user>& user, const prepared_cache_key_type& key) {

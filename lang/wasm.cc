@@ -9,6 +9,7 @@
 #ifdef SCYLLA_ENABLE_WASMTIME
 
 #include "wasm.hh"
+#include "wasm_instance_cache.hh"
 #include "concrete_types.hh"
 #include "utils/utf8.hh"
 #include "utils/ascii.hh"
@@ -23,7 +24,7 @@ static logging::logger wasm_logger("wasm");
 
 namespace wasm {
 
-context::context(wasm::engine* engine_ptr, std::string name) : engine_ptr(engine_ptr), function_name(name) {
+context::context(wasm::engine* engine_ptr, std::string name, instance_cache* cache) : engine_ptr(engine_ptr), function_name(name), cache(cache) {
 }
 
 static constexpr size_t WASM_PAGE_SIZE = 64 * 1024;
@@ -298,16 +299,14 @@ struct from_val_visitor {
     }
 };
 
-seastar::future<bytes_opt> run_script(context& ctx, const std::vector<data_type>& arg_types, const std::vector<bytes_opt>& params, data_type return_type, bool allow_null_input) {
+seastar::future<bytes_opt> run_script(context& ctx, wasmtime::Store& store, wasmtime::Instance& instance, wasmtime::Func& func, const std::vector<data_type>& arg_types, const std::vector<bytes_opt>& params, data_type return_type, bool allow_null_input) {
     wasm_logger.debug("Running function {}", ctx.function_name);
 
-    auto store = wasmtime::Store(ctx.engine_ptr->get());
     // Replenish the store with initial amount of fuel
     auto added = store.context().add_fuel(ctx.engine_ptr->initial_fuel_amount());
     if (!added) {
         co_await coroutine::return_exception(wasm::exception(added.err().message()));
     }
-    auto [instance, func] = create_instance_and_func(ctx, store);
     std::vector<wasmtime::Val> argv;
     for (size_t i = 0; i < arg_types.size(); ++i) {
         const abstract_type& type = *arg_types[i];
@@ -330,7 +329,7 @@ seastar::future<bytes_opt> run_script(context& ctx, const std::vector<data_type>
     wasm_logger.debug("Consumed {} fuel units", consumed);
 
     if (!result) {
-        co_await coroutine::return_exception(wasm::exception("Calling wasm function failed: " + result.err().message()));
+        co_await coroutine::return_exception(wasm::instance_corrupting_exception("Calling wasm function failed: " + result.err().message()));
     }
     std::vector<wasmtime::Val> result_vec = std::move(result).unwrap();
     if (result_vec.size() != 1) {
@@ -359,6 +358,31 @@ seastar::future<bytes_opt> run_script(context& ctx, const std::vector<data_type>
     }
 }
 
+seastar::future<bytes_opt> run_script(context& ctx, const std::vector<data_type>& arg_types, const std::vector<bytes_opt>& params, data_type return_type, bool allow_null_input) {
+    auto store = wasmtime::Store(ctx.engine_ptr->get());
+    auto [instance, func] = create_instance_and_func(ctx, store);
+    return run_script(ctx, store, instance, func, arg_types, params, return_type, allow_null_input);
+}
+
+seastar::future<bytes_opt> run_script(const db::functions::function_name& name, context& ctx, const std::vector<data_type>& arg_types, const std::vector<bytes_opt>& params, data_type return_type, bool allow_null_input) {
+    wasm::instance_cache::value_type func_inst;
+    std::exception_ptr ex;
+    bytes_opt ret;
+    try {
+        func_inst = ctx.cache->get(name, arg_types, ctx).get0();
+        ret = wasm::run_script(ctx, func_inst->instance->store, func_inst->instance->instance, func_inst->instance->func, arg_types, params, return_type, allow_null_input).get0();
+    } catch (const wasm::instance_corrupting_exception& e) {
+        func_inst->instance = std::nullopt;
+        ex = std::current_exception();
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    ctx.cache->recycle(func_inst);
+    if (ex) {
+        std::rethrow_exception(std::move(ex));
+    }
+    return make_ready_future<bytes_opt>(ret);
+}
 }
 
 #endif

@@ -9,6 +9,7 @@
 #include "user_function.hh"
 #include "log.hh"
 #include "cql_serialization_format.hh"
+#include "lang/wasm.hh"
 
 #include <seastar/core/thread.hh>
 
@@ -56,9 +57,9 @@ bytes_opt user_function::execute(cql_serialization_format sf, const std::vector<
             }
             return lua::run_script(lua::bitcode_view{ctx.bitcode}, values, return_type(), ctx.cfg).get0();
         },
-        [&] (wasm::context& ctx) {
+        [&] (wasm::context& ctx) -> bytes_opt {
             try {
-                return wasm::run_script(ctx, arg_types(), parameters, return_type(), _called_on_null_input).get0();
+                return wasm::run_script(name(), ctx, arg_types(), parameters, return_type(), _called_on_null_input).get0();
             } catch (const wasm::exception& e) {
                 throw exceptions::invalid_request_exception(format("UDF error: {}", e.what()));
             }

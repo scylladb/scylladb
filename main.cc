@@ -87,6 +87,7 @@
 #include "alternator/ttl.hh"
 #include "tools/entry_point.hh"
 #include "db/per_partition_rate_limit_extension.hh"
+#include "lang/wasm_instance_cache.hh"
 
 #include "service/raft/raft_group_registry.hh"
 #include "service/raft/raft_group0_client.hh"
@@ -947,6 +948,16 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }
             view_hints_dir_initializer.ensure_created_and_verified().get();
 
+            static sharded<wasm::instance_cache> wasm_instance_cache;
+            auto udf_enabled = cfg->enable_user_defined_functions() && cfg->check_experimental(db::experimental_features_t::feature::UDF);
+            std::any stop_udf_cache_handlers;
+            if (udf_enabled) {
+                supervisor::notify("starting wasm udf cache");
+                wasm_instance_cache.start(128*1024*1024, std::chrono::seconds(5)).get();
+                stop_udf_cache_handlers = defer_verbose_shutdown("udf cache", [] {
+                    wasm_instance_cache.stop().get();
+                });
+            }
             supervisor::notify("starting database");
             debug::the_database = &db;
             db.start(std::ref(*cfg), dbcfg, std::ref(mm_notifier), std::ref(feature_service), std::ref(token_metadata),
@@ -1052,6 +1063,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             qp.start(std::ref(proxy), std::ref(forward_service), std::move(local_data_dict), std::ref(mm_notifier), std::ref(mm), qp_mcfg, std::ref(cql_config), std::move(auth_prep_cache_config)).get();
             // #293 - do not stop anything
             // engine().at_exit([&qp] { return qp.stop(); });
+            if (udf_enabled) {
+                qp.invoke_on_all([&] (cql3::query_processor& qp) {
+                    qp.set_wasm_instance_cache(&wasm_instance_cache.local());
+                }).get();
+            }
             supervisor::notify("initializing batchlog manager");
             db::batchlog_manager_config bm_cfg;
             bm_cfg.write_request_timeout = cfg->write_request_timeout_in_ms() * 1ms;
