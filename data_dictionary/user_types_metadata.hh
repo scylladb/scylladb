@@ -36,4 +36,17 @@ public:
     friend std::ostream& operator<<(std::ostream& os, const user_types_metadata& m);
 };
 
+class user_types_storage {
+public:
+    virtual const user_types_metadata& get(const sstring& ks) const = 0;
+};
+
+class dummy_user_types_storage : public user_types_storage {
+    user_types_metadata _empty;
+public:
+    virtual const user_types_metadata& get(const sstring& ks) const override {
+        return _empty;
+    }
+};
+
 }

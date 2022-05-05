@@ -160,6 +160,21 @@ private:
     }
 };
 
+class user_types_storage : public data_dictionary::user_types_storage {
+    database& _db;
+public:
+    user_types_storage(database& db) noexcept : _db(db) {}
+
+    virtual const data_dictionary::user_types_metadata& get(const sstring& name) const override {
+        for (const auto& ks : _db.keyspaces) {
+            if (ks.metadata->name() == name) {
+                return ks.metadata->user_types();
+            }
+        }
+        throw data_dictionary::no_such_keyspace(name);
+    }
+};
+
 table::table(data_dictionary_impl& impl, keyspace& ks, schema_ptr schema) :
     ks(ks), schema(std::move(schema)), secondary_idx_man(impl.wrap(*this))
 { }
