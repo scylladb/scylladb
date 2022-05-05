@@ -327,12 +327,16 @@ Or from the executable like this:
     $ eu-unstrip -n --exec $executable
 
 With the build-id you can find the relocatable using the
-[scylla-pkg.git/scripts/scylla-s3-reloc (private repo)](https://github.com/scylladb/scylla-pkg/#looking-for-a-build)
-script.
+http://backtrace.scylladb.com/index.html search form.
+The form can also be used to decode backtraces generated
+by the corresponding scylla binary.
 
 **NOTE**: Use the normal relocatable package, usually called
 `scylla-package.tar.gz`, not not the debuginfo one usually called
 `scylla-debug-package.tar.gz`.
+
+Build-id:s for all official releases are listed on
+http://backtrace.scylladb.com/releases.html.
 
 ##### Loading the core
 
