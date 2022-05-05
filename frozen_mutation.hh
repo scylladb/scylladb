@@ -174,6 +174,7 @@ public:
     // the mutation which was used to create this instance.
     // throws schema_mismatch_error otherwise.
     mutation unfreeze(schema_ptr s) const;
+    future<mutation> unfreeze_gently(schema_ptr s) const;
 
     // Automatically upgrades the stored mutation to the supplied schema with custom column mapping.
     mutation unfreeze_upgrading(schema_ptr schema, const column_mapping& cm) const;
@@ -192,6 +193,21 @@ public:
 
     template<FlattenedConsumerV2 Consumer>
     auto consume(schema_ptr s, frozen_mutation_consumer_adaptor<Consumer>& adaptor) const -> frozen_mutation_consume_result<decltype(adaptor.consumer().consume_end_of_stream())>;
+
+    // Consumes the frozen mutation's content.
+    //
+    // The consume operation is stoppable:
+    // * To stop, return stop_iteration::yes from one of the consume() methods;
+    // * The consume will now stop and return;
+    //
+    // Note that `consume_end_of_partition()` and `consume_end_of_stream()`
+    // will be called each time the consume is stopping, regardless of whether
+    // you are pausing or the consumption is ending for good.
+    template<FlattenedConsumerV2 Consumer>
+    auto consume_gently(schema_ptr s, Consumer& consumer) const -> future<frozen_mutation_consume_result<decltype(consumer.consume_end_of_stream())>>;
+
+    template<FlattenedConsumerV2 Consumer>
+    auto consume_gently(schema_ptr s, frozen_mutation_consumer_adaptor<Consumer>& adaptor) const -> future<frozen_mutation_consume_result<decltype(adaptor.consumer().consume_end_of_stream())>>;
 
     unsigned shard_of(const schema& s) const {
         return dht::shard_of(s, dht::get_token(s, key()));
@@ -278,4 +294,28 @@ template<FlattenedConsumerV2 Consumer>
 auto frozen_mutation::consume(schema_ptr s, Consumer& consumer) const -> frozen_mutation_consume_result<decltype(consumer.consume_end_of_stream())> {
     frozen_mutation_consumer_adaptor adaptor(s, consumer);
     return consume(s, adaptor);
+}
+
+template<FlattenedConsumerV2 Consumer>
+auto frozen_mutation::consume_gently(schema_ptr s, frozen_mutation_consumer_adaptor<Consumer>& adaptor) const -> future<frozen_mutation_consume_result<decltype(adaptor.consumer().consume_end_of_stream())>> {
+    check_schema_version(schema_version(), *s);
+    try {
+        adaptor.on_new_partition(_pk);
+        return partition().accept_gently(s->get_column_mapping(), adaptor).then_wrapped([this, s, &adaptor] (future<> f) {
+            if (f.failed()) {
+                std::throw_with_nested(std::runtime_error(format(
+                        "frozen_mutation::consume_gently(): failed consuming mutation {} of {}.{}", key(), s->ks_name(), s->cf_name())));
+            }
+            return adaptor.on_end_of_partition();
+        });
+    } catch (...) {
+        std::throw_with_nested(std::runtime_error(format(
+                "frozen_mutation::consume_gently(): failed consuming mutation {} of {}.{}", key(), s->ks_name(), s->cf_name())));
+    }
+}
+
+template<FlattenedConsumerV2 Consumer>
+auto frozen_mutation::consume_gently(schema_ptr s, Consumer& consumer) const -> future<frozen_mutation_consume_result<decltype(consumer.consume_end_of_stream())>> {
+    frozen_mutation_consumer_adaptor adaptor(s, consumer);
+    co_return co_await consume_gently(s, adaptor);
 }

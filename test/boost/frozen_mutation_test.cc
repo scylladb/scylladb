@@ -35,14 +35,28 @@ static tombstone new_tombstone() {
     return { new_timestamp(), gc_clock::now() };
 };
 
-SEASTAR_TEST_CASE(test_writing_and_reading) {
-    return seastar::async([] {
-        for_each_mutation([](const mutation &m) {
+template <typename UnfreezeFunc>
+requires std::same_as<std::invoke_result_t<UnfreezeFunc, const frozen_mutation&, schema_ptr>, mutation>
+static future<> _test_freeze_unfreeze(UnfreezeFunc&& unfreeze_func) {
+    return seastar::async([unfreeze_func = std::move(unfreeze_func)] {
+        for_each_mutation([&unfreeze_func](const mutation &m) {
             auto frozen = freeze(m);
             BOOST_REQUIRE_EQUAL(frozen.schema_version(), m.schema()->version());
-            assert_that(frozen.unfreeze(m.schema())).is_equal_to(m);
+            assert_that(unfreeze_func(frozen, m.schema())).is_equal_to(m);
             BOOST_REQUIRE(frozen.decorated_key(*m.schema()).equal(*m.schema(), m.decorated_key()));
         });
+    });
+}
+
+SEASTAR_TEST_CASE(test_writing_and_reading) {
+    return _test_freeze_unfreeze([] (const frozen_mutation& fm, schema_ptr s) {
+        return fm.unfreeze(std::move(s));
+    });
+}
+
+SEASTAR_TEST_CASE(test_writing_and_reading_gently) {
+    return _test_freeze_unfreeze([] (const frozen_mutation& fm, schema_ptr s) {
+        return fm.unfreeze_gently(std::move(s)).get();
     });
 }
 

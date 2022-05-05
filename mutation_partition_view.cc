@@ -7,6 +7,8 @@
  */
 
 #include <seastar/core/simple-stream.hh>
+#include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 
 #include "mutation_partition_view.hh"
 #include "schema.hh"
@@ -236,9 +238,58 @@ void mutation_partition_view::do_accept(const column_mapping& cm, Visitor& visit
     }
 }
 
+template<typename Visitor>
+requires MutationViewVisitor<Visitor>
+future<> mutation_partition_view::do_accept_gently(const column_mapping& cm, Visitor& visitor) const {
+    auto in = _in;
+    auto mpv = ser::deserialize(in, boost::type<ser::mutation_partition_view>());
+
+    visitor.accept_partition_tombstone(mpv.tomb());
+
+    struct static_row_cell_visitor {
+        Visitor& _visitor;
+
+        void accept_atomic_cell(column_id id, atomic_cell ac) const {
+           _visitor.accept_static_cell(id, std::move(ac));
+        }
+        void accept_collection(column_id id, const collection_mutation& cm) const {
+           _visitor.accept_static_cell(id, cm);
+        }
+    };
+    read_and_visit_row(mpv.static_row(), cm, column_kind::static_column, static_row_cell_visitor{visitor});
+    co_await coroutine::maybe_yield();
+
+    for (auto&& rt : mpv.range_tombstones()) {
+        visitor.accept_row_tombstone(rt);
+        co_await coroutine::maybe_yield();
+    }
+
+    for (auto&& cr : mpv.rows()) {
+        auto t = row_tombstone(cr.deleted_at(), shadowable_tombstone(cr.shadowable_deleted_at()));
+        visitor.accept_row(position_in_partition_view::for_key(cr.key()), t, read_row_marker(cr.marker()), is_dummy::no, is_continuous::yes);
+
+        struct cell_visitor {
+            Visitor& _visitor;
+
+            void accept_atomic_cell(column_id id, atomic_cell ac) const {
+               _visitor.accept_row_cell(id, std::move(ac));
+            }
+            void accept_collection(column_id id, const collection_mutation& cm) const {
+               _visitor.accept_row_cell(id, cm);
+            }
+        };
+        read_and_visit_row(cr.cells(), cm, column_kind::regular_column, cell_visitor{visitor});
+        co_await coroutine::maybe_yield();
+    }
+}
+
 void mutation_partition_view::accept(const schema& s, partition_builder& visitor) const
 {
     do_accept(s.get_column_mapping(), visitor);
+}
+
+future<> mutation_partition_view::accept_gently(const schema& s, partition_builder& visitor) const {
+    return do_accept_gently(s.get_column_mapping(), visitor);
 }
 
 void mutation_partition_view::accept(const column_mapping& cm, converting_mutation_partition_applier& visitor) const
@@ -246,8 +297,16 @@ void mutation_partition_view::accept(const column_mapping& cm, converting_mutati
     do_accept(cm, visitor);
 }
 
+future<> mutation_partition_view::accept_gently(const column_mapping& cm, converting_mutation_partition_applier& visitor) const {
+    return do_accept_gently(cm, visitor);
+}
+
 void mutation_partition_view::accept(const column_mapping& cm, mutation_partition_view_virtual_visitor& visitor) const {
     do_accept(cm, visitor);
+}
+
+future<> mutation_partition_view::accept_gently(const column_mapping& cm, mutation_partition_view_virtual_visitor& visitor) const {
+    return do_accept_gently(cm, visitor);
 }
 
 std::optional<clustering_key> mutation_partition_view::first_row_key() const
