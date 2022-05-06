@@ -339,6 +339,9 @@ private:
     // Stop all fibers, without waiting. Safe to be called multiple times.
     void do_stop() noexcept;
     void really_do_stop();
+
+    // Propagate replacement of sstables to all ongoing compaction of a given table
+    void propagate_replacement(replica::table* t, const std::vector<sstables::shared_sstable>& removed, const std::vector<sstables::shared_sstable>& added);
 public:
     compaction_manager(compaction_scheduling_group csg, maintenance_scheduling_group msg, size_t available_memory, abort_source& as);
     compaction_manager(compaction_scheduling_group csg, maintenance_scheduling_group msg, size_t available_memory, uint64_t shares, abort_source& as);
@@ -460,9 +463,6 @@ public:
     void register_backlog_tracker(compaction_backlog_tracker& backlog_tracker) {
         _backlog_manager.register_backlog_tracker(backlog_tracker);
     }
-
-    // Propagate replacement of sstables to all ongoing compaction of a given table
-    void propagate_replacement(replica::table* t, const std::vector<sstables::shared_sstable>& removed, const std::vector<sstables::shared_sstable>& added);
 
     static sstables::compaction_data create_compaction_data();
 
