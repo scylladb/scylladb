@@ -1054,7 +1054,7 @@ protected:
     }
 
 private:
-    future<> rewrite_sstable(sstables::shared_sstable sst) {
+    future<> rewrite_sstable(const sstables::shared_sstable sst) {
         co_await coroutine::switch_to(_cm._compaction_controller.sg());
 
         for (;;) {
@@ -1063,7 +1063,7 @@ private:
             auto sstable_level = sst->get_sstable_level();
             auto run_identifier = sst->run_identifier();
             // FIXME: this compaction should run with maintenance priority.
-            auto descriptor = sstables::compaction_descriptor({ std::move(sst) }, service::get_local_compaction_priority(),
+            auto descriptor = sstables::compaction_descriptor({ sst }, service::get_local_compaction_priority(),
                 sstable_level, sstables::compaction_descriptor::default_max_sstable_bytes, run_identifier, _options);
 
             // Releases reference to cleaned sstable such that respective used disk space can be freed.
