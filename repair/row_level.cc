@@ -727,7 +727,7 @@ private:
     row_level_repair* _row_level_repair_ptr;
     std::vector<repair_node_state> _all_node_states;
     is_dirty_on_master _dirty_on_master = is_dirty_on_master::no;
-    std::optional<shared_promise<>> _stop_promise;
+    std::optional<shared_future<>> _stopped;
     repair_hasher _repair_hasher;
 public:
     std::vector<repair_node_state>& all_nodes() {
@@ -851,34 +851,25 @@ public:
 
     future<> stop() {
         // Handle deferred stop
-        if (_stop_promise) {
-            if (!_stop_promise->available()) {
-                rlogger.debug("repair_meta::stop: wait on previous stop");
-            }
-            return _stop_promise->get_shared_future();
+        if (_stopped) {
+            return _stopped->get_future();
         }
-        _stop_promise.emplace();
-        auto ret = _stop_promise->get_shared_future();
+        promise<> stopped;
+        _stopped.emplace(stopped.get_future());
         auto gate_future = _gate.close();
         auto f1 = _sink_source_for_get_full_row_hashes.close();
         auto f2 = _sink_source_for_get_row_diff.close();
         auto f3 = _sink_source_for_put_row_diff.close();
         rlogger.debug("repair_meta::stop");
-        // move to background.  waited on via _stop_promise->get_future.
-        (void)when_all_succeed(std::move(gate_future), std::move(f1), std::move(f2), std::move(f3)).discard_result().finally([this] {
+        // move to background.  waited on via _stopped->get_future.
+        when_all_succeed(std::move(gate_future), std::move(f1), std::move(f2), std::move(f3)).discard_result().finally([this] {
             return _repair_writer->wait_for_writer_done().finally([this] {
                 return close().then([this] {
                     return clear_gently();
                 });
             });
-        }).then_wrapped([this] (future<> f) {
-            if (f.failed()) {
-                _stop_promise->set_exception(f.get_exception());
-            } else {
-                _stop_promise->set_value();
-            }
-        });
-        return ret;
+        }).forward_to(std::move(stopped));
+        return _stopped->get_future();
     }
 
     void reset_peer_row_hash_sets() {
