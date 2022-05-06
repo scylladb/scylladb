@@ -2170,7 +2170,7 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
 
     if (auto_snapshot) {
         auto name = format("{:d}-{}", truncated_at.time_since_epoch().count(), cf.schema()->cf_name());
-        co_await cf.snapshot(*this, name);
+        co_await cf.snapshot(*this, name, true);
     }
 
     db::replay_position rp = co_await cf.discard_sstables(truncated_at);
