@@ -2073,6 +2073,28 @@ future<> database::flush(const sstring& ksname, const sstring& cfname) {
     return cf.flush();
 }
 
+future<> database::flush_on_all(utils::UUID id) {
+    return container().invoke_on_all([id] (replica::database& db) {
+        return db.find_column_family(id).flush();
+    });
+}
+
+future<> database::flush_on_all(std::string_view ks_name, std::string_view table_name) {
+    return flush_on_all(find_uuid(ks_name, table_name));
+}
+
+future<> database::flush_on_all(std::string_view ks_name, std::vector<sstring> table_names) {
+    return parallel_for_each(table_names, [this, ks_name] (const auto& table_name) {
+        return flush_on_all(ks_name, table_name);
+    });
+}
+
+future<> database::flush_on_all(std::string_view ks_name) {
+    return parallel_for_each(find_keyspace(ks_name).metadata()->cf_meta_data(), [this] (auto& pair) {
+        return flush_on_all(pair.second->id());
+    });
+}
+
 future<> database::truncate(sstring ksname, sstring cfname, timestamp_func tsf) {
     auto& ks = find_keyspace(ksname);
     auto& cf = find_column_family(ksname, cfname);

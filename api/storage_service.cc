@@ -26,6 +26,7 @@
 #include "db/system_keyspace.hh"
 #include <seastar/http/exception.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 #include "repair/row_level.hh"
 #include "locator/snitch_base.hh"
 #include "column_family.hh"
@@ -678,19 +679,16 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         });
     }));
 
-    ss::force_keyspace_flush.set(r, [&ctx](std::unique_ptr<request> req) {
+    ss::force_keyspace_flush.set(r, [&ctx](std::unique_ptr<request> req) -> future<json::json_return_type> {
         auto keyspace = validate_keyspace(ctx, req->param);
         auto column_families = parse_tables(keyspace, ctx, req->query_parameters, "cf");
+        auto &db = ctx.db.local();
         if (column_families.empty()) {
-            column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
+            co_await db.flush_on_all(keyspace);
+        } else {
+            co_await db.flush_on_all(keyspace, std::move(column_families));
         }
-        return ctx.db.invoke_on_all([keyspace, column_families] (replica::database& db) {
-            return parallel_for_each(column_families, [&db, keyspace](const sstring& cf) mutable {
-                return db.find_column_family(keyspace, cf).flush();
-            });
-        }).then([]{
-                return make_ready_future<json::json_return_type>(json_void());
-        });
+        co_return json_void();
     });
 
 
