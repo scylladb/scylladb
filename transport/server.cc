@@ -445,7 +445,9 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
                 break;
             case auth_state::AUTHENTICATION:
                 // Support both SASL auth from protocol v2 and the older style Credentials auth from v1
-                assert(cqlop == cql_binary_opcode::AUTH_RESPONSE || cqlop == cql_binary_opcode::CREDENTIALS);
+                if (cqlop != cql_binary_opcode::AUTH_RESPONSE && cqlop != cql_binary_opcode::CREDENTIALS) {
+                    throw exceptions::protocol_exception(format("Unexpected message {:d}, expecting AUTH_RESPONSE or CREDENTIALS", int(cqlop)));
+                }
                 if (res_op == cql_binary_opcode::READY || res_op == cql_binary_opcode::AUTH_SUCCESS) {
                     client_state.set_auth_state(auth_state::READY);
                 }
