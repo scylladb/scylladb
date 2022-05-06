@@ -281,6 +281,12 @@ def test_storage_service_snapshot(cql, this_dc, rest_api):
                     'value': [{'ks': ks0, 'cf': cf00, 'total': 1, 'live': 0}]
                 })
 
+                cql.execute(f"TRUNCATE {table00}")
+                verify_snapshot_details({
+                    'key': snapshot0,
+                    'value': [{'ks': ks0, 'cf': cf00, 'total': 1, 'live': 1}]
+                })
+
             with new_test_table(cql, keyspace0, "p text PRIMARY KEY") as table01:
                 _, cf01 = table01.split('.')
                 stmt = cql.prepare(f"INSERT INTO {table01} (p) VALUES (?)")
@@ -291,7 +297,7 @@ def test_storage_service_snapshot(cql, this_dc, rest_api):
                     verify_snapshot_details({
                         'key': snapshot1,
                         'value': [
-                            {'ks': ks0, 'cf': cf00, 'total': 1, 'live': 0},
+                            {'ks': ks0, 'cf': cf00, 'total': 0, 'live': 0},
                             {'ks': ks0, 'cf': cf01, 'total': 1, 'live': 0}
                         ]
                     })
@@ -305,7 +311,7 @@ def test_storage_service_snapshot(cql, this_dc, rest_api):
                             verify_snapshot_details({
                                 'key': snapshot2,
                                 'value': [
-                                    {'ks': ks0, 'cf': cf00, 'total': 1, 'live': 0},
+                                    {'ks': ks0, 'cf': cf00, 'total': 0, 'live': 0},
                                     {'ks': ks0, 'cf': cf01, 'total': 1, 'live': 0},
                                     {'ks': ks1, 'cf': cf10, 'total': 0, 'live': 0}
                                 ]
@@ -316,7 +322,7 @@ def test_storage_service_snapshot(cql, this_dc, rest_api):
                             verify_snapshot_details({
                                 'key': snapshot3,
                                 'value': [
-                                    {'ks': ks0, 'cf': cf00, 'total': 1, 'live': 0},
+                                    {'ks': ks0, 'cf': cf00, 'total': 0, 'live': 0},
                                     {'ks': ks0, 'cf': cf01, 'total': 1, 'live': 0},
                                     {'ks': ks1, 'cf': cf10, 'total': 0, 'live': 0}
                                 ]
