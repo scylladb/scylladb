@@ -830,7 +830,11 @@ public:
 
     db::replay_position set_low_replay_position_mark();
 
+private:
     future<> snapshot(database& db, sstring name, bool skip_flush = false);
+
+    friend class database;
+public:
     future<std::unordered_map<sstring, snapshot_details>> get_snapshot_details();
 
     /*!
