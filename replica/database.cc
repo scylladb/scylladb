@@ -19,6 +19,7 @@
 #include "cql3/functions/user_function.hh"
 #include <seastar/core/seastar.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/metrics.hh>
 #include <boost/algorithm/string/erase.hpp>
@@ -2092,6 +2093,25 @@ future<> database::flush_on_all(std::string_view ks_name, std::vector<sstring> t
 future<> database::flush_on_all(std::string_view ks_name) {
     return parallel_for_each(find_keyspace(ks_name).metadata()->cf_meta_data(), [this] (auto& pair) {
         return flush_on_all(pair.second->id());
+    });
+}
+
+future<> database::snapshot_on_all(std::string_view ks_name, std::vector<sstring> table_names, sstring tag, bool skip_flush) {
+    co_await coroutine::parallel_for_each(table_names, [this, ks_name, tag = std::move(tag), skip_flush] (const auto& table_name) {
+        return container().invoke_on_all([ks_name, &table_name, tag, skip_flush] (replica::database& db) {
+            auto& t = db.find_column_family(ks_name, table_name);
+            return t.snapshot(db, tag, skip_flush);
+        });
+    });
+}
+
+future<> database::snapshot_on_all(std::string_view ks_name, sstring tag, bool skip_flush) {
+    auto& ks = find_keyspace(ks_name);
+    co_await coroutine::parallel_for_each(ks.metadata()->cf_meta_data(), [this, tag = std::move(tag), skip_flush] (const auto& pair) {
+        return container().invoke_on_all([id = pair.second, tag, skip_flush] (replica::database& db) {
+            auto& t = db.find_column_family(id);
+            return t.snapshot(db, tag, skip_flush);
+        });
     });
 }
 

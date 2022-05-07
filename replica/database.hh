@@ -1565,6 +1565,9 @@ public:
     // flush all tables in a keyspace on all shards.
     future<> flush_on_all(std::string_view ks_name);
 
+    future<> snapshot_on_all(std::string_view ks_name, std::vector<sstring> table_names, sstring tag, bool skip_flush);
+    future<> snapshot_on_all(std::string_view ks_name, sstring tag, bool skip_flush);
+
     // See #937. Truncation now requires a callback to get a time stamp
     // that must be guaranteed to be the same for all shards.
     typedef std::function<future<db_clock::time_point>()> timestamp_func;

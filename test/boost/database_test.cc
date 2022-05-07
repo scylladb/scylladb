@@ -432,10 +432,7 @@ future<> do_with_some_data(std::vector<sstring> cf_names, std::function<future<>
 
 future<> take_snapshot(sharded<replica::database>& db, bool skip_flush = false, sstring ks_name = "ks", sstring cf_name = "cf", sstring snapshot_name = "test") {
     try {
-        co_await db.invoke_on_all([&ks_name, &cf_name, &snapshot_name, skip_flush] (replica::database& db) {
-            auto& cf = db.find_column_family(ks_name, cf_name);
-            return cf.snapshot(db, snapshot_name, skip_flush);
-        });
+        co_await db.local().snapshot_on_all(ks_name, {cf_name}, snapshot_name, skip_flush);
     } catch (...) {
         testlog.error("Could not take snapshot for {}.{} snapshot_name={} skip_flush={}: {}",
                 ks_name, cf_name, snapshot_name, skip_flush, std::current_exception());

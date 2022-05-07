@@ -71,14 +71,8 @@ future<> snapshot_ctl::do_take_snapshot(sstring tag, std::vector<sstring> keyspa
     co_await coroutine::parallel_for_each(keyspace_names, [tag, this] (const auto& ks_name) {
         return check_snapshot_not_exist(ks_name, tag);
     });
-    co_await _db.invoke_on_all([tag = std::move(tag), keyspace_names = std::move(keyspace_names), sf] (replica::database& db) {
-        return parallel_for_each(keyspace_names, [&db, tag, sf] (auto& ks_name) {
-            auto& ks = db.find_keyspace(ks_name);
-            return parallel_for_each(ks.metadata()->cf_meta_data(), [&db, tag, sf] (auto& pair) {
-                auto& cf = db.find_column_family(pair.second);
-                return cf.snapshot(db, tag, bool(sf));
-            });
-        });
+    co_await coroutine::parallel_for_each(keyspace_names, [this, tag = std::move(tag), sf] (const auto& ks_name) {
+        return _db.local().snapshot_on_all(ks_name, tag, bool(sf));
     });
 }
 
@@ -102,14 +96,12 @@ future<> snapshot_ctl::do_take_column_family_snapshot(sstring ks_name, std::vect
     co_await check_snapshot_not_exist(ks_name, tag, tables);
 
     for (const auto& table_name : tables) {
-        co_await _db.invoke_on_all([&] (replica::database &db) {
-            auto& cf = db.find_column_family(ks_name, table_name);
-            if (cf.schema()->is_view()) {
-                throw std::invalid_argument("Do not take a snapshot of a materialized view or a secondary index by itself. Run snapshot on the base table instead.");
-            }
-            return cf.snapshot(db, tag, bool(sf));
-        });
+        auto& cf = _db.local().find_column_family(ks_name, table_name);
+        if (cf.schema()->is_view()) {
+            throw std::invalid_argument("Do not take a snapshot of a materialized view or a secondary index by itself. Run snapshot on the base table instead.");
+        }
     }
+    co_await _db.local().snapshot_on_all(ks_name, std::move(tables), std::move(tag), bool(sf));
 }
 
 future<> snapshot_ctl::take_column_family_snapshot(sstring ks_name, sstring cf_name, sstring tag, skip_flush sf) {
