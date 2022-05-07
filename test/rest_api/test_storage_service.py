@@ -209,3 +209,35 @@ def test_toppartitions_pk_needs_escaping(cql, this_dc, rest_api):
             t2.start()
             t1.join()
             t2.join()
+
+# TODO: check that keyspace_flush actually does anything, like create new sstables.
+def test_storage_service_flush(cql, this_dc, rest_api):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
+        with new_test_table(cql, keyspace, "p text PRIMARY KEY") as table0:
+            ks, t0 = table0.split('.')
+            stmt = cql.prepare(f"INSERT INTO {table0} (p) VALUES (?)")
+            cql.execute(stmt, ["pk0"])
+            with new_test_table(cql, keyspace, "p text PRIMARY KEY") as table1:
+                _, t1 = table1.split('.')
+                stmt = cql.prepare(f"INSERT INTO {table1} (p) VALUES (?)")
+                cql.execute(stmt, ["pk1"])
+
+                # test the keyspace_flush doesn't produce any errors when called on existing keyspace and table(s)
+                resp = rest_api.send("POST", f"storage_service/keyspace_flush/{ks}")
+                resp.raise_for_status()
+
+                resp = rest_api.send("POST", f"storage_service/keyspace_flush/{ks}", { "cf": f"{t0}"})
+                resp.raise_for_status()
+
+                resp = rest_api.send("POST", f"storage_service/keyspace_flush/{ks}", { "cf": f"{t0},{t1}"})
+                resp.raise_for_status()
+
+                # test error when keyspace_flush is called on non-existing keyspace or table(s)
+                resp = rest_api.send("POST", f"storage_service/keyspace_flush/no_such_keyspace")
+                assert resp.status_code == requests.codes.bad_request
+
+                resp = rest_api.send("POST", f"storage_service/keyspace_flush/{ks}", { "cf": f"no_such_table"} )
+                assert resp.status_code == requests.codes.bad_request
+
+                resp = rest_api.send("POST", f"storage_service/keyspace_flush/{ks}", { "cf": f"{t0},no_such_table,{t1}"} )
+                assert resp.status_code == requests.codes.bad_request
