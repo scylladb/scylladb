@@ -13,6 +13,7 @@
 #include <boost/range/adaptors.hpp>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 #include "db/snapshot-ctl.hh"
 #include "replica/database.hh"
 
@@ -61,18 +62,21 @@ future<> snapshot_ctl::take_snapshot(sstring tag, std::vector<sstring> keyspace_
         boost::copy(_db.local().get_keyspaces() | boost::adaptors::map_keys, std::back_inserter(keyspace_names));
     };
 
-    return run_snapshot_modify_operation([tag = std::move(tag), keyspace_names = std::move(keyspace_names), sf, this] {
-        return parallel_for_each(keyspace_names, [tag, this] (auto& ks_name) {
-            return check_snapshot_not_exist(ks_name, tag);
-        }).then([this, tag, keyspace_names, sf] {
-            return _db.invoke_on_all([tag = std::move(tag), keyspace_names, sf] (replica::database& db) {
-                return parallel_for_each(keyspace_names, [&db, tag = std::move(tag), sf] (auto& ks_name) {
-                    auto& ks = db.find_keyspace(ks_name);
-                    return parallel_for_each(ks.metadata()->cf_meta_data(), [&db, tag = std::move(tag), sf] (auto& pair) {
-                        auto& cf = db.find_column_family(pair.second);
-                        return cf.snapshot(db, tag, bool(sf));
-                    });
-                });
+    return run_snapshot_modify_operation([tag = std::move(tag), keyspace_names = std::move(keyspace_names), sf, this] () mutable {
+        return do_take_snapshot(std::move(tag), std::move(keyspace_names), sf);
+    });
+}
+
+future<> snapshot_ctl::do_take_snapshot(sstring tag, std::vector<sstring> keyspace_names, skip_flush sf) {
+    co_await coroutine::parallel_for_each(keyspace_names, [tag, this] (const auto& ks_name) {
+        return check_snapshot_not_exist(ks_name, tag);
+    });
+    co_await _db.invoke_on_all([tag = std::move(tag), keyspace_names = std::move(keyspace_names), sf] (replica::database& db) {
+        return parallel_for_each(keyspace_names, [&db, tag, sf] (auto& ks_name) {
+            auto& ks = db.find_keyspace(ks_name);
+            return parallel_for_each(ks.metadata()->cf_meta_data(), [&db, tag, sf] (auto& pair) {
+                auto& cf = db.find_column_family(pair.second);
+                return cf.snapshot(db, tag, bool(sf));
             });
         });
     });
@@ -89,21 +93,25 @@ future<> snapshot_ctl::take_column_family_snapshot(sstring ks_name, std::vector<
         throw std::runtime_error("You must supply a snapshot name.");
     }
 
-    return run_snapshot_modify_operation([this, ks_name = std::move(ks_name), tables = std::move(tables), tag = std::move(tag), sf] {
-        return check_snapshot_not_exist(ks_name, tag, tables).then([this, ks_name, tables, tag, sf] {
-            return do_with(std::vector<sstring>(std::move(tables)),[this, ks_name, tag, sf](const std::vector<sstring>& tables) {
-                return do_for_each(tables, [ks_name, tag, sf, this] (const sstring& table_name) {
-                    if (table_name.find(".") != sstring::npos) {
-                        throw std::invalid_argument("Cannot take a snapshot of a secondary index by itself. Run snapshot on the table that owns the index.");
-                    }
-                    return _db.invoke_on_all([ks_name, table_name, tag, sf] (replica::database &db) {
-                        auto& cf = db.find_column_family(ks_name, table_name);
-                        return cf.snapshot(db, tag, bool(sf));
-                    });
-                });
-            });
-        });
+    return run_snapshot_modify_operation([this, ks_name = std::move(ks_name), tables = std::move(tables), tag = std::move(tag), sf] () mutable {
+        return do_take_column_family_snapshot(std::move(ks_name), std::move(tables), std::move(tag), sf);
     });
+}
+
+future<> snapshot_ctl::do_take_column_family_snapshot(sstring ks_name, std::vector<sstring> tables, sstring tag, skip_flush sf) {
+    co_await check_snapshot_not_exist(ks_name, tag, tables);
+
+    for (const auto& table_name : tables) {
+        co_await _db.invoke_on_all([&] (replica::database &db) {
+            auto& cf = db.find_column_family(ks_name, table_name);
+            // FIXME: need a better way.
+            // See https://github.com/scylladb/scylla/issues/10526
+            if (table_name.find(".") != sstring::npos) {
+                throw std::invalid_argument("Cannot take a snapshot of a secondary index by itself. Run snapshot on the table that owns the index.");
+            }
+            return cf.snapshot(db, tag, bool(sf));
+        });
+    }
 }
 
 future<> snapshot_ctl::take_column_family_snapshot(sstring ks_name, sstring cf_name, sstring tag, skip_flush sf) {
