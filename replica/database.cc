@@ -2097,20 +2097,26 @@ future<> database::flush_on_all(std::string_view ks_name) {
 }
 
 future<> database::snapshot_on_all(std::string_view ks_name, std::vector<sstring> table_names, sstring tag, bool skip_flush) {
-    co_await coroutine::parallel_for_each(table_names, [this, ks_name, tag = std::move(tag), skip_flush] (const auto& table_name) {
-        return container().invoke_on_all([ks_name, &table_name, tag, skip_flush] (replica::database& db) {
+    co_await coroutine::parallel_for_each(table_names, [this, ks_name, tag = std::move(tag), skip_flush] (const auto& table_name) -> future<> {
+        if (!skip_flush) {
+            co_await flush_on_all(ks_name, table_name);
+        }
+        co_await container().invoke_on_all([ks_name, &table_name, tag, skip_flush] (replica::database& db) {
             auto& t = db.find_column_family(ks_name, table_name);
-            return t.snapshot(db, tag, skip_flush);
+            return t.snapshot(db, tag, true);
         });
     });
 }
 
 future<> database::snapshot_on_all(std::string_view ks_name, sstring tag, bool skip_flush) {
     auto& ks = find_keyspace(ks_name);
-    co_await coroutine::parallel_for_each(ks.metadata()->cf_meta_data(), [this, tag = std::move(tag), skip_flush] (const auto& pair) {
-        return container().invoke_on_all([id = pair.second, tag, skip_flush] (replica::database& db) {
+    co_await coroutine::parallel_for_each(ks.metadata()->cf_meta_data(), [this, tag = std::move(tag), skip_flush] (const auto& pair) -> future<> {
+        if (!skip_flush) {
+            co_await flush_on_all(pair.second->id());
+        }
+        co_await container().invoke_on_all([id = pair.second, tag, skip_flush] (replica::database& db) {
             auto& t = db.find_column_family(id);
-            return t.snapshot(db, tag, skip_flush);
+            return t.snapshot(db, tag, true);
         });
     });
 }
