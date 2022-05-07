@@ -2103,7 +2103,7 @@ future<> database::snapshot_on_all(std::string_view ks_name, std::vector<sstring
         }
         co_await container().invoke_on_all([ks_name, &table_name, tag, skip_flush] (replica::database& db) {
             auto& t = db.find_column_family(ks_name, table_name);
-            return t.snapshot(db, tag, true);
+            return t.snapshot(db, tag);
         });
     });
 }
@@ -2116,7 +2116,7 @@ future<> database::snapshot_on_all(std::string_view ks_name, sstring tag, bool s
         }
         co_await container().invoke_on_all([id = pair.second, tag, skip_flush] (replica::database& db) {
             auto& t = db.find_column_family(id);
-            return t.snapshot(db, tag, true);
+            return t.snapshot(db, tag);
         });
     });
 }
@@ -2170,7 +2170,7 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
 
     if (auto_snapshot) {
         auto name = format("{:d}-{}", truncated_at.time_since_epoch().count(), cf.schema()->cf_name());
-        co_await cf.snapshot(*this, name, true);
+        co_await cf.snapshot(*this, name);
     }
 
     db::replay_position rp = co_await cf.discard_sstables(truncated_at);

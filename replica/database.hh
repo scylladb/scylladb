@@ -831,7 +831,7 @@ public:
     db::replay_position set_low_replay_position_mark();
 
 private:
-    future<> snapshot(database& db, sstring name, bool skip_flush = false);
+    future<> snapshot(database& db, sstring name);
 
     friend class database;
 public:

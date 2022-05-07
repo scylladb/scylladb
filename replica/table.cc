@@ -1345,11 +1345,11 @@ future<> table::write_schema_as_cql(database& db, sstring dir) const {
 
 }
 
-future<> table::snapshot(database& db, sstring name, bool skip_flush) {
+future<> table::snapshot(database& db, sstring name) {
     auto jsondir = _config.datadir + "/snapshots/" + name;
-    tlogger.debug("snapshot {}: skip_flush={}", jsondir, skip_flush);
-    auto f = skip_flush ? make_ready_future<>() : flush();
-    return f.then([this, &db, jsondir = std::move(jsondir)]() {
+    tlogger.debug("snapshot {}", jsondir);
+
+    // FIXME: indentation
        return with_semaphore(_sstable_deletion_sem, 1, [this, &db, jsondir = std::move(jsondir)]() {
         auto tables = boost::copy_range<std::vector<sstables::shared_sstable>>(*_sstables->all());
         return do_with(std::move(tables), std::move(jsondir), [this, &db] (std::vector<sstables::shared_sstable>& tables, const sstring& jsondir) {
@@ -1415,7 +1415,6 @@ future<> table::snapshot(database& db, sstring name, bool skip_flush) {
             });
         });
        });
-    });
 }
 
 future<bool> table::snapshot_exists(sstring tag) {
