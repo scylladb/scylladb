@@ -99,6 +99,10 @@ public:
         }
         return fragmented_temporary_buffer(std::move(fragments), data_size);
     }
+
+    vector_type release() && noexcept {
+        return std::move(_fragments);
+    }
 };
 
 class fragmented_temporary_buffer::view {
