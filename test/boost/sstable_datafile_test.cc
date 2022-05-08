@@ -337,12 +337,6 @@ SEASTAR_TEST_CASE(datafile_generation_16) {
 }
 
 // mutation_reader for sstable keeping all the required objects alive.
-static flat_mutation_reader sstable_reader(shared_sstable sst, schema_ptr s, reader_permit permit) {
-    return sst->as_mutation_source().make_reader(s, std::move(permit), query::full_partition_range, s->full_slice());
-
-}
-
-// mutation_reader for sstable keeping all the required objects alive.
 static flat_mutation_reader_v2 sstable_reader_v2(shared_sstable sst, schema_ptr s, reader_permit permit) {
     return sst->as_mutation_source().make_reader_v2(s, std::move(permit), query::full_partition_range, s->full_slice());
 

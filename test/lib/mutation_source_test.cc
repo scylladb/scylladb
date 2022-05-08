@@ -15,7 +15,6 @@
 #include "counters.hh"
 #include "mutation_rebuilder.hh"
 #include "test/lib/simple_schema.hh"
-#include "readers/flat_mutation_reader.hh"
 #include "readers/flat_mutation_reader_v2.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
 #include "mutation_query.hh"
@@ -62,16 +61,6 @@ private:
 public:
     explicit partition_range_walker(std::vector<dht::partition_range> ranges) : _ranges(ranges) { }
     const dht::partition_range& initial_range() const { return _ranges[0]; }
-    void fast_forward_if_needed(flat_reader_assertions& mr, const mutation& expected, bool verify_eos = true) {
-        while (!current_range().contains(expected.decorated_key(), dht::ring_position_comparator(*expected.schema()))) {
-            _current_position++;
-            assert(_current_position < _ranges.size());
-            if (verify_eos) {
-                mr.produces_end_of_stream();
-            }
-            mr.fast_forward_to(current_range());
-        }
-    }
     void fast_forward_if_needed(flat_reader_assertions_v2& mr, const mutation& expected, bool verify_eos = true) {
         while (!current_range().contains(expected.decorated_key(), dht::ring_position_comparator(*expected.schema()))) {
             _current_position++;
@@ -2724,36 +2713,6 @@ void for_each_schema_change(std::function<void(schema_ptr, const std::vector<mut
     test_mutated_schemas();
 }
 
-// Returns true iff the readers were non-empty.
-static bool compare_readers(const schema& s, flat_mutation_reader& authority, flat_reader_assertions& tested) {
-    bool empty = true;
-    while (auto expected = authority().get()) {
-        tested.produces(s, *expected);
-        empty = false;
-    }
-    tested.produces_end_of_stream();
-    return !empty;
-}
-
-void compare_readers(const schema& s, flat_mutation_reader authority, flat_mutation_reader tested) {
-    auto close_authority = deferred_close(authority);
-    auto assertions = assert_that(std::move(tested));
-    compare_readers(s, authority, assertions);
-}
-
-// Assumes that the readers return fragments from (at most) a single (and the same) partition.
-void compare_readers(const schema& s, flat_mutation_reader authority, flat_mutation_reader tested, const std::vector<position_range>& fwd_ranges) {
-    auto close_authority = deferred_close(authority);
-    auto assertions = assert_that(std::move(tested));
-    if (compare_readers(s, authority, assertions)) {
-        for (auto& r: fwd_ranges) {
-            authority.fast_forward_to(r).get();
-            assertions.fast_forward_to(r);
-            compare_readers(s, authority, assertions);
-        }
-    }
-}
-
 static bool compare_readers(const schema& s, flat_mutation_reader_v2& authority, flat_reader_assertions_v2& tested) {
     bool empty = true;
     while (auto expected = authority().get()) {
@@ -2781,65 +2740,6 @@ void compare_readers(const schema& s, flat_mutation_reader_v2 authority, flat_mu
             compare_readers(s, authority, assertions);
         }
     }
-}
-
-mutation forwardable_reader_to_mutation(flat_mutation_reader r, const std::vector<position_range>& fwd_ranges) {
-    auto close_reader = deferred_close(r);
-
-    struct consumer {
-        schema_ptr _s;
-        std::optional<mutation_rebuilder>& _builder;
-        consumer(schema_ptr s, std::optional<mutation_rebuilder>& builder)
-            : _s(std::move(s))
-            , _builder(builder) { }
-
-        void consume_new_partition(const dht::decorated_key& dk) {
-            assert(!_builder);
-            _builder = mutation_rebuilder(std::move(_s));
-            _builder->consume_new_partition(dk);
-        }
-
-        stop_iteration consume(tombstone t) {
-            assert(_builder);
-            return _builder->consume(t);
-        }
-
-        stop_iteration consume(range_tombstone&& rt) {
-            assert(_builder);
-            return _builder->consume(std::move(rt));
-        }
-
-        stop_iteration consume(static_row&& sr) {
-            assert(_builder);
-            return _builder->consume(std::move(sr));
-        }
-
-        stop_iteration consume(clustering_row&& cr) {
-            assert(_builder);
-            return _builder->consume(std::move(cr));
-        }
-
-        stop_iteration consume_end_of_partition() {
-            assert(_builder);
-            return stop_iteration::yes;
-        }
-
-        void consume_end_of_stream() { }
-    };
-
-    std::optional<mutation_rebuilder> builder{};
-    r.consume(consumer(r.schema(), builder)).get();
-    BOOST_REQUIRE(builder);
-    for (auto& range : fwd_ranges) {
-        testlog.trace("forwardable_reader_to_mutation: forwarding to {}", range);
-        r.fast_forward_to(range).get();
-        r.consume(consumer(r.schema(), builder)).get();
-    }
-
-    auto m = builder->consume_end_of_stream();
-    BOOST_REQUIRE(m);
-
-    return std::move(*m);
 }
 
 mutation forwardable_reader_to_mutation(flat_mutation_reader_v2 r, const std::vector<position_range>& fwd_ranges) {
