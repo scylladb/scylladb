@@ -831,26 +831,29 @@ SEASTAR_TEST_CASE(test_wrong_range_tombstone_order) {
 
         auto sst = env.make_sstable(s, get_test_dir("wrong_range_tombstone_order", s), 1, version, big);
         sst->load().get0();
-        auto reader = sstable_reader(sst, s, env.make_reader_permit());
+        auto reader = sstable_reader_v2(sst, s, env.make_reader_permit());
 
-        using kind = mutation_fragment::kind;
+        using kind = mutation_fragment_v2::kind;
         assert_that(std::move(reader))
             .produces_partition_start(dkey)
-            .produces(kind::range_tombstone, { 0 })
+            .produces(kind::range_tombstone_change, { 0 })
+            .produces(kind::range_tombstone_change, { 0 })
             .produces(kind::clustering_row, { 1 })
             .produces(kind::clustering_row, { 1, 1 })
             .produces(kind::clustering_row, { 1, 2 })
             .produces(kind::clustering_row, { 1, 2, 3 })
-            .produces(kind::range_tombstone, { 1, 3 })
+            .produces(kind::range_tombstone_change, { 1, 3 })
             .produces(kind::clustering_row, { 1, 3 })
             .produces(kind::clustering_row, { 1, 3, 4 })
+            .produces(kind::range_tombstone_change, { 1, 3 })
             .produces(kind::clustering_row, { 1, 4 })
             .produces(kind::clustering_row, { 1, 4, 0 })
-            .produces(kind::range_tombstone, { 2 })
-            .produces(kind::range_tombstone, { 2, 1 })
-            .produces(kind::range_tombstone, { 2, 1 })
-            .produces(kind::range_tombstone, { 2, 2 })
-            .produces(kind::range_tombstone, { 2, 2 })
+            .produces(kind::range_tombstone_change, { 2 })
+            .produces(kind::range_tombstone_change, { 2, 1 })
+            .produces(kind::range_tombstone_change, { 2, 1 })
+            .produces(kind::range_tombstone_change, { 2, 2 })
+            .produces(kind::range_tombstone_change, { 2, 2 })
+            .produces(kind::range_tombstone_change, { 2 })
             .produces_partition_end()
             .produces_end_of_stream();
       }
@@ -1030,17 +1033,14 @@ SEASTAR_TEST_CASE(test_promoted_index_read) {
         auto ck2 = clustering_key::from_exploded(*s, {int32_type->decompose(0), int32_type->decompose(0)});
         auto ck3 = clustering_key::from_exploded(*s, {int32_type->decompose(0), int32_type->decompose(1)});
 
-        auto rd = sstable_reader(sst, s, env.make_reader_permit());
-        using kind = mutation_fragment::kind;
+        auto rd = sstable_reader_v2(sst, s, env.make_reader_permit());
+        using kind = mutation_fragment_v2::kind;
         assert_that(std::move(rd))
                 .produces_partition_start(dkey)
-                .produces(kind::range_tombstone, { 0 })
+                .produces(kind::range_tombstone_change, { 0 })
                 .produces(kind::clustering_row, { 0, 0 })
-                .may_produce_tombstones({position_in_partition::after_key(ck2),
-                                         position_in_partition::before_key(ck3)})
                 .produces(kind::clustering_row, { 0, 1 })
-                .may_produce_tombstones({position_in_partition::after_key(ck2),
-                                         position_in_partition(position_in_partition::range_tag_t(), bound_kind::incl_end, std::move(ck1))})
+                .produces(kind::range_tombstone_change, { 0 })
                 .produces_partition_end()
                 .produces_end_of_stream();
       }

@@ -673,13 +673,18 @@ static void test_streamed_mutation_slicing_returns_only_relevant_tombstones(test
             ))
             .build();
 
-        auto rd = assert_that(ms.make_reader(s, semaphore.make_permit(), pr, slice));
+        auto rd = assert_that(ms.make_reader_v2(s, semaphore.make_permit(), pr, slice));
+
+        auto rt3_trimmed = rt3; trim_range_tombstone(*s, rt3_trimmed, slice.row_ranges(*s, m.key()));
+        auto rt4_trimmed = rt4; trim_range_tombstone(*s, rt4_trimmed, slice.row_ranges(*s, m.key()));
 
         rd.produces_partition_start(m.decorated_key());
         rd.produces_row_with_key(keys[2]);
-        rd.produces_range_tombstone(rt3, slice.row_ranges(*s, m.key()));
+        rd.produces_range_tombstone_change({rt3_trimmed.position(), rt3.tomb});
+        rd.produces_range_tombstone_change({rt3_trimmed.end_position(), {}});
         rd.produces_row_with_key(keys[8]);
-        rd.produces_range_tombstone(rt4, slice.row_ranges(*s, m.key()));
+        rd.produces_range_tombstone_change({rt4_trimmed.position(), rt4.tomb});
+        rd.produces_range_tombstone_change({rt4_trimmed.end_position(), {}});
         rd.produces_partition_end();
         rd.produces_end_of_stream();
     }
@@ -692,12 +697,17 @@ static void test_streamed_mutation_slicing_returns_only_relevant_tombstones(test
             ))
             .build();
 
-        auto rd = assert_that(ms.make_reader(s, semaphore.make_permit(), pr, slice));
+        auto rd = assert_that(ms.make_reader_v2(s, semaphore.make_permit(), pr, slice));
+
+        auto rt3_trimmed = rt3; trim_range_tombstone(*s, rt3_trimmed, slice.row_ranges(*s, m.key()));
+        auto rt4_trimmed = rt4; trim_range_tombstone(*s, rt4_trimmed, slice.row_ranges(*s, m.key()));
 
         rd.produces_partition_start(m.decorated_key())
-            .produces_range_tombstone(rt3, slice.row_ranges(*s, m.key()))
+            .produces_range_tombstone_change({rt3_trimmed.position(), rt3.tomb})
+            .produces_range_tombstone_change({rt3_trimmed.end_position(), {}})
             .produces_row_with_key(keys[8])
-            .produces_range_tombstone(rt4, slice.row_ranges(*s, m.key()))
+            .produces_range_tombstone_change({rt4_trimmed.position(), rt4.tomb})
+            .produces_range_tombstone_change({rt4_trimmed.end_position(), {}})
             .produces_partition_end()
             .produces_end_of_stream();
     }
@@ -750,7 +760,7 @@ static void test_streamed_mutation_forwarding_across_range_tombstones(tests::rea
     auto rt5 = table.delete_range(m, rt5_range);
 
     mutation_source ms = populate(s, std::vector<mutation>({m}), gc_clock::now());
-    auto rd = assert_that(ms.make_reader(s,
+    auto rd = assert_that(ms.make_reader_v2(s,
         semaphore.make_permit(),
         query::full_partition_range,
         s->full_slice(),
@@ -758,10 +768,15 @@ static void test_streamed_mutation_forwarding_across_range_tombstones(tests::rea
         nullptr,
         streamed_mutation::forwarding::yes));
     rd.produces_partition_start(m.decorated_key());
-    rd.fast_forward_to(position_range(query::clustering_range::make(
+
+    auto ff0 = query::clustering_range::make(
         query::clustering_range::bound(keys[1], true),
         query::clustering_range::bound(keys[2], true)
-    )));
+    );
+    rd.fast_forward_to(position_range(ff0));
+
+    // there might be a dummy rt [{keys[1],before},{keys[1],before}]
+    rd.may_produce_tombstones(position_range(ff0));
 
     rd.produces_row_with_key(keys[2]);
 
@@ -771,13 +786,14 @@ static void test_streamed_mutation_forwarding_across_range_tombstones(tests::rea
     );
     rd.fast_forward_to(position_range(ff1));
 
-    // we definitely expect (at least) trimmed-to-ff1 part of rt2 --
-    // before, after, or split around the keys[4] row
-    rd.produces_range_tombstone(rt2, {ff1});
+    auto rt2_trimmed = rt2; trim_range_tombstone(*s, rt2_trimmed, {ff1});
+    rd.produces_range_tombstone_change({rt2_trimmed.position(), rt2.tomb});
     rd.produces_row_with_key(keys[4]);
-    rd.may_produce_tombstones(position_range(rt2_range), {ff1});
+    rd.produces_range_tombstone_change({rt2_trimmed.end_position(), {}});
 
-    rd.produces_range_tombstone(rt3, {ff1});
+    auto rt3_trimmed = rt3; trim_range_tombstone(*s, rt3_trimmed, {ff1});
+    rd.produces_range_tombstone_change({rt3_trimmed.position(), rt3.tomb});
+    rd.produces_range_tombstone_change({rt3_trimmed.end_position(), {}});
 
     auto ff2 = query::clustering_range::make(
         query::clustering_range::bound(keys[10], true),
@@ -785,8 +801,12 @@ static void test_streamed_mutation_forwarding_across_range_tombstones(tests::rea
     );
     rd.fast_forward_to(position_range(ff2));
 
-    rd.produces_range_tombstone(rt4, {ff2});
-    rd.produces_range_tombstone(rt5, {ff2});
+    auto rt4_trimmed = rt4; trim_range_tombstone(*s, rt4_trimmed, {ff2});
+    auto rt5_trimmed = rt5; trim_range_tombstone(*s, rt5_trimmed, {ff2});
+    rd.produces_range_tombstone_change({rt4_trimmed.position(), rt4.tomb});
+    rd.produces_range_tombstone_change({rt4_trimmed.end_position(), {}});
+    rd.produces_range_tombstone_change({rt5_trimmed.position(), rt5.tomb});
+    rd.produces_range_tombstone_change({rt5_trimmed.end_position(), {}});
     rd.produces_end_of_stream();
 
     rd.fast_forward_to(position_range(query::clustering_range::make(
