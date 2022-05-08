@@ -774,6 +774,9 @@ public:
 
     // Advance index_reader bounds to the bounds of the supplied range
     future<> advance_to(const dht::partition_range& range) {
+        if (eof()) {
+            return make_ready_future<>();
+        }
         return seastar::when_all_succeed(
             advance_lower_to_start(range),
             advance_upper_to_end(range)).discard_result();
@@ -911,6 +914,9 @@ public:
     // If upper_bound is provided, the upper bound within position is looked up
     future<bool> advance_lower_and_check_if_present(
             dht::ring_position_view key, std::optional<position_in_partition_view> pos = {}) {
+        if (eof()) {
+            return make_ready_future<bool>(false);
+        }
         return advance_to(_lower_bound, key).then([this, key, pos] {
             if (eof()) {
                 return make_ready_future<bool>(false);
@@ -1037,6 +1043,9 @@ public:
     // Positions the cursor on the first partition which is not smaller than pos (like std::lower_bound).
     // Must be called for non-decreasing positions.
     future<> advance_to(dht::ring_position_view pos) {
+        if (eof()) {
+            return make_ready_future<>();
+        }
         return advance_to(_lower_bound, pos);
     }
 
