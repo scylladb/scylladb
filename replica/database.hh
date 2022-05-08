@@ -219,17 +219,10 @@ public:
         }
     }
 
-    // Clears the active memtable and adds a new, empty one.
+    // Synchronously swaps the active memtable with a new, empty one,
+    // then, clears the existing memtable(s) asynchronously.
     // Exception safe.
-    void clear_and_add() {
-        auto mt = new_memtable();
-        _memtables.clear();
-        // emplace_back might throw only if _memtables was empty
-        // on entry. Otherwise, we rely on clear() not to release
-        // the vector capacity (See https://en.cppreference.com/w/cpp/container/vector/clear)
-        // and lw_shared_ptr being nothrow move constructible.
-        _memtables.emplace_back(std::move(mt));
-    }
+    future<> clear_and_add();
 
     size_t size() const {
         return _memtables.size();
