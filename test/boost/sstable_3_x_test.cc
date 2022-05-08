@@ -1533,7 +1533,7 @@ SEASTAR_TEST_CASE(test_uncompressed_counters_read) {
     BOOST_REQUIRE(cdef);
 
     auto generate = [&] (api::timestamp_type timestamp, int64_t value, int64_t clock) {
-        std::vector<flat_reader_assertions::assert_function> assertions;
+        std::vector<flat_reader_assertions_v2::assert_function> assertions;
 
         assertions.push_back([&, timestamp, value, clock] (const column_definition& def,
                                                            const atomic_cell_or_collection* cell) {
@@ -2447,7 +2447,7 @@ SEASTAR_TEST_CASE(test_uncompressed_deleted_cells_read) {
     BOOST_REQUIRE(int_cdef);
 
     auto generate = [&] (uint64_t timestamp, uint64_t deletion_time) {
-        std::vector<flat_reader_assertions::assert_function> assertions;
+        std::vector<flat_reader_assertions_v2::assert_function> assertions;
 
         assertions.push_back([timestamp, deletion_time] (const column_definition& def,
                                  const atomic_cell_or_collection* cell) {
@@ -2916,7 +2916,7 @@ SEASTAR_TEST_CASE(test_uncompressed_collections_read) {
     BOOST_REQUIRE(map_cdef);
 
     auto generate = [&] (std::vector<int> set_val, std::vector<sstring> list_val, std::vector<std::pair<int, sstring>> map_val) {
-        std::vector<flat_reader_assertions::assert_function> assertions;
+        std::vector<flat_reader_assertions_v2::assert_function> assertions;
 
         assertions.push_back([val = std::move(set_val)] (const column_definition& def,
                                                          const atomic_cell_or_collection* cell) {

@@ -3809,8 +3809,8 @@ SEASTAR_THREAD_TEST_CASE(test_clustering_order_merger_in_memory) {
 
     // Test case with 0 readers
     for (auto fwd: {streamed_mutation::forwarding::no, streamed_mutation::forwarding::yes}) {
-        auto r = downgrade_to_v1(make_clustering_combined_reader(g._s, semaphore.make_permit(), fwd,
-                std::make_unique<simple_position_reader_queue>(*g._s, std::vector<reader_bounds>{})));
+        auto r = make_clustering_combined_reader(g._s, semaphore.make_permit(), fwd,
+                std::make_unique<simple_position_reader_queue>(*g._s, std::vector<reader_bounds>{}));
         assert_that(std::move(r)).produces_end_of_stream();
     }
 }
