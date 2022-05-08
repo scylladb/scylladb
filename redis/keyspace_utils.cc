@@ -232,14 +232,13 @@ future<> create_keyspace_if_not_exists_impl(seastar::sharded<service::storage_pr
 }
 
 future<> maybe_create_keyspace(seastar::sharded<service::storage_proxy>& proxy, data_dictionary::database db, seastar::sharded<service::migration_manager>& mm, db::config& config, sharded<gms::gossiper>& gossiper) {
-    return gms::get_up_endpoint_count(gossiper.local()).then([&proxy, db, &mm, &config] (auto live_endpoint_count) {
-        int replication_factor = 3;
-        if (live_endpoint_count < replication_factor) {
-            replication_factor = 1;
-            logger.warn("Creating keyspace for redis with unsafe, live endpoint nodes count: {}.", live_endpoint_count);
-        }
-        return create_keyspace_if_not_exists_impl(proxy, db, mm, config, replication_factor);
-    });
+    auto live_endpoint_count = gossiper.local().get_up_endpoint_count();
+    int replication_factor = 3;
+    if (live_endpoint_count < replication_factor) {
+        replication_factor = 1;
+        logger.warn("Creating keyspace for redis with unsafe, live endpoint nodes count: {}.", live_endpoint_count);
+    }
+    return create_keyspace_if_not_exists_impl(proxy, db, mm, config, replication_factor);
 }
 
 }

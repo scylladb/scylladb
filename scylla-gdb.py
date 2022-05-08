@@ -3575,9 +3575,11 @@ class scylla_gms(gdb.Command):
     def invoke(self, arg, for_tty):
         try:
             gossiper = sharded(gdb.parse_and_eval('debug::the_gossiper')).local()
+            state_map = gossiper['_endpoint_state_map']
         except Exception as e:
             gossiper = sharded(gdb.parse_and_eval('gms::_the_gossiper')).local()
-        for (endpoint, state) in unordered_map(gossiper['endpoint_state_map']):
+            state_map = gossiper['endpoint_state_map']
+        for (endpoint, state) in unordered_map(state_map):
             ip = ip_to_str(int(get_ip(endpoint)), byteorder=sys.byteorder)
             gdb.write('%s: (gms::endpoint_state*) %s (%s)\n' % (ip, state.address, state['_heart_beat_state']))
             for app_state, value in std_map(state['_application_state']):

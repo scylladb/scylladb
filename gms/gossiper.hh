@@ -157,12 +157,14 @@ public:
         semaphore_units<> _units;
     };
     future<endpoint_permit> lock_endpoint(inet_address);
-public:
-    /* map where key is the endpoint and value is the state associated with the endpoint */
-    std::unordered_map<inet_address, endpoint_state> endpoint_state_map;
-    // Used for serializing changes to endpoint_state_map and running of associated change listeners.
-    endpoint_locks_map endpoint_locks;
 
+private:
+    /* map where key is the endpoint and value is the state associated with the endpoint */
+    std::unordered_map<inet_address, endpoint_state> _endpoint_state_map;
+    // Used for serializing changes to _endpoint_state_map and running of associated change listeners.
+    endpoint_locks_map _endpoint_locks;
+
+public:
     const std::vector<sstring> DEAD_STATES = {
         versioned_value::REMOVING_TOKEN,
         versioned_value::REMOVED_TOKEN,
@@ -356,8 +358,6 @@ public:
     future<> assassinate_endpoint(sstring address);
 
 public:
-    bool is_known_endpoint(inet_address endpoint) const noexcept;
-
     future<int> get_current_generation_number(inet_address endpoint);
     future<int> get_current_heart_beat_version(inet_address endpoint);
 
@@ -391,9 +391,6 @@ public:
 
     const versioned_value* get_application_state_ptr(inet_address endpoint, application_state appstate) const noexcept;
     sstring get_application_state_value(inet_address endpoint, application_state appstate) const;
-
-    // Use with caution, copies might be expensive (see #764)
-    std::optional<endpoint_state> get_endpoint_state_for_endpoint(inet_address ep) const noexcept;
 
     // removes ALL endpoint states; should only be called after shadow gossip
     future<> reset_endpoint_state_map();
@@ -607,71 +604,13 @@ public:
     void append_endpoint_state(std::stringstream& ss, const endpoint_state& state);
 public:
     void check_snitch_name_matches() const;
-    sstring get_all_endpoint_states();
-    std::map<sstring, sstring> get_simple_states();
     int get_down_endpoint_count() const noexcept;
     int get_up_endpoint_count() const noexcept;
-    int get_all_endpoint_count() const noexcept;
-    sstring get_endpoint_state(sstring address);
 private:
     future<> failure_detector_loop();
     future<> failure_detector_loop_for_node(gms::inet_address node, int64_t gossip_generation, uint64_t live_endpoints_version);
     future<> update_live_endpoints_version();
 };
-
-inline future<sstring> get_all_endpoint_states(gossiper& g) {
-    return g.container().invoke_on(0, [] (gossiper& g) {
-        return g.get_all_endpoint_states();
-    });
-}
-
-inline future<sstring> get_endpoint_state(gossiper& g, sstring address) {
-    return g.container().invoke_on(0, [address] (gossiper& g) {
-        return g.get_endpoint_state(address);
-    });
-}
-
-inline future<std::map<sstring, sstring>> get_simple_states(gossiper& g) {
-    return g.container().invoke_on(0, [] (gossiper& g) {
-        return g.get_simple_states();
-    });
-}
-
-inline future<int> get_down_endpoint_count(gossiper& g) {
-    return g.container().invoke_on(0, [] (gossiper& g) {
-        return g.get_down_endpoint_count();
-    });
-}
-
-inline future<int> get_up_endpoint_count(gossiper& g) {
-    return g.container().invoke_on(0, [] (gossiper& g) {
-        return g.get_up_endpoint_count();
-    });
-}
-
-inline future<int> get_all_endpoint_count(gossiper& g) {
-    return g.container().invoke_on(0, [] (gossiper& g) {
-        return static_cast<int>(g.get_endpoint_states().size());
-    });
-}
-
-inline future<> set_phi_convict_threshold(double phi) {
-    return smp::submit_to(0, [phi] {
-        return make_ready_future<>();
-    });
-}
-
-inline future<double> get_phi_convict_threshold() {
-    return smp::submit_to(0, [] {
-        return make_ready_future<double>(8);
-    });
-}
-
-inline future<std::map<inet_address, arrival_window>> get_arrival_samples() {
-    return smp::submit_to(0, [] {
-        return make_ready_future<std::map<inet_address, arrival_window>>();
-    });
-}
 
 struct gossip_get_endpoint_states_request {
     // Application states the sender requested

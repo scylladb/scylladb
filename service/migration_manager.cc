@@ -203,7 +203,7 @@ void migration_manager::schedule_schema_pull(const gms::inet_address& endpoint, 
 }
 
 bool migration_manager::have_schema_agreement() {
-    const auto known_endpoints = _gossiper.endpoint_state_map;
+    const auto known_endpoints = _gossiper.get_endpoint_states();
     if (known_endpoints.size() == 1) {
         // Us.
         return true;
