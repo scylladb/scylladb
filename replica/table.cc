@@ -1513,7 +1513,10 @@ future<> table::clear() {
             _commitlog->discard_completed_segments(_schema->id(), t->get_and_discard_rp_set());
         }
     }
-    co_await _memtables->clear_and_add();
+    auto old_memtables = _memtables->clear_and_add();
+    for (auto& smt : old_memtables) {
+        co_await smt->clear_gently();
+    }
     co_await _cache.invalidate(row_cache::external_updater([] { /* There is no underlying mutation source */ }));
 }
 

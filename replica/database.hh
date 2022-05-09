@@ -221,9 +221,9 @@ public:
     }
 
     // Synchronously swaps the active memtable with a new, empty one,
-    // then, clears the existing memtable(s) asynchronously.
+    // returning the old memtables list.
     // Exception safe.
-    future<> clear_and_add();
+    std::vector<replica::shared_memtable> clear_and_add();
 
     size_t size() const {
         return _memtables.size();
