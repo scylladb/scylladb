@@ -24,5 +24,6 @@ public:
     }
 private:
     sstring _local_private_address;
+    bool _broadcast_rpc_address_specified_by_user;
 };
 } // namespace locator
