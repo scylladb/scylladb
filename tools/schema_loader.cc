@@ -160,6 +160,21 @@ private:
     }
 };
 
+class user_types_storage : public data_dictionary::user_types_storage {
+    database& _db;
+public:
+    user_types_storage(database& db) noexcept : _db(db) {}
+
+    virtual const data_dictionary::user_types_metadata& get(const sstring& name) const override {
+        for (const auto& ks : _db.keyspaces) {
+            if (ks.metadata->name() == name) {
+                return ks.metadata->user_types();
+            }
+        }
+        throw data_dictionary::no_such_keyspace(name);
+    }
+};
+
 table::table(data_dictionary_impl& impl, keyspace& ks, schema_ptr schema) :
     ks(ks), schema(std::move(schema)), secondary_idx_man(impl.wrap(*this))
 { }
@@ -269,7 +284,7 @@ std::vector<schema_ptr> do_load_schemas(std::string_view schema_str) {
                             db::schema_tables::NAME, db::schema_tables::DROPPED_COLUMNS, keyspace_name, table_name));
                 }
                 auto name = row.get_nonnull<sstring>("column_name");
-                auto type = db::cql_type_parser::parse(keyspace_name, row.get_nonnull<sstring>("type"));
+                auto type = db::cql_type_parser::parse(keyspace_name, row.get_nonnull<sstring>("type"), user_types_storage(real_db));
                 auto time = row.get_nonnull<db_clock::time_point>("dropped_time");
                 *it = schema_builder(*it).without_column(std::move(name), std::move(type), time.time_since_epoch().count()).build();
             }

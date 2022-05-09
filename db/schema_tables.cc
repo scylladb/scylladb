@@ -91,14 +91,15 @@ static bool is_extra_durable(const sstring& ks_name, const sstring& cf_name) {
 /** system.schema_* tables used to store keyspace/table/type attributes prior to C* 3.0 */
 namespace db {
 
-schema_ctxt::schema_ctxt(const db::config& cfg)
+schema_ctxt::schema_ctxt(const db::config& cfg, std::shared_ptr<data_dictionary::user_types_storage> uts)
     : _extensions(cfg.extensions())
     , _murmur3_partitioner_ignore_msb_bits(cfg.murmur3_partitioner_ignore_msb_bits())
     , _schema_registry_grace_period(cfg.schema_registry_grace_period())
+    , _user_types(std::move(uts))
 {}
 
 schema_ctxt::schema_ctxt(const replica::database& db)
-    : schema_ctxt(db.get_config())
+    : schema_ctxt(db.get_config(), db.as_user_types_storage())
 {}
 
 schema_ctxt::schema_ctxt(distributed<replica::database>& db)
@@ -164,6 +165,7 @@ using computed_columns_map = std::unordered_map<bytes, column_computation_ptr>;
 static computed_columns_map get_computed_columns(const schema_mutations& sm);
 
 static std::vector<column_definition> create_columns_from_column_rows(
+                const schema_ctxt& ctxt,
                 const query::result_set& rows, const sstring& keyspace,
                 const sstring& table, bool is_super, column_view_virtual is_view_virtual, const computed_columns_map& computed_columns);
 
@@ -1506,10 +1508,10 @@ static future<user_types_to_drop> merge_types(distributed<service::storage_proxy
     }};
 }
 
-static std::vector<data_type> read_arg_types(const query::result_set_row& row, const sstring& keyspace) {
+static std::vector<data_type> read_arg_types(replica::database& db, const query::result_set_row& row, const sstring& keyspace) {
     std::vector<data_type> arg_types;
     for (const auto& arg : get_list<sstring>(row, "argument_types")) {
-        arg_types.push_back(db::cql_type_parser::parse(keyspace, arg));
+        arg_types.push_back(db::cql_type_parser::parse(keyspace, arg, db.user_types()));
     }
     return arg_types;
 }
@@ -1572,8 +1574,8 @@ static std::vector<data_type> read_arg_types(const query::result_set_row& row, c
 static shared_ptr<cql3::functions::user_function> create_func(replica::database& db, const query::result_set_row& row) {
     cql3::functions::function_name name{
             row.get_nonnull<sstring>("keyspace_name"), row.get_nonnull<sstring>("function_name")};
-    auto arg_types = read_arg_types(row, name.keyspace);
-    data_type return_type = db::cql_type_parser::parse(name.keyspace, row.get_nonnull<sstring>("return_type"));
+    auto arg_types = read_arg_types(db, row, name.keyspace);
+    data_type return_type = db::cql_type_parser::parse(name.keyspace, row.get_nonnull<sstring>("return_type"), db.user_types());
 
     // FIXME: We already computed the bitcode in
     // create_function_statement, but it is not clear how to get it
@@ -1610,8 +1612,8 @@ static shared_ptr<cql3::functions::user_function> create_func(replica::database&
 static shared_ptr<cql3::functions::user_aggregate> create_aggregate(replica::database& db, const query::result_set_row& row) {
     cql3::functions::function_name name{
             row.get_nonnull<sstring>("keyspace_name"), row.get_nonnull<sstring>("aggregate_name")};
-    auto arg_types = read_arg_types(row, name.keyspace);
-    data_type state_type = db::cql_type_parser::parse(name.keyspace, row.get_nonnull<sstring>("state_type"));
+    auto arg_types = read_arg_types(db, row, name.keyspace);
+    data_type state_type = db::cql_type_parser::parse(name.keyspace, row.get_nonnull<sstring>("state_type"), db.user_types());
     sstring sfunc = row.get_nonnull<sstring>("state_func");
     auto ffunc = row.get<sstring>("final_func");
     auto initcond_str = row.get<sstring>("initcond");
@@ -2661,6 +2663,7 @@ schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations
 
     auto computed_columns = get_computed_columns(sm);
     std::vector<column_definition> column_defs = create_columns_from_column_rows(
+            ctxt,
             query::result_set(sm.columns_mutation()),
             ks_name,
             cf_name,/*,
@@ -2691,7 +2694,7 @@ schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations
         query::result_set dcr(*sm.dropped_columns_mutation());
         for (auto& row : dcr.rows()) {
             auto name = row.get_nonnull<sstring>("column_name");
-            auto type = cql_type_parser::parse(ks_name, row.get_nonnull<sstring>("type"));
+            auto type = cql_type_parser::parse(ks_name, row.get_nonnull<sstring>("type"), ctxt.user_types());
             auto time = row.get_nonnull<db_clock::time_point>("dropped_time");
             builder.without_column(name, type, time.time_since_epoch().count());
         }
@@ -2842,7 +2845,8 @@ static computed_columns_map get_computed_columns(const schema_mutations& sm) {
     }));
 }
 
-static std::vector<column_definition> create_columns_from_column_rows(const query::result_set& rows,
+static std::vector<column_definition> create_columns_from_column_rows(const schema_ctxt& ctxt,
+                                                               const query::result_set& rows,
                                                                const sstring& keyspace,
                                                                const sstring& table, /*,
                                                                AbstractType<?> rawComparator, */
@@ -2853,7 +2857,7 @@ static std::vector<column_definition> create_columns_from_column_rows(const quer
     std::vector<column_definition> columns;
     for (auto&& row : rows.rows()) {
         auto kind = deserialize_kind(row.get_nonnull<sstring>("kind"));
-        auto type = cql_type_parser::parse(keyspace, row.get_nonnull<sstring>("type"));
+        auto type = cql_type_parser::parse(keyspace, row.get_nonnull<sstring>("type"), ctxt.user_types());
         auto name_bytes = row.get_nonnull<bytes>("column_name_bytes");
         column_id position = row.get_nonnull<int32_t>("position");
 
@@ -2916,12 +2920,12 @@ view_ptr create_view_from_mutations(const schema_ctxt& ctxt, schema_mutations sm
     prepare_builder_from_table_row(ctxt, builder, row);
 
     auto computed_columns = get_computed_columns(sm);
-    auto column_defs = create_columns_from_column_rows(query::result_set(sm.columns_mutation()), ks_name, cf_name, false, column_view_virtual::no, computed_columns);
+    auto column_defs = create_columns_from_column_rows(ctxt, query::result_set(sm.columns_mutation()), ks_name, cf_name, false, column_view_virtual::no, computed_columns);
     for (auto&& cdef : column_defs) {
         builder.with_column_ordered(cdef);
     }
     if (sm.view_virtual_columns_mutation()) {
-        column_defs = create_columns_from_column_rows(query::result_set(*sm.view_virtual_columns_mutation()), ks_name, cf_name, false, column_view_virtual::yes, computed_columns);
+        column_defs = create_columns_from_column_rows(ctxt, query::result_set(*sm.view_virtual_columns_mutation()), ks_name, cf_name, false, column_view_virtual::yes, computed_columns);
         for (auto&& cdef : column_defs) {
             builder.with_column_ordered(cdef);
         }
@@ -3315,7 +3319,7 @@ future<column_mapping> get_column_mapping(utils::UUID table_id, table_schema_ver
     std::vector<column_definition>  static_columns, regular_columns;
     for (const auto& row : *results) {
         auto kind = deserialize_kind(row.get_as<sstring>("kind"));
-        auto type = cql_type_parser::parse("" /*unused*/, row.get_as<sstring>("type"));
+        auto type = cql_type_parser::parse("" /*unused*/, row.get_as<sstring>("type"), data_dictionary::dummy_user_types_storage());
         auto name_bytes = row.get_blob("column_name_bytes");
         column_id position = row.get_as<int32_t>("position");
 

@@ -34,7 +34,7 @@ struct dummy_init {
 
     dummy_init() {
         config = std::make_unique<db::config>();
-        local_schema_registry().init(*config);
+        local_schema_registry().init(db::schema_ctxt(*config,std::make_shared<data_dictionary::dummy_user_types_storage>()));
     }
 };
 

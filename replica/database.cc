@@ -303,9 +303,28 @@ void database::setup_scylla_memory_diagnostics_producer() {
     });
 }
 
+class db_user_types_storage : public data_dictionary::dummy_user_types_storage {
+    const replica::database* _db = nullptr;
+public:
+    db_user_types_storage(const database& db) noexcept : _db(&db) {}
+
+    virtual const user_types_metadata& get(const sstring& ks) const override {
+        if (_db == nullptr) {
+            return dummy_user_types_storage::get(ks);
+        }
+
+        return _db->find_keyspace(ks).metadata()->user_types();
+    }
+
+    void deactivate() noexcept {
+        _db = nullptr;
+    }
+};
+
 database::database(const db::config& cfg, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::shared_token_metadata& stm,
         abort_source& as, sharded<semaphore>& sst_dir_sem, utils::cross_shard_barrier barrier)
     : _stats(make_lw_shared<db_stats>())
+    , _user_types(std::make_shared<db_user_types_storage>(*this))
     , _cl_stats(std::make_unique<cell_locker_stats>())
     , _cfg(cfg)
     // Allow system tables a pool of 10 MB memory to write, but never block on other regions.
@@ -374,6 +393,14 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
 
 const db::extensions& database::extensions() const {
     return get_config().extensions();
+}
+
+std::shared_ptr<data_dictionary::user_types_storage> database::as_user_types_storage() const noexcept {
+    return _user_types;
+}
+
+const data_dictionary::user_types_storage& database::user_types() const noexcept {
+    return *_user_types;
 }
 
 } // namespace replica
@@ -713,6 +740,7 @@ void database::set_format(sstables::sstable_version_types format) noexcept {
 }
 
 database::~database() {
+    _user_types->deactivate();
 }
 
 void database::update_version(const utils::UUID& version) {
