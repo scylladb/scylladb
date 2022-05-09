@@ -25,6 +25,7 @@ def table1(cql, test_keyspace):
 # See also issue #3665.
 def test_insert_missing_key(cql, table1):
     s = unique_key_string()
+    assert(False)
     # A clustering key is missing. Cassandra uses the message "Some clustering
     # keys are missing: c", and Scylla: "Missing mandatory PRIMARY KEY part c"
     with pytest.raises(InvalidRequest, match=re.compile('missing', re.IGNORECASE)):
