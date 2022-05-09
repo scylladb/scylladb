@@ -1298,7 +1298,7 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         });
     });
 
-    ss::take_snapshot.set(r, [&snap_ctl](std::unique_ptr<request> req) {
+    ss::take_snapshot.set(r, [&snap_ctl](std::unique_ptr<request> req) -> future<json::json_return_type> {
         apilog.debug("take_snapshot: {}", req->query_parameters);
         auto tag = req->get_query_param("tag");
         auto column_families = split(req->get_query_param("cf"), ",");
@@ -1307,31 +1307,29 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
 
         std::vector<sstring> keynames = split(req->get_query_param("kn"), ",");
 
-        auto resp = make_ready_future<>();
-        if (column_families.empty()) {
-            resp = snap_ctl.local().take_snapshot(tag, keynames, sf);
-        } else {
-            if (keynames.empty()) {
-                throw httpd::bad_param_exception("The keyspace of column families must be specified");
+        // FIXME: over-indented on purpose
+            if (column_families.empty()) {
+                co_await snap_ctl.local().take_snapshot(tag, keynames, sf);
+            } else {
+                if (keynames.empty()) {
+                    throw httpd::bad_param_exception("The keyspace of column families must be specified");
+                }
+                if (keynames.size() > 1) {
+                    throw httpd::bad_param_exception("Only one keyspace allowed when specifying a column family");
+                }
+                co_await snap_ctl.local().take_column_family_snapshot(keynames[0], column_families, tag, sf);
             }
-            if (keynames.size() > 1) {
-                throw httpd::bad_param_exception("Only one keyspace allowed when specifying a column family");
-            }
-            resp = snap_ctl.local().take_column_family_snapshot(keynames[0], column_families, tag, sf);
-        }
-        return resp.then([] {
-            return make_ready_future<json::json_return_type>(json_void());
-        });
+            co_return json_void();
     });
 
-    ss::del_snapshot.set(r, [&snap_ctl](std::unique_ptr<request> req) {
+    ss::del_snapshot.set(r, [&snap_ctl](std::unique_ptr<request> req) -> future<json::json_return_type> {
         auto tag = req->get_query_param("tag");
         auto column_family = req->get_query_param("cf");
 
         std::vector<sstring> keynames = split(req->get_query_param("kn"), ",");
-        return snap_ctl.local().clear_snapshot(tag, keynames, column_family).then([] {
-            return make_ready_future<json::json_return_type>(json_void());
-        });
+        // FIXME: over-indented on purpose
+            co_await snap_ctl.local().clear_snapshot(tag, keynames, column_family);
+            co_return json_void();
     });
 
     ss::true_snapshots_size.set(r, [&snap_ctl](std::unique_ptr<request> req) {
