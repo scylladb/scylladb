@@ -1299,15 +1299,14 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
     });
 
     ss::take_snapshot.set(r, [&snap_ctl](std::unique_ptr<request> req) -> future<json::json_return_type> {
-        apilog.debug("take_snapshot: {}", req->query_parameters);
+        apilog.info("take_snapshot: {}", req->query_parameters);
         auto tag = req->get_query_param("tag");
         auto column_families = split(req->get_query_param("cf"), ",");
         auto sfopt = req->get_query_param("sf");
         auto sf = db::snapshot_ctl::skip_flush(strcasecmp(sfopt.c_str(), "true") == 0);
 
         std::vector<sstring> keynames = split(req->get_query_param("kn"), ",");
-
-        // FIXME: over-indented on purpose
+        try {
             if (column_families.empty()) {
                 co_await snap_ctl.local().take_snapshot(tag, keynames, sf);
             } else {
@@ -1320,16 +1319,25 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
                 co_await snap_ctl.local().take_column_family_snapshot(keynames[0], column_families, tag, sf);
             }
             co_return json_void();
+        } catch (...) {
+            apilog.error("take_snapshot failed: {}", std::current_exception());
+            throw;
+        }
     });
 
     ss::del_snapshot.set(r, [&snap_ctl](std::unique_ptr<request> req) -> future<json::json_return_type> {
+        apilog.info("del_snapshot: {}", req->query_parameters);
         auto tag = req->get_query_param("tag");
         auto column_family = req->get_query_param("cf");
 
         std::vector<sstring> keynames = split(req->get_query_param("kn"), ",");
-        // FIXME: over-indented on purpose
+        try {
             co_await snap_ctl.local().clear_snapshot(tag, keynames, column_family);
             co_return json_void();
+        } catch (...) {
+            apilog.error("del_snapshot failed: {}", std::current_exception());
+            throw;
+        }
     });
 
     ss::true_snapshots_size.set(r, [&snap_ctl](std::unique_ptr<request> req) {
