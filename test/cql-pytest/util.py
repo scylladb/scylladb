@@ -102,6 +102,19 @@ def new_materialized_view(cql, table, select, pk, where):
     finally:
         cql.execute(f"DROP MATERIALIZED VIEW {mv}")
 
+# A utility function for creating a new temporary secondary index of
+# an existing table.
+@contextmanager
+def new_secondary_index(cql, table, column, name='', extra=''):
+    keyspace = table.split('.')[0]
+    if not name:
+        name = unique_name()
+    cql.execute(f"CREATE INDEX {name} ON {table} ({column}) {extra}")
+    try:
+        yield f"{keyspace}.{name}"
+    finally:
+        cql.execute(f"DROP INDEX {keyspace}.{name}")
+
 def project(column_name_string, rows):
     """Returns a list of column values from each of the rows."""
     return [getattr(r, column_name_string) for r in rows]

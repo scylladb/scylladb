@@ -119,8 +119,9 @@ future<> snapshot_ctl::take_column_family_snapshot(sstring ks_name, std::vector<
         return check_snapshot_not_exist(ks_name, tag, tables).then([this, ks_name, tables, tag, sf] {
             return do_with(std::vector<sstring>(std::move(tables)),[this, ks_name, tag, sf](const std::vector<sstring>& tables) {
                 return do_for_each(tables, [ks_name, tag, sf, this] (const sstring& table_name) {
-                    if (table_name.find(".") != sstring::npos) {
-                        throw std::invalid_argument("Cannot take a snapshot of a secondary index by itself. Run snapshot on the table that owns the index.");
+                    auto& cf = _db.local().find_column_family(ks_name, table_name);
+                    if (cf.schema()->is_view()) {
+                        throw std::invalid_argument("Do not take a snapshot of a materialized view or a secondary index by itself. Run snapshot on the base table instead.");
                     }
                     return _db.invoke_on_all([ks_name, table_name, tag, sf] (database &db) {
                         auto& cf = db.find_column_family(ks_name, table_name);
