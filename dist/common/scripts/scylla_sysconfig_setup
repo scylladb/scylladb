@@ -72,7 +72,7 @@ if __name__ == '__main__':
     if args.setup_nic_and_disks:
         res = run('{} --tune net --nic {} --get-cpu-mask'.format(perftune_base_command(), ifname), shell=True, check=True, capture_output=True, encoding='utf-8').stdout
         # we need to extract CPU mask from output, since perftune.py may also print warning messages (#10082)
-        match = re.match('(.*)(0x[0-9a-f]+)', res, re.DOTALL)
+        match = re.match('(.*\n)?(0x[0-9a-f]+(?:,0x[0-9a-f]+)*)', res, re.DOTALL)
         try:
             warning = match.group(1)
             rps_cpus = match.group(2)
