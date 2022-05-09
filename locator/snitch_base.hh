@@ -45,6 +45,7 @@ struct snitch_config {
     sstring name = "SimpleSnitch";
     sstring properties_file_name = "";
     unsigned io_cpu_id = 0;
+    bool broadcast_rpc_address_specified_by_user = false;
 
     // GCE-specific
     sstring gce_meta_server_url = "";
