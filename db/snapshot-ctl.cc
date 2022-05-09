@@ -104,10 +104,8 @@ future<> snapshot_ctl::do_take_column_family_snapshot(sstring ks_name, std::vect
     for (const auto& table_name : tables) {
         co_await _db.invoke_on_all([&] (replica::database &db) {
             auto& cf = db.find_column_family(ks_name, table_name);
-            // FIXME: need a better way.
-            // See https://github.com/scylladb/scylla/issues/10526
-            if (table_name.find(".") != sstring::npos) {
-                throw std::invalid_argument("Cannot take a snapshot of a secondary index by itself. Run snapshot on the table that owns the index.");
+            if (cf.schema()->is_view()) {
+                throw std::invalid_argument("Do not take a snapshot of a materialized view or a secondary index by itself. Run snapshot on the base table instead.");
             }
             return cf.snapshot(db, tag, bool(sf));
         });

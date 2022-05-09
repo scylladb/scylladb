@@ -10,7 +10,7 @@ import time
 
 # Use the util.py library from ../cql-pytest:
 sys.path.insert(1, sys.path[0] + '/../cql-pytest')
-from util import unique_name, new_test_table, new_test_keyspace
+from util import unique_name, new_test_table, new_test_keyspace, new_materialized_view, new_secondary_index
 from rest_util import new_test_snapshot
 
 # "keyspace" function: Creates and returns a temporary keyspace to be
@@ -321,3 +321,25 @@ def test_storage_service_snapshot(cql, this_dc, rest_api):
                                     {'ks': ks1, 'cf': cf10, 'total': 0, 'live': 0}
                                 ]
                             })
+
+# Verify that snapshots of materialized views and secondary indexes are disallowed.
+def test_storage_service_snapshot_mv_si(cql, this_dc, rest_api):
+    resp = rest_api.send("GET", "storage_service/snapshots")
+    resp.raise_for_status()
+
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
+        schema = 'p int, v text, primary key (p)'
+        with new_test_table(cql, keyspace, schema) as table:
+            with new_materialized_view(cql, table, '*', 'v, p', 'v is not null and p is not null') as mv:
+                try:
+                    with new_test_snapshot(rest_api, keyspace, mv.split('.')[1]) as snap:
+                        pytest.fail(f"Snapshot of materialized view {mv} should have failed")
+                except requests.HTTPError:
+                    pass
+
+            with new_secondary_index(cql, table, 'v') as si:
+                try:
+                    with new_test_snapshot(rest_api, keyspace, si.split('.')[1]) as snap:
+                        pytest.fail(f"Snapshot of secondary index {si} should have failed")
+                except requests.HTTPError:
+                    pass
