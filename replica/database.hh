@@ -839,7 +839,11 @@ public:
 
     db::replay_position set_low_replay_position_mark();
 
-    future<> snapshot(database& db, sstring name, bool skip_flush = false);
+private:
+    future<> snapshot(database& db, sstring name);
+
+    friend class database;
+public:
     future<std::unordered_map<sstring, snapshot_details>> get_snapshot_details();
 
     /*!
@@ -1217,7 +1221,7 @@ struct string_pair_eq {
 //   local metadata reads
 //   use shard_of() for data
 
-class database {
+class database : public peering_sharded_service<database> {
     friend class ::database_test;
 public:
     enum class table_kind {
@@ -1561,6 +1565,17 @@ public:
 
     future<> flush_all_memtables();
     future<> flush(const sstring& ks, const sstring& cf);
+    // flush a table identified by the given id on all shards.
+    future<> flush_on_all(utils::UUID id);
+    // flush a single table in a keyspace on all shards.
+    future<> flush_on_all(std::string_view ks_name, std::string_view table_name);
+    // flush a list of tables in a keyspace on all shards.
+    future<> flush_on_all(std::string_view ks_name, std::vector<sstring> table_names);
+    // flush all tables in a keyspace on all shards.
+    future<> flush_on_all(std::string_view ks_name);
+
+    future<> snapshot_on_all(std::string_view ks_name, std::vector<sstring> table_names, sstring tag, bool skip_flush);
+    future<> snapshot_on_all(std::string_view ks_name, sstring tag, bool skip_flush);
 
     // See #937. Truncation now requires a callback to get a time stamp
     // that must be guaranteed to be the same for all shards.

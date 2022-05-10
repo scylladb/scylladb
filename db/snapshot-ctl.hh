@@ -97,6 +97,9 @@ private:
 
     template <typename Func>
     std::result_of_t<Func()> run_snapshot_list_operation(Func&&);
+
+    future<> do_take_snapshot(sstring tag, std::vector<sstring> keyspace_names, skip_flush sf = skip_flush::no);
+    future<> do_take_column_family_snapshot(sstring ks_name, std::vector<sstring> tables, sstring tag, skip_flush sf = skip_flush::no);
 };
 
 }

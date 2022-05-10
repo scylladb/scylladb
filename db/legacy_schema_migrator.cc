@@ -574,12 +574,8 @@ public:
     }
 
     future<> flush_schemas() {
-        return _qp.proxy().get_db().invoke_on_all([this] (replica::database& db) {
-            return parallel_for_each(db::schema_tables::all_table_names(schema_features::full()), [this, &db](const sstring& cf_name) {
-                auto& cf = db.find_column_family(db::schema_tables::NAME, cf_name);
-                return cf.flush();
-            });
-        });
+        auto& db = _qp.db().real_database();
+        return db.flush_on_all(db::schema_tables::NAME, db::schema_tables::all_table_names(schema_features::full()));
     }
 
     future<> migrate() {
