@@ -42,6 +42,7 @@
 #include <seastar/core/sleep.hh>
 
 #include <cfloat>
+#include <algorithm>
 
 #include "idl/partition_checksum.dist.hh"
 
@@ -117,6 +118,13 @@ std::ostream& operator<<(std::ostream& out, row_level_diff_detect_algorithm algo
         return out << "send_full_set_rpc_stream";
     };
     return out << "unknown";
+}
+
+static size_t get_nr_tables(const replica::database& db, const sstring& keyspace) {
+    auto& m = db.get_column_families_mapping();
+    return std::count_if(m.begin(), m.end(), [&keyspace] (auto& e) {
+        return e.first.first == keyspace;
+    });
 }
 
 static std::vector<sstring> list_column_families(const replica::database& db, const sstring& keyspace) {
@@ -444,7 +452,7 @@ float tracker::report_progress(streaming::stream_reason reason) {
     for (auto& x : _repairs) {
         auto& ri = x.second;
         if (ri->reason == reason) {
-            nr_ranges_total += ri->nr_ranges_total;
+            nr_ranges_total += ri->ranges_size();
             nr_ranges_finished += ri->nr_ranges_finished;
         }
     }
@@ -556,8 +564,8 @@ void repair_info::check_failed_ranges() {
     rlogger.info("repair[{}]: shard {} stats: repair_reason={}, keyspace={}, tables={}, ranges_nr={}, {}",
         id.uuid, shard, reason, keyspace, table_names(), ranges.size(), _stats.get_stats());
     if (nr_failed_ranges) {
-        rlogger.warn("repair[{}]: shard {} failed - {} out of {} ranges failed", id.uuid, shard, nr_failed_ranges, ranges.size());
-        throw std::runtime_error(format("repair[{}] on shard {} failed to repair {} out of {} ranges", id.uuid, shard, nr_failed_ranges, ranges.size()));
+        rlogger.warn("repair[{}]: shard {} failed - {} out of {} ranges failed", id.uuid, shard, nr_failed_ranges, ranges_size());
+        throw std::runtime_error(format("repair[{}] on shard {} failed to repair {} out of {} ranges", id.uuid, shard, nr_failed_ranges, ranges_size()));
     } else {
         if (dropped_tables.size()) {
             rlogger.warn("repair[{}]: shard {} completed successfully, keyspace={}, ignoring dropped tables={}", id.uuid, shard, keyspace, dropped_tables);
@@ -583,14 +591,18 @@ repair_neighbors repair_info::get_repair_neighbors(const dht::token_range& range
         neighbors[range];
 }
 
+size_t repair_info::ranges_size() {
+    return ranges.size() * table_ids.size();
+}
+
 // Repair a single local range, multiple column families.
 // Comparable to RepairSession in Origin
-future<> repair_info::repair_range(const dht::token_range& range) {
+future<> repair_info::repair_range(const dht::token_range& range, utils::UUID table_id) {
     check_in_shutdown();
     check_in_abort();
     ranges_index++;
     repair_neighbors neighbors = get_repair_neighbors(range);
-    return do_with(std::move(neighbors.all), std::move(neighbors.mandatory), [this, range] (auto& neighbors, auto& mandatory_neighbors) {
+    return do_with(std::move(neighbors.all), std::move(neighbors.mandatory), [this, range, table_id] (auto& neighbors, auto& mandatory_neighbors) {
       auto live_neighbors = boost::copy_range<std::vector<gms::inet_address>>(neighbors |
                     boost::adaptors::filtered([this] (const gms::inet_address& node) { return gossiper.is_alive(node); }));
       for (auto& node : mandatory_neighbors) {
@@ -599,7 +611,7 @@ future<> repair_info::repair_range(const dht::token_range& range) {
                 nr_failed_ranges++;
                 auto status = format("failed: mandatory neighbor={} is not alive", node);
                 rlogger.error("repair[{}]: Repair {} out of {} ranges, shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
-                        id.uuid, ranges_index, ranges.size(), shard, keyspace, table_names(), range, neighbors, live_neighbors, status);
+                        id.uuid, ranges_index, ranges_size(), shard, keyspace, table_names(), range, neighbors, live_neighbors, status);
                 abort();
                 return make_exception_future<>(std::runtime_error(format("Repair mandatory neighbor={} is not alive, keyspace={}, mandatory_neighbors={}",
                     node, keyspace, mandatory_neighbors)));
@@ -609,7 +621,7 @@ future<> repair_info::repair_range(const dht::token_range& range) {
             nr_failed_ranges++;
             auto status = live_neighbors.empty() ? "skipped" : "partial";
             rlogger.warn("repair[{}]: Repair {} out of {} ranges, shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
-                    id.uuid, ranges_index, ranges.size(), shard, keyspace, table_names(), range, neighbors, live_neighbors, status);
+                    id.uuid, ranges_index, ranges_size(), shard, keyspace, table_names(), range, neighbors, live_neighbors, status);
             if (live_neighbors.empty()) {
                 return make_ready_future<>();
             }
@@ -618,13 +630,12 @@ future<> repair_info::repair_range(const dht::token_range& range) {
       if (neighbors.empty()) {
             auto status = "skipped_no_followers";
             rlogger.warn("repair[{}]: Repair {} out of {} ranges,  shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
-                    id.uuid, ranges_index, ranges.size(), shard, keyspace, table_names(), range, neighbors, live_neighbors, status);
+                    id.uuid, ranges_index, ranges_size(), shard, keyspace, table_names(), range, neighbors, live_neighbors, status);
             return make_ready_future<>();
       }
-      rlogger.info("repair[{}]: Repair {} out of {} ranges, shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}",
-            id.uuid, ranges_index, ranges.size(), shard, keyspace, table_names(), range, neighbors, live_neighbors);
-      return mm.sync_schema(db.local(), neighbors).then([this, &neighbors, range] {
-        return do_for_each(table_ids.begin(), table_ids.end(), [this, &neighbors, range] (utils::UUID table_id) {
+      rlogger.debug("repair[{}]: Repair {} out of {} ranges, shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}",
+            id.uuid, ranges_index, ranges_size(), shard, keyspace, table_names(), range, neighbors, live_neighbors);
+      return mm.sync_schema(db.local(), neighbors).then([this, &neighbors, range, table_id] {
             sstring cf;
             try {
                 cf = db.local().find_column_family(table_id).schema()->cf_name();
@@ -642,7 +653,6 @@ future<> repair_info::repair_range(const dht::token_range& range) {
                 nr_failed_ranges++;
                 return make_exception_future<>(std::move(ep));
             });
-        });
       });
     });
 }
@@ -915,27 +925,45 @@ private:
 
 
 static future<> do_repair_ranges(lw_shared_ptr<repair_info> ri) {
-    // repair all the ranges in limited parallelism
-    return parallel_for_each(ri->ranges, [ri] (auto&& range) {
-        return with_semaphore(ri->rs.repair_tracker().range_parallelism_semaphore(), 1, [ri, &range] {
-            return ri->repair_range(range).then([ri] {
-                if (ri->reason == streaming::stream_reason::bootstrap) {
-                    ri->rs.get_metrics().bootstrap_finished_ranges++;
-                } else if (ri->reason == streaming::stream_reason::replace) {
-                    ri->rs.get_metrics().replace_finished_ranges++;
-                } else if (ri->reason == streaming::stream_reason::rebuild) {
-                    ri->rs.get_metrics().rebuild_finished_ranges++;
-                } else if (ri->reason == streaming::stream_reason::decommission) {
-                    ri->rs.get_metrics().decommission_finished_ranges++;
-                } else if (ri->reason == streaming::stream_reason::removenode) {
-                    ri->rs.get_metrics().removenode_finished_ranges++;
-                } else if (ri->reason == streaming::stream_reason::repair) {
-                    ri->rs.get_metrics().repair_finished_ranges_sum++;
-                    ri->nr_ranges_finished++;
-                }
+    // Repair tables in the keyspace one after another
+    assert(ri->table_names().size() == ri->table_ids.size());
+    for (int idx = 0; idx < ri->table_ids.size(); idx++) {
+        auto table_id = ri->table_ids[idx];
+        auto table_name = ri->table_names()[idx];
+        // repair all the ranges in limited parallelism
+        rlogger.info("repair[{}]: Started to repair {} out of {} tables in keyspace={}, table={}, table_id={}, repair_reason={}",
+                ri->id.uuid, idx + 1, ri->table_ids.size(), ri->keyspace, table_name, table_id, ri->reason);
+        co_await parallel_for_each(ri->ranges, [ri, table_id] (auto&& range) {
+            return with_semaphore(ri->rs.repair_tracker().range_parallelism_semaphore(), 1, [ri, &range, table_id] {
+                return ri->repair_range(range, table_id).then([ri] {
+                    if (ri->reason == streaming::stream_reason::bootstrap) {
+                        ri->rs.get_metrics().bootstrap_finished_ranges++;
+                    } else if (ri->reason == streaming::stream_reason::replace) {
+                        ri->rs.get_metrics().replace_finished_ranges++;
+                    } else if (ri->reason == streaming::stream_reason::rebuild) {
+                        ri->rs.get_metrics().rebuild_finished_ranges++;
+                    } else if (ri->reason == streaming::stream_reason::decommission) {
+                        ri->rs.get_metrics().decommission_finished_ranges++;
+                    } else if (ri->reason == streaming::stream_reason::removenode) {
+                        ri->rs.get_metrics().removenode_finished_ranges++;
+                    } else if (ri->reason == streaming::stream_reason::repair) {
+                        ri->rs.get_metrics().repair_finished_ranges_sum++;
+                        ri->nr_ranges_finished++;
+                    }
+                    rlogger.debug("repair[{}]: node ops progress bootstrap={}, replace={}, rebuild={}, decommission={}, removenode={}, repair={}",
+                        ri->id.uuid,
+                        ri->rs.get_metrics().bootstrap_finished_percentage(),
+                        ri->rs.get_metrics().replace_finished_percentage(),
+                        ri->rs.get_metrics().rebuild_finished_percentage(),
+                        ri->rs.get_metrics().decommission_finished_percentage(),
+                        ri->rs.get_metrics().removenode_finished_percentage(),
+                        ri->rs.get_metrics().repair_finished_percentage());
+                });
             });
         });
-    });
+
+    }
+    co_return;
 }
 
 // repair_ranges repairs a list of token ranges, each assumed to be a token
@@ -1305,7 +1333,8 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
             auto& strat = ks.get_replication_strategy();
             dht::token_range_vector desired_ranges = strat.get_pending_address_ranges(tmptr, tokens, myip).get0();
             seastar::thread::maybe_yield();
-            nr_ranges_total += desired_ranges.size();
+            auto nr_tables = get_nr_tables(db.local(), keyspace_name);
+            nr_ranges_total += desired_ranges.size() * nr_tables;
         }
         container().invoke_on_all([nr_ranges_total] (repair_service& rs) {
             rs.get_metrics().bootstrap_finished_ranges = 0;
@@ -1337,7 +1366,8 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
             //Collects the source that will have its range moved to the new node
             std::unordered_map<dht::token_range, repair_neighbors> range_sources;
 
-            rlogger.info("bootstrap_with_repair: started with keyspace={}, nr_ranges={}", keyspace_name, desired_ranges.size());
+            auto nr_tables = get_nr_tables(db.local(), keyspace_name);
+            rlogger.info("bootstrap_with_repair: started with keyspace={}, nr_ranges={}", keyspace_name, desired_ranges.size() * nr_tables);
             for (auto& desired_range : desired_ranges) {
                 for (auto& x : range_addresses) {
                     const range<dht::token>& src_range = x.first;
@@ -1478,7 +1508,8 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
             }
             auto& ks = db.local().find_keyspace(keyspace_name);
             dht::token_range_vector ranges = ks.get_effective_replication_map()->get_ranges(leaving_node);
-            nr_ranges_total += ranges.size();
+            auto nr_tables = get_nr_tables(db.local(), keyspace_name);
+            nr_ranges_total += ranges.size() * nr_tables;
         }
         if (reason == streaming::stream_reason::decommission) {
             container().invoke_on_all([nr_ranges_total] (repair_service& rs) {
@@ -1502,8 +1533,9 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
             auto erm = ks.get_effective_replication_map();
             // First get all ranges the leaving node is responsible for
             dht::token_range_vector ranges = erm->get_ranges(leaving_node);
-            rlogger.info("{}: started with keyspace={}, leaving_node={}, nr_ranges={}", op, keyspace_name, leaving_node, ranges.size());
-            size_t nr_ranges_total = ranges.size();
+            auto nr_tables = get_nr_tables(db.local(), keyspace_name);
+            rlogger.info("{}: started with keyspace={}, leaving_node={}, nr_ranges={}", op, keyspace_name, leaving_node, ranges.size() * nr_tables);
+            size_t nr_ranges_total = ranges.size() * nr_tables;
             size_t nr_ranges_skipped = 0;
             std::unordered_map<dht::token_range, inet_address_vector_replica_set> current_replica_endpoints;
             // Find (for each range) all nodes that store replicas for these ranges as well
@@ -1694,7 +1726,8 @@ future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_
             auto& strat = ks.get_replication_strategy();
             // Okay to yield since tm is immutable
             dht::token_range_vector ranges = strat.get_ranges(myip, tmptr).get0();
-            nr_ranges_total += ranges.size();
+            auto nr_tables = get_nr_tables(db.local(), keyspace_name);
+            nr_ranges_total += ranges.size() * nr_tables;
 
         }
         if (reason == streaming::stream_reason::rebuild) {
@@ -1719,7 +1752,8 @@ future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_
             auto& strat = ks.get_replication_strategy();
             dht::token_range_vector ranges = strat.get_ranges(myip, tmptr).get0();
             std::unordered_map<dht::token_range, repair_neighbors> range_sources;
-            rlogger.info("{}: started with keyspace={}, source_dc={}, nr_ranges={}, ignore_nodes={}", op, keyspace_name, source_dc, ranges.size(), ignore_nodes);
+            auto nr_tables = get_nr_tables(db.local(), keyspace_name);
+            rlogger.info("{}: started with keyspace={}, source_dc={}, nr_ranges={}, ignore_nodes={}", op, keyspace_name, source_dc, ranges.size() * nr_tables, ignore_nodes);
             for (auto it = ranges.begin(); it != ranges.end();) {
                 auto& r = *it;
                 seastar::thread::maybe_yield();
@@ -1747,12 +1781,12 @@ future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_
                 }
             }
             if (reason == streaming::stream_reason::rebuild) {
-                container().invoke_on_all([nr_ranges_skipped] (repair_service& rs) {
-                    rs.get_metrics().rebuild_finished_ranges += nr_ranges_skipped;
+                container().invoke_on_all([nr_ranges_skipped, nr_tables] (repair_service& rs) {
+                    rs.get_metrics().rebuild_finished_ranges += nr_ranges_skipped * nr_tables;
                 }).get();
             } else if (reason == streaming::stream_reason::replace) {
-                container().invoke_on_all([nr_ranges_skipped] (repair_service& rs) {
-                    rs.get_metrics().replace_finished_ranges += nr_ranges_skipped;
+                container().invoke_on_all([nr_ranges_skipped, nr_tables] (repair_service& rs) {
+                    rs.get_metrics().replace_finished_ranges += nr_ranges_skipped * nr_tables;
                 }).get();
             }
             auto nr_ranges = ranges.size();
