@@ -465,6 +465,10 @@ private:
     std::optional<index_bound> _upper_bound;
 
 private:
+    bool bound_eof(const index_bound& b) const {
+        return b.data_file_position == data_file_end();
+    }
+
     static future<> reset_clustered_cursor(index_bound& bound) noexcept {
         if (bound.clustered_cursor) {
             return bound.clustered_cursor->close().then([&bound] {
@@ -628,6 +632,10 @@ private:
         } else if (pos.is_max()) {
             return advance_to_end(bound);
         }
+        if (bound_eof(bound)) {
+            sstlog.trace("index {}: eof", fmt::ptr(this));
+            return make_ready_future<>();
+        }
 
         auto& summary = _sstable->get_summary();
         bound.previous_summary_idx = std::distance(std::begin(summary.entries),
@@ -774,9 +782,6 @@ public:
 
     // Advance index_reader bounds to the bounds of the supplied range
     future<> advance_to(const dht::partition_range& range) {
-        if (eof()) {
-            return make_ready_future<>();
-        }
         return seastar::when_all_succeed(
             advance_lower_to_start(range),
             advance_upper_to_end(range)).discard_result();
@@ -914,9 +919,6 @@ public:
     // If upper_bound is provided, the upper bound within position is looked up
     future<bool> advance_lower_and_check_if_present(
             dht::ring_position_view key, std::optional<position_in_partition_view> pos = {}) {
-        if (eof()) {
-            return make_ready_future<bool>(false);
-        }
         return advance_to(_lower_bound, key).then([this, key, pos] {
             if (eof()) {
                 return make_ready_future<bool>(false);
@@ -1043,9 +1045,6 @@ public:
     // Positions the cursor on the first partition which is not smaller than pos (like std::lower_bound).
     // Must be called for non-decreasing positions.
     future<> advance_to(dht::ring_position_view pos) {
-        if (eof()) {
-            return make_ready_future<>();
-        }
         return advance_to(_lower_bound, pos);
     }
 
@@ -1079,7 +1078,7 @@ public:
     }
 
     bool eof() const {
-        return _lower_bound.data_file_position == data_file_end();
+        return bound_eof(_lower_bound);
     }
 
     const shared_sstable& sstable() const { return _sstable; }
