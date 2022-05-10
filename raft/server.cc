@@ -502,8 +502,15 @@ future<> server_impl::add_entry(command command, wait_type type, seastar::abort_
             }();
             if (std::holds_alternative<raft::entry_id>(reply)) {
                 co_return co_await wait_for_entry(std::get<raft::entry_id>(reply), type, as);
+            } else if (std::holds_alternative<raft::commit_status_unknown>(reply)) {
+                // It should be impossible to obtain `commit_status_unknown` here
+                // because neither `execute_add_entry` nor `send_add_entry` wait for the entry
+                // to be committed/applied.
+                on_internal_error(logger, "add_entry: `execute_add_entry` or `send_add_entry`"
+                        " returned `commit_status_unknown`");
+            } else {
+                leader = std::get<raft::not_a_leader>(reply).leader;
             }
-            leader = std::get<raft::not_a_leader>(reply).leader;
         }
     }
 }
@@ -596,7 +603,11 @@ future<> server_impl::modify_config(std::vector<server_address> add, std::vector
                 // See also #9981.
                 co_return;
             }
-            leader = std::get<raft::not_a_leader>(reply).leader;
+            if (auto nal = std::get_if<raft::not_a_leader>(&reply)) {
+                leader = nal->leader;
+            } else {
+                throw std::get<raft::commit_status_unknown>(reply);
+            }
         }
     }
 }
