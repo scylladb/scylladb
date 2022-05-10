@@ -378,6 +378,7 @@ scylla_tests = set([
     'test/boost/cdc_test',
     'test/boost/cell_locker_test',
     'test/boost/checksum_utils_test',
+    'test/boost/chunked_deque_test',
     'test/boost/chunked_vector_test',
     'test/boost/chunked_managed_vector_test',
     'test/boost/clustering_ranges_walker_test',
