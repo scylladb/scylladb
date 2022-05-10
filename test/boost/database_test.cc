@@ -391,11 +391,14 @@ future<> do_with_some_data(std::function<future<> (cql_test_env& env)> func, lw_
     });
 }
 
-future<> take_snapshot(sharded<replica::database>& db, bool skip_flush = false) {
-    return db.invoke_on_all([skip_flush] (replica::database& db) {
-        auto& cf = db.find_column_family("ks", "cf");
-        return cf.snapshot(db, "test", skip_flush);
-    });
+future<> take_snapshot(sharded<replica::database>& db, bool skip_flush = false, sstring ks_name = "ks", sstring cf_name = "cf", sstring snapshot_name = "test") {
+    try {
+        co_await db.local().snapshot_on_all(ks_name, {cf_name}, snapshot_name, skip_flush);
+    } catch (...) {
+        testlog.error("Could not take snapshot for {}.{} snapshot_name={} skip_flush={}: {}",
+                ks_name, cf_name, snapshot_name, skip_flush, std::current_exception());
+        throw;
+    }
 }
 
 future<> take_snapshot(cql_test_env& e, bool skip_flush = false) {

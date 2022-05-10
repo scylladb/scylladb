@@ -669,19 +669,16 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         });
     }));
 
-    ss::force_keyspace_flush.set(r, [&ctx](std::unique_ptr<request> req) {
+    ss::force_keyspace_flush.set(r, [&ctx](std::unique_ptr<request> req) -> future<json::json_return_type> {
         auto keyspace = validate_keyspace(ctx, req->param);
         auto column_families = parse_tables(keyspace, ctx, req->query_parameters, "cf");
+        auto &db = ctx.db.local();
         if (column_families.empty()) {
-            column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
+            co_await db.flush_on_all(keyspace);
+        } else {
+            co_await db.flush_on_all(keyspace, std::move(column_families));
         }
-        return ctx.db.invoke_on_all([keyspace, column_families] (replica::database& db) {
-            return parallel_for_each(column_families, [&db, keyspace](const sstring& cf) mutable {
-                return db.find_column_family(keyspace, cf).flush();
-            });
-        }).then([]{
-                return make_ready_future<json::json_return_type>(json_void());
-        });
+        co_return json_void();
     });
 
 
@@ -1284,40 +1281,46 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         });
     });
 
-    ss::take_snapshot.set(r, [&snap_ctl](std::unique_ptr<request> req) {
-        apilog.debug("take_snapshot: {}", req->query_parameters);
+    ss::take_snapshot.set(r, [&snap_ctl](std::unique_ptr<request> req) -> future<json::json_return_type> {
+        apilog.info("take_snapshot: {}", req->query_parameters);
         auto tag = req->get_query_param("tag");
         auto column_families = split(req->get_query_param("cf"), ",");
         auto sfopt = req->get_query_param("sf");
         auto sf = db::snapshot_ctl::skip_flush(strcasecmp(sfopt.c_str(), "true") == 0);
 
         std::vector<sstring> keynames = split(req->get_query_param("kn"), ",");
-
-        auto resp = make_ready_future<>();
-        if (column_families.empty()) {
-            resp = snap_ctl.local().take_snapshot(tag, keynames, sf);
-        } else {
-            if (keynames.empty()) {
-                throw httpd::bad_param_exception("The keyspace of column families must be specified");
+        try {
+            if (column_families.empty()) {
+                co_await snap_ctl.local().take_snapshot(tag, keynames, sf);
+            } else {
+                if (keynames.empty()) {
+                    throw httpd::bad_param_exception("The keyspace of column families must be specified");
+                }
+                if (keynames.size() > 1) {
+                    throw httpd::bad_param_exception("Only one keyspace allowed when specifying a column family");
+                }
+                co_await snap_ctl.local().take_column_family_snapshot(keynames[0], column_families, tag, sf);
             }
-            if (keynames.size() > 1) {
-                throw httpd::bad_param_exception("Only one keyspace allowed when specifying a column family");
-            }
-            resp = snap_ctl.local().take_column_family_snapshot(keynames[0], column_families, tag, sf);
+            co_return json_void();
+        } catch (...) {
+            apilog.error("take_snapshot failed: {}", std::current_exception());
+            throw;
         }
-        return resp.then([] {
-            return make_ready_future<json::json_return_type>(json_void());
-        });
     });
 
-    ss::del_snapshot.set(r, [&snap_ctl](std::unique_ptr<request> req) {
+    ss::del_snapshot.set(r, [&snap_ctl](std::unique_ptr<request> req) -> future<json::json_return_type> {
+        apilog.info("del_snapshot: {}", req->query_parameters);
         auto tag = req->get_query_param("tag");
         auto column_family = req->get_query_param("cf");
 
         std::vector<sstring> keynames = split(req->get_query_param("kn"), ",");
-        return snap_ctl.local().clear_snapshot(tag, keynames, column_family).then([] {
-            return make_ready_future<json::json_return_type>(json_void());
-        });
+        try {
+            co_await snap_ctl.local().clear_snapshot(tag, keynames, column_family);
+            co_return json_void();
+        } catch (...) {
+            apilog.error("del_snapshot failed: {}", std::current_exception());
+            throw;
+        }
     });
 
     ss::true_snapshots_size.set(r, [&snap_ctl](std::unique_ptr<request> req) {
