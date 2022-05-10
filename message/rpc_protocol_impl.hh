@@ -169,6 +169,48 @@ auto send_message_timeout(messaging_service* ms, messaging_verb verb, msg_addr i
     });
 }
 
+// TODO: Remove duplicated code in send_message
+template <typename MsgIn, typename... MsgOut>
+auto send_message_abortable(messaging_service* ms, messaging_verb verb, msg_addr id, abort_source& as, MsgOut&&... msg) {
+    auto rpc_handler = ms->rpc()->make_client<MsgIn(MsgOut...)>(verb);
+    if (ms->is_shutting_down()) {
+        using futurator = futurize<std::result_of_t<decltype(rpc_handler)(rpc_protocol::client&, MsgOut...)>>;
+        return futurator::make_exception_future(rpc::closed_error());
+    }
+    auto rpc_client_ptr = ms->get_rpc_client(verb, id);
+    auto& rpc_client = *rpc_client_ptr;
+
+    auto c = std::make_unique<seastar::rpc::cancellable>();
+    auto& c_ref = *c;
+    auto sub = as.subscribe([c = std::move(c)] () noexcept {
+        c->cancel();
+    });
+    if (!sub) {
+        throw abort_requested_exception{};
+    }
+
+    return rpc_handler(rpc_client, c_ref, std::forward<MsgOut>(msg)...).then_wrapped([ms = ms->shared_from_this(), id, verb, rpc_client_ptr = std::move(rpc_client_ptr), sub = std::move(sub)] (auto&& f) {
+        try {
+            if (f.failed()) {
+                ms->increment_dropped_messages(verb);
+                f.get();
+                assert(false); // never reached
+            }
+            return std::move(f);
+        } catch (rpc::closed_error&) {
+            // This is a transport error
+            ms->remove_error_rpc_client(verb, id);
+            throw;
+        } catch (rpc::canceled_error&) {
+            // Translate low-level canceled_error into high-level abort_requested_exception.
+            throw abort_requested_exception{};
+        } catch (...) {
+            // This is expected to be a rpc server error, e.g., the rpc handler throws a std::runtime_error.
+            throw;
+        }
+    });
+}
+
 // Send one way message for verb
 template <typename... MsgOut>
 auto send_message_oneway(messaging_service* ms, messaging_verb verb, msg_addr id, MsgOut&&... msg) {

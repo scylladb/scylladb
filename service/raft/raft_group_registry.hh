@@ -16,6 +16,7 @@
 #include "raft/server.hh"
 #include "service/raft/raft_address_map.hh"
 #include "gms/feature.hh"
+#include "direct_failure_detector/failure_detector.hh"
 
 namespace gms { class gossiper; class feature_service; }
 
@@ -23,7 +24,6 @@ namespace service {
 
 class raft_rpc;
 class raft_sys_table_storage;
-class raft_gossip_failure_detector;
 
 struct raft_group_not_found: public raft::error {
     raft::group_id gid;
@@ -56,8 +56,14 @@ private:
     std::unordered_map<raft::group_id, raft_server_for_group> _servers;
     // inet_address:es for remote raft servers known to us
     raft_address_map<> _srv_address_mappings;
-    // Shard-local failure detector instance shared among all raft groups
-    seastar::shared_ptr<raft_gossip_failure_detector> _fd;
+
+    direct_failure_detector::failure_detector& _direct_fd;
+    // Listens to notifications from direct failure detector.
+    // Implements the `raft::failure_detector` interface. Used by all raft groups to check server liveness.
+    class direct_fd_proxy;
+    seastar::shared_ptr<direct_fd_proxy> _direct_fd_proxy;
+    // Direct failure detector listener subscription for `_direct_fd_proxy`.
+    std::optional<direct_failure_detector::subscription> _direct_fd_subscription;
 
     void init_rpc_verbs();
     seastar::future<> uninit_rpc_verbs();
@@ -71,7 +77,9 @@ private:
     gms::feature::listener_registration _raft_support_listener;
 
 public:
-    raft_group_registry(bool is_enabled, netw::messaging_service& ms, gms::gossiper& gs, gms::feature_service& feat);
+    raft_group_registry(bool is_enabled, netw::messaging_service& ms, gms::gossiper& gs,
+            gms::feature_service& feat, direct_failure_detector::failure_detector& fd);
+    ~raft_group_registry();
 
     // Called manually at start
     seastar::future<> start();
@@ -96,8 +104,9 @@ public:
     // arm the associated timer to tick the server.
     future<> start_server_for_group(raft_server_for_group grp);
     unsigned shard_for_group(const raft::group_id& gid) const;
-    shared_ptr<raft_gossip_failure_detector>& failure_detector() { return _fd; }
+    shared_ptr<raft::failure_detector> failure_detector();
     raft_address_map<>& address_map() { return _srv_address_mappings; }
+    direct_failure_detector::failure_detector& direct_fd() { return _direct_fd; }
 
     bool is_enabled() const { return _is_enabled; }
 };

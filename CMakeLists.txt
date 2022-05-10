@@ -575,7 +575,6 @@ set(scylla_sources
     service/qos/qos_common.cc
     service/qos/service_level_controller.cc
     service/qos/standard_service_level_distributed_data_accessor.cc
-    service/raft/raft_gossip_failure_detector.cc
     service/raft/raft_group_registry.cc
     service/raft/raft_rpc.cc
     service/raft/raft_sys_table_storage.cc

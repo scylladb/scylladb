@@ -335,15 +335,17 @@ public:
             false);
     }
 
-    // Erase an entry from the server address map.
-    // Does nothing if an element with a given id does not exist.
-    void erase(raft::server_id id) {
+    // Erase an entry from the server address map and return its address.
+    // Does nothing if an element with a given id does not exist (and returns nullopt).
+    std::optional<gms::inet_address> erase(raft::server_id id) {
         auto set_it = _set.find(id, std::hash<raft::server_id>(), id_compare());
         if (set_it == _set.end()) {
-            return;
+            return std::nullopt;
         }
+        auto addr = set_it->_addr;
         // Erase both from LRU list and base storage
         unlink_and_dispose(set_it);
+        return addr;
     }
 
     // Map raft server_id to inet_address to be consumed by `messaging_service`

@@ -17,6 +17,7 @@
 #include <seastar/core/weak_ptr.hh>
 #include <seastar/util/defer.hh>
 
+#include "direct_failure_detector/failure_detector.hh"
 #include "raft/server.hh"
 #include "raft/logical_clock.hh"
 #include "serializer.hh"
@@ -24,10 +25,12 @@
 #include "idl/uuid.dist.hh"
 #include "idl/uuid.dist.impl.hh"
 
+
 #include "test/lib/random_utils.hh"
 #include "test/raft/logical_timer.hh"
 #include "test/raft/ticker.hh"
 #include "test/raft/generator.hh"
+#include "test/raft/helpers.hh"
 
 #include "to_string.hh"
 
@@ -338,6 +341,9 @@ future<call_result_t<M>> call(
 //
 // We also keep a reference to a `snapshots_t` set to be shared with the `impure_state_machine`
 // on the same server. We access this set when we receive or send a snapshot message.
+//
+// The `on_server_update` function passed into the constructor is called when servers
+// are added or removed when our cluster configuration changes.
 template <typename State>
 class rpc : public raft::rpc {
     using reply_id_t = uint32_t;
@@ -378,6 +384,14 @@ class rpc : public raft::rpc {
         reply_id_t reply_id;
     };
 
+    struct ping_message {
+        reply_id_t reply_id;
+    };
+
+    struct ping_reply {
+        reply_id_t reply_id;
+    };
+
 public:
     using message_t = std::variant<
         snapshot_message,
@@ -393,10 +407,13 @@ public:
         execute_barrier_on_leader_reply,
         add_entry_message,
         add_entry_reply_message,
-        modify_config_message
+        modify_config_message,
+        ping_message,
+        ping_reply
         >;
 
     using send_message_t = std::function<void(raft::server_id dst, message_t)>;
+    using on_server_update_t = std::function<void(raft::server_id, bool)>;
 
 private:
     raft::server_id _id;
@@ -406,6 +423,7 @@ private:
     logical_timer _timer;
 
     send_message_t _send;
+    on_server_update_t _on_server_update;
 
     // Before we send a snapshot apply request we create a promise-future pair,
     // allocate a new ID, and put the promise here under that ID. We then send the ID
@@ -416,7 +434,8 @@ private:
     using reply_promise = std::variant<
         promise<raft::snapshot_reply>,
         promise<raft::read_barrier_reply>,
-        promise<raft::add_entry_reply>
+        promise<raft::add_entry_reply>,
+        promise<>
     >;
     std::unordered_map<reply_id_t, reply_promise> _reply_promises;
     reply_id_t _counter = 0;
@@ -432,16 +451,15 @@ private:
 
     template <typename F>
     auto with_gate(F&& f) -> decltype(f()) {
-        try {
-            co_return co_await seastar::with_gate(_gate, std::forward<F>(f));
-        } catch (const gate_closed_exception&) {
-            co_return coroutine::make_exception(raft::stopped_error{});
-        }
+        return seastar::with_gate(_gate, std::forward<F>(f))
+            .handle_exception_type([] (const gate_closed_exception&) -> decltype(f()) {
+                throw raft::stopped_error{};
+            });
     }
 
 public:
-    rpc(raft::server_id id, snapshots_t<State>& snaps, send_message_t send)
-        : _id(id), _snapshots(snaps), _send(std::move(send)) {
+    rpc(raft::server_id id, snapshots_t<State>& snaps, send_message_t send, on_server_update_t on_server_update)
+        : _id(id), _snapshots(snaps), _send(std::move(send)), _on_server_update(std::move(on_server_update)) {
     }
 
     // Message is delivered to us.
@@ -595,6 +613,18 @@ public:
 
                 --self._modify_config_executions;
             }(*this, src, std::move(m), _gate.hold());
+        },
+        [&] (ping_message m) {
+            _send(src, ping_reply {
+                .reply_id = m.reply_id
+            });
+        },
+        [this] (ping_reply m) {
+            auto it = _reply_promises.find(m.reply_id);
+            if (it != _reply_promises.end()) {
+                std::get<promise<>>(it->second).set_value();
+                _reply_promises.erase(it);
+            }
         }
         ), std::move(payload));
     }
@@ -713,6 +743,40 @@ public:
         });
     }
 
+    future<> ping(raft::server_id dst, abort_source& as) {
+        co_await with_gate([&] () -> future<> {
+            auto id = _counter++;
+            promise<> p;
+            auto f = p.get_future();
+            _reply_promises.emplace(id, std::move(p));
+            auto guard = defer([this, id] { _reply_promises.erase(id); });
+            auto sub = as.subscribe([this, id] () noexcept {
+                auto it = _reply_promises.find(id);
+                if (it == _reply_promises.end()) {
+                    // We already had a response when the abort got called.
+                    return;
+                }
+
+                std::get<promise<>>(it->second).set_exception(std::make_exception_ptr(abort_requested_exception{}));
+                // Erase the promise immediately so ping_reply doesn't try to set it.
+                _reply_promises.erase(it);
+            });
+
+            if (!sub) {
+                // Destroy the future before the promise to prevent 'exceptional future ignored'
+                auto _ = std::move(f);
+
+                throw abort_requested_exception{};
+            }
+
+            _send(dst, ping_message {
+                .reply_id = id
+            });
+
+            co_await std::move(f);
+        });
+    }
+
     virtual future<> send_append_entries(raft::server_id dst, const raft::append_request& m) override {
         _send(dst, m);
         co_return;
@@ -742,10 +806,12 @@ public:
         _send(dst, m);
     }
 
-    virtual void add_server(raft::server_id, raft::server_info) override {
+    virtual void add_server(raft::server_id id, raft::server_info) override {
+        _on_server_update(id, true);
     }
 
-    virtual void remove_server(raft::server_id) override {
+    virtual void remove_server(raft::server_id id) override {
+        _on_server_update(id, false);
     }
 
     virtual future<> abort() override {
@@ -919,77 +985,138 @@ public:
     }
 };
 
-// A failure detector using heartbeats for deciding whether to convict a server
-// as failed. We convict a server if we don't receive a heartbeat for a long enough time.
-// `failure_detector` assumes a message-passing method given by a `send_heartbeat_t` function
-// through the constructor for sending heartbeats and assumes that `receive_heartbeat` is called
-// whenever another server sends a message to us.
-// To decide who to send heartbeats to we use the ``current knowledge'' of servers in the network
-// which is updated through `add_server` and `remove_server` functions.
-class failure_detector : public raft::failure_detector {
-public:
-    using send_heartbeat_t = std::function<void(raft::server_id dst)>;
-
-private:
-    raft::logical_clock _clock;
-
-    // The set of known servers, used to broadcast heartbeats.
-    std::unordered_set<raft::server_id> _known;
-
-    // The last time we received a heartbeat from a server.
-    std::unordered_map<raft::server_id, raft::logical_clock::time_point> _last_heard;
-
-    // The last time we sent a heartbeat.
-    raft::logical_clock::time_point _last_beat;
-
-    // How long from the last received heartbeat does it take to convict a node as dead.
-    const raft::logical_clock::duration _convict_threshold;
-
-    send_heartbeat_t _send_heartbeat;
+// Maps `direct_failure_detector::pinger::endpoint_id`s to `raft::server_id`s.
+// We only need to store the map on shard 0, since all `failure_detector` RPCs will be routed through shard 0 (for simplicity of implementation).
+class direct_fd_endpoint_map {
+    direct_failure_detector::pinger::endpoint_id _next_id{0};
+    std::unordered_map<direct_failure_detector::pinger::endpoint_id, raft::server_id> _ep_to_srv;
 
 public:
-    failure_detector(raft::logical_clock::duration convict_threshold, send_heartbeat_t f)
-        : _convict_threshold(convict_threshold), _send_heartbeat(std::move(f))
-    {
-        send_heartbeats();
-        assert(_last_beat == _clock.now());
+    direct_failure_detector::pinger::endpoint_id allocate(raft::server_id srv) {
+        {
+            auto it = std::find_if(_ep_to_srv.begin(), _ep_to_srv.end(), [srv] (auto& p) { return p.second == srv; });
+            if (it != _ep_to_srv.end()) {
+                return it->first;
+            }
+        }
+
+        auto id = _next_id++;
+        _ep_to_srv.emplace(id, srv);
+        tlogger.debug("direct_fd_endpoint_map: allocated endpoint ID {} to Raft server {}", id, srv);
+        return id;
     }
 
-    void receive_heartbeat(raft::server_id src) {
-        assert(_known.contains(src));
-        _last_heard[src] = std::max(_clock.now(), _last_heard[src]);
+    raft::server_id get_raft_id(direct_failure_detector::pinger::endpoint_id ep) const {
+        auto it = _ep_to_srv.find(ep);
+        assert(it != _ep_to_srv.end());
+        return it->second;
+    }
+};
+
+template <typename State>
+class direct_fd_pinger : public direct_failure_detector::pinger {
+    ::rpc<State>& _rpc;
+    direct_fd_endpoint_map& _ep_map;
+
+public:
+    direct_fd_pinger(::rpc<State>& rpc, direct_fd_endpoint_map& ep_map)
+            : _rpc(rpc), _ep_map(ep_map) {
+        assert(this_shard_id() == 0);
+    }
+
+    // Can be called on any shard.
+    // The given `id` must've been previosuly returned by `_ep_map.allocate` on shard 0.
+    future<bool> ping(direct_failure_detector::pinger::endpoint_id id, abort_source& as) override {
+        try {
+            co_await invoke_abortable_on(0, [this, id] (abort_source& as) {
+                return _rpc.ping(_ep_map.get_raft_id(id), as);
+            }, as);
+        } catch (raft::stopped_error&) {
+            co_return false;
+        }
+        co_return true;
+    }
+};
+
+class direct_fd_clock : public direct_failure_detector::clock {
+    // We use `logical_timer` for an implementation of `sleep_until`
+    // (for simplicity of implementation we route the sleep to shard 0),
+    // but we also need a separate atomic _ticks counter because we need a `now` function callable from every shard.
+    // The timer is ticked in synchrony with _ticks.
+    logical_timer _timer;
+    std::atomic<int64_t> _ticks{0};
+
+public:
+    direct_fd_clock() {
+        assert(this_shard_id() == 0);
     }
 
     void tick() {
-        _clock.advance();
+        _timer.tick();
+        ++_ticks;
+    }
 
-        // TODO: make it adjustable
-        static const raft::logical_clock::duration _heartbeat_period = 10_t;
+    direct_failure_detector::clock::timepoint_t now() noexcept override {
+        return _ticks;
+    }
 
-        if (_last_beat + _heartbeat_period <= _clock.now()) {
-            send_heartbeats();
+    future<> sleep_until(direct_failure_detector::clock::timepoint_t tp, abort_source& as) override {
+        try {
+            co_await invoke_abortable_on(0, [this, tp] (abort_source& as) {
+                auto start = now();
+                if (tp <= start) {
+                    return make_ready_future<>();
+                }
+
+                // Translate direct_failure_detector timepoint `tp` to a `logical_timer` timepoint,
+                // using the fact that they are ticked in synchrony.
+                auto diff = tp - start;
+                auto timer_start = _timer.now();
+                auto timer_tp = timer_start + raft::logical_clock::duration{diff};
+
+                return _timer.sleep_until(timer_tp, as);
+
+                // When this sleep finishes, we know that timer_tp <= _timer.now().
+                // Thus timer_tp - timer_start <= _timer.now() - timer_start.
+                // _timer.now() - timer_start == now() - start (because _ticks is incremented in synchrony with _timer.tick()).
+                // Thus timer_tp - timer_start <= now() - start.
+                // But timer_tp = timer_start + (tp - start), so timer_tp - timer_start = tp - start,
+                // hence tp - start <= now() - start,
+                // hence tp <= now().
+            }, as);
+        } catch (abort_requested_exception&) {
+            throw sleep_aborted{};
         }
     }
+};
 
-    void send_heartbeats() {
-        for (auto& dst : _known) {
-            _send_heartbeat(dst);
-        }
-        _last_beat = _clock.now();
+class direct_fd_listener : public raft::failure_detector, public direct_failure_detector::listener {
+    raft::server_id _id;
+    direct_fd_endpoint_map& _ep_map;
+
+    std::unordered_set<raft::server_id> _alive_set;
+
+public:
+    direct_fd_listener(raft::server_id id, direct_fd_endpoint_map& ep_map)
+            : _id(id), _ep_map(ep_map) {
     }
 
-    // We expect a server to be added through this function before we receive a heartbeat from it.
-    void add_server(raft::server_id id) {
-        _known.insert(id);
+    future<> mark_alive(direct_failure_detector::pinger::endpoint_id ep) override {
+        auto id = _ep_map.get_raft_id(ep);
+        tlogger.trace("failure detector ({}): mark {} alive", _id, id);
+        _alive_set.insert(id);
+        return make_ready_future<>();
     }
 
-    void remove_server(raft::server_id id) {
-        _known.erase(id);
-        _last_heard.erase(id);
+    future<> mark_dead(direct_failure_detector::pinger::endpoint_id ep) override {
+        auto id = _ep_map.get_raft_id(ep);
+        tlogger.trace("failure detector ({}): mark {} dead", _id, id);
+        _alive_set.erase(id);
+        return make_ready_future<>();
     }
 
     bool is_alive(raft::server_id id) override {
-        return _clock.now() < _last_heard[id] + _convict_threshold;
+        return _alive_set.contains(id);
     }
 };
 
@@ -1163,9 +1290,17 @@ class raft_server {
     std::unique_ptr<snapshots_t<typename M::state_t>> _snapshots;
     std::unique_ptr<raft::server> _server;
 
-    // The following objects are owned by _server:
+    // _sm and _rpc are owned by _server:
     impure_state_machine<M>& _sm;
     rpc<typename M::state_t>& _rpc;
+
+    std::unique_ptr<direct_fd_endpoint_map> _fd_ep_map;
+    std::unique_ptr<sharded<direct_failure_detector::failure_detector>> _fd_service;
+    std::unique_ptr<direct_fd_pinger<typename M::state_t>> _fd_pinger;
+    std::unique_ptr<direct_fd_clock> _fd_clock;
+    shared_ptr<direct_fd_listener> _fd_listener;
+
+    raft::logical_clock::duration _fd_convict_threshold;
 
     bool _started = false;
     bool _stopped = false;
@@ -1173,6 +1308,8 @@ class raft_server {
     // Used to ensure that when `abort()` returns there are
     // no more in-progress methods running on this object.
     seastar::gate _gate;
+
+    std::optional<direct_failure_detector::subscription> _fd_subscription;
 
 public:
     // Create a `raft::server` with the given `id` and all other facilities required
@@ -1189,21 +1326,36 @@ public:
     static std::unique_ptr<raft_server> create(
             raft::server_id id,
             lw_shared_ptr<persistence<typename M::state_t>> persistence,
-            shared_ptr<failure_detector> fd,
+            raft::logical_clock::duration fd_convict_threshold,
             raft::server::configuration cfg,
             typename rpc<typename M::state_t>::send_message_t send_rpc) {
         using state_t = typename M::state_t;
 
+        auto fd_ep_map = std::make_unique<direct_fd_endpoint_map>();
+        auto fd_service = std::make_unique<sharded<direct_failure_detector::failure_detector>>();
+        auto update_fd_server = [&fd = *fd_service, &ep_map = *fd_ep_map] (raft::server_id id, bool added) {
+            auto ep = ep_map.allocate(id);
+            if (added) {
+                fd.local().add_endpoint(ep);
+            } else {
+                fd.local().remove_endpoint(ep);
+            }
+        };
+
         auto snapshots = std::make_unique<snapshots_t<state_t>>();
         auto sm = std::make_unique<impure_state_machine<M>>(id, *snapshots);
-        auto rpc_ = std::make_unique<rpc<state_t>>(id, *snapshots, std::move(send_rpc));
+        auto rpc_ = std::make_unique<rpc<state_t>>(id, *snapshots, std::move(send_rpc), std::move(update_fd_server));
         auto persistence_ = std::make_unique<persistence_proxy<state_t>>(*snapshots, std::move(persistence));
+
+        auto fd_pinger = std::make_unique<direct_fd_pinger<state_t>>(*rpc_, *fd_ep_map);
+        auto fd_clock = std::make_unique<direct_fd_clock>();
+        auto fd_listener = make_shared<direct_fd_listener>(id, *fd_ep_map);
 
         auto& sm_ref = *sm;
         auto& rpc_ref = *rpc_;
 
         auto server = raft::create_server(
-                id, std::move(rpc_), std::move(sm), std::move(persistence_), std::move(fd),
+                id, std::move(rpc_), std::move(sm), std::move(persistence_), fd_listener,
                 std::move(cfg));
 
         return std::make_unique<raft_server>(initializer{
@@ -1211,7 +1363,13 @@ public:
             ._snapshots = std::move(snapshots),
             ._server = std::move(server),
             ._sm = sm_ref,
-            ._rpc = rpc_ref
+            ._rpc = rpc_ref,
+            ._fd_ep_map = std::move(fd_ep_map),
+            ._fd_service = std::move(fd_service),
+            ._fd_pinger = std::move(fd_pinger),
+            ._fd_clock = std::move(fd_clock),
+            ._fd_listener = std::move(fd_listener),
+            ._fd_convict_threshold = fd_convict_threshold
         });
     }
 
@@ -1224,9 +1382,17 @@ public:
 
     // Start the server. Can be called at most once.
     future<> start() {
+        // TODO: make it adjustable
+        static const raft::logical_clock::duration fd_ping_period = 10_t;
+
         assert(!_started);
         _started = true;
 
+        // _fd_service must be started before raft server,
+        // because as soon as raft server is started, it may start adding endpoints to the service.
+        // _fd_service is using _server's RPC, but not until the first endpoint is added.
+        co_await _fd_service->start(std::ref(*_fd_pinger), std::ref(*_fd_clock), fd_ping_period.count());
+        _fd_subscription.emplace(co_await _fd_service->local().register_listener(*_fd_listener, _fd_convict_threshold.count()));
         co_await _server->start();
     }
 
@@ -1237,6 +1403,10 @@ public:
         // Abort everything before waiting on the gate close future
         // so currently running operations finish earlier.
         if (_started) {
+            // Stop _fd_service before _server because _fd_service is using _server's RPC.
+            // _server may try to add/remove endpoints after _fd_service is stopped but it's allowed.
+            _fd_subscription = std::nullopt;
+            co_await _fd_service->stop();
             co_await _server->abort();
         }
         co_await std::move(f);
@@ -1247,6 +1417,7 @@ public:
         assert(_started);
         _rpc.tick();
         _server->tick();
+        _fd_clock->tick();
     }
 
     future<call_result_t<M>> call(
@@ -1324,6 +1495,13 @@ private:
 
         impure_state_machine<M>& _sm;
         rpc<typename M::state_t>& _rpc;
+
+        std::unique_ptr<direct_fd_endpoint_map> _fd_ep_map;
+        std::unique_ptr<sharded<direct_failure_detector::failure_detector>> _fd_service;
+        std::unique_ptr<direct_fd_pinger<typename M::state_t>> _fd_pinger;
+        std::unique_ptr<direct_fd_clock> _fd_clock;
+        shared_ptr<direct_fd_listener> _fd_listener;
+        raft::logical_clock::duration _fd_convict_threshold;
     };
 
     raft_server(initializer i)
@@ -1331,17 +1509,17 @@ private:
         , _snapshots(std::move(i._snapshots))
         , _server(std::move(i._server))
         , _sm(i._sm)
-        , _rpc(i._rpc) {
-    }
+        , _rpc(i._rpc)
+        , _fd_ep_map(std::move(i._fd_ep_map))
+        , _fd_service(std::move(i._fd_service))
+        , _fd_pinger(std::move(i._fd_pinger))
+        , _fd_clock(std::move(i._fd_clock))
+        , _fd_listener(std::move(i._fd_listener))
+        , _fd_convict_threshold(i._fd_convict_threshold)
+    {}
 
     friend std::unique_ptr<raft_server> std::make_unique<raft_server, raft_server::initializer>(initializer&&);
 };
-
-static raft::server_id to_raft_id(size_t id) {
-    // Raft uses UUID 0 as special case.
-    assert(id > 0);
-    return raft::server_id{utils::UUID{0, id}};
-}
 
 struct environment_config {
     std::mt19937 rnd;
@@ -1370,7 +1548,6 @@ class environment : public seastar::weakly_referencable<environment<M>> {
         raft::server::configuration _cfg;
         lw_shared_ptr<persistence<state_t>> _persistence;
         std::unique_ptr<raft_server<M>> _server;
-        shared_ptr<failure_detector> _fd;
     };
 
     // Passed to newly created failure detectors.
@@ -1382,10 +1559,9 @@ class environment : public seastar::weakly_referencable<environment<M>> {
     std::unordered_map<raft::server_id, route> _routes;
 
     // Used to create a new ID in `new_server`.
-    size_t _next_id = 1;
+    size_t _next_id = 0;
 
-    // Engaged optional: RPC message, nullopt: heartbeat
-    using message_t = std::optional<typename rpc<state_t>::message_t>;
+    using message_t = typename rpc<state_t>::message_t;
     network<message_t> _network;
 
     bool _stopped = false;
@@ -1417,13 +1593,9 @@ public:
         [this] (raft::server_id src, raft::server_id dst, const message_t& m) {
             auto& n = _routes.at(dst);
             assert(n._persistence);
-            assert(n._fd);
 
             if (n._server) {
-                n._fd->receive_heartbeat(src);
-                if (m) {
-                    n._server->deliver(src, *m);
-                }
+                n._server->deliver(src, m);
             }
         }) {
     }
@@ -1439,11 +1611,10 @@ public:
         _network.tick();
     }
 
-    template <std::invocable<raft::server_id, raft_server<M>*, failure_detector&> F>
+    template <std::invocable<raft::server_id, raft_server<M>*> F>
     void for_each_server(F&& f) {
         for (auto& [id, r]: _routes) {
-            assert(r._fd);
-            f(id, r._server.get(), *r._fd);
+            f(id, r._server.get());
         }
     }
 
@@ -1455,11 +1626,10 @@ public:
     }
 
     void tick_servers() {
-        for_each_server([] (raft::server_id, raft_server<M>* srv, failure_detector& fd) {
+        for_each_server([] (raft::server_id, raft_server<M>* srv) {
             if (srv) {
                 srv->tick();
             }
-            fd.tick();
         });
 
         tick_crashing_servers();
@@ -1483,28 +1653,9 @@ public:
             ._cfg = std::move(cfg),
             ._persistence = make_lw_shared<persistence<state_t>>(first ? std::optional{id} : std::nullopt, M::init),
             ._server = nullptr,
-            ._fd = nullptr,
         });
         assert(inserted);
         auto& n = it->second;
-
-        n._fd = seastar::make_shared<failure_detector>(_fd_convict_threshold,
-                [id, &n, this] (raft::server_id dst) {
-            // Ping others only if a server is running.
-            if (n._server) {
-                _network.send(id, dst, std::nullopt);
-            }
-        });
-
-        // Add us to other servers' failure detectors.
-        for (auto& [_, r] : _routes) {
-            r._fd->add_server(id);
-        }
-
-        // Add other servers to our failure detector.
-        for (auto& [id, _] : _routes) {
-            n._fd->add_server(id);
-        }
 
         return id;
     }
@@ -1515,11 +1666,10 @@ public:
         return with_gate(_gate, [this, id] () -> future<> {
             auto& n = _routes.at(id);
             assert(n._persistence);
-            assert(n._fd);
             assert(!n._server);
 
             lw_shared_ptr<raft_server<M>*> this_srv_addr = make_lw_shared<raft_server<M>*>(nullptr);
-            auto srv = raft_server<M>::create(id, n._persistence, n._fd, n._cfg,
+            auto srv = raft_server<M>::create(id, n._persistence, _fd_convict_threshold, n._cfg,
                     [id, this_srv_addr, &n, this] (raft::server_id dst, typename rpc<state_t>::message_t m) {
                 // Allow the message out only if we are still the currently running server on this node.
                 if (*this_srv_addr == n._server.get()) {
@@ -1555,7 +1705,6 @@ public:
             auto& n = _routes.at(id);
             assert(n._persistence);
             assert(n._server);
-            assert(n._fd);
 
             co_await n._server->abort();
             n._server = nullptr;
@@ -1572,7 +1721,6 @@ public:
         auto& n = _routes.at(id);
         assert(n._persistence);
         assert(n._server);
-        assert(n._fd);
 
         // Let the 'crashed' server continue working on its copy of persistence;
         // none of that work will be seen by later servers restarted on this node
@@ -1838,6 +1986,16 @@ struct wait_for_leader {
     }
 };
 
+future<> ping_shards() {
+    if (smp::count == 1) {
+        return seastar::yield();
+    }
+
+    return parallel_for_each(boost::irange(0u, smp::count), [] (shard_id s) {
+        return smp::submit_to(s, [](){});
+    });
+}
+
 SEASTAR_TEST_CASE(basic_test) {
     logical_timer timer;
     environment_config cfg {
@@ -1848,12 +2006,13 @@ SEASTAR_TEST_CASE(basic_test) {
     co_await with_env_and_ticker<ExReg>(cfg, [&timer] (environment<ExReg>& env, ticker& t) -> future<> {
         using output_t = typename ExReg::output_t;
 
-        t.start([&] (uint64_t tick) {
+        t.start([&] (uint64_t tick) -> future<> {
             env.tick_network();
             timer.tick();
             if (tick % 10 == 0) {
                 env.tick_servers();
             }
+            return ping_shards();
         }, 10'000);
 
         auto leader_id = co_await env.new_server(true);
@@ -1924,6 +2083,7 @@ SEASTAR_TEST_CASE(snapshot_uses_correct_term_test) {
             if (tick % 10 == 0) {
                 env.tick_servers();
             }
+            return ping_shards();
         }, 10'000);
 
         auto id1 = co_await env.new_server(true,
@@ -2003,6 +2163,7 @@ SEASTAR_TEST_CASE(snapshotting_preserves_config_test) {
             if (tick % 10 == 0) {
                 env.tick_servers();
             }
+            return ping_shards();
         }, 10'000);
 
         auto id1 = co_await env.new_server(true,
@@ -2063,6 +2224,7 @@ SEASTAR_TEST_CASE(removed_follower_with_forwarding_learns_about_removal) {
             if (tick % 10 == 0) {
                 env.tick_servers();
             }
+            return ping_shards();
         }, 10'000);
 
         raft::server::configuration cfg {
@@ -2670,16 +2832,16 @@ SEASTAR_TEST_CASE(basic_generator_test) {
         t.start([&, dist = std::uniform_int_distribution<size_t>(0, 9)] (uint64_t tick) mutable {
             env.tick_network();
             timer.tick();
-            env.for_each_server([&] (raft::server_id, raft_server<AppendReg>* srv, failure_detector& fd) {
+            env.for_each_server([&] (raft::server_id, raft_server<AppendReg>* srv) {
                 // Tick each server with probability 1/10.
                 // Thus each server is ticked, on average, once every 10 timer/network ticks.
                 // On the other hand, we now have servers running at different speeds.
                 if (srv && dist(random_engine) == 0) {
                     srv->tick();
-                    fd.tick();
                 }
             });
             env.tick_crashing_servers();
+            return ping_shards();
         }, 200'000);
 
         std::bernoulli_distribution bdist{0.5};
@@ -2897,7 +3059,7 @@ SEASTAR_TEST_CASE(basic_generator_test) {
             co_await interp.run();
         } catch (inconsistency& e) {
             tlogger.error("inconsistency: {}", e.what);
-            env.for_each_server([&] (raft::server_id id, raft_server<AppendReg>* srv, failure_detector&) {
+            env.for_each_server([&] (raft::server_id id, raft_server<AppendReg>* srv) {
                 if (srv) {
                     tlogger.info("server {} state machine state: {}", id, srv->state());
                 } else {

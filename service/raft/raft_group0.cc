@@ -7,7 +7,6 @@
  */
 #include "service/raft/raft_group0.hh"
 #include "service/raft/raft_rpc.hh"
-#include "service/raft/raft_gossip_failure_detector.hh"
 #include "service/raft/raft_sys_table_storage.hh"
 #include "service/raft/group0_state_machine.hh"
 
@@ -15,6 +14,7 @@
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
 #include "service/storage_proxy.hh"
+#include "direct_failure_detector/failure_detector.hh"
 #include "gms/gossiper.hh"
 #include "db/system_keyspace.hh"
 
@@ -55,7 +55,17 @@ raft_server_for_group raft_group0::create_server_for_group(raft::group_id gid,
 
     _raft_gr.address_map().set(my_addr);
     auto state_machine = std::make_unique<group0_state_machine>(_mm, _qp.proxy());
-    auto rpc = std::make_unique<raft_rpc>(*state_machine, _ms, _raft_gr.address_map(), gid, my_addr.id);
+    auto rpc = std::make_unique<raft_rpc>(*state_machine, _ms, _raft_gr.address_map(), gid, my_addr.id,
+            [this] (gms::inet_address addr, bool added) {
+                // FIXME: we should eventually switch to UUID-based (not IP-based) node identification/communication scheme.
+                // See #6403.
+                auto id = _gossiper.get_direct_fd_pinger().allocate_id(addr);
+                if (added) {
+                    _raft_gr.direct_fd().add_endpoint(id);
+                } else {
+                    _raft_gr.direct_fd().remove_endpoint(id);
+                }
+            });
     // Keep a reference to a specific RPC class.
     auto& rpc_ref = *rpc;
     auto storage = std::make_unique<raft_sys_table_storage>(_qp, gid, my_addr.id);

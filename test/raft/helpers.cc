@@ -10,6 +10,8 @@
 // Helper functions for raft tests
 //
 
+#include <seastar/core/sharded.hh>
+
 #include "helpers.hh"
 
 raft::fsm_config fsm_cfg{.append_request_threshold = 1, .enable_prevoting = false};
@@ -148,4 +150,49 @@ size_t to_int_id(utils::UUID uuid) {
 // Return true upon a random event with given probability
 bool rolladice(float probability) {
     return tests::random::get_real(0.0, 1.0) < probability;
+}
+
+future<> invoke_abortable_on(unsigned shard, noncopyable_function<future<>(abort_source&)> f, abort_source& as) {
+    auto foreign_abort_source = co_await smp::submit_to(shard, [] {
+        return make_foreign(std::make_unique<abort_source>());
+    });
+
+    std::optional<future<>> abort_on_foreign;
+    auto sub = as.subscribe([shard, &abort_on_foreign, &as = *foreign_abort_source] () noexcept {
+        // Not sure if submit_to can't really throw exceptions (e.g. bad_alloc?), but this is test code so whatever.
+        abort_on_foreign = smp::submit_to(shard, [&as] {
+            as.request_abort();
+        });
+    });
+
+    if (!sub) {
+        throw abort_requested_exception{};
+    }
+
+    std::exception_ptr ep;
+    try {
+        co_await smp::submit_to(shard, std::bind_front(std::move(f), std::ref(*foreign_abort_source)));
+
+        if (abort_on_foreign) {
+            // Abort was requested in the meantime.
+            // Wait for the abort future to resolve so it's safe to destroy `foreign_abort_source`.
+            // Ignore any exceptions from `submit_to`.
+            try {
+                co_await std::move(*abort_on_foreign);
+            } catch (...) {}
+        }
+
+        co_return;
+    } catch (...) {
+        ep = std::current_exception();
+    }
+
+    if (abort_on_foreign) {
+        // As above.
+        try {
+            co_await std::move(*abort_on_foreign);
+        } catch (...) {}
+    }
+
+    std::rethrow_exception(ep);
 }

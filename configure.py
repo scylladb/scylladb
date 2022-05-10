@@ -559,6 +559,7 @@ raft_tests = set([
     'test/raft/raft_sys_table_storage_test',
     'test/raft/raft_address_map_test',
     'test/raft/discovery_test',
+    'test/raft/failure_detector_test',
 ])
 
 apps = set([
@@ -1016,10 +1017,10 @@ scylla_core = (['replica/database.cc',
                 'serializer.cc',
                 'release.cc',
                 'service/raft/raft_rpc.cc',
-                'service/raft/raft_gossip_failure_detector.cc',
                 'service/raft/raft_group_registry.cc',
                 'service/raft/discovery.cc',
                 'service/raft/raft_group0.cc',
+                'direct_failure_detector/failure_detector.cc',
                 ] + [Antlr3Grammar('cql3/Cql.g')] + [Thrift('interface/cassandra.thrift', 'Cassandra')] \
                   + scylla_raft_core
                )
@@ -1278,7 +1279,8 @@ deps['test/boost/duration_test'] += ['test/lib/exception_utils.cc']
 deps['test/boost/schema_loader_test'] += ['tools/schema_loader.cc']
 
 deps['test/raft/replication_test'] = ['test/raft/replication_test.cc', 'test/raft/replication.cc', 'test/raft/helpers.cc'] + scylla_raft_dependencies
-deps['test/raft/randomized_nemesis_test'] = ['test/raft/randomized_nemesis_test.cc'] + scylla_raft_dependencies
+deps['test/raft/randomized_nemesis_test'] = ['test/raft/randomized_nemesis_test.cc', 'direct_failure_detector/failure_detector.cc', 'test/raft/helpers.cc'] + scylla_raft_dependencies
+deps['test/raft/failure_detector_test'] = ['test/raft/failure_detector_test.cc', 'direct_failure_detector/failure_detector.cc', 'test/raft/helpers.cc'] + scylla_raft_dependencies
 deps['test/raft/many_test'] = ['test/raft/many_test.cc', 'test/raft/replication.cc', 'test/raft/helpers.cc'] + scylla_raft_dependencies
 deps['test/raft/fsm_test'] =  ['test/raft/fsm_test.cc', 'test/raft/helpers.cc', 'test/lib/log.cc'] + scylla_raft_dependencies
 deps['test/raft/etcd_test'] =  ['test/raft/etcd_test.cc', 'test/raft/helpers.cc', 'test/lib/log.cc'] + scylla_raft_dependencies
