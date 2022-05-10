@@ -624,7 +624,7 @@
                   },
                   {
                      "name":"kn",
-                     "description":"Comma seperated keyspaces name to snapshot",
+                     "description":"Keyspace(s) to snapshot. Multiple keyspaces can be provided using a comma-separated list. If omitted, snapshot all keyspaces.",
                      "required":false,
                      "allowMultiple":false,
                      "type":"string",
@@ -632,7 +632,7 @@
                   },
                   {
                      "name":"cf",
-                     "description":"the column family to snapshot",
+                     "description":"Table(s) to snapshot. Multiple tables (in a single keyspace) can be provided using a comma-separated list. If omitted, snapshot all tables in the given keyspace(s).",
                      "required":false,
                      "allowMultiple":false,
                      "type":"string",

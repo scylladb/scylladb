@@ -47,6 +47,7 @@
 #include <seastar/util/noncopyable_function.hh>
 #include <seastar/rpc/rpc_types.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/range/algorithm/copy.hpp>
@@ -1073,12 +1074,9 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std:
     co_await proxy.local().mutate_locally(std::move(mutations), tracing::trace_state_ptr());
 
     if (do_flush) {
-        co_await proxy.local().get_db().invoke_on_all([&] (replica::database& db) -> future<> {
-            auto& cfs = column_families;
-            co_await parallel_for_each(cfs.begin(), cfs.end(), [&] (const utils::UUID& id) -> future<> {
-                auto& cf = db.find_column_family(id);
-                co_await cf.flush();
-            });
+        auto& db = proxy.local().local_db();
+        co_await coroutine::parallel_for_each(column_families, [&db] (const utils::UUID& id) -> future<> {
+            return db.flush_on_all(id);
         });
     }
 
