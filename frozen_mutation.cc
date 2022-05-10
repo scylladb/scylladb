@@ -29,6 +29,7 @@
 #include "readers/flat_mutation_reader_v2.hh"
 #include "converting_mutation_partition_applier.hh"
 #include "mutation_partition_view.hh"
+#include "utils/chunked_deque.hh"
 
 //
 // Representation layout:
@@ -196,7 +197,7 @@ class fragmenting_mutation_freezer {
 
     tombstone _partition_tombstone;
     std::optional<static_row> _sr;
-    std::deque<clustering_row> _crs;
+    utils::chunked_deque<clustering_row> _crs;
     range_tombstone_list _rts;
 
     frozen_mutation_consumer_fn _consumer;

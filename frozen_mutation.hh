@@ -15,6 +15,7 @@
 #include "mutation_partition_view.hh"
 #include "mutation_consumer_concepts.hh"
 #include "range_tombstone_change_generator.hh"
+#include "utils/chunked_deque.hh"
 
 class mutation;
 class flat_mutation_reader_v2;
@@ -238,7 +239,7 @@ class streamed_mutation_freezer {
 
     tombstone _partition_tombstone;
     std::optional<static_row> _sr;
-    std::deque<clustering_row> _crs;
+    utils::chunked_deque<clustering_row> _crs;
     range_tombstone_list _rts;
 public:
     streamed_mutation_freezer(const schema& s, const partition_key& key, bool reversed = false)

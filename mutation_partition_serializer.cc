@@ -206,7 +206,7 @@ void mutation_partition_serializer::write(ser::writer_of_mutation_partition<byte
 
 void serialize_mutation_fragments(const schema& s, tombstone partition_tombstone,
     std::optional<static_row> sr,  range_tombstone_list rts,
-    std::deque<clustering_row> crs, ser::writer_of_mutation_partition<bytes_ostream>&& wr)
+    utils::chunked_deque<clustering_row> crs, ser::writer_of_mutation_partition<bytes_ostream>&& wr)
 {
     auto srow_writer = std::move(wr).write_tomb(partition_tombstone).start_static_row();
     auto row_tombstones = [&] {
