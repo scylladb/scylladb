@@ -340,12 +340,12 @@ static bool belongs_to_other_shard(const std::vector<shard_id>& shards) {
 
 sstables::shared_sstable table::make_sstable(sstring dir, int64_t generation, sstables::sstable_version_types v, sstables::sstable_format_types f,
         io_error_handler_gen error_handler_gen) {
-    return get_sstables_manager().make_sstable(_schema, dir, generation, v, f, gc_clock::now(), error_handler_gen);
+    return get_sstables_manager().make_sstable(_schema, dir, generation, v, f, _storage_options, gc_clock::now(), error_handler_gen);
 }
 
 sstables::shared_sstable table::make_sstable(sstring dir, int64_t generation,
         sstables::sstable_version_types v, sstables::sstable_format_types f) {
-    return get_sstables_manager().make_sstable(_schema, dir, generation, v, f);
+    return get_sstables_manager().make_sstable(_schema, dir, generation, v, f, _storage_options);
 }
 
 sstables::shared_sstable table::make_sstable(sstring dir) {
@@ -1167,7 +1167,7 @@ table::make_memtable_list() {
 }
 
 table::table(schema_ptr schema, config config, db::commitlog* cl, compaction_manager& compaction_manager,
-             cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker)
+             cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker, const storage_options& storage_opts)
     : _schema(std::move(schema))
     , _config(std::move(config))
     , _view_stats(format("{}_{}_view_replica_update", _schema->ks_name(), _schema->cf_name()),
@@ -1187,6 +1187,7 @@ table::table(schema_ptr schema, config config, db::commitlog* cl, compaction_man
     , _counter_cell_locks(_schema->is_counter() ? std::make_unique<cell_locker>(_schema, cl_stats) : nullptr)
     , _table_state(std::make_unique<table_state>(*this))
     , _row_locker(_schema)
+    , _storage_options(storage_opts)
     , _off_strategy_trigger([this] { trigger_offstrategy_compaction(); })
 {
     if (!_config.enable_disk_writes) {

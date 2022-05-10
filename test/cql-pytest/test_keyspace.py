@@ -200,6 +200,16 @@ def test_storage_options_local(cql, scylla_only):
         res = cql.execute(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{keyspace}'")
         assert not res.all()
 
+# Test that passing "SHARED_FILESYSTEM" parameter to storage options works as expected
+# and validates its parameters
+def test_storage_options_shared_filesystem(cql, scylla_only):
+    ksdef = "WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : '1' } " \
+            "AND STORAGE = { 'type' : 'SHARED_FILESYSTEM', 'directory' : '/tmp/' }"
+    with new_test_keyspace(cql, ksdef) as keyspace:
+        res = cql.execute(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{keyspace}'")
+        assert res.one().storage_options['directory'] == '/tmp/'
+
+
 # Test that passing an unsupported storage type is not legal
 def test_storage_options_unknown_type(cql, scylla_only):
     ksdef = "WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : '1' } " \
