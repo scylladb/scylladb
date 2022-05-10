@@ -15,7 +15,7 @@
 #include "seastarx.hh"
 #include "utils/extremum_tracking.hh"
 #include "utils/estimated_histogram.hh"
-#include "linux-perf-event.hh"
+#include <seastar/testing/linux_perf_event.hh>
 #include "reader_permit.hh"
 
 #include <chrono>

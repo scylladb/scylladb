@@ -29,8 +29,11 @@ static auto transformer(const std::vector<collectd_value>& values) {
         case scollectd::data_type::GAUGE:
             collected_value.values.push(v.d());
             break;
-        case scollectd::data_type::DERIVE:
-            collected_value.values.push(v.i());
+        case scollectd::data_type::COUNTER:
+            collected_value.values.push(v.ui());
+            break;
+        case scollectd::data_type::REAL_COUNTER:
+            collected_value.values.push(v.d());
             break;
         default:
             collected_value.values.push(v.ui());

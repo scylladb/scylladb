@@ -1236,7 +1236,7 @@ perf_tests_seastar_deps = [
 
 for t in perf_tests:
     deps[t] = [t + '.cc'] + scylla_tests_dependencies + perf_tests_seastar_deps
-    deps[t] += ['test/perf/perf.cc', 'test/perf/linux-perf-event.cc']
+    deps[t] += ['test/perf/perf.cc', 'seastar/tests/perf/linux_perf_event.cc']
 
 deps['test/boost/mutation_reader_test'] += ['test/lib/dummy_sharder.cc' ]
 deps['test/boost/multishard_combining_reader_as_mutation_source_test'] += ['test/lib/dummy_sharder.cc' ]
@@ -1256,11 +1256,11 @@ deps['test/boost/allocation_strategy_test'] = ['test/boost/allocation_strategy_t
 deps['test/boost/log_heap_test'] = ['test/boost/log_heap_test.cc']
 deps['test/boost/estimated_histogram_test'] = ['test/boost/estimated_histogram_test.cc']
 deps['test/boost/anchorless_list_test'] = ['test/boost/anchorless_list_test.cc']
-deps['test/perf/perf_fast_forward'] += ['test/perf/linux-perf-event.cc']
-deps['test/perf/perf_simple_query'] += ['test/perf/perf.cc', 'test/perf/linux-perf-event.cc', 'test/lib/alternator_test_env.cc'] + alternator
-deps['test/perf/perf_commitlog'] += ['test/perf/perf.cc', 'test/perf/linux-perf-event.cc']
-deps['test/perf/perf_row_cache_reads'] += ['test/perf/perf.cc', 'test/perf/linux-perf-event.cc']
-deps['test/perf/perf_row_cache_update'] += ['test/perf/perf.cc', 'test/perf/linux-perf-event.cc']
+deps['test/perf/perf_fast_forward'] += ['seastar/tests/perf/linux_perf_event.cc']
+deps['test/perf/perf_simple_query'] += ['test/perf/perf.cc', 'seastar/tests/perf/linux_perf_event.cc', 'test/lib/alternator_test_env.cc'] + alternator
+deps['test/perf/perf_commitlog'] += ['test/perf/perf.cc', 'seastar/tests/perf/linux_perf_event.cc']
+deps['test/perf/perf_row_cache_reads'] += ['test/perf/perf.cc', 'seastar/tests/perf/linux_perf_event.cc']
+deps['test/perf/perf_row_cache_update'] += ['test/perf/perf.cc', 'seastar/tests/perf/linux_perf_event.cc']
 deps['test/boost/reusable_buffer_test'] = [
     "test/boost/reusable_buffer_test.cc",
     "test/lib/log.cc",
