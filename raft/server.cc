@@ -1172,8 +1172,9 @@ future<> server_impl::abort() {
     _apply_entries.abort(std::make_exception_ptr(stop_apply_fiber()));
     co_await seastar::when_all_succeed(std::move(_io_status), std::move(_applier_status)).discard_result();
 
-    // Start RPC abort before aborting snapshot applications.
-    // After calling `_rpc->abort()` no new applications should be started (see `rpc::abort()` comment).
+    // Start RPC abort before aborting snapshot applications or destroying entry waiters.
+    // After calling `_rpc->abort()` no new snapshot applications should be started or new waiters created
+    // (see `rpc::abort()` comment and `_aborted` flag).
     auto abort_rpc = _rpc->abort();
     auto abort_sm = _state_machine->abort();
     auto abort_persistence = _persistence->abort();
@@ -1184,8 +1185,11 @@ future<> server_impl::abort() {
         f.set_exception(std::runtime_error("Snapshot application aborted"));
     }
 
-    co_await seastar::when_all_succeed(std::move(abort_rpc), std::move(abort_sm), std::move(abort_persistence)).discard_result();
-
+    // Destroy entry waiters before waiting for `abort_rpc`,
+    // since the RPC implementation may wait for forwarded `modify_config` calls to finish
+    // (and `modify_config` does not finish until the configuration entry is committed or an error occurs).
+    // FIXME: probably need to do the same with read barriers (`_reads`)
+    // (not doing it yet because I want to catch the problem first in nemesis test)
     for (auto& ac: _awaited_commits) {
         ac.second.done.set_exception(stopped_error());
     }
@@ -1194,6 +1198,9 @@ future<> server_impl::abort() {
     }
     _awaited_commits.clear();
     _awaited_applies.clear();
+
+    co_await seastar::when_all_succeed(std::move(abort_rpc), std::move(abort_sm), std::move(abort_persistence)).discard_result();
+
     if (_leader_promise) {
         _leader_promise->set_exception(stopped_error());
     }
