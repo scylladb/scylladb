@@ -109,6 +109,13 @@ def schema(gdb, scylla_gdb):
         table['_schema']['_p'].reinterpret_cast(gdb.lookup_type('schema').pointer()))
     yield '$schema'
 
+@pytest.fixture(scope="module")
+def sstable(gdb, scylla_gdb):
+    db = scylla_gdb.sharded(gdb.parse_and_eval('::debug::the_database')).local()
+    sst = next(scylla_gdb.find_sstables())
+    gdb.set_convenience_variable('sst', sst)
+    yield '$sst'
+
 def test_schema(gdb, schema):
     scylla(gdb, f'schema {schema}')
 
