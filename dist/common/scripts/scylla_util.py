@@ -21,8 +21,8 @@ from scylla_product import PRODUCT
 
 from multiprocessing import cpu_count
 
-def out(cmd, shell=True, timeout=None, encoding='utf-8'):
-    res = subprocess.run(cmd, capture_output=True, shell=shell, timeout=timeout, check=False, encoding=encoding)
+def out(cmd, shell=True, timeout=None, user=None, group=None, encoding='utf-8'):
+    res = subprocess.run(cmd, capture_output=True, shell=shell, timeout=timeout, user=user, group=group, check=False, encoding=encoding)
     if res.returncode != 0:
         print(f'Command \'{cmd}\' returned non-zero exit status: {res.returncode}')
         print('----------  stdout  ----------')
