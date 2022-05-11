@@ -3037,6 +3037,21 @@ class boost_small_vector(object):
 class chunked_vector(object):
     def __init__(self, ref):
         self.ref = ref
+        self._max_contiguous_allocation = int(list(template_arguments(self.ref.type))[1])
+
+    def max_chunk_capacity(self):
+        return max(self._max_contiguous_allocation / self.ref.type.sizeof, 1);
+
+    def __len__(self):
+        return int(self.ref['_size'])
+
+    def __iter__(self):
+        sz = len(self)
+        for chunk in small_vector(self.ref['_chunks']):
+            chunk = std_unique_ptr(chunk).get()
+            for i in range(min(sz, self.max_chunk_capacity())):
+                yield chunk[i]
+                sz -= 1
 
     def external_memory_footprint(self):
         return int(self.ref['_capacity']) * self.ref.type.template_argument(0).sizeof \
