@@ -768,6 +768,37 @@ class chunked_managed_vector:
                 yield e
 
 
+class sstring:
+    def __init__(self, ref):
+        self.ref = ref
+
+    @staticmethod
+    def to_hex(data, size):
+        inf = gdb.selected_inferior()
+        return bytes(inf.read_memory(data, size)).hex()
+
+    def as_hex(self):
+        return self.to_hex(self.data(), len(self))
+
+    def is_internal(self):
+        return self.ref['u']['internal']['size'] >= 0
+
+    def __len__(self):
+        if self.is_internal():
+            return self.ref['u']['internal']['size']
+        else:
+            return self.ref['u']['external']['size']
+
+    def data(self):
+        if self.is_internal():
+            return self.ref['u']['internal']['str']
+        else:
+            return self.ref['u']['external']['str']
+
+    def __str__(self):
+        return self.as_hex()
+
+
 def uint64_t(val):
     val = int(val)
     if val < 0:
