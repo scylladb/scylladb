@@ -2452,7 +2452,42 @@ struct reconfiguration {
 
     using result_type = reconfigure_result_t;
 
-    future<result_type> execute(state_type& s, const operation::context& ctx) {
+    future<result_type> execute_modify_config(state_type& s, const operation::context&) {
+        assert(s.all_servers.size() > 1);
+        std::vector<raft::server_id> nodes{s.all_servers.begin(), s.all_servers.end()};
+
+        std::shuffle(nodes.begin(), nodes.end(), s.rnd);
+        size_t added_ix = std::uniform_int_distribution<size_t>{1, nodes.size()}(s.rnd);
+        std::vector<raft::server_id> added {nodes.begin(), nodes.begin() + added_ix};
+        std::vector<raft::server_id> removed {nodes.begin() + added_ix, nodes.end()};
+
+        assert(s.known.size() > 0);
+        auto [res, last] = co_await bouncing{
+                [&added, &removed, timeout = s.timer.now() + timeout, &timer = s.timer, &env = s.env] (raft::server_id id) {
+            return env.modify_config(id, added, removed, timeout, timer);
+        }}(s.timer, s.known, *s.known.begin(), 10, 10_t, 10_t);
+
+        std::visit(make_visitor(
+        [&, last = last] (std::monostate) {
+            tlogger.debug("reconfig successful known {} added {} removed {} by {}", s.known, added, removed, last);
+            s.known.merge(std::unordered_set<raft::server_id>{added.begin(), added.end()});
+            for (auto id: removed) {
+                s.known.erase(id);
+            }
+        },
+        [&, last = last] (raft::not_a_leader& e) {
+            tlogger.debug("reconfig failed, not a leader: {} tried to add {}, remove {} by {}", e, added, removed, last);
+        },
+        [&, last = last] (auto& e) {
+            s.known.merge(std::unordered_set<raft::server_id>{added.begin(), added.end()});
+            tlogger.debug("reconfig failed: {}, tried to add {}, remove {}, after merge {} by {}", e, added, removed, s.known, last);
+        }
+        ), res);
+
+        co_return res;
+    }
+
+    future<result_type> execute_reconfigure(state_type& s, const operation::context&) {
         assert(s.all_servers.size() > 1);
         std::vector<raft::server_id> nodes{s.all_servers.begin(), s.all_servers.end()};
 
@@ -2481,6 +2516,15 @@ struct reconfiguration {
         ), res);
 
         co_return res;
+    }
+
+    future<result_type> execute(state_type& s, const operation::context& ctx) {
+        static std::bernoulli_distribution bdist{0.5};
+        if (bdist(s.rnd)) {
+            return execute_modify_config(s, ctx);
+        } else {
+            return execute_reconfigure(s, ctx);
+        }
     }
 
     friend std::ostream& operator<<(std::ostream& os, const reconfiguration& r) {
