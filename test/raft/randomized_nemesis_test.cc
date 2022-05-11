@@ -438,7 +438,6 @@ private:
         promise<>
     >;
     std::unordered_map<reply_id_t, reply_promise> _reply_promises;
-    reply_id_t _counter = 0;
 
     // Used to ensure that when `abort()` returns there are
     // no more in-progress methods running on this object.
@@ -455,6 +454,11 @@ private:
             .handle_exception_type([] (const gate_closed_exception&) -> decltype(f()) {
                 throw raft::stopped_error{};
             });
+    }
+
+    static reply_id_t new_reply_id() {
+        static size_t counter = 0;
+        return counter++;
     }
 
 public:
@@ -640,7 +644,7 @@ public:
                 throw snapshot_not_found{ .id = ins.snp.id };
             }
 
-            auto id = _counter++;
+            auto id = new_reply_id();
             promise<raft::snapshot_reply> p;
             auto f = p.get_future();
             _reply_promises.emplace(id, std::move(p));
@@ -675,7 +679,7 @@ public:
 
     virtual future<raft::add_entry_reply> send_add_entry(raft::server_id dst, const raft::command& cmd) override {
         co_return co_await with_gate([&] () -> future<raft::add_entry_reply> {
-            auto id = _counter++;
+            auto id = new_reply_id();
             promise<raft::add_entry_reply> p;
             auto f = p.get_future();
             _reply_promises.emplace(id, std::move(p));
@@ -700,7 +704,7 @@ public:
                 const std::vector<raft::server_address>& add,
                 const std::vector<raft::server_id>& del) override {
         co_return co_await with_gate([&] () -> future<raft::add_entry_reply> {
-            auto id = _counter++;
+            auto id = new_reply_id();
             promise<raft::add_entry_reply> p;
             auto f = p.get_future();
             _reply_promises.emplace(id, std::move(p));
@@ -724,7 +728,7 @@ public:
     }
     virtual future<raft::read_barrier_reply> execute_read_barrier_on_leader(raft::server_id dst) override {
         co_return co_await with_gate([&] () -> future<raft::read_barrier_reply> {
-            auto id = _counter++;
+            auto id = new_reply_id();
             promise<raft::read_barrier_reply> p;
             auto f = p.get_future();
             _reply_promises.emplace(id, std::move(p));
@@ -745,7 +749,7 @@ public:
 
     future<> ping(raft::server_id dst, abort_source& as) {
         co_await with_gate([&] () -> future<> {
-            auto id = _counter++;
+            auto id = new_reply_id();
             promise<> p;
             auto f = p.get_future();
             _reply_promises.emplace(id, std::move(p));
