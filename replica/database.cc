@@ -1284,6 +1284,40 @@ database::existing_index_names(const sstring& ks_name, const sstring& cf_to_excl
     return names;
 }
 
+namespace {
+
+enum class request_class {
+    user,
+    system,
+    maintenance,
+};
+
+request_class classify_request(const database_config& _dbcfg) {
+    const auto current_group = current_scheduling_group();
+
+    // Everything running in the statement group is considered a user request
+    if (current_group == _dbcfg.statement_scheduling_group) {
+        return request_class::user;
+    // System requests run in the default (main) scheduling group
+    // All requests executed on behalf of internal work also uses the system semaphore
+    } else if (current_group == default_scheduling_group()
+            || current_group == _dbcfg.compaction_scheduling_group
+            || current_group == _dbcfg.gossip_scheduling_group
+            || current_group == _dbcfg.memory_compaction_scheduling_group
+            || current_group == _dbcfg.memtable_scheduling_group
+            || current_group == _dbcfg.memtable_to_cache_scheduling_group) {
+        return request_class::system;
+    // Requests done on behalf of view update generation run in the streaming group
+    } else if (current_scheduling_group() == _dbcfg.streaming_scheduling_group) {
+        return request_class::maintenance;
+    // Everything else is considered a user request
+    } else {
+        return request_class::user;
+    }
+}
+
+} // anonymous namespace
+
 future<std::tuple<lw_shared_ptr<query::result>, cache_temperature>>
 database::query(schema_ptr s, const query::read_command& cmd, query::result_options opts, const dht::partition_range_vector& ranges,
                 tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout) {
@@ -1405,56 +1439,22 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
     co_return std::tuple(std::move(result), hit_rate);
 }
 
-namespace {
-
-enum class query_class {
-    user,
-    system,
-    maintenance,
-};
-
-query_class classify_query(const database_config& _dbcfg) {
-    const auto current_group = current_scheduling_group();
-
-    // Everything running in the statement group is considered a user query
-    if (current_group == _dbcfg.statement_scheduling_group) {
-        return query_class::user;
-    // System queries run in the default (main) scheduling group
-    // All queries executed on behalf of internal work also uses the system semaphore
-    } else if (current_group == default_scheduling_group()
-            || current_group == _dbcfg.compaction_scheduling_group
-            || current_group == _dbcfg.gossip_scheduling_group
-            || current_group == _dbcfg.memory_compaction_scheduling_group
-            || current_group == _dbcfg.memtable_scheduling_group
-            || current_group == _dbcfg.memtable_to_cache_scheduling_group) {
-        return query_class::system;
-    // Reads done on behalf of view update generation run in the streaming group
-    } else if (current_scheduling_group() == _dbcfg.streaming_scheduling_group) {
-        return query_class::maintenance;
-    // Everything else is considered a user query
-    } else {
-        return query_class::user;
-    }
-}
-
-} // anonymous namespace
-
 query::max_result_size database::get_unlimited_query_max_result_size() const {
-    switch (classify_query(_dbcfg)) {
-        case query_class::user:
+    switch (classify_request(_dbcfg)) {
+        case request_class::user:
             return query::max_result_size(_cfg.max_memory_for_unlimited_query_soft_limit(), _cfg.max_memory_for_unlimited_query_hard_limit());
-        case query_class::system: [[fallthrough]];
-        case query_class::maintenance:
+        case request_class::system: [[fallthrough]];
+        case request_class::maintenance:
             return query::max_result_size(query::result_memory_limiter::unlimited_result_size);
     }
     std::abort();
 }
 
 reader_concurrency_semaphore& database::get_reader_concurrency_semaphore() {
-    switch (classify_query(_dbcfg)) {
-        case query_class::user: return _read_concurrency_sem;
-        case query_class::system: return _system_read_concurrency_sem;
-        case query_class::maintenance: return _streaming_concurrency_sem;
+    switch (classify_request(_dbcfg)) {
+        case request_class::user: return _read_concurrency_sem;
+        case request_class::system: return _system_read_concurrency_sem;
+        case request_class::maintenance: return _streaming_concurrency_sem;
     }
     std::abort();
 }
