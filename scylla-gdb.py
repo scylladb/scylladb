@@ -4500,6 +4500,56 @@ class scylla_schema(gdb.Command):
                     cdef['_is_counter']))
 
 
+class scylla_sstable_summary(gdb.Command):
+    """Print content of sstable summary
+
+    Usage: scylla sstable-summary $sst
+
+    Where $sst has to be a sstables::sstable value or reference, or a
+    sstables::shared_sstable instance.
+
+    Example:
+
+        (gdb) scylla sstable-summary $sst
+        header: {min_index_interval = 128, size = 1, memory_size = 21, sampling_level = 128, size_at_full_sampling = 0}
+        first_key: 63617373616e647261
+        last_key: 63617373616e647261
+        [0]: {
+          token: 356242581507269238,
+          key: 63617373616e647261,
+          position: 0}
+
+    Keys are printed in the hexadecimal notation.
+    """
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla sstable-summary', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
+        self.inf = gdb.selected_inferior()
+
+    def to_hex(self, data, size):
+        return bytes(self.inf.read_memory(data, size)).hex()
+
+    def invoke(self, arg, for_tty):
+        arg = gdb.parse_and_eval(arg)
+        typ = arg.type.strip_typedefs()
+        if typ.name.startswith("seastar::lw_shared_ptr"):
+            sst = seastar_lw_shared_ptr(arg).get().dereference()
+        else:
+            sst = arg
+        summary = seastar_lw_shared_ptr(sst['_components']['_value']).get().dereference()['summary']
+
+        gdb.write("header: {}\n".format(summary['header']))
+        gdb.write("first_key: {}\n".format(sstring(summary['first_key']['value'])))
+        gdb.write("last_key: {}\n".format(sstring(summary['last_key']['value'])))
+
+        entries = list(chunked_vector(summary['entries']))
+        for i in range(len(entries)):
+            e = entries[i]
+            gdb.write("[{}]: {{\n  token: {},\n  key: {},\n  position: {}}}\n".format(i,
+                e['token']['_data'],
+                self.to_hex(e['key']['_M_str'], int(e['key']['_M_len'])),
+                e['position']))
+
+
 class permit_stats:
     def __init__(self, *args):
         if len(args) == 2:
@@ -4925,6 +4975,7 @@ scylla_active_sstables()
 scylla_netw()
 scylla_gms()
 scylla_cache()
+scylla_sstable_summary()
 scylla_sstables()
 scylla_memtables()
 scylla_generate_object_graph()

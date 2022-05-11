@@ -144,4 +144,7 @@ def task(gdb, scylla_gdb):
 def test_fiber(gdb, task):
     scylla(gdb, f'fiber {task}')
 
+def test_sstable_summary(gdb, sstable):
+    scylla(gdb, f'sstable-summary {sstable}')
+
 # FIXME: need a simple test for lsa-segment
