@@ -4,13 +4,15 @@
 
 # Tests for secondary indexes
 
+import random
+import itertools
 import time
 import tempfile
 import pytest
 import os
 from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException, ReadFailure, WriteFailure
 from cassandra.query import SimpleStatement
-from cassandra_tests.porting import assert_rows, assert_row_count
+from cassandra_tests.porting import assert_rows, assert_row_count, assert_rows_ignoring_order, assert_empty
 
 from util import new_test_table, unique_name
 
@@ -849,3 +851,109 @@ def test_index_quoted_names(cql, test_keyspace):
         cql.execute(f'INSERT INTO {table} (pk, ck, {names}) VALUES (1, 2, {values})')
         for name in quoted_names:
             assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE {name} CONTAINS KEY 3'))
+
+# Test that queries with the index over collection provide the same answer as it
+# would be without index, but with ALLOW FILTERING.
+# The operations on collections here are picked up randomly.
+def test_secondary_collection_index(cql, test_keyspace):
+
+    seed = int(time.time()*1e8)
+    print(f"Seed for collection index test: {seed}")
+    rand = random.Random(seed)
+
+    schema = f'id int, m map<int, text>, primary key (id)'
+
+    possible_ids = [100, 101]
+    possible_keys = [1, 2, 3]
+    possible_values = ['abc', 'def', 'ghi']
+
+    def insert(table, id, map, **kwargs):
+        a = (f'insert into {table}(id, m) values (%s, %s)', (id, map))
+        print(a)
+        cql.execute(*a)
+    def update_cell(table, id, key, value, **kwargs):
+        a = (f'update {table} set m[%s] = %s where id = %s', (key, value, id))
+        print(a)
+        cql.execute(*a)
+    def update_delete(table, id, keys, **kwargs):
+        a = (f'update {table} set m = m - %s where id = %s', (keys, id))
+        print(a)
+        cql.execute(*a)
+    def update_add(table, id, map, **kwargs):
+        a = (f'update {table} set m = m + %s where id = %s', (map, id))
+        print(a)
+        cql.execute(*a)
+    def delete(table, id, **kwargs):
+        a = (f'delete m from {table} where id = %s', (id,))
+        print(a)
+        cql.execute(*a)
+    def delete_cell(table, id, key, **kwargs):
+        a = (f'delete m[%s] from {table} where id = %s', (key, id))
+        print(a)
+        cql.execute(*a)
+
+    def random_map():
+        size = rand.randrange(len(possible_keys))
+        keys = rand.sample(possible_keys, k=size)
+        values = rand.choices(possible_values, k=size)
+        return dict(zip(keys, values))
+    def random_keys():
+        return set(random_map())
+    def random_key():
+        return random.choice(possible_keys)
+    def random_value():
+        return random.choice(possible_values)
+    def random_id():
+        return random.choice(possible_ids)
+
+    def random_operation():
+        return random.choice([insert, update_cell, update_delete, update_add, delete, delete_cell])
+    def random_args():
+        return {
+            'map': random_map(),
+            'key': random_key(),
+            'value': random_value(),
+            'keys': random_keys(),
+            'id': random_id(),
+        }
+
+    with new_test_table(cql, test_keyspace, schema) as tab1, new_test_table(cql, test_keyspace, schema) as tab2:
+        def select(cql, table, where, *args):
+            query = f'select id from {table} where {where}'
+            if table is tab2:
+                query += ' allow filtering'
+            try:
+                return cql.execute(query, *args)
+            except:
+                print('args=', args, table, where)
+                raise
+        def test_all_possible_selects():
+            # Choose something that is not possible.
+            possible_ids_ = possible_ids + [10000]
+            possible_keys_ = possible_keys + [10000]
+            possible_values_ = possible_values + ['aaaaa']
+            for k, v in itertools.product(possible_keys_, possible_values_):
+                r1 = select(cql, tab1, 'm[%s] = %s', (k, v))
+                r2 = select(cql, tab2, 'm[%s] = %s', (k, v))
+                assert_rows_ignoring_order(r1, *list(r2))
+            for k in possible_keys_:
+                r1 = select(cql, tab1, 'm contains key %s', (k,))
+                r2 = select(cql, tab2, 'm contains key %s', (k,))
+                assert_rows_ignoring_order(r1, *list(r2))
+            for v in possible_values_:
+                r1 = select(cql, tab1, 'm contains %s', (v,))
+                r2 = select(cql, tab2, 'm contains %s', (v,))
+                assert_rows_ignoring_order(r1, *list(r2))
+
+
+        cql.execute(f'create index on {tab1}(keys(m))')
+        cql.execute(f'create index on {tab1}(values(m))')
+        cql.execute(f'create index on {tab1}(entries(m))')
+
+        for _ in range(50):
+            op = random_operation()
+            args = random_args()
+            print(f"op={op}, args={args}")
+            for tab in [tab1, tab2]:
+                op(tab, **args)
+            test_all_possible_selects()
