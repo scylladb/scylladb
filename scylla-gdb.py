@@ -731,6 +731,24 @@ class std_list:
         return deref(it['_M_node'])
 
 
+class managed_vector:
+    def __init__(self, ref):
+        self._ref = ref
+
+    def __len__(self):
+        return int(self._ref['_size'])
+
+    def __nonzero__(self):
+        return self.__len__() > 0
+
+    def __bool__(self):
+        return self.__len__() > 0
+
+    def __iter__(self):
+        for i in range(len(self)):
+            yield self._ref['_data'][i]
+
+
 def uint64_t(val):
     val = int(val)
     if val < 0:
