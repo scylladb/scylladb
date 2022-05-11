@@ -1810,8 +1810,15 @@ future<> gossiper::start_gossiping(int generation_nbr, std::map<application_stat
     _enabled = true;
     _nr_run = 0;
     _scheduled_gossip_task.arm(INTERVAL);
+    if (!_background_msg.is_closed()) {
+        co_await _background_msg.close();
+    }
+    _background_msg = seastar::gate();
+    /* Ensure all shards have enabled gossip before starting the failure detector loop */
     co_await container().invoke_on_all([] (gms::gossiper& g) {
         g._enabled = true;
+    });
+    co_await container().invoke_on_all([] (gms::gossiper& g) {
         g._failure_detector_loop_done = g.failure_detector_loop();
     });
     co_await _direct_fd_pinger.update_generation_number(generation_nbr);
