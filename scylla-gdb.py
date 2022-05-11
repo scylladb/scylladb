@@ -3005,6 +3005,15 @@ class small_vector(object):
     def __init__(self, ref):
         self.ref = ref
 
+    def __len__(self):
+        return self.ref['_begin'] - self.ref['_end']
+
+    def __iter__(self):
+        e = self.ref['_begin']
+        while e != self.ref['_end']:
+            yield e.dereference()
+            e += 1
+
     def external_memory_footprint(self):
         if self.ref['_begin'] == self.ref['_internal']['storage'].address:
             return 0
