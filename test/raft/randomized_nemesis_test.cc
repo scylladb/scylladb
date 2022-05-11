@@ -2291,8 +2291,7 @@ struct bouncing {
                 --bounces;
 
                 if (n_a_l->leader) {
-                    assert(n_a_l->leader != srv_id);
-                    if (!tried.contains(n_a_l->leader)) {
+                    if (n_a_l->leader == srv_id || !tried.contains(n_a_l->leader)) {
                         co_await timer.sleep(known_leader_delay);
                         srv_id = n_a_l->leader;
                         tlogger.trace("bouncing call: got `not_a_leader`, rerouted to {}", srv_id);
