@@ -749,6 +749,25 @@ class managed_vector:
             yield self._ref['_data'][i]
 
 
+class chunked_managed_vector:
+    def __init__(self, ref):
+        self._ref = ref
+
+    def __len__(self):
+        return int(self._ref['_size'])
+
+    def __nonzero__(self):
+        return self.__len__() > 0
+
+    def __bool__(self):
+        return self.__len__() > 0
+
+    def __iter__(self):
+        for chunk in managed_vector(self._ref['_chunks']):
+            for e in managed_vector(chunk):
+                yield e
+
+
 def uint64_t(val):
     val = int(val)
     if val < 0:
