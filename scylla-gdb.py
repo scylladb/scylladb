@@ -341,10 +341,10 @@ class std_variant:
     def index(self):
         return int(self.ref['_M_index'])
 
-    def get(self):
+    # workaround for when template arguments refuses to work
+    def get_with_type(self, current_type):
         index = self.index()
         variadic_union = self.ref['_M_u']
-        current_type = self.member_types[index].strip_typedefs()
         for i in range(index):
             variadic_union = variadic_union['_M_rest']
 
@@ -355,6 +355,11 @@ class std_variant:
 
         # non-literal types are stored via a __gnu_cxx::__aligned_membuf
         return wrapper['_M_storage'].reinterpret_cast(current_type.pointer()).dereference()
+
+    def get(self):
+        index = self.index()
+        current_type = self.member_types[index].strip_typedefs()
+        return self.get_with_type(index, current_type)
 
 
 class std_map:
