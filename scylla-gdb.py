@@ -253,6 +253,34 @@ class intrusive_btree:
                 yield r
 
 
+class bplus_tree:
+    def __init__(self, ref):
+        self.tree = ref
+        self.leaf_node_flag = int(gdb.parse_and_eval(self.tree.type.name + "::node::NODE_LEAF"))
+        self.rightmost_leaf_flag = int(gdb.parse_and_eval(self.tree.type.name + "::node::NODE_RIGHTMOST"))
+
+    def __len__(self):
+        i = 0
+        for _ in self:
+            i += 1
+        return i
+
+    def __iter__(self):
+        node_p = self.tree['_left']
+        while node_p:
+            node = node_p.dereference()
+            if not node['_flags'] & self.leaf_node_flag:
+                raise ValueError("Expected B+ leaf node")
+
+            for i in range(0, node['_num_keys']):
+                yield node['_kids'][i+1]['d'].dereference()['value']
+
+            if node['_flags'] & self.rightmost_leaf_flag:
+                node_p = None
+            else:
+                node_p = node['__next']
+
+
 class double_decker:
     def __init__(self, ref):
         self.tree = ref['_tree']
