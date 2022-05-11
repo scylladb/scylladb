@@ -4550,6 +4550,80 @@ class scylla_sstable_summary(gdb.Command):
                 e['position']))
 
 
+class scylla_sstable_index_cache(gdb.Command):
+    """Print content of sstable partition-index cache
+
+    Prints index pages present in the partition-cache. Promoted index is
+    not printed.
+
+    Usage: scylla sstable-index-cache $sst
+
+    Where $sst has to be a sstables::sstable value or reference, or a
+    sstables::shared_sstable instance.
+
+    Output format is:
+
+        [$summary_index] : [
+            { key: $partition_key, token: $token, position: $position_in_data_file }
+            ...
+        ]
+        ...
+
+    Example:
+
+        (gdb) scylla sstable-index-cache $sst
+        [0]: [
+          { key: 63617373616e647261, token: 356242581507269238, position: 0 }
+        ]
+        Total: 1 page(s) (1 loaded, 0 loading)
+
+    Keys are printed in the hexadecimal notation.
+    """
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla sstable-index-cache', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
+
+    def invoke(self, arg, for_tty):
+        arg = gdb.parse_and_eval(arg)
+        typ = arg.type
+        if typ.code == gdb.TYPE_CODE_PTR or typ.code == gdb.TYPE_CODE_REF or typ.code == gdb.TYPE_CODE_RVALUE_REF:
+            typ = typ.target().strip_typedefs()
+        if typ.name == "sstables::partition_index_cache":
+            cache = arg
+        else:
+            if typ.name.startswith("seastar::lw_shared_ptr"):
+                sst = seastar_lw_shared_ptr(arg).get()
+            else:
+                sst = arg
+            cache = std_unique_ptr(sst['_index_cache']).get().dereference()
+        tree = bplus_tree(cache['_cache'])
+        loaded_pages = 0
+        loading_pages = 0
+        partition_index_page_type = gdb.lookup_type('sstables::partition_index_page')
+        for n in tree:
+            t = n['_page'].type
+            page = std_variant(n['_page'])
+            if page.index() == 0:
+                loading_pages += 1
+                continue
+            loaded_pages += 1
+            page = page.get_with_type(partition_index_page_type)
+            gdb.write("[{}]: [\n".format(int(n['_key'])))
+            for entry in chunked_managed_vector(page['_entries']):
+                entry = entry['_ptr'].dereference()['_value']
+                key = entry['_key']
+                token = std_optional(entry['_token'])
+                if token:
+                    token = str(int(token.get()['_data']))
+                else:
+                    token = 'null'
+                position = int(entry['_position'])
+
+                gdb.write("  {{ key: {}, token: {}, position: {} }}\n".format(key, token, position))
+            gdb.write(']\n')
+
+        gdb.write("Total: {} page(s) ({} loaded, {} loading)\n".format(loaded_pages + loading_pages, loaded_pages, loading_pages))
+
+
 class permit_stats:
     def __init__(self, *args):
         if len(args) == 2:
@@ -4976,6 +5050,7 @@ scylla_netw()
 scylla_gms()
 scylla_cache()
 scylla_sstable_summary()
+scylla_sstable_index_cache()
 scylla_sstables()
 scylla_memtables()
 scylla_generate_object_graph()
