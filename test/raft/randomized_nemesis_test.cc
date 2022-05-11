@@ -1275,6 +1275,8 @@ future<reconfigure_result_t> modify_config(
         co_return e;
     } catch (raft::request_aborted&) {
         co_return timed_out_error{};
+    } catch (seastar::timed_out_error e) {
+        co_return e;
     } catch (...) {
         tlogger.error("unexpected exception from modify_config: {}", std::current_exception());
         assert(false);
