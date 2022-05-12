@@ -250,3 +250,37 @@ def test_filtering_null_map_with_subscript(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"INSERT INTO {table} (p) VALUES ('dog')")
         assert list(cql.execute(f"SELECT p FROM {table} WHERE m[2] = 3 ALLOW FILTERING")) == []
+
+# Test whether it is allowed to specify more than on restriction on the same
+# column. For example, "c=0 and c>0".
+# Cassandra does *not* allow such expressions, giving errors such as
+# "Column "c" cannot be restricted by both an equality and an inequality
+# relation", "More than one restriction was found for the start bound on
+# c", and so on.
+#
+# Scylla chose to *allow* such expressions. In that case, we need to verify
+# that it at least gives the correct results - if the two restrictions
+# conflict, they result list should be happy, but if they overlap without
+# conflicting the result list can be non-empty.
+# This test is marked scylla_only because the support for such expressions
+# is a Scylla extension.
+def test_multiple_restrictions_on_same_column(cql, test_keyspace, scylla_only):
+    schema = 'p int, c int, primary key (p, c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        p = 1
+        cql.execute(f"INSERT INTO {table} (p,c) VALUES ({p}, 0)")
+        cql.execute(f"INSERT INTO {table} (p,c) VALUES ({p}, 1)")
+        cql.execute(f"INSERT INTO {table} (p,c) VALUES ({p}, 2)")
+        assert list(cql.execute(f"SELECT c FROM {table} WHERE p = {p} and c = 0 and c > 0")) == []
+        assert list(cql.execute(f"SELECT c FROM {table} WHERE p = {p} and c > 0 and c = 0")) == []
+        assert list(cql.execute(f"SELECT c FROM {table} WHERE p = {p} and c = 1 and c > 0")) == [(1,)]
+        assert list(cql.execute(f"SELECT c FROM {table} WHERE p = {p} and c > 0 and c = 1")) == [(1,)]
+        assert list(cql.execute(f"SELECT c FROM {table} WHERE p = {p} and c = 1 and c = 1")) == [(1,)]
+        assert list(cql.execute(f"SELECT c FROM {table} WHERE p = {p} and c = 0 and c = 1")) == []
+        assert list(cql.execute(f"SELECT c FROM {table} WHERE p = {p} and c > 0 and c > 1")) == [(2,)]
+        assert list(cql.execute(f"SELECT c FROM {table} WHERE p = {p} and c > 1 and c > 0")) == [(2,)]
+        assert list(cql.execute(f"SELECT c FROM {table} WHERE p = {p} and c = 1 and c >= 1")) == [(1,)]
+        assert list(cql.execute(f"SELECT c FROM {table} WHERE p = {p} and c >= 1 and c = 1")) == [(1,)]
+        assert list(cql.execute(f"SELECT c FROM {table} WHERE p = {p} and c > 1 and c < 1")) == []
+        assert list(cql.execute(f"SELECT c FROM {table} WHERE p = {p} and c >= 1 and c <= 1")) == [(1,)]
+        assert list(cql.execute(f"SELECT c FROM {table} WHERE p = {p} and c >= 1 and c <= 2")) == [(1,),(2,)]
