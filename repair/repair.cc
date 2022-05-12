@@ -962,6 +962,16 @@ static future<> do_repair_ranges(lw_shared_ptr<repair_info> ri) {
             });
         });
 
+        if (ri->reason != streaming::stream_reason::repair) {
+            try {
+                auto& table = ri->db.local().find_column_family(table_id);
+                rlogger.debug("repair[{}]: Trigger off-strategy compaction for keyspace={}, table={}",
+                    ri->id.uuid, table.schema()->ks_name(), table.schema()->cf_name());
+                table.trigger_offstrategy_compaction();
+            } catch (replica::no_such_column_family&) {
+                // Ignore dropped table
+            }
+        }
     }
     co_return;
 }
