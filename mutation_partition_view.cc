@@ -266,7 +266,12 @@ future<> mutation_partition_view::do_accept_gently(const column_mapping& cm, Vis
 
     for (auto&& cr : mpv.rows()) {
         auto t = row_tombstone(cr.deleted_at(), shadowable_tombstone(cr.shadowable_deleted_at()));
-        visitor.accept_row(position_in_partition_view::for_key(cr.key()), t, read_row_marker(cr.marker()), is_dummy::no, is_continuous::yes);
+        // Keep the row's key on the stack
+        // so `position_in_partition_view::for_key` can safely refernce it.
+        // Otherwise we observed it get lost after resuming the coroutine on aarch64.
+        // See https://github.com/scylladb/scylla/issues/10555
+        auto key = cr.key();
+        visitor.accept_row(position_in_partition_view::for_key(key), t, read_row_marker(cr.marker()), is_dummy::no, is_continuous::yes);
 
         struct cell_visitor {
             Visitor& _visitor;
