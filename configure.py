@@ -1669,6 +1669,8 @@ def configure_abseil(build_dir, mode, mode_config):
         '-DCMAKE_CXX_COMPILER={}'.format(args.cxx),
         '-DCMAKE_CXX_FLAGS_{}={}'.format(cmake_mode.upper(), abseil_cflags),
         '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON',
+        '-DCMAKE_CXX_STANDARD=20',
+        '-DABSL_PROPAGATE_CXX_STD=ON',
     ] + distro_extra_cmake_args
 
     abseil_cmd = ['cmake', '-G', 'Ninja', real_relpath('abseil', abseil_build_dir)] + abseil_cmake_args
