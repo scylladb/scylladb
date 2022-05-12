@@ -1085,6 +1085,10 @@ future<> server_impl::wait_for_apply(index_t idx, abort_source* as) {
 }
 
 future<read_barrier_reply> server_impl::execute_read_barrier(server_id from, seastar::abort_source* as) {
+    if (_aborted) {
+        throw stopped_error();
+    }
+
     logger.trace("[{}] execute_read_barrier start", _id);
 
     std::optional<std::pair<read_id, index_t>> rid;
@@ -1103,7 +1107,7 @@ future<read_barrier_reply> server_impl::execute_read_barrier(server_id from, sea
         return make_exception_future<read_barrier_reply>(request_aborted());
     }
     _reads.push_back({rid->first, rid->second, {}, {}});
-    auto read = --_reads.end();
+    auto read = std::prev(_reads.end());
     if (as) {
         read->abort = as->subscribe([this, read] () noexcept {
             read->promise.set_exception(request_aborted());
@@ -1203,8 +1207,6 @@ future<> server_impl::abort() {
     // Destroy entry waiters before waiting for `abort_rpc`,
     // since the RPC implementation may wait for forwarded `modify_config` calls to finish
     // (and `modify_config` does not finish until the configuration entry is committed or an error occurs).
-    // FIXME: probably need to do the same with read barriers (`_reads`)
-    // (not doing it yet because I want to catch the problem first in nemesis test)
     for (auto& ac: _awaited_commits) {
         ac.second.done.set_exception(stopped_error());
     }
@@ -1213,12 +1215,6 @@ future<> server_impl::abort() {
     }
     _awaited_commits.clear();
     _awaited_applies.clear();
-
-    co_await seastar::when_all_succeed(std::move(abort_rpc), std::move(abort_sm), std::move(abort_persistence)).discard_result();
-
-    if (_leader_promise) {
-        _leader_promise->set_exception(stopped_error());
-    }
 
     // Complete all read attempts with not_a_leader
     for (auto& r: _reads) {
@@ -1231,6 +1227,12 @@ future<> server_impl::abort() {
         i.second.promise.set_exception(stopped_error());
     }
     _awaited_indexes.clear();
+
+    co_await seastar::when_all_succeed(std::move(abort_rpc), std::move(abort_sm), std::move(abort_persistence)).discard_result();
+
+    if (_leader_promise) {
+        _leader_promise->set_exception(stopped_error());
+    }
 
     abort_snapshot_transfers();
 
