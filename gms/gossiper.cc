@@ -112,7 +112,7 @@ gossiper::gossiper(abort_source& as, feature_service& features, const locator::s
     namespace sm = seastar::metrics;
     auto ep = get_broadcast_address();
     _metrics.add_group("gossip", {
-        sm::make_derive("heart_beat",
+        sm::make_counter("heart_beat",
             [ep, this] {
                 auto es = get_endpoint_state_for_endpoint_ptr(ep);
                 if (es) {

@@ -36,18 +36,18 @@ tracing::tracing(const backend_registry& br, sstring tracing_backend_helper_clas
     namespace sm = seastar::metrics;
 
     _metrics.add_group("tracing", {
-        sm::make_derive("dropped_sessions", stats.dropped_sessions,
+        sm::make_counter("dropped_sessions", stats.dropped_sessions,
                         sm::description("Counts a number of dropped sessions due to too many pending sessions/records. "
                                         "High value indicates that backend is saturated with the rate with which new tracing records are created.")),
 
-        sm::make_derive("dropped_records", stats.dropped_records,
+        sm::make_counter("dropped_records", stats.dropped_records,
                         sm::description("Counts a number of dropped records due to too many pending records. "
                                         "High value indicates that backend is saturated with the rate with which new tracing records are created.")),
 
-        sm::make_derive("trace_records_count", stats.trace_records_count,
+        sm::make_counter("trace_records_count", stats.trace_records_count,
                         sm::description("This metric is a rate of tracing records generation.")),
 
-        sm::make_derive("trace_errors", stats.trace_errors,
+        sm::make_counter("trace_errors", stats.trace_errors,
                         sm::description("Counts a number of trace records dropped due to an error (e.g. OOM).")),
 
         sm::make_gauge("active_sessions", _active_sessions,

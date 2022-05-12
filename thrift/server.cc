@@ -340,13 +340,13 @@ thrift_stats::thrift_stats(thrift_server& server) {
     namespace sm = seastar::metrics;
 
     _metrics.add_group("thrift", {
-        sm::make_derive("thrift-connections", [&server] { return server.total_connections(); },
+        sm::make_counter("thrift-connections", [&server] { return server.total_connections(); },
                         sm::description("Rate of creation of new Thrift connections.")),
 
         sm::make_gauge("current_connections", [&server] { return server.current_connections(); },
                         sm::description("Holds a current number of opened Thrift connections.")),
 
-        sm::make_derive("served", [&server] { return server.requests_served(); },
+        sm::make_counter("served", [&server] { return server.requests_served(); },
                         sm::description("Rate of serving Thrift requests.")),
         sm::make_gauge("serving", [&server] { return server.requests_serving(); },
                         sm::description("Number of Thrift requests being currently served.")),
@@ -354,11 +354,11 @@ thrift_stats::thrift_stats(thrift_server& server) {
                         sm::description(
                             seastar::format("Holds the number of Thrift requests that are currently blocked due to reaching the memory quota limit ({}B). "
                                             "Non-zero value indicates that our bottleneck is memory and more specifically - the memory quota allocated for the \"Thrift transport\" component.", server.max_request_size()))),
-        sm::make_derive("requests_blocked_memory", [&server] { return server.requests_blocked_memory(); },
+        sm::make_counter("requests_blocked_memory", [&server] { return server.requests_blocked_memory(); },
                         sm::description(
                             seastar::format("Holds an incrementing counter with the Thrift requests that ever blocked due to reaching the memory quota limit ({}B). "
                                             "The first derivative of this value shows how often we block due to memory exhaustion in the \"Thrift transport\" component.", server.max_request_size()))),
-        sm::make_derive("requests_shed", [&server] { return server.requests_shed(); },
+        sm::make_counter("requests_shed", [&server] { return server.requests_shed(); },
                         sm::description("Holds an incrementing counter with the requests that were shed due to exceeding the threshold configured via max_concurrent_requests_per_shard. "
                                             "The first derivative of this value shows how often we shed requests due to exceeding the limit in the \"Thrift transport\" component.")),
         sm::make_gauge("requests_memory_available", [&server] { return server.memory_available().current(); },

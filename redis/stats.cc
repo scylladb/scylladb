@@ -29,11 +29,11 @@ stats::stats() : api_operations{} {
             OPERATION(_select, "select")
     });
     _metrics.add_group("redis", {
-        seastar::metrics::make_derive("redis-connections", _connects,
+        seastar::metrics::make_counter("redis-connections", _connects,
             seastar::metrics::description("Counts a number of client connections.")),
         seastar::metrics::make_gauge("current_connections", _connections,
             seastar::metrics::description("Holds a current number of client connections.")),
-        seastar::metrics::make_derive("requests_served", _requests_served,
+        seastar::metrics::make_counter("requests_served", _requests_served,
             seastar::metrics::description("Counts a number of served requests.")),
         seastar::metrics::make_gauge("requests_serving", _requests_serving,
             seastar::metrics::description("Holds a number of requests that are being processed right now.")),

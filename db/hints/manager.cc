@@ -65,22 +65,22 @@ void manager::register_metrics(const sstring& group_name) {
         sm::make_gauge("size_of_hints_in_progress", _stats.size_of_hints_in_progress,
                         sm::description("Size of hinted mutations that are scheduled to be written.")),
 
-        sm::make_derive("written", _stats.written,
+        sm::make_counter("written", _stats.written,
                         sm::description("Number of successfully written hints.")),
 
-        sm::make_derive("errors", _stats.errors,
+        sm::make_counter("errors", _stats.errors,
                         sm::description("Number of errors during hints writes.")),
 
-        sm::make_derive("dropped", _stats.dropped,
+        sm::make_counter("dropped", _stats.dropped,
                         sm::description("Number of dropped hints.")),
 
-        sm::make_derive("sent", _stats.sent,
+        sm::make_counter("sent", _stats.sent,
                         sm::description("Number of sent hints.")),
 
-        sm::make_derive("discarded", _stats.discarded,
+        sm::make_counter("discarded", _stats.discarded,
                         sm::description("Number of hints that were discarded during sending (too old, schema changed, etc.).")),
 
-        sm::make_derive("corrupted_files", _stats.corrupted_files,
+        sm::make_counter("corrupted_files", _stats.corrupted_files,
                         sm::description("Number of hints files that were discarded during sending because the file was corrupted.")),
 
         sm::make_gauge("pending_drains", 

@@ -175,21 +175,21 @@ struct row_level_repair_metrics {
     row_level_repair_metrics() {
         namespace sm = seastar::metrics;
         _metrics.add_group("repair", {
-            sm::make_derive("tx_row_nr", tx_row_nr,
+            sm::make_counter("tx_row_nr", tx_row_nr,
                             sm::description("Total number of rows sent on this shard.")),
-            sm::make_derive("rx_row_nr", rx_row_nr,
+            sm::make_counter("rx_row_nr", rx_row_nr,
                             sm::description("Total number of rows received on this shard.")),
-            sm::make_derive("tx_row_bytes", tx_row_bytes,
+            sm::make_counter("tx_row_bytes", tx_row_bytes,
                             sm::description("Total bytes of rows sent on this shard.")),
-            sm::make_derive("rx_row_bytes", rx_row_bytes,
+            sm::make_counter("rx_row_bytes", rx_row_bytes,
                             sm::description("Total bytes of rows received on this shard.")),
-            sm::make_derive("tx_hashes_nr", tx_hashes_nr,
+            sm::make_counter("tx_hashes_nr", tx_hashes_nr,
                             sm::description("Total number of row hashes sent on this shard.")),
-            sm::make_derive("rx_hashes_nr", rx_hashes_nr,
+            sm::make_counter("rx_hashes_nr", rx_hashes_nr,
                             sm::description("Total number of row hashes received on this shard.")),
-            sm::make_derive("row_from_disk_nr", row_from_disk_nr,
+            sm::make_counter("row_from_disk_nr", row_from_disk_nr,
                             sm::description("Total number of rows read from disk on this shard.")),
-            sm::make_derive("row_from_disk_bytes", row_from_disk_bytes,
+            sm::make_counter("row_from_disk_bytes", row_from_disk_bytes,
                             sm::description("Total bytes of rows read from disk on this shard.")),
         });
     }

@@ -1342,11 +1342,11 @@ void view_builder::setup_metrics() {
                 sm::description("Number of tasks waiting to perform bookkeeping operations"),
                 [this] { return _sem.waiters(); }),
 
-        sm::make_derive("steps_performed",
+        sm::make_counter("steps_performed",
                 sm::description("Number of performed build steps."),
                 _stats.steps_performed),
 
-        sm::make_derive("steps_failed",
+        sm::make_counter("steps_failed",
                 sm::description("Number of failed build steps."),
                 _stats.steps_failed),
 

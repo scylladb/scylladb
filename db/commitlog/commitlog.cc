@@ -1444,21 +1444,21 @@ void db::commitlog::segment_manager::create_counters(const sstring& metrics_cate
                        sm::description("Holds the current number of unused segments. "
                                        "A non-zero value indicates that the disk write path became temporary slow.")),
 
-        sm::make_derive("alloc", totals.allocation_count,
+        sm::make_counter("alloc", totals.allocation_count,
                        sm::description("Counts a number of times a new mutation has been added to a segment. "
                                        "Divide bytes_written by this value to get the average number of bytes per mutation written to the disk.")),
 
-        sm::make_derive("cycle", totals.cycle_count,
+        sm::make_counter("cycle", totals.cycle_count,
                        sm::description("Counts a number of commitlog write cycles - when the data is written from the internal memory buffer to the disk.")),
 
-        sm::make_derive("flush", totals.flush_count,
+        sm::make_counter("flush", totals.flush_count,
                        sm::description("Counts a number of times the flush() method was called for a file.")),
 
-        sm::make_derive("bytes_written", totals.bytes_written,
+        sm::make_counter("bytes_written", totals.bytes_written,
                        sm::description("Counts a number of bytes written to the disk. "
                                        "Divide this value by \"alloc\" to get the average number of bytes per mutation written to the disk.")),
 
-        sm::make_derive("slack", totals.bytes_slack,
+        sm::make_counter("slack", totals.bytes_slack,
                        sm::description("Counts a number of unused bytes written to the disk due to disk segment alignment.")),
 
         sm::make_gauge("pending_flushes", totals.pending_flushes,
@@ -1468,11 +1468,11 @@ void db::commitlog::segment_manager::create_counters(const sstring& metrics_cate
                        sm::description("Holds a number of currently pending allocations. "
                                        "A non-zero value indicates that we have a bottleneck in the disk write flow.")),
 
-        sm::make_derive("requests_blocked_memory", totals.requests_blocked_memory,
+        sm::make_counter("requests_blocked_memory", totals.requests_blocked_memory,
                        sm::description("Counts a number of requests blocked due to memory pressure. "
                                        "A non-zero value indicates that the commitlog memory quota is not enough to serve the required amount of requests.")),
 
-        sm::make_derive("flush_limit_exceeded", totals.flush_limit_exceeded,
+        sm::make_counter("flush_limit_exceeded", totals.flush_limit_exceeded,
                        sm::description(
                            seastar::format("Counts a number of times a flush limit was exceeded. "
                                            "A non-zero value indicates that there are too many pending flush operations (see pending_flushes) and some of "
