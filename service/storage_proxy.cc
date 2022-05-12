@@ -1750,7 +1750,7 @@ void storage_proxy_stats::split_stats::register_metrics_local() {
     namespace sm = seastar::metrics;
 
     _metrics.add_group(_category, {
-        sm::make_derive(_short_description_prefix + sstring("_local_node"), [this] { return _local.val; },
+        sm::make_counter(_short_description_prefix + sstring("_local_node"), [this] { return _local.val; },
                        sm::description(_long_description_prefix + "on a local Node"), {storage_proxy_stats::current_scheduling_group_label(), op_type_label(_op_type)})
     });
 }
@@ -1763,7 +1763,7 @@ void storage_proxy_stats::split_stats::register_metrics_for(gms::inet_address ep
     // corresponding collectd metric
     if (auto [ignored, added] = _dc_stats.try_emplace(dc); added) {
         _metrics.add_group(_category, {
-            sm::make_derive(_short_description_prefix + sstring("_remote_node"), [this, dc] { return _dc_stats[dc].val; },
+            sm::make_counter(_short_description_prefix + sstring("_remote_node"), [this, dc] { return _dc_stats[dc].val; },
                             sm::description(seastar::format("{} when communicating with external Nodes in DC {}", _long_description_prefix, dc)), {storage_proxy_stats::current_scheduling_group_label(), datacenter_label(dc), op_type_label(_op_type)})
         });
     }

@@ -514,54 +514,54 @@ database::setup_metrics() {
                            seastar::format("Holds the current number of requests blocked due to reaching the memory quota ({}B). "
                                            "Non-zero value indicates that our bottleneck is memory and more specifically - the memory quota allocated for the \"database\" component.", _dirty_memory_manager.throttle_threshold()))),
 
-        sm::make_derive("requests_blocked_memory", [this] { return _dirty_memory_manager.region_group().blocked_requests_counter(); },
+        sm::make_counter("requests_blocked_memory", [this] { return _dirty_memory_manager.region_group().blocked_requests_counter(); },
                        sm::description(seastar::format("Holds the current number of requests blocked due to reaching the memory quota ({}B). "
                                        "Non-zero value indicates that our bottleneck is memory and more specifically - the memory quota allocated for the \"database\" component.", _dirty_memory_manager.throttle_threshold()))),
 
-        sm::make_derive("clustering_filter_count", _cf_stats.clustering_filter_count,
+        sm::make_counter("clustering_filter_count", _cf_stats.clustering_filter_count,
                        sm::description("Counts bloom filter invocations.")),
 
-        sm::make_derive("clustering_filter_sstables_checked", _cf_stats.sstables_checked_by_clustering_filter,
+        sm::make_counter("clustering_filter_sstables_checked", _cf_stats.sstables_checked_by_clustering_filter,
                        sm::description("Counts sstables checked after applying the bloom filter. "
                                        "High value indicates that bloom filter is not very efficient.")),
 
-        sm::make_derive("clustering_filter_fast_path_count", _cf_stats.clustering_filter_fast_path_count,
+        sm::make_counter("clustering_filter_fast_path_count", _cf_stats.clustering_filter_fast_path_count,
                        sm::description("Counts number of times bloom filtering short cut to include all sstables when only one full range was specified.")),
 
-        sm::make_derive("clustering_filter_surviving_sstables", _cf_stats.surviving_sstables_after_clustering_filter,
+        sm::make_counter("clustering_filter_surviving_sstables", _cf_stats.surviving_sstables_after_clustering_filter,
                        sm::description("Counts sstables that survived the clustering key filtering. "
                                        "High value indicates that bloom filter is not very efficient and still have to access a lot of sstables to get data.")),
 
-        sm::make_derive("dropped_view_updates", _cf_stats.dropped_view_updates,
+        sm::make_counter("dropped_view_updates", _cf_stats.dropped_view_updates,
                        sm::description("Counts the number of view updates that have been dropped due to cluster overload. ")),
 
-       sm::make_derive("view_building_paused", _cf_stats.view_building_paused,
+       sm::make_counter("view_building_paused", _cf_stats.view_building_paused,
                       sm::description("Counts the number of times view building process was paused (e.g. due to node unavailability). ")),
 
-        sm::make_derive("total_writes", _stats->total_writes,
+        sm::make_counter("total_writes", _stats->total_writes,
                        sm::description("Counts the total number of successful write operations performed by this shard.")),
 
-        sm::make_derive("total_writes_failed", _stats->total_writes_failed,
+        sm::make_counter("total_writes_failed", _stats->total_writes_failed,
                        sm::description("Counts the total number of failed write operations. "
                                        "A sum of this value plus total_writes represents a total amount of writes attempted on this shard.")),
 
-        sm::make_derive("total_writes_timedout", _stats->total_writes_timedout,
+        sm::make_counter("total_writes_timedout", _stats->total_writes_timedout,
                        sm::description("Counts write operations failed due to a timeout. A positive value is a sign of storage being overloaded.")),
 
-        sm::make_derive("total_reads", _read_concurrency_sem.get_stats().total_successful_reads,
+        sm::make_counter("total_reads", _read_concurrency_sem.get_stats().total_successful_reads,
                        sm::description("Counts the total number of successful user reads on this shard."),
                        {user_label_instance}),
 
-        sm::make_derive("total_reads_failed", _read_concurrency_sem.get_stats().total_failed_reads,
+        sm::make_counter("total_reads_failed", _read_concurrency_sem.get_stats().total_failed_reads,
                        sm::description("Counts the total number of failed user read operations. "
                                        "Add the total_reads to this value to get the total amount of reads issued on this shard."),
                        {user_label_instance}),
 
-        sm::make_derive("total_reads", _system_read_concurrency_sem.get_stats().total_successful_reads,
+        sm::make_counter("total_reads", _system_read_concurrency_sem.get_stats().total_successful_reads,
                        sm::description("Counts the total number of successful system reads on this shard."),
                        {system_label_instance}),
 
-        sm::make_derive("total_reads_failed", _system_read_concurrency_sem.get_stats().total_failed_reads,
+        sm::make_counter("total_reads_failed", _system_read_concurrency_sem.get_stats().total_failed_reads,
                        sm::description("Counts the total number of failed system read operations. "
                                        "Add the total_reads to this value to get the total amount of reads issued on this shard."),
                        {system_label_instance}),
@@ -569,26 +569,26 @@ database::setup_metrics() {
         sm::make_current_bytes("view_update_backlog", [this] { return get_view_update_backlog().current; },
                        sm::description("Holds the current size in bytes of the pending view updates for all tables")),
 
-        sm::make_derive("querier_cache_lookups", _querier_cache.get_stats().lookups,
+        sm::make_counter("querier_cache_lookups", _querier_cache.get_stats().lookups,
                        sm::description("Counts querier cache lookups (paging queries)")),
 
-        sm::make_derive("querier_cache_misses", _querier_cache.get_stats().misses,
+        sm::make_counter("querier_cache_misses", _querier_cache.get_stats().misses,
                        sm::description("Counts querier cache lookups that failed to find a cached querier")),
 
-        sm::make_derive("querier_cache_drops", _querier_cache.get_stats().drops,
+        sm::make_counter("querier_cache_drops", _querier_cache.get_stats().drops,
                        sm::description("Counts querier cache lookups that found a cached querier but had to drop it due to position mismatch")),
 
-        sm::make_derive("querier_cache_time_based_evictions", _querier_cache.get_stats().time_based_evictions,
+        sm::make_counter("querier_cache_time_based_evictions", _querier_cache.get_stats().time_based_evictions,
                        sm::description("Counts querier cache entries that timed out and were evicted.")),
 
-        sm::make_derive("querier_cache_resource_based_evictions", _querier_cache.get_stats().resource_based_evictions,
+        sm::make_counter("querier_cache_resource_based_evictions", _querier_cache.get_stats().resource_based_evictions,
                        sm::description("Counts querier cache entries that were evicted to free up resources "
                                        "(limited by reader concurency limits) necessary to create new readers.")),
 
         sm::make_gauge("querier_cache_population", _querier_cache.get_stats().population,
                        sm::description("The number of entries currently in the querier cache.")),
 
-        sm::make_derive("sstable_read_queue_overloads", _read_concurrency_sem.get_stats().total_reads_shed_due_to_overload,
+        sm::make_counter("sstable_read_queue_overloads", _read_concurrency_sem.get_stats().total_reads_shed_due_to_overload,
                        sm::description("Counts the number of times the sstable read queue was overloaded. "
                                        "A non-zero value indicates that we have to drop read requests because they arrive faster than we can serve them.")),
 
@@ -614,13 +614,13 @@ database::setup_metrics() {
                        sm::description("The number of currently active reads that are temporarily paused."),
                        {user_label_instance}),
 
-        sm::make_derive("paused_reads_permit_based_evictions", _read_concurrency_sem.get_stats().permit_based_evictions,
+        sm::make_counter("paused_reads_permit_based_evictions", _read_concurrency_sem.get_stats().permit_based_evictions,
                        sm::description("The number of paused reads evicted to free up permits."
                                        " Permits are required for new reads to start, and the database will evict paused reads (if any)"
                                        " to be able to admit new ones, if there is a shortage of permits."),
                        {user_label_instance}),
 
-        sm::make_derive("reads_shed_due_to_overload", _read_concurrency_sem.get_stats().total_reads_shed_due_to_overload,
+        sm::make_counter("reads_shed_due_to_overload", _read_concurrency_sem.get_stats().total_reads_shed_due_to_overload,
                        sm::description("The number of reads shed because the admission queue reached its max capacity."
                                        " When the queue is full, excessive reads are shed to avoid overload."),
                        {user_label_instance}),
@@ -644,13 +644,13 @@ database::setup_metrics() {
                        sm::description("The number of currently ongoing streaming reads that are temporarily paused."),
                        {streaming_label_instance}),
 
-        sm::make_derive("paused_reads_permit_based_evictions", _streaming_concurrency_sem.get_stats().permit_based_evictions,
+        sm::make_counter("paused_reads_permit_based_evictions", _streaming_concurrency_sem.get_stats().permit_based_evictions,
                        sm::description("The number of inactive streaming reads evicted to free up permits"
                                        " Permits are required for new reads to start, and the database will evict paused reads (if any)"
                                        " to be able to admit new ones, if there is a shortage of permits."),
                        {streaming_label_instance}),
 
-        sm::make_derive("reads_shed_due_to_overload", _streaming_concurrency_sem.get_stats().total_reads_shed_due_to_overload,
+        sm::make_counter("reads_shed_due_to_overload", _streaming_concurrency_sem.get_stats().total_reads_shed_due_to_overload,
                        sm::description("The number of reads shed because the admission queue reached its max capacity."
                                        " When the queue is full, excessive reads are shed to avoid overload."),
                        {streaming_label_instance}),
@@ -673,13 +673,13 @@ database::setup_metrics() {
                        sm::description("The number of currently ongoing system reads that are temporarily paused."),
                        {system_label_instance}),
 
-        sm::make_derive("paused_reads_permit_based_evictions", _system_read_concurrency_sem.get_stats().permit_based_evictions,
+        sm::make_counter("paused_reads_permit_based_evictions", _system_read_concurrency_sem.get_stats().permit_based_evictions,
                        sm::description("The number of paused system reads evicted to free up permits"
                                        " Permits are required for new reads to start, and the database will evict inactive reads (if any)"
                                        " to be able to admit new ones, if there is a shortage of permits."),
                        {system_label_instance}),
 
-        sm::make_derive("reads_shed_due_to_overload", _system_read_concurrency_sem.get_stats().total_reads_shed_due_to_overload,
+        sm::make_counter("reads_shed_due_to_overload", _system_read_concurrency_sem.get_stats().total_reads_shed_due_to_overload,
                        sm::description("The number of reads shed because the admission queue reached its max capacity."
                                        " When the queue is full, excessive reads are shed to avoid overload."),
                        {system_label_instance}),
@@ -687,22 +687,22 @@ database::setup_metrics() {
         sm::make_gauge("total_result_bytes", [this] { return get_result_memory_limiter().total_used_memory(); },
                        sm::description("Holds the current amount of memory used for results.")),
 
-        sm::make_derive("short_data_queries", _stats->short_data_queries,
+        sm::make_counter("short_data_queries", _stats->short_data_queries,
                        sm::description("The rate of data queries (data or digest reads) that returned less rows than requested due to result size limiting.")),
 
-        sm::make_derive("short_mutation_queries", _stats->short_mutation_queries,
+        sm::make_counter("short_mutation_queries", _stats->short_mutation_queries,
                        sm::description("The rate of mutation queries that returned less rows than requested due to result size limiting.")),
 
-        sm::make_derive("multishard_query_unpopped_fragments", _stats->multishard_query_unpopped_fragments,
+        sm::make_counter("multishard_query_unpopped_fragments", _stats->multishard_query_unpopped_fragments,
                        sm::description("The total number of fragments that were extracted from the shard reader but were unconsumed by the query and moved back into the reader.")),
 
-        sm::make_derive("multishard_query_unpopped_bytes", _stats->multishard_query_unpopped_bytes,
+        sm::make_counter("multishard_query_unpopped_bytes", _stats->multishard_query_unpopped_bytes,
                        sm::description("The total number of bytes that were extracted from the shard reader but were unconsumed by the query and moved back into the reader.")),
 
-        sm::make_derive("multishard_query_failed_reader_stops", _stats->multishard_query_failed_reader_stops,
+        sm::make_counter("multishard_query_failed_reader_stops", _stats->multishard_query_failed_reader_stops,
                        sm::description("The number of times the stopping of a shard reader failed.")),
 
-        sm::make_derive("multishard_query_failed_reader_saves", _stats->multishard_query_failed_reader_saves,
+        sm::make_counter("multishard_query_failed_reader_saves", _stats->multishard_query_failed_reader_saves,
                        sm::description("The number of times the saving of a shard reader failed.")),
 
         sm::make_total_operations("counter_cell_lock_acquisition", _cl_stats->lock_acquisitions,
@@ -729,7 +729,7 @@ database::setup_metrics() {
     });
     if (this_shard_id() == 0) {
         _metrics.add_group("database", {
-                sm::make_derive("schema_changed", _schema_change_count,
+                sm::make_counter("schema_changed", _schema_change_count,
                         sm::description("The number of times the schema changed")),
         });
     }

@@ -59,7 +59,7 @@ db::batchlog_manager::batchlog_manager(cql3::query_processor& qp, batchlog_manag
     namespace sm = seastar::metrics;
 
     _metrics.add_group("batchlog_manager", {
-        sm::make_derive("total_write_replay_attempts", _stats.write_attempts,
+        sm::make_counter("total_write_replay_attempts", _stats.write_attempts,
                         sm::description("Counts write operations issued in a batchlog replay flow. "
                                         "The high value of this metric indicates that we have a long batch replay list.")),
     });

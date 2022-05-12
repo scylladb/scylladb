@@ -37,10 +37,10 @@ stream_manager::stream_manager(sharded<replica::database>& db,
     namespace sm = seastar::metrics;
 
     _metrics.add_group("streaming", {
-        sm::make_derive("total_incoming_bytes", [this] { return _total_incoming_bytes; },
+        sm::make_counter("total_incoming_bytes", [this] { return _total_incoming_bytes; },
                         sm::description("Total number of bytes received on this shard.")),
 
-        sm::make_derive("total_outgoing_bytes", [this] { return _total_outgoing_bytes; },
+        sm::make_counter("total_outgoing_bytes", [this] { return _total_outgoing_bytes; },
                         sm::description("Total number of bytes sent on this shard.")),
     });
 }
