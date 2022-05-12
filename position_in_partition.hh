@@ -132,6 +132,14 @@ public:
     position_in_partition_view(const clustering_key_prefix& ck, bound_weight w)
         : _type(partition_region::clustered), _bound_weight(w), _ck(&ck) { }
 
+    // delete constructors accepting clustering_key_prefix&&
+    // to help prevent cases where a view to a temporary
+    // clustering_key_prefix is used past the object's life time.
+    // (See #10555)
+    position_in_partition_view(clustering_row_tag_t, clustering_key_prefix&&) = delete;
+    position_in_partition_view(clustering_key_prefix&&) = delete;
+    position_in_partition_view(clustering_key_prefix&&, bound_weight) = delete;
+
     static position_in_partition_view for_range_start(const query::clustering_range& r) {
         return {position_in_partition_view::range_tag_t(), bound_view::from_range_start(r)};
     }
@@ -486,6 +494,19 @@ public:
         std::strong_ordering operator()(const position_in_partition_view& a, const position_in_partition& b) const {
             return compare(a, b);
         }
+        std::strong_ordering operator()(clustering_key_prefix&& a_ckp_, clustering_key_prefix&& b_ckp_) const {
+            auto a_ckp = std::move(a_ckp_);
+            auto b_ckp = std::move(b_ckp_);
+            return compare(position_in_partition_view(a_ckp), position_in_partition_view(b_ckp));
+        }
+        std::strong_ordering operator()(const position_in_partition& a, clustering_key_prefix&& ckp_) const {
+            auto ckp = std::move(ckp_);
+            return compare(a, position_in_partition_view(ckp));
+        }
+        std::strong_ordering operator()(clustering_key_prefix&& ckp_, const position_in_partition_view& b) const {
+            auto ckp = std::move(ckp_);
+            return compare(position_in_partition_view(ckp), b);
+        }
     };
     class less_compare {
         tri_compare _cmp;
@@ -530,6 +551,14 @@ public:
         }
         bool operator()(const position_in_partition& a, const position_in_partition_view& b) const {
             return compare(a, b);
+        }
+        bool operator()(const position_in_partition_view& a, clustering_key_prefix&& ckp_) const {
+            auto ckp = std::move(ckp_);
+            return compare(a, position_in_partition_view(ckp));
+        }
+        bool operator()(clustering_key_prefix&& ckp_, const position_in_partition_view& b) const {
+            auto ckp = std::move(ckp_);
+            return compare(position_in_partition_view(ckp), b);
         }
     };
     friend std::ostream& operator<<(std::ostream&, const position_in_partition&);

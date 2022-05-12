@@ -447,6 +447,13 @@ public:
         return no_clustering_row_between(_schema, lower_bound, position());
     }
 
+    bool advance_to(clustering_key_prefix&& lower_bound_ckp) {
+        auto ckp = std::move(lower_bound_ckp);
+        auto lower_bound = position_in_partition_view(ckp);
+        maybe_advance_to(lower_bound);
+        return no_clustering_row_between(_schema, lower_bound, position());
+    }
+
     // Call only when valid.
     // Returns true iff the cursor is pointing at a row.
     bool at_a_row() const { return !_current_row.empty(); }

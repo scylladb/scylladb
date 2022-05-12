@@ -40,6 +40,10 @@ public:
         : _pos(pos)
         , _tomb(tomb)
     { }
+    range_tombstone_change(clustering_key_prefix&& ckp, bound_weight weight, tombstone tomb)
+        : _pos(partition_region::clustered, weight, std::move(ckp))
+        , _tomb(tomb)
+    { }
     const position_in_partition& position() const & {
         return _pos;
     }

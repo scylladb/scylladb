@@ -751,6 +751,11 @@ public:
         return *this;
     }
 
+    flat_reader_assertions_v2& produces_range_tombstone_change(range_tombstone_change&& rt_) {
+        auto rt = std::move(rt_);
+        return produces_range_tombstone_change(rt);
+    }
+
     flat_reader_assertions_v2& produces_partition_end() {
         testlog.trace("Expecting partition end");
         auto mfopt = read_next();
