@@ -2170,7 +2170,7 @@ std::chrono::milliseconds table::get_coordinator_read_latency_percentile(double 
 
 void
 table::enable_auto_compaction() {
-    // FIXME: unmute backlog. turn table backlog back on.
+    // XXX: unmute backlog. turn table backlog back on.
     //      see table::disable_auto_compaction() notes.
     _compaction_disabled_by_user = false;
     trigger_compaction();
@@ -2178,7 +2178,7 @@ table::enable_auto_compaction() {
 
 future<>
 table::disable_auto_compaction() {
-    // FIXME: mute backlog. When we disable background compactions
+    // XXX: mute backlog. When we disable background compactions
     // for the table, we must also disable current backlog of the
     // table compaction strategy that contributes to the scheduling
     // group resources prioritization.
@@ -2205,9 +2205,8 @@ table::disable_auto_compaction() {
     // - it will break computation of major compaction descriptor
     //   for new submissions
     _compaction_disabled_by_user = true;
-    return with_gate(_async_gate, [this] {
-        return compaction_manager().stop_ongoing_compactions("disable auto-compaction", this, sstables::compaction_type::Compaction);
-    });
+    // FIXME: stop ongoing compactions
+    return make_ready_future<>();
 }
 
 flat_mutation_reader_v2
