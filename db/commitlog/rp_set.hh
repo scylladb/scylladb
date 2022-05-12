@@ -1,7 +1,4 @@
 /*
- */
-
-/*
  * Modified by ScyllaDB
  * Copyright (C) 2016-present ScyllaDB
  */
