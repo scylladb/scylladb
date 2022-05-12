@@ -16,6 +16,10 @@
 #include <seastar/core/on_internal_error.hh>
 #include "log.hh"
 
+namespace seastar {
+extern logger seastar_logger;
+}
+
 namespace ser {
 
 template<typename T>
@@ -782,4 +786,123 @@ unknown_variant_type deserialize(Input& in, boost::type<unknown_variant_type>) {
         return unknown_variant_type{ index, std::move(v) };
     });
 }
+
+// Class for iteratively deserializing a frozen vector
+// using a range.
+// Use begin() and end() to iterate through the frozen vector,
+// deserializing (or skipping) one element at a time.
+template <typename T, typename InputStream = utils::input_stream>
+class vector_deserializer {
+public:
+    using value_type = T;
+    using input_stream = InputStream;
+
+private:
+    input_stream _in;
+    size_t _size;
+
+public:
+    vector_deserializer() noexcept
+        : _in(simple_input_stream())
+        , _size(0)
+    { }
+
+    explicit vector_deserializer(input_stream in)
+        : _in(std::move(in))
+        , _size(deserialize(_in, boost::type<uint32_t>()))
+    { }
+
+    // Get the number of items in the vector
+    size_t size() const noexcept {
+        return _size;
+    }
+
+    bool empty() const noexcept {
+        return _size == 0;
+    }
+
+    // Input iterator
+    class iterator {
+        input_stream _in;
+        size_t _idx = 0;
+        bool _consumed = false;
+
+        iterator(input_stream in, size_t idx) noexcept
+            : _in(in)
+            , _idx(idx)
+        { }
+
+        friend class vector_deserializer;
+   public:
+        using iterator_category = std::input_iterator_tag;
+        using value_type = T;
+        using pointer = value_type*;
+        using reference = value_type&;
+        using difference_type = ssize_t;
+
+        iterator() noexcept : _in(simple_input_stream()) {}
+
+        bool operator==(const iterator& it) const noexcept {
+            return _idx == it._idx;
+        }
+
+        // Deserializes and returns the item, effectively incrementing the iterator..
+        value_type operator*() const {
+            auto zis = const_cast<iterator*>(this);
+            auto item = deserialize(zis->_in, boost::type<T>());
+            zis->_idx++;
+            zis->_consumed = true;
+            return item;
+        }
+
+        iterator& operator++() {
+            if (!_consumed) {
+                serializer<T>::skip(_in);
+                // auto len = read_frame_size();
+                // _in.skip(len);
+                ++_idx;
+            } else {
+                _consumed = false;
+            }
+            return *this;
+        }
+        iterator operator++(int) {
+            auto pre = *this;
+            ++*this;
+            return pre;
+        }
+
+        ssize_t operator-(const iterator& it) const noexcept {
+            return _idx - it._idx;
+        }
+    };
+
+    using const_iterator = iterator;
+
+    static_assert(std::input_iterator<iterator>);
+    static_assert(std::sentinel_for<iterator, iterator>);
+
+    iterator begin() noexcept {
+        return iterator(_in, 0);
+    }
+    const_iterator begin() const noexcept {
+        return const_iterator(_in, 0);
+    }
+    const_iterator cbegin() const noexcept {
+        return const_iterator(_in, 0);
+    }
+
+    iterator end() noexcept {
+        return iterator(_in, _size);
+    }
+    const_iterator end() const noexcept {
+        return const_iterator(_in, _size);
+    }
+    const_iterator cend() const noexcept {
+        return const_iterator(_in, _size);
+    }
+};
+
+static_assert(std::ranges::range<vector_deserializer<int>>);
+
 }
