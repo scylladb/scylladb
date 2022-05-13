@@ -11,3 +11,5 @@ OK
 > INSERT INTO t2 (userid) VALUES (1) IF NOT EXISTS
 > APPLY BATCH;
 Error from server: code=2200 [Invalid query] message="BATCH with conditions cannot span multiple tables"
+> DROP KEYSPACE k;
+OK
