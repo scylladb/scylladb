@@ -309,7 +309,7 @@ SEASTAR_THREAD_TEST_CASE(test_stress_eviction) {
     auto cached_size = 4'000'000;
 
     cached_file::metrics metrics;
-    tests::logalloc::sharded_tracker logalloc_tracker(memory::stats().total_memory(), 0);
+    tests::logalloc::sharded_tracker logalloc_tracker(::logalloc::tracker::config(memory::stats().total_memory(), 0));
     logalloc::region region(*logalloc_tracker);
 
     auto f = file(make_shared<garbage_file_impl>());

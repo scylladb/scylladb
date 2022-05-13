@@ -86,13 +86,15 @@ reader_permit reader_concurrency_semaphore_wrapper::make_permit() {
 }
 
 logalloc_tracker::logalloc_tracker()
+    : _tracker(std::make_unique<logalloc::tracker>(logalloc::tracker::config{memory::stats().total_memory(), memory::min_free_memory()}))
 { }
 
 logalloc_tracker::~logalloc_tracker() {
+    (void)_tracker->stop().finally([t = std::move(_tracker)] {});
 }
 
 logalloc::tracker& logalloc_tracker::tracker() {
-    return logalloc::shard_tracker();
+    return *_tracker;
 }
 
 } // namespace perf

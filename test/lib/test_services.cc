@@ -35,8 +35,8 @@ db::nop_large_data_handler nop_lp_handler;
 db::config test_db_config;
 gms::feature_service test_feature_service(gms::feature_config_from_db_config(test_db_config));
 
-column_family_for_tests::data::data()
-    : dmm(logalloc::shard_tracker())
+column_family_for_tests::data::data(logalloc::tracker& logalloc_tracker)
+    : dmm(logalloc_tracker)
     , semaphore(reader_concurrency_semaphore::no_limits{}, "column_family_for_tests")
     , cm(compaction_manager::for_testing_tag{}, dmm)
 { }
@@ -51,7 +51,7 @@ column_family_for_tests::column_family_for_tests(sstables::sstables_manager& sst
 { }
 
 column_family_for_tests::column_family_for_tests(sstables::sstables_manager& sstables_manager, schema_ptr s, std::optional<sstring> datadir)
-    : _data(make_lw_shared<data>())
+    : _data(make_lw_shared<data>(sstables_manager.get_cache_tracker().region().get_tracker()))
 {
     _data->s = s;
     _data->cfg = replica::table::config{.dirty_memory_manager = &_data->dmm, .compaction_concurrency_semaphore = &_data->semaphore};

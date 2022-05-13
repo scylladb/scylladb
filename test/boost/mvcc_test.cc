@@ -1367,7 +1367,8 @@ SEASTAR_TEST_CASE(test_ensure_entry_in_latest_does_not_set_continuity_in_reverse
 
 SEASTAR_TEST_CASE(test_apply_is_atomic) {
     auto do_test = [](auto&& gen) {
-        logalloc::region r(logalloc::shard_tracker());
+        ::logalloc::tracker tracker(tests::logalloc::default_config());
+        logalloc::region r(tracker);
         mutation_cleaner cleaner(r, no_cache_tracker, app_stats_for_tests);
         failure_injecting_allocation_strategy alloc(r.allocator());
         with_allocator(r.allocator(), [&] {

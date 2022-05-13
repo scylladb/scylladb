@@ -352,14 +352,6 @@ struct segment;
 static logging::logger llogger("lsa");
 static logging::logger timing_logger("lsa-timing");
 
-static tracker& get_tracker_instance() noexcept {
-    memory::scoped_critical_alloc_section dfg;
-    static thread_local tracker obj;
-    return obj;
-}
-
-static thread_local tracker& tracker_instance = get_tracker_instance();
-
 using clock = std::chrono::steady_clock;
 
 class background_reclaimer {
@@ -465,11 +457,14 @@ public:
     ~impl();
     future<> stop() {
         if (_background_reclaimer) {
-            return _background_reclaimer->stop();
+            return _background_reclaimer->stop().finally([this] {
+                _background_reclaimer.reset();
+            });
         } else {
             return make_ready_future<>();
         }
     }
+    void register_metrics();
     segment_pool& segment_pool() {
         return *_segment_pool;
     }
@@ -497,7 +492,6 @@ public:
     void enable_abort_on_bad_alloc() { _abort_on_bad_alloc = true; }
     bool should_abort_on_bad_alloc() const { return _abort_on_bad_alloc; }
     void setup_background_reclaim(scheduling_group sg) {
-        assert(!_background_reclaimer);
         _background_reclaimer.emplace(sg, [this] (size_t target) {
             reclaim(target, is_preemptible::yes);
         });
@@ -515,10 +509,38 @@ public:
     tracker_reclaimer_lock(tracker::impl& tracker) : _lock(tracker) { }
 };
 
-tracker::tracker()
+tracker::config::config(
+        size_t available_memory,
+        size_t min_free_memory,
+        bool defragment_on_idle,
+        bool abort_on_lsa_bad_alloc,
+        bool sanitizer_report_backtrace,
+        size_t lsa_reclamation_step,
+        std::optional<scheduling_group> background_reclaim_sched_group)
+    : available_memory(available_memory)
+    , min_free_memory(min_free_memory)
+    , defragment_on_idle(defragment_on_idle)
+    , abort_on_lsa_bad_alloc(abort_on_lsa_bad_alloc)
+    , sanitizer_report_backtrace(sanitizer_report_backtrace)
+    , lsa_reclamation_step(lsa_reclamation_step)
+    , background_reclaim_sched_group(std::move(background_reclaim_sched_group)) {
+}
+
+tracker::config::config()
+    : config(memory::stats().total_memory(), memory::min_free_memory()) {
+}
+
+
+tracker::tracker(const config& cfg)
     : _impl(std::make_unique<impl>())
     , _reclaimer([this] (seastar::memory::reclaimer::request r) { return reclaim(r); }, memory::reclaimer_scope::sync)
-{ }
+{
+    configure(cfg);
+}
+
+void tracker::register_metrics() {
+    _impl->register_metrics();
+}
 
 tracker::~tracker() {
 }
@@ -554,10 +576,6 @@ void tracker::full_compaction() {
 
 void tracker::reclaim_all_free_segments() {
     return _impl->reclaim_all_free_segments();
-}
-
-tracker& shard_tracker() {
-    return tracker_instance;
 }
 
 struct alignas(segment_size) segment {
@@ -822,6 +840,7 @@ private:
     bool compact_segment(segment* seg);
 public:
     explicit segment_pool(tracker::impl& tracker);
+    ~segment_pool();
     void prime(size_t available_memory, size_t min_free_memory);
     segment* new_segment(region::impl* r);
     segment_descriptor& descriptor(segment*);
@@ -1060,6 +1079,17 @@ segment_pool::segment_pool(tracker::impl& tracker)
     , _lsa_owned_segments_bitmap(max_segments())
     , _lsa_free_segments_bitmap(max_segments())
 {
+}
+
+segment_pool::~segment_pool() {
+    for (size_t src_idx = _lsa_owned_segments_bitmap.find_first_set();
+            src_idx != utils::dynamic_bitset::npos;
+            src_idx = _lsa_owned_segments_bitmap.find_next_set(src_idx)) {
+        auto src = segment_from_idx(src_idx);
+        _store.free_segment(src);
+        src->~segment();
+        ::free(src);
+    }
 }
 
 void segment_pool::prime(size_t available_memory, size_t min_free_memory) {
@@ -1916,6 +1946,8 @@ bool tracker::should_abort_on_bad_alloc() {
 }
 
 void tracker::configure(const config& cfg) {
+    _impl->segment_pool().prime(cfg.available_memory, cfg.min_free_memory);
+
     if (cfg.defragment_on_idle) {
         engine().set_idle_cpu_handler([this] (reactor::work_waiting_on_reactor check_for_work) {
             return _impl->compact_on_idle(check_for_work);
@@ -1926,7 +1958,9 @@ void tracker::configure(const config& cfg) {
     if (cfg.abort_on_lsa_bad_alloc) {
         _impl->enable_abort_on_bad_alloc();
     }
-    _impl->setup_background_reclaim(cfg.background_reclaim_sched_group);
+    if (cfg.background_reclaim_sched_group) {
+        _impl->setup_background_reclaim(*cfg.background_reclaim_sched_group);
+    }
     s_sanitizer_report_backtrace = cfg.sanitizer_report_backtrace;
 }
 
@@ -2429,6 +2463,9 @@ void tracker::impl::unregister_region(region::impl* r) noexcept {
 }
 
 tracker::impl::impl() : _segment_pool(std::make_unique<logalloc::segment_pool>(*this)) {
+}
+
+void tracker::impl::register_metrics() {
     namespace sm = seastar::metrics;
 
     _metrics.add_group("lsa", {
@@ -2474,6 +2511,7 @@ tracker::impl::impl() : _segment_pool(std::make_unique<logalloc::segment_pool>(*
 }
 
 tracker::impl::~impl() {
+    assert(!_background_reclaimer);
     if (!_regions.empty()) {
         for (auto&& r : _regions) {
             llogger.error("Region with id={} not unregistered!", r->id());
@@ -2709,12 +2747,6 @@ void allocating_section::set_std_reserve(size_t reserve) {
 
 void region_group::on_request_expiry::operator()(std::unique_ptr<allocating_function>& func) noexcept {
     func->fail(std::make_exception_ptr(blocked_requests_timed_out_error{_name}));
-}
-
-future<> prime_segment_pool(size_t available_memory, size_t min_free_memory) {
-    return smp::invoke_on_all([=] {
-        shard_tracker().get_impl().segment_pool().prime(available_memory, min_free_memory);
-    });
 }
 
 }

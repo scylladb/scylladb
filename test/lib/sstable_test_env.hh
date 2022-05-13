@@ -108,20 +108,30 @@ public:
 
     template <typename Func>
     static inline auto do_with(Func&& func) {
-        return seastar::do_with(test_env(logalloc::shard_tracker()), [func = std::move(func)] (test_env& env) mutable {
+        auto tracker = std::make_unique<sharded<::logalloc::tracker>>();
+      return tracker->start(tests::logalloc::default_config()).then([tracker = tracker.get(), func = std::move(func)] {
+        return seastar::do_with(test_env(tracker->local()), [func = std::move(func)] (test_env& env) mutable {
             return futurize_invoke(func, env).finally([&env] {
                 return env.stop();
             });
         });
+      }).finally([tracker = std::move(tracker)] () mutable {
+          return tracker->stop().finally([tracker = std::move(tracker)] { });
+      });
     }
 
     template <typename T, typename Func>
     static inline auto do_with(T&& rval, Func&& func) {
-        return seastar::do_with(test_env(logalloc::shard_tracker()), std::forward<T>(rval), [func = std::move(func)] (test_env& env, T& val) mutable {
+        auto tracker = std::make_unique<sharded<::logalloc::tracker>>();
+      return tracker->start(tests::logalloc::default_config()).then([tracker = tracker.get(), rval = std::forward<T>(rval), func = std::move(func)] () mutable {
+        return seastar::do_with(test_env(tracker->local()), std::forward<T>(rval), [func = std::move(func)] (test_env& env, T& val) mutable {
             return futurize_invoke(func, env, val).finally([&env] {
                 return env.stop();
             });
         });
+      }).finally([tracker = std::move(tracker)] () mutable {
+          return tracker->stop().finally([tracker = std::move(tracker)] { });
+      });
     }
 
     static inline future<> do_with_async(noncopyable_function<void (test_env&)> func) {
@@ -135,8 +145,9 @@ public:
 
     static inline future<> do_with_sharded_async(noncopyable_function<void (sharded<test_env>&)> func) {
         return seastar::async([func = std::move(func)] {
+            tests::logalloc::sharded_tracker logalloc_tracker;
             sharded<test_env> env;
-            env.start(sharded_parameter([] { return std::ref(logalloc::shard_tracker()); })).get();
+            env.start(std::ref(logalloc_tracker.get())).get();
             auto stop = defer([&] { env.stop().get(); });
             func(env);
         });

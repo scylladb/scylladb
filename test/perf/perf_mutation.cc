@@ -34,8 +34,10 @@ int main(int argc, char* argv[]) {
             builder.with_column(to_bytes(cnames.back()), int32_type);
         }
 
+        auto tracker = std::make_unique<logalloc::tracker>(logalloc::tracker::config{memory::stats().total_memory(), memory::min_free_memory()});
+
         auto s = builder.build();
-        dirty_memory_manager dmm(logalloc::shard_tracker());
+        dirty_memory_manager dmm(*tracker);
         replica::memtable mt(s, dmm);
 
         std::cout << "Timing mutation of single column within one row...\n";
@@ -50,6 +52,6 @@ int main(int argc, char* argv[]) {
             m.set_clustered_cell(c_key, col, make_atomic_cell(col.type, value));
             mt.apply(std::move(m));
         });
-        engine().exit(0);
+        return tracker->stop().finally([t = std::move(tracker)] {});
     });
 }

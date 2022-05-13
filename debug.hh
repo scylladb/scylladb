@@ -17,6 +17,7 @@ class database;
 namespace debug {
 
 extern seastar::sharded<replica::database>* the_database;
+extern sharded<logalloc::tracker> *the_logalloc_tracker;
 
 
 }

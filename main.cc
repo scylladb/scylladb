@@ -421,6 +421,7 @@ sharded<replica::database>* the_database;
 sharded<streaming::stream_manager> *the_stream_manager;
 sharded<gms::feature_service> *the_feature_service;
 sharded<gms::gossiper> *the_gossiper;
+sharded<logalloc::tracker> *the_logalloc_tracker;
 }
 
 static int scylla_main(int ac, char** av) {
@@ -510,6 +511,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
     print_starting_message(ac, av, parsed_opts);
 
+    sharded<logalloc::tracker> logalloc_tracker;
     sharded<locator::shared_token_metadata> token_metadata;
     sharded<locator::effective_replication_map_factory> erm_factory;
     sharded<service::migration_notifier> mm_notifier;
@@ -563,7 +565,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
         tcp_syncookies_sanity();
 
         return seastar::async([&app, cfg, ext, &db, &qp, &bm, &proxy, &forward_service, &mm, &mm_notifier, &ctx, &opts, &dirs,
-                &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service, &gossiper,
+                &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service, &gossiper, &logalloc_tracker,
                 &token_metadata, &erm_factory, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
                 &repair, &sst_loader, &ss, &lifecycle_notifier, &stream_manager] {
           try {
@@ -590,7 +592,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 sighup_handler.stop().get();
             });
 
-            logalloc::prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory()).get();
             logging::apply_settings(cfg->logging_settings(app.options().log_opts));
 
             startlog.info(startup_msg, scylla_version(), get_build_id());
@@ -642,21 +643,21 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto background_reclaim_scheduling_group = make_sched_group("background_reclaim", 50);
             auto maintenance_scheduling_group = make_sched_group("streaming", 200);
 
-            smp::invoke_on_all([&cfg, background_reclaim_scheduling_group] {
-                logalloc::tracker::config st_cfg;
-                st_cfg.defragment_on_idle = cfg->defragment_memory_on_idle();
-                st_cfg.abort_on_lsa_bad_alloc = cfg->abort_on_lsa_bad_alloc();
-                st_cfg.lsa_reclamation_step = cfg->lsa_reclamation_step();
-                st_cfg.background_reclaim_sched_group = background_reclaim_scheduling_group;
-                st_cfg.sanitizer_report_backtrace = cfg->sanitizer_report_backtrace();
-                logalloc::shard_tracker().configure(st_cfg);
-            }).get();
-
+            logalloc_tracker.start(logalloc::tracker::config(
+                    memory::stats().total_memory(),
+                    memory::min_free_memory(),
+                    cfg->defragment_memory_on_idle(),
+                    cfg->abort_on_lsa_bad_alloc(),
+                    cfg->sanitizer_report_backtrace(),
+                    cfg->lsa_reclamation_step(),
+                    background_reclaim_scheduling_group)).get();
             auto stop_lsa_background_reclaim = defer([&] () noexcept {
-                smp::invoke_on_all([&] {
-                    return logalloc::shard_tracker().stop();
-                }).get();
+                logalloc_tracker.stop().get();
             });
+            logalloc_tracker.invoke_on_all([] (logalloc::tracker& tracker) {
+                tracker.register_metrics();
+            }).get();
+            debug::the_logalloc_tracker = &logalloc_tracker;
 
             if (cfg->broadcast_address().empty() && cfg->listen_address().empty()) {
                 startlog.error("Bad configuration: neither listen_address nor broadcast_address are defined\n");
@@ -949,7 +950,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             supervisor::notify("starting database");
             debug::the_database = &db;
-            db.start(std::ref(*cfg), dbcfg, std::ref(mm_notifier), std::ref(feature_service), std::ref(token_metadata),
+            db.start(std::ref(*cfg), dbcfg, std::ref(logalloc_tracker), std::ref(mm_notifier), std::ref(feature_service), std::ref(token_metadata),
                     std::ref(stop_signal.as_sharded_abort_source()), std::ref(sst_dir_semaphore), utils::cross_shard_barrier()).get();
             auto stop_database_and_sstables = defer_verbose_shutdown("database", [&db] {
                 // #293 - do not stop anything - not even db (for real)

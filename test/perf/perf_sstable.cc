@@ -88,6 +88,7 @@ int main(int argc, char** argv) {
         ("timestamp-range", bpo::value<api::timestamp_type>()->default_value(0), "Timestamp values to use, chosen uniformly from: [-x, +x]");
 
     return app.run_deprecated(argc, argv, [&app] {
+        tests::logalloc::sharded_tracker logalloc_tracker;
         auto test = make_lw_shared<distributed<perf_sstable_test_env>>();
 
         auto cfg = perf_sstable_test_env::conf();
@@ -109,7 +110,7 @@ int main(int argc, char** argv) {
         }
         cfg.compaction_strategy = sstables::compaction_strategy::type(app.configuration()["compaction-strategy"].as<sstring>());
         cfg.timestamp_range = app.configuration()["timestamp-range"].as<api::timestamp_type>();
-        return test->start(sharded_parameter([] { return std::ref(logalloc::shard_tracker()); }), std::move(cfg)).then([mode, dir, test] {
+        return test->start(std::ref(logalloc_tracker.get()), std::move(cfg)).then([mode, dir, test] {
             engine().at_exit([test] { return test->stop(); });
             if ((mode == test_modes::index_read) ||
                (mode == test_modes::sequential_read)) {

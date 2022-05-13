@@ -1091,10 +1091,17 @@ class sharded:
         return self.instance()
 
 
+def get_lsa_tracker():
+    try:
+        tracker = sharded(gdb.parse_and_eval('\'debug::the_logalloc_tracker\'')).local()
+        return std_unique_ptr(tracker["_impl"]).get().dereference()
+    except gdb.error:
+        return std_unique_ptr(gdb.parse_and_eval('\'logalloc::tracker_instance\'._impl')).get().dereference()
+
+
 def get_lsa_segment_pool():
     try:
-        tracker = gdb.parse_and_eval('\'logalloc::tracker_instance\'')
-        tracker_impl = std_unique_ptr(tracker["_impl"]).get().dereference()
+        tracker_impl = get_lsa_tracker()
         return std_unique_ptr(tracker_impl["_segment_pool"]).get().dereference()
     except gdb.error:
         return gdb.parse_and_eval('\'logalloc::shard_segment_pool\'')
@@ -2555,7 +2562,7 @@ class scylla_lsa(gdb.Command):
                   'Free segments:         {free_segments:>12}\n\n'
                   .format(er_goal=er_goal, er_max=er_max, free_segments=free_segments))
 
-        lsa_tracker = std_unique_ptr(gdb.parse_and_eval('\'logalloc::tracker_instance\'._impl'))
+        lsa_tracker = get_lsa_tracker()
         regions = lsa_tracker['_regions']
         region = regions['_M_impl']['_M_start']
         gdb.write('LSA regions:\n')

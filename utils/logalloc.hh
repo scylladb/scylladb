@@ -420,11 +420,29 @@ public:
     class impl;
 
     struct config {
+        size_t available_memory;
+        /// LSA may reserve more memory then requested via \p min_free_memory.
+        /// A request for 0 reserves will be honored however.
+        size_t min_free_memory;
         bool defragment_on_idle;
         bool abort_on_lsa_bad_alloc;
-        bool sanitizer_report_backtrace = false; // Better reports but slower
+        bool sanitizer_report_backtrace; // Better reports but slower
         size_t lsa_reclamation_step;
-        scheduling_group background_reclaim_sched_group;
+        std::optional<scheduling_group> background_reclaim_sched_group; // if disengaged, background reclaim is not configured
+
+        config(
+            size_t available_memory,
+            size_t min_free_memory,
+            bool defragment_on_idle = false,
+            bool abort_on_lsa_bad_alloc = false,
+            bool sanitizer_report_backtrace = false,
+            size_t lsa_reclamation_step = 1,
+            std::optional<scheduling_group> background_reclaim_sched_group = {});
+
+        // Default configuration, using:
+        //      available_memory: memory::stats().total_memory()
+        //      min_free_memory: memory::min_free_memory()
+        config();
     };
 
     struct stats {
@@ -436,8 +454,8 @@ public:
         uint64_t memory_evicted;
     };
 
+private:
     void configure(const config& cfg);
-    future<> stop();
 
 private:
     std::unique_ptr<impl> _impl;
@@ -447,8 +465,13 @@ private:
     memory::reclaiming_result reclaim(seastar::memory::reclaimer::request);
 
 public:
-    tracker();
+    explicit tracker(const config& cfg = {memory::stats().total_memory(), memory::min_free_memory()});
     ~tracker();
+
+    void register_metrics();
+
+    // Required only if background reclaim was configured, see config::background_reclaim_shed_group
+    future<> stop();
 
     stats statistics() const;
 
@@ -487,8 +510,6 @@ public:
 
     bool should_abort_on_bad_alloc();
 };
-
-tracker& shard_tracker();
 
 class segment_descriptor;
 
@@ -646,7 +667,7 @@ public:
 //
 // Each region has separate memory accounting and can be compacted
 // independently from other regions. To reclaim memory from all regions use
-// shard_tracker().
+// the logalloc tracker instance owning this region (obtainable via get_tracker()).
 //
 // Region is automatically added to the set of
 // compactible regions when constructed.
@@ -846,9 +867,5 @@ public:
         });
     }
 };
-
-/// LSA may reserve more memory then requested via \p min_free_memory.
-/// A request for 0 reserves will be honored however.
-future<> prime_segment_pool(size_t available_memory, size_t min_free_memory);
 
 }

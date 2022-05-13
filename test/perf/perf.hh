@@ -284,6 +284,7 @@ public:
 
 // Closes the tracker in the background when destroyed
 class logalloc_tracker {
+    std::unique_ptr<logalloc::tracker> _tracker;
 public:
     explicit logalloc_tracker();
     ~logalloc_tracker();
