@@ -688,7 +688,7 @@ SEASTAR_TEST_CASE(memtable_flush_compresses_mutations) {
 
         // Treat the table as mutation_source and assert we get the expected mutation and end of stream
         mutation_source ms = t.as_mutation_source();
-        assert_that(ms.make_reader(s, semaphore.make_permit()))
+        assert_that(ms.make_reader_v2(s, semaphore.make_permit()))
             .produces(m2)
             .produces_end_of_stream();
     }, db_config);

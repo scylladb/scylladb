@@ -1010,7 +1010,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_compound_dense) {
 
         {
             auto slice = partition_slice_builder(*s).with_range(query::clustering_range::make_starting_with({ck1})).build();
-            assert_that(sst->as_mutation_source().make_reader(s, env.make_reader_permit(), dht::partition_range::make_singular(dk), slice))
+            assert_that(sst->as_mutation_source().make_reader_v2(s, env.make_reader_permit(), dht::partition_range::make_singular(dk), slice))
                     .produces(m, slice.get_all_ranges())
                     .produces_end_of_stream();
         }
@@ -1061,7 +1061,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_non_compound_dense) {
 
         {
             auto slice = partition_slice_builder(*s).with_range(query::clustering_range::make_starting_with({ck1})).build();
-            assert_that(sst->as_mutation_source().make_reader(s, env.make_reader_permit(), dht::partition_range::make_singular(dk), slice))
+            assert_that(sst->as_mutation_source().make_reader_v2(s, env.make_reader_permit(), dht::partition_range::make_singular(dk), slice))
                     .produces(m)
                     .produces_end_of_stream();
         }
@@ -1105,7 +1105,7 @@ SEASTAR_TEST_CASE(test_promoted_index_repeats_open_tombstones) {
 
             {
                 auto slice = partition_slice_builder(*s).with_range(query::clustering_range::make_starting_with({ck})).build();
-                assert_that(sst->as_mutation_source().make_reader(s, env.make_reader_permit(), dht::partition_range::make_singular(dk), slice))
+                assert_that(sst->as_mutation_source().make_reader_v2(s, env.make_reader_permit(), dht::partition_range::make_singular(dk), slice))
                         .produces(m, slice.get_all_ranges())
                         .produces_end_of_stream();
             }
@@ -1142,7 +1142,7 @@ SEASTAR_TEST_CASE(test_range_tombstones_are_correctly_seralized_for_non_compound
 
         {
             auto slice = partition_slice_builder(*s).build();
-            assert_that(sst->as_mutation_source().make_reader(s, env.make_reader_permit(), dht::partition_range::make_singular(dk), slice))
+            assert_that(sst->as_mutation_source().make_reader_v2(s, env.make_reader_permit(), dht::partition_range::make_singular(dk), slice))
                     .produces(m)
                     .produces_end_of_stream();
         }
@@ -1211,7 +1211,7 @@ SEASTAR_TEST_CASE(test_writing_combined_stream_with_tombstones_at_the_same_posit
             mt1->make_flat_reader(s, combined_permit), mt2->make_flat_reader(s, combined_permit));
         auto sst = make_sstable_easy(env, dir.path(), std::move(mr), env.manager().configure_writer(), 1, version);
 
-        assert_that(sst->as_mutation_source().make_reader(s, env.make_reader_permit()))
+        assert_that(sst->as_mutation_source().make_reader_v2(s, env.make_reader_permit()))
             .produces(m1 + m2)
             .produces_end_of_stream();
       }
@@ -1249,7 +1249,7 @@ SEASTAR_TEST_CASE(test_no_index_reads_when_rows_fall_into_range_boundaries) {
             auto before = index_accesses();
 
             {
-                assert_that(ms.make_reader(s, env.make_reader_permit()))
+                assert_that(ms.make_reader_v2(s, env.make_reader_permit()))
                     .produces(m1)
                     .produces(m2)
                     .produces_end_of_stream();
@@ -1540,7 +1540,7 @@ SEASTAR_TEST_CASE(test_counter_header_size) {
 
     for (const auto version : writable_sstable_versions) {
         auto sst = make_sstable_easy(env, dir.path(), mt, env.manager().configure_writer(), 1, version);
-        assert_that(sst->as_mutation_source().make_reader(s, env.make_reader_permit()))
+        assert_that(sst->as_mutation_source().make_reader_v2(s, env.make_reader_permit()))
             .produces(m)
             .produces_end_of_stream();
     }
@@ -1577,7 +1577,7 @@ SEASTAR_TEST_CASE(test_static_compact_tables_are_read) {
             sstable_writer_config cfg = env.manager().configure_writer();
             auto ms = make_sstable_mutation_source(env, s, dir.path().string(), muts, cfg, version);
 
-            assert_that(ms.make_reader(s, env.make_reader_permit()))
+            assert_that(ms.make_reader_v2(s, env.make_reader_permit()))
                 .produces(muts[0])
                 .produces(muts[1])
                 .produces_end_of_stream();

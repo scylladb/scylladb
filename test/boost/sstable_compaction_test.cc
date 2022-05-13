@@ -116,8 +116,8 @@ static future<std::vector<sstables::shared_sstable>> open_sstables(test_env& env
 }
 
 // mutation_reader for sstable keeping all the required objects alive.
-static flat_mutation_reader sstable_reader(shared_sstable sst, schema_ptr s, reader_permit permit) {
-    return sst->as_mutation_source().make_reader(s, std::move(permit), query::full_partition_range, s->full_slice());
+static flat_mutation_reader_v2 sstable_reader(shared_sstable sst, schema_ptr s, reader_permit permit) {
+    return sst->as_mutation_source().make_reader_v2(s, std::move(permit), query::full_partition_range, s->full_slice());
 }
 
 class table_state_for_test : public table_state {
@@ -290,7 +290,7 @@ SEASTAR_TEST_CASE(compact) {
                 //   john |  20 |   deleted
                 //   nadav - deleted partition
                 return open_sstable(env, s, tmpdir_path, generation).then([&env, s] (shared_sstable sst) {
-                    auto reader = make_lw_shared<flat_mutation_reader>(sstable_reader(sst, s, env.make_reader_permit())); // reader holds sst and s alive.
+                    auto reader = make_lw_shared<flat_mutation_reader_v2>(sstable_reader(sst, s, env.make_reader_permit())); // reader holds sst and s alive.
                     return read_mutation_from_flat_mutation_reader(*reader).then([reader, s] (mutation_opt m) {
                         BOOST_REQUIRE(m);
                         BOOST_REQUIRE(m->key().equal(*s, partition_key::from_singular(*s, data_value(sstring("jerry")))));
@@ -483,7 +483,7 @@ static future<> check_compacted_sstables(test_env& env, sstring tmpdir_path, uns
         auto reader = sstable_reader(sst, s, env.make_reader_permit()); // reader holds sst and s alive.
         auto keys = make_lw_shared<std::vector<partition_key>>();
 
-        return with_closeable(std::move(reader), [generations, s, keys] (flat_mutation_reader& reader) {
+        return with_closeable(std::move(reader), [generations, s, keys] (flat_mutation_reader_v2& reader) {
             return do_for_each(*generations, [&reader, keys] (unsigned long generation) mutable {
                 return read_mutation_from_flat_mutation_reader(reader).then([generation, keys] (mutation_opt m) {
                     BOOST_REQUIRE(m);
@@ -1098,7 +1098,7 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
         };
 
         auto assert_that_produces_dead_cell = [&] (auto& sst, partition_key& key) {
-            auto reader = make_lw_shared<flat_mutation_reader>(sstable_reader(sst, s, env.make_reader_permit()));
+            auto reader = make_lw_shared<flat_mutation_reader_v2>(sstable_reader(sst, s, env.make_reader_permit()));
             read_mutation_from_flat_mutation_reader(*reader).then([reader, s, &key] (mutation_opt m) {
                 BOOST_REQUIRE(m);
                 BOOST_REQUIRE(m->key().equal(*s, key));
@@ -1110,7 +1110,7 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
                 auto& cdef = *s->get_column_definition("value");
                 BOOST_REQUIRE(!cells.cell_at(cdef.id).as_atomic_cell(cdef).is_live());
                 return (*reader)();
-            }).then([reader, s] (mutation_fragment_opt m) {
+            }).then([reader, s] (mutation_fragment_v2_opt m) {
                 BOOST_REQUIRE(!m);
             }).finally([reader] {
                 return reader->close();
@@ -1284,8 +1284,8 @@ SEASTAR_TEST_CASE(sstable_rewrite) {
                 BOOST_REQUIRE(new_tables->size() == 1);
                 auto newsst = (*new_tables)[0];
                 BOOST_REQUIRE(newsst->generation() == 52);
-                auto reader = make_lw_shared<flat_mutation_reader>(sstable_reader(newsst, s, env.make_reader_permit()));
-                return (*reader)().then([s, reader, key] (mutation_fragment_opt m) {
+                auto reader = make_lw_shared<flat_mutation_reader_v2>(sstable_reader(newsst, s, env.make_reader_permit()));
+                return (*reader)().then([s, reader, key] (mutation_fragment_v2_opt m) {
                     BOOST_REQUIRE(m);
                     BOOST_REQUIRE(m->is_partition_start());
                     auto pkey = partition_key::from_exploded(*s, {to_bytes(key)});
@@ -1293,7 +1293,7 @@ SEASTAR_TEST_CASE(sstable_rewrite) {
                     return reader->next_partition();
                 }).then([reader] {
                     return (*reader)();
-                }).then([reader] (mutation_fragment_opt m) {
+                }).then([reader] (mutation_fragment_v2_opt m) {
                     BOOST_REQUIRE(!m);
                 }).finally([reader] {
                     return reader->close();
@@ -2737,11 +2737,11 @@ SEASTAR_TEST_CASE(sstable_scrub_quarantine_mode_test) {
                     testlog.info("Scrub resulted in {} sstables", table->in_strategy_sstables().size());
                     BOOST_REQUIRE(table->in_strategy_sstables().size() > 1);
                     {
-                        auto sst_reader = assert_that(table->as_mutation_source().make_reader(schema, env.make_reader_permit()));
-                        auto mt_reader = scrubbed_mt->as_data_source().make_reader(schema, env.make_reader_permit());
+                        auto sst_reader = assert_that(table->as_mutation_source().make_reader_v2(schema, env.make_reader_permit()));
+                        auto mt_reader = scrubbed_mt->as_data_source().make_reader_v2(schema, env.make_reader_permit());
                         auto mt_reader_close = deferred_close(mt_reader);
                         while (auto mf_opt = mt_reader().get()) {
-                            testlog.trace("Expecting {}", mutation_fragment::printer(*schema, *mf_opt));
+                            testlog.trace("Expecting {}", mutation_fragment_v2::printer(*schema, *mf_opt));
                             sst_reader.produces(*schema, *mf_opt);
                         }
                         sst_reader.produces_end_of_stream();
@@ -3400,7 +3400,7 @@ SEASTAR_TEST_CASE(purged_tombstone_consumer_sstable_test) {
         auto ttl = 5;
 
         auto assert_that_produces_purged_tombstone = [&] (auto& sst, partition_key& key, tombstone tomb) {
-            auto reader = make_lw_shared<flat_mutation_reader>(sstable_reader(sst, s, env.make_reader_permit()));
+            auto reader = make_lw_shared<flat_mutation_reader_v2>(sstable_reader(sst, s, env.make_reader_permit()));
             read_mutation_from_flat_mutation_reader(*reader).then([reader, s, &key, is_tombstone_purgeable, &tomb] (mutation_opt m) {
                 BOOST_REQUIRE(m);
                 BOOST_REQUIRE(m->key().equal(*s, key));
@@ -3409,7 +3409,7 @@ SEASTAR_TEST_CASE(purged_tombstone_consumer_sstable_test) {
                 BOOST_REQUIRE(is_tombstone_purgeable(m->partition().partition_tombstone()));
                 BOOST_REQUIRE(m->partition().partition_tombstone() == tomb);
                 return (*reader)();
-            }).then([reader, s] (mutation_fragment_opt m) {
+            }).then([reader, s] (mutation_fragment_v2_opt m) {
                 BOOST_REQUIRE(!m);
             }).finally([reader] {
                 return reader->close();

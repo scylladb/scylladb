@@ -16,6 +16,18 @@
 #include "schema.hh"
 #include "test/lib/log.hh"
 
+static inline bool trim_range_tombstone(const schema& s, range_tombstone& rt, const query::clustering_row_ranges& ck_ranges) {
+    if (ck_ranges.empty()) {
+        return true;
+    }
+    position_in_partition::less_compare less(s);
+    bool relevant = false;
+    for (auto& range : ck_ranges) {
+        relevant |= rt.trim(s, position_in_partition::for_range_start(range), position_in_partition::for_range_end(range));
+    }
+    return relevant;
+}
+
 // Intended to be called in a seastar thread
 class flat_reader_assertions {
     flat_mutation_reader _reader;
@@ -54,17 +66,6 @@ private:
             }
         }
         reset_rts();
-    }
-    bool trim(range_tombstone& rt, const query::clustering_row_ranges& ck_ranges) const {
-        position_in_partition::less_compare less(*_reader.schema());
-        if (ck_ranges.empty()) {
-            return true;
-        }
-        bool relevant = false;
-        for (auto& range : ck_ranges) {
-            relevant |= rt.trim(*_reader.schema(), position_in_partition::for_range_start(range), position_in_partition::for_range_end(range));
-        }
-        return relevant;
     }
     void apply_rt_unchecked(const range_tombstone& rt_) {
         auto rt = maybe_drop_deletion_time(rt_);
@@ -172,7 +173,7 @@ public:
                 testlog.trace("Received range tombstone: {}", mutation_fragment::printer(*_reader.schema(), *next));
                 range = position_range(position_in_partition(next->position()), range.end());
                 auto rt = maybe_drop_deletion_time(_reader().get0()->as_range_tombstone());
-                if (trim(rt, ck_ranges)) {
+                if (trim_range_tombstone(*_reader.schema(), rt, ck_ranges)) {
                     testlog.trace("Applying {} to actual range tombstone list", rt);
                     _tombstones.apply(*_reader.schema(), rt);
                 } else {
@@ -306,7 +307,7 @@ public:
 private:
     void apply_rt(const range_tombstone& rt_, const query::clustering_row_ranges& ck_ranges) {
         auto rt = maybe_drop_deletion_time(rt_);
-        if (!trim(rt, ck_ranges)) {
+        if (!trim_range_tombstone(*_reader.schema(), rt, ck_ranges)) {
             testlog.trace("Refusing to expect {}, does not overlap any of the ranges in {}", rt, ck_ranges);
             return;
         }
@@ -543,8 +544,30 @@ class flat_reader_assertions_v2 {
     flat_mutation_reader_v2 _reader;
     dht::partition_range _pr;
     bool _ignore_deletion_time = false;
+    tombstone _rt;
 private:
+    mutation_fragment_v2* peek_next() {
+        while (auto next = _reader.peek().get0()) {
+            // There is no difference between an empty row and a row that doesn't exist.
+            // While readers that emit spurious empty rows may be wasteful, it is not
+            // incorrect to do so, so let's ignore them.
+            if (next->is_clustering_row() && next->as_clustering_row().empty()) {
+                testlog.trace("Received empty clustered row: {}", mutation_fragment_v2::printer(*_reader.schema(), *next));
+                _reader().get();
+                continue;
+            }
+            // silently ignore rtcs that don't change anything
+            if (next->is_range_tombstone_change() && next->as_range_tombstone_change().tombstone() == _rt) {
+                testlog.trace("Received spurious closing rtc: {}", mutation_fragment_v2::printer(*_reader.schema(), *next));
+                _reader().get();
+                continue;
+            }
+            return next;
+        }
+        return nullptr;
+    }
     mutation_fragment_v2_opt read_next() {
+        peek_next();
         return _reader().get0();
     }
     range_tombstone_change maybe_drop_deletion_time(const range_tombstone_change& rt) const {
@@ -553,6 +576,12 @@ private:
         } else {
             return {rt.position(), {rt.tombstone().timestamp, {}}};
         }
+    }
+    void reset_rt() {
+        _rt = {};
+    }
+    void apply_rtc(const range_tombstone_change& rtc) {
+        _rt = rtc.tombstone();
     }
 public:
     flat_reader_assertions_v2(flat_mutation_reader_v2 reader)
@@ -572,6 +601,7 @@ public:
             _reader = std::move(o._reader);
             _pr = std::move(o._pr);
             _ignore_deletion_time = std::move(o._ignore_deletion_time);
+            _rt = std::move(o._rt);
         }
         return *this;
     }
@@ -597,6 +627,7 @@ public:
         if (tomb && mfopt->as_partition_start().partition_tombstone() != *tomb) {
             BOOST_FAIL(format("Expected: partition start with tombstone {}, got: {}", *tomb, mutation_fragment_v2::printer(*_reader.schema(), *mfopt)));
         }
+        reset_rt();
         return *this;
     }
 
@@ -612,8 +643,11 @@ public:
         return *this;
     }
 
-    flat_reader_assertions_v2& produces_row_with_key(const clustering_key& ck) {
+    flat_reader_assertions_v2& produces_row_with_key(const clustering_key& ck, std::optional<tombstone> active_range_tombstone = std::nullopt) {
         testlog.trace("Expect {}", ck);
+        if (active_range_tombstone) {
+            testlog.trace("(with active range tombstone: {})", *active_range_tombstone);
+        }
         auto mfopt = read_next();
         if (!mfopt) {
             BOOST_FAIL(format("Expected row with key {}, but got end of stream", ck));
@@ -624,6 +658,9 @@ public:
         auto& actual = mfopt->as_clustering_row().key();
         if (!actual.equal(*_reader.schema(), ck)) {
             BOOST_FAIL(format("Expected row with key {}, but key is {}", ck, actual));
+        }
+        if (active_range_tombstone) {
+            BOOST_CHECK_EQUAL(*active_range_tombstone, _rt);
         }
         return *this;
     }
@@ -736,23 +773,45 @@ public:
         return *this;
     }
 
-    flat_reader_assertions_v2& produces_range_tombstone_change(const range_tombstone_change& rt) {
-        testlog.trace("Expect {}", rt);
-        auto mfo = read_next();
-        if (!mfo) {
-            BOOST_FAIL(format("Expected range tombstone {}, but got end of stream", rt));
+    flat_reader_assertions_v2& may_produce_tombstones(position_range range) {
+        testlog.trace("Expect possible range tombstone changes in {}", range);
+        while (auto next = peek_next()) {
+            if (!next->is_range_tombstone_change()) {
+                break;
+            }
+            auto rtc = maybe_drop_deletion_time(next->as_range_tombstone_change());
+            if (!interval<position_in_partition>{range.start(), range.end()}.contains(rtc.position(), position_in_partition::tri_compare{*_reader.schema()})) {
+                testlog.trace("{} is out of range {}", mutation_fragment_v2::printer(*_reader.schema(), *next), range);
+                break;
+            }
+            testlog.trace("Received: {}", rtc);
+            apply_rtc(rtc);
+            _reader().get();
         }
-        if (!mfo->is_range_tombstone_change()) {
-            BOOST_FAIL(format("Expected range tombstone change {}, but got {}", rt, mutation_fragment_v2::printer(*_reader.schema(), *mfo)));
+        return *this;
+    }
+
+    flat_reader_assertions_v2& produces_range_tombstone_change(const range_tombstone_change& rtc_) {
+        auto rtc = maybe_drop_deletion_time(rtc_);
+        testlog.trace("Expect {}", rtc);
+        auto mfopt = read_next();
+        if (!mfopt) {
+            BOOST_FAIL(format("Expected {}, but got end of stream", rtc));
         }
-        if (!maybe_drop_deletion_time(mfo->as_range_tombstone_change()).equal(*_reader.schema(), maybe_drop_deletion_time(rt))) {
-            BOOST_FAIL(format("Expected {}, but got {}", rt, mutation_fragment_v2::printer(*_reader.schema(), *mfo)));
+        if (!mfopt->is_range_tombstone_change()) {
+            BOOST_FAIL(format("Expected {}, but got {}", rtc, mutation_fragment_v2::printer(*_reader.schema(), *mfopt)));
         }
+        auto read_rtc = maybe_drop_deletion_time(mfopt->as_range_tombstone_change());
+        if (!rtc.equal(*_reader.schema(), read_rtc)) {
+            BOOST_FAIL(format("Read {} does not match expected {}", read_rtc, rtc));
+        }
+        apply_rtc(rtc);
         return *this;
     }
 
     flat_reader_assertions_v2& produces_partition_end() {
         testlog.trace("Expecting partition end");
+        BOOST_REQUIRE(!_rt);
         auto mfopt = read_next();
         if (!mfopt) {
             BOOST_FAIL(format("Expected partition end but got end of stream"));
@@ -764,6 +823,10 @@ public:
     }
 
     flat_reader_assertions_v2& produces(const schema& s, const mutation_fragment_v2& mf) {
+        if (mf.is_range_tombstone_change()) {
+            return produces_range_tombstone_change(mf.as_range_tombstone_change());
+        }
+
         auto mfopt = read_next();
         if (!mfopt) {
             BOOST_FAIL(format("Expected {}, but got end of stream", mutation_fragment_v2::printer(*_reader.schema(), mf)));
@@ -780,10 +843,12 @@ public:
         if (bool(mfopt)) {
             BOOST_FAIL(format("Expected end of stream, got {}", mutation_fragment_v2::printer(*_reader.schema(), *mfopt)));
         }
+        reset_rt();
         return *this;
     }
 
     flat_reader_assertions_v2& produces(mutation_fragment_v2::kind k, std::vector<int> ck_elements, bool make_full_key = false) {
+        testlog.trace("Expect {} {{{}}}", k, ::join(", ", ck_elements));
         std::vector<bytes> ck_bytes;
         for (auto&& e : ck_elements) {
             ck_bytes.emplace_back(int32_type->decompose(e));
@@ -804,6 +869,10 @@ public:
         if (!ck_eq(mfopt->key(), ck)) {
             BOOST_FAIL(format("Expected key {}, got: {}", ck, mfopt->key()));
         }
+        if (mfopt->is_range_tombstone_change()) {
+            apply_rtc(maybe_drop_deletion_time(mfopt->as_range_tombstone_change()));
+        }
+        testlog.trace("Received {}", mutation_fragment_v2::printer(*_reader.schema(), *mfopt));
         return *this;
     }
 
@@ -893,6 +962,7 @@ public:
     flat_reader_assertions_v2& next_partition() {
         testlog.trace("Skip to next partition");
         _reader.next_partition().get();
+        reset_rt();
         return *this;
     }
 
