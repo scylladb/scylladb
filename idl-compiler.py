@@ -1353,6 +1353,13 @@ def param_view_type(t):
         return t.name + join_template_view(t.template_parameters, additional_types)
 
 
+def element_type(t):
+    assert isinstance(t, TemplateType)
+    assert len(t.template_parameters) == 1
+    assert t.name != "boost::variant" and t.name != "std::variant"
+    return param_view_type(t.template_parameters[0])
+
+
 read_sizes = set()
 
 
@@ -1423,6 +1430,18 @@ def add_view(cout, cls):
             deser = f"(in.size()>0) ? {DESERIALIZER}(in, boost::type<{full_type}>()) : {deflt}"
         else:
             deser = f"{DESERIALIZER}(in, boost::type<{full_type}>())"
+
+        if is_vector(m.type):
+            elem_type = element_type(m.type)
+            fprintln(cout, reindent(4, """
+                auto {name}_range() const {{
+                  return seastar::with_serialized_stream(v, [this] (auto& v) {{
+                   auto in = v;
+                   {skip}
+                   return vector_deserializer<{elem_type}>(in);
+                  }});
+                }}
+            """).format(f=DESERIALIZER, **locals()))
 
         fprintln(cout, reindent(4, """
             auto {name}() const {{
