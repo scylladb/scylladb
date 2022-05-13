@@ -2571,7 +2571,8 @@ region_group::start_releaser(scheduling_group deferred_work_sg) {
 
 region_group::region_group(sstring name, region_group *parent,
         region_group_reclaimer& reclaimer, scheduling_group deferred_work_sg)
-    : _parent(parent)
+    : _tracker(shard_tracker())
+    , _parent(parent)
     , _reclaimer(reclaimer)
     , _blocked_requests(on_request_expiry{std::move(name)})
     , _releaser(reclaimer_can_block() ? start_releaser(deferred_work_sg) : make_ready_future<>())

@@ -24,6 +24,7 @@
 namespace logalloc {
 
 struct occupancy_stats;
+class tracker;
 class region;
 class region_impl;
 class allocating_section;
@@ -158,6 +159,7 @@ class region_group {
           //constant_time_size<true> causes corruption with boost < 1.60
           boost::heap::constant_time_size<false>>;
 
+    tracker& _tracker;
     region_group* _parent = nullptr;
     size_t _total_memory = 0;
     region_group_reclaimer& _reclaimer;
@@ -263,6 +265,7 @@ public:
     }
     region_group& operator=(const region_group&) = delete;
     region_group& operator=(region_group&&) = delete;
+    tracker& get_tracker() const { return _tracker; }
     size_t memory_used() const {
         return _total_memory;
     }
