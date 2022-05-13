@@ -450,6 +450,16 @@ void backlog_controller::update_controller(float shares) {
     _inflight_update = _scheduling_group.io.update_shares(uint32_t(shares));
 }
 
+
+dirty_memory_manager::dirty_memory_manager(replica::database& db, size_t threshold, double soft_limit, scheduling_group deferred_work_sg)
+    : logalloc::region_group_reclaimer(threshold / 2, threshold * soft_limit / 2)
+    , _real_dirty_reclaimer(threshold)
+    , _db(&db)
+    , _real_region_group("memtable", _real_dirty_reclaimer, deferred_work_sg)
+    , _virtual_region_group("memtable (virtual)", &_real_region_group, *this, deferred_work_sg)
+    , _flush_serializer(1)
+    , _waiting_flush(flush_when_needed()) {}
+
 void
 dirty_memory_manager::setup_collectd(sstring namestr) {
     namespace sm = seastar::metrics;
