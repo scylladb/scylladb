@@ -14,6 +14,7 @@
 #include "utils/lsa/chunked_managed_vector.hh"
 #include "utils/managed_ref.hh"
 #include "test/lib/log.hh"
+#include "test/lib/logalloc.hh"
 
 #include <boost/range/algorithm/sort.hpp>
 #include <boost/range/algorithm/equal.hpp>
@@ -27,7 +28,7 @@ using disk_array = lsa::chunked_managed_vector<uint64_t>;
 using deque = std::deque<int>;
 
 SEASTAR_TEST_CASE(test_random_walk) {
-  region region;
+  region region(shard_tracker());
   allocating_section as;
   with_allocator(region.allocator(), [&] {
     auto rand = std::default_random_engine();
@@ -165,7 +166,7 @@ public:
 };
 
 SEASTAR_TEST_CASE(tests_constructor_exception_safety) {
-  region region;
+  region region(shard_tracker());
   allocating_section as;
   with_allocator(region.allocator(), [&] {
    as(region, [&] {
@@ -185,7 +186,7 @@ SEASTAR_TEST_CASE(tests_constructor_exception_safety) {
 }
 
 SEASTAR_TEST_CASE(tests_reserve_partial) {
-  region region;
+  region region(shard_tracker());
   allocating_section as;
   with_allocator(region.allocator(), [&] {
    as(region, [&] {
@@ -207,7 +208,7 @@ SEASTAR_TEST_CASE(tests_reserve_partial) {
 }
 
 SEASTAR_TEST_CASE(test_clear_and_release) {
-    region region;
+    region region(shard_tracker());
     allocating_section as;
 
     with_allocator(region.allocator(), [&] {
@@ -226,7 +227,7 @@ SEASTAR_TEST_CASE(test_clear_and_release) {
 }
 
 SEASTAR_TEST_CASE(test_chunk_reserve) {
-    region region;
+    region region(shard_tracker());
     allocating_section as;
 
     for (auto conf :
@@ -268,7 +269,7 @@ SEASTAR_TEST_CASE(test_chunk_reserve) {
 }
 
 SEASTAR_TEST_CASE(test_correctness_when_crossing_chunk_boundary) {
-    region region;
+    region region(shard_tracker());
     allocating_section as;
     with_allocator(region.allocator(), [&] {
         as(region, [&] {
@@ -291,7 +292,7 @@ SEASTAR_TEST_CASE(test_correctness_when_crossing_chunk_boundary) {
 // Tests the case of make_room() invoked with last_chunk_capacity_deficit but _size not in
 // the last reserved chunk.
 SEASTAR_TEST_CASE(test_shrinking_and_expansion_involving_chunk_boundary) {
-    region region;
+    region region(shard_tracker());
     allocating_section as;
 
     with_allocator(region.allocator(), [&] {

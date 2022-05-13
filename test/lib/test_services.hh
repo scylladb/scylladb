@@ -43,7 +43,6 @@ struct column_family_for_tests {
         schema_ptr s;
         dirty_memory_manager dmm;
         reader_concurrency_semaphore semaphore;
-        cache_tracker tracker;
         replica::cf_stats cf_stats{0};
         replica::column_family::config cfg;
         cell_locker_stats cl_stats;

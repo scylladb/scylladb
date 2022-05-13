@@ -19,6 +19,7 @@ struct stress_config {
     int iters;
     std::string keys;
     bool verb;
+    logalloc::tracker* logalloc_tracker;
 };
 
 enum class stress_step { before_insert, before_erase, iteration_finished };
@@ -179,7 +180,7 @@ void stress_compact_collection(const stress_config& conf, Insert&& insert, Erase
     std::random_device rd;
     std::mt19937 g(rd());
 
-    logalloc::region mem;
+    logalloc::region mem(*conf.logalloc_tracker);
 
     with_allocator(mem.allocator(), [&] {
         for (auto rep = 0; rep < conf.iters; rep++) {

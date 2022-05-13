@@ -15,6 +15,7 @@
 #include <string>
 
 #include "utils/double-decker.hh"
+#include "test/lib/logalloc.hh"
 #include "test/lib/random_utils.hh"
 
 class compound_key {
@@ -303,7 +304,8 @@ SEASTAR_THREAD_TEST_CASE(test_insert_and_erase) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_compaction) {
-    logalloc::region reg;
+    tests::logalloc::sharded_tracker logalloc_tracker;
+    logalloc::region reg(*logalloc_tracker);
     with_allocator(reg.allocator(), [&] {
         collection c(compound_key::less_compare{});
         test_data::compare cmp;

@@ -14,6 +14,7 @@
 #include <seastar/util/defer.hh>
 
 #include "sstables/sstables.hh"
+#include "test/lib/logalloc.hh"
 #include "test/lib/tmpdir.hh"
 #include "test/lib/test_services.hh"
 #include "test/lib/log.hh"
@@ -30,21 +31,25 @@ public:
 
 class test_env {
     struct impl {
+        logalloc::tracker& logalloc_tracker;
         cache_tracker cache_tracker;
         test_env_sstables_manager mgr;
         reader_concurrency_semaphore semaphore;
         dirty_memory_manager dmm;
 
-        impl()
-            : mgr(nop_lp_handler, test_db_config, test_feature_service, cache_tracker)
+        impl(logalloc::tracker& logalloc_tracker)
+            : logalloc_tracker(logalloc_tracker)
+            , cache_tracker(logalloc_tracker)
+            , mgr(nop_lp_handler, test_db_config, test_feature_service, cache_tracker)
             , semaphore(reader_concurrency_semaphore::no_limits{}, "sstables::test_env")
+            , dmm(logalloc_tracker)
         { }
         impl(impl&&) = delete;
         impl(const impl&) = delete;
     };
     std::unique_ptr<impl> _impl;
 public:
-    explicit test_env() : _impl(std::make_unique<impl>()) { }
+    explicit test_env(logalloc::tracker& logalloc_tracker) : _impl(std::make_unique<impl>(logalloc_tracker)) { }
 
     future<> stop() {
         return _impl->mgr.close().finally([this] {
@@ -75,6 +80,8 @@ public:
     // looks up the sstable in the given dir
     future<shared_sstable> reusable_sst(schema_ptr schema, sstring dir, unsigned long generation);
 
+    logalloc::tracker& logalloc_tracker() { return _impl->logalloc_tracker; }
+    cache_tracker& cache_tracker() { return _impl->cache_tracker; }
     test_env_sstables_manager& manager() { return _impl->mgr; }
     reader_concurrency_semaphore& semaphore() { return _impl->semaphore; }
     reader_permit make_reader_permit(const schema* const s, const char* n, db::timeout_clock::time_point timeout) {
@@ -101,7 +108,7 @@ public:
 
     template <typename Func>
     static inline auto do_with(Func&& func) {
-        return seastar::do_with(test_env(), [func = std::move(func)] (test_env& env) mutable {
+        return seastar::do_with(test_env(logalloc::shard_tracker()), [func = std::move(func)] (test_env& env) mutable {
             return futurize_invoke(func, env).finally([&env] {
                 return env.stop();
             });
@@ -110,7 +117,7 @@ public:
 
     template <typename T, typename Func>
     static inline auto do_with(T&& rval, Func&& func) {
-        return seastar::do_with(test_env(), std::forward<T>(rval), [func = std::move(func)] (test_env& env, T& val) mutable {
+        return seastar::do_with(test_env(logalloc::shard_tracker()), std::forward<T>(rval), [func = std::move(func)] (test_env& env, T& val) mutable {
             return futurize_invoke(func, env, val).finally([&env] {
                 return env.stop();
             });
@@ -119,7 +126,8 @@ public:
 
     static inline future<> do_with_async(noncopyable_function<void (test_env&)> func) {
         return seastar::async([func = std::move(func)] {
-            test_env env;
+            tests::logalloc::sharded_tracker logalloc_tracker;
+            test_env env(*logalloc_tracker);
             auto close_env = defer([&] { env.stop().get(); });
             func(env);
         });
@@ -128,7 +136,7 @@ public:
     static inline future<> do_with_sharded_async(noncopyable_function<void (sharded<test_env>&)> func) {
         return seastar::async([func = std::move(func)] {
             sharded<test_env> env;
-            env.start().get();
+            env.start(sharded_parameter([] { return std::ref(logalloc::shard_tracker()); })).get();
             auto stop = defer([&] { env.stop().get(); });
             func(env);
         });
@@ -137,7 +145,8 @@ public:
     template <typename T>
     static future<T> do_with_async_returning(noncopyable_function<T (test_env&)> func) {
         return seastar::async([func = std::move(func)] {
-            test_env env;
+            tests::logalloc::sharded_tracker logalloc_tracker;
+            test_env env(*logalloc_tracker);
             auto stop = defer([&] { env.stop().get(); });
             return func(env);
         });

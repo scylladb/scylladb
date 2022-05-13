@@ -24,6 +24,7 @@
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/simple_schema.hh"
+#include "test/lib/logalloc.hh"
 #include "querier.hh"
 #include "types.hh"
 #include "reader_concurrency_semaphore.hh"
@@ -51,7 +52,7 @@ static const int cell_size = 128;
 static bool cancelled = false;
 static const auto MB = 1024 * 1024;
 
-void test_scans_with_dummy_entries() {
+void test_scans_with_dummy_entries(logalloc::tracker& logalloc_tracker) {
     std::cout << __FUNCTION__<< std::endl;
 
     auto s = schema_builder("ks", "cf")
@@ -65,8 +66,8 @@ void test_scans_with_dummy_entries() {
     auto pk = dht::decorate_key(*s, partition_key::from_single_value(*s,
                                             serialized(utils::UUID_gen::get_time_UUID())));
 
-    cache_tracker tracker;
-    memtable_snapshot_source mss(s);
+    cache_tracker tracker(logalloc_tracker);
+    memtable_snapshot_source mss(s, logalloc_tracker);
 
     auto make_random_ck = [&] {
         return clustering_key::from_single_value(*s, serialized(utils::make_random_uuid()));
@@ -138,15 +139,15 @@ void test_scans_with_dummy_entries() {
     tracker.cleaner().drain().get();
 }
 
-void test_scan_with_range_delete_over_rows() {
+void test_scan_with_range_delete_over_rows(logalloc::tracker& logalloc_tracker) {
     std::cout << __FUNCTION__<< std::endl;
 
     simple_schema ss;
     auto s = ss.schema();
     tests::reader_concurrency_semaphore_wrapper semaphore;
 
-    cache_tracker tracker;
-    memtable_snapshot_source mss(s);
+    cache_tracker tracker(logalloc_tracker);
+    memtable_snapshot_source mss(s, logalloc_tracker);
 
     auto pk = ss.make_pkey(0);
     auto val = sstring(sstring::initialized_later(), cell_size);
@@ -229,9 +230,9 @@ int main(int argc, char** argv) {
                 cancelled = true;
                 return make_ready_future();
             });
-            logalloc::prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory()).get();
-            test_scans_with_dummy_entries();
-            test_scan_with_range_delete_over_rows();
+            tests::logalloc::sharded_tracker logalloc_tracker;
+            test_scans_with_dummy_entries(*logalloc_tracker);
+            test_scan_with_range_delete_over_rows(*logalloc_tracker);
         });
     });
 }

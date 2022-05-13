@@ -45,6 +45,7 @@
 #include "db/query_context.hh"
 #include "test/lib/test_services.hh"
 #include "test/lib/log.hh"
+#include "test/lib/logalloc.hh"
 #include "unit_test_service_levels_accessor.hh"
 #include "db/view/view_builder.hh"
 #include "db/view/node_view_update_backlog.hh"
@@ -446,7 +447,8 @@ public:
                 engine().update_blocked_reactor_notify_ms(std::chrono::milliseconds(1000000));
             }).get();
 
-            logalloc::prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory()).get();
+            tests::logalloc::sharded_tracker logalloc_tracker;
+
             bool old_active = false;
             if (!active.compare_exchange_strong(old_active, true)) {
                 throw std::runtime_error("Starting more than one cql_test_env at a time not supported due to singletons.");

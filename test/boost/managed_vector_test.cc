@@ -9,6 +9,7 @@
 #include <boost/test/unit_test.hpp>
 #include <seastar/testing/thread_test_case.hh>
 
+#include "test/lib/logalloc.hh"
 #include "utils/managed_vector.hh"
 #include "utils/logalloc.hh"
 
@@ -130,7 +131,8 @@ SEASTAR_THREAD_TEST_CASE(test_resize_down) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_compaction) {
-    logalloc::region reg;
+    tests::logalloc::sharded_tracker logalloc_tracker;
+    logalloc::region reg(*logalloc_tracker);
     with_allocator(reg.allocator(), [&] {
         managed_vector<unsigned> vec;
         fill(vec);

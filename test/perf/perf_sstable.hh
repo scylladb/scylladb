@@ -96,8 +96,11 @@ private:
     }
 
 public:
-    perf_sstable_test_env(conf cfg) : _cfg(std::move(cfg))
+    perf_sstable_test_env(logalloc::tracker& logalloc_tracker, conf cfg)
+           : _env(logalloc_tracker)
+           , _cfg(std::move(cfg))
            , s(create_schema(cfg.compaction_strategy))
+            , _dmm(logalloc_tracker)
            , _distribution('@', '~')
            , _mt(make_lw_shared<replica::memtable>(s, _dmm))
     {}
@@ -168,7 +171,7 @@ public:
                     ssts.push_back(std::move(sst));
                 }
 
-                cache_tracker tracker;
+                cache_tracker tracker(_env.logalloc_tracker());
                 cell_locker_stats cl_stats;
                 auto cm = make_lw_shared<compaction_manager>(compaction_manager::for_testing_tag{}, env.get_dirty_memory_manager());
                 auto cf = make_lw_shared<replica::column_family>(s, env.make_table_config(), replica::column_family::no_commitlog(), *cm, env.manager(), cl_stats, tracker);

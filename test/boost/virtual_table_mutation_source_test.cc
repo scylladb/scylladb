@@ -53,7 +53,8 @@ public:
 };
 
 SEASTAR_THREAD_TEST_CASE(test_memtable_filling_vt_as_mutation_source) {
-    dirty_memory_manager dmm;
+    tests::logalloc::sharded_tracker logalloc_tracker;
+    dirty_memory_manager dmm(*logalloc_tracker);
     std::unique_ptr<memtable_filling_test_vt> table; // Used to prolong table's life
 
     auto mt_factory = [&dmm] (schema_ptr s) {
@@ -67,7 +68,8 @@ SEASTAR_THREAD_TEST_CASE(test_memtable_filling_vt_as_mutation_source) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_streaming_vt_as_mutation_source) {
-    dirty_memory_manager dmm;
+    tests::logalloc::sharded_tracker logalloc_tracker;
+    dirty_memory_manager dmm(*logalloc_tracker);
     std::unique_ptr<streaming_test_vt> table; // Used to prolong table's life
 
     run_mutation_source_tests([&table, &dmm] (schema_ptr s, const std::vector<mutation>& mutations, gc_clock::time_point) -> mutation_source {

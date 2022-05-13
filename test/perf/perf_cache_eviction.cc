@@ -87,6 +87,7 @@ int main(int argc, char** argv) {
             utils::estimated_histogram writes_hist;
 
             auto& tracker = env.local_db().row_cache_tracker();
+            auto& logalloc_tracker = tracker.region().get_tracker();
 
             timer<> stats_printer;
             monotonic_counter<uint64_t> reads_ctr([&] { return reads; });
@@ -104,8 +105,8 @@ int main(int argc, char** argv) {
                     miss_ctr.change(),
                     tracker.region().occupancy().used_space() / MB,
                     tracker.region().occupancy().total_space() / MB,
-                    logalloc::shard_tracker().region_occupancy().used_space() / MB,
-                    logalloc::shard_tracker().region_occupancy().total_space() / MB,
+                    logalloc_tracker.region_occupancy().used_space() / MB,
+                    logalloc_tracker.region_occupancy().total_space() / MB,
                     seastar::memory::stats().free_memory() / MB) << "\n\n";
 
                 auto print_percentiles = [] (const utils::estimated_histogram& hist) {

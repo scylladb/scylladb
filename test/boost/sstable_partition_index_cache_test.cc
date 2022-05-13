@@ -63,7 +63,8 @@ static void has_page0(partition_index_cache::list_ptr ptr) {
 SEASTAR_THREAD_TEST_CASE(test_caching) {
     ::lru lru;
     simple_schema s;
-    logalloc::region r;
+    tests::logalloc::sharded_tracker logalloc_tracker;
+    logalloc::region r(*logalloc_tracker);
     partition_index_cache cache(lru, r);
 
     auto page0_loader = [&] (partition_index_cache::key_type k) {
@@ -152,7 +153,8 @@ static future<> ignore_result(future<T>&& f) {
 SEASTAR_THREAD_TEST_CASE(test_exception_while_loading) {
     ::lru lru;
     simple_schema s;
-    logalloc::region r;
+    tests::logalloc::sharded_tracker logalloc_tracker;
+    logalloc::region r(*logalloc_tracker);
     partition_index_cache cache(lru, r);
 
     auto clear_lru = defer([&] {
@@ -182,7 +184,8 @@ SEASTAR_THREAD_TEST_CASE(test_exception_while_loading) {
 SEASTAR_THREAD_TEST_CASE(test_auto_clear) {
     ::lru lru;
     simple_schema s;
-    logalloc::region r;
+    tests::logalloc::sharded_tracker logalloc_tracker;
+    logalloc::region r(*logalloc_tracker);
 
     partition_index_cache::stats old_stats;
 
@@ -209,7 +212,8 @@ SEASTAR_THREAD_TEST_CASE(test_auto_clear) {
 SEASTAR_THREAD_TEST_CASE(test_destroy) {
     ::lru lru;
     simple_schema s;
-    logalloc::region r;
+    tests::logalloc::sharded_tracker logalloc_tracker;
+    logalloc::region r(*logalloc_tracker);
 
     partition_index_cache::stats old_stats;
 
@@ -235,7 +239,8 @@ SEASTAR_THREAD_TEST_CASE(test_destroy) {
 SEASTAR_THREAD_TEST_CASE(test_evict_gently) {
     ::lru lru;
     simple_schema s;
-    logalloc::region r;
+    tests::logalloc::sharded_tracker logalloc_tracker;
+    logalloc::region r(*logalloc_tracker);
 
     partition_index_cache::stats old_stats;
 

@@ -16,6 +16,7 @@
 #include "seastarx.hh"
 #include "utils/extremum_tracking.hh"
 #include "utils/estimated_histogram.hh"
+#include "utils/logalloc.hh"
 #include <seastar/testing/linux_perf_event.hh>
 #include <seastar/util/defer.hh>
 #include "reader_permit.hh"
@@ -279,6 +280,14 @@ public:
     explicit reader_concurrency_semaphore_wrapper(sstring name);
     ~reader_concurrency_semaphore_wrapper();
     reader_permit make_permit();
+};
+
+// Closes the tracker in the background when destroyed
+class logalloc_tracker {
+public:
+    explicit logalloc_tracker();
+    ~logalloc_tracker();
+    logalloc::tracker& tracker();
 };
 
 } // namespace perf

@@ -28,14 +28,16 @@
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/simple_schema.hh"
 #include "test/lib/fragment_scatterer.hh"
+#include "test/lib/logalloc.hh"
 
 #include <boost/range/algorithm/transform.hpp>
 #include "readers/from_mutations_v2.hh"
 
 SEASTAR_TEST_CASE(test_mutation_merger_conforms_to_mutation_source) {
     return seastar::async([] {
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        dirty_memory_manager dmm;
+        dirty_memory_manager dmm(*logalloc_tracker);
         run_mutation_source_tests([&](schema_ptr s, const std::vector<mutation>& partitions) -> mutation_source {
             // We create a mutation source which combines N memtables.
             // The input fragments are spread among the memtables according to some selection logic,

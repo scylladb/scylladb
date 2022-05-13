@@ -30,6 +30,7 @@
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/memtable_snapshot_source.hh"
 #include "test/lib/log.hh"
+#include "test/lib/logalloc.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/random_utils.hh"
 
@@ -126,9 +127,10 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying) {
         auto s = make_schema();
         auto m = make_new_mutation(s);
 
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
-        cache_tracker tracker;
+        cache_tracker tracker(*logalloc_tracker);
         row_cache cache(s, snapshot_source_from_snapshot(make_source_with(m)), tracker);
 
         assert_that(cache.make_reader(s, semaphore.make_permit(), query::full_partition_range))
@@ -140,10 +142,11 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying) {
 SEASTAR_TEST_CASE(test_cache_works_after_clearing) {
     return seastar::async([] {
         auto s = make_schema();
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto m = make_new_mutation(s);
 
-        cache_tracker tracker;
+        cache_tracker tracker(*logalloc_tracker);
         row_cache cache(s, snapshot_source_from_snapshot(make_source_with(m)), tracker);
 
         assert_that(cache.make_reader(s, semaphore.make_permit(), query::full_partition_range))
@@ -185,9 +188,10 @@ flat_mutation_reader_v2 make_counting_reader(flat_mutation_reader_v2 mr, int& co
 SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_empty_full_range) {
     return seastar::async([] {
         auto s = make_schema();
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
         int secondary_calls_count = 0;
-        cache_tracker tracker;
+        cache_tracker tracker(*logalloc_tracker);
         row_cache cache(s, snapshot_source_from_snapshot(mutation_source([&secondary_calls_count] (
                 schema_ptr s,
                 reader_permit permit,
@@ -217,9 +221,10 @@ dht::partition_range make_single_partition_range(schema_ptr& s, int pkey) {
 SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_empty_single_partition_query) {
     return seastar::async([] {
         auto s = make_schema();
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
         int secondary_calls_count = 0;
-        cache_tracker tracker;
+        cache_tracker tracker(*logalloc_tracker);
         row_cache cache(s, snapshot_source_from_snapshot(mutation_source([&secondary_calls_count] (
                 schema_ptr s,
                 reader_permit permit,
@@ -243,9 +248,10 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_empty_single_part
 SEASTAR_TEST_CASE(test_cache_uses_continuity_info_for_single_partition_query) {
     return seastar::async([] {
         auto s = make_schema();
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
         int secondary_calls_count = 0;
-        cache_tracker tracker;
+        cache_tracker tracker(*logalloc_tracker);
         row_cache cache(s, snapshot_source_from_snapshot(mutation_source([&secondary_calls_count] (
                 schema_ptr s,
                 reader_permit permit,
@@ -270,12 +276,13 @@ SEASTAR_TEST_CASE(test_cache_uses_continuity_info_for_single_partition_query) {
 }
 
 void test_cache_delegates_to_underlying_only_once_with_single_partition(schema_ptr s,
+                                                                       logalloc::tracker& logalloc_tracker,
                                                                         tests::reader_concurrency_semaphore_wrapper& semaphore,
                                                                         const mutation& m,
                                                                         const dht::partition_range& range,
                                                                         int calls_to_secondary) {
     int secondary_calls_count = 0;
-    cache_tracker tracker;
+    cache_tracker tracker(logalloc_tracker);
     row_cache cache(s, snapshot_source_from_snapshot(mutation_source([m, &secondary_calls_count] (
             schema_ptr s,
             reader_permit permit,
@@ -305,9 +312,10 @@ void test_cache_delegates_to_underlying_only_once_with_single_partition(schema_p
 SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_single_key_range) {
     return seastar::async([] {
         auto s = make_schema();
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto m = make_new_mutation(s);
-        test_cache_delegates_to_underlying_only_once_with_single_partition(s, semaphore, m,
+        test_cache_delegates_to_underlying_only_once_with_single_partition(s, *logalloc_tracker, semaphore, m,
             dht::partition_range::make_singular(query::ring_position(m.decorated_key())), 1);
     });
 }
@@ -315,20 +323,22 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_single_key_range)
 SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_full_range) {
     return seastar::async([] {
         auto s = make_schema();
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto m = make_new_mutation(s);
-        test_cache_delegates_to_underlying_only_once_with_single_partition(s, semaphore, m, query::full_partition_range, 2);
+        test_cache_delegates_to_underlying_only_once_with_single_partition(s, *logalloc_tracker, semaphore, m, query::full_partition_range, 2);
     });
 }
 
 SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_range_open) {
     return seastar::async([] {
         auto s = make_schema();
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto m = make_new_mutation(s);
         dht::partition_range::bound end = {dht::ring_position(m.decorated_key()), true};
         dht::partition_range range = dht::partition_range::make_ending_with(end);
-        test_cache_delegates_to_underlying_only_once_with_single_partition(s, semaphore, m, range, 2);
+        test_cache_delegates_to_underlying_only_once_with_single_partition(s, *logalloc_tracker, semaphore, m, range, 2);
     });
 }
 
@@ -351,8 +361,9 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_multiple_mutation
             .with_column("v", bytes_type)
             .build();
 
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        dirty_memory_manager dmm;
+        dirty_memory_manager dmm(*logalloc_tracker);
 
         auto make_partition_mutation = [s] (bytes key) -> mutation {
             mutation m(s, partition_key::from_single_value(*s, key));
@@ -377,7 +388,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_multiple_mutation
         dht::decorated_key key_after_all = partitions.back().decorated_key();
         partitions.pop_back();
 
-        cache_tracker tracker;
+        cache_tracker tracker(*logalloc_tracker);
         auto mt = make_lw_shared<replica::memtable>(s, dmm);
 
         for (auto&& m : partitions) {
@@ -550,8 +561,9 @@ static std::vector<mutation> make_ring(schema_ptr s, int n_mutations) {
 SEASTAR_TEST_CASE(test_query_of_incomplete_range_goes_to_underlying) {
     return seastar::async([] {
         auto s = make_schema();
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        dirty_memory_manager dmm;
+        dirty_memory_manager dmm(*logalloc_tracker);
 
         std::vector<mutation> mutations = make_ring(s, 3);
 
@@ -560,7 +572,7 @@ SEASTAR_TEST_CASE(test_query_of_incomplete_range_goes_to_underlying) {
             mt->apply(m);
         }
 
-        cache_tracker tracker;
+        cache_tracker tracker(*logalloc_tracker);
         row_cache cache(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
 
         auto get_partition_range = [] (const mutation& m) {
@@ -601,8 +613,9 @@ SEASTAR_TEST_CASE(test_query_of_incomplete_range_goes_to_underlying) {
 SEASTAR_TEST_CASE(test_single_key_queries_after_population_in_reverse_order) {
     return seastar::async([] {
         auto s = make_schema();
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        dirty_memory_manager dmm;
+        dirty_memory_manager dmm(*logalloc_tracker);
 
         auto mt = make_lw_shared<replica::memtable>(s, dmm);
 
@@ -612,7 +625,7 @@ SEASTAR_TEST_CASE(test_single_key_queries_after_population_in_reverse_order) {
             mt->apply(m);
         }
 
-        cache_tracker tracker;
+        cache_tracker tracker(*logalloc_tracker);
         row_cache cache(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
 
         auto get_partition_range = [] (const mutation& m) {
@@ -643,8 +656,9 @@ SEASTAR_TEST_CASE(test_single_key_queries_after_population_in_reverse_order) {
 SEASTAR_TEST_CASE(test_partition_range_population_with_concurrent_memtable_flushes) {
     return seastar::async([] {
         auto s = make_schema();
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        dirty_memory_manager dmm;
+        dirty_memory_manager dmm(*logalloc_tracker);
 
         std::vector<mutation> mutations = make_ring(s, 3);
 
@@ -653,7 +667,7 @@ SEASTAR_TEST_CASE(test_partition_range_population_with_concurrent_memtable_flush
             mt->apply(m);
         }
 
-        cache_tracker tracker;
+        cache_tracker tracker(*logalloc_tracker);
         row_cache cache(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
 
         bool cancel_updater = false;
@@ -703,8 +717,9 @@ SEASTAR_TEST_CASE(test_partition_range_population_with_concurrent_memtable_flush
 
 SEASTAR_TEST_CASE(test_row_cache_conforms_to_mutation_source) {
     return seastar::async([] {
-        cache_tracker tracker;
-        dirty_memory_manager dmm;
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        cache_tracker tracker(*logalloc_tracker);
+        dirty_memory_manager dmm(*logalloc_tracker);
 
         run_mutation_source_tests([&tracker, &dmm](schema_ptr s, const std::vector<mutation>& mutations) -> mutation_source {
             auto mt = make_lw_shared<replica::memtable>(s, dmm);
@@ -737,10 +752,11 @@ mutation make_fully_continuous(const mutation& m) {
 
 SEASTAR_TEST_CASE(test_reading_from_random_partial_partition) {
     return seastar::async([] {
-        cache_tracker tracker;
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        cache_tracker tracker(*logalloc_tracker);
         random_mutation_generator gen(random_mutation_generator::generate_counters::no);
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        dirty_memory_manager dmm;
+        dirty_memory_manager dmm(*logalloc_tracker);
 
         // The test primes the cache with m1, which has random continuity,
         // and then applies m2 on top of it. This should result in some of m2's
@@ -750,7 +766,7 @@ SEASTAR_TEST_CASE(test_reading_from_random_partial_partition) {
         auto m1 = gen();
         auto m2 = make_fully_continuous(gen());
 
-        memtable_snapshot_source underlying(gen.schema());
+        memtable_snapshot_source underlying(gen.schema(), *logalloc_tracker);
         underlying.apply(make_fully_continuous(m1));
 
         row_cache cache(gen.schema(), snapshot_source([&] { return underlying(); }), tracker);
@@ -775,11 +791,12 @@ SEASTAR_TEST_CASE(test_reading_from_random_partial_partition) {
 
 SEASTAR_TEST_CASE(test_presence_checker_runs_under_right_allocator) {
     return seastar::async([] {
-        cache_tracker tracker;
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        cache_tracker tracker(*logalloc_tracker);
         random_mutation_generator gen(random_mutation_generator::generate_counters::no);
-        dirty_memory_manager dmm;
+        dirty_memory_manager dmm(*logalloc_tracker);
 
-        memtable_snapshot_source underlying(gen.schema());
+        memtable_snapshot_source underlying(gen.schema(), *logalloc_tracker);
 
         // Create a snapshot source whose presence checker allocates and stores a managed object.
         // The presence checker may assume that it runs and is destroyed in the context
@@ -816,14 +833,15 @@ SEASTAR_TEST_CASE(test_presence_checker_runs_under_right_allocator) {
 
 SEASTAR_TEST_CASE(test_random_partition_population) {
     return seastar::async([] {
-        cache_tracker tracker;
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        cache_tracker tracker(*logalloc_tracker);
         random_mutation_generator gen(random_mutation_generator::generate_counters::no);
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
         auto m1 = make_fully_continuous(gen());
         auto m2 = make_fully_continuous(gen());
 
-        memtable_snapshot_source underlying(gen.schema());
+        memtable_snapshot_source underlying(gen.schema(), *logalloc_tracker);
         underlying.apply(m1);
 
         row_cache cache(gen.schema(), snapshot_source([&] { return underlying(); }), tracker);
@@ -846,11 +864,12 @@ SEASTAR_TEST_CASE(test_random_partition_population) {
 SEASTAR_TEST_CASE(test_eviction) {
     return seastar::async([] {
         auto s = make_schema();
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        dirty_memory_manager dmm;
+        dirty_memory_manager dmm(*logalloc_tracker);
         auto mt = make_lw_shared<replica::memtable>(s, dmm);
 
-        cache_tracker tracker;
+        cache_tracker tracker(*logalloc_tracker);
         row_cache cache(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
 
         std::vector<dht::decorated_key> keys;
@@ -872,7 +891,7 @@ SEASTAR_TEST_CASE(test_eviction) {
         }
 
         while (tracker.partitions() > 0) {
-            logalloc::shard_tracker().reclaim(100);
+            logalloc_tracker->reclaim(100);
         }
 
         BOOST_REQUIRE_EQUAL(tracker.get_stats().partition_evictions, keys.size());
@@ -884,11 +903,12 @@ SEASTAR_TEST_CASE(test_eviction) {
 SEASTAR_TEST_CASE(test_eviction_from_invalidated) {
     return seastar::async([] {
         auto s = make_schema();
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        dirty_memory_manager dmm;
+        dirty_memory_manager dmm(*logalloc_tracker);
         auto mt = make_lw_shared<replica::memtable>(s, dmm);
 
-        cache_tracker tracker;
+        cache_tracker tracker(*logalloc_tracker);
         random_mutation_generator gen(random_mutation_generator::generate_counters::no);
         row_cache cache(gen.schema(), snapshot_source_from_snapshot(mt->as_data_source()), tracker);
 
@@ -937,11 +957,12 @@ SEASTAR_TEST_CASE(test_eviction_after_schema_change) {
     return seastar::async([] {
         auto s = make_schema();
         auto s2 = make_schema_with_extra_column();
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        dirty_memory_manager dmm;
+        dirty_memory_manager dmm(*logalloc_tracker);
         auto mt = make_lw_shared<replica::memtable>(s, dmm);
 
-        cache_tracker tracker;
+        cache_tracker tracker(*logalloc_tracker);
         row_cache cache(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
 
         auto m = make_new_mutation(s);
@@ -998,8 +1019,9 @@ SEASTAR_TEST_CASE(test_single_partition_update) {
             .with_column("ck", int32_type, column_kind::clustering_key)
             .with_column("v", int32_type)
             .build();
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        dirty_memory_manager dmm;
+        dirty_memory_manager dmm(*logalloc_tracker);
         auto pk = partition_key::from_exploded(*s, { int32_type->decompose(100) });
         auto dk = dht::decorate_key(*s, pk);
         auto range = dht::partition_range::make_singular(dk);
@@ -1011,7 +1033,7 @@ SEASTAR_TEST_CASE(test_single_partition_update) {
         auto ck3 = make_ck(3);
         auto ck4 = make_ck(4);
         auto ck7 = make_ck(7);
-        memtable_snapshot_source cache_mt(s);
+        memtable_snapshot_source cache_mt(s, *logalloc_tracker);
         {
             mutation m(s, pk);
             m.set_clustered_cell(ck1, "v", data_value(101), 1);
@@ -1021,7 +1043,7 @@ SEASTAR_TEST_CASE(test_single_partition_update) {
             cache_mt.apply(m);
         }
 
-        cache_tracker tracker;
+        cache_tracker tracker(*logalloc_tracker);
         row_cache cache(s, snapshot_source([&] { return cache_mt(); }), tracker);
 
         {
@@ -1052,11 +1074,12 @@ SEASTAR_TEST_CASE(test_single_partition_update) {
 SEASTAR_TEST_CASE(test_update) {
     return seastar::async([] {
         auto s = make_schema();
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        dirty_memory_manager dmm;
+        dirty_memory_manager dmm(*logalloc_tracker);
         auto cache_mt = make_lw_shared<replica::memtable>(s, dmm);
 
-        cache_tracker tracker;
+        cache_tracker tracker(*logalloc_tracker);
         row_cache cache(s, snapshot_source_from_snapshot(cache_mt->as_data_source()), tracker, is_continuous::yes);
 
         testlog.info("Check cache miss with populate");
@@ -1161,11 +1184,12 @@ mutation make_new_mutation(schema_ptr s, int key) {
 SEASTAR_TEST_CASE(test_update_failure) {
     return seastar::async([] {
         auto s = make_schema();
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        dirty_memory_manager dmm;
+        dirty_memory_manager dmm(*logalloc_tracker);
         auto cache_mt = make_lw_shared<replica::memtable>(s, dmm);
 
-        cache_tracker tracker;
+        cache_tracker tracker(*logalloc_tracker);
         row_cache cache(s, snapshot_source_from_snapshot(cache_mt->as_data_source()), tracker, is_continuous::yes);
 
         int partition_count = 1000;
@@ -1336,8 +1360,9 @@ static std::vector<mutation> updated_ring(std::vector<mutation>& mutations) {
 SEASTAR_TEST_CASE(test_continuity_flag_and_invalidate_race) {
     return seastar::async([] {
         auto s = make_schema();
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        dirty_memory_manager dmm;
+        dirty_memory_manager dmm(*logalloc_tracker);
         lw_shared_ptr<replica::memtable> mt = make_lw_shared<replica::memtable>(s, dmm);
 
         auto ring = make_ring(s, 4);
@@ -1345,7 +1370,7 @@ SEASTAR_TEST_CASE(test_continuity_flag_and_invalidate_race) {
             mt->apply(m);
         }
 
-        cache_tracker tracker;
+        cache_tracker tracker(*logalloc_tracker);
         row_cache cache(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
 
         // Bring ring[2]and ring[3] to cache.
@@ -1393,14 +1418,15 @@ SEASTAR_TEST_CASE(test_continuity_flag_and_invalidate_race) {
 SEASTAR_TEST_CASE(test_cache_population_and_update_race) {
     return seastar::async([] {
         auto s = make_schema();
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        dirty_memory_manager dmm;
-        memtable_snapshot_source memtables(s);
+        dirty_memory_manager dmm(*logalloc_tracker);
+        memtable_snapshot_source memtables(s, *logalloc_tracker);
         throttle thr;
         auto cache_source = make_decorated_snapshot_source(snapshot_source([&] { return memtables(); }), [&] (mutation_source src) {
             return throttled_mutation_source(thr, std::move(src));
         });
-        cache_tracker tracker;
+        cache_tracker tracker(*logalloc_tracker);
 
         auto mt1 = make_lw_shared<replica::memtable>(s, dmm);
         auto ring = make_ring(s, 3);
@@ -1473,11 +1499,12 @@ SEASTAR_TEST_CASE(test_cache_population_and_update_race) {
 SEASTAR_TEST_CASE(test_invalidate) {
     return seastar::async([] {
         auto s = make_schema();
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        dirty_memory_manager dmm;
+        dirty_memory_manager dmm(*logalloc_tracker);
         auto mt = make_lw_shared<replica::memtable>(s, dmm);
 
-        cache_tracker tracker;
+        cache_tracker tracker(*logalloc_tracker);
         row_cache cache(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
 
         int partition_count = 1000;
@@ -1533,13 +1560,14 @@ SEASTAR_TEST_CASE(test_invalidate) {
 SEASTAR_TEST_CASE(test_cache_population_and_clear_race) {
     return seastar::async([] {
         auto s = make_schema();
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        memtable_snapshot_source memtables(s);
+        memtable_snapshot_source memtables(s, *logalloc_tracker);
         throttle thr;
         auto cache_source = make_decorated_snapshot_source(snapshot_source([&] { return memtables(); }), [&] (mutation_source src) {
             return throttled_mutation_source(thr, std::move(src));
         });
-        cache_tracker tracker;
+        cache_tracker tracker(*logalloc_tracker);
 
         auto mt1 = make_lw_shared<replica::memtable>(s, memtables.get_dirty_memory_manager());
         auto ring = make_ring(s, 3);
@@ -1606,14 +1634,17 @@ SEASTAR_TEST_CASE(test_mvcc) {
     return seastar::async([] {
         auto test = [&] (const mutation& m1, const mutation& m2, bool with_active_memtable_reader) {
             auto s = m1.schema();
+        tests::logalloc::sharded_tracker logalloc_tracker;
             tests::reader_concurrency_semaphore_wrapper semaphore;
 
-            memtable_snapshot_source underlying(s);
+            memtable_snapshot_source underlying(s, *logalloc_tracker);
+            auto& dmm = underlying.get_dirty_memory_manager();
+
             partition_key::equality eq(*s);
 
             underlying.apply(m1);
 
-            cache_tracker tracker;
+            cache_tracker tracker(*logalloc_tracker);
             row_cache cache(s, snapshot_source([&] { return underlying(); }), tracker);
 
             auto pk = m1.key();
@@ -1703,8 +1734,9 @@ SEASTAR_TEST_CASE(test_slicing_mutation_reader) {
             .with_column("ck", int32_type, column_kind::clustering_key)
             .with_column("v", int32_type)
             .build();
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        dirty_memory_manager dmm;
+        dirty_memory_manager dmm(*logalloc_tracker);
 
         auto pk = partition_key::from_exploded(*s, { int32_type->decompose(0) });
         mutation m(s, pk);
@@ -1717,7 +1749,7 @@ SEASTAR_TEST_CASE(test_slicing_mutation_reader) {
         auto mt = make_lw_shared<replica::memtable>(s, dmm);
         mt->apply(m);
 
-        cache_tracker tracker;
+        cache_tracker tracker(*logalloc_tracker);
         row_cache cache(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
 
         auto run_tests = [&] (auto& ps, std::deque<int> expected) {
@@ -1808,11 +1840,12 @@ static void evict_one_row(cache_tracker& tracker) {
 SEASTAR_TEST_CASE(test_lru) {
     return seastar::async([] {
         auto s = make_schema();
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        dirty_memory_manager dmm;
+        dirty_memory_manager dmm(*logalloc_tracker);
         auto cache_mt = make_lw_shared<replica::memtable>(s, dmm);
 
-        cache_tracker tracker;
+        cache_tracker tracker(*logalloc_tracker);
         row_cache cache(s, snapshot_source_from_snapshot(cache_mt->as_data_source()), tracker);
 
         int partition_count = 10;
@@ -1866,9 +1899,10 @@ SEASTAR_TEST_CASE(test_lru) {
 SEASTAR_TEST_CASE(test_update_invalidating) {
     return seastar::async([] {
         simple_schema s;
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        cache_tracker tracker;
-        memtable_snapshot_source underlying(s.schema());
+        cache_tracker tracker(*logalloc_tracker);
+        memtable_snapshot_source underlying(s.schema(), *logalloc_tracker);
 
         auto mutation_for_key = [&] (dht::decorated_key key) {
             mutation m(s.schema(), key);
@@ -1917,8 +1951,9 @@ SEASTAR_TEST_CASE(test_update_invalidating) {
 SEASTAR_TEST_CASE(test_scan_with_partial_partitions) {
     return seastar::async([] {
         simple_schema s;
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        dirty_memory_manager dmm;
+        dirty_memory_manager dmm(*logalloc_tracker);
         auto cache_mt = make_lw_shared<replica::memtable>(s.schema(), dmm);
 
         auto pkeys = s.make_pkeys(3);
@@ -1942,7 +1977,7 @@ SEASTAR_TEST_CASE(test_scan_with_partial_partitions) {
         s.add_row(m3, s.make_ckey(2), "v10");
         cache_mt->apply(m3);
 
-        cache_tracker tracker;
+        cache_tracker tracker(*logalloc_tracker);
         row_cache cache(s.schema(), snapshot_source_from_snapshot(cache_mt->as_data_source()), tracker);
 
         // partially populate all up to middle of m1
@@ -1986,8 +2021,9 @@ SEASTAR_TEST_CASE(test_scan_with_partial_partitions) {
 SEASTAR_TEST_CASE(test_cache_populates_partition_tombstone) {
     return seastar::async([] {
         simple_schema s;
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        dirty_memory_manager dmm;
+        dirty_memory_manager dmm(*logalloc_tracker);
         auto cache_mt = make_lw_shared<replica::memtable>(s.schema(), dmm);
 
         auto pkeys = s.make_pkeys(2);
@@ -2002,7 +2038,7 @@ SEASTAR_TEST_CASE(test_cache_populates_partition_tombstone) {
         m2.partition().apply(tombstone(s.new_timestamp(), gc_clock::now()));
         cache_mt->apply(m2);
 
-        cache_tracker tracker;
+        cache_tracker tracker(*logalloc_tracker);
         row_cache cache(s.schema(), snapshot_source_from_snapshot(cache_mt->as_data_source()), tracker);
 
         // singular range case
@@ -2055,8 +2091,9 @@ static query::partition_slice make_legacy_reversed(schema_ptr table_schema, quer
 SEASTAR_TEST_CASE(test_scan_with_partial_partitions_reversed) {
     return seastar::async([] {
         simple_schema s;
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        dirty_memory_manager dmm;
+        dirty_memory_manager dmm(*logalloc_tracker);
         auto cache_mt = make_lw_shared<replica::memtable>(s.schema(), dmm);
 
         auto pkeys = s.make_pkeys(3);
@@ -2084,7 +2121,7 @@ SEASTAR_TEST_CASE(test_scan_with_partial_partitions_reversed) {
         s.add_row(m3, s.make_ckey(2), "v10");
         cache_mt->apply(m3);
 
-        cache_tracker tracker;
+        cache_tracker tracker(*logalloc_tracker);
         row_cache cache(s.schema(), snapshot_source_from_snapshot(cache_mt->as_data_source()), tracker);
 
         // partially populate middle of m1, clustering range: [-inf, 1]
@@ -2182,9 +2219,10 @@ SEASTAR_TEST_CASE(test_scan_with_partial_partitions_reversed) {
 SEASTAR_TEST_CASE(test_tombstone_merging_in_partial_partition) {
     return seastar::async([] {
         simple_schema s;
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        cache_tracker tracker;
-        memtable_snapshot_source underlying(s.schema());
+        cache_tracker tracker(*logalloc_tracker);
+        memtable_snapshot_source underlying(s.schema(), *logalloc_tracker);
 
         auto pk = s.make_pkey(0);
         auto pr = dht::partition_range::make_singular(pk);
@@ -2263,8 +2301,9 @@ SEASTAR_TEST_CASE(test_readers_get_all_data_after_eviction) {
     return seastar::async([] {
         simple_schema table;
         schema_ptr s = table.schema();
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        memtable_snapshot_source underlying(s);
+        memtable_snapshot_source underlying(s, *logalloc_tracker);
 
         auto m1 = table.new_mutation("pk");
         table.add_row(m1, table.make_ckey(3), "v3");
@@ -2275,7 +2314,7 @@ SEASTAR_TEST_CASE(test_readers_get_all_data_after_eviction) {
 
         underlying.apply(m1);
 
-        cache_tracker tracker;
+        cache_tracker tracker(*logalloc_tracker);
         row_cache cache(s, snapshot_source([&] { return underlying(); }), tracker);
         cache.populate(m1);
 
@@ -2317,9 +2356,10 @@ SEASTAR_TEST_CASE(test_readers_get_all_data_after_eviction) {
 SEASTAR_TEST_CASE(test_single_tombstone_with_small_buffer) {
     return seastar::async([] {
         simple_schema s;
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        cache_tracker tracker;
-        memtable_snapshot_source underlying(s.schema());
+        cache_tracker tracker(*logalloc_tracker);
+        memtable_snapshot_source underlying(s.schema(), *logalloc_tracker);
 
         auto pk = s.make_pkey(0);
         auto pr = dht::partition_range::make_singular(pk);
@@ -2350,9 +2390,10 @@ SEASTAR_TEST_CASE(test_single_tombstone_with_small_buffer) {
 SEASTAR_TEST_CASE(test_tombstone_and_row_with_small_buffer) {
     return seastar::async([] {
         simple_schema s;
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        cache_tracker tracker;
-        memtable_snapshot_source underlying(s.schema());
+        cache_tracker tracker(*logalloc_tracker);
+        memtable_snapshot_source underlying(s.schema(), *logalloc_tracker);
 
         auto pk = s.make_pkey(0);
         auto pr = dht::partition_range::make_singular(pk);
@@ -2390,9 +2431,10 @@ SEASTAR_TEST_CASE(test_tombstone_and_row_with_small_buffer) {
 SEASTAR_TEST_CASE(test_tombstones_are_not_missed_when_range_is_invalidated) {
     return seastar::async([] {
         simple_schema s;
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        cache_tracker tracker;
-        memtable_snapshot_source underlying(s.schema());
+        cache_tracker tracker(*logalloc_tracker);
+        memtable_snapshot_source underlying(s.schema(), *logalloc_tracker);
 
         auto pk = s.make_pkey(0);
         auto pr = dht::partition_range::make_singular(pk);
@@ -2486,8 +2528,9 @@ SEASTAR_TEST_CASE(test_tombstones_are_not_missed_when_range_is_invalidated) {
 SEASTAR_TEST_CASE(test_exception_safety_of_update_from_memtable) {
     return seastar::async([] {
         simple_schema s;
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        cache_tracker tracker;
+        cache_tracker tracker(*logalloc_tracker);
 
         // keys[0] - in underlying, in cache
         // keys[1] - not in underlying, continuous in cache
@@ -2513,7 +2556,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_update_from_memtable) {
         orig.push_back(muts[3]);
         orig.push_back(muts[4]);
 
-        memtable_snapshot_source underlying(s.schema());
+        memtable_snapshot_source underlying(s.schema(), *logalloc_tracker);
         memory::with_allocation_failures([&] {
             for (auto&& m : orig) {
                 memory::scoped_critical_alloc_section dfg;
@@ -2591,11 +2634,12 @@ SEASTAR_TEST_CASE(test_exception_safety_of_update_from_memtable) {
 
 SEASTAR_TEST_CASE(test_exception_safety_of_reads) {
     return seastar::async([] {
-        cache_tracker tracker;
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        cache_tracker tracker(*logalloc_tracker);
         random_mutation_generator gen(random_mutation_generator::generate_counters::no);
         auto s = gen.schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        memtable_snapshot_source underlying(s);
+        memtable_snapshot_source underlying(s, *logalloc_tracker);
 
         auto mut = make_fully_continuous(gen());
         underlying.apply(mut);
@@ -2648,9 +2692,10 @@ SEASTAR_TEST_CASE(test_exception_safety_of_reads) {
 SEASTAR_TEST_CASE(test_exception_safety_of_transitioning_from_underlying_read_to_read_from_cache) {
     return seastar::async([] {
         simple_schema s;
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        cache_tracker tracker;
-        memtable_snapshot_source underlying(s.schema());
+        cache_tracker tracker(*logalloc_tracker);
+        memtable_snapshot_source underlying(s.schema(), *logalloc_tracker);
 
         auto pk = s.make_pkey(0);
         auto pr = dht::partition_range::make_singular(pk);
@@ -2690,9 +2735,10 @@ SEASTAR_TEST_CASE(test_exception_safety_of_transitioning_from_underlying_read_to
 SEASTAR_TEST_CASE(test_exception_safety_of_partition_scan) {
     return seastar::async([] {
         simple_schema s;
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        cache_tracker tracker;
-        memtable_snapshot_source underlying(s.schema());
+        cache_tracker tracker(*logalloc_tracker);
+        memtable_snapshot_source underlying(s.schema(), *logalloc_tracker);
 
         auto pkeys = s.make_pkeys(7);
         std::vector<mutation> muts;
@@ -2724,9 +2770,10 @@ SEASTAR_TEST_CASE(test_exception_safety_of_partition_scan) {
 SEASTAR_TEST_CASE(test_concurrent_population_before_latest_version_iterator) {
     return seastar::async([] {
         simple_schema s;
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        cache_tracker tracker;
-        memtable_snapshot_source underlying(s.schema());
+        cache_tracker tracker(*logalloc_tracker);
+        memtable_snapshot_source underlying(s.schema(), *logalloc_tracker);
 
         auto pk = s.make_pkey(0);
         auto pr = dht::partition_range::make_singular(pk);
@@ -2813,9 +2860,10 @@ SEASTAR_TEST_CASE(test_concurrent_population_before_latest_version_iterator) {
 SEASTAR_TEST_CASE(test_concurrent_populating_partition_range_reads) {
     return seastar::async([] {
         simple_schema s;
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        cache_tracker tracker;
-        memtable_snapshot_source underlying(s.schema());
+        cache_tracker tracker(*logalloc_tracker);
+        memtable_snapshot_source underlying(s.schema(), *logalloc_tracker);
 
         auto keys = s.make_pkeys(10);
         std::vector<mutation> muts;
@@ -2884,9 +2932,10 @@ static void check_continuous(row_cache& cache, dht::partition_range& pr, const q
 SEASTAR_TEST_CASE(test_random_row_population) {
     return seastar::async([] {
         simple_schema s;
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        cache_tracker tracker;
-        memtable_snapshot_source underlying(s.schema());
+        cache_tracker tracker(*logalloc_tracker);
+        memtable_snapshot_source underlying(s.schema(), *logalloc_tracker);
 
         auto pk = s.make_pkey(0);
         auto pr = dht::partition_range::make_singular(pk);
@@ -2969,14 +3018,15 @@ SEASTAR_TEST_CASE(test_random_row_population) {
 
 SEASTAR_TEST_CASE(test_no_misses_when_read_is_repeated) {
     return seastar::async([] {
+        tests::logalloc::sharded_tracker logalloc_tracker;
         random_mutation_generator gen(random_mutation_generator::generate_counters::no);
-        memtable_snapshot_source underlying(gen.schema());
+        memtable_snapshot_source underlying(gen.schema(), *logalloc_tracker);
 
         auto m1 = gen();
         underlying.apply(m1);
         auto pr = dht::partition_range::make_singular(m1.decorated_key());
 
-        cache_tracker tracker;
+        cache_tracker tracker(*logalloc_tracker);
         row_cache cache(gen.schema(), snapshot_source([&] { return underlying(); }), tracker);
 
         for (auto n_ranges : {1, 2, 4}) {
@@ -2999,9 +3049,10 @@ SEASTAR_TEST_CASE(test_no_misses_when_read_is_repeated) {
 SEASTAR_TEST_CASE(test_continuity_is_populated_when_read_overlaps_with_older_version) {
     return seastar::async([] {
         simple_schema s;
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        cache_tracker tracker;
-        memtable_snapshot_source underlying(s.schema());
+        cache_tracker tracker(*logalloc_tracker);
+        memtable_snapshot_source underlying(s.schema(), *logalloc_tracker);
 
         auto pk = s.make_pkey(0);
         auto pr = dht::partition_range::make_singular(pk);
@@ -3121,10 +3172,11 @@ SEASTAR_TEST_CASE(test_continuity_population_with_multicolumn_clustering_key) {
             .with_column("ck2", int32_type, column_kind::clustering_key)
             .with_column("v", int32_type)
             .build();
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
-        cache_tracker tracker;
-        memtable_snapshot_source underlying(s);
+        cache_tracker tracker(*logalloc_tracker);
+        memtable_snapshot_source underlying(s, *logalloc_tracker);
 
         auto pk = dht::decorate_key(*s,
             partition_key::from_single_value(*s, serialized(3)));
@@ -3208,9 +3260,10 @@ SEASTAR_TEST_CASE(test_continuity_population_with_multicolumn_clustering_key) {
 SEASTAR_TEST_CASE(test_continuity_is_populated_for_single_row_reads) {
     return seastar::async([] {
         simple_schema s;
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        cache_tracker tracker;
-        memtable_snapshot_source underlying(s.schema());
+        cache_tracker tracker(*logalloc_tracker);
+        memtable_snapshot_source underlying(s.schema(), *logalloc_tracker);
 
         auto pk = s.make_pkey(0);
         auto pr = dht::partition_range::make_singular(pk);
@@ -3253,9 +3306,10 @@ SEASTAR_TEST_CASE(test_continuity_is_populated_for_single_row_reads) {
 SEASTAR_TEST_CASE(test_concurrent_setting_of_continuity_on_read_upper_bound) {
     return seastar::async([] {
         simple_schema s;
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        cache_tracker tracker;
-        memtable_snapshot_source underlying(s.schema());
+        cache_tracker tracker(*logalloc_tracker);
+        memtable_snapshot_source underlying(s.schema(), *logalloc_tracker);
 
         auto pk = s.make_pkey(0);
         auto pr = dht::partition_range::make_singular(pk);
@@ -3318,9 +3372,10 @@ SEASTAR_TEST_CASE(test_concurrent_setting_of_continuity_on_read_upper_bound) {
 SEASTAR_TEST_CASE(test_tombstone_merging_of_overlapping_tombstones_in_many_versions) {
     return seastar::async([] {
         simple_schema s;
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        cache_tracker tracker;
-        memtable_snapshot_source underlying(s.schema());
+        cache_tracker tracker(*logalloc_tracker);
+        memtable_snapshot_source underlying(s.schema(), *logalloc_tracker);
 
         auto pk = s.make_pkey(0);
         auto pr = dht::partition_range::make_singular(pk);
@@ -3362,7 +3417,8 @@ SEASTAR_TEST_CASE(test_tombstone_merging_of_overlapping_tombstones_in_many_versi
 SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
     return seastar::async([] {
         random_mutation_generator gen(random_mutation_generator::generate_counters::no);
-        memtable_snapshot_source underlying(gen.schema());
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        memtable_snapshot_source underlying(gen.schema(), *logalloc_tracker);
         schema_ptr s = gen.schema();
         schema_ptr rev_s = s->make_reversed();
         tests::reader_concurrency_semaphore_wrapper semaphore;
@@ -3375,7 +3431,7 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
         underlying.apply(m0);
         versions.emplace_back(m0);
 
-        cache_tracker tracker;
+        cache_tracker tracker(*logalloc_tracker);
         row_cache cache(s, snapshot_source([&] { return underlying(); }), tracker);
 
         auto pr = dht::partition_range::make_singular(m0.decorated_key());
@@ -3487,10 +3543,11 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
 SEASTAR_TEST_CASE(test_alter_then_preempted_update_then_memtable_read) {
     return seastar::async([] {
         simple_schema ss;
-        memtable_snapshot_source underlying(ss.schema());
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        memtable_snapshot_source underlying(ss.schema(), *logalloc_tracker);
         schema_ptr s = ss.schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        dirty_memory_manager dmm;
+        dirty_memory_manager dmm(*logalloc_tracker);
 
         auto pk = ss.make_pkey("pk");
         mutation m(s, pk);
@@ -3503,7 +3560,7 @@ SEASTAR_TEST_CASE(test_alter_then_preempted_update_then_memtable_read) {
 
         underlying.apply(m);
 
-        cache_tracker tracker;
+        cache_tracker tracker(*logalloc_tracker);
         row_cache cache(s, snapshot_source([&] { return underlying(); }), tracker);
 
         auto pr = dht::partition_range::make_singular(m.decorated_key());
@@ -3553,16 +3610,17 @@ SEASTAR_TEST_CASE(test_cache_update_and_eviction_preserves_monotonicity_of_memta
     return seastar::async([] {
         random_mutation_generator gen(random_mutation_generator::generate_counters::no);
         auto s = gen.schema();
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        dirty_memory_manager dmm;
+        dirty_memory_manager dmm(*logalloc_tracker);
 
         mutation m1 = gen();
         mutation m2 = gen();
         m1.partition().make_fully_continuous();
         m2.partition().make_fully_continuous();
 
-        cache_tracker tracker;
-        memtable_snapshot_source underlying(s);
+        cache_tracker tracker(*logalloc_tracker);
+        memtable_snapshot_source underlying(s, *logalloc_tracker);
         row_cache cache(s, snapshot_source([&] { return underlying(); }), tracker, is_continuous::yes);
 
         lw_shared_ptr<replica::memtable> mt = make_lw_shared<replica::memtable>(s, dmm);
@@ -3603,15 +3661,16 @@ SEASTAR_TEST_CASE(test_cache_update_and_eviction_preserves_monotonicity_of_memta
 
 SEASTAR_TEST_CASE(test_hash_is_cached) {
     return seastar::async([] {
-        cache_tracker tracker;
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        cache_tracker tracker(*logalloc_tracker);
         random_mutation_generator gen(random_mutation_generator::generate_counters::no);
 
         auto s = make_schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        dirty_memory_manager dmm;
+        dirty_memory_manager dmm(*logalloc_tracker);
 
         auto mut = make_new_mutation(s);
-        memtable_snapshot_source underlying(s);
+        memtable_snapshot_source underlying(s, *logalloc_tracker);
         underlying.apply(mut);
 
         row_cache cache(s, snapshot_source([&] { return underlying(); }), tracker);
@@ -3677,7 +3736,8 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
 SEASTAR_TEST_CASE(test_random_population_with_many_versions) {
     return seastar::async([] {
         random_mutation_generator gen(random_mutation_generator::generate_counters::no);
-        memtable_snapshot_source underlying(gen.schema());
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        memtable_snapshot_source underlying(gen.schema(), *logalloc_tracker);
         schema_ptr s = gen.schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
@@ -3689,7 +3749,7 @@ SEASTAR_TEST_CASE(test_random_population_with_many_versions) {
         m2.partition().make_fully_continuous();
         m3.partition().make_fully_continuous();
 
-        cache_tracker tracker;
+        cache_tracker tracker(*logalloc_tracker);
         row_cache cache(s, snapshot_source([&] { return underlying(); }), tracker);
 
         auto make_reader = [&] () {
@@ -3736,12 +3796,13 @@ SEASTAR_TEST_CASE(test_static_row_is_kept_alive_by_reads_with_no_clustering_rang
     return seastar::async([] {
         simple_schema table;
         auto s = table.schema();
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        dirty_memory_manager dmm;
+        dirty_memory_manager dmm(*logalloc_tracker);
 
         auto mt = make_lw_shared<replica::memtable>(s, dmm);
 
-        cache_tracker tracker;
+        cache_tracker tracker(*logalloc_tracker);
         row_cache cache(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
 
         auto keys = table.make_pkeys(3);
@@ -3778,12 +3839,13 @@ SEASTAR_TEST_CASE(test_static_row_is_kept_alive_by_reads_with_no_clustering_rang
 SEASTAR_TEST_CASE(test_eviction_after_old_snapshot_touches_overriden_rows_keeps_later_snapshot_consistent) {
     return seastar::async([] {
         simple_schema table;
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto s = table.schema();
 
         {
-            memtable_snapshot_source underlying(s);
-            cache_tracker tracker;
+            memtable_snapshot_source underlying(s, *logalloc_tracker);
+            cache_tracker tracker(*logalloc_tracker);
             row_cache cache(s, snapshot_source([&] { return underlying(); }), tracker);
 
             auto pk = table.make_pkey();
@@ -3823,8 +3885,8 @@ SEASTAR_TEST_CASE(test_eviction_after_old_snapshot_touches_overriden_rows_keeps_
             assert_that(std::move(rd2)).produces(m1 + m2);
         }
         {
-            memtable_snapshot_source underlying(s);
-            cache_tracker tracker;
+            memtable_snapshot_source underlying(s, *logalloc_tracker);
+            cache_tracker tracker(*logalloc_tracker);
             row_cache cache(s, snapshot_source([&] { return underlying(); }), tracker);
 
             auto pk = table.make_pkey();
@@ -3868,9 +3930,10 @@ SEASTAR_TEST_CASE(test_eviction_after_old_snapshot_touches_overriden_rows_keeps_
 SEASTAR_TEST_CASE(test_reading_progress_with_small_buffer_and_invalidation) {
     return seastar::async([] {
         simple_schema s;
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        cache_tracker tracker;
-        memtable_snapshot_source underlying(s.schema());
+        cache_tracker tracker(*logalloc_tracker);
+        memtable_snapshot_source underlying(s.schema(), *logalloc_tracker);
         row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
 
         auto m1 = s.new_mutation("pk");
@@ -3909,8 +3972,9 @@ SEASTAR_TEST_CASE(test_reading_progress_with_small_buffer_and_invalidation) {
 SEASTAR_TEST_CASE(test_scans_erase_dummies) {
     return seastar::async([] {
         simple_schema s;
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        dirty_memory_manager dmm;
+        dirty_memory_manager dmm(*logalloc_tracker);
         auto cache_mt = make_lw_shared<replica::memtable>(s.schema(), dmm);
 
         auto pkey = s.make_pkey("pk");
@@ -3920,7 +3984,7 @@ SEASTAR_TEST_CASE(test_scans_erase_dummies) {
         s.add_row(m1, s.make_ckey(0), "v1");
         cache_mt->apply(m1);
 
-        cache_tracker tracker;
+        cache_tracker tracker(*logalloc_tracker);
         row_cache cache(s.schema(), snapshot_source_from_snapshot(cache_mt->as_data_source()), tracker);
 
         auto pr = dht::partition_range::make_singular(pkey);

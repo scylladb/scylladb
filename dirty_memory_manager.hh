@@ -139,10 +139,10 @@ public:
     // We then set the soft limit to 80 % of the virtual dirty hard limit, which is equal to 40 % of
     // the user-supplied threshold.
     dirty_memory_manager(replica::database& db, size_t threshold, double soft_limit, scheduling_group deferred_work_sg);
-    dirty_memory_manager() : logalloc::region_group_reclaimer()
+    explicit dirty_memory_manager(logalloc::tracker& tracker) : logalloc::region_group_reclaimer()
         , _db(nullptr)
-        , _real_region_group("memtable", _real_dirty_reclaimer)
-        , _virtual_region_group("memtable (virtual)", &_real_region_group, *this)
+        , _real_region_group(tracker, "memtable", _real_dirty_reclaimer)
+        , _virtual_region_group(tracker, "memtable (virtual)", &_real_region_group, *this)
         , _flush_serializer(1)
         , _waiting_flush(make_ready_future<>()) {}
 

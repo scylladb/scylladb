@@ -46,6 +46,7 @@
 #include "test/lib/random_utils.hh"
 #include "test/lib/simple_schema.hh"
 #include "test/lib/log.hh"
+#include "test/lib/logalloc.hh"
 #include "types/map.hh"
 #include "types/list.hh"
 #include "types/set.hh"
@@ -90,7 +91,7 @@ static mutation_partition get_partition(reader_permit permit, replica::memtable&
 
 future<>
 with_column_family(schema_ptr s, replica::column_family::config cfg, sstables::test_env& env, noncopyable_function<future<> (replica::column_family&)> func) {
-    auto tracker = make_lw_shared<cache_tracker>();
+    auto tracker = make_lw_shared<cache_tracker>(env.logalloc_tracker());
     auto dir = tmpdir();
     cfg.datadir = dir.path().string();
     auto cm = make_lw_shared<compaction_manager>(compaction_manager::for_testing_tag{}, env.get_dirty_memory_manager());
@@ -105,7 +106,8 @@ with_column_family(schema_ptr s, replica::column_family::config cfg, sstables::t
 SEASTAR_TEST_CASE(test_mutation_is_applied) {
     return seastar::async([] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        dirty_memory_manager dmm;
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        dirty_memory_manager dmm(*logalloc_tracker);
 
         auto s = make_shared_schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type);
@@ -210,7 +212,8 @@ collection_mutation_description make_collection_mutation(tombstone t, bytes key1
 SEASTAR_TEST_CASE(test_map_mutations) {
     return seastar::async([] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        dirty_memory_manager dmm;
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        dirty_memory_manager dmm(*logalloc_tracker);
 
         auto my_map_type = map_type_impl::get_instance(int32_type, utf8_type, true);
         auto s = make_shared_schema({}, some_keyspace, some_column_family,
@@ -249,7 +252,8 @@ SEASTAR_TEST_CASE(test_map_mutations) {
 SEASTAR_TEST_CASE(test_set_mutations) {
     return seastar::async([] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        dirty_memory_manager dmm;
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        dirty_memory_manager dmm(*logalloc_tracker);
 
         auto my_set_type = set_type_impl::get_instance(int32_type, true);
         auto s = make_shared_schema({}, some_keyspace, some_column_family,
@@ -288,7 +292,8 @@ SEASTAR_TEST_CASE(test_set_mutations) {
 SEASTAR_TEST_CASE(test_list_mutations) {
     return seastar::async([] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        dirty_memory_manager dmm;
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        dirty_memory_manager dmm(*logalloc_tracker);
 
         auto my_list_type = list_type_impl::get_instance(int32_type, true);
         auto s = make_shared_schema({}, some_keyspace, some_column_family,
@@ -327,7 +332,8 @@ SEASTAR_TEST_CASE(test_list_mutations) {
 
 SEASTAR_THREAD_TEST_CASE(test_udt_mutations) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
-    dirty_memory_manager dmm;
+    tests::logalloc::sharded_tracker logalloc_tracker;
+    dirty_memory_manager dmm(*logalloc_tracker);
 
     // (a int, b text, c long, d text)
     auto ut = user_type_impl::get_instance("ks", to_bytes("ut"),
@@ -399,7 +405,8 @@ SEASTAR_THREAD_TEST_CASE(test_udt_mutations) {
 // there are no allocations larger than our usual 128KB buffer size.
 SEASTAR_THREAD_TEST_CASE(test_large_collection_allocation) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
-    dirty_memory_manager dmm;
+    tests::logalloc::sharded_tracker logalloc_tracker;
+    dirty_memory_manager dmm(*logalloc_tracker);
 
     const auto key_type = int32_type;
     const auto value_type = utf8_type;
@@ -1161,7 +1168,8 @@ SEASTAR_TEST_CASE(test_mutation_diff) {
 SEASTAR_TEST_CASE(test_large_blobs) {
     return seastar::async([] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        dirty_memory_manager dmm;
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        dirty_memory_manager dmm(*logalloc_tracker);
 
         auto s = make_shared_schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {}, {}, {{"s1", bytes_type}}, utf8_type);

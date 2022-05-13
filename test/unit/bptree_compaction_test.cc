@@ -19,6 +19,7 @@ constexpr int TEST_NODE_SIZE = 7;
 #include "utils/bptree.hh"
 #include "bptree_validation.hh"
 #include "collection_stress.hh"
+#include "test/lib/logalloc.hh"
 
 using namespace bplus;
 using namespace seastar;
@@ -51,10 +52,13 @@ int main(int argc, char **argv) {
         auto verb = app.configuration()["verb"].as<bool>();
 
         return seastar::async([count, iter, verb] {
+            tests::logalloc::sharded_tracker logalloc_tracker;
+
             stress_config cfg;
             cfg.count = count;
             cfg.iters = iter;
             cfg.verb = verb;
+            cfg.logalloc_tracker = &*logalloc_tracker;
 
             tree_pointer<test_tree> t(test_key_compare{});
             test_validator tv;

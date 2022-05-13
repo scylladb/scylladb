@@ -12,6 +12,7 @@
 #include "repair/row.hh"
 #include "repair/writer.hh"
 #include "repair/row_level.hh"
+#include "test/lib/logalloc.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
@@ -117,7 +118,8 @@ SEASTAR_TEST_CASE(flush_repair_rows_on_wire_to_sstable) {
     // to disk, they would produce the original stream.
     return seastar::async([&] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        dirty_memory_manager dmm;
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        dirty_memory_manager dmm(*logalloc_tracker);
         reader_permit permit = semaphore.make_permit();
         random_mutation_generator gen{random_mutation_generator::generate_counters::no};
         schema_ptr s = gen.schema();

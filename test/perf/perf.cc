@@ -85,4 +85,14 @@ reader_permit reader_concurrency_semaphore_wrapper::make_permit() {
     return _semaphore->make_tracking_only_permit(nullptr, "perf", db::no_timeout);
 }
 
+logalloc_tracker::logalloc_tracker()
+{ }
+
+logalloc_tracker::~logalloc_tracker() {
+}
+
+logalloc::tracker& logalloc_tracker::tracker() {
+    return logalloc::shard_tracker();
+}
+
 } // namespace perf

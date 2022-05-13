@@ -78,6 +78,7 @@ private:
 
 private:
     std::optional<params> _params;
+    logalloc::tracker& _tracker;
     reader_concurrency_semaphore& _sem;
     const reader_resources _initial_res;
     utils::chunked_vector<data_point> _data_points;
@@ -85,7 +86,7 @@ private:
 private:
     void capture_snapshot() {
         const auto mem_stats = memory::stats();
-        const auto lsa_stats = logalloc::shard_tracker().region_occupancy();
+        const auto lsa_stats = _tracker.region_occupancy();
         const auto res = _sem.available_resources();
 
         data_point dp;
@@ -108,8 +109,9 @@ public:
             app_config["stats-file"].as<sstring>(),
             std::chrono::milliseconds(app_config["stats-period-ms"].as<unsigned>())};
     }
-    stats_collector(reader_concurrency_semaphore& sem, std::optional<params> p)
+    stats_collector(logalloc::tracker& tracker, reader_concurrency_semaphore& sem, std::optional<params> p)
         : _params(std::move(p))
+        , _tracker(tracker)
         , _sem(sem)
         , _initial_res(_sem.available_resources()) {
     }
@@ -246,7 +248,8 @@ void test_main_thread(cql_test_env& env) {
     testlog.info("Live sstables: {}", tab.get_stats().live_sstable_count);
 
     testlog.info("Preparing dummy cache");
-    memtable_snapshot_source underlying(s);
+    auto& logalloc_tracker = env.local_db().logalloc_tracker();
+    memtable_snapshot_source underlying(s, logalloc_tracker);
     cache_tracker& tr = env.local_db().row_cache_tracker();
     row_cache c(s, snapshot_source([&] { return underlying(); }), tr, is_continuous::yes);
     auto prev_evictions = tr.get_stats().row_evictions;
@@ -257,13 +260,13 @@ void test_main_thread(cql_test_env& env) {
         thread::maybe_yield();
     }
 
-    auto prev_occupancy = logalloc::shard_tracker().occupancy();
+    auto prev_occupancy = env.local_db().logalloc_tracker().occupancy();
     testlog.info("Occupancy before: {}", prev_occupancy);
 
     auto& sem = env.local_db().get_reader_concurrency_semaphore();
 
     testlog.info("Reading");
-    stats_collector sc(sem, stats_collector_params);
+    stats_collector sc(env.local_db().logalloc_tracker(), sem, stats_collector_params);
     try {
         auto _ = sc.collect();
         memory::set_heap_profiling_enabled(true);
@@ -277,7 +280,7 @@ void test_main_thread(cql_test_env& env) {
     memory::set_heap_profiling_enabled(false);
     sc.write_stats().get();
 
-    auto occupancy = logalloc::shard_tracker().occupancy();
+    auto occupancy = env.local_db().logalloc_tracker().occupancy();
     testlog.info("Occupancy after: {}", occupancy);
     testlog.info("Max demand: {}", prev_occupancy.total_space() - occupancy.total_space());
     testlog.info("Max sstables per read: {}", tab.get_stats().estimated_sstable_per_read.max());

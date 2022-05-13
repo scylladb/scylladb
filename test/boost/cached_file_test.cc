@@ -18,6 +18,7 @@
 
 #include "test/lib/random_utils.hh"
 #include "test/lib/log.hh"
+#include "test/lib/logalloc.hh"
 #include "test/lib/tmpdir.hh"
 
 #include "utils/cached_file.hh"
@@ -101,7 +102,8 @@ SEASTAR_THREAD_TEST_CASE(test_file_wrapper) {
     auto page_size = cached_file::page_size;
     cached_file::metrics metrics;
     test_file tf = make_test_file(page_size * 3);
-    logalloc::region region;
+    tests::logalloc::sharded_tracker logalloc_tracker;
+    logalloc::region region(*logalloc_tracker);
     cached_file cf(tf.f, metrics, cf_lru, region, page_size * 3);
     seastar::file f = make_cached_seastar_file(cf);
 
@@ -124,7 +126,8 @@ SEASTAR_THREAD_TEST_CASE(test_concurrent_population) {
     auto page_size = cached_file::page_size;
     cached_file::metrics metrics;
     test_file tf = make_test_file(page_size * 3);
-    logalloc::region region;
+    tests::logalloc::sharded_tracker logalloc_tracker;
+    logalloc::region region(*logalloc_tracker);
     cached_file cf(tf.f, metrics, cf_lru, region, page_size * 3);
     seastar::file f = make_cached_seastar_file(cf);
 
@@ -146,10 +149,11 @@ SEASTAR_THREAD_TEST_CASE(test_concurrent_population) {
 
 SEASTAR_THREAD_TEST_CASE(test_reading_from_small_file) {
     test_file tf = make_test_file(1024);
+    tests::logalloc::sharded_tracker logalloc_tracker;
 
     {
         cached_file::metrics metrics;
-        logalloc::region region;
+        logalloc::region region(*logalloc_tracker);
         cached_file cf(tf.f, metrics, cf_lru, region, tf.contents.size());
 
         {
@@ -189,10 +193,11 @@ SEASTAR_THREAD_TEST_CASE(test_eviction_via_lru) {
     auto page = cached_file::page_size;
     auto file_size = page * 2 + 12;
     test_file tf = make_test_file(file_size);
+    tests::logalloc::sharded_tracker logalloc_tracker;
 
     {
         cached_file::metrics metrics;
-        logalloc::region region;
+        logalloc::region region(*logalloc_tracker);
         cached_file cf(tf.f, metrics, cf_lru, region, tf.contents.size());
 
         {
@@ -304,7 +309,8 @@ SEASTAR_THREAD_TEST_CASE(test_stress_eviction) {
     auto cached_size = 4'000'000;
 
     cached_file::metrics metrics;
-    logalloc::region region;
+    tests::logalloc::sharded_tracker logalloc_tracker(memory::stats().total_memory(), 0);
+    logalloc::region region(*logalloc_tracker);
 
     auto f = file(make_shared<garbage_file_impl>());
     cached_file cf(f, metrics, cf_lru, region, file_size);
@@ -349,7 +355,8 @@ SEASTAR_THREAD_TEST_CASE(test_invalidation) {
     test_file tf = make_test_file(page_size * 2);
 
     cached_file::metrics metrics;
-    logalloc::region region;
+    tests::logalloc::sharded_tracker logalloc_tracker;
+    logalloc::region region(*logalloc_tracker);
     cached_file cf(tf.f, metrics, cf_lru, region, page_size * 2);
 
     // Reads one page, half of the first page and half of the second page.

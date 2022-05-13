@@ -18,6 +18,7 @@
 #include <boost/range/algorithm/sort.hpp>
 #include "sstables/version.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
+#include "test/lib/logalloc.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include <seastar/core/reactor.hh>
 #include <seastar/core/seastar.hh>
@@ -57,7 +58,8 @@ std::vector<sstring> do_make_keys(unsigned n, const schema_ptr& s, size_t min_ke
 
 sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, std::vector<mutation> muts) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
-    dirty_memory_manager dmm;
+    tests::logalloc::sharded_tracker logalloc_tracker;
+    dirty_memory_manager dmm(*logalloc_tracker);
 
     auto sst = sst_factory();
     schema_ptr s = muts[0].schema();

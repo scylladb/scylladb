@@ -19,6 +19,7 @@
 #include "utils/compact-radix-tree.hh"
 #include "radix_tree_printer.hh"
 #include "collection_stress.hh"
+#include "test/lib/logalloc.hh"
 
 using namespace compact_radix_tree;
 using namespace seastar;
@@ -62,6 +63,8 @@ int main(int argc, char **argv) {
         auto verb = app.configuration()["verb"].as<bool>();
 
         return seastar::async([count, iter, verb] {
+            tests::logalloc::sharded_tracker logalloc_tracker;
+
             tree_pointer<test_tree> t;
 
             stress_config cfg;
@@ -69,6 +72,7 @@ int main(int argc, char **argv) {
             cfg.iters = 1;
             cfg.keys = "rand";
             cfg.verb = verb;
+            cfg.logalloc_tracker = &*logalloc_tracker;
 
             unsigned col_size = 0;
 

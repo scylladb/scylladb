@@ -18,6 +18,7 @@
 #define BOOST_CHECK_NO_THROW(x) (void)(x)
 
 #include "test/perf/perf_sstable.hh"
+#include "test/lib/logalloc.hh"
 
 using namespace sstables;
 
@@ -108,7 +109,7 @@ int main(int argc, char** argv) {
         }
         cfg.compaction_strategy = sstables::compaction_strategy::type(app.configuration()["compaction-strategy"].as<sstring>());
         cfg.timestamp_range = app.configuration()["timestamp-range"].as<api::timestamp_type>();
-        return test->start(std::move(cfg)).then([mode, dir, test] {
+        return test->start(sharded_parameter([] { return std::ref(logalloc::shard_tracker()); }), std::move(cfg)).then([mode, dir, test] {
             engine().at_exit([test] { return test->stop(); });
             if ((mode == test_modes::index_read) ||
                (mode == test_modes::sequential_read)) {

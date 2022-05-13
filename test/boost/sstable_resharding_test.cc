@@ -18,6 +18,7 @@
 #include "test/lib/tmpdir.hh"
 #include "cell_locking.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
+#include "test/lib/logalloc.hh"
 #include "test/lib/sstable_utils.hh"
 #include "service/storage_proxy.hh"
 #include "db/config.hh"
@@ -39,9 +40,10 @@ static schema_ptr get_schema(unsigned shard_count, unsigned sharding_ignore_msb_
 }
 
 void run_sstable_resharding_test() {
-    test_env env;
+    tests::logalloc::sharded_tracker logalloc_tracker;
+    test_env env(*logalloc_tracker);
     auto close_env = defer([&] { env.stop().get(); });
-    cache_tracker tracker;
+    cache_tracker tracker(*logalloc_tracker);
   for (const auto version : writable_sstable_versions) {
     auto tmp = tmpdir();
     auto s = get_schema();

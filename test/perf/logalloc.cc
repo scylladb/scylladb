@@ -11,6 +11,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/reactor.hh>
+#include <seastar/util/defer.hh>
 
 #include <fmt/core.h>
 #include <random>
@@ -18,6 +19,7 @@
 #include "utils/allocation_strategy.hh"
 #include "utils/logalloc.hh"
 #include "log.hh"
+#include "test/lib/logalloc.hh"
 #include "test/perf/perf.hh"
 
 class piggie {
@@ -36,8 +38,8 @@ int main(int argc, char** argv) {
     app_template app;
     return app.run(argc, argv, [&app] {
         return seastar::async([&] {
-            logalloc::prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory()).get();
-            logalloc::region reg;
+            tests::logalloc::sharded_tracker logalloc_tracker;
+            logalloc::region reg(*logalloc_tracker);
 
             std::array<piggie*, nr_seq_allocations> objects;
             std::array<size_t, nr_sizes> sizes;

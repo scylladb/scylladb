@@ -10,12 +10,14 @@
 #include <seastar/core/app-template.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/thread.hh>
+#include <seastar/util/defer.hh>
 
 #include "utils/managed_bytes.hh"
 #include "utils/logalloc.hh"
 #include "utils/managed_ref.hh"
 #include "test/perf/perf.hh"
 #include "log.hh"
+#include "test/lib/logalloc.hh"
 
 #include <random>
 
@@ -38,8 +40,8 @@ int main(int argc, char** argv) {
         }
 
         return seastar::async([reg_obj_size, std_obj_size, obj_count] {
-            logalloc::region r;
-            logalloc::prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory()).get();
+            tests::logalloc::sharded_tracker logalloc_tracker;
+            logalloc::region r(*logalloc_tracker);
 
             with_allocator(r.allocator(), [&] {
                 std::deque<managed_bytes> refs;

@@ -30,6 +30,7 @@
 #include "test/lib/simple_schema.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
 #include "test/lib/log.hh"
+#include "test/lib/logalloc.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/random_schema.hh"
@@ -867,8 +868,9 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_reader_reads_in_native_reverse_order) {
 
     std::mt19937 engine(tests::random::get_int<uint32_t>());
 
+    tests::logalloc::sharded_tracker logalloc_tracker;
     tests::reader_concurrency_semaphore_wrapper semaphore;
-    dirty_memory_manager dmm;
+    dirty_memory_manager dmm(*logalloc_tracker);
     auto permit = semaphore.make_permit();
 
     auto rnd_schema_spec = tests::make_random_schema_specification(

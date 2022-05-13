@@ -20,6 +20,7 @@ constexpr int TEST_LINEAR_THRESHOLD = 19;
 #include "utils/intrusive_btree.hh"
 #include "btree_validation.hh"
 #include "collection_stress.hh"
+#include "test/lib/logalloc.hh"
 
 using namespace intrusive_b;
 using namespace seastar;
@@ -49,10 +50,13 @@ int main(int argc, char **argv) {
         auto verb = app.configuration()["verb"].as<bool>();
 
         return seastar::async([count, rep, verb] {
+            tests::logalloc::sharded_tracker logalloc_tracker;
+
             stress_config cfg;
             cfg.count = count;
             cfg.iters = rep;
             cfg.verb = verb;
+            cfg.logalloc_tracker = &*logalloc_tracker;
 
             tree_pointer<test_tree> t;
             test_validator tv;

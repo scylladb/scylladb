@@ -312,6 +312,7 @@ class memtable {
     static constexpr size_t row_count = 50;
     mutable simple_schema _schema;
     perf::reader_concurrency_semaphore_wrapper _semaphore;
+    perf::logalloc_tracker _tracker;
     dirty_memory_manager _dmm;
     reader_permit _permit;
     std::vector<dht::decorated_key> _dkeys;
@@ -322,6 +323,7 @@ class memtable {
 public:
     memtable()
         : _semaphore(__FILE__)
+        , _dmm(_tracker.tracker())
         , _permit(_semaphore.make_permit())
         , _dkeys(_schema.make_pkeys(partition_count))
         , _single_row(make_lw_shared<replica::memtable>(_schema.schema(), _dmm))

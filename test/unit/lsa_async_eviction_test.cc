@@ -16,12 +16,13 @@
 #include "utils/logalloc.hh"
 #include "utils/managed_ref.hh"
 #include "test/perf/perf.hh"
+#include "test/lib/logalloc.hh"
 #include "log.hh"
 
-void print_stats() {
+void print_stats(logalloc::tracker& tracker) {
     std::cout << "free " << memory::stats().free_memory()
-        << " used " << logalloc::shard_tracker().occupancy().used_space()
-        << " total " << logalloc::shard_tracker().occupancy().total_space()
+        << " used " << tracker.occupancy().used_space()
+        << " total " << tracker.occupancy().total_space()
         << std::endl;
 }
 
@@ -42,7 +43,8 @@ int main(int argc, char** argv) {
 
         return seastar::async([obj_size, obj_count, objects_in_batch] {
             chunked_fifo<managed_bytes> refs;
-            logalloc::region r;
+            tests::logalloc::sharded_tracker logalloc_tracker;
+            logalloc::region r(*logalloc_tracker);
 
             with_allocator(r.allocator(), [&] {
                 auto clear_refs = defer([&refs] { refs.clear(); });
@@ -72,7 +74,7 @@ int main(int argc, char** argv) {
                     ++counter;
 
                     if (counter % objects_in_batch == 0) {
-                        print_stats();
+                        print_stats(*logalloc_tracker);
                         seastar::thread::yield();
                     }
                 }

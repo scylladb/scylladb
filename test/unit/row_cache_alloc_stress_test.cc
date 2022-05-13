@@ -20,6 +20,7 @@
 #include "replica/memtable.hh"
 #include "dirty_memory_manager.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
+#include "test/lib/logalloc.hh"
 
 static
 partition_key new_key(schema_ptr s) {
@@ -57,9 +58,10 @@ int main(int argc, char** argv) {
                 .with_column("v", bytes_type, column_kind::regular_column)
                 .build();
             tests::reader_concurrency_semaphore_wrapper semaphore;
-            dirty_memory_manager dmm;
+            tests::logalloc::sharded_tracker logalloc_tracker;
+            dirty_memory_manager dmm(*logalloc_tracker);
 
-            cache_tracker tracker;
+            cache_tracker tracker(*logalloc_tracker);
             row_cache cache(s, make_empty_snapshot_source(), tracker);
 
             auto mt = make_lw_shared<replica::memtable>(s, dmm);
@@ -101,8 +103,8 @@ int main(int argc, char** argv) {
                 keys.push_back(key);
             }
 
-            auto reclaimable_memory = [] {
-                return memory::stats().free_memory() + logalloc::shard_tracker().occupancy().free_space();
+            auto reclaimable_memory = [&] {
+                return memory::stats().free_memory() + logalloc_tracker->occupancy().free_space();
             };
 
             std::cout << "memtable occupancy: " << mt->occupancy() << "\n";
@@ -221,7 +223,7 @@ int main(int argc, char** argv) {
 
                 cache.populate(m);
 
-                logalloc::shard_tracker().reclaim_all_free_segments();
+                logalloc_tracker->reclaim_all_free_segments();
 
                 {
                     logalloc::reclaim_lock _(tracker.region());

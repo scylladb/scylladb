@@ -1941,12 +1941,12 @@ region_group::region_evictable_occupancy_ascending_less_comparator::operator()(r
     return r1->evictable_occupancy().total_space() < r2->evictable_occupancy().total_space();
 }
 
-region::region()
-    : _impl(make_shared<impl>(shard_tracker(), this))
+region::region(tracker& tracker)
+    : _impl(make_shared<impl>(tracker, this))
 { }
 
 region::region(region_group& group)
-        : _impl(make_shared<impl>(shard_tracker(), this, &group)) {
+        : _impl(make_shared<impl>(group.get_tracker(), this, &group)) {
 }
 
 region_impl& region::get_impl() {
@@ -2572,9 +2572,9 @@ region_group::start_releaser(scheduling_group deferred_work_sg) {
     });
 }
 
-region_group::region_group(sstring name, region_group *parent,
+region_group::region_group(tracker& tracker, sstring name, region_group *parent,
         region_group_reclaimer& reclaimer, scheduling_group deferred_work_sg)
-    : _tracker(shard_tracker())
+    : _tracker(tracker)
     , _parent(parent)
     , _reclaimer(reclaimer)
     , _blocked_requests(on_request_expiry{std::move(name)})

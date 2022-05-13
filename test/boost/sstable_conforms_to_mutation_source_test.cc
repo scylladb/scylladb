@@ -57,7 +57,7 @@ void test_cache_population_with_range_tombstone_adjacent_to_population_range(tes
     s.delete_range(m1, s.make_ckey_range(2, 100));
     cache_mt->apply(m1);
 
-    cache_tracker tracker;
+    cache_tracker tracker(env.logalloc_tracker());
     auto ms = populate(s.schema(), std::vector<mutation>({m1}), gc_clock::now());
     row_cache cache(s.schema(), snapshot_source_from_snapshot(std::move(ms)), tracker);
 

@@ -3022,7 +3022,7 @@ static flat_mutation_reader_v2 compacted_sstable_reader(test_env& env, schema_pt
                      sstring table_name, std::vector<unsigned long> generations) {
     auto cm = make_lw_shared<compaction_manager>(compaction_manager::for_testing_tag{}, env.get_dirty_memory_manager());
     auto cl_stats = make_lw_shared<cell_locker_stats>();
-    auto tracker = make_lw_shared<cache_tracker>();
+    auto tracker = make_lw_shared<cache_tracker>(env.logalloc_tracker());
     auto cf = make_lw_shared<replica::column_family>(s, env.make_table_config(), replica::column_family::no_commitlog(), *cm, env.manager(), *cl_stats, *tracker);
     cf->mark_ready_for_writes();
     lw_shared_ptr<replica::memtable> mt = env.make_memtable(s);
@@ -5188,7 +5188,8 @@ static void test_sstable_write_large_row_f(schema_ptr s, reader_permit permit, r
     };
 
     large_row_handler handler(threshold, std::numeric_limits<uint64_t>::max(), f);
-    cache_tracker tracker;
+    tests::logalloc::sharded_tracker logalloc_tracker;
+    cache_tracker tracker(*logalloc_tracker);
     test_db_config.host_id = ::utils::make_random_uuid();
     sstables_manager manager(handler, test_db_config, test_feature_service, tracker);
     auto stop_manager = defer([&] { manager.close().get(); });
@@ -5207,7 +5208,8 @@ static void test_sstable_write_large_row_f(schema_ptr s, reader_permit permit, r
 SEASTAR_THREAD_TEST_CASE(test_sstable_write_large_row) {
     simple_schema s;
     tests::reader_concurrency_semaphore_wrapper semaphore;
-    dirty_memory_manager dmm;
+    tests::logalloc::sharded_tracker logalloc_tracker;
+    dirty_memory_manager dmm(*logalloc_tracker);
     mutation partition = s.new_mutation("pv");
     const partition_key& pk = partition.key();
     s.add_static_row(partition, "foo bar zed");
@@ -5229,7 +5231,8 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_write_large_row) {
 static void test_sstable_log_too_many_rows_f(int rows, uint64_t threshold, bool expected, sstable_version_types version) {
     simple_schema s;
     tests::reader_concurrency_semaphore_wrapper semaphore;
-    dirty_memory_manager dmm;
+    tests::logalloc::sharded_tracker logalloc_tracker;
+    dirty_memory_manager dmm(*logalloc_tracker);
     mutation p = s.new_mutation("pv");
     const partition_key& pk = p.key();
     sstring sv;
@@ -5250,7 +5253,7 @@ static void test_sstable_log_too_many_rows_f(int rows, uint64_t threshold, bool 
     };
 
     large_row_handler handler(std::numeric_limits<uint64_t>::max(), threshold, f);
-    cache_tracker tracker;
+    cache_tracker tracker(*logalloc_tracker);
     test_db_config.host_id = ::utils::make_random_uuid();
     sstables_manager manager(handler, test_db_config, test_feature_service, tracker);
     auto close_manager = defer([&] { manager.close().get(); });

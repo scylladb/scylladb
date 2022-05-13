@@ -22,6 +22,7 @@
 
 #include "test/lib/memtable_snapshot_source.hh"
 #include "test/lib/mutation_assertions.hh"
+#include "test/lib/logalloc.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 
@@ -200,7 +201,8 @@ static void check_produces_only(const dht::decorated_key& dk,
     ra.produces_end_of_stream();
 }
 
-void test_slice_single_version(mutation& underlying,
+void test_slice_single_version(logalloc::tracker& logalloc_tracker,
+                               mutation& underlying,
                                mutation& cache_mutation,
                                const query::partition_slice& slice,
                                std::deque<expected_fragment> expected_sm_fragments,
@@ -209,9 +211,9 @@ void test_slice_single_version(mutation& underlying,
     tests::reader_concurrency_semaphore_wrapper semaphore;
 
     // Set up underlying
-    memtable_snapshot_source source_mt(SCHEMA);
+    memtable_snapshot_source source_mt(SCHEMA, logalloc_tracker);
     source_mt.apply(underlying);
-    cache_tracker tracker;
+    cache_tracker tracker(logalloc_tracker);
     row_cache cache(SCHEMA, snapshot_source([&] { return source_mt(); }), tracker);
 
     cache.populate(cache_mutation);
@@ -237,7 +239,8 @@ void test_slice_single_version(mutation& underlying,
  * ====== Tests for single row with a single version ======
  * ========================================================
  */
-void test_single_row(int ck,
+void test_single_row(logalloc::tracker& logalloc_tracker,
+                     int ck,
                      bool cached,
                      is_continuous continuous,
                      const query::partition_slice& slice,
@@ -258,7 +261,7 @@ void test_single_row(int ck,
     for (int r : expected_sm_rows) {
         expected_sm_fragments.push_back(expected_fragment(r));
     }
-    test_slice_single_version(underlying, m, slice, expected_sm_fragments, expected_cache_rows, { });
+    test_slice_single_version(logalloc_tracker, underlying, m, slice, expected_sm_fragments, expected_cache_rows, { });
 }
 
 static expected_row after_cont(int ck) {
@@ -279,7 +282,8 @@ static expected_row before_notc(int ck) {
 
 SEASTAR_TEST_CASE(test_single_row_not_cached_full_range) {
     return seastar::async([] {
-        test_single_row(1, false, is_continuous::yes, SCHEMA->full_slice(), { 1 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_single_row(*logalloc_tracker, 1, false, is_continuous::yes, SCHEMA->full_slice(), { 1 }, {
             expected_row(1, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::yes)
         });
@@ -288,7 +292,8 @@ SEASTAR_TEST_CASE(test_single_row_not_cached_full_range) {
 
 SEASTAR_TEST_CASE(test_single_row_not_cached_single_row_range) {
     return seastar::async([] {
-        test_single_row(1, false, is_continuous::yes, make_slice({ query::clustering_range::make_singular(make_ck(1)) }), { 1 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_single_row(*logalloc_tracker, 1, false, is_continuous::yes, make_slice({ query::clustering_range::make_singular(make_ck(1)) }), { 1 }, {
             expected_row(1, is_continuous::no),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
@@ -297,7 +302,8 @@ SEASTAR_TEST_CASE(test_single_row_not_cached_single_row_range) {
 
 SEASTAR_TEST_CASE(test_single_row_not_cached_range_from_start_to_row) {
     return seastar::async([] {
-        test_single_row(1, false, is_continuous::yes, make_slice({ query::clustering_range::make_ending_with(make_ck(1)) }), { 1 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_single_row(*logalloc_tracker, 1, false, is_continuous::yes, make_slice({ query::clustering_range::make_ending_with(make_ck(1)) }), { 1 }, {
             expected_row(1, is_continuous::yes),
             after_cont(1),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
@@ -307,7 +313,8 @@ SEASTAR_TEST_CASE(test_single_row_not_cached_range_from_start_to_row) {
 
 SEASTAR_TEST_CASE(test_single_row_not_cached_range_from_row_to_end) {
     return seastar::async([] {
-        test_single_row(1, false, is_continuous::yes, make_slice({ query::clustering_range::make_starting_with(make_ck(1)) }), { 1 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_single_row(*logalloc_tracker, 1, false, is_continuous::yes, make_slice({ query::clustering_range::make_starting_with(make_ck(1)) }), { 1 }, {
             before_notc(1),
             expected_row(1, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::yes)
@@ -317,7 +324,8 @@ SEASTAR_TEST_CASE(test_single_row_not_cached_range_from_row_to_end) {
 
 SEASTAR_TEST_CASE(test_single_row_not_cached_exclusive_range_on_the_left) {
     return seastar::async([] {
-        test_single_row(1, false, is_continuous::yes, make_slice({ query::clustering_range::make_ending_with({make_ck(1), false}) }),
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_single_row(*logalloc_tracker, 1, false, is_continuous::yes, make_slice({ query::clustering_range::make_ending_with({make_ck(1), false}) }),
             { }, {
                 before_cont(1),
                 expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
@@ -327,7 +335,8 @@ SEASTAR_TEST_CASE(test_single_row_not_cached_exclusive_range_on_the_left) {
 
 SEASTAR_TEST_CASE(test_single_row_not_cached_exclusive_range_on_the_right) {
     return seastar::async([] {
-        test_single_row(1, false, is_continuous::yes, make_slice({ query::clustering_range::make_starting_with({make_ck(1), false}) }),
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_single_row(*logalloc_tracker, 1, false, is_continuous::yes, make_slice({ query::clustering_range::make_starting_with({make_ck(1), false}) }),
             { }, {
                 after_notc(1),
                 expected_row(expected_row::dummy_tag_t{}, is_continuous::yes)
@@ -337,7 +346,8 @@ SEASTAR_TEST_CASE(test_single_row_not_cached_exclusive_range_on_the_right) {
 
 SEASTAR_TEST_CASE(test_single_row_not_cached_small_range) {
     return seastar::async([] {
-        test_single_row(1, false, is_continuous::yes, make_slice({ query::clustering_range::make(make_ck(0), make_ck(2)) }), { 1 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_single_row(*logalloc_tracker, 1, false, is_continuous::yes, make_slice({ query::clustering_range::make(make_ck(0), make_ck(2)) }), { 1 }, {
             before_notc(0),
             expected_row(1, is_continuous::yes),
             after_cont(2),
@@ -348,7 +358,8 @@ SEASTAR_TEST_CASE(test_single_row_not_cached_small_range) {
 
 SEASTAR_TEST_CASE(test_single_row_not_cached_small_range_on_left) {
     return seastar::async([] {
-        test_single_row(1, false, is_continuous::yes, make_slice({ query::clustering_range::make(make_ck(0), make_ck(1)) }), { 1 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_single_row(*logalloc_tracker, 1, false, is_continuous::yes, make_slice({ query::clustering_range::make(make_ck(0), make_ck(1)) }), { 1 }, {
             before_notc(0),
             expected_row(1, is_continuous::yes),
             after_cont(1),
@@ -359,7 +370,8 @@ SEASTAR_TEST_CASE(test_single_row_not_cached_small_range_on_left) {
 
 SEASTAR_TEST_CASE(test_single_row_not_cached_small_range_on_right) {
     return seastar::async([] {
-        test_single_row(1, false, is_continuous::yes, make_slice({ query::clustering_range::make(make_ck(1), make_ck(2)) }), { 1 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_single_row(*logalloc_tracker, 1, false, is_continuous::yes, make_slice({ query::clustering_range::make(make_ck(1), make_ck(2)) }), { 1 }, {
             before_notc(1),
             expected_row(1, is_continuous::yes),
             after_cont(2),
@@ -370,7 +382,8 @@ SEASTAR_TEST_CASE(test_single_row_not_cached_small_range_on_right) {
 
 SEASTAR_TEST_CASE(test_single_row_cached_as_continuous_full_range) {
     return seastar::async([] {
-        test_single_row(1, true, is_continuous::yes, SCHEMA->full_slice(), { 1 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_single_row(*logalloc_tracker, 1, true, is_continuous::yes, SCHEMA->full_slice(), { 1 }, {
             expected_row(1, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::yes)
         });
@@ -379,7 +392,8 @@ SEASTAR_TEST_CASE(test_single_row_cached_as_continuous_full_range) {
 
 SEASTAR_TEST_CASE(test_single_row_cached_as_continuous_single_row_range) {
     return seastar::async([] {
-        test_single_row(1, true, is_continuous::yes, make_slice({ query::clustering_range::make_singular(make_ck(1)) }), { 1 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_single_row(*logalloc_tracker, 1, true, is_continuous::yes, make_slice({ query::clustering_range::make_singular(make_ck(1)) }), { 1 }, {
             expected_row(1, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
@@ -388,7 +402,8 @@ SEASTAR_TEST_CASE(test_single_row_cached_as_continuous_single_row_range) {
 
 SEASTAR_TEST_CASE(test_single_row_cached_as_continuous_range_from_start_to_row) {
     return seastar::async([] {
-        test_single_row(1, true, is_continuous::yes, make_slice({ query::clustering_range::make_ending_with(make_ck(1)) }), { 1 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_single_row(*logalloc_tracker, 1, true, is_continuous::yes, make_slice({ query::clustering_range::make_ending_with(make_ck(1)) }), { 1 }, {
             expected_row(1, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
@@ -397,7 +412,8 @@ SEASTAR_TEST_CASE(test_single_row_cached_as_continuous_range_from_start_to_row) 
 
 SEASTAR_TEST_CASE(test_single_row_cached_as_continuous_range_from_row_to_end) {
     return seastar::async([] {
-        test_single_row(1, true, is_continuous::yes, make_slice({ query::clustering_range::make_starting_with(make_ck(1)) }), { 1 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_single_row(*logalloc_tracker, 1, true, is_continuous::yes, make_slice({ query::clustering_range::make_starting_with(make_ck(1)) }), { 1 }, {
             expected_row(1, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::yes)
         });
@@ -406,7 +422,8 @@ SEASTAR_TEST_CASE(test_single_row_cached_as_continuous_range_from_row_to_end) {
 
 SEASTAR_TEST_CASE(test_single_row_cached_as_continuous_exclusive_range_on_the_left) {
     return seastar::async([] {
-        test_single_row(1, true, is_continuous::yes, make_slice({ query::clustering_range::make_ending_with({make_ck(1), false}) }), { }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_single_row(*logalloc_tracker, 1, true, is_continuous::yes, make_slice({ query::clustering_range::make_ending_with({make_ck(1), false}) }), { }, {
             expected_row(1, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
@@ -415,7 +432,8 @@ SEASTAR_TEST_CASE(test_single_row_cached_as_continuous_exclusive_range_on_the_le
 
 SEASTAR_TEST_CASE(test_single_row_cached_as_continuous_exclusive_range_on_the_right) {
     return seastar::async([] {
-        test_single_row(1, true, is_continuous::yes, make_slice({ query::clustering_range::make_starting_with({make_ck(1), false}) }), { }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_single_row(*logalloc_tracker, 1, true, is_continuous::yes, make_slice({ query::clustering_range::make_starting_with({make_ck(1), false}) }), { }, {
             expected_row(1, is_continuous::yes),
             after_notc(1),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::yes)
@@ -425,7 +443,8 @@ SEASTAR_TEST_CASE(test_single_row_cached_as_continuous_exclusive_range_on_the_ri
 
 SEASTAR_TEST_CASE(test_single_row_cached_as_continuous_small_range) {
     return seastar::async([] {
-        test_single_row(1, true, is_continuous::yes, make_slice({ query::clustering_range::make(make_ck(0), make_ck(2)) }), { 1 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_single_row(*logalloc_tracker, 1, true, is_continuous::yes, make_slice({ query::clustering_range::make(make_ck(0), make_ck(2)) }), { 1 }, {
             expected_row(1, is_continuous::yes),
             after_cont(2),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
@@ -435,7 +454,8 @@ SEASTAR_TEST_CASE(test_single_row_cached_as_continuous_small_range) {
 
 SEASTAR_TEST_CASE(test_single_row_cached_as_continuous_small_range_on_left) {
     return seastar::async([] {
-        test_single_row(1, true, is_continuous::yes, make_slice({ query::clustering_range::make(make_ck(0), make_ck(1)) }), { 1 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_single_row(*logalloc_tracker, 1, true, is_continuous::yes, make_slice({ query::clustering_range::make(make_ck(0), make_ck(1)) }), { 1 }, {
             expected_row(1, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
@@ -444,7 +464,8 @@ SEASTAR_TEST_CASE(test_single_row_cached_as_continuous_small_range_on_left) {
 
 SEASTAR_TEST_CASE(test_single_row_cached_as_continuous_small_range_on_right) {
     return seastar::async([] {
-        test_single_row(1, true, is_continuous::yes, make_slice({ query::clustering_range::make(make_ck(1), make_ck(2)) }), { 1 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_single_row(*logalloc_tracker, 1, true, is_continuous::yes, make_slice({ query::clustering_range::make(make_ck(1), make_ck(2)) }), { 1 }, {
             expected_row(1, is_continuous::yes),
             after_cont(2),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
@@ -454,7 +475,8 @@ SEASTAR_TEST_CASE(test_single_row_cached_as_continuous_small_range_on_right) {
 
 SEASTAR_TEST_CASE(test_single_row_cached_as_noncontinuous_full_range) {
     return seastar::async([] {
-        test_single_row(1, true, is_continuous::no, SCHEMA->full_slice(), { 1 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_single_row(*logalloc_tracker, 1, true, is_continuous::no, SCHEMA->full_slice(), { 1 }, {
             expected_row(1, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::yes)
         });
@@ -463,7 +485,8 @@ SEASTAR_TEST_CASE(test_single_row_cached_as_noncontinuous_full_range) {
 
 SEASTAR_TEST_CASE(test_single_row_cached_as_noncontinuous_single_row_range) {
     return seastar::async([] {
-        test_single_row(1, true, is_continuous::no, make_slice({ query::clustering_range::make_singular(make_ck(1)) }), { 1 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_single_row(*logalloc_tracker, 1, true, is_continuous::no, make_slice({ query::clustering_range::make_singular(make_ck(1)) }), { 1 }, {
             expected_row(1, is_continuous::no),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
@@ -472,7 +495,8 @@ SEASTAR_TEST_CASE(test_single_row_cached_as_noncontinuous_single_row_range) {
 
 SEASTAR_TEST_CASE(test_single_row_cached_as_noncontinuous_range_from_start_to_row) {
     return seastar::async([] {
-        test_single_row(1, true, is_continuous::no, make_slice({ query::clustering_range::make_ending_with(make_ck(1)) }), { 1 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_single_row(*logalloc_tracker, 1, true, is_continuous::no, make_slice({ query::clustering_range::make_ending_with(make_ck(1)) }), { 1 }, {
             expected_row(1, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
@@ -481,7 +505,8 @@ SEASTAR_TEST_CASE(test_single_row_cached_as_noncontinuous_range_from_start_to_ro
 
 SEASTAR_TEST_CASE(test_single_row_cached_as_noncontinuous_range_from_row_to_end) {
     return seastar::async([] {
-        test_single_row(1, true, is_continuous::no, make_slice({ query::clustering_range::make_starting_with(make_ck(1)) }), { 1 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_single_row(*logalloc_tracker, 1, true, is_continuous::no, make_slice({ query::clustering_range::make_starting_with(make_ck(1)) }), { 1 }, {
             expected_row(1, is_continuous::no),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::yes)
         });
@@ -490,7 +515,8 @@ SEASTAR_TEST_CASE(test_single_row_cached_as_noncontinuous_range_from_row_to_end)
 
 SEASTAR_TEST_CASE(test_single_row_cached_as_noncontinuous_exclusive_range_on_the_left) {
     return seastar::async([] {
-        test_single_row(1, true, is_continuous::no, make_slice({ query::clustering_range::make_ending_with({make_ck(1), false}) }), { }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_single_row(*logalloc_tracker, 1, true, is_continuous::no, make_slice({ query::clustering_range::make_ending_with({make_ck(1), false}) }), { }, {
             expected_row(1, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
@@ -499,7 +525,8 @@ SEASTAR_TEST_CASE(test_single_row_cached_as_noncontinuous_exclusive_range_on_the
 
 SEASTAR_TEST_CASE(test_single_row_cached_as_noncontinuous_exclusive_range_on_the_right) {
     return seastar::async([] {
-        test_single_row(1, true, is_continuous::no, make_slice({ query::clustering_range::make_starting_with({make_ck(1), false}) }), { }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_single_row(*logalloc_tracker, 1, true, is_continuous::no, make_slice({ query::clustering_range::make_starting_with({make_ck(1), false}) }), { }, {
             expected_row(1, is_continuous::no),
             after_notc(1),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::yes)
@@ -509,7 +536,8 @@ SEASTAR_TEST_CASE(test_single_row_cached_as_noncontinuous_exclusive_range_on_the
 
 SEASTAR_TEST_CASE(test_single_row_cached_as_noncontinuous_small_range) {
     return seastar::async([] {
-        test_single_row(1, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(0), make_ck(2)) }), { 1 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_single_row(*logalloc_tracker, 1, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(0), make_ck(2)) }), { 1 }, {
             before_notc(0),
             expected_row(1, is_continuous::yes),
             after_cont(2),
@@ -520,7 +548,8 @@ SEASTAR_TEST_CASE(test_single_row_cached_as_noncontinuous_small_range) {
 
 SEASTAR_TEST_CASE(test_single_row_cached_as_noncontinuous_small_range_on_left) {
     return seastar::async([] {
-        test_single_row(1, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(0), make_ck(1)) }), { 1 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_single_row(*logalloc_tracker, 1, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(0), make_ck(1)) }), { 1 }, {
             before_notc(0),
             expected_row(1, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
@@ -530,7 +559,8 @@ SEASTAR_TEST_CASE(test_single_row_cached_as_noncontinuous_small_range_on_left) {
 
 SEASTAR_TEST_CASE(test_single_row_cached_as_noncontinuous_small_range_on_right) {
     return seastar::async([] {
-        test_single_row(1, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(1), make_ck(2)) }), { 1 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_single_row(*logalloc_tracker, 1, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(1), make_ck(2)) }), { 1 }, {
             expected_row(1, is_continuous::no),
             after_cont(2),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
@@ -544,7 +574,8 @@ SEASTAR_TEST_CASE(test_single_row_cached_as_noncontinuous_small_range_on_right) 
  * ======================================================
  */
 
-void test_two_rows(int ck1,
+void test_two_rows(logalloc::tracker& logalloc_tracker,
+                   int ck1,
                    bool cached1,
                    is_continuous continuous1,
                    int ck2,
@@ -573,12 +604,13 @@ void test_two_rows(int ck1,
     for (int r : expected_sm_rows) {
         expected_sm_fragments.push_back(expected_fragment(r));
     }
-    test_slice_single_version(underlying, cache, slice, expected_sm_fragments, expected_cache_rows, { });
+    test_slice_single_version(logalloc_tracker, underlying, cache, slice, expected_sm_fragments, expected_cache_rows, { });
 }
 
 SEASTAR_TEST_CASE(test_two_rows_not_cached_full_range) {
     return seastar::async([] {
-        test_two_rows(1, false, is_continuous::no, 3, false, is_continuous::no, SCHEMA->full_slice(), { 1, 3 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, false, is_continuous::no, 3, false, is_continuous::no, SCHEMA->full_slice(), { 1, 3 }, {
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::yes)
@@ -588,7 +620,8 @@ SEASTAR_TEST_CASE(test_two_rows_not_cached_full_range) {
 
 SEASTAR_TEST_CASE(test_two_rows_not_cached_single_row_range1) {
     return seastar::async([] {
-        test_two_rows(1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make_singular(make_ck(1)) }), { 1 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make_singular(make_ck(1)) }), { 1 }, {
             expected_row(1, is_continuous::no),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
@@ -597,7 +630,8 @@ SEASTAR_TEST_CASE(test_two_rows_not_cached_single_row_range1) {
 
 SEASTAR_TEST_CASE(test_two_rows_not_cached_single_row_range2) {
     return seastar::async([] {
-        test_two_rows(1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make_singular(make_ck(3)) }), { 3 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make_singular(make_ck(3)) }), { 3 }, {
             expected_row(3, is_continuous::no),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
@@ -606,7 +640,8 @@ SEASTAR_TEST_CASE(test_two_rows_not_cached_single_row_range2) {
 
 SEASTAR_TEST_CASE(test_two_rows_not_cached_range_from_start_to_row1) {
     return seastar::async([] {
-        test_two_rows(1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make_ending_with(make_ck(1)) }), { 1 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make_ending_with(make_ck(1)) }), { 1 }, {
             expected_row(1, is_continuous::yes),
             after_cont(1),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
@@ -616,7 +651,8 @@ SEASTAR_TEST_CASE(test_two_rows_not_cached_range_from_start_to_row1) {
 
 SEASTAR_TEST_CASE(test_two_rows_not_cached_range_from_start_to_row2) {
     return seastar::async([] {
-        test_two_rows(1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make_ending_with(make_ck(3)) }), { 1, 3 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make_ending_with(make_ck(3)) }), { 1, 3 }, {
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
             after_cont(3),
@@ -627,7 +663,8 @@ SEASTAR_TEST_CASE(test_two_rows_not_cached_range_from_start_to_row2) {
 
 SEASTAR_TEST_CASE(test_two_rows_not_cached_range_from_row1_to_end) {
     return seastar::async([] {
-        test_two_rows(1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make_starting_with(make_ck(1)) }), { 1, 3 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make_starting_with(make_ck(1)) }), { 1, 3 }, {
             before_notc(1),
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
@@ -638,7 +675,8 @@ SEASTAR_TEST_CASE(test_two_rows_not_cached_range_from_row1_to_end) {
 
 SEASTAR_TEST_CASE(test_two_rows_not_cached_range_from_row2_to_end) {
     return seastar::async([] {
-        test_two_rows(1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make_starting_with(make_ck(3)) }), { 3 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make_starting_with(make_ck(3)) }), { 3 }, {
             before_notc(3),
             expected_row(3, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::yes)
@@ -648,7 +686,8 @@ SEASTAR_TEST_CASE(test_two_rows_not_cached_range_from_row2_to_end) {
 
 SEASTAR_TEST_CASE(test_two_rows_not_cached_exclusive_range_on_the_left) {
     return seastar::async([] {
-        test_two_rows(1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make_ending_with({make_ck(3), false}) }), { 1 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make_ending_with({make_ck(3), false}) }), { 1 }, {
             expected_row(1, is_continuous::yes),
             before_cont(3),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
@@ -658,7 +697,8 @@ SEASTAR_TEST_CASE(test_two_rows_not_cached_exclusive_range_on_the_left) {
 
 SEASTAR_TEST_CASE(test_two_rows_not_cached_exclusive_range_on_the_right) {
     return seastar::async([] {
-        test_two_rows(1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make_starting_with({make_ck(1), false}) }), { 3 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make_starting_with({make_ck(1), false}) }), { 3 }, {
             after_notc(1),
             expected_row(3, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::yes)
@@ -668,7 +708,8 @@ SEASTAR_TEST_CASE(test_two_rows_not_cached_exclusive_range_on_the_right) {
 
 SEASTAR_TEST_CASE(test_two_rows_not_cached_exclusive_range_between_rows1) {
     return seastar::async([] {
-        test_two_rows(1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make({make_ck(1), false}, {make_ck(3), false}) }),
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make({make_ck(1), false}, {make_ck(3), false}) }),
             { }, {
                 after_notc(1),
                 before_cont(3),
@@ -679,7 +720,8 @@ SEASTAR_TEST_CASE(test_two_rows_not_cached_exclusive_range_between_rows1) {
 
 SEASTAR_TEST_CASE(test_two_rows_not_cached_exclusive_range_between_rows2) {
     return seastar::async([] {
-        test_two_rows(1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make({make_ck(1), false}, make_ck(3)) }), { 3 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make({make_ck(1), false}, make_ck(3)) }), { 3 }, {
             after_notc(1),
             expected_row(3, is_continuous::yes),
             after_cont(3),
@@ -690,7 +732,8 @@ SEASTAR_TEST_CASE(test_two_rows_not_cached_exclusive_range_between_rows2) {
 
 SEASTAR_TEST_CASE(test_two_rows_not_cached_exclusive_range_between_rows3) {
     return seastar::async([] {
-        test_two_rows(1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(1), {make_ck(3), false}) }), { 1 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(1), {make_ck(3), false}) }), { 1 }, {
             before_notc(1),
             expected_row(1, is_continuous::yes),
             before_cont(3),
@@ -701,7 +744,8 @@ SEASTAR_TEST_CASE(test_two_rows_not_cached_exclusive_range_between_rows3) {
 
 SEASTAR_TEST_CASE(test_two_rows_not_cached_small_range) {
     return seastar::async([] {
-        test_two_rows(1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(0), make_ck(4)) }), { 1, 3 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(0), make_ck(4)) }), { 1, 3 }, {
             before_notc(0),
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
@@ -713,7 +757,8 @@ SEASTAR_TEST_CASE(test_two_rows_not_cached_small_range) {
 
 SEASTAR_TEST_CASE(test_two_rows_not_cached_small_range_row1) {
     return seastar::async([] {
-        test_two_rows(1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(0), make_ck(2)) }), { 1 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(0), make_ck(2)) }), { 1 }, {
             before_notc(0),
             expected_row(1, is_continuous::yes),
             after_cont(2),
@@ -724,7 +769,8 @@ SEASTAR_TEST_CASE(test_two_rows_not_cached_small_range_row1) {
 
 SEASTAR_TEST_CASE(test_two_rows_not_cached_small_range_row2) {
     return seastar::async([] {
-        test_two_rows(1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(2), make_ck(4)) }), { 3 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(2), make_ck(4)) }), { 3 }, {
             before_notc(2),
             expected_row(3, is_continuous::yes),
             after_cont(4),
@@ -735,7 +781,8 @@ SEASTAR_TEST_CASE(test_two_rows_not_cached_small_range_row2) {
 
 SEASTAR_TEST_CASE(test_two_rows_cached_continuous_full_range) {
     return seastar::async([] {
-        test_two_rows(1, true, is_continuous::yes, 3, true, is_continuous::yes, SCHEMA->full_slice(), { 1, 3 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, true, is_continuous::yes, 3, true, is_continuous::yes, SCHEMA->full_slice(), { 1, 3 }, {
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::yes)
@@ -745,7 +792,8 @@ SEASTAR_TEST_CASE(test_two_rows_cached_continuous_full_range) {
 
 SEASTAR_TEST_CASE(test_two_rows_cached_continuous_single_row_range1) {
     return seastar::async([] {
-        test_two_rows(1, true, is_continuous::yes, 3, true, is_continuous::yes, make_slice({ query::clustering_range::make_singular(make_ck(1)) }), { 1 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, true, is_continuous::yes, 3, true, is_continuous::yes, make_slice({ query::clustering_range::make_singular(make_ck(1)) }), { 1 }, {
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
@@ -755,7 +803,8 @@ SEASTAR_TEST_CASE(test_two_rows_cached_continuous_single_row_range1) {
 
 SEASTAR_TEST_CASE(test_two_rows_cached_continuous_single_row_range2) {
     return seastar::async([] {
-        test_two_rows(1, true, is_continuous::yes, 3, true, is_continuous::yes, make_slice({ query::clustering_range::make_singular(make_ck(3)) }), { 3 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, true, is_continuous::yes, 3, true, is_continuous::yes, make_slice({ query::clustering_range::make_singular(make_ck(3)) }), { 3 }, {
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
@@ -765,7 +814,8 @@ SEASTAR_TEST_CASE(test_two_rows_cached_continuous_single_row_range2) {
 
 SEASTAR_TEST_CASE(test_two_rows_cached_continuous_range_from_start_to_row1) {
     return seastar::async([] {
-        test_two_rows(1, true, is_continuous::yes, 3, true, is_continuous::yes, make_slice({ query::clustering_range::make_ending_with(make_ck(1)) }), { 1 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, true, is_continuous::yes, 3, true, is_continuous::yes, make_slice({ query::clustering_range::make_ending_with(make_ck(1)) }), { 1 }, {
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
@@ -775,7 +825,8 @@ SEASTAR_TEST_CASE(test_two_rows_cached_continuous_range_from_start_to_row1) {
 
 SEASTAR_TEST_CASE(test_two_rows_cached_continuous_range_from_start_to_row2) {
     return seastar::async([] {
-        test_two_rows(1, true, is_continuous::yes, 3, true, is_continuous::yes, make_slice({ query::clustering_range::make_ending_with(make_ck(3)) }), { 1, 3 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, true, is_continuous::yes, 3, true, is_continuous::yes, make_slice({ query::clustering_range::make_ending_with(make_ck(3)) }), { 1, 3 }, {
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
@@ -785,7 +836,8 @@ SEASTAR_TEST_CASE(test_two_rows_cached_continuous_range_from_start_to_row2) {
 
 SEASTAR_TEST_CASE(test_two_rows_cached_continuous_range_from_row1_to_end) {
     return seastar::async([] {
-        test_two_rows(1, true, is_continuous::yes, 3, true, is_continuous::yes, make_slice({ query::clustering_range::make_starting_with(make_ck(1)) }), { 1, 3 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, true, is_continuous::yes, 3, true, is_continuous::yes, make_slice({ query::clustering_range::make_starting_with(make_ck(1)) }), { 1, 3 }, {
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::yes)
@@ -795,7 +847,8 @@ SEASTAR_TEST_CASE(test_two_rows_cached_continuous_range_from_row1_to_end) {
 
 SEASTAR_TEST_CASE(test_two_rows_cached_continuous_range_from_row2_to_end) {
     return seastar::async([] {
-        test_two_rows(1, true, is_continuous::yes, 3, true, is_continuous::yes, make_slice({ query::clustering_range::make_starting_with(make_ck(3)) }), { 3 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, true, is_continuous::yes, 3, true, is_continuous::yes, make_slice({ query::clustering_range::make_starting_with(make_ck(3)) }), { 3 }, {
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::yes)
@@ -805,7 +858,8 @@ SEASTAR_TEST_CASE(test_two_rows_cached_continuous_range_from_row2_to_end) {
 
 SEASTAR_TEST_CASE(test_two_rows_cached_continuous_exclusive_range_on_the_left) {
     return seastar::async([] {
-        test_two_rows(1, true, is_continuous::yes, 3, true, is_continuous::yes, make_slice({ query::clustering_range::make_ending_with({make_ck(3), false}) }), { 1 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, true, is_continuous::yes, 3, true, is_continuous::yes, make_slice({ query::clustering_range::make_ending_with({make_ck(3), false}) }), { 1 }, {
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
@@ -815,7 +869,8 @@ SEASTAR_TEST_CASE(test_two_rows_cached_continuous_exclusive_range_on_the_left) {
 
 SEASTAR_TEST_CASE(test_two_rows_cached_continuous_exclusive_range_on_the_right) {
     return seastar::async([] {
-        test_two_rows(1, true, is_continuous::yes, 3, true, is_continuous::yes, make_slice({ query::clustering_range::make_starting_with({make_ck(1), false}) }), { 3 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, true, is_continuous::yes, 3, true, is_continuous::yes, make_slice({ query::clustering_range::make_starting_with({make_ck(1), false}) }), { 3 }, {
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::yes)
@@ -825,7 +880,8 @@ SEASTAR_TEST_CASE(test_two_rows_cached_continuous_exclusive_range_on_the_right) 
 
 SEASTAR_TEST_CASE(test_two_rows_cached_continuous_exclusive_range_between_rows1) {
     return seastar::async([] {
-        test_two_rows(1, true, is_continuous::yes, 3, true, is_continuous::yes, make_slice({ query::clustering_range::make({make_ck(1), false}, {make_ck(3), false}) }), { }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, true, is_continuous::yes, 3, true, is_continuous::yes, make_slice({ query::clustering_range::make({make_ck(1), false}, {make_ck(3), false}) }), { }, {
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
@@ -835,7 +891,8 @@ SEASTAR_TEST_CASE(test_two_rows_cached_continuous_exclusive_range_between_rows1)
 
 SEASTAR_TEST_CASE(test_two_rows_cached_continuous_exclusive_range_between_rows2) {
     return seastar::async([] {
-        test_two_rows(1, true, is_continuous::yes, 3, true, is_continuous::yes, make_slice({ query::clustering_range::make({make_ck(1), false}, make_ck(3)) }), { 3 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, true, is_continuous::yes, 3, true, is_continuous::yes, make_slice({ query::clustering_range::make({make_ck(1), false}, make_ck(3)) }), { 3 }, {
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
@@ -845,7 +902,8 @@ SEASTAR_TEST_CASE(test_two_rows_cached_continuous_exclusive_range_between_rows2)
 
 SEASTAR_TEST_CASE(test_two_rows_cached_continuous_exclusive_range_between_rows3) {
     return seastar::async([] {
-        test_two_rows(1, true, is_continuous::yes, 3, true, is_continuous::yes, make_slice({ query::clustering_range::make(make_ck(1), {make_ck(3), false}) }), { 1 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, true, is_continuous::yes, 3, true, is_continuous::yes, make_slice({ query::clustering_range::make(make_ck(1), {make_ck(3), false}) }), { 1 }, {
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
@@ -855,7 +913,8 @@ SEASTAR_TEST_CASE(test_two_rows_cached_continuous_exclusive_range_between_rows3)
 
 SEASTAR_TEST_CASE(test_two_rows_cached_continuous_small_range) {
     return seastar::async([] {
-        test_two_rows(1, true, is_continuous::yes, 3, true, is_continuous::yes, make_slice({ query::clustering_range::make(make_ck(0), make_ck(4)) }), { 1, 3 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, true, is_continuous::yes, 3, true, is_continuous::yes, make_slice({ query::clustering_range::make(make_ck(0), make_ck(4)) }), { 1, 3 }, {
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
             after_cont(4),
@@ -866,7 +925,8 @@ SEASTAR_TEST_CASE(test_two_rows_cached_continuous_small_range) {
 
 SEASTAR_TEST_CASE(test_two_rows_cached_continuous_small_range_row1) {
     return seastar::async([] {
-        test_two_rows(1, true, is_continuous::yes, 3, true, is_continuous::yes, make_slice({ query::clustering_range::make(make_ck(0), make_ck(2)) }), { 1 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, true, is_continuous::yes, 3, true, is_continuous::yes, make_slice({ query::clustering_range::make(make_ck(0), make_ck(2)) }), { 1 }, {
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
@@ -876,7 +936,8 @@ SEASTAR_TEST_CASE(test_two_rows_cached_continuous_small_range_row1) {
 
 SEASTAR_TEST_CASE(test_two_rows_cached_continuous_small_range_row2) {
     return seastar::async([] {
-        test_two_rows(1, true, is_continuous::yes, 3, true, is_continuous::yes, make_slice({ query::clustering_range::make(make_ck(2), make_ck(4)) }), { 3 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, true, is_continuous::yes, 3, true, is_continuous::yes, make_slice({ query::clustering_range::make(make_ck(2), make_ck(4)) }), { 3 }, {
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
             after_cont(4),
@@ -887,7 +948,8 @@ SEASTAR_TEST_CASE(test_two_rows_cached_continuous_small_range_row2) {
 
 SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_full_range) {
     return seastar::async([] {
-        test_two_rows(1, true, is_continuous::no, 3, true, is_continuous::no, SCHEMA->full_slice(), { 1, 3 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, true, is_continuous::no, 3, true, is_continuous::no, SCHEMA->full_slice(), { 1, 3 }, {
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::yes)
@@ -897,7 +959,8 @@ SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_full_range) {
 
 SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_single_row_range1) {
     return seastar::async([] {
-        test_two_rows(1, true, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make_singular(make_ck(1)) }), { 1 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, true, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make_singular(make_ck(1)) }), { 1 }, {
             expected_row(1, is_continuous::no),
             expected_row(3, is_continuous::no),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
@@ -907,7 +970,8 @@ SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_single_row_range1) {
 
 SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_single_row_range2) {
     return seastar::async([] {
-        test_two_rows(1, true, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make_singular(make_ck(3)) }), { 3 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, true, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make_singular(make_ck(3)) }), { 3 }, {
             expected_row(1, is_continuous::no),
             expected_row(3, is_continuous::no),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
@@ -917,7 +981,8 @@ SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_single_row_range2) {
 
 SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_range_from_start_to_row1) {
     return seastar::async([] {
-        test_two_rows(1, true, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make_ending_with(make_ck(1)) }), { 1 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, true, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make_ending_with(make_ck(1)) }), { 1 }, {
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::no),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
@@ -927,7 +992,8 @@ SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_range_from_start_to_row1) 
 
 SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_range_from_start_to_row2) {
     return seastar::async([] {
-        test_two_rows(1, true, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make_ending_with(make_ck(3)) }), { 1, 3 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, true, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make_ending_with(make_ck(3)) }), { 1, 3 }, {
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
@@ -937,7 +1003,8 @@ SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_range_from_start_to_row2) 
 
 SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_range_from_row1_to_end) {
     return seastar::async([] {
-        test_two_rows(1, true, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make_starting_with(make_ck(1)) }), { 1, 3 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, true, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make_starting_with(make_ck(1)) }), { 1, 3 }, {
             expected_row(1, is_continuous::no),
             expected_row(3, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::yes)
@@ -947,7 +1014,8 @@ SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_range_from_row1_to_end) {
 
 SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_range_from_row2_to_end) {
     return seastar::async([] {
-        test_two_rows(1, true, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make_starting_with(make_ck(3)) }), { 3 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, true, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make_starting_with(make_ck(3)) }), { 3 }, {
             expected_row(1, is_continuous::no),
             expected_row(3, is_continuous::no),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::yes)
@@ -957,7 +1025,8 @@ SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_range_from_row2_to_end) {
 
 SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_exclusive_range_on_the_left) {
     return seastar::async([] {
-        test_two_rows(1, true, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make_ending_with({make_ck(3), false}) }), { 1 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, true, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make_ending_with({make_ck(3), false}) }), { 1 }, {
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
@@ -967,7 +1036,8 @@ SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_exclusive_range_on_the_lef
 
 SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_exclusive_range_on_the_right) {
     return seastar::async([] {
-        test_two_rows(1, true, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make_starting_with({make_ck(1), false}) }), { 3 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, true, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make_starting_with({make_ck(1), false}) }), { 3 }, {
             expected_row(1, is_continuous::no),
             after_notc(1),
             expected_row(3, is_continuous::yes),
@@ -978,7 +1048,8 @@ SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_exclusive_range_on_the_rig
 
 SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_exclusive_range_between_rows1) {
     return seastar::async([] {
-        test_two_rows(1, true, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make({make_ck(1), false}, {make_ck(3), false}) }), { }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, true, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make({make_ck(1), false}, {make_ck(3), false}) }), { }, {
             expected_row(1, is_continuous::no),
             after_notc(1),
             expected_row(3, is_continuous::yes),
@@ -989,7 +1060,8 @@ SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_exclusive_range_between_ro
 
 SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_exclusive_range_between_rows2) {
     return seastar::async([] {
-        test_two_rows(1, true, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make({make_ck(1), false}, make_ck(3)) }), { 3 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, true, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make({make_ck(1), false}, make_ck(3)) }), { 3 }, {
             expected_row(1, is_continuous::no),
             after_notc(1),
             expected_row(3, is_continuous::yes),
@@ -1000,7 +1072,8 @@ SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_exclusive_range_between_ro
 
 SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_exclusive_range_between_rows3) {
     return seastar::async([] {
-        test_two_rows(1, true, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(1), {make_ck(3), false}) }), { 1 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, true, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(1), {make_ck(3), false}) }), { 1 }, {
             expected_row(1, is_continuous::no),
             expected_row(3, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
@@ -1010,7 +1083,8 @@ SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_exclusive_range_between_ro
 
 SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_small_range) {
     return seastar::async([] {
-        test_two_rows(1, true, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(0), make_ck(4)) }), { 1, 3 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, true, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(0), make_ck(4)) }), { 1, 3 }, {
             before_notc(0),
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
@@ -1022,7 +1096,8 @@ SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_small_range) {
 
 SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_small_range_row1) {
     return seastar::async([] {
-        test_two_rows(1, true, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(0), make_ck(2)) }), { 1 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, true, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(0), make_ck(2)) }), { 1 }, {
             before_notc(0),
             expected_row(1, is_continuous::yes),
             after_cont(2),
@@ -1034,7 +1109,8 @@ SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_small_range_row1) {
 
 SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_small_range_row2) {
     return seastar::async([] {
-        test_two_rows(1, true, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(2), make_ck(4)) }), { 3 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, true, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(2), make_ck(4)) }), { 3 }, {
             expected_row(1, is_continuous::no),
             before_notc(2),
             expected_row(3, is_continuous::yes),
@@ -1046,7 +1122,8 @@ SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_small_range_row2) {
 
 SEASTAR_TEST_CASE(test_two_rows_first_not_cached_second_cached_non_continuous1) {
     return seastar::async([] {
-        test_two_rows(1, false, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(2), make_ck(4)) }), { 3 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, false, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(2), make_ck(4)) }), { 3 }, {
             before_notc(2),
             expected_row(3, is_continuous::yes),
             after_cont(4),
@@ -1057,7 +1134,8 @@ SEASTAR_TEST_CASE(test_two_rows_first_not_cached_second_cached_non_continuous1) 
 
 SEASTAR_TEST_CASE(test_two_rows_first_not_cached_second_cached_non_continuous2) {
     return seastar::async([] {
-        test_two_rows(1, false, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(0), make_ck(4)) }), { 1, 3 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, false, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(0), make_ck(4)) }), { 1, 3 }, {
             before_notc(0),
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
@@ -1069,7 +1147,8 @@ SEASTAR_TEST_CASE(test_two_rows_first_not_cached_second_cached_non_continuous2) 
 
 SEASTAR_TEST_CASE(test_two_rows_first_cached_non_continuous_second_not_cached1) {
     return seastar::async([] {
-        test_two_rows(1, true, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(2), make_ck(4)) }), { 3 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, true, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(2), make_ck(4)) }), { 3 }, {
             expected_row(1, is_continuous::no),
             before_notc(2),
             expected_row(3, is_continuous::yes),
@@ -1081,7 +1160,8 @@ SEASTAR_TEST_CASE(test_two_rows_first_cached_non_continuous_second_not_cached1) 
 
 SEASTAR_TEST_CASE(test_two_rows_first_cached_non_continuous_second_not_cached2) {
     return seastar::async([] {
-        test_two_rows(1, true, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(0), make_ck(4)) }), { 1, 3 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, true, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(0), make_ck(4)) }), { 1, 3 }, {
             before_notc(0),
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
@@ -1093,7 +1173,8 @@ SEASTAR_TEST_CASE(test_two_rows_first_cached_non_continuous_second_not_cached2) 
 
 SEASTAR_TEST_CASE(test_two_rows_first_cached_continuous_second_not_cached1) {
     return seastar::async([] {
-        test_two_rows(1, true, is_continuous::yes, 3, false, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(2), make_ck(4)) }), { 3 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, true, is_continuous::yes, 3, false, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(2), make_ck(4)) }), { 3 }, {
             expected_row(1, is_continuous::yes),
             before_notc(2),
             expected_row(3, is_continuous::yes),
@@ -1105,7 +1186,8 @@ SEASTAR_TEST_CASE(test_two_rows_first_cached_continuous_second_not_cached1) {
 
 SEASTAR_TEST_CASE(test_two_rows_first_cached_continuous_second_not_cached2) {
     return seastar::async([] {
-        test_two_rows(1, true, is_continuous::yes, 3, false, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(0), make_ck(4)) }), { 1, 3 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_two_rows(*logalloc_tracker, 1, true, is_continuous::yes, 3, false, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(0), make_ck(4)) }), { 1, 3 }, {
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
             after_cont(4),
@@ -1120,7 +1202,8 @@ SEASTAR_TEST_CASE(test_two_rows_first_cached_continuous_second_not_cached2) {
  * ========================================================
  */
 
-void test_three_rows(int ck1,
+void test_three_rows(logalloc::tracker& logalloc_tracker,
+                     int ck1,
                      bool cached1,
                      is_continuous continuous1,
                      int ck2,
@@ -1158,12 +1241,13 @@ void test_three_rows(int ck1,
     for (int r : expected_sm_rows) {
         expected_sm_fragments.push_back(expected_fragment(r));
     }
-    test_slice_single_version(underlying, cache, slice, expected_sm_fragments, expected_cache_rows, { });
+    test_slice_single_version(logalloc_tracker, underlying, cache, slice, expected_sm_fragments, expected_cache_rows, { });
 }
 
 SEASTAR_TEST_CASE(test_three_rows_first_continuous1) {
     return seastar::async([] {
-        test_three_rows(1, true, is_continuous::yes, 3, false, is_continuous::no, 5, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(0), make_ck(6)) }), { 1, 3, 5 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_three_rows(*logalloc_tracker, 1, true, is_continuous::yes, 3, false, is_continuous::no, 5, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(0), make_ck(6)) }), { 1, 3, 5 }, {
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
             expected_row(5, is_continuous::yes),
@@ -1175,7 +1259,8 @@ SEASTAR_TEST_CASE(test_three_rows_first_continuous1) {
 
 SEASTAR_TEST_CASE(test_three_rows_first_continuous2) {
     return seastar::async([] {
-        test_three_rows(1, true, is_continuous::yes, 3, false, is_continuous::no, 5, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(2), make_ck(6)) }), { 3, 5 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_three_rows(*logalloc_tracker, 1, true, is_continuous::yes, 3, false, is_continuous::no, 5, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(2), make_ck(6)) }), { 3, 5 }, {
             expected_row(1, is_continuous::yes),
             before_notc(2),
             expected_row(3, is_continuous::yes),
@@ -1188,7 +1273,8 @@ SEASTAR_TEST_CASE(test_three_rows_first_continuous2) {
 
 SEASTAR_TEST_CASE(test_three_rows_first_continuous3) {
     return seastar::async([] {
-        test_three_rows(1, true, is_continuous::yes, 3, false, is_continuous::no, 5, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(0), make_ck(4)) }), { 1, 3 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_three_rows(*logalloc_tracker, 1, true, is_continuous::yes, 3, false, is_continuous::no, 5, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(0), make_ck(4)) }), { 1, 3 }, {
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
             after_cont(4),
@@ -1200,7 +1286,8 @@ SEASTAR_TEST_CASE(test_three_rows_first_continuous3) {
 
 SEASTAR_TEST_CASE(test_three_rows_first_continuous4) {
     return seastar::async([] {
-        test_three_rows(1, true, is_continuous::yes, 3, false, is_continuous::no, 5, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(2), make_ck(4)) }), { 3 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_three_rows(*logalloc_tracker, 1, true, is_continuous::yes, 3, false, is_continuous::no, 5, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(2), make_ck(4)) }), { 3 }, {
             expected_row(1, is_continuous::yes),
             before_notc(2),
             expected_row(3, is_continuous::yes),
@@ -1213,7 +1300,8 @@ SEASTAR_TEST_CASE(test_three_rows_first_continuous4) {
 
 SEASTAR_TEST_CASE(test_three_rows_first_noncontinuous1) {
     return seastar::async([] {
-        test_three_rows(1, true, is_continuous::no, 3, false, is_continuous::no, 5, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(0), make_ck(6)) }), { 1, 3, 5 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_three_rows(*logalloc_tracker, 1, true, is_continuous::no, 3, false, is_continuous::no, 5, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(0), make_ck(6)) }), { 1, 3, 5 }, {
             before_notc(0),
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
@@ -1226,7 +1314,8 @@ SEASTAR_TEST_CASE(test_three_rows_first_noncontinuous1) {
 
 SEASTAR_TEST_CASE(test_three_rows_first_noncontinuous2) {
     return seastar::async([] {
-        test_three_rows(1, true, is_continuous::no, 3, false, is_continuous::no, 5, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(2), make_ck(6)) }), { 3, 5 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_three_rows(*logalloc_tracker, 1, true, is_continuous::no, 3, false, is_continuous::no, 5, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(2), make_ck(6)) }), { 3, 5 }, {
             expected_row(1, is_continuous::no),
             before_notc(2),
             expected_row(3, is_continuous::yes),
@@ -1239,7 +1328,8 @@ SEASTAR_TEST_CASE(test_three_rows_first_noncontinuous2) {
 
 SEASTAR_TEST_CASE(test_three_rows_first_nonecontinuous3) {
     return seastar::async([] {
-        test_three_rows(1, true, is_continuous::no, 3, false, is_continuous::no, 5, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(0), make_ck(4)) }), { 1, 3 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_three_rows(*logalloc_tracker, 1, true, is_continuous::no, 3, false, is_continuous::no, 5, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(0), make_ck(4)) }), { 1, 3 }, {
             before_notc(0),
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
@@ -1252,7 +1342,8 @@ SEASTAR_TEST_CASE(test_three_rows_first_nonecontinuous3) {
 
 SEASTAR_TEST_CASE(test_three_rows_first_nonecontinuous4) {
     return seastar::async([] {
-        test_three_rows(1, true, is_continuous::no, 3, false, is_continuous::no, 5, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(2), make_ck(4)) }), { 3 }, {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        test_three_rows(*logalloc_tracker, 1, true, is_continuous::no, 3, false, is_continuous::no, 5, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(2), make_ck(4)) }), { 3 }, {
             expected_row(1, is_continuous::no),
             before_notc(2),
             expected_row(3, is_continuous::yes),
@@ -1275,6 +1366,8 @@ static tombstone new_tombstone() {
 
 SEASTAR_TEST_CASE(test_single_row_and_tombstone_not_cached_single_row_range1) {
     return seastar::async([] {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+
         const int ck1 = 1;
         const int value1 = 12;
         range_tombstone rt(make_ck(0), bound_kind::incl_start, make_ck(2), bound_kind::incl_end, new_tombstone());
@@ -1286,7 +1379,7 @@ SEASTAR_TEST_CASE(test_single_row_and_tombstone_not_cached_single_row_range1) {
         auto cache = make_incomplete_mutation();
         auto slice = make_slice({ query::clustering_range::make_singular(make_ck(ck1)) });
 
-        test_slice_single_version(underlying, cache, slice, {
+        test_slice_single_version(*logalloc_tracker, underlying, cache, slice, {
             expected_fragment(position_in_partition::before_key(make_ck(1)), rt.tomb),
             expected_fragment(1),
             expected_fragment(position_in_partition::after_key(make_ck(1)), {}),
@@ -1299,6 +1392,8 @@ SEASTAR_TEST_CASE(test_single_row_and_tombstone_not_cached_single_row_range1) {
 
 SEASTAR_TEST_CASE(test_single_row_and_tombstone_not_cached_single_row_range2) {
     return seastar::async([] {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+
         const int ck1 = 1;
         const int value1 = 12;
         range_tombstone rt(make_ck(0), bound_kind::incl_start, make_ck(2), bound_kind::incl_end, new_tombstone());
@@ -1310,7 +1405,7 @@ SEASTAR_TEST_CASE(test_single_row_and_tombstone_not_cached_single_row_range2) {
         auto cache = make_incomplete_mutation();
         auto slice = make_slice({ query::clustering_range::make(make_ck(0), {make_ck(1), false}) });
 
-        test_slice_single_version(underlying, cache, slice, {
+        test_slice_single_version(*logalloc_tracker, underlying, cache, slice, {
             expected_fragment(position_in_partition_view::before_key(make_ck(0)), rt.tomb),
             expected_fragment(position_in_partition_view::before_key(make_ck(1)), {}),
         }, {
@@ -1323,6 +1418,8 @@ SEASTAR_TEST_CASE(test_single_row_and_tombstone_not_cached_single_row_range2) {
 
 SEASTAR_TEST_CASE(test_single_row_and_tombstone_not_cached_single_row_range3) {
     return seastar::async([] {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+
         const int ck1 = 4;
         const int value1 = 12;
         range_tombstone rt(make_ck(0), bound_kind::incl_start, make_ck(2), bound_kind::incl_end, new_tombstone());
@@ -1334,7 +1431,7 @@ SEASTAR_TEST_CASE(test_single_row_and_tombstone_not_cached_single_row_range3) {
         auto cache = make_incomplete_mutation();
         auto slice = make_slice({ query::clustering_range::make(make_ck(0), make_ck(5)) });
 
-        test_slice_single_version(underlying, cache, slice, {
+        test_slice_single_version(*logalloc_tracker, underlying, cache, slice, {
             expected_fragment(position_in_partition_view::before_key(make_ck(0)), rt.tomb),
             expected_fragment(position_in_partition_view::after_key(make_ck(2)), {}),
             expected_fragment(4)
@@ -1349,6 +1446,8 @@ SEASTAR_TEST_CASE(test_single_row_and_tombstone_not_cached_single_row_range3) {
 
 SEASTAR_TEST_CASE(test_single_row_and_tombstone_not_cached_single_row_range4) {
     return seastar::async([] {
+        tests::logalloc::sharded_tracker logalloc_tracker;
+
         const int ck1 = 4;
         const int value1 = 12;
         range_tombstone rt(make_ck(0), bound_kind::incl_start, make_ck(2), bound_kind::incl_end, new_tombstone());
@@ -1360,7 +1459,7 @@ SEASTAR_TEST_CASE(test_single_row_and_tombstone_not_cached_single_row_range4) {
         auto cache = make_incomplete_mutation();
         auto slice = make_slice({ query::clustering_range::make(make_ck(3), make_ck(5)) });
 
-        test_slice_single_version(underlying, cache, slice, {
+        test_slice_single_version(*logalloc_tracker, underlying, cache, slice, {
             expected_fragment(4)
         }, {
             before_notc(3),

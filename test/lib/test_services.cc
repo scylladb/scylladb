@@ -36,7 +36,8 @@ db::config test_db_config;
 gms::feature_service test_feature_service(gms::feature_config_from_db_config(test_db_config));
 
 column_family_for_tests::data::data()
-    : semaphore(reader_concurrency_semaphore::no_limits{}, "column_family_for_tests")
+    : dmm(logalloc::shard_tracker())
+    , semaphore(reader_concurrency_semaphore::no_limits{}, "column_family_for_tests")
     , cm(compaction_manager::for_testing_tag{}, dmm)
 { }
 
@@ -59,6 +60,6 @@ column_family_for_tests::column_family_for_tests(sstables::sstables_manager& sst
     _data->cfg.cf_stats = &_data->cf_stats;
     _data->cfg.enable_commitlog = false;
     _data->cm.enable();
-    _data->cf = make_lw_shared<replica::column_family>(_data->s, _data->cfg, replica::column_family::no_commitlog(), _data->cm, sstables_manager, _data->cl_stats, _data->tracker);
+    _data->cf = make_lw_shared<replica::column_family>(_data->s, _data->cfg, replica::column_family::no_commitlog(), _data->cm, sstables_manager, _data->cl_stats, sstables_manager.get_cache_tracker());
     _data->cf->mark_ready_for_writes();
 }

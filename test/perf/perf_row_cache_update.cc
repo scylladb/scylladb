@@ -24,6 +24,7 @@
 #include "replica/memtable.hh"
 #include "test/perf/perf.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
+#include "test/lib/logalloc.hh"
 
 static const int update_iterations = 16;
 static const int cell_size = 128;
@@ -32,8 +33,9 @@ static bool cancelled = false;
 template<typename MutationGenerator>
 void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
-    dirty_memory_manager dmm;
-    cache_tracker tracker;
+    tests::logalloc::sharded_tracker logalloc_tracker;
+    cache_tracker tracker(*logalloc_tracker);
+    dirty_memory_manager dmm(*logalloc_tracker);
     row_cache cache(s, make_empty_snapshot_source(), tracker, is_continuous::yes);
 
     size_t memtable_size = seastar::memory::stats().total_memory() / 4;
@@ -42,7 +44,7 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
 
     for (int i = 0; i < update_iterations; ++i) {
         auto MB = 1024 * 1024;
-        const auto prefill_stats = logalloc::shard_tracker().statistics();
+        const auto prefill_stats = logalloc_tracker->statistics();
         auto prefill_compacted = prefill_stats.memory_compacted;
         auto prefill_allocated = prefill_stats.memory_allocated;
 
@@ -65,7 +67,7 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
         });
         std::cout << format("took {:.6f} [ms]", drain_d.count() * 1000) << std::endl;
 
-        const auto prev_stats = logalloc::shard_tracker().statistics();
+        const auto prev_stats = logalloc_tracker->statistics();
         auto prev_compacted = prev_stats.memory_compacted;
         auto prev_allocated = prev_stats.memory_allocated;
         auto prev_rows_processed_from_memtable = tracker.get_stats().rows_processed_from_memtable;
@@ -109,7 +111,7 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
 
         slm.stop();
 
-        const auto stats = logalloc::shard_tracker().statistics();
+        const auto stats = logalloc_tracker->statistics();
         auto compacted = stats.memory_compacted - prev_compacted;
         auto allocated = stats.memory_allocated - prev_allocated;
 
@@ -236,7 +238,6 @@ int main(int argc, char** argv) {
                 cancelled = true;
                 return make_ready_future();
             });
-            logalloc::prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory()).get();
             test_small_partitions();
             test_partition_with_few_small_rows();
             test_partition_with_lots_of_small_rows();

@@ -35,7 +35,7 @@ int main(int argc, char* argv[]) {
         }
 
         auto s = builder.build();
-        dirty_memory_manager dmm;
+        dirty_memory_manager dmm(logalloc::shard_tracker());
         replica::memtable mt(s, dmm);
 
         std::cout << "Timing mutation of single column within one row...\n";

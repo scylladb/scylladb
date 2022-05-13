@@ -51,14 +51,15 @@ row_cache::create_underlying_reader(read_context& ctx, mutation_source& src, con
 
 static thread_local mutation_application_stats dummy_app_stats;
 
-cache_tracker::cache_tracker(register_metrics with_metrics)
-    : cache_tracker(dummy_app_stats, with_metrics)
+cache_tracker::cache_tracker(logalloc::tracker& tracker, register_metrics with_metrics)
+    : cache_tracker(tracker, dummy_app_stats, with_metrics)
 {}
 
 static thread_local cache_tracker* current_tracker;
 
-cache_tracker::cache_tracker(mutation_application_stats& app_stats, register_metrics with_metrics)
-    : _garbage(_region, this, app_stats)
+cache_tracker::cache_tracker(logalloc::tracker& tracker, mutation_application_stats& app_stats, register_metrics with_metrics)
+    : _region(tracker)
+    , _garbage(_region, this, app_stats)
     , _memtable_cleaner(_region, nullptr, app_stats)
     , _app_stats(app_stats)
 {

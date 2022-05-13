@@ -33,6 +33,7 @@
 #include "test/lib/random_utils.hh"
 #include "test/lib/simple_position_reader_queue.hh"
 #include "test/lib/fragment_scatterer.hh"
+#include "test/lib/logalloc.hh"
 
 #include "dht/sharder.hh"
 #include "schema_builder.hh"
@@ -694,6 +695,8 @@ struct sst_factory {
 
 SEASTAR_TEST_CASE(combined_mutation_reader_test) {
   return sstables::test_env::do_with_async([] (sstables::test_env& env) {
+    tests::logalloc::sharded_tracker logalloc_tracker;
+
     simple_schema s;
 
     auto pkeys = s.make_pkeys(6);
@@ -1204,8 +1207,9 @@ SEASTAR_TEST_CASE(test_combined_reader_slicing_with_overlapping_range_tombstones
 
 SEASTAR_TEST_CASE(test_combined_mutation_source_is_a_mutation_source) {
     return seastar::async([] {
+        tests::logalloc::sharded_tracker logalloc_tracker;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        dirty_memory_manager dmm;
+        dirty_memory_manager dmm(*logalloc_tracker);
 
         // Creates a mutation source which combines N mutation sources with mutation fragments spread
         // among them in a round robin fashion.
@@ -2566,7 +2570,8 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_compacting_reader_as_mutation_source) {
-    dirty_memory_manager dmm;
+    tests::logalloc::sharded_tracker logalloc_tracker;
+    dirty_memory_manager dmm(*logalloc_tracker);
     auto make_populate = [&dmm] (bool single_fragment_buffer) {
         return [&dmm, single_fragment_buffer] (schema_ptr s, const std::vector<mutation>& mutations, gc_clock::time_point query_time) mutable {
             auto mt = make_lw_shared<replica::memtable>(s, dmm);
@@ -2694,7 +2699,8 @@ SEASTAR_THREAD_TEST_CASE(test_compacting_reader_is_consistent_with_compaction) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_auto_paused_evictable_reader_is_mutation_source) {
-    dirty_memory_manager dmm;
+    tests::logalloc::sharded_tracker logalloc_tracker;
+    dirty_memory_manager dmm(*logalloc_tracker);
     auto make_populate = [&dmm] (schema_ptr s, const std::vector<mutation>& mutations, gc_clock::time_point query_time) {
         auto mt = make_lw_shared<replica::memtable>(s, dmm);
         for (auto& mut : mutations) {
@@ -2777,7 +2783,8 @@ SEASTAR_THREAD_TEST_CASE(test_manual_paused_evictable_reader_is_mutation_source)
         }
     };
 
-    dirty_memory_manager dmm;
+    tests::logalloc::sharded_tracker logalloc_tracker;
+    dirty_memory_manager dmm(*logalloc_tracker);
 
     auto make_populate = [&dmm] (schema_ptr s, const std::vector<mutation>& mutations, gc_clock::time_point query_time) {
         auto mt = make_lw_shared<replica::memtable>(s, dmm);

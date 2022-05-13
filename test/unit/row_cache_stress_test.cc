@@ -17,6 +17,7 @@
 #include "utils/int_range.hh"
 #include "utils/div_ceil.hh"
 #include "test/lib/memtable_snapshot_source.hh"
+#include "test/lib/logalloc.hh"
 #include <seastar/core/reactor.hh>
 
 static thread_local bool cancelled = false;
@@ -42,10 +43,11 @@ struct table {
     cache_tracker tracker;
     row_cache cache;
 
-    table(unsigned partitions, unsigned rows)
+    table(logalloc::tracker& ltracker, unsigned partitions, unsigned rows)
         : semaphore(reader_concurrency_semaphore::no_limits{}, __FILE__)
-        , underlying(s.schema())
+        , underlying(s.schema(), ltracker)
         , mt(make_lw_shared<replica::memtable>(s.schema(), underlying.get_dirty_memory_manager()))
+        , tracker(ltracker)
         , cache(s.schema(), snapshot_source([this] { return underlying(); }), tracker)
     {
         p_keys = s.make_pkeys(partitions);
@@ -281,7 +283,9 @@ int main(int argc, char** argv) {
             auto rows = app.configuration()["rows"].as<unsigned>();
             auto seconds = app.configuration()["seconds"].as<unsigned>();
 
-            row_cache_stress_test::table t(partitions, rows);
+            tests::logalloc::sharded_tracker logalloc_tracker;
+
+            row_cache_stress_test::table t(*logalloc_tracker, partitions, rows);
             auto stop_t = deferred_stop(t);
 
             engine().at_exit([] {
@@ -314,8 +318,8 @@ int main(int argc, char** argv) {
                     reads.change(), scans.change(), mutations.change(), flushes.change(),
                     t.tracker.region().occupancy().used_space() / MB,
                     t.tracker.region().occupancy().total_space() / MB,
-                    logalloc::shard_tracker().region_occupancy().used_space() / MB,
-                    logalloc::shard_tracker().region_occupancy().total_space() / MB,
+                    logalloc_tracker->region_occupancy().used_space() / MB,
+                    logalloc_tracker->region_occupancy().total_space() / MB,
                     seastar::memory::stats().free_memory() / MB);
             });
             stats_printer.arm_periodic(1s);

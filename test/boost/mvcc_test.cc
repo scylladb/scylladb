@@ -26,6 +26,7 @@
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/failure_injecting_allocation_strategy.hh"
 #include "test/lib/log.hh"
+#include "test/lib/logalloc.hh"
 #include "test/boost/range_tombstone_list_assertions.hh"
 #include "real_dirty_memory_accounter.hh"
 
@@ -95,7 +96,8 @@ static mutation_partition read_partition_from(const schema& schema, partition_sn
 
 SEASTAR_TEST_CASE(test_range_tombstone_slicing) {
     return seastar::async([] {
-        logalloc::region r;
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        logalloc::region r(*logalloc_tracker);
         mutation_cleaner cleaner(r, no_cache_tracker, app_stats_for_tests);
         simple_schema table;
         auto s = table.schema();
@@ -173,7 +175,8 @@ static query::clustering_range reversed(const query::clustering_range& range) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_range_tombstone_reverse_slicing) {
-    logalloc::region r;
+    tests::logalloc::sharded_tracker logalloc_tracker;
+    logalloc::region r(*logalloc_tracker);
     mutation_cleaner cleaner(r, no_cache_tracker, app_stats_for_tests);
     with_allocator(r.allocator(), [&] {
         mutation_application_stats app_stats;
@@ -263,17 +266,19 @@ class mvcc_container {
     mutation_cleaner* _cleaner;
 public:
     struct no_tracker {};
-    mvcc_container(schema_ptr s)
+    mvcc_container(schema_ptr s, logalloc::tracker& tracker)
         : _schema(s)
-        , _tracker(std::make_optional<cache_tracker>())
+        , _tracker(std::make_optional<cache_tracker>(tracker))
+        , _mgr(tracker)
         , _acc(std::make_optional<real_dirty_memory_accounter>(_mgr, *_tracker, 0))
         , _region(&_tracker->region())
         , _cleaner(&_tracker->cleaner())
     { }
-    mvcc_container(schema_ptr s, no_tracker)
+    mvcc_container(schema_ptr s, logalloc::tracker& tracker, no_tracker)
         : _schema(s)
-        , _region_holder(std::make_optional<logalloc::region>())
+        , _region_holder(std::make_optional<logalloc::region>(tracker))
         , _cleaner_holder(std::make_optional<mutation_cleaner>(*_region_holder, nullptr, app_stats_for_tests))
+        , _mgr(tracker)
         , _region(&*_region_holder)
         , _cleaner(&*_cleaner_holder)
     { }
@@ -427,8 +432,9 @@ mvcc_partition mvcc_container::make_not_evictable(const mutation_partition& mp) 
 
 SEASTAR_TEST_CASE(test_apply_to_incomplete) {
     return seastar::async([] {
+        tests::logalloc::sharded_tracker logalloc_tracker;
         simple_schema table;
-        mvcc_container ms(table.schema());
+        mvcc_container ms(table.schema(), *logalloc_tracker);
         auto&& s = *table.schema();
 
         auto new_mutation = [&] {
@@ -483,8 +489,9 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete) {
 
 SEASTAR_TEST_CASE(test_schema_upgrade_preserves_continuity) {
     return seastar::async([] {
+        tests::logalloc::sharded_tracker logalloc_tracker;
         simple_schema table;
-        mvcc_container ms(table.schema());
+        mvcc_container ms(table.schema(), *logalloc_tracker);
 
         auto new_mutation = [&] {
             return mutation(table.schema(), table.make_pkey(0));
@@ -543,8 +550,9 @@ SEASTAR_TEST_CASE(test_schema_upgrade_preserves_continuity) {
 SEASTAR_TEST_CASE(test_eviction_with_active_reader) {
     return seastar::async([] {
         {
+            tests::logalloc::sharded_tracker logalloc_tracker;
             simple_schema table;
-            mvcc_container ms(table.schema());
+            mvcc_container ms(table.schema(), *logalloc_tracker);
             auto&& s = *table.schema();
             auto pk = table.make_pkey();
             auto ck1 = table.make_ckey(1);
@@ -586,9 +594,10 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete_respects_continuity) {
     // and that continuity is not affected.
     return seastar::async([] {
         {
+            tests::logalloc::sharded_tracker logalloc_tracker;
             random_mutation_generator gen(random_mutation_generator::generate_counters::no);
             auto s = gen.schema();
-            mvcc_container ms(s);
+            mvcc_container ms(s, *logalloc_tracker);
 
             mutation m1 = gen();
             mutation m2 = gen();
@@ -656,9 +665,10 @@ SEASTAR_TEST_CASE(test_snapshot_cursor_is_consistent_with_merging) {
     // Tests that reading many versions using a cursor gives the logical mutation back.
     return seastar::async([] {
         {
+            tests::logalloc::sharded_tracker logalloc_tracker;
             random_mutation_generator gen(random_mutation_generator::generate_counters::no);
             auto s = gen.schema();
-            mvcc_container ms(s);
+            mvcc_container ms(s, *logalloc_tracker);
 
             mutation m1 = gen();
             mutation m2 = gen();
@@ -694,7 +704,8 @@ SEASTAR_TEST_CASE(test_snapshot_cursor_is_consistent_with_merging) {
 SEASTAR_TEST_CASE(test_snapshot_cursor_is_consistent_with_merging_for_nonevictable) {
     // Tests that reading many versions using a cursor gives the logical mutation back.
     return seastar::async([] {
-        logalloc::region r;
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        logalloc::region r(*logalloc_tracker);
         mutation_cleaner cleaner(r, no_cache_tracker, app_stats_for_tests);
         with_allocator(r.allocator(), [&] {
             random_mutation_generator gen(random_mutation_generator::generate_counters::no);
@@ -734,7 +745,8 @@ SEASTAR_TEST_CASE(test_snapshot_cursor_is_consistent_with_merging_for_nonevictab
 SEASTAR_TEST_CASE(test_continuity_merging_in_evictable) {
     // Tests that reading many versions using a cursor gives the logical mutation back.
     return seastar::async([] {
-        cache_tracker tracker;
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        cache_tracker tracker(*logalloc_tracker);
         auto& r = tracker.region();
         with_allocator(r.allocator(), [&] {
             simple_schema ss;
@@ -776,7 +788,8 @@ SEASTAR_TEST_CASE(test_continuity_merging_in_evictable) {
 
 SEASTAR_TEST_CASE(test_partition_snapshot_row_cursor) {
     return seastar::async([] {
-        cache_tracker tracker;
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        cache_tracker tracker(*logalloc_tracker);
         auto& r = tracker.region();
         with_allocator(r.allocator(), [&] {
             simple_schema table;
@@ -946,7 +959,8 @@ SEASTAR_TEST_CASE(test_partition_snapshot_row_cursor) {
 
 SEASTAR_TEST_CASE(test_partition_snapshot_row_cursor_reversed) {
     return seastar::async([] {
-        cache_tracker tracker;
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        cache_tracker tracker(*logalloc_tracker);
         auto& r = tracker.region();
         with_allocator(r.allocator(), [&] {
             simple_schema table;
@@ -1137,7 +1151,8 @@ SEASTAR_TEST_CASE(test_partition_snapshot_row_cursor_reversed) {
 
 SEASTAR_TEST_CASE(test_cursor_tracks_continuity_in_reversed_mode) {
     return seastar::async([] {
-        cache_tracker tracker;
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        cache_tracker tracker(*logalloc_tracker);
         auto& r = tracker.region();
         with_allocator(r.allocator(), [&] {
             simple_schema table;
@@ -1244,7 +1259,8 @@ SEASTAR_TEST_CASE(test_cursor_tracks_continuity_in_reversed_mode) {
 
 SEASTAR_TEST_CASE(test_ensure_entry_in_latest_in_reversed_mode) {
     return seastar::async([] {
-        cache_tracker tracker;
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        cache_tracker tracker(*logalloc_tracker);
         auto& r = tracker.region();
         with_allocator(r.allocator(), [&] {
             simple_schema table;
@@ -1299,7 +1315,8 @@ SEASTAR_TEST_CASE(test_ensure_entry_in_latest_in_reversed_mode) {
 
 SEASTAR_TEST_CASE(test_ensure_entry_in_latest_does_not_set_continuity_in_reversed_mode) {
     return seastar::async([] {
-        cache_tracker tracker;
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        cache_tracker tracker(*logalloc_tracker);
         auto& r = tracker.region();
         with_allocator(r.allocator(), [&] {
             simple_schema table;
@@ -1350,7 +1367,7 @@ SEASTAR_TEST_CASE(test_ensure_entry_in_latest_does_not_set_continuity_in_reverse
 
 SEASTAR_TEST_CASE(test_apply_is_atomic) {
     auto do_test = [](auto&& gen) {
-        logalloc::region r;
+        logalloc::region r(logalloc::shard_tracker());
         mutation_cleaner cleaner(r, no_cache_tracker, app_stats_for_tests);
         failure_injecting_allocation_strategy alloc(r.allocator());
         with_allocator(r.allocator(), [&] {
@@ -1397,7 +1414,8 @@ SEASTAR_TEST_CASE(test_apply_is_atomic) {
 
 SEASTAR_TEST_CASE(test_versions_are_merged_when_snapshots_go_away) {
     return seastar::async([] {
-        logalloc::region r;
+        tests::logalloc::sharded_tracker logalloc_tracker;
+        logalloc::region r(*logalloc_tracker);
         mutation_cleaner cleaner(r, nullptr, app_stats_for_tests);
         with_allocator(r.allocator(), [&] {
             random_mutation_generator gen(random_mutation_generator::generate_counters::no);
@@ -1459,6 +1477,7 @@ SEASTAR_TEST_CASE(test_versions_are_merged_when_snapshots_go_away) {
 // Reproducer of #4030
 SEASTAR_TEST_CASE(test_snapshot_merging_after_container_is_destroyed) {
     return seastar::async([] {
+        tests::logalloc::sharded_tracker logalloc_tracker;
         random_mutation_generator gen(random_mutation_generator::generate_counters::no);
         auto s = gen.schema();
 
@@ -1468,8 +1487,8 @@ SEASTAR_TEST_CASE(test_snapshot_merging_after_container_is_destroyed) {
         mutation m2 = gen();
         m2.partition().make_fully_continuous();
 
-        auto c1 = std::make_unique<mvcc_container>(s, mvcc_container::no_tracker{});
-        auto c2 = std::make_unique<mvcc_container>(s, mvcc_container::no_tracker{});
+        auto c1 = std::make_unique<mvcc_container>(s, *logalloc_tracker, mvcc_container::no_tracker{});
+        auto c2 = std::make_unique<mvcc_container>(s, *logalloc_tracker, mvcc_container::no_tracker{});
 
         auto e = std::make_unique<mvcc_partition>(c1->make_not_evictable(m1.partition()));
         auto snap1 = e->read();

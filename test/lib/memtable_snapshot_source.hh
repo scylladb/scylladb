@@ -79,8 +79,9 @@ private:
         _memtables.push_back(new_mt);
     }
 public:
-    memtable_snapshot_source(schema_ptr s)
+    memtable_snapshot_source(schema_ptr s, logalloc::tracker& tracker)
         : _s(s)
+        , _dmm(tracker)
         , _compactor(seastar::async([this] () noexcept {
             while (!_closed) {
                 // condition_variable::wait() also allocates memory

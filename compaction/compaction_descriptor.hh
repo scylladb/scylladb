@@ -20,6 +20,10 @@
 #include "dht/i_partitioner.hh"
 #include "compaction_weight_registration.hh"
 
+namespace logalloc {
+class tracker;
+}
+
 namespace sstables {
 
 enum class compaction_type {

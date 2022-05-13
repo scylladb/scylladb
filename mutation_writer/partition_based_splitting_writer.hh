@@ -13,6 +13,10 @@
 
 #include "feed_writers.hh"
 
+namespace logalloc {
+class tracker;
+}
+
 namespace mutation_writer {
 
 struct segregate_config {
