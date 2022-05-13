@@ -512,7 +512,7 @@ private:
 class tracker_reclaimer_lock {
     tracker::impl::reclaiming_lock _lock;
 public:
-    tracker_reclaimer_lock() : _lock(shard_tracker().get_impl()) { }
+    tracker_reclaimer_lock(tracker::impl& tracker) : _lock(tracker) { }
 };
 
 tracker::tracker()
@@ -947,7 +947,7 @@ segment* segment_pool::allocate_segment(size_t reserve)
     //    memory in order to reclaim enough segments.
     //
     do {
-        tracker_reclaimer_lock rl;
+        tracker_reclaimer_lock rl(_tracker);
         if (_free_segments > reserve) {
             auto free_idx = _lsa_free_segments_bitmap.find_last_set();
             _lsa_free_segments_bitmap.clear(free_idx);
@@ -2490,7 +2490,7 @@ bool segment_pool::compact_segment(segment* seg) {
     // one more segment
     reservation_goal open_emergency_pool(*this, 0);
     allocation_lock no_alloc(*this);
-    tracker_reclaimer_lock no_reclaim;
+    tracker_reclaimer_lock no_reclaim(_tracker);
 
     desc._region->compact_segment(seg, desc);
     return true;
@@ -2559,7 +2559,7 @@ region_group::start_releaser(scheduling_group deferred_work_sg) {
                 } else {
                     // Block reclaiming to prevent signal() from being called by reclaimer inside wait()
                     // FIXME: handle allocation failures (not very likely) like allocating_section does
-                    tracker_reclaimer_lock rl;
+                    tracker_reclaimer_lock rl(_tracker.get_impl());
                     return _relief.wait().then([] {
                         return stop_iteration::no;
                     });
