@@ -11,6 +11,7 @@
 #include <chrono>
 #include <unordered_map>
 #include <memory_resource>
+#include <optional>
 
 #include <boost/intrusive/list.hpp>
 #include <boost/intrusive/unordered_set.hpp>
@@ -213,10 +214,18 @@ private:
     {
         static_assert(noexcept(LoadingCacheStats::inc_unprivileged_on_cache_size_eviction()), "LoadingCacheStats::inc_unprivileged_on_cache_size_eviction must be non-throwing");
 
-        // Sanity check: if expiration period is given then non-zero refresh period and maximal size are required
-        if (caching_enabled() && (_cfg.refresh == lowres_clock::duration(0) || _cfg.max_size == 0)) {
+        if (!validate_config(_cfg)) {
             throw exceptions::configuration_exception("loading_cache: caching is enabled but refresh period and/or max_size are zero");
         }
+    }
+
+    bool validate_config(const authorization_cache_config& cfg) const noexcept {
+        // Sanity check: if expiration period is given then non-zero refresh period and maximal size are required
+        if (cfg.expiry != loading_cache_clock_type::duration(0) && (cfg.max_size == 0 || cfg.refresh == loading_cache_clock_type::duration(0))) {
+            return false;
+        }
+
+        return true;
     }
 
 public:
@@ -262,6 +271,31 @@ public:
         _logger.info("Resetting cache");
 
         remove_if([](const value_type&){ return true; });
+    }
+
+    bool update_config(utils::authorization_cache_config cfg) {
+        _logger.info("Updating loading cache; max_size: {}, expiry: {}ms, refresh: {}ms", cfg.max_size,
+                     std::chrono::duration_cast<std::chrono::milliseconds>(cfg.expiry).count(),
+                     std::chrono::duration_cast<std::chrono::milliseconds>(cfg.refresh).count());
+
+        if (!validate_config(cfg)) {
+            _logger.debug("loading_cache: caching is enabled but refresh period and/or max_size are zero");
+            return false;
+        }
+
+        _updated_cfg.emplace(std::move(cfg));
+
+        // * If the timer is already armed we need to rearm it so that the changes on config can take place.
+        // * If timer is not armed and caching is enabled, it means that on_timer was executed but its continuation hasn't finished yet,
+        //   so we don't need to rearm it here, since on_timer's continuation will take care of that
+        // * If caching is disabled and it's being enabled here on update_config, we also need to arm the timer, so that the changes on config
+        //   can take place
+        if (_timer.armed() ||
+            (!caching_enabled() && _updated_cfg->expiry != loading_cache_clock_type::duration(0))) {
+            _timer.rearm(loading_cache_clock_type::now() + loading_cache_clock_type::duration(std::chrono::milliseconds(1)));
+        }
+
+        return true;
     }
 
     template <typename LoadFunc>
@@ -592,6 +626,18 @@ private:
     void on_timer() {
         _logger.trace("on_timer(): start");
 
+        if (_updated_cfg) {
+            _cfg = *_updated_cfg;
+            _updated_cfg.reset();
+            _timer_period = std::min(_cfg.expiry, _cfg.refresh);
+        }
+
+        // Caching might have been disabled during a config update
+        if (!caching_enabled()) {
+            reset();
+            return;
+        }
+
         // Clean up items that were not touched for the whole expiry period.
         drop_expired();
 
@@ -621,7 +667,14 @@ private:
                 return this->reload(std::move(ts_value_ptr));
             }).finally([this] {
                 _logger.trace("on_timer(): rearming");
-                _timer.arm(loading_cache_clock_type::now() + _timer_period);
+
+                // If the config was updated after on_timer and before this continuation finished
+                // it's necessary to run on_timer again to make sure that everything will be reloaded correctly
+                if (_updated_cfg) {
+                    _timer.arm(loading_cache_clock_type::now() + loading_cache_clock_type::duration(std::chrono::milliseconds(1)));
+                } else {
+                    _timer.arm(loading_cache_clock_type::now() + _timer_period);
+                }
             });
         });
     }
@@ -633,6 +686,7 @@ private:
     size_t _unprivileged_section_size = 0;
     loading_cache_clock_type::duration _timer_period;
     loading_cache_config _cfg;
+    std::optional<loading_cache_config> _updated_cfg;
     logging::logger& _logger;
     std::function<future<Tp>(const Key&)> _load;
     timer<loading_cache_clock_type> _timer;
