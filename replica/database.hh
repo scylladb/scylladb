@@ -367,7 +367,7 @@ public:
         bool enable_incremental_backups = false;
         utils::updateable_value<bool> compaction_enforce_min_threshold{false};
         bool enable_dangerous_direct_import_of_cassandra_counters = false;
-        ::dirty_memory_manager* dirty_memory_manager = &default_dirty_memory_manager;
+        ::dirty_memory_manager* dirty_memory_manager = nullptr;
         reader_concurrency_semaphore* streaming_read_concurrency_semaphore;
         reader_concurrency_semaphore* compaction_concurrency_semaphore;
         replica::cf_stats* cf_stats = nullptr;
@@ -1126,7 +1126,7 @@ public:
         bool enable_incremental_backups = false;
         utils::updateable_value<bool> compaction_enforce_min_threshold{false};
         bool enable_dangerous_direct_import_of_cassandra_counters = false;
-        ::dirty_memory_manager* dirty_memory_manager = &default_dirty_memory_manager;
+        ::dirty_memory_manager* dirty_memory_manager = nullptr;
         reader_concurrency_semaphore* streaming_read_concurrency_semaphore;
         reader_concurrency_semaphore* compaction_concurrency_semaphore;
         replica::cf_stats* cf_stats = nullptr;

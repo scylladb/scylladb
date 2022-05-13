@@ -220,6 +220,3 @@ private:
 
     friend class flush_permit;
 };
-
-extern thread_local dirty_memory_manager default_dirty_memory_manager;
-
