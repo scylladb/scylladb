@@ -64,6 +64,7 @@ public:
         return _cache.stop();
     }
 
+    bool update_config(utils::loading_cache_config);
     future<permission_set> get(const role_or_anonymous&, const resource&);
 };
 

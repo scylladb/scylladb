@@ -219,7 +219,7 @@ private:
         }
     }
 
-    bool validate_config(const authorization_cache_config& cfg) const noexcept {
+    bool validate_config(const loading_cache_config& cfg) const noexcept {
         // Sanity check: if expiration period is given then non-zero refresh period and maximal size are required
         if (cfg.expiry != loading_cache_clock_type::duration(0) && (cfg.max_size == 0 || cfg.refresh == loading_cache_clock_type::duration(0))) {
             return false;
@@ -273,7 +273,7 @@ public:
         remove_if([](const value_type&){ return true; });
     }
 
-    bool update_config(utils::authorization_cache_config cfg) {
+    bool update_config(utils::loading_cache_config cfg) {
         _logger.info("Updating loading cache; max_size: {}, expiry: {}ms, refresh: {}ms", cfg.max_size,
                      std::chrono::duration_cast<std::chrono::milliseconds>(cfg.expiry).count(),
                      std::chrono::duration_cast<std::chrono::milliseconds>(cfg.refresh).count());

@@ -1031,7 +1031,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             debug::the_query_processor = &qp;
             auto local_data_dict = seastar::sharded_parameter([] (const replica::database& db) { return db.as_data_dictionary(); }, std::ref(db));
 
-            utils::authorization_cache_config auth_prep_cache_config;
+            utils::loading_cache_config auth_prep_cache_config;
             auth_prep_cache_config.max_size = qp_mcfg.authorized_prepared_cache_size;
             auth_prep_cache_config.expiry = std::min(std::chrono::milliseconds(cfg->permissions_validity_in_ms()),
                                                      std::chrono::duration_cast<std::chrono::milliseconds>(cql3::prepared_statements_cache::entry_expiry));

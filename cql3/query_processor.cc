@@ -55,17 +55,23 @@ public:
     }
 };
 
-query_processor::query_processor(service::storage_proxy& proxy, service::forward_service& forwarder, data_dictionary::database db, service::migration_notifier& mn, service::migration_manager& mm, query_processor::memory_config mcfg, cql_config& cql_cfg, utils::authorization_cache_config auth_prep_cache_cfg)
+query_processor::query_processor(service::storage_proxy& proxy, service::forward_service& forwarder, data_dictionary::database db, service::migration_notifier& mn, service::migration_manager& mm, query_processor::memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg)
         : _migration_subscriber{std::make_unique<migration_subscriber>(this)}
         , _proxy(proxy)
         , _forwarder(forwarder)
         , _db(db)
         , _mnotifier(mn)
         , _mm(mm)
+        , _mcfg(mcfg)
         , _cql_config(cql_cfg)
         , _internal_state(new internal_state())
-        , _prepared_cache(prep_cache_log, mcfg.prepared_statment_cache_size)
-        , _authorized_prepared_cache(std::move(auth_prep_cache_cfg), authorized_prepared_statements_cache_log) {
+        , _prepared_cache(prep_cache_log, _mcfg.prepared_statment_cache_size)
+        , _authorized_prepared_cache(std::move(auth_prep_cache_cfg), authorized_prepared_statements_cache_log)
+        , _auth_prepared_cache_cfg_cb([this] (uint32_t) { (void) _authorized_prepared_cache_config_action.trigger_later(); })
+        , _authorized_prepared_cache_config_action([this] { update_authorized_prepared_cache_config(); return make_ready_future<>(); })
+        , _authorized_prepared_cache_update_interval_in_ms_observer(_db.get_config().permissions_update_interval_in_ms.observe(_auth_prepared_cache_cfg_cb))
+        , _authorized_prepared_cache_validity_in_ms_observer(_db.get_config().permissions_validity_in_ms.observe(_auth_prepared_cache_cfg_cb))
+        {
     namespace sm = seastar::metrics;
     namespace stm = statements;
     using clevel = db::consistency_level;
@@ -974,6 +980,18 @@ future<> query_processor::query_internal(
 shared_ptr<cql_transport::messages::result_message> query_processor::bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls) {
     _proxy.get_stats().replica_cross_shard_ops++;
     return ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(shard, std::move(cached_fn_calls));
+}
+
+void query_processor::update_authorized_prepared_cache_config() {
+    utils::loading_cache_config cfg;
+    cfg.max_size = _mcfg.authorized_prepared_cache_size;
+    cfg.expiry = std::min(std::chrono::milliseconds(_db.get_config().permissions_validity_in_ms()),
+                          std::chrono::duration_cast<std::chrono::milliseconds>(prepared_statements_cache::entry_expiry));
+    cfg.refresh = std::chrono::milliseconds(_db.get_config().permissions_update_interval_in_ms());
+
+    if (!_authorized_prepared_cache.update_config(std::move(cfg))) {
+        log.error("Failed to apply authorized prepared statements cache changes. Please read the documentation of these parameters");
+    }
 }
 
 }

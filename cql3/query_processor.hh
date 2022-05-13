@@ -26,6 +26,8 @@
 #include "service/qos/service_level_controller.hh"
 #include "service/client_state.hh"
 #include "service/forward_service.hh"
+#include "utils/observable.hh"
+
 
 namespace service {
 class migration_manager;
@@ -93,6 +95,7 @@ private:
     data_dictionary::database _db;
     service::migration_notifier& _mnotifier;
     service::migration_manager& _mm;
+    memory_config _mcfg;
     const cql_config& _cql_config;
 
     struct stats {
@@ -109,6 +112,11 @@ private:
 
     prepared_statements_cache _prepared_cache;
     authorized_prepared_statements_cache _authorized_prepared_cache;
+
+    std::function<void(uint32_t)> _auth_prepared_cache_cfg_cb;
+    serialized_action _authorized_prepared_cache_config_action;
+    utils::observer<uint32_t> _authorized_prepared_cache_update_interval_in_ms_observer;
+    utils::observer<uint32_t> _authorized_prepared_cache_validity_in_ms_observer;
 
     // A map for prepared statements used internally (which we don't want to mix with user statement, in particular we
     // don't bother with expiration on those.
@@ -128,7 +136,7 @@ public:
     static std::unique_ptr<statements::raw::parsed_statement> parse_statement(const std::string_view& query);
     static std::vector<std::unique_ptr<statements::raw::parsed_statement>> parse_statements(std::string_view queries);
 
-    query_processor(service::storage_proxy& proxy, service::forward_service& forwarder, data_dictionary::database db, service::migration_notifier& mn, service::migration_manager& mm, memory_config mcfg, cql_config& cql_cfg, utils::authorization_cache_config auth_prep_cache_cfg);
+    query_processor(service::storage_proxy& proxy, service::forward_service& forwarder, data_dictionary::database db, service::migration_notifier& mn, service::migration_manager& mm, memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg);
 
     ~query_processor();
 
@@ -370,6 +378,8 @@ public:
     friend class migration_subscriber;
 
     shared_ptr<cql_transport::messages::result_message> bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls);
+
+    void update_authorized_prepared_cache_config();
 
 private:
     query_options make_internal_options(

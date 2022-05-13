@@ -158,6 +158,10 @@ public:
         return _cache.memory_footprint();
     }
 
+    bool update_config(utils::loading_cache_config c) {
+        return _cache.update_config(std::move(c));
+    }
+
     future<> stop() {
         return _cache.stop();
     }

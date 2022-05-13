@@ -22,6 +22,7 @@
 #include "auth/role_or_anonymous.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
+#include "db/config.hh"
 #include "db/consistency_level_type.hh"
 #include "exceptions/exceptions.hh"
 #include "log.hh"
@@ -113,7 +114,12 @@ service::service(
             , _authorizer(std::move(z))
             , _authenticator(std::move(a))
             , _role_manager(std::move(r))
-            , _migration_listener(std::make_unique<auth_migration_listener>(*_authorizer)) {}
+            , _migration_listener(std::make_unique<auth_migration_listener>(*_authorizer))
+            , _permissions_cache_cfg_cb([this] (uint32_t) { (void) _permissions_cache_config_action.trigger_later(); })
+            , _permissions_cache_config_action([this] { update_cache_config(); return make_ready_future<>(); })
+            , _permissions_cache_max_entries_observer(_qp.db().get_config().permissions_cache_max_entries.observe(_permissions_cache_cfg_cb))
+            , _permissions_cache_update_interval_in_ms_observer(_qp.db().get_config().permissions_update_interval_in_ms.observe(_permissions_cache_cfg_cb))
+            , _permissions_cache_validity_in_ms_observer(_qp.db().get_config().permissions_validity_in_ms.observe(_permissions_cache_cfg_cb)) {}
 
 service::service(
         utils::loading_cache_config c,
@@ -180,6 +186,19 @@ future<> service::stop() {
     }).then([this] {
         return when_all_succeed(_role_manager->stop(), _authorizer->stop(), _authenticator->stop()).discard_result();
     });
+}
+
+void service::update_cache_config() {
+    auto db = _qp.db();
+
+    utils::loading_cache_config perm_cache_config;
+    perm_cache_config.max_size = db.get_config().permissions_cache_max_entries();
+    perm_cache_config.expiry = std::chrono::milliseconds(db.get_config().permissions_validity_in_ms());
+    perm_cache_config.refresh = std::chrono::milliseconds(db.get_config().permissions_update_interval_in_ms());
+
+    if (!_permissions_cache->update_config(std::move(perm_cache_config))) {
+        log.error("Failed to apply permissions cache changes. Please read the documentation of these parameters");
+    }
 }
 
 future<bool> service::has_existing_legacy_users() const {
