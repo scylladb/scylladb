@@ -160,7 +160,7 @@ class loading_cache {
             return _loaded;
         }
 
-        size_t size() const {
+        size_t size() const noexcept {
             return _size;
         }
 
@@ -379,7 +379,7 @@ public:
     }
 
     /// \brief returns the memory size the currently cached entries occupy according to the EntrySize predicate.
-    size_t memory_footprint() const {
+    size_t memory_footprint() const noexcept {
         return _unprivileged_section_size + _privileged_section_size;
     }
 
@@ -428,7 +428,7 @@ private:
         return _expiry != lowres_clock::duration(0);
     }
 
-    static void destroy_ts_value(ts_value_lru_entry* val) {
+    static void destroy_ts_value(ts_value_lru_entry* val) noexcept {
         Alloc().delete_object(val);
     }
 
@@ -526,7 +526,7 @@ private:
 
     // Shrink the cache to the _max_size discarding the least recently used items.
     // Get rid from the entries that were used exactly once first.
-    void shrink() {
+    void shrink() noexcept {
         using namespace std::chrono;
 
         auto drop_privileged_entry = [&] {
