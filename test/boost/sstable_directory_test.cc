@@ -78,7 +78,7 @@ make_sstable_for_all_shards(replica::database& db, replica::table& table, fs::pa
     // but the users are usually in a thread, and rewrite_toc_without_scylla_component requires
     // a thread. We could fix that, but deferring that for now.
     auto s = table.schema();
-    auto mt = make_lw_shared<replica::memtable>(s);
+    auto mt = make_lw_shared<replica::memtable>(s, db.get_user_dirty_memory_manager());
     auto msb = db.get_config().murmur3_partitioner_ignore_msb_bits();
     for (shard_id shard = 0; shard < smp::count; ++shard) {
         auto key_token_pair = token_generation_for_shard(1, shard, msb);

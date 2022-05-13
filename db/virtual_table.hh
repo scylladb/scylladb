@@ -10,6 +10,7 @@
 
 #include "readers/filtering.hh"
 #include "replica/memtable.hh"
+#include "dirty_memory_manager.hh"
 #include "schema.hh"
 #include "replica/database_fwd.hh"
 
@@ -51,8 +52,12 @@ public:
 // Produces results by filling a memtable on each read.
 // Use when the amount of data is not significant relative to shard's memory size.
 class memtable_filling_virtual_table : public virtual_table {
+    std::function<lw_shared_ptr<replica::memtable>(schema_ptr)> _mt_factory;
 public:
-    using virtual_table::virtual_table;
+    memtable_filling_virtual_table(schema_ptr s, std::function<lw_shared_ptr<replica::memtable>(schema_ptr)> mt_factory)
+        : db::virtual_table(std::move(s))
+        , _mt_factory(mt_factory)
+    { }
 
     // Override one of these execute() overloads.
     // The handler is always allowed to produce more data than implied by the query_restrictions.

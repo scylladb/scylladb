@@ -35,7 +35,7 @@ SEASTAR_TEST_CASE(test_schema_changes) {
             shared_sstable created_with_base_schema;
             shared_sstable created_with_changed_schema;
             if (it == cache.end()) {
-                auto mt = make_lw_shared<replica::memtable>(base);
+                auto mt = env.make_memtable(base);
                 for (auto& m : base_mutations) {
                     mt->apply(m);
                 }

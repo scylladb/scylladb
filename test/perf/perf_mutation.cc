@@ -35,7 +35,8 @@ int main(int argc, char* argv[]) {
         }
 
         auto s = builder.build();
-        replica::memtable mt(s);
+        dirty_memory_manager dmm;
+        replica::memtable mt(s, dmm);
 
         std::cout << "Timing mutation of single column within one row...\n";
 

@@ -312,6 +312,7 @@ class memtable {
     static constexpr size_t row_count = 50;
     mutable simple_schema _schema;
     perf::reader_concurrency_semaphore_wrapper _semaphore;
+    dirty_memory_manager _dmm;
     reader_permit _permit;
     std::vector<dht::decorated_key> _dkeys;
     lw_shared_ptr<replica::memtable> _single_row;
@@ -323,9 +324,9 @@ public:
         : _semaphore(__FILE__)
         , _permit(_semaphore.make_permit())
         , _dkeys(_schema.make_pkeys(partition_count))
-        , _single_row(make_lw_shared<replica::memtable>(_schema.schema()))
-        , _multi_row(make_lw_shared<replica::memtable>(_schema.schema()))
-        , _large_partition(make_lw_shared<replica::memtable>(_schema.schema()))
+        , _single_row(make_lw_shared<replica::memtable>(_schema.schema(), _dmm))
+        , _multi_row(make_lw_shared<replica::memtable>(_schema.schema(), _dmm))
+        , _large_partition(make_lw_shared<replica::memtable>(_schema.schema(), _dmm))
     {
         boost::for_each(
             _dkeys

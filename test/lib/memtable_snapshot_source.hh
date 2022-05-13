@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "dirty_memory_manager.hh"
 #include "readers/combined.hh"
 #include "readers/flat_mutation_reader_v2.hh"
 #include "replica/memtable.hh"
@@ -22,6 +23,7 @@
 // Must be destroyed in a seastar thread.
 class memtable_snapshot_source {
     schema_ptr _s;
+    dirty_memory_manager _dmm;
     circular_buffer<lw_shared_ptr<replica::memtable>> _memtables;
     utils::phased_barrier _apply;
     bool _closed = false;
@@ -32,7 +34,7 @@ private:
         return !_closed && _memtables.size() >= 3;
     }
     lw_shared_ptr<replica::memtable> new_memtable() {
-        return make_lw_shared<replica::memtable>(_s);
+        return make_lw_shared<replica::memtable>(_s, _dmm);
     }
     lw_shared_ptr<replica::memtable> pending() {
         if (_memtables.empty()) {
@@ -52,7 +54,7 @@ private:
         }
         auto count = _memtables.size();
         auto op = _apply.start();
-        auto new_mt = make_lw_shared<replica::memtable>(_s);
+        auto new_mt = new_memtable();
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto permit = semaphore.make_permit();
         std::vector<flat_mutation_reader_v2> readers;
@@ -116,6 +118,7 @@ public:
         }
         return space;
     }
+    dirty_memory_manager& get_dirty_memory_manager() { return _dmm; }
     void apply(const mutation& mt) {
         pending()->apply(mt);
     }

@@ -31,8 +31,8 @@
 // It has to be a container that does not invalidate pointers
 static std::list<dummy_sharder> keep_alive_sharder;
 
-static auto make_populate(bool evict_paused_readers, bool single_fragment_buffer) {
-    return [evict_paused_readers, single_fragment_buffer] (schema_ptr s, const std::vector<mutation>& mutations, gc_clock::time_point) mutable {
+static auto make_populate(distributed<replica::database>& db, bool evict_paused_readers, bool single_fragment_buffer) {
+    return [&db, evict_paused_readers, single_fragment_buffer] (schema_ptr s, const std::vector<mutation>& mutations, gc_clock::time_point) mutable {
         // We need to group mutations that have the same token so they land on the same shard.
         std::map<dht::token, std::vector<frozen_mutation>> mutations_by_token;
 
@@ -46,9 +46,9 @@ static auto make_populate(bool evict_paused_readers, bool single_fragment_buffer
 
         auto remote_memtables = make_lw_shared<std::vector<foreign_ptr<lw_shared_ptr<replica::memtable>>>>();
         for (unsigned shard = 0; shard < sharder.shard_count(); ++shard) {
-            auto remote_mt = smp::submit_to(shard, [shard, gs = global_schema_ptr(s), &merged_mutations, sharder] {
+            auto remote_mt = smp::submit_to(shard, [shard, &db, gs = global_schema_ptr(s), &merged_mutations, sharder] {
                 auto s = gs.get();
-                auto mt = make_lw_shared<replica::memtable>(s);
+                auto mt = make_lw_shared<replica::memtable>(s, db.local().get_user_dirty_memory_manager());
 
                 for (unsigned i = shard; i < merged_mutations.size(); i += sharder.shard_count()) {
                     for (auto& mut : merged_mutations[i]) {
@@ -105,7 +105,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader) {
     }
 
     do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
-        run_mutation_source_tests(make_populate(false, false));
+        run_mutation_source_tests(make_populate(env.db(), false, false));
         return make_ready_future<>();
     }).get();
 }
@@ -117,7 +117,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_evict_paused) {
     }
 
     do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
-        run_mutation_source_tests(make_populate(true, false));
+        run_mutation_source_tests(make_populate(env.db(), true, false));
         return make_ready_future<>();
     }).get();
 }
@@ -132,7 +132,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_with_tiny_buffer) {
     }
 
     do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
-        run_mutation_source_tests_plain(make_populate(true, true), true);
+        run_mutation_source_tests_plain(make_populate(env.db(), true, true), true);
         return make_ready_future<>();
     }).get();
 }
@@ -144,7 +144,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_with_tiny_buffer_rever
     }
 
     do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
-        run_mutation_source_tests_reverse(make_populate(true, true), true);
+        run_mutation_source_tests_reverse(make_populate(env.db(), true, true), true);
         return make_ready_future<>();
     }).get();
 }

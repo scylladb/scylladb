@@ -35,6 +35,7 @@
 SEASTAR_TEST_CASE(test_mutation_merger_conforms_to_mutation_source) {
     return seastar::async([] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
+        dirty_memory_manager dmm;
         run_mutation_source_tests([&](schema_ptr s, const std::vector<mutation>& partitions) -> mutation_source {
             // We create a mutation source which combines N memtables.
             // The input fragments are spread among the memtables according to some selection logic,
@@ -43,7 +44,7 @@ SEASTAR_TEST_CASE(test_mutation_merger_conforms_to_mutation_source) {
 
             std::vector<lw_shared_ptr<replica::memtable>> memtables;
             for (int i = 0; i < n; ++i) {
-                memtables.push_back(make_lw_shared<replica::memtable>(s));
+                memtables.push_back(make_lw_shared<replica::memtable>(s, dmm));
             }
 
             for (auto&& m : partitions) {

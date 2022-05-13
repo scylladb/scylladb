@@ -45,7 +45,7 @@ void run_sstable_resharding_test() {
   for (const auto version : writable_sstable_versions) {
     auto tmp = tmpdir();
     auto s = get_schema();
-    auto cm = make_lw_shared<compaction_manager>(compaction_manager::for_testing_tag{});
+    auto cm = make_lw_shared<compaction_manager>(compaction_manager::for_testing_tag{}, env.get_dirty_memory_manager());
     auto cl_stats = make_lw_shared<cell_locker_stats>();
     auto cf = make_lw_shared<replica::column_family>(s, env.make_table_config(), replica::column_family::no_commitlog(), *cm, env.manager(), *cl_stats, tracker);
     cf->mark_ready_for_writes();
@@ -54,7 +54,7 @@ void run_sstable_resharding_test() {
 
     // create sst shared by all shards
     {
-        auto mt = make_lw_shared<replica::memtable>(s);
+        auto mt = env.make_memtable(s);
         auto get_mutation = [mt, s] (sstring key_to_write, auto value) {
             auto key = partition_key::from_exploded(*s, {to_bytes(key_to_write)});
             mutation m(s, key);

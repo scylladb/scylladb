@@ -1299,6 +1299,7 @@ private:
 
     dirty_memory_manager _system_dirty_memory_manager;
     dirty_memory_manager _dirty_memory_manager;
+    dirty_memory_manager _misc_dirty_memory_manager;
 
     database_config _dbcfg;
     backlog_controller::scheduling_group _flush_sg;
@@ -1438,6 +1439,11 @@ public:
 
     cache_tracker& row_cache_tracker() { return _row_cache_tracker; }
     future<> drop_caches() const;
+
+    dirty_memory_manager& get_user_dirty_memory_manager() { return _dirty_memory_manager; }
+
+    // Used by miscellaneous source outside of the regular write-path, like virtual tables and scrub compaction.
+    dirty_memory_manager& get_misc_dirty_memory_manager() { return _misc_dirty_memory_manager; }
 
     void update_version(const utils::UUID& version);
 

@@ -74,6 +74,8 @@ public:
             only, // scrub only quarantined sstables
         };
         quarantine_mode quarantine_operation_mode = quarantine_mode::include;
+
+        std::function<lw_shared_ptr<replica::memtable>(schema_ptr)> memtable_factory;
     };
     struct reshard {
     };
@@ -110,8 +112,9 @@ public:
         return compaction_type_options(upgrade{std::move(owned_ranges)});
     }
 
-    static compaction_type_options make_scrub(scrub::mode mode) {
-        return compaction_type_options(scrub{mode});
+    // memtable_factory only required for scrub::mode::segregate
+    static compaction_type_options make_scrub(scrub::mode mode, std::function<lw_shared_ptr<replica::memtable>(schema_ptr)> memtable_factory) {
+        return compaction_type_options(scrub{mode, scrub::quarantine_mode::include, memtable_factory});
     }
 
     template <typename... Visitor>

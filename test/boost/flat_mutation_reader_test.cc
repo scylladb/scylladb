@@ -868,6 +868,7 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_reader_reads_in_native_reverse_order) {
     std::mt19937 engine(tests::random::get_int<uint32_t>());
 
     tests::reader_concurrency_semaphore_wrapper semaphore;
+    dirty_memory_manager dmm;
     auto permit = semaphore.make_permit();
 
     auto rnd_schema_spec = tests::make_random_schema_specification(
@@ -879,8 +880,8 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_reader_reads_in_native_reverse_order) {
     auto forward_schema = rnd_schema.schema();
     auto reverse_schema = forward_schema->make_reversed();
 
-    auto forward_mt = make_lw_shared<replica::memtable>(forward_schema);
-    auto reverse_mt = make_lw_shared<replica::memtable>(reverse_schema);
+    auto forward_mt = make_lw_shared<replica::memtable>(forward_schema, dmm);
+    auto reverse_mt = make_lw_shared<replica::memtable>(reverse_schema, dmm);
 
     for (size_t pk = 0; pk != 8; ++pk) {
         auto mut = rnd_schema.new_mutation(pk);

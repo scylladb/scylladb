@@ -17,8 +17,8 @@
 class memtable_filling_test_vt : public db::memtable_filling_virtual_table {
     std::vector<mutation> _mutations;
 public:
-    memtable_filling_test_vt(schema_ptr s, std::vector<mutation> mutations)
-            : memtable_filling_virtual_table(s)
+    memtable_filling_test_vt(schema_ptr s, std::function<lw_shared_ptr<replica::memtable>(schema_ptr)> mt_factory, std::vector<mutation> mutations)
+            : memtable_filling_virtual_table(s, std::move(mt_factory))
             , _mutations(std::move(mutations)) {}
 
     future<> execute(std::function<void(mutation)> mutation_sink) override {
@@ -28,16 +28,18 @@ public:
 
 class streaming_test_vt : public db::streaming_virtual_table {
     schema_ptr _s;
+    dirty_memory_manager& _dmm;
     std::vector<mutation> _mutations;
 public:
-    streaming_test_vt(schema_ptr s, std::vector<mutation> mutations)
+    streaming_test_vt(schema_ptr s, dirty_memory_manager& dmm, std::vector<mutation> mutations)
             : streaming_virtual_table(s)
             , _s(s)
+            , _dmm(dmm)
             , _mutations(std::move(mutations)) {}
 
     virtual future<> execute(reader_permit permit, db::result_collector& rc) override {
         return async([this, permit, &rc] {
-            auto mt = make_lw_shared<replica::memtable>(_s);
+            auto mt = make_lw_shared<replica::memtable>(_s, _dmm);
             do_for_each(_mutations, [mt] (const mutation& m) {
                 mt->apply(m);
             }).get();
@@ -51,19 +53,25 @@ public:
 };
 
 SEASTAR_THREAD_TEST_CASE(test_memtable_filling_vt_as_mutation_source) {
+    dirty_memory_manager dmm;
     std::unique_ptr<memtable_filling_test_vt> table; // Used to prolong table's life
 
-    run_mutation_source_tests([&table] (schema_ptr s, const std::vector<mutation>& mutations, gc_clock::time_point) -> mutation_source {
-        table = std::make_unique<memtable_filling_test_vt>(s, mutations);
+    auto mt_factory = [&dmm] (schema_ptr s) {
+        return make_lw_shared<replica::memtable>(std::move(s), dmm);
+    };
+
+    run_mutation_source_tests([mt_factory, &table] (schema_ptr s, const std::vector<mutation>& mutations, gc_clock::time_point) -> mutation_source {
+        table = std::make_unique<memtable_filling_test_vt>(s, mt_factory, mutations);
         return table->as_mutation_source();
     });
 }
 
 SEASTAR_THREAD_TEST_CASE(test_streaming_vt_as_mutation_source) {
+    dirty_memory_manager dmm;
     std::unique_ptr<streaming_test_vt> table; // Used to prolong table's life
 
-    run_mutation_source_tests([&table] (schema_ptr s, const std::vector<mutation>& mutations, gc_clock::time_point) -> mutation_source {
-        table = std::make_unique<streaming_test_vt>(s, mutations);
+    run_mutation_source_tests([&table, &dmm] (schema_ptr s, const std::vector<mutation>& mutations, gc_clock::time_point) -> mutation_source {
+        table = std::make_unique<streaming_test_vt>(s, dmm, mutations);
         return mutation_source([ms = table->as_mutation_source()] (schema_ptr s,
                 reader_permit permit,
                 const dht::partition_range& pr,

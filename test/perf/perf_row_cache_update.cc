@@ -18,6 +18,7 @@
 #include "row_cache.hh"
 #include "log.hh"
 #include "schema_builder.hh"
+#include "dirty_memory_manager.hh"
 #include "readers/combined.hh"
 #include "readers/mutation_fragment_v1_stream.hh"
 #include "replica/memtable.hh"
@@ -31,6 +32,7 @@ static bool cancelled = false;
 template<typename MutationGenerator>
 void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
+    dirty_memory_manager dmm;
     cache_tracker tracker;
     row_cache cache(s, make_empty_snapshot_source(), tracker, is_continuous::yes);
 
@@ -44,7 +46,7 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
         auto prefill_compacted = prefill_stats.memory_compacted;
         auto prefill_allocated = prefill_stats.memory_allocated;
 
-        auto mt = make_lw_shared<replica::memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s, dmm);
         auto fill_d = duration_in_seconds([&] {
             while (mt->occupancy().total_space() < memtable_size) {
                 mutation m = gen();

@@ -90,8 +90,9 @@ make_flush_controller(const db::config& cfg, backlog_controller::scheduling_grou
     return flush_controller(sg, 50ms, cfg.virtual_dirty_soft_limit(), std::move(fn));
 }
 
-inline compaction_manager::config make_compaction_manager_config(const db::config& cfg, database_config& dbcfg) {
+inline compaction_manager::config make_compaction_manager_config(const db::config& cfg, database_config& dbcfg, dirty_memory_manager& dmm) {
     return compaction_manager::config {
+        .dmm = dmm,
         .compaction_sched_group = compaction_manager::scheduling_group{dbcfg.compaction_scheduling_group, service::get_local_compaction_priority()},
         .maintenance_sched_group = compaction_manager::scheduling_group{dbcfg.streaming_scheduling_group, service::get_local_streaming_priority()},
         .available_memory = dbcfg.available_memory,
@@ -356,7 +357,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _row_cache_tracker(cache_tracker::register_metrics::yes)
     , _apply_stage("db_apply", &database::do_apply)
     , _version(empty_version)
-    , _compaction_manager(std::make_unique<compaction_manager>(make_compaction_manager_config(_cfg, dbcfg), as))
+    , _compaction_manager(std::make_unique<compaction_manager>(make_compaction_manager_config(_cfg, dbcfg, _misc_dirty_memory_manager), as))
     , _enable_incremental_backups(cfg.incremental_backups())
     , _large_data_handler(std::make_unique<db::cql_table_large_data_handler>(_cfg.compaction_large_partition_warning_threshold_mb()*1024*1024,
               _cfg.compaction_large_row_warning_threshold_mb()*1024*1024,

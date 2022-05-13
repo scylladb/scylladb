@@ -596,7 +596,8 @@ sstables::compaction_stopped_exception compaction_manager::task::make_compaction
 }
 
 compaction_manager::compaction_manager(config cfg, abort_source& as)
-    : _compaction_sg(cfg.compaction_sched_group)
+    : _dmm(cfg.dmm)
+    , _compaction_sg(cfg.compaction_sched_group)
     , _maintenance_sg(cfg.maintenance_sched_group)
     , _compaction_controller(make_compaction_controller(_compaction_sg, cfg.static_shares, [this, available_memory = cfg.available_memory] () -> float {
         _last_backlog = backlog();
@@ -620,8 +621,9 @@ compaction_manager::compaction_manager(config cfg, abort_source& as)
     register_metrics();
 }
 
-compaction_manager::compaction_manager()
-    : _compaction_sg(scheduling_group{default_scheduling_group(), default_priority_class()})
+compaction_manager::compaction_manager(dirty_memory_manager& dmm)
+    : _dmm(dmm)
+    , _compaction_sg(scheduling_group{default_scheduling_group(), default_priority_class()})
     , _maintenance_sg(scheduling_group{default_scheduling_group(), default_priority_class()})
     , _compaction_controller(_compaction_sg, 1)
     , _backlog_manager(_compaction_controller)
@@ -1183,7 +1185,7 @@ private:
                     sst->get_sstable_level(),
                     sstables::compaction_descriptor::default_max_sstable_bytes,
                     sst->run_identifier(),
-                    sstables::compaction_type_options::make_scrub(sstables::compaction_type_options::scrub::mode::validate));
+                    sstables::compaction_type_options::make_scrub(sstables::compaction_type_options::scrub::mode::validate, {}));
             co_await sstables::compact_sstables(std::move(desc), _compaction_data, _compacting_table->as_table_state());
         } catch (sstables::compaction_stopped_exception&) {
             // ignore, will be handled by can_proceed()
@@ -1366,7 +1368,10 @@ future<> compaction_manager::perform_sstable_scrub(replica::table* t, sstables::
     if (scrub_mode == sstables::compaction_type_options::scrub::mode::validate) {
         return perform_sstable_scrub_validate_mode(t);
     }
-    return rewrite_sstables(t, sstables::compaction_type_options::make_scrub(scrub_mode), [this, t, opts] {
+    auto mt_factory = [dmm = &_dmm] (schema_ptr s) {
+        return make_lw_shared<replica::memtable>(std::move(s), *dmm);
+    };
+    return rewrite_sstables(t, sstables::compaction_type_options::make_scrub(scrub_mode, mt_factory), [this, t, opts] {
         auto all_sstables = t->get_sstable_set().all();
         std::vector<sstables::shared_sstable> sstables = boost::copy_range<std::vector<sstables::shared_sstable>>(*all_sstables
                 | boost::adaptors::filtered([&opts] (const sstables::shared_sstable& sst) {

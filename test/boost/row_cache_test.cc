@@ -352,6 +352,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_multiple_mutation
             .build();
 
         tests::reader_concurrency_semaphore_wrapper semaphore;
+        dirty_memory_manager dmm;
 
         auto make_partition_mutation = [s] (bytes key) -> mutation {
             mutation m(s, partition_key::from_single_value(*s, key));
@@ -377,7 +378,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_multiple_mutation
         partitions.pop_back();
 
         cache_tracker tracker;
-        auto mt = make_lw_shared<replica::memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s, dmm);
 
         for (auto&& m : partitions) {
             mt->apply(m);
@@ -550,10 +551,11 @@ SEASTAR_TEST_CASE(test_query_of_incomplete_range_goes_to_underlying) {
     return seastar::async([] {
         auto s = make_schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;
+        dirty_memory_manager dmm;
 
         std::vector<mutation> mutations = make_ring(s, 3);
 
-        auto mt = make_lw_shared<replica::memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s, dmm);
         for (auto&& m : mutations) {
             mt->apply(m);
         }
@@ -600,8 +602,9 @@ SEASTAR_TEST_CASE(test_single_key_queries_after_population_in_reverse_order) {
     return seastar::async([] {
         auto s = make_schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;
+        dirty_memory_manager dmm;
 
-        auto mt = make_lw_shared<replica::memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s, dmm);
 
         std::vector<mutation> mutations = make_ring(s, 3);
 
@@ -641,10 +644,11 @@ SEASTAR_TEST_CASE(test_partition_range_population_with_concurrent_memtable_flush
     return seastar::async([] {
         auto s = make_schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;
+        dirty_memory_manager dmm;
 
         std::vector<mutation> mutations = make_ring(s, 3);
 
-        auto mt = make_lw_shared<replica::memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s, dmm);
         for (auto&& m : mutations) {
             mt->apply(m);
         }
@@ -658,7 +662,7 @@ SEASTAR_TEST_CASE(test_partition_range_population_with_concurrent_memtable_flush
                 return make_ready_future<stop_iteration>(stop_iteration::yes);
             }
             return yield().then([&] {
-                auto mt = make_lw_shared<replica::memtable>(s);
+                auto mt = make_lw_shared<replica::memtable>(s, dmm);
                 return cache.update(row_cache::external_updater([]{}), *mt).then([mt] {
                     return stop_iteration::no;
                 });
@@ -700,9 +704,10 @@ SEASTAR_TEST_CASE(test_partition_range_population_with_concurrent_memtable_flush
 SEASTAR_TEST_CASE(test_row_cache_conforms_to_mutation_source) {
     return seastar::async([] {
         cache_tracker tracker;
+        dirty_memory_manager dmm;
 
-        run_mutation_source_tests([&tracker](schema_ptr s, const std::vector<mutation>& mutations) -> mutation_source {
-            auto mt = make_lw_shared<replica::memtable>(s);
+        run_mutation_source_tests([&tracker, &dmm](schema_ptr s, const std::vector<mutation>& mutations) -> mutation_source {
+            auto mt = make_lw_shared<replica::memtable>(s, dmm);
 
             for (auto&& m : mutations) {
                 mt->apply(m);
@@ -735,6 +740,7 @@ SEASTAR_TEST_CASE(test_reading_from_random_partial_partition) {
         cache_tracker tracker;
         random_mutation_generator gen(random_mutation_generator::generate_counters::no);
         tests::reader_concurrency_semaphore_wrapper semaphore;
+        dirty_memory_manager dmm;
 
         // The test primes the cache with m1, which has random continuity,
         // and then applies m2 on top of it. This should result in some of m2's
@@ -755,7 +761,7 @@ SEASTAR_TEST_CASE(test_reading_from_random_partial_partition) {
         rd1.fill_buffer().get();
 
         // Merge m2 into cache
-        auto mt = make_lw_shared<replica::memtable>(gen.schema());
+        auto mt = make_lw_shared<replica::memtable>(gen.schema(), dmm);
         mt->apply(m2);
         cache.update(row_cache::external_updater([&] { underlying.apply(m2); }), *mt).get();
 
@@ -771,6 +777,7 @@ SEASTAR_TEST_CASE(test_presence_checker_runs_under_right_allocator) {
     return seastar::async([] {
         cache_tracker tracker;
         random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+        dirty_memory_manager dmm;
 
         memtable_snapshot_source underlying(gen.schema());
 
@@ -801,7 +808,7 @@ SEASTAR_TEST_CASE(test_presence_checker_runs_under_right_allocator) {
 
         auto m1 = make_fully_continuous(gen());
 
-        auto mt = make_lw_shared<replica::memtable>(gen.schema());
+        auto mt = make_lw_shared<replica::memtable>(gen.schema(), dmm);
         mt->apply(m1);
         cache.update(row_cache::external_updater([&] { underlying.apply(m1); }), *mt).get();
     });
@@ -840,7 +847,8 @@ SEASTAR_TEST_CASE(test_eviction) {
     return seastar::async([] {
         auto s = make_schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        auto mt = make_lw_shared<replica::memtable>(s);
+        dirty_memory_manager dmm;
+        auto mt = make_lw_shared<replica::memtable>(s, dmm);
 
         cache_tracker tracker;
         row_cache cache(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
@@ -877,7 +885,8 @@ SEASTAR_TEST_CASE(test_eviction_from_invalidated) {
     return seastar::async([] {
         auto s = make_schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        auto mt = make_lw_shared<replica::memtable>(s);
+        dirty_memory_manager dmm;
+        auto mt = make_lw_shared<replica::memtable>(s, dmm);
 
         cache_tracker tracker;
         random_mutation_generator gen(random_mutation_generator::generate_counters::no);
@@ -929,7 +938,8 @@ SEASTAR_TEST_CASE(test_eviction_after_schema_change) {
         auto s = make_schema();
         auto s2 = make_schema_with_extra_column();
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        auto mt = make_lw_shared<replica::memtable>(s);
+        dirty_memory_manager dmm;
+        auto mt = make_lw_shared<replica::memtable>(s, dmm);
 
         cache_tracker tracker;
         row_cache cache(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
@@ -989,6 +999,7 @@ SEASTAR_TEST_CASE(test_single_partition_update) {
             .with_column("v", int32_type)
             .build();
         tests::reader_concurrency_semaphore_wrapper semaphore;
+        dirty_memory_manager dmm;
         auto pk = partition_key::from_exploded(*s, { int32_type->decompose(100) });
         auto dk = dht::decorate_key(*s, pk);
         auto range = dht::partition_range::make_singular(dk);
@@ -1022,7 +1033,7 @@ SEASTAR_TEST_CASE(test_single_partition_update) {
             test_sliced_read_row_presence(std::move(reader), s, {1, 4, 7});
         }
 
-        auto mt = make_lw_shared<replica::memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s, dmm);
         cache.update(row_cache::external_updater([&] {
             mutation m(s, pk);
             m.set_clustered_cell(ck3, "v", data_value(101), 1);
@@ -1042,7 +1053,8 @@ SEASTAR_TEST_CASE(test_update) {
     return seastar::async([] {
         auto s = make_schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        auto cache_mt = make_lw_shared<replica::memtable>(s);
+        dirty_memory_manager dmm;
+        auto cache_mt = make_lw_shared<replica::memtable>(s, dmm);
 
         cache_tracker tracker;
         row_cache cache(s, snapshot_source_from_snapshot(cache_mt->as_data_source()), tracker, is_continuous::yes);
@@ -1060,7 +1072,7 @@ SEASTAR_TEST_CASE(test_update) {
         }
 
         // populate memtable with partitions not in cache
-        auto mt = make_lw_shared<replica::memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s, dmm);
         std::vector<dht::decorated_key> keys_not_in_cache;
         for (int i = 0; i < partition_count; i++) {
             auto m = make_new_mutation(s);
@@ -1083,7 +1095,7 @@ SEASTAR_TEST_CASE(test_update) {
 
         testlog.info("Check cache miss with drop");
 
-        auto mt2 = make_lw_shared<replica::memtable>(s);
+        auto mt2 = make_lw_shared<replica::memtable>(s, dmm);
 
         // populate memtable with partitions not in cache
         for (int i = 0; i < partition_count; i++) {
@@ -1101,7 +1113,7 @@ SEASTAR_TEST_CASE(test_update) {
 
         testlog.info("Check cache hit with merge");
 
-        auto mt3 = make_lw_shared<replica::memtable>(s);
+        auto mt3 = make_lw_shared<replica::memtable>(s, dmm);
 
         std::vector<mutation> new_mutations;
         for (auto&& key : keys_in_cache) {
@@ -1150,7 +1162,8 @@ SEASTAR_TEST_CASE(test_update_failure) {
     return seastar::async([] {
         auto s = make_schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        auto cache_mt = make_lw_shared<replica::memtable>(s);
+        dirty_memory_manager dmm;
+        auto cache_mt = make_lw_shared<replica::memtable>(s, dmm);
 
         cache_tracker tracker;
         row_cache cache(s, snapshot_source_from_snapshot(cache_mt->as_data_source()), tracker, is_continuous::yes);
@@ -1167,7 +1180,7 @@ SEASTAR_TEST_CASE(test_update_failure) {
         }
 
         // populate memtable with more updated partitions
-        auto mt = make_lw_shared<replica::memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s, dmm);
         auto updated_partitions = partitions_type(partition_key::less_compare(*s));
         for (int i = 0; i < partition_count; i++) {
             auto m = make_new_large_mutation(s, i);
@@ -1324,7 +1337,8 @@ SEASTAR_TEST_CASE(test_continuity_flag_and_invalidate_race) {
     return seastar::async([] {
         auto s = make_schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        lw_shared_ptr<replica::memtable> mt = make_lw_shared<replica::memtable>(s);
+        dirty_memory_manager dmm;
+        lw_shared_ptr<replica::memtable> mt = make_lw_shared<replica::memtable>(s, dmm);
 
         auto ring = make_ring(s, 4);
         for (auto&& m : ring) {
@@ -1380,6 +1394,7 @@ SEASTAR_TEST_CASE(test_cache_population_and_update_race) {
     return seastar::async([] {
         auto s = make_schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;
+        dirty_memory_manager dmm;
         memtable_snapshot_source memtables(s);
         throttle thr;
         auto cache_source = make_decorated_snapshot_source(snapshot_source([&] { return memtables(); }), [&] (mutation_source src) {
@@ -1387,7 +1402,7 @@ SEASTAR_TEST_CASE(test_cache_population_and_update_race) {
         });
         cache_tracker tracker;
 
-        auto mt1 = make_lw_shared<replica::memtable>(s);
+        auto mt1 = make_lw_shared<replica::memtable>(s, dmm);
         auto ring = make_ring(s, 3);
         for (auto&& m : ring) {
             mt1->apply(m);
@@ -1396,7 +1411,7 @@ SEASTAR_TEST_CASE(test_cache_population_and_update_race) {
 
         row_cache cache(s, cache_source, tracker);
 
-        auto mt2 = make_lw_shared<replica::memtable>(s);
+        auto mt2 = make_lw_shared<replica::memtable>(s, dmm);
         auto ring2 = updated_ring(ring);
         for (auto&& m : ring2) {
             mt2->apply(m);
@@ -1416,7 +1431,7 @@ SEASTAR_TEST_CASE(test_cache_population_and_update_race) {
         sleep(10ms).get();
 
         // This update should miss on all partitions
-        auto mt2_copy = make_lw_shared<replica::memtable>(s);
+        auto mt2_copy = make_lw_shared<replica::memtable>(s, dmm);
         mt2_copy->apply(*mt2, semaphore.make_permit()).get();
         auto update_future = cache.update(row_cache::external_updater([&] { memtables.apply(mt2_copy); }), *mt2);
 
@@ -1459,7 +1474,8 @@ SEASTAR_TEST_CASE(test_invalidate) {
     return seastar::async([] {
         auto s = make_schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        auto mt = make_lw_shared<replica::memtable>(s);
+        dirty_memory_manager dmm;
+        auto mt = make_lw_shared<replica::memtable>(s, dmm);
 
         cache_tracker tracker;
         row_cache cache(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
@@ -1525,7 +1541,7 @@ SEASTAR_TEST_CASE(test_cache_population_and_clear_race) {
         });
         cache_tracker tracker;
 
-        auto mt1 = make_lw_shared<replica::memtable>(s);
+        auto mt1 = make_lw_shared<replica::memtable>(s, memtables.get_dirty_memory_manager());
         auto ring = make_ring(s, 3);
         for (auto&& m : ring) {
             mt1->apply(m);
@@ -1534,7 +1550,7 @@ SEASTAR_TEST_CASE(test_cache_population_and_clear_race) {
 
         row_cache cache(s, std::move(cache_source), tracker);
 
-        auto mt2 = make_lw_shared<replica::memtable>(s);
+        auto mt2 = make_lw_shared<replica::memtable>(s, memtables.get_dirty_memory_manager());
         auto ring2 = updated_ring(ring);
         for (auto&& m : ring2) {
             mt2->apply(m);
@@ -1609,7 +1625,7 @@ SEASTAR_TEST_CASE(test_mvcc) {
             auto rd2 = cache.make_reader(s, semaphore.make_permit());
             rd2.fill_buffer().get();
 
-            auto mt1 = make_lw_shared<replica::memtable>(s);
+            auto mt1 = make_lw_shared<replica::memtable>(s, underlying.get_dirty_memory_manager());
             mt1->apply(m2);
 
             auto m12 = m1 + m2;
@@ -1626,7 +1642,7 @@ SEASTAR_TEST_CASE(test_mvcc) {
                 mt1_reader_opt->fill_buffer().get();
             }
 
-            auto mt1_copy = make_lw_shared<replica::memtable>(s);
+            auto mt1_copy = make_lw_shared<replica::memtable>(s, underlying.get_dirty_memory_manager());
             mt1_copy->apply(*mt1, semaphore.make_permit()).get();
             cache.update(row_cache::external_updater([&] { underlying.apply(mt1_copy); }), *mt1).get();
 
@@ -1688,6 +1704,7 @@ SEASTAR_TEST_CASE(test_slicing_mutation_reader) {
             .with_column("v", int32_type)
             .build();
         tests::reader_concurrency_semaphore_wrapper semaphore;
+        dirty_memory_manager dmm;
 
         auto pk = partition_key::from_exploded(*s, { int32_type->decompose(0) });
         mutation m(s, pk);
@@ -1697,7 +1714,7 @@ SEASTAR_TEST_CASE(test_slicing_mutation_reader) {
                                  to_bytes("v"), data_value(i), api::new_timestamp());
         }
 
-        auto mt = make_lw_shared<replica::memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s, dmm);
         mt->apply(m);
 
         cache_tracker tracker;
@@ -1792,7 +1809,8 @@ SEASTAR_TEST_CASE(test_lru) {
     return seastar::async([] {
         auto s = make_schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        auto cache_mt = make_lw_shared<replica::memtable>(s);
+        dirty_memory_manager dmm;
+        auto cache_mt = make_lw_shared<replica::memtable>(s, dmm);
 
         cache_tracker tracker;
         row_cache cache(s, snapshot_source_from_snapshot(cache_mt->as_data_source()), tracker);
@@ -1873,7 +1891,7 @@ SEASTAR_TEST_CASE(test_update_invalidating) {
             .produces(m2)
             .produces_end_of_stream();
 
-        auto mt = make_lw_shared<replica::memtable>(s.schema());
+        auto mt = make_lw_shared<replica::memtable>(s.schema(), underlying.get_dirty_memory_manager());
 
         auto m3 = mutation_for_key(m1.decorated_key());
         m3.partition().apply(s.new_tombstone());
@@ -1883,7 +1901,7 @@ SEASTAR_TEST_CASE(test_update_invalidating) {
         mt->apply(m4);
         mt->apply(m5);
 
-        auto mt_copy = make_lw_shared<replica::memtable>(s.schema());
+        auto mt_copy = make_lw_shared<replica::memtable>(s.schema(), underlying.get_dirty_memory_manager());
         mt_copy->apply(*mt, semaphore.make_permit()).get();
         cache.update_invalidating(row_cache::external_updater([&] { underlying.apply(mt_copy); }), *mt).get();
 
@@ -1900,7 +1918,8 @@ SEASTAR_TEST_CASE(test_scan_with_partial_partitions) {
     return seastar::async([] {
         simple_schema s;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        auto cache_mt = make_lw_shared<replica::memtable>(s.schema());
+        dirty_memory_manager dmm;
+        auto cache_mt = make_lw_shared<replica::memtable>(s.schema(), dmm);
 
         auto pkeys = s.make_pkeys(3);
 
@@ -1968,7 +1987,8 @@ SEASTAR_TEST_CASE(test_cache_populates_partition_tombstone) {
     return seastar::async([] {
         simple_schema s;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        auto cache_mt = make_lw_shared<replica::memtable>(s.schema());
+        dirty_memory_manager dmm;
+        auto cache_mt = make_lw_shared<replica::memtable>(s.schema(), dmm);
 
         auto pkeys = s.make_pkeys(2);
 
@@ -2036,7 +2056,8 @@ SEASTAR_TEST_CASE(test_scan_with_partial_partitions_reversed) {
     return seastar::async([] {
         simple_schema s;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        auto cache_mt = make_lw_shared<replica::memtable>(s.schema());
+        dirty_memory_manager dmm;
+        auto cache_mt = make_lw_shared<replica::memtable>(s.schema(), dmm);
 
         auto pkeys = s.make_pkeys(3);
         auto rev_schema = s.schema()->make_reversed();
@@ -2226,14 +2247,14 @@ static void populate_range(row_cache& cache, const dht::partition_range& pr = qu
 }
 
 static void apply(row_cache& cache, memtable_snapshot_source& underlying, const mutation& m) {
-    auto mt = make_lw_shared<replica::memtable>(m.schema());
+    auto mt = make_lw_shared<replica::memtable>(m.schema(), underlying.get_dirty_memory_manager());
     mt->apply(m);
     cache.update(row_cache::external_updater([&] { underlying.apply(m); }), *mt).get();
 }
 
 static void apply(row_cache& cache, memtable_snapshot_source& underlying, replica::memtable& m) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
-    auto mt1 = make_lw_shared<replica::memtable>(m.schema());
+    auto mt1 = make_lw_shared<replica::memtable>(m.schema(), underlying.get_dirty_memory_manager());
     mt1->apply(m, semaphore.make_permit()).get();
     cache.update(row_cache::external_updater([&] { underlying.apply(std::move(mt1)); }), m).get();
 }
@@ -2531,7 +2552,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_update_from_memtable) {
                     .produces_end_of_stream();
             });
 
-            auto mt = make_lw_shared<replica::memtable>(cache.schema());
+            auto mt = make_lw_shared<replica::memtable>(cache.schema(), underlying.get_dirty_memory_manager());
             for (auto&& m : muts2) {
                 mt->apply(m);
             }
@@ -2543,7 +2564,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_update_from_memtable) {
             snap->fill_buffer().get();
 
             cache.update(row_cache::external_updater([&] {
-                auto mt2 = make_lw_shared<replica::memtable>(cache.schema());
+                auto mt2 = make_lw_shared<replica::memtable>(cache.schema(), underlying.get_dirty_memory_manager());
                 for (auto&& m : muts2) {
                     mt2->apply(m);
                 }
@@ -3004,7 +3025,7 @@ SEASTAR_TEST_CASE(test_continuity_is_populated_when_read_overlaps_with_older_ver
         row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
 
         auto apply = [&] (mutation m) {
-            auto mt = make_lw_shared<replica::memtable>(m.schema());
+            auto mt = make_lw_shared<replica::memtable>(m.schema(), underlying.get_dirty_memory_manager());
             mt->apply(m);
             cache.update(row_cache::external_updater([&] { underlying.apply(m); }), *mt).get();
         };
@@ -3136,7 +3157,7 @@ SEASTAR_TEST_CASE(test_continuity_population_with_multicolumn_clustering_key) {
         row_cache cache(s, snapshot_source([&] { return underlying(); }), tracker);
 
         auto apply = [&] (mutation m) {
-            auto mt = make_lw_shared<replica::memtable>(m.schema());
+            auto mt = make_lw_shared<replica::memtable>(m.schema(), underlying.get_dirty_memory_manager());
             mt->apply(m);
             cache.update(row_cache::external_updater([&] { underlying.apply(m); }), *mt).get();
         };
@@ -3434,7 +3455,7 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
             auto m2 = gen();
             m2.partition().make_fully_continuous();
 
-            auto mt = make_lw_shared<replica::memtable>(m2.schema());
+            auto mt = make_lw_shared<replica::memtable>(m2.schema(), underlying.get_dirty_memory_manager());
             mt->apply(m2);
             cache.update(row_cache::external_updater([&] () noexcept {
                 auto snap = underlying();
@@ -3469,6 +3490,7 @@ SEASTAR_TEST_CASE(test_alter_then_preempted_update_then_memtable_read) {
         memtable_snapshot_source underlying(ss.schema());
         schema_ptr s = ss.schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;
+        dirty_memory_manager dmm;
 
         auto pk = ss.make_pkey("pk");
         mutation m(s, pk);
@@ -3489,7 +3511,7 @@ SEASTAR_TEST_CASE(test_alter_then_preempted_update_then_memtable_read) {
         // Populate the cache so that update has an entry to update.
         assert_that(cache.make_reader(s, semaphore.make_permit(), pr)).produces(m);
 
-        auto mt2 = make_lw_shared<replica::memtable>(s);
+        auto mt2 = make_lw_shared<replica::memtable>(s, dmm);
         mt2->apply(m2);
 
         // Alter the schema
@@ -3532,6 +3554,7 @@ SEASTAR_TEST_CASE(test_cache_update_and_eviction_preserves_monotonicity_of_memta
         random_mutation_generator gen(random_mutation_generator::generate_counters::no);
         auto s = gen.schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;
+        dirty_memory_manager dmm;
 
         mutation m1 = gen();
         mutation m2 = gen();
@@ -3542,7 +3565,7 @@ SEASTAR_TEST_CASE(test_cache_update_and_eviction_preserves_monotonicity_of_memta
         memtable_snapshot_source underlying(s);
         row_cache cache(s, snapshot_source([&] { return underlying(); }), tracker, is_continuous::yes);
 
-        lw_shared_ptr<replica::memtable> mt = make_lw_shared<replica::memtable>(s);
+        lw_shared_ptr<replica::memtable> mt = make_lw_shared<replica::memtable>(s, dmm);
 
         mt->apply(m1);
 
@@ -3585,6 +3608,7 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
 
         auto s = make_schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;
+        dirty_memory_manager dmm;
 
         auto mut = make_new_mutation(s);
         memtable_snapshot_source underlying(s);
@@ -3618,7 +3642,7 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
             BOOST_REQUIRE(row.cells().cell_hash_for(0));
         }
 
-        auto mt = make_lw_shared<replica::memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s, dmm);
         mt->apply(make_new_mutation(s, mut.key()));
         cache.update(row_cache::external_updater([&] { }), *mt).get();
 
@@ -3713,8 +3737,9 @@ SEASTAR_TEST_CASE(test_static_row_is_kept_alive_by_reads_with_no_clustering_rang
         simple_schema table;
         auto s = table.schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;
+        dirty_memory_manager dmm;
 
-        auto mt = make_lw_shared<replica::memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s, dmm);
 
         cache_tracker tracker;
         row_cache cache(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
@@ -3885,7 +3910,8 @@ SEASTAR_TEST_CASE(test_scans_erase_dummies) {
     return seastar::async([] {
         simple_schema s;
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        auto cache_mt = make_lw_shared<replica::memtable>(s.schema());
+        dirty_memory_manager dmm;
+        auto cache_mt = make_lw_shared<replica::memtable>(s.schema(), dmm);
 
         auto pkey = s.make_pkey("pk");
 

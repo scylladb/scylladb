@@ -91,6 +91,10 @@ public:
         return replica::table::config{.dirty_memory_manager = &_impl->dmm, .compaction_concurrency_semaphore = &_impl->semaphore};
     }
 
+    lw_shared_ptr<replica::memtable> make_memtable(schema_ptr s) {
+        return make_lw_shared<replica::memtable>(std::move(s), _impl->dmm);
+    }
+
     future<> working_sst(schema_ptr schema, sstring dir, unsigned long generation) {
         return reusable_sst(std::move(schema), dir, generation).then([] (auto ptr) { return make_ready_future<>(); });
     }

@@ -41,12 +41,13 @@ extern gms::feature_service test_feature_service;
 struct column_family_for_tests {
     struct data {
         schema_ptr s;
+        dirty_memory_manager dmm;
         reader_concurrency_semaphore semaphore;
         cache_tracker tracker;
         replica::cf_stats cf_stats{0};
         replica::column_family::config cfg;
         cell_locker_stats cl_stats;
-        compaction_manager cm{compaction_manager::for_testing_tag{}};
+        compaction_manager cm;
         lw_shared_ptr<replica::column_family> cf;
         data();
     };

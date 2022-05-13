@@ -31,6 +31,7 @@ struct segregate_config {
 // streams that honor it.
 // This is useful for scrub compaction to split sstables containing out-of-order
 // and/or duplicate partitions into sstables that honor the partition ordering.
-future<> segregate_by_partition(flat_mutation_reader_v2 producer, segregate_config cfg, reader_consumer_v2 consumer);
+future<> segregate_by_partition(flat_mutation_reader_v2 producer, segregate_config cfg, reader_consumer_v2 consumer,
+        std::function<lw_shared_ptr<replica::memtable>(schema_ptr)> mt_factory);
 
 } // namespace mutation_writer

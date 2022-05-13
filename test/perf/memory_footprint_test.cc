@@ -178,10 +178,10 @@ struct sizes {
     size_t query_result;
 };
 
-static sizes calculate_sizes(cache_tracker& tracker, const mutation_settings& settings) {
+static sizes calculate_sizes(dirty_memory_manager& dmm, cache_tracker& tracker, const mutation_settings& settings) {
     sizes result;
     auto s = make_schema(settings);
-    auto mt = make_lw_shared<replica::memtable>(s);
+    auto mt = make_lw_shared<replica::memtable>(s, dmm);
     row_cache cache(s, make_empty_snapshot_source(), tracker);
 
     auto cache_initial_occupancy = tracker.region().occupancy().used_space();
@@ -210,7 +210,7 @@ static sizes calculate_sizes(cache_tracker& tracker, const mutation_settings& se
                 1 /* generation */,
                 v,
                 sstables::sstable::format_types::big);
-            auto mt2 = make_lw_shared<replica::memtable>(s);
+            auto mt2 = make_lw_shared<replica::memtable>(s, dmm);
             mt2->apply(*mt, env.make_reader_permit()).get();
             write_memtable_to_sstable_for_test(*mt2, sst).get();
             sst->load().get();
@@ -254,7 +254,7 @@ int main(int argc, char** argv) {
             settings.data_size = app.configuration()["data-size"].as<size_t>();
 
             auto& tracker = env.local_db().find_column_family("system", "local").get_row_cache().get_cache_tracker();
-            auto sizes = calculate_sizes(tracker, settings);
+            auto sizes = calculate_sizes(env.local_db().get_user_dirty_memory_manager(), tracker, settings);
 
             std::cout << "mutation footprint:" << "\n";
             std::cout << " - in cache:     " << sizes.cache << "\n";

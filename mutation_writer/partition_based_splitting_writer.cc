@@ -8,6 +8,7 @@
 
 #include "mutation_writer/partition_based_splitting_writer.hh"
 #include "mutation_rebuilder.hh"
+#include "dirty_memory_manager.hh"
 #include "replica/memtable.hh"
 
 #include <seastar/core/coroutine.hh>
@@ -22,6 +23,7 @@ class partition_sorting_mutation_writer {
     size_t _max_memory;
     bucket_writer_v2 _bucket_writer;
     std::optional<dht::decorated_key> _last_bucket_key;
+    std::function<lw_shared_ptr<replica::memtable>(schema_ptr)> _mt_factory;
     lw_shared_ptr<replica::memtable> _memtable;
     future<> _background_memtable_flush = make_ready_future<>();
     std::optional<mutation_rebuilder_v2> _mut_builder;
@@ -42,7 +44,7 @@ private:
 
     future<> flush_memtable() {
         co_await _consumer(_memtable->make_flush_reader(_schema, _permit, _pc));
-        _memtable = make_lw_shared<replica::memtable>(_schema);
+        _memtable = _mt_factory(_schema);
     }
 
     future<> maybe_flush_memtable() {
@@ -71,14 +73,16 @@ private:
     }
 
 public:
-    partition_sorting_mutation_writer(schema_ptr schema, reader_permit permit, reader_consumer_v2 consumer, const segregate_config& cfg)
+    partition_sorting_mutation_writer(schema_ptr schema, reader_permit permit, reader_consumer_v2 consumer, const segregate_config& cfg,
+            std::function<lw_shared_ptr<replica::memtable>(schema_ptr)> mt_factory)
         : _schema(std::move(schema))
         , _permit(std::move(permit))
         , _consumer(std::move(consumer))
         , _pc(cfg.pc)
         , _max_memory(cfg.max_memory)
         , _bucket_writer(_schema, _permit, _consumer)
-        , _memtable(make_lw_shared<replica::memtable>(_schema))
+        , _mt_factory(std::move(mt_factory))
+        , _memtable(_mt_factory(_schema))
         , _last_pos(position_in_partition::for_partition_start())
     { }
 
@@ -130,12 +134,13 @@ public:
     }
 };
 
-future<> segregate_by_partition(flat_mutation_reader_v2 producer, segregate_config cfg, reader_consumer_v2 consumer) {
+future<> segregate_by_partition(flat_mutation_reader_v2 producer, segregate_config cfg, reader_consumer_v2 consumer,
+        std::function<lw_shared_ptr<replica::memtable>(schema_ptr)> mt_factory) {
     auto schema = producer.schema();
     auto permit = producer.permit();
   try {
     return feed_writer(std::move(producer),
-            partition_sorting_mutation_writer(std::move(schema), std::move(permit), std::move(consumer), std::move(cfg)));
+            partition_sorting_mutation_writer(std::move(schema), std::move(permit), std::move(consumer), std::move(cfg), std::move(mt_factory)));
   } catch (...) {
     return producer.close().then([ex = std::current_exception()] () mutable {
         return make_exception_future<>(std::move(ex));

@@ -3020,12 +3020,12 @@ static std::vector<sstables::shared_sstable> open_sstables(test_env& env, schema
 
 static flat_mutation_reader_v2 compacted_sstable_reader(test_env& env, schema_ptr s,
                      sstring table_name, std::vector<unsigned long> generations) {
-    auto cm = make_lw_shared<compaction_manager>(compaction_manager::for_testing_tag{});
+    auto cm = make_lw_shared<compaction_manager>(compaction_manager::for_testing_tag{}, env.get_dirty_memory_manager());
     auto cl_stats = make_lw_shared<cell_locker_stats>();
     auto tracker = make_lw_shared<cache_tracker>();
     auto cf = make_lw_shared<replica::column_family>(s, env.make_table_config(), replica::column_family::no_commitlog(), *cm, env.manager(), *cl_stats, *tracker);
     cf->mark_ready_for_writes();
-    lw_shared_ptr<replica::memtable> mt = make_lw_shared<replica::memtable>(s);
+    lw_shared_ptr<replica::memtable> mt = env.make_memtable(s);
 
     tmpdir tmp;
     auto sstables = open_sstables(env, s, format("test/resource/sstables/3.x/uncompressed/{}", table_name), generations);
@@ -3272,7 +3272,7 @@ constexpr std::array<sstable_version_types, 3> test_sstable_versions = {
 
 static void write_mut_and_compare_sstables_version(test_env& env, schema_ptr s, mutation& mut, const sstring& table_name,
         sstable_version_types version) {
-    lw_shared_ptr<replica::memtable> mt = make_lw_shared<replica::memtable>(s);
+    lw_shared_ptr<replica::memtable> mt = env.make_memtable(s);
     mt->apply(mut);
 
     (void)write_and_compare_sstables(env, s, mt, table_name, version);
@@ -3286,8 +3286,8 @@ static void write_mut_and_compare_sstables(test_env& env, schema_ptr s, mutation
 
 static void write_muts_and_compare_sstables_version(test_env& env, schema_ptr s, mutation& mut1, mutation& mut2, const sstring& table_name,
         sstable_version_types version) {
-    lw_shared_ptr<replica::memtable> mt1 = make_lw_shared<replica::memtable>(s);
-    lw_shared_ptr<replica::memtable> mt2 = make_lw_shared<replica::memtable>(s);
+    lw_shared_ptr<replica::memtable> mt1 = env.make_memtable(s);
+    lw_shared_ptr<replica::memtable> mt2 = env.make_memtable(s);
     mt1->apply(mut1);
     mt2->apply(mut2);
 
@@ -3350,7 +3350,7 @@ using validate_stats_metadata = bool_class<validate_stats_metadata_tag>;
 
 static void write_mut_and_validate_version(test_env& env, schema_ptr s, const sstring& table_name, mutation& mut,
         sstable_version_types version, validate_stats_metadata validate_flag) {
-    lw_shared_ptr<replica::memtable> mt = make_lw_shared<replica::memtable>(s);
+    lw_shared_ptr<replica::memtable> mt = env.make_memtable(s);
     mt->apply(mut);
 
     tmpdir tmp = write_and_compare_sstables(env, s, mt, table_name, version);
@@ -3369,7 +3369,7 @@ static void write_mut_and_validate(test_env& env, schema_ptr s, const sstring& t
 
 static void write_mut_and_validate_version(test_env& env, schema_ptr s, const sstring& table_name, mutation& mut,
         sstable_version_types version, std::vector<bytes> min_components, std::vector<bytes> max_components) {
-    lw_shared_ptr<replica::memtable> mt = make_lw_shared<replica::memtable>(s);
+    lw_shared_ptr<replica::memtable> mt = env.make_memtable(s);
     mt->apply(mut);
 
     // FIXME This used to `write_and_compare_sstables()` and to
@@ -3391,7 +3391,7 @@ static void write_mut_and_validate(test_env& env, schema_ptr s, const sstring& t
 
 static void write_mut_and_validate_version(test_env& env, schema_ptr s, const sstring& table_name, std::vector<mutation> muts,
         sstable_version_types version, validate_stats_metadata validate_flag) {
-    lw_shared_ptr<replica::memtable> mt = make_lw_shared<replica::memtable>(s);
+    lw_shared_ptr<replica::memtable> mt = env.make_memtable(s);
     for (auto& mut : muts) {
         mt->apply(mut);
     }
@@ -3734,7 +3734,7 @@ static future<> test_write_many_partitions(sstring table_name, tombstone partiti
 
     bool compressed = cp.get_compressor() != nullptr;
     for (auto version : test_sstable_versions) {
-        lw_shared_ptr<replica::memtable> mt = make_lw_shared<replica::memtable>(s);
+        lw_shared_ptr<replica::memtable> mt = env.make_memtable(s);
         for (auto& mut : muts) {
             mt->apply(mut);
         }
@@ -4895,7 +4895,7 @@ SEASTAR_TEST_CASE(test_regular_and_shadowable_deletion) {
         return tombstone{api::timestamp_type{ts}, gc_clock::time_point(gc_clock::duration(tp))};
     };
 
-    lw_shared_ptr<replica::memtable> mt = make_lw_shared<replica::memtable>(s);
+    lw_shared_ptr<replica::memtable> mt = env.make_memtable(s);
 
     clustering_key ckey = clustering_key::from_deeply_exploded(*s, { {1}, {1} });
     mutation mut1{s, partition_key::from_deeply_exploded(*s, {1})};
@@ -5053,7 +5053,7 @@ SEASTAR_TEST_CASE(test_write_empty_static_row) {
     mut2.set_cell(ckey, "rc", data_value{3}, ts);
 
     for (auto version : test_sstable_versions) {
-        lw_shared_ptr<replica::memtable> mt = make_lw_shared<replica::memtable>(s);
+        lw_shared_ptr<replica::memtable> mt = env.make_memtable(s);
         mt->apply(mut1);
         mt->apply(mut2);
 
@@ -5109,7 +5109,7 @@ SEASTAR_TEST_CASE(test_sstable_reader_on_unknown_column) {
         partition.set_cell(ckey, "val2", data_value{200 + i}, write_timestamp);
     };
   for (auto version : test_sstable_versions) {
-    auto mt = make_lw_shared<replica::memtable>(write_schema);
+    auto mt = env.make_memtable(write_schema);
     mt->apply(partition);
     for (auto index_block_size : {1, 128, 64*1024}) {
         tmpdir dir;
@@ -5207,6 +5207,7 @@ static void test_sstable_write_large_row_f(schema_ptr s, reader_permit permit, r
 SEASTAR_THREAD_TEST_CASE(test_sstable_write_large_row) {
     simple_schema s;
     tests::reader_concurrency_semaphore_wrapper semaphore;
+    dirty_memory_manager dmm;
     mutation partition = s.new_mutation("pv");
     const partition_key& pk = partition.key();
     s.add_static_row(partition, "foo bar zed");
@@ -5217,7 +5218,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_write_large_row) {
     auto ck2 = s.make_ckey("cv2");
     s.add_row(partition, ck2, "foo bar");
   for (auto version : test_sstable_versions) {
-    auto mt = make_lw_shared<replica::memtable>(s.schema());
+    auto mt = make_lw_shared<replica::memtable>(s.schema(), dmm);
     mt->apply(partition);
 
     test_sstable_write_large_row_f(s.schema(), semaphore.make_permit(), *mt, pk, {nullptr, &ck1, &ck2}, 21, version);
@@ -5228,6 +5229,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_write_large_row) {
 static void test_sstable_log_too_many_rows_f(int rows, uint64_t threshold, bool expected, sstable_version_types version) {
     simple_schema s;
     tests::reader_concurrency_semaphore_wrapper semaphore;
+    dirty_memory_manager dmm;
     mutation p = s.new_mutation("pv");
     const partition_key& pk = p.key();
     sstring sv;
@@ -5236,7 +5238,7 @@ static void test_sstable_log_too_many_rows_f(int rows, uint64_t threshold, bool 
         s.add_row(p, s.make_ckey(sv), sv);
     }
     schema_ptr sc = s.schema();
-    auto mt = make_lw_shared<replica::memtable>(sc);
+    auto mt = make_lw_shared<replica::memtable>(sc, dmm);
     mt->apply(p);
 
     bool logged = false;

@@ -43,10 +43,9 @@ static snapshot_source snapshot_source_from_snapshot(mutation_source src) {
 }
 
 static
-void test_cache_population_with_range_tombstone_adjacent_to_population_range(populate_fn_ex populate) {
+void test_cache_population_with_range_tombstone_adjacent_to_population_range(test_env& env, populate_fn_ex populate) {
     simple_schema s;
-    tests::reader_concurrency_semaphore_wrapper semaphore;
-    auto cache_mt = make_lw_shared<replica::memtable>(s.schema());
+    auto cache_mt = env.make_memtable(s.schema());
 
     auto pkey = s.make_pkey();
 
@@ -68,7 +67,7 @@ void test_cache_population_with_range_tombstone_adjacent_to_population_range(pop
         auto slice = partition_slice_builder(*s.schema())
                 .with_range(query::clustering_range::make_singular(s.make_ckey(start)))
                 .build();
-        auto rd = cache.make_reader(s.schema(), semaphore.make_permit(), pr, slice);
+        auto rd = cache.make_reader(s.schema(), env.make_reader_permit(), pr, slice);
         auto close_rd = deferred_close(rd);
         consume_all(rd);
     };
@@ -79,7 +78,7 @@ void test_cache_population_with_range_tombstone_adjacent_to_population_range(pop
     // Populating reader which stops populating at entry with ckey 2 should not forget
     // to emit range_tombstone which starts at before(2).
 
-    assert_that(cache.make_reader(s.schema(), semaphore.make_permit()))
+    assert_that(cache.make_reader(s.schema(), env.make_reader_permit()))
             .produces(m1)
             .produces_end_of_stream();
 }
@@ -100,7 +99,7 @@ static future<> test_sstable_conforms_to_mutation_source(sstable_version_types v
 
         if (index_block_size == 1) {
             // The tests below are not sensitive to index bock size so run once.
-            test_cache_population_with_range_tombstone_adjacent_to_population_range(populate);
+            test_cache_population_with_range_tombstone_adjacent_to_population_range(env, populate);
         }
     });
 }

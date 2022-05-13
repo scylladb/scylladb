@@ -443,6 +443,7 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer_abort) {
 // Check that the partition_based_splitting_mutation_writer can fix reordered partitions
 SEASTAR_THREAD_TEST_CASE(test_partition_based_splitting_mutation_writer) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
+    dirty_memory_manager dmm;
     auto random_spec = tests::make_random_schema_specification(
             get_name(),
             std::uniform_int_distribution<size_t>(1, 2),
@@ -510,13 +511,16 @@ SEASTAR_THREAD_TEST_CASE(test_partition_based_splitting_mutation_writer) {
         output_mutations.clear();
         next_index = 0;
     };
+    auto mt_factory = [&dmm] (schema_ptr s) {
+        return make_lw_shared<replica::memtable>(std::move(s), dmm);
+    };
 
     for (const size_t max_memory : {1'000, 10'000, 1'000'000, 10'000'000, 100'000'000}) {
         testlog.info("Segregating with in-memory method (max_memory={})", max_memory);
         mutation_writer::segregate_by_partition(
                 make_flat_mutation_reader_from_mutations_v2(random_schema.schema(), semaphore.make_permit(), shuffled_input_mutations),
                 mutation_writer::segregate_config{default_priority_class(), max_memory},
-                consumer).get();
+                consumer, mt_factory).get();
         testlog.info("Done segregating with in-memory method (max_memory={}): input segregated into {} buckets", max_memory, output_mutations.size());
         check_and_reset();
     }

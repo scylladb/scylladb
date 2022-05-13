@@ -341,14 +341,14 @@ public:
 class compaction_manager_for_testing {
     struct wrapped_compaction_manager {
         compaction_manager cm;
-        explicit wrapped_compaction_manager(bool enabled);
+        explicit wrapped_compaction_manager(dirty_memory_manager& dmm, bool enabled);
         // Must run in a seastar thread
         ~wrapped_compaction_manager();
     };
 
     lw_shared_ptr<wrapped_compaction_manager> _wcm;
 public:
-    explicit compaction_manager_for_testing(bool enabled = true) : _wcm(make_lw_shared<wrapped_compaction_manager>(enabled)) {}
+    explicit compaction_manager_for_testing(dirty_memory_manager& dmm, bool enabled = true) : _wcm(make_lw_shared<wrapped_compaction_manager>(dmm, enabled)) {}
 
     compaction_manager& operator*() noexcept {
         return _wcm->cm;

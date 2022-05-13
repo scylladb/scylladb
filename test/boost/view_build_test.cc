@@ -787,6 +787,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
     };
 
     reader_concurrency_semaphore sem(reader_concurrency_semaphore::for_tests{}, get_name(), 1, replica::new_reader_base_cost);
+    dirty_memory_manager dmm;
     auto stop_sem = deferred_stop(sem);
 
     auto schema = schema_builder("ks", "cf")
@@ -825,7 +826,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
 
         auto permit = sem.obtain_permit(schema.get(), get_name(), replica::new_reader_base_cost, db::no_timeout).get0();
 
-        auto mt = make_lw_shared<replica::memtable>(schema);
+        auto mt = make_lw_shared<replica::memtable>(schema, dmm);
         for (const auto& mut : muts) {
             mt->apply(mut);
         }

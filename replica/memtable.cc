@@ -126,11 +126,10 @@ memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm, replica::table_
         , _table_stats(table_stats) {
 }
 
-static thread_local dirty_memory_manager mgr_for_tests;
 static thread_local replica::table_stats stats_for_tests;
 
-memtable::memtable(schema_ptr schema)
-        : memtable(std::move(schema), mgr_for_tests, stats_for_tests)
+memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm)
+        : memtable(std::move(schema), dmm, stats_for_tests)
 { }
 
 memtable::~memtable() {

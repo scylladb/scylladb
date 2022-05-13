@@ -54,7 +54,7 @@ mutation_source memtable_filling_virtual_table::as_mutation_source() {
 
         auto units = make_lw_shared<my_units>(permit.consume_memory(0));
 
-        auto populate = [this, mt = make_lw_shared<replica::memtable>(schema()), s, units, range, slice, pc, trace_state, fwd, fwd_mr] () mutable {
+        auto populate = [this, mt = _mt_factory(schema()), s, units, range, slice, pc, trace_state, fwd, fwd_mr] () mutable {
             auto mutation_sink = [units, mt] (mutation m) mutable {
                 mt->apply(m);
                 units->units.add(units->units.permit().consume_memory(mt->occupancy().used_space() - units->memory_used));

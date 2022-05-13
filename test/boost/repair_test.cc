@@ -81,7 +81,7 @@ repair_rows_on_wire make_random_repair_rows_on_wire(random_mutation_generator& g
 
     for (mutation& mut : muts) {
         partition_key pk = mut.key();
-        auto m2 = make_lw_shared<replica::memtable>(s);
+        auto m2 = make_lw_shared<replica::memtable>(s, m->get_dirty_memory_manager());
         m->apply(mut);
         m2->apply(mut);
         auto reader = mutation_fragment_v1_stream(m2->make_flat_reader(s, permit));
@@ -117,10 +117,11 @@ SEASTAR_TEST_CASE(flush_repair_rows_on_wire_to_sstable) {
     // to disk, they would produce the original stream.
     return seastar::async([&] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
+        dirty_memory_manager dmm;
         reader_permit permit = semaphore.make_permit();
         random_mutation_generator gen{random_mutation_generator::generate_counters::no};
         schema_ptr s = gen.schema();
-        auto m = make_lw_shared<replica::memtable>(s);
+        auto m = make_lw_shared<replica::memtable>(s, dmm);
         repair_rows_on_wire input = make_random_repair_rows_on_wire(gen, s, permit, m);
         std::deque<mutation_fragment_v2> fragments;
         lw_shared_ptr<repair_writer> writer = make_test_repair_writer(s, permit, fragments);

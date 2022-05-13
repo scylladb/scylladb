@@ -57,10 +57,11 @@ std::vector<sstring> do_make_keys(unsigned n, const schema_ptr& s, size_t min_ke
 
 sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, std::vector<mutation> muts) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
+    dirty_memory_manager dmm;
 
     auto sst = sst_factory();
     schema_ptr s = muts[0].schema();
-    auto mt = make_lw_shared<replica::memtable>(s);
+    auto mt = make_lw_shared<replica::memtable>(s, dmm);
 
     std::size_t i{0};
     for (auto&& m : muts) {
@@ -98,7 +99,7 @@ sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_
 
 shared_sstable make_sstable(sstables::test_env& env, schema_ptr s, sstring dir, std::vector<mutation> mutations,
         sstable_writer_config cfg, sstables::sstable::version_types version, gc_clock::time_point query_time) {
-    auto mt = make_lw_shared<replica::memtable>(s);
+    auto mt = env.make_memtable(s);
     fs::path dir_path(dir);
 
     for (auto&& m : mutations) {
@@ -193,8 +194,8 @@ future<shared_sstable> test_env::reusable_sst(schema_ptr schema, sstring dir, un
     throw sst_not_found(dir, generation);
 }
 
-compaction_manager_for_testing::wrapped_compaction_manager::wrapped_compaction_manager(bool enabled)
-        : cm(compaction_manager::for_testing_tag{})
+compaction_manager_for_testing::wrapped_compaction_manager::wrapped_compaction_manager(dirty_memory_manager& dmm, bool enabled)
+        : cm(compaction_manager::for_testing_tag{}, dmm)
 {
     if (enabled) {
         cm.enable();

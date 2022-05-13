@@ -18,6 +18,7 @@
 #include "log.hh"
 #include "schema_builder.hh"
 #include "replica/memtable.hh"
+#include "dirty_memory_manager.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 
 static
@@ -56,11 +57,12 @@ int main(int argc, char** argv) {
                 .with_column("v", bytes_type, column_kind::regular_column)
                 .build();
             tests::reader_concurrency_semaphore_wrapper semaphore;
+            dirty_memory_manager dmm;
 
             cache_tracker tracker;
             row_cache cache(s, make_empty_snapshot_source(), tracker);
 
-            auto mt = make_lw_shared<replica::memtable>(s);
+            auto mt = make_lw_shared<replica::memtable>(s, dmm);
             std::vector<dht::decorated_key> keys;
 
             size_t cell_size = 1024;

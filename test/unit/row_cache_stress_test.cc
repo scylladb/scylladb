@@ -36,16 +36,16 @@ struct table {
     uint64_t reads_started = 0;
     uint64_t scans_started = 0;
 
+    memtable_snapshot_source underlying;
     lw_shared_ptr<replica::memtable> mt;
     lw_shared_ptr<replica::memtable> prev_mt;
-    memtable_snapshot_source underlying;
     cache_tracker tracker;
     row_cache cache;
 
     table(unsigned partitions, unsigned rows)
         : semaphore(reader_concurrency_semaphore::no_limits{}, __FILE__)
-        , mt(make_lw_shared<replica::memtable>(s.schema()))
         , underlying(s.schema())
+        , mt(make_lw_shared<replica::memtable>(s.schema(), underlying.get_dirty_memory_manager()))
         , cache(s.schema(), snapshot_source([this] { return underlying(); }), tracker)
     {
         p_keys = s.make_pkeys(partitions);
@@ -94,8 +94,8 @@ struct table {
     // Must not be called concurrently
     void flush() {
         testlog.trace("flushing");
-        prev_mt = std::exchange(mt, make_lw_shared<replica::memtable>(s.schema()));
-        auto flushed = make_lw_shared<replica::memtable>(s.schema());
+        prev_mt = std::exchange(mt, make_lw_shared<replica::memtable>(s.schema(), underlying.get_dirty_memory_manager()));
+        auto flushed = make_lw_shared<replica::memtable>(s.schema(), underlying.get_dirty_memory_manager());
         flushed->apply(*prev_mt, make_permit()).get();
         prev_mt->mark_flushed(flushed->as_data_source());
         testlog.trace("updating cache");

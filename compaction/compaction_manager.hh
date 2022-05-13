@@ -37,6 +37,7 @@ class table;
 }
 
 class compacting_sstable_registration;
+class dirty_memory_manager;
 
 // Compaction manager provides facilities to submit and track compaction jobs on
 // behalf of existing tables.
@@ -50,6 +51,7 @@ public:
     };
     using scheduling_group = backlog_controller::scheduling_group;
     struct config {
+        dirty_memory_manager& dmm;
         scheduling_group compaction_sched_group;
         scheduling_group maintenance_sched_group;
         size_t available_memory;
@@ -283,6 +285,7 @@ private:
     timer<lowres_clock> _compaction_submission_timer = timer<lowres_clock>(compaction_submission_callback());
     static constexpr std::chrono::seconds periodic_compaction_submission_interval() { return std::chrono::seconds(3600); }
 
+    dirty_memory_manager& _dmm;
     scheduling_group _compaction_sg;
     scheduling_group _maintenance_sg;
     compaction_controller _compaction_controller;
@@ -354,13 +357,13 @@ private:
 
     // This constructor is suposed to only be used for testing so lets be more explicit
     // about invoking it. Ref #10146
-    compaction_manager();
+    explicit compaction_manager(dirty_memory_manager& dmm);
 public:
     compaction_manager(config cfg, abort_source& as);
     ~compaction_manager();
     class for_testing_tag{};
     // An inline constructor for testing
-    compaction_manager(for_testing_tag) : compaction_manager() {}
+    compaction_manager(for_testing_tag, dirty_memory_manager& dmm) : compaction_manager(dmm) {}
 
     void register_metrics();
 

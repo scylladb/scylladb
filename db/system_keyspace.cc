@@ -1798,8 +1798,8 @@ private:
     service::storage_service& _ss;
     gms::gossiper& _gossiper;
 public:
-    cluster_status_table(service::storage_service& ss, gms::gossiper& g)
-            : memtable_filling_virtual_table(build_schema())
+    cluster_status_table(service::storage_service& ss, gms::gossiper& g, std::function<lw_shared_ptr<replica::memtable>(schema_ptr)> mt_factory)
+            : memtable_filling_virtual_table(build_schema(), std::move(mt_factory))
             , _ss(ss), _gossiper(g) {}
 
     static schema_ptr build_schema() {
@@ -2077,8 +2077,8 @@ private:
         }
     };
 public:
-    explicit protocol_servers_table(service::storage_service& ss)
-        : memtable_filling_virtual_table(build_schema())
+    explicit protocol_servers_table(service::storage_service& ss, std::function<lw_shared_ptr<replica::memtable>(schema_ptr)> mt_factory)
+        : memtable_filling_virtual_table(build_schema(), std::move(mt_factory))
         , _ss(ss) {
         _shard_aware = true;
     }
@@ -2202,8 +2202,8 @@ private:
     }
 
 public:
-    explicit runtime_info_table(distributed<replica::database>& db, service::storage_service& ss)
-        : memtable_filling_virtual_table(build_schema())
+    explicit runtime_info_table(distributed<replica::database>& db, service::storage_service& ss, std::function<lw_shared_ptr<replica::memtable>(schema_ptr)> mt_factory)
+        : memtable_filling_virtual_table(build_schema(), std::move(mt_factory))
         , _db(db)
         , _ss(ss) {
         _shard_aware = true;
@@ -2332,8 +2332,8 @@ public:
 
 class versions_table : public memtable_filling_virtual_table {
 public:
-    explicit versions_table()
-        : memtable_filling_virtual_table(build_schema()) {
+    explicit versions_table(std::function<lw_shared_ptr<replica::memtable>(schema_ptr)> mt_factory)
+        : memtable_filling_virtual_table(build_schema(), std::move(mt_factory)) {
         _shard_aware = false;
     }
 
@@ -2615,13 +2615,17 @@ void register_virtual_tables(distributed<replica::database>& dist_db, distribute
     auto& ss = dist_ss.local();
     auto& gossiper = dist_gossiper.local();
 
+    auto memtable_factory = [&dist_db] (schema_ptr s) {
+        return make_lw_shared<replica::memtable>(std::move(s), dist_db.local().get_misc_dirty_memory_manager());
+    };
+
     // Add built-in virtual tables here.
-    add_table(std::make_unique<cluster_status_table>(ss, gossiper));
+    add_table(std::make_unique<cluster_status_table>(ss, gossiper, memtable_factory));
     add_table(std::make_unique<token_ring_table>(db, ss));
     add_table(std::make_unique<snapshots_table>(dist_db));
-    add_table(std::make_unique<protocol_servers_table>(ss));
-    add_table(std::make_unique<runtime_info_table>(dist_db, ss));
-    add_table(std::make_unique<versions_table>());
+    add_table(std::make_unique<protocol_servers_table>(ss, memtable_factory));
+    add_table(std::make_unique<runtime_info_table>(dist_db, ss, memtable_factory));
+    add_table(std::make_unique<versions_table>(memtable_factory));
     add_table(std::make_unique<db_config_table>(cfg));
     add_table(std::make_unique<clients_table>(ss));
 }

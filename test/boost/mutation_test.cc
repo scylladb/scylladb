@@ -89,13 +89,13 @@ static mutation_partition get_partition(reader_permit permit, replica::memtable&
 }
 
 future<>
-with_column_family(schema_ptr s, replica::column_family::config cfg, sstables::sstables_manager& sm, noncopyable_function<future<> (replica::column_family&)> func) {
+with_column_family(schema_ptr s, replica::column_family::config cfg, sstables::test_env& env, noncopyable_function<future<> (replica::column_family&)> func) {
     auto tracker = make_lw_shared<cache_tracker>();
     auto dir = tmpdir();
     cfg.datadir = dir.path().string();
-    auto cm = make_lw_shared<compaction_manager>(compaction_manager::for_testing_tag{});
+    auto cm = make_lw_shared<compaction_manager>(compaction_manager::for_testing_tag{}, env.get_dirty_memory_manager());
     auto cl_stats = make_lw_shared<cell_locker_stats>();
-    auto cf = make_lw_shared<replica::column_family>(s, cfg, replica::column_family::no_commitlog(), *cm, sm, *cl_stats, *tracker);
+    auto cf = make_lw_shared<replica::column_family>(s, cfg, replica::column_family::no_commitlog(), *cm, env.manager(), *cl_stats, *tracker);
     cf->mark_ready_for_writes();
     return func(*cf).then([cf, cm] {
         return cf->stop();
@@ -105,11 +105,12 @@ with_column_family(schema_ptr s, replica::column_family::config cfg, sstables::s
 SEASTAR_TEST_CASE(test_mutation_is_applied) {
     return seastar::async([] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
+        dirty_memory_manager dmm;
 
         auto s = make_shared_schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type);
 
-        auto mt = make_lw_shared<replica::memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s, dmm);
 
         const column_definition& r1_col = *s->get_column_definition("r1");
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
@@ -209,11 +210,12 @@ collection_mutation_description make_collection_mutation(tombstone t, bytes key1
 SEASTAR_TEST_CASE(test_map_mutations) {
     return seastar::async([] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
+        dirty_memory_manager dmm;
 
         auto my_map_type = map_type_impl::get_instance(int32_type, utf8_type, true);
         auto s = make_shared_schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", my_map_type}}, utf8_type);
-        auto mt = make_lw_shared<replica::memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s, dmm);
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         auto& column = *s->get_column_definition("s1");
         auto mmut1 = make_collection_mutation({}, int32_type->decompose(101), make_collection_member(utf8_type, sstring("101")));
@@ -247,11 +249,12 @@ SEASTAR_TEST_CASE(test_map_mutations) {
 SEASTAR_TEST_CASE(test_set_mutations) {
     return seastar::async([] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
+        dirty_memory_manager dmm;
 
         auto my_set_type = set_type_impl::get_instance(int32_type, true);
         auto s = make_shared_schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", my_set_type}}, utf8_type);
-        auto mt = make_lw_shared<replica::memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s, dmm);
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         auto& column = *s->get_column_definition("s1");
         auto mmut1 = make_collection_mutation({}, int32_type->decompose(101), make_atomic_cell());
@@ -285,11 +288,12 @@ SEASTAR_TEST_CASE(test_set_mutations) {
 SEASTAR_TEST_CASE(test_list_mutations) {
     return seastar::async([] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
+        dirty_memory_manager dmm;
 
         auto my_list_type = list_type_impl::get_instance(int32_type, true);
         auto s = make_shared_schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", my_list_type}}, utf8_type);
-        auto mt = make_lw_shared<replica::memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s, dmm);
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         auto& column = *s->get_column_definition("s1");
         auto make_key = [] { return timeuuid_type->decompose(utils::UUID_gen::get_time_UUID()); };
@@ -323,6 +327,7 @@ SEASTAR_TEST_CASE(test_list_mutations) {
 
 SEASTAR_THREAD_TEST_CASE(test_udt_mutations) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
+    dirty_memory_manager dmm;
 
     // (a int, b text, c long, d text)
     auto ut = user_type_impl::get_instance("ks", to_bytes("ut"),
@@ -332,7 +337,7 @@ SEASTAR_THREAD_TEST_CASE(test_udt_mutations) {
 
     auto s = make_shared_schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", ut}}, utf8_type);
-    auto mt = make_lw_shared<replica::memtable>(s);
+    auto mt = make_lw_shared<replica::memtable>(s, dmm);
     auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
     auto& column = *s->get_column_definition("s1");
 
@@ -394,6 +399,7 @@ SEASTAR_THREAD_TEST_CASE(test_udt_mutations) {
 // there are no allocations larger than our usual 128KB buffer size.
 SEASTAR_THREAD_TEST_CASE(test_large_collection_allocation) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
+    dirty_memory_manager dmm;
 
     const auto key_type = int32_type;
     const auto value_type = utf8_type;
@@ -405,7 +411,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_collection_allocation) {
         .build();
 
     const std::array sizes_kb{size_t(1), size_t(10), size_t(64)};
-    auto mt = make_lw_shared<replica::memtable>(schema);
+    auto mt = make_lw_shared<replica::memtable>(schema, dmm);
 
     auto make_mutation_with_collection = [&schema, &semaphore, collection_type] (partition_key pk, collection_mutation_description cmd) {
         const auto& cdef = schema->column_at(column_kind::regular_column, 0);
@@ -493,7 +499,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
     cfg.enable_incremental_backups = false;
     cfg.cf_stats = &*cf_stats;
 
-    with_column_family(s, cfg, env.manager(), [s, &env] (replica::column_family& cf) {
+    with_column_family(s, cfg, env, [s, &env] (replica::column_family& cf) {
         const column_definition& r1_col = *s->get_column_definition("r1");
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
 
@@ -546,7 +552,7 @@ SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
     cfg.enable_incremental_backups = false;
     cfg.cf_stats = &*cf_stats;
 
-    return with_column_family(s, cfg, env.manager(), [&env, s](replica::column_family& cf) {
+    return with_column_family(s, cfg, env, [&env, s](replica::column_family& cf) {
         return seastar::async([&env, s, &cf] {
             // populate
             auto new_key = [&] {
@@ -627,7 +633,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
     cfg.enable_incremental_backups = false;
     cfg.cf_stats = &*cf_stats;
 
-    with_column_family(s, cfg, env.manager(), [s, &env] (auto& cf) mutable {
+    with_column_family(s, cfg, env, [s, &env] (auto& cf) mutable {
         std::map<int32_t, std::map<int32_t, int32_t>> shadow, result;
 
         const column_definition& r1_col = *s->get_column_definition("r1");
@@ -1155,11 +1161,12 @@ SEASTAR_TEST_CASE(test_mutation_diff) {
 SEASTAR_TEST_CASE(test_large_blobs) {
     return seastar::async([] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
+        dirty_memory_manager dmm;
 
         auto s = make_shared_schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {}, {}, {{"s1", bytes_type}}, utf8_type);
 
-        auto mt = make_lw_shared<replica::memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s, dmm);
 
         auto blob1 = make_blob(1234567);
         auto blob2 = make_blob(2345678);

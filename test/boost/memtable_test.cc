@@ -67,8 +67,9 @@ std::vector<mutation> make_ring(schema_ptr s, int n_mutations) {
 
 SEASTAR_TEST_CASE(test_memtable_conforms_to_mutation_source) {
     return seastar::async([] {
-        run_mutation_source_tests([](schema_ptr s, const std::vector<mutation>& partitions) {
-            auto mt = make_lw_shared<replica::memtable>(s);
+        dirty_memory_manager dmm;
+        run_mutation_source_tests([&dmm](schema_ptr s, const std::vector<mutation>& partitions) {
+            auto mt = make_lw_shared<replica::memtable>(s, dmm);
 
             for (auto&& m : partitions) {
                 mt->apply(m);
@@ -84,6 +85,7 @@ SEASTAR_TEST_CASE(test_memtable_conforms_to_mutation_source) {
 SEASTAR_TEST_CASE(test_memtable_with_many_versions_conforms_to_mutation_source) {
     return seastar::async([] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
+        dirty_memory_manager dmm;
         lw_shared_ptr<replica::memtable> mt;
         std::vector<flat_mutation_reader_v2> readers;
         auto clear_readers = [&readers] {
@@ -107,7 +109,7 @@ SEASTAR_TEST_CASE(test_memtable_with_many_versions_conforms_to_mutation_source) 
         });
         run_mutation_source_tests([&] (schema_ptr s, const std::vector<mutation>& muts) {
             clear_readers();
-            mt = make_lw_shared<replica::memtable>(s);
+            mt = make_lw_shared<replica::memtable>(s, dmm);
 
             for (auto&& m : muts) {
                 mt->apply(m);
@@ -211,8 +213,9 @@ SEASTAR_TEST_CASE(test_adding_a_column_during_reading_doesnt_affect_read_result)
                 .build();
 
         tests::reader_concurrency_semaphore_wrapper semaphore;
+        dirty_memory_manager dmm;
 
-        auto mt = make_lw_shared<replica::memtable>(s1);
+        auto mt = make_lw_shared<replica::memtable>(s1, dmm);
 
         std::vector<mutation> ring = make_ring(s1, 3);
 
@@ -321,8 +324,9 @@ SEASTAR_TEST_CASE(test_partition_version_consistency_after_lsa_compaction_happen
                 .build();
 
         tests::reader_concurrency_semaphore_wrapper semaphore;
+        dirty_memory_manager dmm;
 
-        auto mt = make_lw_shared<replica::memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s, dmm);
 
         auto empty_m = make_unique_mutation(s);
         auto ck1 = clustering_key::from_single_value(*s, serialized(make_unique_bytes()));
@@ -442,9 +446,10 @@ SEASTAR_TEST_CASE(test_fast_forward_to_after_memtable_is_flushed) {
             .build();
 
         tests::reader_concurrency_semaphore_wrapper semaphore;
+        dirty_memory_manager dmm;
 
-        auto mt = make_lw_shared<replica::memtable>(s);
-        auto mt2 = make_lw_shared<replica::memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s, dmm);
+        auto mt2 = make_lw_shared<replica::memtable>(s, dmm);
 
         std::vector<mutation> ring = make_ring(s, 5);
 
@@ -468,9 +473,10 @@ SEASTAR_TEST_CASE(test_exception_safety_of_partition_range_reads) {
         random_mutation_generator gen(random_mutation_generator::generate_counters::no);
         auto s = gen.schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;
+        dirty_memory_manager dmm;
         std::vector<mutation> ms = gen(2);
 
-        auto mt = make_lw_shared<replica::memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s, dmm);
         for (auto& m : ms) {
             mt->apply(m);
         }
@@ -487,9 +493,10 @@ SEASTAR_TEST_CASE(test_exception_safety_of_flush_reads) {
         random_mutation_generator gen(random_mutation_generator::generate_counters::no);
         auto s = gen.schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;
+        dirty_memory_manager dmm;
         std::vector<mutation> ms = gen(2);
 
-        auto mt = make_lw_shared<replica::memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s, dmm);
         for (auto& m : ms) {
             mt->apply(m);
         }
@@ -509,9 +516,10 @@ SEASTAR_TEST_CASE(test_exception_safety_of_single_partition_reads) {
         random_mutation_generator gen(random_mutation_generator::generate_counters::no);
         auto s = gen.schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;
+        dirty_memory_manager dmm;
         std::vector<mutation> ms = gen(2);
 
-        auto mt = make_lw_shared<replica::memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s, dmm);
         for (auto& m : ms) {
             mt->apply(m);
         }
@@ -525,9 +533,10 @@ SEASTAR_TEST_CASE(test_exception_safety_of_single_partition_reads) {
 
 SEASTAR_THREAD_TEST_CASE(test_tombstone_compaction_during_flush) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
+    dirty_memory_manager dmm;
     simple_schema ss;
     auto s = ss.schema();
-    auto mt = make_lw_shared<replica::memtable>(ss.schema());
+    auto mt = make_lw_shared<replica::memtable>(ss.schema(), dmm);
 
     auto pk = ss.make_pkey(0);
     auto pr = dht::partition_range::make_singular(pk);
@@ -576,9 +585,10 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_compaction_during_flush) {
 
 SEASTAR_THREAD_TEST_CASE(test_tombstone_merging_with_multiple_versions) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
+    dirty_memory_manager dmm;
     simple_schema ss;
     auto s = ss.schema();
-    auto mt = make_lw_shared<replica::memtable>(ss.schema());
+    auto mt = make_lw_shared<replica::memtable>(ss.schema(), dmm);
 
     auto pk = ss.make_pkey(0);
     auto pr = dht::partition_range::make_singular(pk);
@@ -644,9 +654,10 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_merging_with_multiple_versions) {
 
 SEASTAR_THREAD_TEST_CASE(test_range_tombstones_are_compacted_with_data) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
+    dirty_memory_manager dmm;
     simple_schema ss;
     auto s = ss.schema();
-    auto mt = make_lw_shared<replica::memtable>(ss.schema());
+    auto mt = make_lw_shared<replica::memtable>(ss.schema(), dmm);
 
     auto pk = ss.make_pkey(0);
     auto pr = dht::partition_range::make_singular(pk);
@@ -717,8 +728,9 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
                 .with_column("v", bytes_type, column_kind::regular_column)
                 .build();
         tests::reader_concurrency_semaphore_wrapper semaphore;
+        dirty_memory_manager dmm;
 
-        auto mt = make_lw_shared<replica::memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(s, dmm);
 
         auto m = make_unique_mutation(s);
         set_column(m, "v");
@@ -782,6 +794,7 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_collecting_encoding_stats) {
+    dirty_memory_manager dmm;
     auto random_int32_value = [] {
         return int32_type->decompose(tests::random::get_int<int32_t>());
     };
@@ -817,7 +830,7 @@ SEASTAR_THREAD_TEST_CASE(test_collecting_encoding_stats) {
             tests::data_model::mutation_description::atomic_value(random_int32_value(), tests::data_model::data_timestamp, md3_ttl, md3_expiry_point));
     auto m3 = md3.build(s);
 
-    auto mt = make_lw_shared<replica::memtable>(s);
+    auto mt = make_lw_shared<replica::memtable>(s, dmm);
 
     auto stats = mt->get_encoding_stats();
     BOOST_CHECK(stats.min_local_deletion_time == gc_clock::time_point::max());

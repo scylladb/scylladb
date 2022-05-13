@@ -412,7 +412,7 @@ SEASTAR_TEST_CASE(test_sstable_can_write_and_read_range_tombstone) {
         auto ttl = gc_clock::now() + std::chrono::seconds(1);
         m.partition().apply_delete(*s, range_tombstone(c_key_start, bound_kind::excl_start, c_key_end, bound_kind::excl_end, tombstone(9, ttl)));
 
-        auto mt = make_lw_shared<replica::memtable>(s);
+        auto mt = env.make_memtable(s);
         mt->apply(std::move(m));
 
         auto sst = env.make_sstable(s,
@@ -856,7 +856,7 @@ SEASTAR_TEST_CASE(test_non_compound_table_row_is_not_marked_as_static) {
         auto cell = atomic_cell::make_live(*int32_type, 1, int32_type->decompose(17), { });
         m.set_clustered_cell(ck, *s->get_column_definition("v"), std::move(cell));
 
-        auto mt = make_lw_shared<replica::memtable>(s);
+        auto mt = env.make_memtable(s);
         mt->apply(std::move(m));
 
         auto sst = env.make_sstable(s,
@@ -891,7 +891,7 @@ SEASTAR_TEST_CASE(test_has_partition_key) {
             auto cell = atomic_cell::make_live(*int32_type, 1, int32_type->decompose(17), { });
             m.set_clustered_cell(ck, *s->get_column_definition("v"), std::move(cell));
 
-            auto mt = make_lw_shared<replica::memtable>(s);
+            auto mt = env.make_memtable(s);
             mt->apply(std::move(m));
 
             auto sst = env.make_sstable(s,
@@ -954,7 +954,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic) {
                 bound_kind::incl_end,
                 {1, gc_clock::now()}));
 
-        auto mt = make_lw_shared<replica::memtable>(s);
+        auto mt = env.make_memtable(s);
         mt->apply(std::move(m));
         sstable_writer_config cfg = env.manager().configure_writer();
         cfg.promoted_index_block_size = 1;
@@ -991,7 +991,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_with_auto_scaling) {
                 bound_kind::incl_end,
                 {1, gc_clock::now()}));
 
-        auto mt = make_lw_shared<replica::memtable>(s);
+        auto mt = env.make_memtable(s);
         mt->apply(std::move(m));
         sstable_writer_config cfg = env.manager().configure_writer();
         cfg.promoted_index_block_size = 1;
@@ -1036,7 +1036,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_compound_dense) {
                 bound_kind::incl_end,
                 {1, gc_clock::now()}));
 
-        auto mt = make_lw_shared<replica::memtable>(s);
+        auto mt = env.make_memtable(s);
         mt->apply(std::move(m));
         sstable_writer_config cfg = env.manager().configure_writer();
         cfg.promoted_index_block_size = 1;
@@ -1087,7 +1087,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_non_compound_dense) {
                 bound_kind::incl_end,
                 {1, gc_clock::now()}));
 
-        auto mt = make_lw_shared<replica::memtable>(s);
+        auto mt = env.make_memtable(s);
         mt->apply(std::move(m));
         sstable_writer_config cfg = env.manager().configure_writer();
         cfg.promoted_index_block_size = 1;
@@ -1135,7 +1135,7 @@ SEASTAR_TEST_CASE(test_promoted_index_repeats_open_tombstones) {
             auto ck = clustering_key::from_exploded(*s, {bytes_type->decompose(data_value(to_bytes("ck3")))});
             m.set_clustered_cell(ck, *s->get_column_definition("v"), atomic_cell(*int32_type, cell));
 
-            auto mt = make_lw_shared<replica::memtable>(s);
+            auto mt = env.make_memtable(s);
             mt->apply(m);
             sstable_writer_config cfg = env.manager().configure_writer();
             cfg.promoted_index_block_size = 1;
@@ -1173,7 +1173,7 @@ SEASTAR_TEST_CASE(test_range_tombstones_are_correctly_seralized_for_non_compound
                 bound_kind::incl_end,
                 {1, gc_clock::now()}));
 
-        auto mt = make_lw_shared<replica::memtable>(s);
+        auto mt = env.make_memtable(s);
         mt->apply(m);
         sstable_writer_config cfg = env.manager().configure_writer();
 
@@ -1204,7 +1204,7 @@ SEASTAR_TEST_CASE(test_promoted_index_is_absent_for_schemas_without_clustering_k
             auto cell = atomic_cell::make_live(*int32_type, 1, int32_type->decompose(v), { });
             m.set_clustered_cell(clustering_key_prefix::make_empty(), *s->get_column_definition("v"), atomic_cell(*int32_type, cell));
         }
-        auto mt = make_lw_shared<replica::memtable>(s);
+        auto mt = env.make_memtable(s);
         mt->apply(m);
         sstable_writer_config cfg = env.manager().configure_writer();
         cfg.promoted_index_block_size = 1;
@@ -1240,10 +1240,10 @@ SEASTAR_TEST_CASE(test_writing_combined_stream_with_tombstones_at_the_same_posit
         m2.partition().apply_delete(*s, rt2);
         ss.add_row(m2, ss.make_ckey(4), "v2"); // position inside rt2
 
-        auto mt1 = make_lw_shared<replica::memtable>(s);
+        auto mt1 = env.make_memtable(s);
         mt1->apply(m1);
 
-        auto mt2 = make_lw_shared<replica::memtable>(s);
+        auto mt2 = env.make_memtable(s);
         mt2->apply(m2);
         auto combined_permit = env.make_reader_permit();
         auto mr = make_combined_reader(s, combined_permit,
@@ -1402,7 +1402,7 @@ SEASTAR_TEST_CASE(test_large_index_pages_do_not_cause_large_allocations) {
 
     seastar::memory::scoped_large_allocation_warning_threshold mtg(logalloc::segment_size);
 
-    auto mt = make_lw_shared<replica::memtable>(s);
+    auto mt = env.make_memtable(s);
     {
         mutation m(s, *large_key);
         ss.add_row(m, ss.make_ckey(0), "v");
@@ -1471,7 +1471,7 @@ SEASTAR_TEST_CASE(test_reading_serialization_header) {
             tests::data_model::mutation_description::atomic_value(random_int32_value(), tests::data_model::data_timestamp, ttl, expiry_time));
     auto m2 = md2.build(s);
 
-    auto mt = make_lw_shared<replica::memtable>(s);
+    auto mt = env.make_memtable(s);
     mt->apply(m1);
     mt->apply(m2);
 
@@ -1574,7 +1574,7 @@ SEASTAR_TEST_CASE(test_counter_header_size) {
     }
     m.set_clustered_cell(ck, col, ccb.build(api::new_timestamp()));
 
-    auto mt = make_lw_shared<replica::memtable>(s);
+    auto mt = env.make_memtable(s);
     mt->apply(m);
 
     for (const auto version : writable_sstable_versions) {

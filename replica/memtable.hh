@@ -175,7 +175,7 @@ public:
     explicit memtable(schema_ptr schema, dirty_memory_manager&, replica::table_stats& table_stats, memtable_list *memtable_list = nullptr,
             seastar::scheduling_group compaction_scheduling_group = seastar::current_scheduling_group());
     // Used for testing that want to control the flush process.
-    explicit memtable(schema_ptr schema);
+    explicit memtable(schema_ptr schema, dirty_memory_manager&);
     ~memtable();
     // Clears this memtable gradually without consuming the whole CPU.
     // Never resolves with a failed future.
