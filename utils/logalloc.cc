@@ -512,7 +512,7 @@ private:
     size_t reclaim_locked(size_t bytes, is_preemptible p);
 };
 
-tracker_reclaimer_lock::tracker_reclaimer_lock() noexcept : _tracker_impl(shard_tracker().get_impl()) {
+tracker_reclaimer_lock::tracker_reclaimer_lock(tracker::impl& impl) noexcept : _tracker_impl(impl) {
     _tracker_impl.disable_reclaim();
 }
 
@@ -1074,7 +1074,7 @@ segment* segment_pool::allocate_segment(size_t reserve)
     //    memory in order to reclaim enough segments.
     //
     do {
-        tracker_reclaimer_lock rl;
+        tracker_reclaimer_lock rl(_tracker);
         if (_free_segments > reserve) {
             auto free_idx = _lsa_free_segments_bitmap.find_last_set();
             _lsa_free_segments_bitmap.clear(free_idx);
@@ -2609,7 +2609,7 @@ bool segment_pool::compact_segment(segment* seg) {
     // one more segment
     reservation_goal open_emergency_pool(*this, 0);
     allocation_lock no_alloc(*this);
-    tracker_reclaimer_lock no_reclaim;
+    tracker_reclaimer_lock no_reclaim(_tracker);
 
     desc._region->compact_segment(seg, desc);
     return true;

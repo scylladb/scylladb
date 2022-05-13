@@ -128,7 +128,7 @@ region_group::start_releaser(scheduling_group deferred_work_sg) {
                 } else {
                     // Block reclaiming to prevent signal() from being called by reclaimer inside wait()
                     // FIXME: handle allocation failures (not very likely) like allocating_section does
-                    tracker_reclaimer_lock rl;
+                    tracker_reclaimer_lock rl(logalloc::shard_tracker());
                     return _relief.wait().then([] {
                         return stop_iteration::no;
                     });
