@@ -1,4 +1,5 @@
 #include "cql3/column_identifier.hh"
+#include "cql3/util.hh"
 #include "seastar/core/shared_ptr.hh"
 #include "types.hh"
 #include "types/list.hh"
@@ -302,4 +303,39 @@ BOOST_AUTO_TEST_CASE(expr_printer_in_test) {
         int_list_const
     };
     BOOST_REQUIRE_EQUAL(expr_print(a_in_int_list_const), "a IN (13, 45, 90)");
+}
+
+
+// To easily test how many expressions work with expression::printer
+// We can use a function that parses a string to expression and then
+// print it using another function that uses printer
+BOOST_AUTO_TEST_CASE(expr_printer_parse_and_print_test) {
+    auto tests = {
+        "col = 1234",
+        "col != 1234",
+        "col < 1234",
+        "col <= 1234",
+        "col >= 1234",
+        "col > 1234",
+        "col CONTAINS 1234",
+        "col CONTAINS KEY 1234",
+        "col IS NOT null",
+        "col LIKE 'abc'",
+        "token(p1, p2) > -3434",
+        "col2 = (1, 2)",
+        "col2 = {1, 2}",
+        "col2 IN (1, 2, 3)",
+        "col2 IN ((1, 2), (3, 4))",
+        "(col1, col2) < (1, 2)",
+        "(c1, c2) IN ((1, 2), (3, 4))",
+        "col > ?",
+        "col IN (1, 2, 3, ?, 4, null)"
+    };
+
+    for(const char* test : tests) {
+        std::vector<expression> parsed_where = cql3::util::where_clause_to_relations(test);
+        sstring printed_where = cql3::util::relations_to_where_clause(parsed_where);
+
+        BOOST_REQUIRE_EQUAL(sstring(test), printed_where);
+    }
 }
