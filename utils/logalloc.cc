@@ -866,6 +866,35 @@ public:
         uint64_t memory_freed;
         uint64_t memory_compacted;
         uint64_t memory_evicted;
+
+        friend stats operator+(const stats& s1, const stats& s2) {
+            stats result(s1);
+            result += s2;
+            return result;
+        }
+        friend stats operator-(const stats& s1, const stats& s2) {
+            stats result(s1);
+            result -= s2;
+            return result;
+        }
+        stats& operator+=(const stats& other) {
+            segments_compacted += other.segments_compacted;
+            lsa_buffer_segments += other.lsa_buffer_segments;
+            memory_allocated += other.memory_allocated;
+            memory_freed += other.memory_freed;
+            memory_compacted += other.memory_compacted;
+            memory_evicted += other.memory_evicted;
+            return *this;
+        }
+        stats& operator-=(const stats& other) {
+            segments_compacted -= other.segments_compacted;
+            lsa_buffer_segments -= other.lsa_buffer_segments;
+            memory_allocated -= other.memory_allocated;
+            memory_freed -= other.memory_freed;
+            memory_compacted -= other.memory_compacted;
+            memory_evicted -= other.memory_evicted;
+            return *this;
+        }
     };
 private:
     stats _stats{};
