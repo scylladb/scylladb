@@ -910,6 +910,31 @@ public:
 
 class reclaim_timer {
     using clock = utils::coarse_steady_clock;
+    struct stats {
+        occupancy_stats region_occupancy;
+        segment_pool::stats pool_stats;
+
+        friend stats operator+(const stats& s1, const stats& s2) {
+            stats result(s1);
+            result += s2;
+            return result;
+        }
+        friend stats operator-(const stats& s1, const stats& s2) {
+            stats result(s1);
+            result -= s2;
+            return result;
+        }
+        stats& operator+=(const stats& other) {
+            region_occupancy += other.region_occupancy;
+            pool_stats += other.pool_stats;
+            return *this;
+        }
+        stats& operator-=(const stats& other) {
+            region_occupancy -= other.region_occupancy;
+            pool_stats -= other.pool_stats;
+            return *this;
+        }
+    };
 
     static thread_local reclaim_timer* _active_timer;
 
@@ -926,9 +951,9 @@ class reclaim_timer {
     size_t _memory_released = 0;
 
     clock::time_point _start;
+    stats _start_stats, _end_stats, _stat_diff;
+
     clock::duration _duration;
-    occupancy_stats _old_region_occupancy;
-    segment_pool::stats _old_pool_stats;
 
 public:
     inline reclaim_timer(const char* name, is_preemptible preemptible, size_t memory_to_release, size_t segments_to_release, tracker::impl* tracker = nullptr);
@@ -941,6 +966,8 @@ public:
         _duration = clock::now() - _start;
         _stall_detected = _duration >= engine().get_blocked_reactor_notify_ms();
         if (_debug_enabled || _stall_detected) {
+            sample_stats(_end_stats);
+            _stat_diff = _end_stats - _start_stats;
             report();
         }
 
@@ -952,6 +979,7 @@ public:
     }
 
 private:
+    void sample_stats(stats& data);
     template <typename T>
     void log_if_changed(log_level level, const char* name, T before, T now) const noexcept {
         if (now != before) {
@@ -1247,10 +1275,14 @@ reclaim_timer::reclaim_timer(const char* name, is_preemptible preemptible, size_
     _active_timer = this;
 
     _start = clock::now();
-    if (_debug_enabled && tracker) {
-        _old_region_occupancy = tracker->region_occupancy();
+    sample_stats(_start_stats);
+}
+
+void reclaim_timer::sample_stats(stats& data) {
+    if (_debug_enabled && _tracker) {
+        data.region_occupancy = _tracker->region_occupancy();
     }
-    _old_pool_stats = shard_segment_pool.statistics();
+    data.pool_stats = shard_segment_pool.statistics();
 }
 
 void reclaim_timer::report() const noexcept {
@@ -1268,16 +1300,17 @@ void reclaim_timer::report() const noexcept {
             static_cast<float>(_memory_released) / std::chrono::duration_cast<std::chrono::duration<float>>(_duration).count();
         timing_logger.log(info_level, "- reclamation rate = {} MiB/s", format("{:.3f}", bytes_per_second / MiB));
     }
+
     if (_debug_enabled && _tracker) {
         log_if_changed(info_level, "occupancy of regions",
-                        _old_region_occupancy.used_fraction(), _tracker->region_occupancy().used_fraction());
+                        _start_stats.region_occupancy.used_fraction(), _end_stats.region_occupancy.used_fraction());
     }
 
-    auto pool_stats = shard_segment_pool.statistics();
-    log_if_any_mem(info_level, "evicted memory", pool_stats.memory_evicted - _old_pool_stats.memory_evicted);
-    log_if_any(info_level, "compacted segments", pool_stats.segments_compacted - _old_pool_stats.segments_compacted);
-    log_if_any_mem(info_level, "compacted memory", pool_stats.memory_compacted - _old_pool_stats.memory_compacted);
-    log_if_any_mem(info_level, "allocated memory", pool_stats.memory_allocated - _old_pool_stats.memory_allocated);
+    auto pool_diff = _stat_diff.pool_stats;
+    log_if_any_mem(info_level, "evicted memory", pool_diff.memory_evicted);
+    log_if_any(info_level, "compacted segments", pool_diff.segments_compacted);
+    log_if_any_mem(info_level, "compacted memory", pool_diff.memory_compacted);
+    log_if_any_mem(info_level, "allocated memory", pool_diff.memory_allocated);
 }
 
 //
