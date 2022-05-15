@@ -298,7 +298,7 @@ inline void write(sstable_version_types v, W& out, managed_bytes_view s) {
     }
 }
 
-inline void write(sstable_version_types v, file_writer& out, bytes_ostream s) {
+inline void write(sstable_version_types v, file_writer& out, const bytes_ostream& s) {
     for (bytes_view fragment : s) {
         write(v, out, fragment);
     }
