@@ -227,7 +227,9 @@ BOOST_AUTO_TEST_CASE(test_vector)
     auto bv2 = buf2.linearize();
     auto in2 = ser::as_input_stream(bv2);
     auto voc_view = ser::deserialize(in2, boost::type<ser::writable_vectors_of_compounds_view>());
-    auto&& first_view = voc_view.first();
+
+    auto first_range = voc_view.first();
+    auto first_view = std::vector<ser::writable_simple_compound_view>(first_range.begin(), first_range.end());
     BOOST_REQUIRE_EQUAL(vec1.size(), first_view.size());
     for (size_t i = 0; i < first_view.size(); i++) {
         auto fv = first_view[i];
@@ -236,7 +238,8 @@ BOOST_AUTO_TEST_CASE(test_vector)
         BOOST_REQUIRE_EQUAL(vec1[i].bar, first_view[i].bar());
     }
 
-    auto&& second_view = voc_view.second().vector();
+    auto second_range = voc_view.second().vector();
+    auto second_view = std::vector<simple_compound>(second_range.begin(), second_range.end());
     BOOST_REQUIRE_EQUAL(vec2.size(), second_view.size());
     for (size_t i = 0; i < second_view.size(); i++) {
         BOOST_REQUIRE_EQUAL(vec2[i], second_view[i]);
@@ -291,7 +294,8 @@ BOOST_AUTO_TEST_CASE(test_variant)
 
     struct expect_vector : boost::static_visitor<std::vector<simple_compound>> {
         std::vector<simple_compound> operator()(ser::writable_vector_view& wvv) const {
-            return wvv.vector();
+            auto range = wvv.vector();
+            return std::vector<simple_compound>(range.begin(), range.end());
         }
         std::vector<simple_compound> operator()(simple_compound&) const {
             throw std::runtime_error("got simple_compound, expected writable_vector");

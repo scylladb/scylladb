@@ -1434,7 +1434,7 @@ def add_view(cout, cls):
         if is_vector(m.type):
             elem_type = element_type(m.type)
             fprintln(cout, reindent(4, """
-                auto {name}_range() const {{
+                auto {name}() const {{
                   return seastar::with_serialized_stream(v, [this] (auto& v) {{
                    auto in = v;
                    {skip}
@@ -1442,16 +1442,16 @@ def add_view(cout, cls):
                   }});
                 }}
             """).format(f=DESERIALIZER, **locals()))
-
-        fprintln(cout, reindent(4, """
-            auto {name}() const {{
-              return seastar::with_serialized_stream(v, [this] (auto& v) -> decltype({f}(std::declval<utils::input_stream&>(), boost::type<{full_type}>())) {{
-               auto in = v;
-               {skip}
-               return {deser};
-              }});
-            }}
-        """).format(f=DESERIALIZER, **locals()))
+        else:
+            fprintln(cout, reindent(4, """
+                auto {name}() const {{
+                  return seastar::with_serialized_stream(v, [this] (auto& v) -> decltype({f}(std::declval<utils::input_stream&>(), boost::type<{full_type}>())) {{
+                   auto in = v;
+                   {skip}
+                   return {deser};
+                  }});
+                }}
+            """).format(f=DESERIALIZER, **locals()))
 
         skip = skip + f"\n       ser::skip(in, boost::type<{full_type}>());"
 
