@@ -24,6 +24,7 @@ import signal
 import subprocess
 import sys
 import time
+import traceback
 import xml.etree.ElementTree as ET
 import yaml
 
@@ -1125,10 +1126,32 @@ async def main():
     #       to cooperate with git bisect's expectations
     return 0 if not failed_tests else 1
 
+
+async def workaround_python26789():
+    """Workaround for https://bugs.python.org/issue26789.
+    We'd like to print traceback if there is an internal error
+    in test.py. However, traceback module calls asyncio
+    default_exception_handler which in turns calls logging
+    module after it has been shut down. This leads to a nested
+    exception. Until 3.10 is in widespread use, reset the
+    asyncio exception handler before printing traceback."""
+    try:
+        code = await main()
+    except (Exception, KeyboardInterrupt):
+        def noop(x, y):
+            return None
+        asyncio.get_event_loop().set_exception_handler(noop)
+        traceback.print_exc()
+        # Clear the custom handler
+        asyncio.get_event_loop().set_exception_handler(None)
+        return -1
+    return code
+
+
 if __name__ == "__main__":
     colorama.init()
 
     if sys.version_info < (3, 7):
         print("Python 3.7 or newer is required to run this program")
         sys.exit(-1)
-    sys.exit(asyncio.run(main()))
+    sys.exit(asyncio.run(workaround_python26789()))
