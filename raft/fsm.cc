@@ -1044,7 +1044,7 @@ void fsm::broadcast_read_quorum(read_id id) {
             if (p.id == _my_id) {
                 handle_read_quorum_reply(_my_id, read_quorum_reply{_current_term, _commit_idx, id});
             } else {
-                send_to(p.id, read_quorum{_current_term, _commit_idx, id});
+                send_to(p.id, read_quorum{_current_term, std::min(p.match_idx, _commit_idx), id});
             }
         }
     }
