@@ -140,3 +140,43 @@ Subscripting a list in a WHERE clause is supported as are maps.
 ```cql
 WHERE some_list[:index] = :value
 ```
+
+## Per-partition rate limit
+
+The `per_partition_rate_limit` option can be used to limit the allowed
+rate of requests to each partition in a given table. When the cluster detects
+that the rate of requests exceeds configured limit, the cluster will start
+rejecting some of them in order to bring the throughput back to the configured
+limit. Rejected requests are less costly which can help reduce overload.
+
+_NOTE_: Due to Scylla's distributed nature, tracking per-partition request rates
+is not perfect and the actual rate of accepted requests may be higher up to
+a factor of keyspace's `RF`. This feature should not be used to enforce precise
+limits but rather serve as an overload protection feature.
+
+_NOTE): This feature works best when shard-aware drivers are used (rejected
+requests have the least cost).
+
+Limits are configured separately for reads and writes. Some examples:
+
+```cql
+    ALTER TABLE t WITH per_partition_rate_limit = {
+        'max_reads_per_second': 100,
+        'max_writes_per_second': 200
+    };
+```
+
+Limit reads only, no limit for writes:
+```cql
+    ALTER TABLE t WITH per_partition_rate_limit = {
+        'max_reads_per_second': 200
+    };
+```
+
+Rejected requests receive the scylla-specific "Rate limit exceeded" error.
+If the driver doesn't support it, `Config_error` will be sent instead.
+
+For more details, see:
+
+- Detailed [`design notes`](./per-partition-rate-limit.md)
+- Description of the [rate limit exceeded](./protocol-extensions.md#rate-limit-error) error
