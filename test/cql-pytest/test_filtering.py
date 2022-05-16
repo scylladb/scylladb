@@ -287,3 +287,19 @@ def test_multiple_restrictions_on_same_column(cql, test_keyspace, scylla_only):
         assert list(cql.execute(f"SELECT c FROM {table} WHERE p = {p} and c >= 1 and c <= 2")) == [(1,),(2,)]
         assert list(cql.execute(f"SELECT c FROM {table} WHERE p = {p} and c = 1 and c in (2, 3)")) == []
         assert list(cql.execute(f"SELECT c FROM {table} WHERE p = {p} and c = 2 and c in (2, 3)")) == [(2,)]
+
+# Cassandra does not allow IN restrictions on non-primary-key columns,
+# even when doing filtering (ALLOW FILTERING). Scylla does support this
+# case, but in this test let's check that it returns correct results.
+# Cassandra consider this a bug (the message say "not yet supported")
+# so we mark this test cassandra_bug (maybe one day it will start working
+# on Cassandra).
+def test_filter_in_restriction(cql, test_keyspace, cassandra_bug):
+    schema = 'pk int, ck int, x int, PRIMARY KEY (pk, ck)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        stmt = cql.prepare(f'INSERT INTO {table} (pk, ck, x) VALUES (?, ?, ?)')
+        for i in range(3):
+            cql.execute(stmt, [1, i, i*2])
+        assert [(1,), (2,)] == list(cql.execute(f'SELECT ck FROM {table} WHERE x IN (2, 4) ALLOW FILTERING'))
+        assert [(1,)] == list(cql.execute(f'SELECT ck FROM {table} WHERE x IN (2, 7) ALLOW FILTERING'))
+        assert [] == list(cql.execute(f'SELECT ck FROM {table} WHERE x IN (3, 7) ALLOW FILTERING'))
