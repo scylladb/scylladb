@@ -334,7 +334,7 @@ protected:
         co_await coroutine::switch_to(_cm._compaction_controller.sg());
 
         switch_state(state::pending);
-        auto units = co_await get_units(_cm._maintenance_ops_sem, 1);
+        auto units = co_await get_units(_cm._maintenance_ops_sem, 1, _compaction_data.abort);
         auto lock_holder = co_await _compaction_state.lock.hold_write_lock();
         if (!can_proceed()) {
             co_return;
@@ -383,7 +383,7 @@ protected:
             co_return;
         }
         switch_state(state::pending);
-        auto units = co_await get_units(_cm._maintenance_ops_sem, 1);
+        auto units = co_await get_units(_cm._maintenance_ops_sem, 1, _compaction_data.abort);
 
         if (!can_proceed(throw_if_stopping::yes)) {
             co_return;
@@ -997,7 +997,7 @@ protected:
                 co_return;
             }
             switch_state(state::pending);
-            auto units = co_await get_units(_cm._maintenance_ops_sem, 1);
+            auto units = co_await get_units(_cm._maintenance_ops_sem, 1, _compaction_data.abort);
             if (!can_proceed()) {
                 co_return;
             }
@@ -1045,7 +1045,7 @@ public:
 protected:
     virtual future<> do_run() override {
         switch_state(state::pending);
-        auto maintenance_permit = co_await seastar::get_units(_cm._maintenance_ops_sem, 1);
+        auto maintenance_permit = co_await seastar::get_units(_cm._maintenance_ops_sem, 1, _compaction_data.abort);
 
         while (!_sstables.empty() && can_proceed()) {
             auto sst = consume_sstable();
@@ -1207,7 +1207,7 @@ public:
 protected:
     virtual future<> do_run() override {
         switch_state(state::pending);
-        auto maintenance_permit = co_await seastar::get_units(_cm._maintenance_ops_sem, 1);
+        auto maintenance_permit = co_await seastar::get_units(_cm._maintenance_ops_sem, 1, _compaction_data.abort);
 
         while (!_pending_cleanup_jobs.empty() && can_proceed()) {
             auto active_job = std::move(_pending_cleanup_jobs.back());
