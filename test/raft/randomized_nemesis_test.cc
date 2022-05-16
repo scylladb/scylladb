@@ -2905,6 +2905,10 @@ SEASTAR_TEST_CASE(basic_generator_test) {
         // threshold is 1024 log commands and we perform only 500 ops.
         bool frequent_snapshotting = bdist(random_engine);
 
+        bool nemesis_partitions = true;
+        bool nemesis_reconfigurations = true;
+        bool nemesis_crashes = true;
+
         // TODO: randomize the snapshot thresholds between different servers for more chaos.
         auto srv_cfg = frequent_snapshotting
             ? raft::server::configuration {
@@ -3011,24 +3015,31 @@ SEASTAR_TEST_CASE(basic_generator_test) {
         // ~= [4s, 8s] -> ~1/2 partitions should cause an election
         // we will set request timeout 600_t ~= 6s and partition every 1200_t ~= 12s
 
-        auto gen = op_limit(500,
+        auto num_ops = 500;
+        auto gen = op_limit(num_ops,
             pin(partition_thread,
-                stagger(seed, timer.now() + 200_t, 1200_t, 1200_t,
-                    random(seed, [] (std::mt19937& engine) {
-                        static std::uniform_int_distribution<raft::logical_clock::rep> dist{400, 800};
-                        return op_type{network_majority_grudge<AppendReg>{raft::logical_clock::duration{dist(engine)}}};
-                    })
+                op_limit(nemesis_partitions ? num_ops : 0,
+                    stagger(seed, timer.now() + 200_t, 1200_t, 1200_t,
+                        random(seed, [] (std::mt19937& engine) {
+                            static std::uniform_int_distribution<raft::logical_clock::rep> dist{400, 800};
+                            return op_type{network_majority_grudge<AppendReg>{raft::logical_clock::duration{dist(engine)}}};
+                        })
+                    )
                 ),
                 pin(reconfig_thread,
-                    stagger(seed, timer.now() + 1000_t, 500_t, 500_t,
-                        constant([] () { return op_type{reconfiguration<AppendReg>{500_t}}; })
+                    op_limit(nemesis_reconfigurations ? num_ops : 0,
+                        stagger(seed, timer.now() + 1000_t, 500_t, 500_t,
+                            constant([] () { return op_type{reconfiguration<AppendReg>{500_t}}; })
+                        )
                     ),
                     pin(crash_thread,
-                        stagger(seed, timer.now() + 200_t, 100_t, 200_t,
-                            random(seed, [] (std::mt19937& engine) {
-                                static std::uniform_int_distribution<raft::logical_clock::rep> dist{0, 100};
-                                return op_type{stop_crash<AppendReg>{raft::logical_clock::duration{dist(engine)}}};
-                            })
+                        op_limit(nemesis_crashes ? num_ops : 0,
+                            stagger(seed, timer.now() + 200_t, 100_t, 200_t,
+                                random(seed, [] (std::mt19937& engine) {
+                                    static std::uniform_int_distribution<raft::logical_clock::rep> dist{0, 100};
+                                    return op_type{stop_crash<AppendReg>{raft::logical_clock::duration{dist(engine)}}};
+                                })
+                            )
                         ),
                         stagger(seed, timer.now(), 0_t, 50_t,
                             sequence(1, [] (int32_t i) {
