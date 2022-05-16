@@ -147,6 +147,8 @@ private:
     // If the operation must be serialized with regular, then the per-table write lock must be taken.
     seastar::named_semaphore _maintenance_ops_sem = {1, named_semaphore_exception_factory{"maintenance operation"}};
 
+    seastar::named_semaphore _custom_jobs_sem = {1, named_semaphore_exception_factory{"custom jobs"}};
+
     std::function<void()> compaction_submission_callback();
     // all registered tables are reevaluated at a constant interval.
     // Submission is a NO-OP when there's nothing to do, so it's fine to call it regularly.

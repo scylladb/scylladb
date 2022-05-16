@@ -317,7 +317,7 @@ future<> compaction_manager::run_custom_job(replica::table* t, sstables::compact
 
     auto job_ptr = std::make_unique<noncopyable_function<future<>(sstables::compaction_data&)>>(std::move(job));
 
-    task->compaction_done = with_semaphore(_maintenance_ops_sem, 1, [this, task, &job = *job_ptr] () mutable {
+    task->compaction_done = with_semaphore(_custom_jobs_sem, 1, [this, task, &job = *job_ptr] () mutable {
             // We don't need to take task->compaction_state.lock.for_read() as it only serializes minor and major
 
             // Allow caller to know that task (e.g. reshape) was asked to stop while waiting for a chance to run.
