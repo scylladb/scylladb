@@ -93,6 +93,8 @@
 #include "utils/overloaded_functor.hh"
 #include "utils/result_try.hh"
 #include "utils/error_injection.hh"
+#include "replica/exceptions.hh"
+#include "db/operation_type.hh"
 
 namespace bi = boost::intrusive;
 
@@ -417,6 +419,8 @@ public:
                 } else {
                     _ready.set_exception(mutation_write_failure_exception(*_message, _cl, _cl_acks, _failed, _total_block_for, _type));
                 }
+            } else if (_error == error::RATE_LIMIT) {
+                _ready.set_value(exceptions::rate_limit_exception(get_schema()->ks_name(), get_schema()->cf_name(), db::operation_type::write, false));
             }
             if (_cdc_operation_result_tracker) {
                 _cdc_operation_result_tracker->on_mutation_failed();
@@ -2795,6 +2799,9 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
             std::optional<sstring> msg;
             try {
                 std::rethrow_exception(eptr);
+            } catch (replica::rate_limit_exception&) {
+                // There might be a lot of those, so ignore
+                err = error::RATE_LIMIT;
             } catch(rpc::closed_error&) {
                 // ignore, disconnect will be logged by gossiper
             } catch(seastar::gate_closed_exception&) {
@@ -4965,10 +4972,15 @@ storage_proxy::handle_write(netw::messaging_service::msg_addr src_addr, rpc::opt
             timeout = *t;
         }
 
-        return do_with(std::move(in), get_local_shared_storage_proxy(), size_t(0), [this, src_addr = std::move(src_addr),
+        struct errors_info {
+            size_t count = 0;
+            replica::exception_variant local;
+        };
+
+        return do_with(std::move(in), get_local_shared_storage_proxy(), errors_info{}, [this, src_addr = std::move(src_addr),
                        forward = std::move(forward), reply_to, shard, response_id, trace_state_ptr, timeout,
                        schema_version, apply_fn = std::move(apply_fn), forward_fn = std::move(forward_fn)]
-                       (const auto& m, shared_ptr<storage_proxy>& p, size_t& errors) mutable {
+                       (const auto& m, shared_ptr<storage_proxy>& p, errors_info& errors) mutable {
             ++p->get_stats().received_mutations;
             p->get_stats().forwarded_mutations += forward.size();
             return when_all(
@@ -4995,14 +5007,15 @@ storage_proxy::handle_write(netw::messaging_service::msg_addr src_addr, rpc::opt
                         f.ignore_ready_future();
                     });
                 }).handle_exception([reply_to, shard, &p, &errors] (std::exception_ptr eptr) {
+                    errors.count++;
+                    errors.local = replica::try_encode_replica_exception(eptr);
                     seastar::log_level l = seastar::log_level::warn;
-                    if (is_timeout_exception(eptr)) {
-                        // ignore timeouts so that logs are not flooded.
-                        // database total_writes_timedout counter was incremented.
+                    if (is_timeout_exception(eptr) || std::holds_alternative<replica::rate_limit_exception>(errors.local.reason)) {
+                        // ignore timeouts and rate limit exceptions so that logs are not flooded.
+                        // database's total_writes_timedout or total_writes_rate_limited counter was incremented.
                         l = seastar::log_level::debug;
                     }
                     slogger.log(l, "Failed to apply mutation from {}#{}: {}", reply_to, shard, eptr);
-                    errors++;
                 }),
                 parallel_for_each(forward.begin(), forward.end(), [reply_to, shard, response_id, &m, &p, trace_state_ptr,
                                   timeout, &errors, forward_fn = std::move(forward_fn)] (gms::inet_address forward) {
@@ -5012,7 +5025,7 @@ storage_proxy::handle_write(netw::messaging_service::msg_addr src_addr, rpc::opt
                             .then_wrapped([&p, &errors] (future<> f) {
                         if (f.failed()) {
                             ++p->get_stats().forwarding_errors;
-                            errors++;
+                            errors.count++;
                         };
                         f.ignore_ready_future();
                     });
@@ -5020,14 +5033,15 @@ storage_proxy::handle_write(netw::messaging_service::msg_addr src_addr, rpc::opt
             ).then_wrapped([trace_state_ptr, reply_to, shard, response_id, &errors, &p] (future<std::tuple<future<>, future<>>>&& f) {
                 // ignore results, since we'll be returning them via MUTATION_DONE/MUTATION_FAILURE verbs
                 auto fut = make_ready_future<seastar::rpc::no_wait_type>(netw::messaging_service::no_wait());
-                if (errors) {
-                    tracing::trace(trace_state_ptr, "Sending mutation_failure with {} failures to /{}", errors, reply_to);
+                if (errors.count) {
+                    tracing::trace(trace_state_ptr, "Sending mutation_failure with {} failures to /{}", errors.count, reply_to);
                     fut = ser::storage_proxy_rpc_verbs::send_mutation_failed(&p->_messaging,
                             netw::messaging_service::msg_addr{reply_to, shard},
                             shard,
                             response_id,
-                            errors,
-                            p->get_view_update_backlog()).then_wrapped([] (future<> f) {
+                            errors.count,
+                            p->get_view_update_backlog(),
+                            std::move(errors.local)).then_wrapped([] (future<> f) {
                         f.ignore_ready_future();
                         return netw::messaging_service::no_wait();
                     });
@@ -5092,11 +5106,21 @@ storage_proxy::handle_mutation_done(const rpc::client_info& cinfo, unsigned shar
 }
 
 future<rpc::no_wait_type>
-storage_proxy::handle_mutation_failed(const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id, size_t num_failed, rpc::optional<db::view::update_backlog> backlog) {
+storage_proxy::handle_mutation_failed(const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id, size_t num_failed, rpc::optional<db::view::update_backlog> backlog, rpc::optional<replica::exception_variant> exception) {
         auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         get_stats().replica_cross_shard_ops += shard != this_shard_id();
-        return container().invoke_on(shard, _write_ack_smp_service_group, [from, response_id, num_failed, backlog = std::move(backlog)] (storage_proxy& sp) mutable {
-            sp.got_failure_response(response_id, from, num_failed, std::move(backlog), error::FAILURE, std::nullopt);
+        return container().invoke_on(shard, _write_ack_smp_service_group, [from, response_id, num_failed, backlog = std::move(backlog), exception = std::move(exception)] (storage_proxy& sp) mutable {
+            error err = error::FAILURE;
+            if (exception) {
+                err = std::visit([] <typename Ex> (Ex&) {
+                    if constexpr (std::is_same_v<Ex, replica::rate_limit_exception>) {
+                        return error::RATE_LIMIT;
+                    } else if constexpr (std::is_same_v<Ex, replica::unknown_exception> || std::is_same_v<Ex, replica::no_exception>) {
+                        return error::FAILURE;
+                    }
+                }, exception->reason);
+            }
+            sp.got_failure_response(response_id, from, num_failed, std::move(backlog), err, std::nullopt);
             return netw::messaging_service::no_wait();
         });
 }

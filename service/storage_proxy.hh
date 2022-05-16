@@ -46,6 +46,7 @@
 #include "partition_range_compat.hh"
 #include "exceptions/exceptions.hh"
 #include "exceptions/coordinator_result.hh"
+#include "replica/exceptions.hh"
 
 class reconcilable_result;
 class frozen_mutation_and_schema;
@@ -126,6 +127,7 @@ public:
         NONE,
         TIMEOUT,
         FAILURE,
+        RATE_LIMIT,
     };
     template<typename T = void>
     using result = exceptions::coordinator_result<T>;
@@ -435,7 +437,7 @@ private:
             inet_address_vector_replica_set forward, gms::inet_address reply_to, unsigned shard,
             storage_proxy::response_id_type response_id, std::optional<tracing::trace_info> trace_info);
     future<rpc::no_wait_type> handle_mutation_done(const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id, rpc::optional<db::view::update_backlog> backlog);
-    future<rpc::no_wait_type> handle_mutation_failed(const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id, size_t num_failed, rpc::optional<db::view::update_backlog> backlog);
+    future<rpc::no_wait_type> handle_mutation_failed(const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id, size_t num_failed, rpc::optional<db::view::update_backlog> backlog, rpc::optional<replica::exception_variant> exception);
     future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> handle_read_data(const rpc::client_info& cinfo, rpc::opt_time_point t, query::read_command cmd, ::compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> oda);
     future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> handle_read_mutation_data(const rpc::client_info& cinfo, rpc::opt_time_point t, query::read_command cmd, ::compat::wrapping_partition_range pr);
     future<rpc::tuple<query::result_digest, long, cache_temperature>> handle_read_digest(const rpc::client_info& cinfo, rpc::opt_time_point t, query::read_command cmd, ::compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> oda);
