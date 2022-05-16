@@ -318,8 +318,8 @@ future<> compaction_manager::run_custom_job(replica::table* t, sstables::compact
     auto job_ptr = std::make_unique<noncopyable_function<future<>(sstables::compaction_data&)>>(std::move(job));
 
     task->compaction_done = with_semaphore(_maintenance_ops_sem, 1, [this, task, &job = *job_ptr] () mutable {
-        // take read lock for table, so major compaction and resharding can't proceed in parallel.
-        return with_lock(task->compaction_state.lock.for_read(), [this, task, &job] () mutable {
+            // We don't need to take task->compaction_state.lock.for_read() as it only serializes minor and major
+
             // Allow caller to know that task (e.g. reshape) was asked to stop while waiting for a chance to run.
             if (task->stopping) {
                 throw sstables::compaction_stopped_exception(task->compacting_table->schema()->ks_name(), task->compacting_table->schema()->cf_name(),
@@ -335,7 +335,6 @@ future<> compaction_manager::run_custom_job(replica::table* t, sstables::compact
             // no need to register shared sstables because they're excluded from non-resharding
             // compaction and some of them may not even belong to current shard.
             return job(task->compaction_data);
-        });
     }).then_wrapped([this, task, job_ptr = std::move(job_ptr), type] (future<> f) {
         _stats.active_tasks--;
         _tasks.remove(task);
