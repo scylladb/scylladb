@@ -256,7 +256,8 @@ def test_filtering_null_map_with_subscript(cql, test_keyspace):
 # Cassandra does *not* allow such expressions, giving errors such as
 # "Column "c" cannot be restricted by both an equality and an inequality
 # relation", "More than one restriction was found for the start bound on
-# c", and so on.
+# c", "c cannot be restricted by more than one relation if it includes a
+# IN", and so on.
 #
 # Scylla chose to *allow* such expressions. In that case, we need to verify
 # that it at least gives the correct results - if the two restrictions
@@ -284,3 +285,5 @@ def test_multiple_restrictions_on_same_column(cql, test_keyspace, scylla_only):
         assert list(cql.execute(f"SELECT c FROM {table} WHERE p = {p} and c > 1 and c < 1")) == []
         assert list(cql.execute(f"SELECT c FROM {table} WHERE p = {p} and c >= 1 and c <= 1")) == [(1,)]
         assert list(cql.execute(f"SELECT c FROM {table} WHERE p = {p} and c >= 1 and c <= 2")) == [(1,),(2,)]
+        assert list(cql.execute(f"SELECT c FROM {table} WHERE p = {p} and c = 1 and c in (2, 3)")) == []
+        assert list(cql.execute(f"SELECT c FROM {table} WHERE p = {p} and c = 2 and c in (2, 3)")) == [(2,)]
