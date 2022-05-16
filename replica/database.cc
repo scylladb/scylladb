@@ -7,6 +7,7 @@
  */
 
 #include "log.hh"
+#include "replica/database_fwd.hh"
 #include "utils/lister.hh"
 #include "replica/database.hh"
 #include <seastar/core/future-util.hh>
@@ -63,6 +64,7 @@
 #include "tombstone_gc.hh"
 
 #include "replica/data_dictionary_impl.hh"
+#include "replica/exceptions.hh"
 #include "readers/multi_range.hh"
 #include "readers/multishard.hh"
 
@@ -1318,15 +1320,51 @@ request_class classify_request(const database_config& _dbcfg) {
 
 } // anonymous namespace
 
+
+static db::rate_limiter::can_proceed account_singular_ranges_to_rate_limit(
+        db::rate_limiter& limiter, column_family& cf,
+        const dht::partition_range_vector& ranges,
+        const database_config& dbcfg,
+        db::per_partition_rate_limit::info rate_limit_info) {
+    using can_proceed = db::rate_limiter::can_proceed;
+
+    if (std::holds_alternative<std::monostate>(rate_limit_info) || !can_apply_per_partition_rate_limit(*cf.schema(), dbcfg, db::operation_type::read)) {
+        // Rate limiting is disabled for this query
+        return can_proceed::yes;
+    }
+
+    auto table_limit = *cf.schema()->per_partition_rate_limit_options().get_max_reads_per_second();
+    can_proceed ret = can_proceed::yes;
+
+    auto& read_label = cf.get_rate_limiter_label_for_reads();
+    for (const auto& range : ranges) {
+        if (!range.is_singular()) {
+            continue;
+        }
+        auto token = dht::token::to_int64(ranges.front().start()->value().token());
+        if (limiter.account_operation(read_label, token, table_limit, rate_limit_info) == db::rate_limiter::can_proceed::no) {
+            // Don't return immediately - account all ranges first
+            ret = can_proceed::no;
+        }
+    }
+
+    return ret;
+}
+
 future<std::tuple<lw_shared_ptr<query::result>, cache_temperature>>
 database::query(schema_ptr s, const query::read_command& cmd, query::result_options opts, const dht::partition_range_vector& ranges,
-                tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout) {
+                tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
     const auto reversed = cmd.slice.is_reversed();
     if (reversed) {
         s = s->make_reversed();
     }
 
     column_family& cf = find_column_family(cmd.cf_id);
+
+    if (account_singular_ranges_to_rate_limit(_rate_limiter, cf, ranges, _dbcfg, rate_limit_info) == db::rate_limiter::can_proceed::no) {
+        co_await coroutine::return_exception(replica::rate_limit_exception());
+    }
+
     auto& semaphore = get_reader_concurrency_semaphore();
     auto max_result_size = cmd.max_result_size ? *cmd.max_result_size : get_unlimited_query_max_result_size();
 
@@ -1770,12 +1808,21 @@ future<> database::apply_with_commitlog(column_family& cf, const mutation& m, db
     }
 }
 
-future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout, db::commitlog::force_sync sync) {
+future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout, db::commitlog::force_sync sync, db::per_partition_rate_limit::info rate_limit_info) {
     // I'm doing a nullcheck here since the init code path for db etc
     // is a little in flux and commitlog is created only when db is
     // initied from datadir.
     auto uuid = m.column_family_id();
     auto& cf = find_column_family(uuid);
+
+    if (!std::holds_alternative<std::monostate>(rate_limit_info) && can_apply_per_partition_rate_limit(*s, db::operation_type::write)) {
+        auto table_limit = *s->per_partition_rate_limit_options().get_max_writes_per_second();
+        auto& write_label = cf.get_rate_limiter_label_for_writes();
+        auto token = dht::token::to_int64(dht::get_token(*s, m.key()));
+        if (_rate_limiter.account_operation(write_label, token, table_limit, rate_limit_info) == db::rate_limiter::can_proceed::no) {
+            co_await coroutine::return_exception(replica::rate_limit_exception());
+        }
+    }
 
     sync = sync || db::commitlog::force_sync(s->wait_for_sync_to_commitlog());
 
@@ -1833,7 +1880,7 @@ void database::update_write_metrics_for_timed_out_write() {
     ++_stats->total_writes_timedout;
 }
 
-future<> database::apply(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, db::timeout_clock::time_point timeout) {
+future<> database::apply(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, db::timeout_clock::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
     if (dblog.is_enabled(logging::log_level::trace)) {
         dblog.trace("apply {}", m.pretty_printer(s));
     }
@@ -1844,7 +1891,7 @@ future<> database::apply(schema_ptr s, const frozen_mutation& m, tracing::trace_
     if (!s->is_synced()) {
         on_internal_error(dblog, format("attempted to apply mutation using not synced schema of {}.{}, version={}", s->ks_name(), s->cf_name(), s->version()));
     }
-    return update_write_metrics(_apply_stage(this, std::move(s), seastar::cref(m), std::move(tr_state), timeout, sync));
+    return update_write_metrics(_apply_stage(this, std::move(s), seastar::cref(m), std::move(tr_state), timeout, sync, rate_limit_info));
 }
 
 future<> database::apply_hint(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout) {
@@ -1855,7 +1902,7 @@ future<> database::apply_hint(schema_ptr s, const frozen_mutation& m, tracing::t
         on_internal_error(dblog, format("attempted to apply hint using not synced schema of {}.{}, version={}", s->ks_name(), s->cf_name(), s->version()));
     }
     return with_scheduling_group(_dbcfg.streaming_scheduling_group, [this, s = std::move(s), &m, tr_state = std::move(tr_state), timeout] () mutable {
-        return update_write_metrics(_apply_stage(this, std::move(s), seastar::cref(m), std::move(tr_state), timeout, db::commitlog::force_sync::no));
+        return update_write_metrics(_apply_stage(this, std::move(s), seastar::cref(m), std::move(tr_state), timeout, db::commitlog::force_sync::no, std::monostate{}));
     });
 }
 

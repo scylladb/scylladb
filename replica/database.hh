@@ -66,6 +66,8 @@
 #include "absl-flat_hash_map.hh"
 #include "utils/cross-shard-barrier.hh"
 #include "sstables/generation_type.hh"
+#include "db/rate_limiter.hh"
+#include "db/per_partition_rate_limit_info.hh"
 
 class cell_locker;
 class cell_locker_stats;
@@ -452,6 +454,11 @@ private:
     std::vector<view_ptr> _views;
 
     std::unique_ptr<cell_locker> _counter_cell_locks; // Memory-intensive; allocate only when needed.
+
+    // Labels used to identify writes and reads for this table in the rate_limiter structure.
+    db::rate_limiter::label _rate_limiter_label_for_writes;
+    db::rate_limiter::label _rate_limiter_label_for_reads;
+
     void set_metrics();
     seastar::metrics::metric_groups _metrics;
 
@@ -742,6 +749,23 @@ public:
 
     row_cache& get_row_cache() {
         return _cache;
+    }
+
+    db::rate_limiter::label& get_rate_limiter_label_for_op_type(db::operation_type op_type) {
+        switch (op_type) {
+        case db::operation_type::write:
+            return _rate_limiter_label_for_writes;
+        case db::operation_type::read:
+            return _rate_limiter_label_for_reads;
+        }
+    }
+
+    db::rate_limiter::label& get_rate_limiter_label_for_writes() {
+        return _rate_limiter_label_for_writes;
+    }
+
+    db::rate_limiter::label& get_rate_limiter_label_for_reads() {
+        return _rate_limiter_label_for_reads;
     }
 
     future<std::vector<locked_cell>> lock_counter_cells(const mutation& m, db::timeout_clock::time_point timeout);
@@ -1294,7 +1318,8 @@ private:
             const frozen_mutation&,
             tracing::trace_state_ptr,
             db::timeout_clock::time_point,
-            db::commitlog_force_sync> _apply_stage;
+            db::commitlog_force_sync,
+            db::per_partition_rate_limit::info> _apply_stage;
 
     flat_hash_map<sstring, keyspace> _keyspaces;
     std::unordered_map<utils::UUID, lw_shared_ptr<column_family>> _column_families;
@@ -1332,6 +1357,8 @@ private:
     std::unique_ptr<wasm::engine> _wasm_engine;
     utils::cross_shard_barrier _stop_barrier;
 
+    db::rate_limiter _rate_limiter;
+
 public:
     data_dictionary::database as_data_dictionary() const;
     std::shared_ptr<data_dictionary::user_types_storage> as_user_types_storage() const noexcept;
@@ -1361,7 +1388,7 @@ private:
     void setup_metrics();
     void setup_scylla_memory_diagnostics_producer();
 
-    future<> do_apply(schema_ptr, const frozen_mutation&, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout, db::commitlog_force_sync sync);
+    future<> do_apply(schema_ptr, const frozen_mutation&, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout, db::commitlog_force_sync sync, db::per_partition_rate_limit::info rate_limit_info);
     future<> apply_with_commitlog(column_family& cf, const mutation& m, db::timeout_clock::time_point timeout);
 
     future<mutation> do_apply_counter_update(column_family& cf, const frozen_mutation& fm, schema_ptr m_schema, db::timeout_clock::time_point timeout,
@@ -1487,12 +1514,12 @@ public:
 
     future<std::tuple<lw_shared_ptr<query::result>, cache_temperature>> query(schema_ptr, const query::read_command& cmd, query::result_options opts,
                                                                   const dht::partition_range_vector& ranges, tracing::trace_state_ptr trace_state,
-                                                                  db::timeout_clock::time_point timeout);
+                                                                  db::timeout_clock::time_point timeout, db::per_partition_rate_limit::info rate_limit_info = std::monostate{});
     future<std::tuple<reconcilable_result, cache_temperature>> query_mutations(schema_ptr, const query::read_command& cmd, const dht::partition_range& range,
                                                 tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout);
     // Apply the mutation atomically.
     // Throws timed_out_error when timeout is reached.
-    future<> apply(schema_ptr, const frozen_mutation&, tracing::trace_state_ptr tr_state, db::commitlog_force_sync sync, db::timeout_clock::time_point timeout);
+    future<> apply(schema_ptr, const frozen_mutation&, tracing::trace_state_ptr tr_state, db::commitlog_force_sync sync, db::timeout_clock::time_point timeout, db::per_partition_rate_limit::info rate_limit_info = std::monostate{});
     future<> apply_hint(schema_ptr, const frozen_mutation&, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout);
     future<mutation> apply_counter_update(schema_ptr, const frozen_mutation& m, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state);
     keyspace::config make_keyspace_config(const keyspace_metadata& ksm);
