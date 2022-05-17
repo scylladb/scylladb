@@ -624,7 +624,13 @@ void write_collection_size(bytes::iterator& out, int size, cql_serialization_for
 }
 
 bytes_view read_collection_value(bytes_view& in, cql_serialization_format sf) {
-    auto size = sf.using_32_bits_for_collections() ? read_simple<int32_t>(in) : read_simple<uint16_t>(in);
+    int32_t size = sf.using_32_bits_for_collections() ? read_simple<int32_t>(in) : read_simple<uint16_t>(in);
+    if (size == -2) {
+        throw exceptions::invalid_request_exception("unset value is not supported inside collections");
+    }
+    if (size < 0) {
+        throw exceptions::invalid_request_exception("null is not supported inside collections");
+    }
     return read_simple_bytes(in, size);
 }
 
