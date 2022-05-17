@@ -1879,17 +1879,12 @@ std::vector<query::clustering_range> statement_restrictions::get_global_index_cl
     std::transform(pk_value.cbegin(), pk_value.cend(), pkv_linearized.begin(),
                    [] (const managed_bytes& mb) { return to_bytes(mb); });
     auto& token_column = idx_tbl_schema.clustering_column_at(0);
-    bytes_opt token_bytes = token_column.get_computation().compute_value(
-            *_schema, pkv_linearized, clustering_row(clustering_key_prefix::make_empty()));
-    if (!token_bytes) {
-        on_internal_error(rlogger,
-                          format("null value for token column in indexing table {}",
-                                 token_column.name_as_text()));
-    }
+    bytes token_bytes = token_column.get_computation().compute_value(*_schema, pkv_linearized);
+
     // WARNING: We must not yield to another fiber from here until the function's end, lest this RHS be
     // overwritten.
     const_cast<expr::expression&>(expr::as<binary_operator>((*_idx_tbl_ck_prefix)[0]).rhs) =
-            expr::constant(raw_value::make_value(*token_bytes), token_column.type);
+            expr::constant(raw_value::make_value(token_bytes), token_column.type);
 
     // Multi column restrictions are not added to _idx_tbl_ck_prefix, they are handled later by filtering.
     return get_single_column_clustering_bounds(options, idx_tbl_schema, *_idx_tbl_ck_prefix);

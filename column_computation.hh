@@ -22,7 +22,7 @@ using column_computation_ptr = std::unique_ptr<column_computation>;
  * Computed columns description is also available at docs/dev/system_schema_keyspace.md. They hold values
  * not provided directly by the user, but rather computed: from other column values and possibly other sources.
  * This class is able to serialize/deserialize column computations and perform the computation itself,
- * based on given schema, partition key and clustering row. Responsibility for providing enough data
+ * based on given schema, and partition key. Responsibility for providing enough data
  * in the clustering row in order for computation to succeed belongs to the caller. In particular,
  * generating a value might involve performing a read-before-write if the computation is performed
  * on more values than are present in the update request.
@@ -36,7 +36,7 @@ public:
     virtual column_computation_ptr clone() const = 0;
 
     virtual bytes serialize() const = 0;
-    virtual bytes_opt compute_value(const schema& schema, const partition_key& key, const clustering_row& row) const = 0;
+    virtual bytes compute_value(const schema& schema, const partition_key& key) const = 0;
 };
 
 /*
@@ -54,7 +54,7 @@ public:
         return std::make_unique<legacy_token_column_computation>(*this);
     }
     virtual bytes serialize() const override;
-    virtual bytes_opt compute_value(const schema& schema, const partition_key& key, const clustering_row& row) const override;
+    virtual bytes compute_value(const schema& schema, const partition_key& key) const override;
 };
 
 
@@ -75,5 +75,5 @@ public:
         return std::make_unique<token_column_computation>(*this);
     }
     virtual bytes serialize() const override;
-    virtual bytes_opt compute_value(const schema& schema, const partition_key& key, const clustering_row& row) const override;
+    virtual bytes compute_value(const schema& schema, const partition_key& key) const override;
 };

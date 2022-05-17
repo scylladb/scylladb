@@ -1706,8 +1706,8 @@ bytes legacy_token_column_computation::serialize() const {
     return to_bytes(rjson::print(serialized));
 }
 
-bytes_opt legacy_token_column_computation::compute_value(const schema& schema, const partition_key& key, const clustering_row& row) const {
-    return dht::get_token(schema, key).data();
+bytes legacy_token_column_computation::compute_value(const schema& schema, const partition_key& key) const {
+    return {dht::get_token(schema, key).data()};
 }
 
 bytes token_column_computation::serialize() const {
@@ -1716,7 +1716,7 @@ bytes token_column_computation::serialize() const {
     return to_bytes(rjson::print(serialized));
 }
 
-bytes_opt token_column_computation::compute_value(const schema& schema, const partition_key& key, const clustering_row& row) const {
+bytes token_column_computation::compute_value(const schema& schema, const partition_key& key) const {
     auto long_value = dht::token::to_int64(dht::get_token(schema, key));
     return long_type->decompose(long_value);
 }

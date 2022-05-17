@@ -495,12 +495,9 @@ deletable_row& view_updates::get_view_row(const partition_key& base_key, const c
                 if (!service::get_local_storage_proxy().local_db().find_column_family(_base->id()).get_index_manager().is_index(*_view)) {
                     throw std::logic_error(format("Column {} doesn't exist in base and this view is not backing a secondary index", cdef.name_as_text()));
                 }
-                computed_value = legacy_token_column_computation().compute_value(*_base, base_key, update);
+                computed_value = legacy_token_column_computation().compute_value(*_base, base_key);
             } else {
-                computed_value = cdef.get_computation().compute_value(*_base, base_key, update);
-            }
-            if (!computed_value) {
-                throw std::logic_error(format("No value computed for primary key column {}", cdef.name()));
+                computed_value = cdef.get_computation().compute_value(*_base, base_key);
             }
             return managed_bytes_view(linearized_values.emplace_back(*computed_value));
         }
