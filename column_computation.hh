@@ -13,6 +13,12 @@
 class schema;
 class partition_key;
 class clustering_row;
+struct atomic_cell_view;
+struct tombstone;
+
+namespace db::view {
+struct bytes_with_action;
+}
 
 class column_computation;
 using column_computation_ptr = std::unique_ptr<column_computation>;
@@ -76,4 +82,40 @@ public:
     }
     virtual bytes serialize() const override;
     virtual bytes compute_value(const schema& schema, const partition_key& key) const override;
+};
+
+class collection_column_computation final : public column_computation {
+    enum class kind {
+        keys,
+        values,
+        entries,
+    };
+    const bytes _collection_name;
+    const kind _kind;
+    collection_column_computation(const bytes& collection_name, kind kind) : _collection_name(collection_name), _kind(kind) {}
+
+    using collection_kv = std::pair<bytes_view, atomic_cell_view>;
+    void operate_on_collection_entries(
+            std::invocable<collection_kv*, collection_kv*, tombstone> auto&& old_and_new_row_func, const schema& schema,
+            const partition_key& key, const clustering_row& update, const std::optional<clustering_row>& existing) const;
+
+public:
+    static collection_column_computation for_keys(const bytes& collection_name) {
+        return {collection_name, kind::keys};
+    }
+    static collection_column_computation for_values(const bytes& collection_name) {
+        return {collection_name, kind::values};
+    }
+    static collection_column_computation for_entries(const bytes& collection_name) {
+        return {collection_name, kind::entries};
+    }
+    static column_computation_ptr for_target_type(std::string_view type, const bytes& collection_name);
+
+    virtual bytes serialize() const override;
+    virtual bytes compute_value(const schema& schema, const partition_key& key) const override;
+    virtual column_computation_ptr clone() const override {
+        return std::make_unique<collection_column_computation>(*this);
+    }
+
+    std::vector<db::view::bytes_with_action> compute_values_with_action(const schema& schema, const partition_key& key, const clustering_row& row, const std::optional<clustering_row>& existing) const;
 };
