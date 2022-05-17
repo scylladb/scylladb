@@ -1235,20 +1235,21 @@ SEASTAR_TEST_CASE(test_mutation_hash) {
     });
 }
 
-static mutation compacted(const mutation& m) {
+static mutation compacted(const mutation& m, gc_clock::time_point now) {
     auto result = m;
-    result.partition().compact_for_compaction(*result.schema(), always_gc, result.decorated_key(), gc_clock::now());
+    result.partition().compact_for_compaction(*result.schema(), always_gc, result.decorated_key(), now);
     return result;
 }
 
 SEASTAR_TEST_CASE(test_query_digest) {
     return seastar::async([] {
-        auto check_digests_equal = [] (const mutation& m1, const mutation& m2) {
+        auto now = gc_clock::now();
+        auto check_digests_equal = [now] (const mutation& m1, const mutation& m2) {
             auto ps1 = partition_slice_builder(*m1.schema()).build();
             auto ps2 = partition_slice_builder(*m2.schema()).build();
-            auto digest1 = *query_mutation(mutation(m1), ps1, query::max_rows, gc_clock::now(),
+            auto digest1 = *query_mutation(mutation(m1), ps1, query::max_rows, now,
                     query::result_options::only_digest(query::digest_algorithm::xxHash)).digest();
-            auto digest2 = *query_mutation( mutation(m2), ps2, query::max_rows, gc_clock::now(),
+            auto digest2 = *query_mutation( mutation(m2), ps2, query::max_rows, now,
                     query::result_options::only_digest(query::digest_algorithm::xxHash)).digest();
 
             if (digest1 != digest2) {
@@ -1262,8 +1263,8 @@ SEASTAR_TEST_CASE(test_query_digest) {
             }
 
             if (eq) {
-                check_digests_equal(compacted(m1), m2);
-                check_digests_equal(m1, compacted(m2));
+                check_digests_equal(compacted(m1, now), m2);
+                check_digests_equal(m1, compacted(m2, now));
             } else {
                 testlog.info("If not equal, they should become so after applying diffs mutually");
 
