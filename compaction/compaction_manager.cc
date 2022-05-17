@@ -921,8 +921,6 @@ public:
         // by the fact that off-strategy is serialized across all tables, meaning that the
         // actual requirement is the size of the largest table's maintenance set.
 
-        auto sem_unit = co_await seastar::get_units(_compaction_state.off_strategy_sem, 1);
-
         replica::table& t = *_compacting_table;
         const auto& maintenance_sstables = t.maintenance_sstable_set();
 
@@ -997,7 +995,7 @@ protected:
                 co_return;
             }
             switch_state(state::pending);
-            auto units = co_await get_units(_cm._maintenance_ops_sem, 1, _compaction_data.abort);
+            auto units = co_await get_units(_cm._off_strategy_sem, 1, _compaction_data.abort);
             if (!can_proceed()) {
                 co_return;
             }

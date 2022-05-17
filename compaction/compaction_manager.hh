@@ -68,10 +68,6 @@ private:
         // Raised by any function running under run_with_compaction_disabled();
         long compaction_disabled_counter = 0;
 
-        // This semaphore ensures that off-strategy compaction will be serialized for
-        // a given table, protecting against candidates being picked more than once.
-        seastar::named_semaphore off_strategy_sem = {1, named_semaphore_exception_factory{"off-strategy compaction"}};
-
         bool compaction_disabled() const noexcept {
             return compaction_disabled_counter > 0;
         }
@@ -268,6 +264,11 @@ private:
     // Purpose is to serialize all maintenance (non regular) compaction activity to reduce aggressiveness and space requirement.
     // If the operation must be serialized with regular, then the per-table write lock must be taken.
     seastar::named_semaphore _maintenance_ops_sem = {1, named_semaphore_exception_factory{"maintenance operation"}};
+
+    // This semaphore ensures that off-strategy compaction will be serialized for
+    // all tables, to limit space requirement and protect against candidates
+    // being picked more than once.
+    seastar::named_semaphore _off_strategy_sem = {1, named_semaphore_exception_factory{"off-strategy compaction"}};
 
     std::function<void()> compaction_submission_callback();
     // all registered tables are reevaluated at a constant interval.
