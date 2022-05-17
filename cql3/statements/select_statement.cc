@@ -1528,7 +1528,7 @@ static void validate_attrs(const cql3::attributes::raw& attrs) {
 select_statement::select_statement(cf_name cf_name,
                                    lw_shared_ptr<const parameters> parameters,
                                    std::vector<::shared_ptr<selection::raw_selector>> select_clause,
-                                   std::vector<::shared_ptr<relation>> where_clause,
+                                   std::vector<expr::expression> where_clause,
                                    std::optional<expr::expression> limit,
                                    std::optional<expr::expression> per_partition_limit,
                                    std::vector<::shared_ptr<cql3::column_identifier::raw>> group_by_columns,
@@ -1988,11 +1988,24 @@ namespace {
 
 /// True iff one of \p relations is a single-column EQ involving \p def.
 bool equality_restricted(
-        const column_definition& def, const schema& schema, const std::vector<::shared_ptr<relation>>& relations) {
+        const column_definition& def, const schema& schema, const std::vector<expr::expression>& relations) {
     for (const auto& relation : relations) {
-        if (const auto sc_rel = dynamic_pointer_cast<single_column_relation>(relation)) {
-            if (sc_rel->is_EQ() && sc_rel->get_entity()->prepare_column_identifier(schema)->name() == def.name()) {
-                return true;
+        if (auto binop = expr::as_if<expr::binary_operator>(&relation)) {
+            if (binop->op != expr::oper_t::EQ) {
+                continue;
+            }
+
+            if (auto lhs_col_ident = expr::as_if<expr::unresolved_identifier>(&binop->lhs)) {
+                const ::shared_ptr<column_identifier> lhs_cdef = lhs_col_ident->ident->prepare_column_identifier(schema);
+                if (lhs_cdef->name() == def.name()) {
+                    return true;
+                }
+            }
+
+            if (auto lhs_col = expr::as_if<expr::column_value>(&binop->lhs)) {
+                if (lhs_col->col->name() == def.name()) {
+                    return true;
+                }
             }
         }
     }

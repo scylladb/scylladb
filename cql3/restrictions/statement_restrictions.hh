@@ -17,7 +17,6 @@
 #include "cql3/restrictions/restrictions.hh"
 #include "cql3/restrictions/primary_key_restrictions.hh"
 #include "cql3/restrictions/single_column_restrictions.hh"
-#include "cql3/relation.hh"
 #include "cql3/prepare_context.hh"
 #include "cql3/statements/statement_type.hh"
 
@@ -122,7 +121,7 @@ public:
     statement_restrictions(data_dictionary::database db,
         schema_ptr schema,
         statements::statement_type type,
-        const std::vector<::shared_ptr<relation>>& where_clause,
+        const std::vector<expr::expression>& where_clause,
         prepare_context& ctx,
         bool selects_only_static_columns,
         bool for_view = false,

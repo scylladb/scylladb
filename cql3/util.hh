@@ -20,7 +20,6 @@
 #include "cql3/column_identifier.hh"
 #include "cql3/CqlParser.hpp"
 #include "cql3/error_collector.hh"
-#include "cql3/relation.hh"
 #include "cql3/statements/raw/select_statement.hh"
 
 namespace cql3 {
@@ -39,21 +38,45 @@ Result do_with_parser(const sstring_view& cql, Func&& f) {
     return std::move(*ret);
 }
 
-template<typename Range> // Range<cql3::relation_ptr>
+template<typename Range> // Range<expr::expression>
 sstring relations_to_where_clause(Range&& relations) {
-    auto expressions = relations | boost::adaptors::transformed(std::mem_fn(&relation::to_string));
+    auto expr_to_pretty_string = [](const expr::expression& e) -> sstring {
+        expr::expression::printer p {
+            .expr_to_print = e,
+            .debug_mode = false,
+        };
+        return fmt::format("{}", p);
+    };
+    auto expressions = relations | boost::adaptors::transformed(expr_to_pretty_string);
     return boost::algorithm::join(expressions, " AND ");
 }
 
-static std::vector<relation_ptr> where_clause_to_relations(const sstring_view& where_clause) {
+static std::vector<expr::expression> where_clause_to_relations(const sstring_view& where_clause) {
     return do_with_parser(where_clause, std::mem_fn(&cql3_parser::CqlParser::whereClause));
 }
 
 inline sstring rename_column_in_where_clause(const sstring_view& where_clause, column_identifier::raw from, column_identifier::raw to) {
-    auto relations = where_clause_to_relations(where_clause);
-    auto new_relations = relations | boost::adaptors::transformed([&] (auto&& rel) {
-        return rel->maybe_rename_identifier(from, to);
-    });
+    std::vector<expr::expression> relations = where_clause_to_relations(where_clause);
+    std::vector<expr::expression> new_relations;
+    new_relations.reserve(relations.size());
+
+    for (const expr::expression& old_relation : relations) {
+        expr::expression new_relation = expr::search_and_replace(old_relation,
+            [&](const expr::expression& e) -> std::optional<expr::expression> {
+                if (auto ident = expr::as_if<expr::unresolved_identifier>(&e)) {
+                    if (*ident->ident == from) {
+                        return expr::unresolved_identifier{
+                            ::make_shared<column_identifier::raw>(to)
+                        };
+                    }
+                }
+                return std::nullopt;
+            }
+        );
+
+        new_relations.emplace_back(std::move(new_relation));
+    }
+
     return relations_to_where_clause(std::move(new_relations));
 }
 

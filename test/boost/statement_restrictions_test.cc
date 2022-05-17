@@ -11,11 +11,11 @@
 
 #include <vector>
 
-#include "cql3/relation.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
 #include "cql3/util.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/cql_test_env.hh"
+#include "cql3/restrictions/multi_column_restriction.hh"
 
 using namespace cql3;
 
@@ -24,7 +24,7 @@ namespace {
 /// Returns statement_restrictions::get_clustering_bounds() of where_clause, with reasonable defaults in
 /// boilerplate.
 query::clustering_row_ranges slice(
-        const std::vector<relation_ptr>& where_clause, cql_test_env& env,
+        const std::vector<expr::expression>& where_clause, cql_test_env& env,
         const sstring& table_name = "t", const sstring& keyspace_name = "ks") {
     prepare_context ctx;
     return restrictions::statement_restrictions(
@@ -438,12 +438,12 @@ BOOST_AUTO_TEST_CASE(expression_extract_column_restrictions) {
     expression ck1_ck2_restriction = make_multi_column_restriction({&col_ck1, &col_ck2}, oper_t::LT);
     expression conjunction_expr = conjunction{std::vector{ck1_ck2_restriction, r1_restriction2}};
 
-    expression token_lt_restriction = binary_operator(token{}, oper_t::LT, zero_value);
-    expression token_gt_restriction = binary_operator(token{}, oper_t::GT, zero_value);
+    token token_expr(std::vector<const column_definition*>{&col_pk1, &col_pk2});
+    expression token_lt_restriction = binary_operator(token_expr, oper_t::LT, zero_value);
+    expression token_gt_restriction = binary_operator(token_expr, oper_t::GT, zero_value);
 
     expression true_restriction = constant::make_bool(true);
     expression false_restriction = constant::make_bool(false);
-    expression token_expr = token{};
     expression pk1_expr = column_value(&col_pk1);
     expression pk2_expr = column_value(&col_pk1);
     data_type ttype = tuple_type_impl::get_instance({int32_type, int32_type});

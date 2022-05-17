@@ -16,7 +16,6 @@
 
 #include "cql3/operation_impl.hh"
 #include "cql3/type_json.hh"
-#include "cql3/single_column_relation.hh"
 #include "types/map.hh"
 #include "types/set.hh"
 #include "types/list.hh"
@@ -286,7 +285,7 @@ insert_statement::prepare_internal(data_dictionary::database db, schema_ptr sche
         throw exceptions::invalid_request_exception("No columns provided to INSERT");
     }
 
-    std::vector<::shared_ptr<relation>> relations;
+    std::vector<expr::expression> relations;
     std::unordered_set<bytes> column_ids;
     for (size_t i = 0; i < _column_names.size(); i++) {
         auto&& col = _column_names[i];
@@ -303,7 +302,7 @@ insert_statement::prepare_internal(data_dictionary::database db, schema_ptr sche
         auto&& value = _column_values[i];
 
         if (def->is_primary_key()) {
-            relations.push_back(::make_shared<single_column_relation>(col, expr::oper_t::EQ, value));
+            relations.push_back(expr::binary_operator(expr::unresolved_identifier{col}, expr::oper_t::EQ, value));
         } else {
             auto operation = operation::set_value(value).prepare(db, keyspace(), *def);
             operation->fill_prepare_context(ctx);
@@ -344,7 +343,7 @@ insert_json_statement::prepare_internal(data_dictionary::database db, schema_ptr
 update_statement::update_statement(cf_name name,
                                    std::unique_ptr<attributes::raw> attrs,
                                    std::vector<std::pair<::shared_ptr<column_identifier::raw>, std::unique_ptr<operation::raw_update>>> updates,
-                                   std::vector<relation_ptr> where_clause,
+                                   std::vector<expr::expression> where_clause,
                                    conditions_vector conditions, bool if_exists)
     : raw::modification_statement(std::move(name), std::move(attrs), std::move(conditions), false, if_exists)
     , _updates(std::move(updates))

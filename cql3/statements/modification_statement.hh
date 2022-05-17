@@ -15,7 +15,6 @@
 #include "cql3/update_parameters.hh"
 #include "cql3/column_condition.hh"
 #include "cql3/cql_statement.hh"
-#include "cql3/relation.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
 #include "cql3/statements/statement_type.hh"
 #include "exceptions/exceptions.hh"
@@ -163,7 +162,7 @@ public:
         return _is_raw_counter_shard_write.value_or(false);
     }
 
-    void process_where_clause(data_dictionary::database db, std::vector<relation_ptr> where_clause, prepare_context& ctx);
+    void process_where_clause(data_dictionary::database db, std::vector<expr::expression> where_clause, prepare_context& ctx);
 
     // CAS statement returns a result set. Prepare result set metadata
     // so that get_result_metadata() returns a meaningful value.

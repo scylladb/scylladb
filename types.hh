@@ -423,6 +423,9 @@ public:
     friend data_value make_user_value(data_type, std::vector<data_value>);
     template <typename Func>
     friend inline auto visit(const data_value& v, Func&& f);
+    // Prints a value of this type in a way which is parsable back from CQL.
+    // Differs from operator<< for collections.
+    sstring to_parsable_string() const;
 };
 
 template<typename T>

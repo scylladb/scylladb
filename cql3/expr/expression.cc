@@ -23,6 +23,7 @@
 #include "cql3/lists.hh"
 #include "cql3/statements/request_validations.hh"
 #include "cql3/selection/selection.hh"
+#include "cql3/util.hh"
 #include "index/secondary_index_manager.hh"
 #include "types/list.hh"
 #include "types/map.hh"
@@ -53,6 +54,24 @@ expression&
 expression::operator=(const expression& o) {
     *this = expression(o);
     return *this;
+}
+
+token::token(std::vector<expression> args_in)
+    : args(std::move(args_in)) {
+}
+
+token::token(const std::vector<const column_definition*>& col_defs) {
+    args.reserve(col_defs.size());
+    for (const column_definition* col_def : col_defs) {
+        args.push_back(column_value(col_def));
+    }
+}
+
+token::token(const std::vector<::shared_ptr<column_identifier_raw>>& cols) {
+    args.reserve(cols.size());
+    for(const ::shared_ptr<column_identifier_raw>& col : cols) {
+        args.push_back(unresolved_identifier{col});
+    }
 }
 
 binary_operator::binary_operator(expression lhs, oper_t op, expression rhs, comparison_order order)
@@ -1082,49 +1101,107 @@ std::ostream& operator<<(std::ostream& os, const column_value& cv) {
 }
 
 std::ostream& operator<<(std::ostream& os, const expression& expr) {
+    expression::printer pr {
+        .expr_to_print = expr,
+        .debug_mode = true
+    };
+
+    return os << pr;
+}
+
+std::ostream& operator<<(std::ostream& os, const expression::printer& pr) {
+    // Wraps expression in expression::printer to forward formatting options
+    auto to_printer = [&pr] (const expression& expr) -> expression::printer {
+        return expression::printer {
+            .expr_to_print = expr,
+            .debug_mode = pr.debug_mode
+        };
+    };
+
     expr::visit(overloaded_functor{
-            [&] (const constant& v) { os << v.view(); },
-            [&] (const conjunction& conj) { fmt::print(os, "({})", fmt::join(conj.children, ") AND (")); },
-            [&] (const binary_operator& opr) {
-                os << "(" << opr.lhs << ") " << opr.op << ' ' << opr.rhs;
+            [&] (const constant& v) {
+                if (pr.debug_mode) {
+                    os << v.view();
+                } else {
+                    if (v.value.is_null()) {
+                        os << "null";
+                    } else if (v.value.is_unset_value()) {
+                        os << "unset";
+                    } else {
+                        v.value.to_view().with_value([&](const FragmentedView auto& bytes_view) {
+                            data_value deser_val = v.type->deserialize(bytes_view);
+                            os << deser_val.to_parsable_string();
+                        });
+                    }
+                }
             },
-            [&] (const token& t) { os << "TOKEN"; },
+            [&] (const conjunction& conj) {
+                fmt::print(os, "({})", fmt::join(conj.children | transformed(to_printer), ") AND ("));
+            },
+            [&] (const binary_operator& opr) {
+                if (pr.debug_mode) {
+                    os << "(" << to_printer(opr.lhs) << ") " << opr.op << ' ' << to_printer(opr.rhs);
+                } else {
+                    if (opr.op == oper_t::IN && is<collection_constructor>(opr.rhs)) {
+                        tuple_constructor rhs_tuple {
+                            .elements = as<collection_constructor>(opr.rhs).elements
+                        };
+                        os << to_printer(opr.lhs) << ' ' << opr.op << ' ' << to_printer(rhs_tuple);
+                    } else if (opr.op == oper_t::IN && is<constant>(opr.rhs) && as<constant>(opr.rhs).type->without_reversed().is_list()) {
+                        tuple_constructor rhs_tuple;
+                        const list_type_impl* list_typ = dynamic_cast<const list_type_impl*>(&as<constant>(opr.rhs).type->without_reversed());
+                        for (const managed_bytes& elem : get_list_elements(as<constant>(opr.rhs))) {
+                            rhs_tuple.elements.push_back(constant(raw_value::make_value(elem), list_typ->get_elements_type()));
+                        }
+                        os << to_printer(opr.lhs) << ' ' << opr.op << ' ' << to_printer(rhs_tuple);
+                    } else {
+                        os << to_printer(opr.lhs) << ' ' << opr.op << ' ' << to_printer(opr.rhs);
+                    }
+                }
+            },
+            [&] (const token& t) {
+                fmt::print(os, "token({})", fmt::join(t.args | transformed(to_printer), ", "));
+            },
             [&] (const column_value& col) {
-                fmt::print(os, "{}", col);
+                fmt::print(os, "{}", cql3::util::maybe_quote(col.col->name_as_text()));
             },
             [&] (const subscript& sub) {
-                fmt::print(os, "{}[{}]", sub.val, sub.sub);
+                fmt::print(os, "{}[{}]", to_printer(sub.val), to_printer(sub.sub));
             },
             [&] (const unresolved_identifier& ui) {
-                fmt::print(os, "unresolved({})", *ui.ident);
+                if (pr.debug_mode) {
+                    fmt::print(os, "unresolved({})", *ui.ident);
+                } else {
+                    fmt::print(os, "{}", cql3::util::maybe_quote(ui.ident->to_string()));
+                }
             },
             [&] (const column_mutation_attribute& cma)  {
                 fmt::print(os, "{}({})",
                         cma.kind == column_mutation_attribute::attribute_kind::ttl ? "TTL" : "WRITETIME",
-                        cma.column);
+                        to_printer(cma.column));
             },
             [&] (const function_call& fc)  {
                 std::visit(overloaded_functor{
                     [&] (const functions::function_name& named) {
-                        fmt::print(os, "{}({})", named, fmt::join(fc.args, ", "));
+                        fmt::print(os, "{}({})", named, fmt::join(fc.args | transformed(to_printer), ", "));
                     },
                     [&] (const shared_ptr<functions::function>& anon) {
-                        fmt::print(os, "<anonymous function>({})", fmt::join(fc.args, ", "));
+                        fmt::print(os, "<anonymous function>({})", fmt::join(fc.args | transformed(to_printer), ", "));
                     },
                 }, fc.func);
             },
             [&] (const cast& c)  {
                 std::visit(overloaded_functor{
                     [&] (const cql3_type& t) {
-                        fmt::print(os, "({} AS {})", c.arg, t);
+                        fmt::print(os, "({} AS {})", to_printer(c.arg), t);
                     },
                     [&] (const shared_ptr<cql3_type::raw>& t) {
-                        fmt::print(os, "({}) {}", t, c.arg);
+                        fmt::print(os, "({}) {}", t, to_printer(c.arg));
                     },
                 }, c.type);
             },
             [&] (const field_selection& fs)  {
-                fmt::print(os, "({}.{})", fs.structure, fs.field);
+                fmt::print(os, "({}.{})", to_printer(fs.structure), fs.field);
             },
             [&] (const null&) {
                 // FIXME: adjust tests and change to NULL
@@ -1142,13 +1219,16 @@ std::ostream& operator<<(std::ostream& os, const expression& expr) {
                 }
             },
             [&] (const tuple_constructor& tc) {
-                fmt::print(os, "({})", join(", ", tc.elements));
+                fmt::print(os, "({})", fmt::join(tc.elements | transformed(to_printer), ", "));
             },
             [&] (const collection_constructor& cc) {
                 switch (cc.style) {
-                case collection_constructor::style_type::list: fmt::print(os, "{}", std::to_string(cc.elements)); return;
+                case collection_constructor::style_type::list: {
+                    fmt::print(os, "[{}]", fmt::join(cc.elements | transformed(to_printer), ", "));
+                    return;
+                }
                 case collection_constructor::style_type::set: {
-                    fmt::print(os, "{{{}}}", fmt::join(cc.elements, ", "));
+                    fmt::print(os, "{{{}}}", fmt::join(cc.elements | transformed(to_printer), ", "));
                     return;
                 }
                 case collection_constructor::style_type::map: {
@@ -1163,7 +1243,7 @@ std::ostream& operator<<(std::ostream& os, const expression& expr) {
                         if (tuple.elements.size() != 2) {
                             on_internal_error(expr_logger, "map constructor element is not a tuple of arity 2");
                         }
-                        fmt::print(os, "{}:{}", tuple.elements[0], tuple.elements[1]);
+                        fmt::print(os, "{}:{}", to_printer(tuple.elements[0]), to_printer(tuple.elements[1]));
                     }
                     fmt::print(os, "}}");
                     return;
@@ -1179,11 +1259,11 @@ std::ostream& operator<<(std::ostream& os, const expression& expr) {
                         fmt::print(os, ", ");
                     }
                     first = false;
-                    fmt::print(os, "{}:{}", k, v);
+                    fmt::print(os, "{}:{}", k, to_printer(v));
                 }
                 fmt::print(os, "}}");
             },
-        }, expr);
+        }, pr.expr_to_print);
     return os;
 }
 
@@ -1363,6 +1443,14 @@ bool recurse_until(const expression& e, const noncopyable_function<bool (const e
                 }
                 return false;
             },
+            [&] (const token& tok) {
+                for (auto& a : tok.args) {
+                    if (auto found = recurse_until(a, predicate_fun)) {
+                        return found;
+                    }
+                }
+                return false;
+            },
             [](LeafExpression auto const&) {
                 return false;
             }
@@ -1437,6 +1525,13 @@ expression search_and_replace(const expression& e,
                         .sub = recurse(s.sub)
                     };
                     throw std::runtime_error("expr: search_and_replace - subscript not added to expression yet");
+                },
+                [&](const token& tok) -> expression {
+                    return token {
+                        boost::copy_range<std::vector<expression>>(
+                            tok.args | boost::adaptors::transformed(recurse)
+                        )
+                    };
                 },
                 [&] (LeafExpression auto const& e) -> expression {
                     return e;
@@ -2179,7 +2274,11 @@ void fill_prepare_context(expression& e, prepare_context& ctx) {
                 fill_prepare_context(child, ctx);
             }
         },
-        [](token&) {},
+        [&](token& tok) {
+            for (expression& arg : tok.args) {
+                fill_prepare_context(arg, ctx);
+            }
+        },
         [](unresolved_identifier&) {},
         [&](column_mutation_attribute& a) {
             fill_prepare_context(a.column, ctx);

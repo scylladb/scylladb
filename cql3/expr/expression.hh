@@ -57,6 +57,10 @@ class function;
 
 }
 
+namespace restrictions {
+    class restriction;
+}
+
 namespace expr {
 
 struct allow_local_index_tag {};
@@ -173,13 +177,21 @@ public:
 
     template <ExpressionElement E>
     friend const E* as_if(const expression* e);
+
+    template <ExpressionElement E>
+    friend E* as_if(expression* e);
+
+    // Prints given expression using additional options
+    struct printer {
+        const expression& expr_to_print;
+        bool debug_mode = true;
+    };
 };
 
 // An expression that doesn't contain subexpressions
 template <typename E>
 concept LeafExpression
         = std::same_as<bool, E>
-        || std::same_as<token, E> 
         || std::same_as<unresolved_identifier, E> 
         || std::same_as<null, E> 
         || std::same_as<bind_variable, E> 
@@ -211,10 +223,15 @@ const column_value& get_subscripted_column(const subscript&);
 /// Only columns can be subscripted in CQL, so we can expect that the subscripted expression is a column_value.
 const column_value& get_subscripted_column(const expression&);
 
+/// Represents token(c1, c2) function on LHS of an operator relation.
+/// args contains arguments to the token function.
+struct token {
+    std::vector<expression> args;
 
-/// Represents token function on LHS of an operator relation.  No need to list column definitions
-/// here -- token takes exactly the partition key as its argument.
-struct token {};
+    explicit token(std::vector<expression>);
+    explicit token(const std::vector<const column_definition*>&);
+    explicit token(const std::vector<::shared_ptr<column_identifier_raw>>&);
+};
 
 enum class oper_t { EQ, NEQ, LT, LTE, GTE, GT, IN, CONTAINS, CONTAINS_KEY, IS_NOT, LIKE };
 
@@ -304,9 +321,6 @@ struct null {
 };
 
 struct bind_variable {
-    enum class shape_type { scalar, scalar_in, tuple, tuple_in };
-    // FIXME: infer shape from expression rather than from grammar
-    shape_type shape;
     int32_t bind_index;
 
     // Describes where this bound value will be assigned.
@@ -418,6 +432,11 @@ const E* as_if(const expression* e) {
     return std::get_if<E>(&e->_v->v);
 }
 
+template <ExpressionElement E>
+E* as_if(expression* e) {
+    return std::get_if<E>(&e->_v->v);
+}
+
 /// Creates a conjunction of a and b.  If either a or b is itself a conjunction, its children are inserted
 /// directly into the resulting conjunction's children, flattening the expression tree.
 extern expression make_conjunction(expression a, expression b);
@@ -470,6 +489,8 @@ extern sstring to_string(const expression&);
 extern std::ostream& operator<<(std::ostream&, const column_value&);
 
 extern std::ostream& operator<<(std::ostream&, const expression&);
+
+extern std::ostream& operator<<(std::ostream&, const expression::printer&);
 
 extern bool recurse_until(const expression& e, const noncopyable_function<bool (const expression&)>& predicate_fun);
 
@@ -593,7 +614,10 @@ extern expression search_and_replace(const expression& e,
         const noncopyable_function<std::optional<expression> (const expression& candidate)>& replace_candidate);
 
 extern expression prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver);
-extern expression prepare_expression_multi_column(const expression& expr, data_dictionary::database db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers);
+
+// Prepares a binary operator received from the parser.
+// Does some basic type checks but no advanced validation.
+extern binary_operator prepare_binary_operator(const binary_operator& binop, data_dictionary::database db, schema_ptr schema, prepare_context& ctx);
 
 
 /**
@@ -665,6 +689,14 @@ void fill_prepare_context(expression&, cql3::prepare_context&);
 // there can be other things that prevent immediate evaluation of an expression.
 // For example an expression can contain calls to nonpure functions.
 bool contains_bind_marker(const expression& e);
+
+// Converts the given expression to the corresponding restriction instance.
+// The expression does't have to be prepared, it will be prepared in this function.
+// Needed for now, but in the future all restrictions will be replaced by expression.
+::shared_ptr<restrictions::restriction> to_restriction(const expression&,
+                                                       data_dictionary::database,
+                                                       schema_ptr,
+                                                       prepare_context&);
 } // namespace expr
 
 } // namespace cql3
@@ -680,6 +712,21 @@ struct fmt::formatter<cql3::expr::expression> {
     auto format(const cql3::expr::expression& expr, FormatContext& ctx) {
         std::ostringstream os;
         os << expr;
+        return format_to(ctx.out(), "{}", os.str());
+    }
+};
+
+/// Required for fmt::join() to work on expression::printer.
+template <>
+struct fmt::formatter<cql3::expr::expression::printer> {
+    constexpr auto parse(format_parse_context& ctx) {
+        return ctx.end();
+    }
+
+    template <typename FormatContext>
+    auto format(const cql3::expr::expression::printer& pr, FormatContext& ctx) {
+        std::ostringstream os;
+        os << pr;
         return format_to(ctx.out(), "{}", os.str());
     }
 };

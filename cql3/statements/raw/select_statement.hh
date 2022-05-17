@@ -12,7 +12,6 @@
 
 #include "cql3/statements/raw/cf_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
-#include "cql3/relation.hh"
 #include "cql3/attributes.hh"
 #include "db/config.hh"
 #include <seastar/core/shared_ptr.hh>
@@ -81,7 +80,7 @@ private:
 private:
     lw_shared_ptr<const parameters> _parameters;
     std::vector<::shared_ptr<selection::raw_selector>> _select_clause;
-    std::vector<::shared_ptr<relation>> _where_clause;
+    std::vector<expr::expression> _where_clause;
     std::optional<expr::expression> _limit;
     std::optional<expr::expression> _per_partition_limit;
     std::vector<::shared_ptr<cql3::column_identifier::raw>> _group_by_columns;
@@ -90,7 +89,7 @@ public:
     select_statement(cf_name cf_name,
             lw_shared_ptr<const parameters> parameters,
             std::vector<::shared_ptr<selection::raw_selector>> select_clause,
-            std::vector<::shared_ptr<relation>> where_clause,
+            std::vector<expr::expression> where_clause,
             std::optional<expr::expression> limit,
             std::optional<expr::expression> per_partition_limit,
             std::vector<::shared_ptr<cql3::column_identifier::raw>> group_by_columns,
