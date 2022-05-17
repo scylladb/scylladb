@@ -12,7 +12,7 @@
 
 import pytest
 import re
-from util import new_test_table
+from util import new_test_table, new_type, user_type
 from cassandra.protocol import InvalidRequest
 from cassandra.connection import DRIVER_NAME, DRIVER_VERSION
 from cassandra.query import UNSET_VALUE
@@ -303,3 +303,49 @@ def test_filter_in_restriction(cql, test_keyspace, cassandra_bug):
         assert [(1,), (2,)] == list(cql.execute(f'SELECT ck FROM {table} WHERE x IN (2, 4) ALLOW FILTERING'))
         assert [(1,)] == list(cql.execute(f'SELECT ck FROM {table} WHERE x IN (2, 7) ALLOW FILTERING'))
         assert [] == list(cql.execute(f'SELECT ck FROM {table} WHERE x IN (3, 7) ALLOW FILTERING'))
+
+
+# Both Cassandra and Scylla allow filtering restrictions on frozen UDTs,
+# and the "frozen=True" case of the following test verifies their behavior
+# is the same in this case.
+# Non-frozen UDTs could also theoretically behave the same - but they are
+# currently not allowed in Cassandra (this was decided in CASSANDRA-13247).
+# Scylla, however, does allow filtering on non-frozen UDTs so the
+# "frozen=False" case of the following test verifies that they behave just
+# like frozen ones.
+# The non-frozen ("frozen=False") case is expected to fail on Cassandra
+# but the frozen case is expected to pass.
+def test_filter_UDT_restriction_frozen(cql, test_keyspace):
+    do_test_filter_UDT_restriction(cql, test_keyspace, frozen=True)
+def test_filter_UDT_restriction_nonfrozen(cql, test_keyspace, cassandra_bug):
+    do_test_filter_UDT_restriction(cql, test_keyspace, frozen=False)
+def do_test_filter_UDT_restriction(cql, test_keyspace, frozen):
+    # Single-integer UDT, should be comparable like a normal integer:
+    with new_type(cql, test_keyspace, "(a int)") as typ:
+        ftyp = f"frozen<{typ}>" if frozen else typ
+        schema = f"pk int, ck int, x {ftyp}, PRIMARY KEY (pk, ck)"
+        with new_test_table(cql, test_keyspace, schema) as table:
+            stmt = cql.prepare(f"INSERT INTO {table} (pk, ck, x) VALUES (?, ?, ?)")
+            for i in range(5):
+                cql.execute(stmt, [1, i, user_type("a", i*2)])
+            stmt = cql.prepare(f"SELECT ck FROM {table} WHERE x = ? ALLOW FILTERING")
+            assert [(2,)] == list(cql.execute(stmt, [user_type("a", 4)]))
+            assert [] == list(cql.execute(stmt, [user_type("a", 3)]))
+            stmt = cql.prepare(f"SELECT ck FROM {table} WHERE x < ? ALLOW FILTERING")
+            assert [(0,), (1,)] == list(cql.execute(stmt, [user_type("a", 4)]))
+            assert [] == list(cql.execute(stmt, [user_type("a", -1)]))
+    # UDT with two integers. EQ operator is obvious, LT is lexicographical
+    with new_type(cql, test_keyspace, "(a int, b int)") as typ:
+        ftyp = f"frozen<{typ}>" if frozen else typ
+        schema = f"pk int, ck int, x {ftyp}, PRIMARY KEY (pk, ck)"
+        with new_test_table(cql, test_keyspace, schema) as table:
+            stmt = cql.prepare(f"INSERT INTO {table} (pk, ck, x) VALUES (?, ?, ?)")
+            for i in range(5):
+                cql.execute(stmt, [1, i, user_type("a", i*2, "b", i*3)])
+            stmt = cql.prepare(f"SELECT ck FROM {table} WHERE x = ? ALLOW FILTERING")
+            assert [(2,)] == list(cql.execute(stmt, [user_type("a", 4, "b", 6)]))
+            assert [] == list(cql.execute(stmt, [user_type("a", 4, "b", 5)]))
+            stmt = cql.prepare(f"SELECT ck FROM {table} WHERE x < ? ALLOW FILTERING")
+            assert [(0,), (1,)] == list(cql.execute(stmt, [user_type("a", 4, "b", 6)]))
+            assert [(0,), (1,), (2,)] == list(cql.execute(stmt, [user_type("a", 4, "b", 7)]))
+            assert [] == list(cql.execute(stmt, [user_type("a", -1, "b", 7)]))
