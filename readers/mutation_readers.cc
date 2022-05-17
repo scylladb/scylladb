@@ -1403,6 +1403,11 @@ public:
     explicit queue_reader_v2(schema_ptr s, reader_permit permit)
         : impl(std::move(s), std::move(permit)) {
     }
+    virtual ~queue_reader_v2() {
+        if (_handle) {
+            _handle->_reader = nullptr;
+        }
+    }
     virtual future<> fill_buffer() override {
         if (_ex) {
             return make_exception_future<>(_ex);
