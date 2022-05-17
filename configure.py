@@ -2245,8 +2245,6 @@ with open(buildfile_tmp, 'w') as f:
         build help: print_help | always
         ''').format(**globals()))
 
-os.rename(buildfile_tmp, buildfile)
-
 # create compdbs
 compdb = 'compile_commands.json'
 for mode in selected_modes:
@@ -2254,7 +2252,7 @@ for mode in selected_modes:
     submodule_compdbs = [mode_out + '/' + sm + '/' + compdb
                          for sm in ['abseil', 'seastar']]
     subprocess.run(['/bin/sh', '-c',
-                    ninja + ' -t compdb ' +
+                    ninja + ' -f ' + buildfile_tmp + ' -t compdb ' +
                     '| ./scripts/merge-compdb.py build/' + mode + ' - ' +
                     ' '.join(submodule_compdbs) +
                     '> ' + mode_out + '/' + compdb])
@@ -2266,3 +2264,9 @@ if not os.path.exists(compdb):
         if os.path.exists(compdb_target):
             os.symlink(compdb_target, compdb)
             break
+
+# Keep this rename of the output file to its desired name (build.ninja)
+# as the very last step. Otherwise, if configure.py is run from ninja to
+# rebuild build.ninja, and if configure.py fails or is interrupted after
+# build.ninja was already rewritten, this output file will be deleted.
+os.rename(buildfile_tmp, buildfile)
