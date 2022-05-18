@@ -25,6 +25,8 @@ class key_view;
 namespace cdc {
 
 struct cdc_partitioner final : public dht::i_partitioner {
+    static const sstring classname;
+
     cdc_partitioner() = default;
     virtual const sstring name() const override;
     virtual dht::token get_token(const schema& s, partition_key_view key) const override;
