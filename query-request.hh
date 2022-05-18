@@ -11,6 +11,7 @@
 
 #include <optional>
 
+#include "db/functions/function_name.hh"
 #include "keys.hh"
 #include "dht/i_partitioner.hh"
 #include "enum_set.hh"
@@ -369,6 +370,16 @@ public:
 struct forward_request {
     enum class reduction_type {
         count,
+        aggregate
+    };
+    struct aggregation_info {
+        db::functions::function_name name;
+        std::vector<sstring> column_names;
+    };
+    struct reductions_info { 
+        // Used by selector_factries to prepare reductions information
+        std::vector<reduction_type> types;
+        std::vector<aggregation_info> infos;
     };
 
     // multiple reduction types are needed to support queries like:

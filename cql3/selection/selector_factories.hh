@@ -10,9 +10,11 @@
 
 #pragma once
 
+#include <stdexcept>
 #include <vector>
 #include "cql3/selection/selector.hh"
 #include "schema.hh"
+#include "query-request.hh"
 
 namespace cql3 {
 
@@ -119,6 +121,34 @@ public:
             return false;
         }
         return _factories[0]->is_count_selector_factory();
+    }
+
+    bool does_reduction() const {
+        if (_factories.size() != 1) {
+            return false;
+        }
+
+        return _factories[0]->is_reducible_selector_factory() && _factories[0]->contains_only_simple_arguments();
+    }
+
+    query::forward_request::reductions_info get_reductions() const {
+        // For now we only supports reduction of single selection
+        if (_factories.size() != 1) {
+            return {};
+        }
+
+        std::vector<query::forward_request::reduction_type> types;
+        std::vector<query::forward_request::aggregation_info> infos;
+        for (const auto& factory: _factories) {
+            auto r = factory->get_reduction();
+            if (!r) {
+                throw std::runtime_error(format("Column {} doesn't have reduction type", factory->column_name()));
+            }
+
+            types.push_back(r->first);
+            infos.push_back(r->second);
+        }
+        return {types, infos};
     }
 
     /**
