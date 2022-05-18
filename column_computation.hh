@@ -43,6 +43,18 @@ public:
 
     virtual bytes serialize() const = 0;
     virtual bytes compute_value(const schema& schema, const partition_key& key) const = 0;
+    /*
+     * depends_on_non_primary_key_column for a column computation is needed to
+     * detect a case where the primary key of a materialized view depends on a
+     * non primary key column from the base table, but at the same time, the view
+     * itself doesn't have non-primary key columns. This is an issue, since as
+     * for now, it was assumed that no non-primary key columns in view schema
+     * meant that the update cannot change the primary key of the view, and
+     * therefore the update path can be simplified.
+     */
+    virtual bool depends_on_non_primary_key_column() const {
+        return false;
+    }
 };
 
 /*
@@ -115,6 +127,9 @@ public:
     virtual bytes compute_value(const schema& schema, const partition_key& key) const override;
     virtual column_computation_ptr clone() const override {
         return std::make_unique<collection_column_computation>(*this);
+    }
+    virtual bool depends_on_non_primary_key_column() const override {
+        return true;
     }
 
     std::vector<db::view::bytes_with_action> compute_values_with_action(const schema& schema, const partition_key& key, const clustering_row& row, const std::optional<clustering_row>& existing) const;
