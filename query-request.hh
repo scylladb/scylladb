@@ -9,9 +9,12 @@
 
 #pragma once
 
+#include <memory>
 #include <optional>
 
 #include "db/functions/function_name.hh"
+#include "db/functions/function.hh"
+#include "db/functions/aggregate_function.hh"
 #include "keys.hh"
 #include "dht/i_partitioner.hh"
 #include "enum_set.hh"
@@ -382,8 +385,8 @@ struct forward_request {
         std::vector<aggregation_info> infos;
     };
 
-    // multiple reduction types are needed to support queries like:
     // `SELECT min(x), max(x), avg(x) FROM tab`
+    // multiple reduction types are needed to support queries like:
     std::vector<reduction_type> reduction_types;
 
     query::read_command cmd;
@@ -391,19 +394,19 @@ struct forward_request {
 
     db::consistency_level cl;
     lowres_clock::time_point timeout;
+    std::optional<std::vector<aggregation_info>> aggregation_infos;
 };
 
 std::ostream& operator<<(std::ostream& out, const forward_request& r);
 std::ostream& operator<<(std::ostream& out, const forward_request::reduction_type& r);
+std::ostream& operator<<(std::ostream& out, const forward_request::aggregation_info& a);
 
 struct forward_result {
     // vector storing query result for each selected column
     std::vector<bytes_opt> query_results;
 
-    void merge(const forward_result& other, const std::vector<forward_request::reduction_type>& types);
-
     struct printer {
-        const std::vector<forward_request::reduction_type>& types;
+        const std::vector<::shared_ptr<db::functions::aggregate_function>>& functions;
         const query::forward_result& res;
     };
 };

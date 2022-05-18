@@ -12,6 +12,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/smp.hh>
+#include <stdexcept>
 
 #include "cql_serialization_format.hh"
 #include "db/consistency_level.hh"
@@ -27,13 +28,17 @@
 #include "replica/database.hh"
 #include "schema.hh"
 #include "schema_registry.hh"
-#include <seastar/core/do_with.hh>
+#include "seastar/core/do_with.hh"
+#include "seastar/core/future.hh"
+#include "seastar/core/on_internal_error.hh"
+#include "seastar/core/when_all.hh"
 #include "service/pager/query_pagers.hh"
 #include "tracing/trace_state.hh"
 #include "tracing/tracing.hh"
 #include "utils/fb_utilities.hh"
 #include "service/storage_proxy.hh"
 
+#include "cql3/functions/aggregate_function.hh"
 #include "cql3/column_identifier.hh"
 #include "cql3/cql_config.hh"
 #include "cql3/query_options.hh"
@@ -42,11 +47,131 @@
 #include "cql3/selection/selectable-expr.hh"
 #include "cql3/selection/selectable.hh"
 #include "cql3/selection/selection.hh"
-
+#include "cql3/functions/functions.hh"
+#include "cql3/functions/user_aggregate.hh"
 namespace service {
 
 static constexpr int DEFAULT_INTERNAL_PAGING_SIZE = 10000;
 static logging::logger flogger("forward_service");
+
+static std::vector<::shared_ptr<db::functions::aggregate_function>> get_functions(const query::forward_request& request);
+
+class forward_aggregates {
+private:
+    std::vector<::shared_ptr<db::functions::aggregate_function>> _funcs;
+    std::vector<std::unique_ptr<db::functions::aggregate_function::aggregate>> _aggrs;
+
+public:
+    forward_aggregates(const query::forward_request& request);
+    void merge(query::forward_result& result, const query::forward_result& other);
+    void finalize(query::forward_result& result);
+
+    template<typename Func>
+    auto with_thread_if_needed(Func&& func) const {
+        bool required = std::any_of(_funcs.cbegin(), _funcs.cend(), [](const ::shared_ptr<db::functions::aggregate_function>& f) { 
+            return f->requires_thread(); 
+        });
+
+        if (required) {
+            return async(std::move(func));
+        } else {
+            return futurize_invoke(std::move(func));
+        }
+    }
+};
+
+forward_aggregates::forward_aggregates(const query::forward_request& request) {
+    _funcs = get_functions(request);
+    std::vector<std::unique_ptr<db::functions::aggregate_function::aggregate>> aggrs;
+
+    for (auto& func: _funcs) {
+        aggrs.push_back(func->new_aggregate());
+    }
+    _aggrs = std::move(aggrs);
+}
+
+void forward_aggregates::merge(query::forward_result &result, const query::forward_result &other) {
+    if (result.query_results.empty()) {
+        result.query_results.resize(other.query_results.size());
+    }
+
+    if (result.query_results.size() != other.query_results.size() || result.query_results.size() != _aggrs.size()) {
+        on_internal_error(
+            flogger,
+            format("forward_aggregates::merge(): operation cannot be completed due to invalid argument sizes. "
+                    "this.aggrs.size(): {} "
+                    "result.query_result.size(): {} "
+                    "other.query_results.size(): {} ",
+                    _aggrs.size(), result.query_results.size(), other.query_results.size())
+        );
+    }
+
+    for (size_t i = 0; i < _aggrs.size(); i++) {
+        _aggrs[i]->set_accumulator(result.query_results[i]);
+        _aggrs[i]->reduce(cql_serialization_format::internal(), other.query_results[i]);
+        result.query_results[i] = _aggrs[i]->get_accumulator();
+    }
+}
+
+void forward_aggregates::finalize(query::forward_result &result) {
+    if (result.query_results.size() != _aggrs.size()) {
+        on_internal_error(
+            flogger,
+            format("forward_aggregates::finalize(): operation cannot be completed due to invalid argument sizes. "
+                    "this.aggrs.size(): {} "
+                    "result.query_result.size(): {} ",
+                    _aggrs.size(), result.query_results.size())
+        );
+    }
+
+    for (size_t i = 0; i < _aggrs.size(); i++) {
+        _aggrs[i]->set_accumulator(result.query_results[i]);
+        result.query_results[i] = _aggrs[i]->compute(cql_serialization_format::internal());
+    }
+}
+
+static std::vector<::shared_ptr<db::functions::aggregate_function>> get_functions(const query::forward_request& request) {
+    
+    schema_ptr schema = local_schema_registry().get(request.cmd.schema_version);
+    std::vector<::shared_ptr<db::functions::aggregate_function>> aggrs;
+
+    auto name_as_type = [&] (const sstring& name) -> data_type {
+        return schema->get_column_definition(to_bytes(name))->type->underlying_type();
+    };
+
+    for (size_t i = 0; i < request.reduction_types.size(); i++) {
+        ::shared_ptr<db::functions::aggregate_function> aggr;
+
+        if (!request.aggregation_infos) {
+            if (request.reduction_types[i] == query::forward_request::reduction_type::aggregate) {
+                throw std::runtime_error("No aggregation info for reduction type aggregation.");
+            }
+
+            auto name = db::functions::function_name::native_function("countRows");
+            auto func = cql3::functions::functions::find(name, {});
+            aggr = dynamic_pointer_cast<db::functions::aggregate_function>(func);
+            if (!aggr) {
+                throw std::runtime_error("Count function not found.");
+            }
+        } else {
+            auto& info = request.aggregation_infos.value()[i];
+            auto types = boost::copy_range<std::vector<data_type>>(info.column_names | boost::adaptors::transformed(name_as_type));
+            
+            auto func = cql3::functions::functions::mock_get(info.name, types);
+            if (!func) {
+                throw std::runtime_error(format("Cannot mock aggregate function {}", info.name));    
+            }
+
+            aggr = dynamic_pointer_cast<db::functions::aggregate_function>(func);
+            if (!aggr) {
+                throw std::runtime_error(format("Aggregate function {} not found.", info.name));
+            }
+        }
+        aggrs.emplace_back(aggr);
+    }
+    
+    return aggrs;
+}
 
 static const dht::token& end_token(const dht::partition_range& r) {
     static const dht::token max_token = dht::maximum_token();
@@ -172,24 +297,45 @@ future<> forward_service::stop() {
 // stored in `forward_request`. It has to mocked on the receiving node,
 // based on requested reduction types.
 static shared_ptr<cql3::selection::selection> mock_selection(
-    const std::vector<query::forward_request::reduction_type>& reduction_types,
+    query::forward_request& request,
     schema_ptr schema,
     replica::database& db
 ) {
     std::vector<shared_ptr<cql3::selection::raw_selector>> raw_selectors;
 
-    auto mock_singular_selection = [&] (const query::forward_request::reduction_type& type) {
-        switch (type) {
-            case query::forward_request::reduction_type::count: {
-                auto selectable = cql3::selection::make_count_rows_function_expression();
-                auto column_identifier = make_shared<cql3::column_identifier>("count", false);
-                return make_shared<cql3::selection::raw_selector>(selectable, column_identifier);
-            }
+    auto functions = get_functions(request);
+
+    auto mock_singular_selection = [&] (
+        const ::shared_ptr<db::functions::aggregate_function>& aggr_function,
+        const query::forward_request::reduction_type& reduction, 
+        const std::optional<query::forward_request::aggregation_info>& info
+    ) {
+        auto name_as_expression = [] (const sstring& name) -> cql3::expr::expression {
+            return cql3::expr::unresolved_identifier {
+                make_shared<cql3::column_identifier_raw>(name, false)
+            };
+        };
+
+        if (reduction == query::forward_request::reduction_type::count) {
+            auto selectable = cql3::selection::make_count_rows_function_expression();
+            auto column_identifier = make_shared<cql3::column_identifier>("count", false);
+            return make_shared<cql3::selection::raw_selector>(selectable, column_identifier);
         }
+
+        if (!info) {
+            on_internal_error(flogger, "No aggregation info for reduction type aggregation.");
+        }
+
+        auto reducible_aggr = aggr_function->reducible_aggregate_function();
+        auto arg_exprs =boost::copy_range<std::vector<cql3::expr::expression>>(info->column_names | boost::adaptors::transformed(name_as_expression));
+        auto fc_expr = cql3::expr::function_call{reducible_aggr, arg_exprs};
+        auto column_identifier = make_shared<cql3::column_identifier>(info->name.name, false);
+        return make_shared<cql3::selection::raw_selector>(fc_expr, column_identifier);
     };
 
-    for (auto const& type : reduction_types) {
-        raw_selectors.emplace_back(mock_singular_selection(type));
+    for (size_t i = 0; i < request.reduction_types.size(); i++) {
+        auto info = (request.aggregation_infos) ? std::optional(request.aggregation_infos->at(i)) : std::nullopt;
+        raw_selectors.emplace_back(mock_singular_selection(functions[i], request.reduction_types[i], info));
     }
 
     return cql3::selection::selection::from_selectors(db.as_data_dictionary(), schema, std::move(raw_selectors));
@@ -200,21 +346,28 @@ future<query::forward_result> forward_service::dispatch_to_shards(
     std::optional<tracing::trace_info> tr_info
 ) {
     _stats.requests_dispatched_to_own_shards += 1;
+    std::optional<query::forward_result> result;
+    std::vector<future<query::forward_result>> futures;
 
-    auto result = co_await container().map_reduce0(
-        [req, tr_info] (auto& fs) {
+    for (const auto& s : smp::all_cpus()) {
+        futures.push_back(container().invoke_on(s, [req, tr_info] (auto& fs) {
             return fs.execute_on_this_shard(req, tr_info);
-        },
-        std::optional<query::forward_result>(),
-        [&req] (std::optional<query::forward_result> partial, query::forward_result mapped) -> std::optional<query::forward_result>{
-            if (partial) {
-                mapped.merge(*partial, req.reduction_types);
-            }
-            return {mapped};
-        }
-    );
+        }));
+    }
+    auto results = co_await when_all_succeed(futures.begin(), futures.end());
 
-    co_return *result;
+    forward_aggregates aggrs(req);
+    co_return co_await aggrs.with_thread_if_needed([&aggrs, results = std::move(results), result = std::move(result)] () mutable {
+        for (auto& r : results) {
+            if (result) {
+                aggrs.merge(*result, r);
+            }
+            else {
+                result = r;
+            }
+        }
+        return *result;
+    });
 }
 
 // This function executes forward_request on a shard.
@@ -238,7 +391,7 @@ future<query::forward_result> forward_service::execute_on_this_shard(
     auto timeout = req.timeout;
     auto now = gc_clock::now();
 
-    auto selection = mock_selection(req.reduction_types, schema, _db.local());
+    auto selection = mock_selection(req, schema, _db.local());
     auto query_state = make_lw_shared<service::query_state>(
         client_state::for_internal_calls(),
         tr_state,
@@ -275,21 +428,21 @@ future<query::forward_result> forward_service::execute_on_this_shard(
         co_await pager->fetch_page(rs_builder, DEFAULT_INTERNAL_PAGING_SIZE, now, timeout);
     }
 
-    co_return co_await rs_builder.with_thread_if_needed([&rs_builder, reduction_types = std::move(req.reduction_types), tr_state = std::move(tr_state)] {
+    co_return co_await rs_builder.with_thread_if_needed([&req, &rs_builder, reductions = req.reduction_types, tr_state = std::move(tr_state)] {
         auto rs = rs_builder.build();
         auto& rows = rs->rows();
         if (rows.size() != 1) {
             flogger.error("aggregation result row count != 1");
             throw std::runtime_error("aggregation result row count != 1");
         }
-        if (rows[0].size() != reduction_types.size()) {
+        if (rows[0].size() != reductions.size()) {
             flogger.error("aggregation result column count does not match requested column count");
             throw std::runtime_error("aggregation result column count does not match requested column count");
         }
         query::forward_result res = { .query_results = rows[0] };
 
         query::forward_result::printer res_printer{
-            .types = reduction_types,
+            .functions = get_functions(req),
             .res = res
         };
         tracing::trace(tr_state, "On shard execution result is {}", res_printer);
@@ -346,9 +499,9 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
 
     retrying_dispatcher dispatcher(*this, tr_state);
     std::optional<query::forward_result> result;
-
+    
     return do_with(std::move(dispatcher), std::move(result), std::move(vnodes_per_addr), std::move(req), std::move(tr_state),
-        [this] (
+        [] (
             retrying_dispatcher& dispatcher,
             std::optional<query::forward_result>& result,
             std::map<netw::messaging_service::msg_addr, dht::partition_range_vector>& vnodes_per_addr,
@@ -356,9 +509,9 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
             tracing::trace_state_ptr& tr_state
         )-> future<query::forward_result> {
             return parallel_for_each(vnodes_per_addr.begin(), vnodes_per_addr.end(),
-                [this, &req, &result, &tr_state, &dispatcher] (
+                [&req, &result, &tr_state, &dispatcher] (
                     std::pair<netw::messaging_service::msg_addr, dht::partition_range_vector> vnodes_with_addr
-                ) -> future<> {
+                ) {
                     netw::messaging_service::msg_addr addr = vnodes_with_addr.first;
                     std::optional<query::forward_result>& result_ = result;
                     tracing::trace_state_ptr& tr_state_ = tr_state;
@@ -370,34 +523,43 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
                     tracing::trace(tr_state_, "Sending forward_request to {}", addr);
                     flogger.debug("dispatching forward_request={} to address={}", req_with_modified_pr, addr);
 
-                    query::forward_result partial_result = co_await dispatcher_.dispatch_to_node(
-                        addr,
-                        req_with_modified_pr
-                    );
-
-                    query::forward_result::printer partial_result_printer{
-                        .types = req_with_modified_pr.reduction_types,
-                        .res = partial_result
-                    };
-                    tracing::trace(tr_state_, "Received forward_result={} from {}", partial_result_printer, addr);
-                    flogger.debug("received forward_result={} from {}", partial_result_printer, addr);
-
-                    if (result_) {
-                        result_->merge(partial_result, req_with_modified_pr.reduction_types);
-                    } else {
-                        result_ = partial_result;
-                    }
+                    return dispatcher_.dispatch_to_node(addr, req_with_modified_pr).then(
+                        [&req, addr = std::move(addr), &result_, tr_state_ = std::move(tr_state_)] (
+                            query::forward_result partial_result
+                        ) mutable {
+                            forward_aggregates aggrs(req);
+                            query::forward_result::printer partial_result_printer{
+                                .functions = get_functions(req),
+                                .res = partial_result
+                            };
+                            tracing::trace(tr_state_, "Received forward_result={} from {}", partial_result_printer, addr);
+                            flogger.debug("received forward_result={} from {}", partial_result_printer, addr);
+                            
+                            return aggrs.with_thread_if_needed([&result_, &aggrs, partial_result = std::move(partial_result)] () mutable {
+                                if (result_) {
+                                    aggrs.merge(*result_, partial_result);
+                                } else {
+                                    result_ = partial_result;
+                                }
+                            });
+                    });       
                 }
             ).then(
-                [&result, &req, &tr_state] () -> query::forward_result {
-                    query::forward_result::printer result_printer{
-                        .types = req.reduction_types,
-                        .res = *result
-                    };
-                    tracing::trace(tr_state, "Merged result is {}", result_printer);
-                    flogger.debug("merged result is {}", result_printer);
+                [&result, &req, &tr_state] () -> future<query::forward_result> {
+                    forward_aggregates aggrs(req);
+                    return do_with(std::move(aggrs), [&result, &req, &tr_state] (forward_aggregates& aggrs) {
+                        return aggrs.with_thread_if_needed([&result, &req, &tr_state, &aggrs] () mutable {
+                            query::forward_result::printer result_printer{
+                                .functions = get_functions(req),
+                                .res = *result
+                            };
+                            tracing::trace(tr_state, "Merged result is {}", result_printer);
+                            flogger.debug("merged result is {}", result_printer);
 
-                    return *result;
+                            aggrs.finalize(*result);
+                            return *result;
+                        });
+                    });
                 }
             );
         }

@@ -1504,7 +1504,7 @@ parallelized_select_statement::do_execute(
     auto reductions = _selection->get_reductions();
 
     query::forward_request req = {
-        .reductions = reductions.types,
+        .reduction_types = reductions.types,
         .cmd = *command,
         .pr = std::move(key_ranges),
         .cl = options.get_consistency(),
@@ -1636,7 +1636,11 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     // using `forward_service`.
     auto can_be_forwarded = [&] {
         return selection->is_aggregate()        // Aggregation only
-            && selection->is_count()            // Only count(*) selection is supported.
+            && ( // SUPPORTED PARALLELIZATION
+                 // All potential intermediate coordinators must support forwarding
+                (db.features().parallelized_aggregation && selection->is_count())
+                || (db.features().uda_native_parallelized_aggregation && selection->is_reducible())
+            )
             && !restrictions->need_filtering()  // No filtering
             && group_by_cell_indices->empty()   // No GROUP BY
             && db.get_config().enable_parallelized_aggregation();
