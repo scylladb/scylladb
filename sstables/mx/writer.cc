@@ -1360,6 +1360,9 @@ stop_iteration writer::consume(range_tombstone_change&& rtc) {
     ensure_tombstone_is_written();
     ensure_static_row_is_written_if_needed();
     position_in_partition_view pos = rtc.position();
+    if (!_current_tombstone && !rtc.tombstone()) {
+        return stop_iteration::no;
+    }
     tombstone prev_tombstone = std::exchange(_current_tombstone, rtc.tombstone());
     if (!prev_tombstone) { // start bound
         auto bv = pos.as_start_bound_view();
