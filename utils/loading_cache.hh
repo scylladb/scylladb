@@ -254,6 +254,12 @@ public:
         _lru_list.erase_and_dispose(_lru_list.begin(), _lru_list.end(), value_destroyer);
     }
 
+    void reset() noexcept {
+        _logger.info("Resetting cache");
+
+        remove_if([](const value_type&){ return true; });
+    }
+
     template <typename LoadFunc>
     requires std::is_invocable_r_v<future<value_type>, LoadFunc, const key_type&>
     future<value_ptr> get_ptr(const Key& k, LoadFunc&& load) {
