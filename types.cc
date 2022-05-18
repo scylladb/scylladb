@@ -734,6 +734,10 @@ void write_collection_value(managed_bytes_mutable_view& out, cql_serialization_f
     write_fragmented(out, val);
 }
 
+void write_int32(bytes::iterator& out, int32_t value) {
+    return serialize_int32(out, value);
+}
+
 shared_ptr<const abstract_type> abstract_type::underlying_type() const {
     struct visitor {
         shared_ptr<const abstract_type> operator()(const abstract_type& t) { return t.shared_from_this(); }
