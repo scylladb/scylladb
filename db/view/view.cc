@@ -72,6 +72,7 @@ static inline void inject_failure(std::string_view operation) {
 view_info::view_info(const schema& schema, const raw_view_info& raw_view_info)
         : _schema(schema)
         , _raw(raw_view_info)
+        , _has_computed_column_depending_on_base_non_primary_key(false)
 { }
 
 cql3::statements::select_statement& view_info::select_statement() const {
@@ -167,6 +168,9 @@ db::view::base_info_ptr view_info::make_base_dependent_view_info(const schema& b
     for (auto&& view_col : boost::range::join(_schema.partition_key_columns(), _schema.clustering_key_columns())) {
         if (view_col.is_computed()) {
             // we are not going to find it in the base table...
+            if (view_col.get_computation().depends_on_non_primary_key_column()) {
+                _has_computed_column_depending_on_base_non_primary_key = true;
+            }
             continue;
         }
         const bytes& view_col_name = view_col.name();
