@@ -20,6 +20,7 @@
 #include "cdc/cdc_options.hh"
 #include "cdc/change_visitor.hh"
 #include "cdc/metadata.hh"
+#include "cdc/cdc_partitioner.hh"
 #include "bytes.hh"
 #include "replica/database.hh"
 #include "db/schema_tables.hh"
@@ -179,30 +180,30 @@ public:
         bool is_cdc = new_schema.cdc_options().enabled();
         bool was_cdc = old_schema.cdc_options().enabled();
 
-        // we need to create or modify the log & stream schemas iff either we changed cdc status (was != is)
-        // or if cdc is on now unconditionally, since then any actual base schema changes will affect the column 
-        // etc.
-        if (was_cdc || is_cdc) {
+        // if we are turning off cdc we can skip this, since even if columns change etc,
+        // any writer should see cdc -> off together with any actual schema changes to
+        // base table, so should never try to write to non-existent log column etc.
+        // note that if user has set ttl=0 in cdc options, he is still reponsible
+        // for emptying the log. 
+        if (is_cdc) {
             auto& db = _ctxt._proxy.get_db().local();
-
-            if (!was_cdc) {
-                check_that_cdc_log_table_does_not_exist(db, new_schema, log_name(new_schema.cf_name()));
-            }
-            if (is_cdc) {
-                check_for_attempt_to_create_nested_cdc_log(db, new_schema);
-                ensure_that_table_has_no_counter_columns(new_schema);
-            }
-
             auto logname = log_name(old_schema.cf_name());
             auto& keyspace = db.find_keyspace(old_schema.ks_name());
-            auto log_schema = was_cdc ? db.find_column_family(old_schema.ks_name(), logname).schema() : nullptr;
+            auto has_cdc_log = db.has_schema(old_schema.ks_name(), logname);
+            auto log_schema = has_cdc_log ? db.find_schema(old_schema.ks_name(), logname) : nullptr;
 
-            if (!is_cdc) {
-                auto log_mut = db::schema_tables::make_drop_table_mutations(keyspace.metadata(), log_schema, timestamp);
-
-                mutations.insert(mutations.end(), std::make_move_iterator(log_mut.begin()), std::make_move_iterator(log_mut.end()));
-                return;
+            if (!was_cdc && has_cdc_log) {
+                // make sure the apparent log table really is a cdc log (not user table)
+                // we just check the partitioner - since user tables should _not_ be able
+                // set/use this.
+                if (log_schema->get_partitioner().name() != cdc::cdc_partitioner::classname) {
+                    // will throw
+                    check_that_cdc_log_table_does_not_exist(db, old_schema, logname);
+                }
             }
+
+            check_for_attempt_to_create_nested_cdc_log(db, new_schema);
+            ensure_that_table_has_no_counter_columns(new_schema);
 
             auto new_log_schema = create_log_schema(new_schema, log_schema ? std::make_optional(log_schema->id()) : std::nullopt, log_schema);
 
@@ -216,14 +217,16 @@ public:
     }
 
     void on_before_drop_column_family(const schema& schema, std::vector<mutation>& mutations, api::timestamp_type timestamp) override {
-        if (schema.cdc_options().enabled()) {
-            auto logname = log_name(schema.cf_name());
-            auto& db = _ctxt._proxy.get_db().local();
+        auto logname = log_name(schema.cf_name());
+        auto& db = _ctxt._proxy.get_db().local();
+        auto has_cdc_log = db.has_schema(schema.ks_name(), logname);
+        if (has_cdc_log) {
+            auto log_schema = db.find_schema(schema.ks_name(), logname);
+            if (log_schema->get_partitioner().name() != cdc::cdc_partitioner::classname) {
+                return;
+            }
             auto& keyspace = db.find_keyspace(schema.ks_name());
-            auto log_schema = db.find_column_family(schema.ks_name(), logname).schema();
-
             auto log_mut = db::schema_tables::make_drop_table_mutations(keyspace.metadata(), log_schema, timestamp);
-
             mutations.insert(mutations.end(), std::make_move_iterator(log_mut.begin()), std::make_move_iterator(log_mut.end()));
         }
     }
@@ -484,7 +487,7 @@ bytes log_data_column_deleted_elements_name_bytes(const bytes& column_name) {
 
 static schema_ptr create_log_schema(const schema& s, std::optional<utils::UUID> uuid, schema_ptr old) {
     schema_builder b(s.ks_name(), log_name(s.cf_name()));
-    b.with_partitioner("com.scylladb.dht.CDCPartitioner");
+    b.with_partitioner(cdc::cdc_partitioner::classname);
     b.set_compaction_strategy(sstables::compaction_strategy_type::time_window);
     b.set_comment(fmt::format("CDC log for {}.{}", s.ks_name(), s.cf_name()));
     auto ttl_seconds = s.cdc_options().ttl();

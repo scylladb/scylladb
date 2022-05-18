@@ -149,8 +149,6 @@ SEASTAR_THREAD_TEST_CASE(test_with_cdc_parameter) {
                     e.local_db().find_schema("ks", "tbl")->cdc_options().enabled());
             if (exp.enabled) {
                 e.require_table_exists("ks", cdc::log_name("tbl")).get();
-            } else {
-                e.require_table_does_not_exist("ks", cdc::log_name("tbl")).get();
             }
             BOOST_REQUIRE_EQUAL(exp.preimage,
                     e.local_db().find_schema("ks", "tbl")->cdc_options().preimage());

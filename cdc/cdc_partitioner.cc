@@ -14,12 +14,12 @@
 #include "cdc/generation.hh"
 #include "keys.hh"
 
-static const sstring cdc_partitioner_name = "com.scylladb.dht.CDCPartitioner";
-
 namespace cdc {
 
+const sstring cdc_partitioner::classname = "com.scylladb.dht.CDCPartitioner";
+
 const sstring cdc_partitioner::name() const {
-    return cdc_partitioner_name;
+    return classname;
 }
 
 static dht::token to_token(int64_t value) {
@@ -48,7 +48,7 @@ cdc_partitioner::get_token(const schema& s, partition_key_view key) const {
 }
 
 using registry = class_registrator<dht::i_partitioner, cdc_partitioner>;
-static registry registrator(cdc_partitioner_name);
+static registry registrator(cdc::cdc_partitioner::classname);
 static registry registrator_short_name("CDCPartitioner");
 
 }
