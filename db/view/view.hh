@@ -148,6 +148,7 @@ struct bytes_with_action {
         : _view(std::move(view))
         , _action(action)
     {}
+
 };
 
 class view_updates final {
@@ -175,16 +176,21 @@ public:
 private:
     mutation_partition& partition_for(partition_key&& key);
     row_marker compute_row_marker(const clustering_row& base_row) const;
-    deletable_row& get_view_row(const partition_key& base_key, const clustering_row& update);
+    struct view_row_entry {
+        deletable_row* _row;
+        bytes_with_action::action _action;
+    };
+    std::vector<view_row_entry> get_view_rows(const partition_key& base_key, const clustering_row& update, const std::optional<clustering_row>& existing);
     bool can_skip_view_updates(const clustering_row& update, const clustering_row& existing) const;
     void create_entry(const partition_key& base_key, const clustering_row& update, gc_clock::time_point now);
     void delete_old_entry(const partition_key& base_key, const clustering_row& existing, const clustering_row& update, gc_clock::time_point now);
     void do_delete_old_entry(const partition_key& base_key, const clustering_row& existing, const clustering_row& update, gc_clock::time_point now);
     void update_entry(const partition_key& base_key, const clustering_row& update, const clustering_row& existing, gc_clock::time_point now);
     void replace_entry(const partition_key& base_key, const clustering_row& update, const clustering_row& existing, gc_clock::time_point now) {
-        create_entry(base_key, update, now);
         delete_old_entry(base_key, existing, update, now);
+        create_entry(base_key, update, now);
     }
+    void update_entry_for_computed_column(const partition_key& base_key, const clustering_row& update, const std::optional<clustering_row>& existing, gc_clock::time_point now);
 };
 
 class view_update_builder {
