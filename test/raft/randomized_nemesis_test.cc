@@ -2444,9 +2444,10 @@ struct raft_call {
 // To be used only in forwarding mode. Doesn't bounce.
 template <PureStateMachine M>
 struct raft_read {
+    int32_t read_id;
     raft::logical_clock::duration timeout;
 
-    using result_type = read_result_t<M>;
+    using result_type = std::pair<int32_t, read_result_t<M>>;
 
     struct state_type {
         environment<M>& env;
@@ -2466,11 +2467,11 @@ struct raft_read {
         auto res = co_await s.env.read(contact, s.timer.now() + timeout, s.timer);
         tlogger.debug("read end tid {} start time {} current time {} contact {}", ctx.thread, ctx.start, s.timer.now(), contact);
 
-        co_return res;
+        co_return result_type{read_id, std::move(res)};
     }
 
     friend std::ostream& operator<<(std::ostream& os, const raft_read& r) {
-        return os << format("raft_read{{timeout:{}}}", r.timeout);
+        return os << format("raft_read{{id:{}, timeout:{}}}", r.read_id, r.timeout);
     }
 };
 
@@ -2853,6 +2854,10 @@ struct append_reg_model {
     std::unordered_set<elem_t> returned;
     std::unordered_set<elem_t> in_progress;
 
+    // For each read, the element observed at the end of the model sequence
+    // at the moment the read has started.
+    std::unordered_map<int32_t, elem_t> reads;
+
     void invocation(elem_t x) {
         assert(!index.contains(x));
         assert(!in_progress.contains(x));
@@ -2866,7 +2871,7 @@ struct append_reg_model {
         try {
             completion(x, prev);
         } catch (inconsistency& e) {
-            e.what += format("\nwhen completing elem: {}\nprev: {}\nmodel: {}", x, prev, seq);
+            e.what += format("\nwhen completing append: {}\nprev: {}\nmodel: {}", x, prev, seq);
             throw;
         }
         returned.insert(x);
@@ -2877,6 +2882,38 @@ struct append_reg_model {
         assert(in_progress.contains(x));
         banned.insert(x);
         in_progress.erase(x);
+    }
+
+    void start_read(int32_t id) {
+        auto [_, inserted] = reads.emplace(id, seq.back().elem);
+        assert(inserted);
+    }
+
+    void read_success(int32_t id, append_seq result) {
+        auto read = reads.find(id);
+        assert(read != reads.end());
+
+        size_t idx = 0;
+        for (; idx < result.size(); ++idx) {
+            if (result[idx] == read->second) {
+                break;
+            }
+        }
+
+        if (idx == result.size()) {
+            throw inconsistency{format(
+                "read {} observed last model elem {} at start not present in result: {}",
+                id, read->second, result)};
+        }
+
+        try {
+            auto [prev, x] = result.pop();
+            completion(x, prev);
+        } catch (inconsistency& e) {
+            e.what += format(
+                    "\nwhen completing read id: {}, last model elem at start: {}\nread result: {}",
+                    id, read->second, result);
+        }
     }
 
 private:
@@ -3168,7 +3205,9 @@ SEASTAR_TEST_CASE(basic_generator_test) {
                             ),
                             op_limit(forwarding ? num_ops : 0 /* only produce raft_reads in forwarding mode */,
                                 stagger(seed, timer.now(), 0_t, 200_t,
-                                        constant([] () { return op_type{raft_read<AppendReg>{200_t}}; })
+                                    sequence(1, [] (int32_t i) {
+                                        return op_type{raft_read<AppendReg>{i, 200_t}};
+                                    })
                                 )
                             )
                         )
@@ -3196,6 +3235,9 @@ SEASTAR_TEST_CASE(basic_generator_test) {
                 if (auto call_op = std::get_if<raft_call<AppendReg>>(&o.op)) {
                     ++_stats.invocations;
                     _model.invocation(call_op->input.x);
+                } else if (auto read_op = std::get_if<raft_read<AppendReg>>(&o.op)) {
+                    ++_stats.invocations;
+                    _model.start_read(read_op->read_id);
                 }
             }
 
@@ -3225,6 +3267,18 @@ SEASTAR_TEST_CASE(basic_generator_test) {
                         ++_stats.failures;
                     }
                     ), *call_res);
+                } else if (auto read_res = std::get_if<raft_read<AppendReg>::result_type>(res)) {
+                    std::visit(make_visitor(
+                    [this, id = read_res->first] (AppendReg::state_t& s) {
+                        tlogger.debug("read completion id: {} digest: {}", id, s.digest());
+
+                        ++_stats.successes;
+                        _model.read_success(id, std::move(s));
+                    },
+                    [this] (auto&) {
+                        ++_stats.failures;
+                    }
+                    ), read_res->second);
                 } else {
                     tlogger.debug("completion {}", c);
                 }
