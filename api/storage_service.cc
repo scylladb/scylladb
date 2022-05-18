@@ -1390,25 +1390,23 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
             });
         }
 
-        sstables::compaction_type_options::scrub opts = {
-            .operation_mode = scrub_mode,
-        };
         const sstring quarantine_mode_str = req_param<sstring>(*req, "quarantine_mode", "INCLUDE");
+        sstables::compaction_type_options::scrub::quarantine_mode quarantine_mode;
         if (quarantine_mode_str == "INCLUDE") {
-            opts.quarantine_operation_mode = sstables::compaction_type_options::scrub::quarantine_mode::include;
+            quarantine_mode = sstables::compaction_type_options::scrub::quarantine_mode::include;
         } else if (quarantine_mode_str == "EXCLUDE") {
-            opts.quarantine_operation_mode = sstables::compaction_type_options::scrub::quarantine_mode::exclude;
+            quarantine_mode = sstables::compaction_type_options::scrub::quarantine_mode::exclude;
         } else if (quarantine_mode_str == "ONLY") {
-            opts.quarantine_operation_mode = sstables::compaction_type_options::scrub::quarantine_mode::only;
+            quarantine_mode = sstables::compaction_type_options::scrub::quarantine_mode::only;
         } else {
             throw httpd::bad_param_exception(fmt::format("Unknown argument for 'quarantine_mode' parameter: {}", quarantine_mode_str));
         }
-        return f.then([&ctx, keyspace, column_families, opts] {
+        return f.then([&ctx, keyspace, column_families, scrub_mode, quarantine_mode] {
             return ctx.db.invoke_on_all([=] (replica::database& db) {
                 return do_for_each(column_families, [=, &db](sstring cfname) {
                     auto& cm = db.get_compaction_manager();
                     auto& cf = db.find_column_family(keyspace, cfname);
-                    return cm.perform_sstable_scrub(&cf, opts);
+                    return cm.perform_sstable_scrub(&cf, scrub_mode, quarantine_mode);
                 });
             });
         }).then([]{

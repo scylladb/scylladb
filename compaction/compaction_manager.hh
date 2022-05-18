@@ -399,7 +399,8 @@ public:
     future<> perform_sstable_upgrade(replica::database& db, replica::table* t, bool exclude_current_version);
 
     // Submit a table to be scrubbed and wait for its termination.
-    future<> perform_sstable_scrub(replica::table* t, sstables::compaction_type_options::scrub opts);
+    future<> perform_sstable_scrub(replica::table* t, sstables::compaction_type_options::scrub::mode scrub_mode,
+            sstables::compaction_type_options::scrub::quarantine_mode quarantine_mode = sstables::compaction_type_options::scrub::quarantine_mode::include);
 
     // Submit a table for major compaction.
     future<> perform_major_compaction(replica::table* t);
