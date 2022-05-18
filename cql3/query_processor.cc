@@ -994,4 +994,8 @@ void query_processor::update_authorized_prepared_cache_config() {
     }
 }
 
+void query_processor::reset_cache() {
+    _authorized_prepared_cache.reset();
+}
+
 }

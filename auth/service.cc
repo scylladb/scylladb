@@ -201,6 +201,11 @@ void service::update_cache_config() {
     }
 }
 
+void service::reset_authorization_cache() {
+    _permissions_cache->reset();
+    _qp.reset_cache();
+}
+
 future<bool> service::has_existing_legacy_users() const {
     if (!_qp.db().has_schema(meta::AUTH_KS, meta::USERS_CF)) {
         return make_ready_future<bool>(false);

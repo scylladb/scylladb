@@ -1328,6 +1328,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 auth_service.stop().get();
             });
 
+            api::set_server_authorization_cache(ctx, auth_service).get();
+            auto stop_authorization_cache_api = defer_verbose_shutdown("authorization cache api", [&ctx] {
+                api::unset_server_authorization_cache(ctx).get();
+            });
 
             snapshot_ctl.start(std::ref(db)).get();
             auto stop_snapshot_ctl = defer_verbose_shutdown("snapshots", [&snapshot_ctl] {

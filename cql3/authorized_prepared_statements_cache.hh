@@ -162,6 +162,10 @@ public:
         return _cache.update_config(std::move(c));
     }
 
+    void reset() {
+        _cache.reset();
+    }
+
     future<> stop() {
         return _cache.stop();
     }

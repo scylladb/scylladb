@@ -120,6 +120,8 @@ public:
 
     void update_cache_config();
 
+    void reset_authorization_cache();
+
     ///
     /// \returns an exceptional future with \ref nonexistant_role if the named role does not exist.
     ///

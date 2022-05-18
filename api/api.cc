@@ -24,6 +24,7 @@
 #include "compaction_manager.hh"
 #include "hinted_handoff.hh"
 #include "error_injection.hh"
+#include "authorization_cache.hh"
 #include <seastar/http/exception.hh>
 #include "stream_manager.hh"
 #include "system.hh"
@@ -124,6 +125,17 @@ future<> set_server_repair(http_context& ctx, sharded<repair_service>& repair) {
 
 future<> unset_server_repair(http_context& ctx) {
     return ctx.http_server.set_routes([&ctx] (routes& r) { unset_repair(ctx, r); });
+}
+
+future<> set_server_authorization_cache(http_context &ctx, sharded<auth::service> &auth_service) {
+    return register_api(ctx, "authorization_cache",
+                "The authorization cache API", [&auth_service] (http_context &ctx, routes &r) {
+                     set_authorization_cache(ctx, r, auth_service);
+                 });
+}
+
+future<> unset_server_authorization_cache(http_context& ctx) {
+    return ctx.http_server.set_routes([&ctx] (routes& r) { unset_authorization_cache(ctx, r); });
 }
 
 future<> set_server_snapshot(http_context& ctx, sharded<db::snapshot_ctl>& snap_ctl) {

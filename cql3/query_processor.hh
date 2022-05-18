@@ -381,6 +381,8 @@ public:
 
     void update_authorized_prepared_cache_config();
 
+    void reset_cache();
+
 private:
     query_options make_internal_options(
             const statements::prepared_statement::checked_weak_ptr& p,
