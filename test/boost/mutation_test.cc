@@ -93,7 +93,7 @@ with_column_family(schema_ptr s, replica::column_family::config cfg, noncopyable
     auto tracker = make_lw_shared<cache_tracker>();
     auto dir = tmpdir();
     cfg.datadir = dir.path().string();
-    auto cm = make_lw_shared<compaction_manager>();
+    auto cm = make_lw_shared<compaction_manager>(compaction_manager::for_testing_tag{});
     auto cl_stats = make_lw_shared<cell_locker_stats>();
     auto cf = make_lw_shared<replica::column_family>(s, cfg, replica::column_family::no_commitlog(), *cm, *cl_stats, *tracker);
     cf->mark_ready_for_writes();
