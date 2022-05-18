@@ -12,6 +12,7 @@ from cassandra.cluster import NoHostAvailable
 from util import new_test_table, unique_name, new_function
 
 import pytest
+import os.path
 
 # Can be used for marking functions which require
 # WASM support to be compiled into Scylla
@@ -948,3 +949,44 @@ def test_word_double(cql, test_keyspace, table1, scylla_with_wasm_only):
         cql.execute(f"INSERT INTO {table} (p, txt) VALUES (1001, 'cat42')")
         res = [row for row in cql.execute(f"SELECT {test_keyspace}.{dbl_name}(txt) AS result FROM {table} WHERE p = 1001")]
         assert len(res) == 1 and res[0].result == 'cat42cat42'
+
+# Test that calling a wasm-based function works with ABI version 2.
+# The function returns the input. It's compatible with all data types represented by size + pointer.
+# Created with:
+# # extern "C" {
+#     fn malloc(size: usize) -> usize;
+#     fn free(ptr: *mut usize);
+# }
+
+# #[no_mangle]
+# pub unsafe extern "C" fn _scylla_malloc(size: usize) -> u32 {
+#     malloc(size) as u32
+# }
+
+# #[no_mangle]
+# pub unsafe extern "C" fn _scylla_free(ptr: *mut usize) {
+#     free(ptr)
+# }
+
+# #[no_mangle]
+# pub static _scylla_abi: u32 = 2;
+
+# #[no_mangle]
+# pub extern "C" fn return_input(sizeptr: u64) -> u64 {
+#     sizeptr
+# }
+
+# ... and compiled with
+# cargo build --target=wasm32-wasi --release
+# wasm2wat return_input.wasm > return_input.wat
+
+def test_abi_v2(cql, test_keyspace, table1, scylla_with_wasm_only):
+    table = table1
+    ri_name = unique_name()
+    wat_path = os.path.realpath(os.path.join(__file__, '../../resource/wasm/return_input.wat'))
+    ri_source = open(wat_path, 'r').read().replace('export "return_input"', f'export "{ri_name}"')
+    text_src = f"(input text) RETURNS NULL ON NULL INPUT RETURNS text LANGUAGE xwasm AS '{ri_source}'"
+    with new_function(cql, test_keyspace, text_src, ri_name):
+        cql.execute(f"INSERT INTO {table1} (p, txt) VALUES (2000, 'doggo')")
+        res = [row for row in cql.execute(f"SELECT {test_keyspace}.{ri_name}(txt) AS result FROM {table} WHERE p = 2000")]
+        assert len(res) == 1 and res[0].result == 'doggo'
