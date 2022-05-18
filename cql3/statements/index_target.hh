@@ -31,7 +31,7 @@ struct index_target {
     using value_type = std::variant<single_column, multiple_columns>;
 
     const value_type value;
-    const target_type type;
+    target_type type;
 
     index_target(::shared_ptr<column_identifier> c, target_type t) : value(c) , type(t) {}
     index_target(std::vector<::shared_ptr<column_identifier>> c, target_type t) : value(std::move(c)), type(t) {}

@@ -28,6 +28,7 @@
 
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/algorithm/string/join.hpp>
+#include <stdexcept>
 
 namespace cql3 {
 
@@ -205,6 +206,34 @@ void create_index_statement::validate_not_full_index(const index_target& target)
         throw exceptions::invalid_request_exception("full() indexes can only be created on frozen collections");
     }
 }
+
+void create_index_statement::rewrite_target_for_collection(index_target& target, const column_definition& cd) const
+{
+    // In Cassandra, `CREATE INDEX ON table(collection)` works the same as `CREATE INDEX ON table(VALUES(collection))`,
+    // and index on VALUES(collection) indexes values, if the collection was a map or a list, but it indexes the keys, if it
+    // was a set. Rewrite it to clean the mess.
+    switch (target.type) {
+        case index_target::target_type::full:
+            throw std::logic_error("invalid target type(full) in rewrite_target_for_collection");
+        case index_target::target_type::keys:
+            // If it was keys, then it must have been a map.
+            break;
+        case index_target::target_type::keys_and_values:
+            // If it was entries, then it must have been a map.
+            break;
+        case index_target::target_type::regular_values:
+        case index_target::target_type::collection_values:
+            if (cd.type->is_map() || cd.type->is_list()) {
+                target.type = index_target::target_type::collection_values;
+            } else if (cd.type->is_set()) {
+                target.type = index_target::target_type::keys;
+            } else {
+                throw std::logic_error(format("rewrite_target_for_collection: unknown collection type {}", cd.type->cql3_type_name()));
+            }
+            break;
+    }
+}
+
 
 void create_index_statement::validate_is_values_index_if_target_column_not_collection(
         const column_definition* cd, const index_target& target) const
