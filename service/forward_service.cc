@@ -201,20 +201,22 @@ future<query::forward_result> forward_service::dispatch_to_shards(
 ) {
     _stats.requests_dispatched_to_own_shards += 1;
 
-    auto result = co_await container().map_reduce0(
+    return container().map_reduce0(
         [req, tr_info] (auto& fs) {
             return fs.execute_on_this_shard(req, tr_info);
         },
         std::optional<query::forward_result>(),
-        [&req] (std::optional<query::forward_result> partial, query::forward_result mapped) -> std::optional<query::forward_result>{
+        [reduction_types = req.reduction_types] (std::optional<query::forward_result> partial, query::forward_result mapped) -> std::optional<query::forward_result>{
             if (partial) {
-                mapped.merge(*partial, req.reduction_types);
+                mapped.merge(*partial, reduction_types);
             }
             return {mapped};
         }
+    ).then(
+        [] (std::optional<query::forward_result> result) {
+            return *result;
+        }
     );
-
-    co_return *result;
 }
 
 // This function executes forward_request on a shard.
