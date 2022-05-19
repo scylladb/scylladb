@@ -31,6 +31,10 @@ azure_snitch::azure_snitch(const snitch_config& cfg) : production_snitch_base(cf
 }
 
 future<> azure_snitch::load_config() {
+    if (this_shard_id() != io_cpu_id()) {
+        co_return;
+    }
+
     sstring region = co_await azure_api_call(REGION_NAME_QUERY_PATH);
     sstring azure_zone = co_await azure_api_call(ZONE_NAME_QUERY_PATH);
 
