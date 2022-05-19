@@ -261,29 +261,31 @@ distributed_loader::make_sstables_available(sstables::sstable_directory& dir, sh
     auto& table = db.local().find_column_family(ks, cf);
     auto new_sstables = std::vector<sstables::shared_sstable>();
 
-    // FIXME indentation
     co_await dir.do_for_each_sstable([&table, datadir = std::move(datadir), &new_sstables] (sstables::shared_sstable sst) -> future<> {
-            auto gen = table.calculate_generation_for_new_table();
-            dblog.trace("Loading {} into {}, new generation {}", sst->get_filename(), datadir.native(), gen);
-            co_await sst->move_to_new_dir(datadir.native(), gen, true);
-                // When loading an imported sst, set level to 0 because it may overlap with existing ssts on higher levels.
-                sst->set_sstable_level(0);
-                new_sstables.push_back(std::move(sst));
-        });
-            // nothing loaded
-            if (new_sstables.empty()) {
-                co_return 0;
-            }
+        auto gen = table.calculate_generation_for_new_table();
+        dblog.trace("Loading {} into {}, new generation {}", sst->get_filename(), datadir.native(), gen);
+        co_await sst->move_to_new_dir(datadir.native(), gen, true);
+            // When loading an imported sst, set level to 0 because it may overlap with existing ssts on higher levels.
+            sst->set_sstable_level(0);
+            new_sstables.push_back(std::move(sst));
+    });
 
-            co_await table.add_sstables_and_update_cache(new_sstables).handle_exception([&table] (std::exception_ptr ep) {
-                dblog.error("Failed to load SSTables for {}.{}: {}. Aborting.", table.schema()->ks_name(), table.schema()->cf_name(), ep);
-                abort();
-            });
+    // nothing loaded
+    if (new_sstables.empty()) {
+        co_return 0;
+    }
+
+    co_await table.add_sstables_and_update_cache(new_sstables).handle_exception([&table] (std::exception_ptr ep) {
+        dblog.error("Failed to load SSTables for {}.{}: {}. Aborting.", table.schema()->ks_name(), table.schema()->cf_name(), ep);
+        abort();
+    });
+
     co_await coroutine::parallel_for_each(new_sstables, [&view_update_generator, &table] (sstables::shared_sstable sst) -> future<> {
-                if (sst->requires_view_building()) {
-                    co_await view_update_generator.local().register_staging_sstable(sst, table.shared_from_this());
-                }
-            });
+        if (sst->requires_view_building()) {
+            co_await view_update_generator.local().register_staging_sstable(sst, table.shared_from_this());
+        }
+    });
+
     co_return new_sstables.size();
 }
 
