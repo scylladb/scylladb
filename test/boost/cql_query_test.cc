@@ -5086,6 +5086,199 @@ SEASTAR_TEST_CASE(test_parallelized_select_count) {
     });
 }
 
+SEASTAR_TEST_CASE(test_parallelized_select_min) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        auto& qp = e.local_qp();
+        auto stat_parallelized = qp.get_cql_stats().select_parallelized;
+
+        e.execute_cql("CREATE TABLE tbl (k int, PRIMARY KEY (k));").get();
+        int value_count = 10;
+        for (int i = 0; i < value_count; i++) {
+            e.execute_cql(format("INSERT INTO tbl (k) VALUES ({:d});", i)).get();
+        }
+        auto msg = e.execute_cql("SELECT MIN(k) FROM tbl;").get();
+        assert_that(msg).is_rows().with_rows({
+            {int32_type->decompose(int32_t(0))}
+        });
+        BOOST_CHECK_EQUAL(stat_parallelized + 1, qp.get_cql_stats().select_parallelized);
+    });
+}
+
+SEASTAR_TEST_CASE(test_parallelized_select_max) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        auto& qp = e.local_qp();
+        auto stat_parallelized = qp.get_cql_stats().select_parallelized;
+
+        e.execute_cql("CREATE TABLE tbl (k int, PRIMARY KEY (k));").get();
+        int value_count = 10;
+        for (int i = 0; i < value_count; i++) {
+            e.execute_cql(format("INSERT INTO tbl (k) VALUES ({:d});", i)).get();
+        }
+        auto msg = e.execute_cql("SELECT MAX(k) FROM tbl;").get();
+        assert_that(msg).is_rows().with_rows({
+            {int32_type->decompose(int32_t(value_count - 1))}
+        });
+
+        BOOST_CHECK_EQUAL(stat_parallelized + 1, qp.get_cql_stats().select_parallelized);
+    });
+}
+
+SEASTAR_TEST_CASE(test_parallelized_select_sum) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        auto& qp = e.local_qp();
+        auto stat_parallelized = qp.get_cql_stats().select_parallelized;
+
+        e.execute_cql("CREATE TABLE tbl (k int, PRIMARY KEY (k));").get();
+        int value_count = 10;
+        for (int i = 0; i < value_count; i++) {
+            e.execute_cql(format("INSERT INTO tbl (k) VALUES ({:d});", i)).get();
+        }
+        auto msg = e.execute_cql("SELECT SUM(k) FROM tbl;").get();
+        assert_that(msg).is_rows().with_rows({
+            {int32_type->decompose(int32_t((value_count - 1) * value_count / 2))}
+        });
+
+        BOOST_CHECK_EQUAL(stat_parallelized + 1, qp.get_cql_stats().select_parallelized);
+    });
+}
+
+SEASTAR_TEST_CASE(test_non_parallelized_multiple_select) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        auto& qp = e.local_qp();
+        auto stat_parallelized = qp.get_cql_stats().select_parallelized;
+
+        e.execute_cql("CREATE TABLE tbl (k int, PRIMARY KEY (k));").get();
+        int value_count = 10;
+        for (int i = 0; i < value_count; i++) {
+            e.execute_cql(format("INSERT INTO tbl (k) VALUES ({:d});", i)).get();
+        }
+        auto msg = e.execute_cql("SELECT MIN(k), MAX(k) FROM tbl;").get();
+        assert_that(msg).is_rows().with_rows({
+            {int32_type->decompose(int32_t(0)), int32_type->decompose(int32_t(value_count - 1))}
+        });
+
+        BOOST_CHECK_EQUAL(stat_parallelized + 1, qp.get_cql_stats().select_parallelized);
+    });
+}
+
+SEASTAR_TEST_CASE(test_parallelized_select_sum_group_by) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        auto& qp = e.local_qp();
+        auto stat_parallelized = qp.get_cql_stats().select_parallelized;
+
+        e.execute_cql("CREATE TABLE tbl (k int, c int, v int, PRIMARY KEY (k, c));").get();
+        int value_count = 10;
+        for (int k = 0; k < 2; k++) {
+            for (int c = 0; c < value_count; c++) {
+                e.execute_cql(format("INSERT INTO tbl (k, c, v) VALUES ({:d}, {:d}, {:d});", k, c, c)).get();
+            }
+        }
+    
+        auto msg = e.execute_cql("SELECT k, SUM(v) FROM tbl GROUP BY k;").get();
+        assert_that(msg).is_rows().with_rows({
+            {int32_type->decompose(int32_t(1)), int32_type->decompose(int32_t((value_count - 1) * value_count / 2))},
+            {int32_type->decompose(int32_t(0)), int32_type->decompose(int32_t((value_count - 1) * value_count / 2))}
+        });
+
+        BOOST_CHECK_EQUAL(stat_parallelized, qp.get_cql_stats().select_parallelized);
+    });
+}
+
+template<typename Func>
+static future<> with_udf_enabled(Func&& func) {
+    auto db_cfg_ptr = make_shared<db::config>();
+    auto& db_cfg = *db_cfg_ptr;
+    db_cfg.enable_user_defined_functions({true}, db::config::config_source::CommandLine);
+    db_cfg.user_defined_function_time_limit_ms(1000);
+    db_cfg.experimental_features({db::experimental_features_t::feature::UDF}, db::config::config_source::CommandLine);
+    return do_with_cql_env_thread(std::forward<Func>(func), db_cfg_ptr);
+}
+
+SEASTAR_TEST_CASE(test_parallelized_select_uda) {
+    return with_udf_enabled([](cql_test_env& e) {
+        auto& qp = e.local_qp();
+        auto stat_parallelized = qp.get_cql_stats().select_parallelized;
+
+        e.execute_cql("CREATE FUNCTION row_fct(acc bigint, val int) "
+                        "RETURNS NULL ON NULL INPUT "
+                        "RETURNS bigint "
+                        "LANGUAGE lua "
+                        "AS $$ "
+                        "return acc+val "
+                        "$$;").get0();
+        e.execute_cql("CREATE FUNCTION reduce_fct(acc1 bigint, acc2 bigint) "
+                        "RETURNS NULL ON NULL INPUT "
+                        "RETURNS bigint "
+                        "LANGUAGE lua "
+                        "AS $$ "
+                        "return acc1+acc2 "
+                        "$$;").get0();
+        e.execute_cql("CREATE FUNCTION final_fct(acc bigint) "
+                        "RETURNS NULL ON NULL INPUT "
+                        "RETURNS bigint "
+                        "LANGUAGE lua "
+                        "AS $$ "
+                        "return -acc "
+                        "$$;").get0();
+        e.execute_cql("CREATE AGGREGATE aggr(int) "
+                        "SFUNC row_fct "
+                        "STYPE bigint "
+                        "REDUCEFUNC reduce_fct "
+                        "FINALFUNC final_fct "
+                        "INITCOND 0;").get0();
+        e.execute_cql("CREATE TABLE tbl (k int, PRIMARY KEY (k));").get();
+        int value_count = 10;
+        for (int i = 0; i < value_count; i++) {
+            e.execute_cql(format("INSERT INTO tbl (k) VALUES ({:d});", i)).get();
+        }
+        auto msg = e.execute_cql("SELECT aggr(k) FROM tbl;").get();
+        assert_that(msg).is_rows().with_rows({
+            {long_type->decompose(-int64_t((value_count - 1) * value_count / 2))}
+        });
+
+        BOOST_CHECK_EQUAL(stat_parallelized + 1, qp.get_cql_stats().select_parallelized);
+    });
+}
+
+SEASTAR_TEST_CASE(test_not_parallelized_select_uda) {
+    return with_udf_enabled([](cql_test_env& e) {
+        auto& qp = e.local_qp();
+        auto stat_parallelized = qp.get_cql_stats().select_parallelized;
+
+        e.execute_cql("CREATE FUNCTION row_fct(acc bigint, val int) "
+                        "RETURNS NULL ON NULL INPUT "
+                        "RETURNS bigint "
+                        "LANGUAGE lua "
+                        "AS $$ "
+                        "return acc+val "
+                        "$$;").get0();
+        e.execute_cql("CREATE FUNCTION final_fct(acc bigint) "
+                        "RETURNS NULL ON NULL INPUT "
+                        "RETURNS bigint "
+                        "LANGUAGE lua "
+                        "AS $$ "
+                        "return -acc "
+                        "$$;").get0();
+        e.execute_cql("CREATE AGGREGATE aggr(int) "
+                        "SFUNC row_fct "
+                        "STYPE bigint "
+                        "FINALFUNC final_fct "
+                        "INITCOND 0;").get0();
+        
+        e.execute_cql("CREATE TABLE tbl (k int, PRIMARY KEY (k));").get();
+        int value_count = 10;
+        for (int i = 0; i < value_count; i++) {
+            e.execute_cql(format("INSERT INTO tbl (k) VALUES ({:d});", i)).get();
+        }
+        auto msg = e.execute_cql("SELECT aggr(k) FROM tbl;").get();
+        assert_that(msg).is_rows().with_rows({
+            {long_type->decompose(-int64_t((value_count - 1) * value_count / 2))}
+        });
+
+        BOOST_CHECK_EQUAL(stat_parallelized, qp.get_cql_stats().select_parallelized);
+    });
+}
+
 cql3::raw_value make_collection_raw_value(size_t size_to_write, const std::vector<cql3::raw_value>& elements_to_write) {
     cql_serialization_format sf = cql_serialization_format::latest();
 
