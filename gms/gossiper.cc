@@ -251,16 +251,6 @@ future<> gossiper::do_send_ack_msg(msg_addr from, gossip_digest_syn syn_msg) {
     });
 }
 
-class gossiper::msg_proc_guard {
-public:
-    msg_proc_guard(gossiper& g)
-                    : _ptr(&(++g._msg_processing), [](uint64_t * p) { if (p) { --(*p); } })
-    {}
-    msg_proc_guard(msg_proc_guard&& m) = default;
-private:
-    std::unique_ptr<uint64_t, void(*)(uint64_t*)> _ptr;
-};
-
 // Depends on
 // - failure_detector
 // - on_change callbacks, e.g., storage_service -> access db system_table
@@ -274,7 +264,8 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
         return make_ready_future<>();
     }
 
-    msg_proc_guard mp(*this);
+    _msg_processing++;
+    auto mp = defer([&] { _msg_processing--; });
 
     auto g_digest_list = ack_msg.get_gossip_digest_list();
     auto& ep_state_map = ack_msg.get_endpoint_state_map();
@@ -370,7 +361,8 @@ future<> gossiper::handle_ack2_msg(msg_addr from, gossip_digest_ack2 msg) {
         return make_ready_future<>();
     }
 
-    msg_proc_guard mp(*this);
+    _msg_processing++;
+    auto mp = defer([&] { _msg_processing--; });
 
     auto& remote_ep_state_map = msg.get_endpoint_state_map();
     update_timestamp_for_nodes(remote_ep_state_map);
