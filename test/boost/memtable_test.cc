@@ -520,6 +520,57 @@ SEASTAR_TEST_CASE(test_exception_safety_of_single_partition_reads) {
     });
 }
 
+SEASTAR_THREAD_TEST_CASE(test_tombstone_compaction_during_flush) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    simple_schema ss;
+    auto s = ss.schema();
+    auto mt = make_lw_shared<replica::memtable>(ss.schema());
+
+    auto pk = ss.make_pkey(0);
+    auto pr = dht::partition_range::make_singular(pk);
+    int n_rows = 10000;
+    {
+        mutation m(ss.schema(), pk);
+        for (int i = 0; i < n_rows; ++i) {
+            ss.add_row(m, ss.make_ckey(i), "v1");
+        }
+        mt->apply(m);
+    }
+
+    auto rd1 = mt->make_flat_reader(ss.schema(), semaphore.make_permit(), pr, s->full_slice(), default_priority_class(),
+                                    nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
+    auto close_rd1 = defer([&] { rd1.close().get(); });
+
+    rd1.fill_buffer().get();
+
+    mutation rt_m(ss.schema(), pk);
+    auto rt = ss.delete_range(rt_m, ss.make_ckey_range(0, n_rows));
+    mt->apply(rt_m);
+
+    auto rd2 = mt->make_flat_reader(ss.schema(), semaphore.make_permit(), pr, s->full_slice(), default_priority_class(),
+                                    nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
+    auto close_rd2 = defer([&] { rd2.close().get(); });
+
+    rd2.fill_buffer().get();
+
+    mt->apply(rt_m); // whatever
+
+    auto flush_rd = mt->make_flush_reader(ss.schema(), semaphore.make_permit(), default_priority_class());
+    auto close_flush_rd = defer([&] { flush_rd.close().get(); });
+
+    while (!flush_rd.is_end_of_stream()) {
+        flush_rd().get();
+    }
+
+    { auto close_rd = std::move(close_rd2); }
+    { auto rd = std::move(rd2); }
+
+    { auto close_rd = std::move(close_rd1); }
+    { auto rd = std::move(rd1); }
+
+    mt->cleaner().drain().get();
+}
+
 SEASTAR_TEST_CASE(test_hash_is_cached) {
     return seastar::async([] {
         auto s = schema_builder("ks", "cf")

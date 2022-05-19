@@ -118,7 +118,8 @@ memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm, replica::table_
     memtable_list* memtable_list, seastar::scheduling_group compaction_scheduling_group)
         : logalloc::region(dmm.region_group())
         , _dirty_mgr(dmm)
-        , _cleaner(*this, no_cache_tracker, table_stats.memtable_app_stats, compaction_scheduling_group)
+        , _cleaner(*this, no_cache_tracker, table_stats.memtable_app_stats, compaction_scheduling_group,
+                   [this] (size_t freed) { remove_flushed_memory(freed); })
         , _memtable_list(memtable_list)
         , _schema(std::move(schema))
         , partitions(dht::raw_token_less_comparator{})
@@ -544,7 +545,7 @@ public:
         : _mt(mt)
 	{}
     ~flush_memory_accounter() {
-        assert(_mt._flushed_memory <= _mt.occupancy().used_space());
+        assert(_mt._flushed_memory <= _mt.occupancy().total_space());
     }
     uint64_t compute_size(memtable_entry& e, partition_snapshot& snp) {
         return e.size_in_allocator_without_rows(_mt.allocator())
