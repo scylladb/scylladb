@@ -213,11 +213,9 @@ future<> run_resharding_jobs(sharded<sstables::sstable_directory>& dir, std::vec
 //    assigned.
 future<>
 distributed_loader::reshard(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator) {
-    return collect_all_shared_sstables(dir).then([] (sstables::sstable_directory::sstable_info_vector all_jobs) mutable {
-        return distribute_reshard_jobs(std::move(all_jobs));
-    }).then([&dir, &db, ks_name, table_name, creator = std::move(creator)] (std::vector<reshard_shard_descriptor> destinations) mutable {
-        return run_resharding_jobs(dir, std::move(destinations), db, ks_name, table_name, std::move(creator));
-    });
+    auto all_jobs = co_await collect_all_shared_sstables(dir);
+    auto destinations = co_await distribute_reshard_jobs(std::move(all_jobs));
+    co_await run_resharding_jobs(dir, std::move(destinations), db, ks_name, table_name, std::move(creator));
 }
 
 future<int64_t>
