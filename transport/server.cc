@@ -717,7 +717,10 @@ future<fragmented_temporary_buffer> cql_server::connection::read_and_decompress_
                     if (ret < 0) {
                         throw std::runtime_error("CQL frame LZ4 uncompression failure");
                     }
-                    return out.size();
+                    if (ret != out.size()) {
+                        throw std::runtime_error("Malformed CQL frame - provided uncompressed size different than real uncompressed size");
+                    }
+                    return static_cast<size_t>(ret);
                 });
                 on_compression_buffer_use();
                 return uncomp;
