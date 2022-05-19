@@ -1257,13 +1257,13 @@ using reconfigure_result_t = std::variant<std::monostate,
     timed_out_error, raft::not_a_leader, raft::dropped_entry, raft::commit_status_unknown, raft::conf_change_in_progress, raft::stopped_error>;
 
 future<reconfigure_result_t> reconfigure(
-        const std::vector<raft::server_id>& ids,
+        const std::vector<std::pair<raft::server_id, bool>>& ids,
         raft::logical_clock::time_point timeout,
         logical_timer& timer,
         raft::server& server) {
     raft::server_address_set config;
-    for (auto id : ids) {
-        config.insert(raft::server_address { .id = id });
+    for (auto [id, can_vote] : ids) {
+        config.insert(raft::server_address { .id = id, .can_vote = can_vote });
     }
 
     try {
@@ -1293,14 +1293,14 @@ future<reconfigure_result_t> reconfigure(
 }
 
 future<reconfigure_result_t> modify_config(
-        const std::vector<raft::server_id>& added,
+        const std::vector<std::pair<raft::server_id, bool>>& added,
         std::vector<raft::server_id> deleted,
         raft::logical_clock::time_point timeout,
         logical_timer& timer,
         raft::server& server) {
     std::vector<raft::server_address> added_set;
-    for (auto id : added) {
-        added_set.push_back(raft::server_address { .id = id });
+    for (auto [id, can_vote] : added) {
+        added_set.push_back(raft::server_address { .id = id, .can_vote = can_vote });
     }
 
     try {
@@ -1495,7 +1495,7 @@ public:
     }
 
     future<reconfigure_result_t> reconfigure(
-            const std::vector<raft::server_id>& ids,
+            const std::vector<std::pair<raft::server_id, bool>>& ids,
             raft::logical_clock::time_point timeout,
             logical_timer& timer) {
         assert(_started);
@@ -1509,7 +1509,7 @@ public:
     }
 
     future<reconfigure_result_t> modify_config(
-            const std::vector<raft::server_id>& added,
+            const std::vector<std::pair<raft::server_id, bool>>& added,
             std::vector<raft::server_id> deleted,
             raft::logical_clock::time_point timeout,
             logical_timer& timer) {
@@ -1862,7 +1862,7 @@ public:
 
     future<reconfigure_result_t> reconfigure(
             raft::server_id id,
-            const std::vector<raft::server_id>& ids,
+            const std::vector<std::pair<raft::server_id, bool>>& ids,
             raft::logical_clock::time_point timeout,
             logical_timer& timer) {
         auto& n = _routes.at(id);
@@ -1885,9 +1885,21 @@ public:
         co_return res;
     }
 
+    future<reconfigure_result_t> reconfigure(
+            raft::server_id id,
+            const std::vector<raft::server_id>& ids,
+            raft::logical_clock::time_point timeout,
+            logical_timer& timer) {
+        std::vector<std::pair<raft::server_id, bool>> ids_voters;
+        for (auto srv: ids) {
+            ids_voters.emplace_back(srv, true);
+        }
+        co_return co_await reconfigure(id, ids_voters, timeout, timer);
+    }
+
     future<reconfigure_result_t> modify_config(
             raft::server_id id,
-            const std::vector<raft::server_id>& added,
+            const std::vector<std::pair<raft::server_id, bool>>& added,
             std::vector<raft::server_id> deleted,
             raft::logical_clock::time_point timeout,
             logical_timer& timer) {
@@ -1909,6 +1921,19 @@ public:
             co_return timed_out_error{};
         }
         co_return res;
+    }
+
+    future<reconfigure_result_t> modify_config(
+            raft::server_id id,
+            const std::vector<raft::server_id>& added,
+            std::vector<raft::server_id> deleted,
+            raft::logical_clock::time_point timeout,
+            logical_timer& timer) {
+        std::vector<std::pair<raft::server_id, bool>> added_voters;
+        for (auto srv: added) {
+            added_voters.emplace_back(srv, true);
+        }
+        co_return co_await modify_config(id, added_voters, std::move(deleted), timeout, timer);
     }
 
     std::optional<raft::configuration> get_configuration(raft::server_id id) {
@@ -2324,7 +2349,7 @@ SEASTAR_TEST_CASE(removed_follower_with_forwarding_learns_about_removal) {
         // We want server 2 to eventually learn from server 1 that it was removed,
         // so the call finishes (no timeout).
         assert(std::holds_alternative<std::monostate>(
-            co_await env.modify_config(id2, {}, {id2}, timer.now() + 100_t, timer)));
+            co_await env.modify_config(id2, std::vector<raft::server_id>{}, {id2}, timer.now() + 100_t, timer)));
     });
 }
 
@@ -2563,14 +2588,16 @@ struct reconfiguration {
 
     using result_type = reconfigure_result_t;
 
-    future<result_type> execute_modify_config(state_type& s, const operation::context&) {
-        assert(s.all_servers.size() > 1);
-        std::vector<raft::server_id> nodes{s.all_servers.begin(), s.all_servers.end()};
+    future<result_type> execute_modify_config(state_type& s, std::vector<raft::server_id> nodes, size_t members_end, size_t voters_end) {
+        std::vector<std::pair<raft::server_id, bool>> added;
+        for (size_t i = 0; i < voters_end; ++i) {
+            added.emplace_back(nodes[i], true);
+        }
+        for (size_t i = voters_end; i < members_end; ++i) {
+            added.emplace_back(nodes[i], false);
+        }
 
-        std::shuffle(nodes.begin(), nodes.end(), s.rnd);
-        size_t added_ix = std::uniform_int_distribution<size_t>{1, nodes.size()}(s.rnd);
-        std::vector<raft::server_id> added {nodes.begin(), nodes.begin() + added_ix};
-        std::vector<raft::server_id> removed {nodes.begin() + added_ix, nodes.end()};
+        std::vector<raft::server_id> removed {nodes.begin() + members_end, nodes.end()};
 
         assert(s.known.size() > 0);
         auto [res, last] = co_await bouncing{
@@ -2581,7 +2608,7 @@ struct reconfiguration {
         std::visit(make_visitor(
         [&, last = last] (std::monostate) {
             tlogger.debug("reconfig successful known {} added {} removed {} by {}", s.known, added, removed, last);
-            s.known.merge(std::unordered_set<raft::server_id>{added.begin(), added.end()});
+            s.known.merge(std::unordered_set<raft::server_id>{nodes.begin(), nodes.begin() + members_end});
             for (auto id: removed) {
                 s.known.erase(id);
             }
@@ -2590,7 +2617,7 @@ struct reconfiguration {
             tlogger.debug("reconfig failed, not a leader: {} tried to add {}, remove {} by {}", e, added, removed, last);
         },
         [&, last = last] (auto& e) {
-            s.known.merge(std::unordered_set<raft::server_id>{added.begin(), added.end()});
+            s.known.merge(std::unordered_set<raft::server_id>{nodes.begin(), nodes.begin() + members_end});
             tlogger.debug("reconfig failed: {}, tried to add {}, remove {}, after merge {} by {}", e, added, removed, s.known, last);
         }
         ), res);
@@ -2598,31 +2625,34 @@ struct reconfiguration {
         co_return res;
     }
 
-    future<result_type> execute_reconfigure(state_type& s, const operation::context&) {
-        assert(s.all_servers.size() > 1);
-        std::vector<raft::server_id> nodes{s.all_servers.begin(), s.all_servers.end()};
-
-        std::shuffle(nodes.begin(), nodes.end(), s.rnd);
-        nodes.resize(std::uniform_int_distribution<size_t>{1, nodes.size()}(s.rnd));
+    future<result_type> execute_reconfigure(state_type& s, std::vector<raft::server_id> nodes, size_t members_end, size_t voters_end) {
+        std::vector<std::pair<raft::server_id, bool>> nodes_voters;
+        nodes_voters.reserve(members_end);
+        for (size_t i = 0; i < voters_end; ++i) {
+            nodes_voters.emplace_back(nodes[i], true);
+        }
+        for (size_t i = voters_end; i < members_end; ++i) {
+            nodes_voters.emplace_back(nodes[i], false);
+        }
 
         assert(s.known.size() > 0);
-        auto [res, last] = co_await bouncing{[&nodes, timeout = s.timer.now() + timeout, &timer = s.timer, &env = s.env] (raft::server_id id) {
-            return env.reconfigure(id, nodes, timeout, timer);
+        auto [res, last] = co_await bouncing{[&nodes_voters, timeout = s.timer.now() + timeout, &timer = s.timer, &env = s.env] (raft::server_id id) {
+            return env.reconfigure(id, nodes_voters, timeout, timer);
         }}(s.timer, s.known, *s.known.begin(), 10, 10_t, 10_t);
 
         std::visit(make_visitor(
         [&, last = last] (std::monostate) {
-            tlogger.debug("reconfig successful from {} to {} by {}", s.known, nodes, last);
-            s.known = std::unordered_set<raft::server_id>{nodes.begin(), nodes.end()};
+            tlogger.debug("reconfig successful from {} to {} by {}", s.known, nodes_voters, last);
+            s.known = std::unordered_set<raft::server_id>{nodes.begin(), nodes.begin() + members_end};
             // TODO: include the old leader as well in case it's not part of the new config?
             // it may remain a leader for some time...
         },
         [&, last = last] (raft::not_a_leader& e) {
-            tlogger.debug("reconfig failed, not a leader: {} tried {} by {}", e, nodes, last);
+            tlogger.debug("reconfig failed, not a leader: {} tried {} by {}", e, nodes_voters, last);
         },
         [&, last = last] (auto& e) {
-            s.known.merge(std::unordered_set<raft::server_id>{nodes.begin(), nodes.end()});
-            tlogger.debug("reconfig failed: {}, tried {} after merge {} by {}", e, nodes, s.known, last);
+            s.known.merge(std::unordered_set<raft::server_id>{nodes.begin(), nodes.begin() + members_end});
+            tlogger.debug("reconfig failed: {}, tried {} after merge {} by {}", e, nodes_voters, s.known, last);
         }
         ), res);
 
@@ -2631,10 +2661,18 @@ struct reconfiguration {
 
     future<result_type> execute(state_type& s, const operation::context& ctx) {
         static std::bernoulli_distribution bdist{0.5};
+
+        assert(s.all_servers.size() > 1);
+        std::vector<raft::server_id> nodes{s.all_servers.begin(), s.all_servers.end()};
+
+        std::shuffle(nodes.begin(), nodes.end(), s.rnd);
+        size_t members_end = std::uniform_int_distribution<size_t>{1, nodes.size()}(s.rnd);
+        size_t voters_end = std::uniform_int_distribution<size_t>{1, members_end}(s.rnd);
+
         if (bdist(s.rnd)) {
-            return execute_modify_config(s, ctx);
+            return execute_modify_config(s, std::move(nodes), members_end, voters_end);
         } else {
-            return execute_reconfigure(s, ctx);
+            return execute_reconfigure(s, std::move(nodes), members_end, voters_end);
         }
     }
 
