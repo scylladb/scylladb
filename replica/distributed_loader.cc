@@ -186,28 +186,24 @@ future<> run_resharding_jobs(sharded<sstables::sstable_directory>& dir, std::vec
 
     uint64_t total_size = boost::accumulate(reshard_jobs | boost::adaptors::transformed(std::mem_fn(&reshard_shard_descriptor::size)), uint64_t(0));
     if (total_size == 0) {
-        return make_ready_future<>();
+        co_return;
     }
 
-    return do_with(std::move(reshard_jobs), [&dir, &db, ks_name, table_name, creator = std::move(creator), total_size] (std::vector<reshard_shard_descriptor>& reshard_jobs) {
+    // FIXME: indentation
         auto start = std::chrono::steady_clock::now();
         dblog.info("{}", fmt::format("Resharding {} for {}.{}", sstables::pretty_printed_data_size(total_size), ks_name, table_name));
 
-        return dir.invoke_on_all([&dir, &db, &reshard_jobs, ks_name, table_name, creator] (sstables::sstable_directory& d) mutable {
+        co_await dir.invoke_on_all([&] (sstables::sstable_directory& d) -> future<> {
             auto& table = db.local().find_column_family(ks_name, table_name);
             auto info_vec = std::move(reshard_jobs[this_shard_id()].info_vec);
             auto& cm = db.local().get_compaction_manager();
             auto max_threshold = table.schema()->max_compaction_threshold();
             auto& iop = service::get_local_streaming_priority();
-            return d.reshard(std::move(info_vec), cm, table, max_threshold, creator, iop).then([&d, &dir] {
-                return d.move_foreign_sstables(dir);
-            });
-        }).then([start, total_size, ks_name, table_name] {
+            co_await d.reshard(std::move(info_vec), cm, table, max_threshold, creator, iop);
+                co_await d.move_foreign_sstables(dir);
+        });
             auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - start);
             dblog.info("{}", fmt::format("Resharded {} for {}.{} in {:.2f} seconds, {}", sstables::pretty_printed_data_size(total_size), ks_name, table_name, duration.count(), sstables::pretty_printed_throughput(total_size, duration)));
-            return make_ready_future<>();
-        });
-    });
 }
 
 // Global resharding function. Done in two parts:
