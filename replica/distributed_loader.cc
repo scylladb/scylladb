@@ -409,8 +409,10 @@ future<> distributed_loader::cleanup_column_family_temp_sst_dirs(sstring sstdir)
 }
 
 future<> distributed_loader::handle_sstables_pending_delete(sstring pending_delete_dir) {
-    return do_with(std::vector<future<>>(), [dir = std::move(pending_delete_dir)] (std::vector<future<>>& futures) {
-        return lister::scan_dir(dir, { directory_entry_type::regular }, [&futures] (fs::path dir, directory_entry de) {
+    std::vector<future<>> futures;
+
+    // FIXME: indentation
+        co_await lister::scan_dir(pending_delete_dir, { directory_entry_type::regular }, [&futures] (fs::path dir, directory_entry de) {
             // push nested futures that remove files/directories into an array of futures,
             // so that the supplied callback will not block scan_dir() from
             // reading the next entry in the directory.
@@ -429,10 +431,8 @@ future<> distributed_loader::handle_sstables_pending_delete(sstring pending_dele
                 dblog.debug("Found unknown file in pending_delete directory: {}, ignoring", file_path);
             }
             return make_ready_future<>();
-        }).then([&futures] {
-            return when_all_succeed(futures.begin(), futures.end()).discard_result();
         });
-    });
+            co_await when_all_succeed(futures.begin(), futures.end()).discard_result();
 }
 
 future<> distributed_loader::populate_column_family(distributed<replica::database>& db, sstring sstdir, sstring ks, sstring cf, allow_offstrategy_compaction do_allow_offstrategy_compaction, must_exist dir_must_exist) {
