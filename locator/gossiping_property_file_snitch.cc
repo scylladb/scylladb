@@ -167,14 +167,9 @@ future<> gossiping_property_file_snitch::reload_configuration() {
         _my_rack = new_rack;
         _prefer_local = new_prefer_local;
 
-        return container().invoke_on_all(
-            [this] (snitch_ptr& local_s) {
-
-            // Distribute the new values on all CPUs but the current one
-            if (this_shard_id() != _file_reader_cpu_id) {
-                local_s->set_my_dc_and_rack(_my_dc, _my_rack);
-                local_s->set_prefer_local(_prefer_local);
-            }
+        return container().invoke_on_others([this] (snitch_ptr& local_s) {
+            local_s->set_my_dc_and_rack(_my_dc, _my_rack);
+            local_s->set_prefer_local(_prefer_local);
         }).then([this] {
             // FIXME -- tests don't start gossiper
             if (!local().get_gossiper().local_is_initialized()) {
