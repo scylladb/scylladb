@@ -91,15 +91,14 @@ distributed_loader::process_sstable_dir(sharded<sstables::sstable_directory>& di
         return utils::directories::verify_owner_and_mode(d.sstable_dir());
     });
 
-    // FIXME: indentation
-      co_await dir.invoke_on_all([&dir, sort_sstables_according_to_owner] (sstables::sstable_directory& d) -> future<> {
+    co_await dir.invoke_on_all([&dir, sort_sstables_according_to_owner] (sstables::sstable_directory& d) -> future<> {
         // Supposed to be called with the node either down or on behalf of maintenance tasks
         // like nodetool refresh
         co_await d.process_sstable_dir(service::get_local_streaming_priority(), sort_sstables_according_to_owner);
-            co_await d.move_foreign_sstables(dir);
-      });
+        co_await d.move_foreign_sstables(dir);
+    });
 
-        co_await dir.invoke_on_all(&sstables::sstable_directory::commit_directory_changes);
+    co_await dir.invoke_on_all(&sstables::sstable_directory::commit_directory_changes);
 }
 
 future<>
