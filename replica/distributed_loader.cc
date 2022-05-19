@@ -137,26 +137,25 @@ future<sstables::sstable_directory::sstable_info_vector>
 collect_all_shared_sstables(sharded<sstables::sstable_directory>& dir) {
     auto info_vec = sstables::sstable_directory::sstable_info_vector();
 
-    // FIXME: indentation
-        // We want to make sure that each distributed object reshards about the same amount of data.
-        // Each sharded object has its own shared SSTables. We can use a clever algorithm in which they
-        // all distributely figure out which SSTables to exchange, but we'll keep it simple and move all
-        // their foreign_sstable_open_info to a coordinator (the shard who called this function). We can
-        // move in bulk and that's efficient. That shard can then distribute the work among all the
-        // others who will reshard.
-        auto coordinator = this_shard_id();
-        // We will first move all of the foreign open info to temporary storage so that we can sort
-        // them. We want to distribute bigger sstables first.
-        co_await dir.invoke_on_all([&info_vec, coordinator] (sstables::sstable_directory& d) -> future<> {
-            co_await smp::submit_to(coordinator, [&] () -> future<> {
-                for (auto& info : d.retrieve_shared_sstables()) {
-                    info_vec.push_back(std::move(info));
-                    co_await coroutine::maybe_yield();
-                }
-            });
+    // We want to make sure that each distributed object reshards about the same amount of data.
+    // Each sharded object has its own shared SSTables. We can use a clever algorithm in which they
+    // all distributely figure out which SSTables to exchange, but we'll keep it simple and move all
+    // their foreign_sstable_open_info to a coordinator (the shard who called this function). We can
+    // move in bulk and that's efficient. That shard can then distribute the work among all the
+    // others who will reshard.
+    auto coordinator = this_shard_id();
+    // We will first move all of the foreign open info to temporary storage so that we can sort
+    // them. We want to distribute bigger sstables first.
+    co_await dir.invoke_on_all([&info_vec, coordinator] (sstables::sstable_directory& d) -> future<> {
+        co_await smp::submit_to(coordinator, [&] () -> future<> {
+            for (auto& info : d.retrieve_shared_sstables()) {
+                info_vec.push_back(std::move(info));
+                co_await coroutine::maybe_yield();
+            }
         });
+    });
 
-            co_return info_vec;
+    co_return info_vec;
 }
 
 // Given a vector of shared sstables to be resharded, distribute it among all shards.
