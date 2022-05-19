@@ -6,6 +6,10 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/as_future.hh>
+#include <seastar/coroutine/exception.hh>
+
 #include "message/messaging_service.hh"
 #include <seastar/core/distributed.hh>
 #include "gms/failure_detector.hh"
@@ -835,14 +839,19 @@ template<class SinkType, class SourceType>
 future<std::tuple<rpc::sink<SinkType>, rpc::source<SourceType>>>
 do_make_sink_source(messaging_verb verb, uint32_t repair_meta_id, shared_ptr<messaging_service::rpc_protocol_client_wrapper> rpc_client, std::unique_ptr<messaging_service::rpc_protocol_wrapper>& rpc) {
     using value_type = std::tuple<rpc::sink<SinkType>, rpc::source<SourceType>>;
-    return rpc_client->make_stream_sink<netw::serializer, SinkType>().then([&rpc, verb, repair_meta_id, rpc_client] (rpc::sink<SinkType> sink) mutable {
-        auto rpc_handler = rpc->make_client<rpc::source<SourceType> (uint32_t, rpc::sink<SinkType>)>(verb);
-        return rpc_handler(*rpc_client, repair_meta_id, sink).then_wrapped([sink, rpc_client] (future<rpc::source<SourceType>> source) mutable {
-            return (source.failed() ? sink.close() : make_ready_future<>()).then([sink = std::move(sink), source = std::move(source)] () mutable {
-                return make_ready_future<value_type>(value_type(std::move(sink), std::move(source.get0())));
-            });
-        });
-    });
+    auto sink = co_await rpc_client->make_stream_sink<netw::serializer, SinkType>();
+    auto rpc_handler = rpc->make_client<rpc::source<SourceType> (uint32_t, rpc::sink<SinkType>)>(verb);
+    auto source_fut = co_await coroutine::as_future(rpc_handler(*rpc_client, repair_meta_id, sink));
+    if (source_fut.failed()) {
+        auto ex = source_fut.get_exception();
+        try {
+            co_await sink.close();
+        } catch (...) {
+            std::throw_with_nested(std::move(ex));
+        }
+        co_return coroutine::exception(std::move(ex));
+    }
+    co_return value_type(std::move(sink), std::move(source_fut.get0()));
 }
 
 // Wrapper for REPAIR_GET_ROW_DIFF_WITH_RPC_STREAM
