@@ -46,8 +46,8 @@ SEASTAR_TEST_CASE(test_group0_history_clearing_old_entries) {
         co_await perform_schema_change();
         BOOST_REQUIRE_EQUAL(co_await get_history_size(), size + 1);
 
-        auto& mm = e.migration_manager().local();
-        mm.set_group0_history_gc_duration(gc_clock::duration{0});
+        auto& rclient = e.get_raft_group0_client();
+        rclient.set_history_gc_duration(gc_clock::duration{0});
 
         // When group0_history_gc_duration is 0, any change should clear all previous history entries.
         co_await perform_schema_change();
@@ -55,7 +55,7 @@ SEASTAR_TEST_CASE(test_group0_history_clearing_old_entries) {
         co_await perform_schema_change();
         BOOST_REQUIRE_EQUAL(co_await get_history_size(), 1);
 
-        mm.set_group0_history_gc_duration(duration_cast<gc_clock::duration>(weeks{1}));
+        rclient.set_history_gc_duration(duration_cast<gc_clock::duration>(weeks{1}));
         co_await perform_schema_change();
         BOOST_REQUIRE_EQUAL(co_await get_history_size(), 2);
 
@@ -82,7 +82,7 @@ SEASTAR_TEST_CASE(test_group0_history_clearing_old_entries) {
         };
 
         auto timestamps1 = co_await get_history_timestamps();
-        mm.set_group0_history_gc_duration(duration_cast<gc_clock::duration>(sleep_dur));
+        rclient.set_history_gc_duration(duration_cast<gc_clock::duration>(sleep_dur));
         co_await perform_schema_change();
         auto timestamps2 = co_await get_history_timestamps();
         // State IDs are sorted in descending order in the history table.
@@ -110,13 +110,14 @@ SEASTAR_TEST_CASE(test_group0_history_clearing_old_entries) {
 
 SEASTAR_TEST_CASE(test_concurrent_group0_modifications) {
     return do_with_cql_env([] (cql_test_env& e) -> future<> {
+        auto& rclient = e.get_raft_group0_client();
         auto& mm = e.migration_manager().local();
 
-        // migration_manager::_group0_operation_mutex prevents concurrent group 0 changes to be executed on a single node,
+        // raft_group0_client::_group0_operation_mutex prevents concurrent group 0 changes to be executed on a single node,
         // so in production `group0_concurrent_modification` never occurs if all changes go through a single node.
         // For this test, give it more units so it doesn't block these concurrent executions
         // in order to simulate a scenario where multiple nodes concurrently send schema changes.
-        mm.group0_operation_mutex().signal(1337);
+        rclient.operation_mutex().signal(1337);
 
         // Make DDL statement execution fail on the first attempt if it gets a concurrent modification exception.
         mm.set_concurrent_ddl_retries(0);
@@ -178,7 +179,7 @@ SEASTAR_TEST_CASE(test_concurrent_group0_modifications) {
         BOOST_REQUIRE_EQUAL(successes, N*M);
 
         // Let's verify that the mutex indeed does its job.
-        mm.group0_operation_mutex().consume(1337);
+        rclient.operation_mutex().consume(1337);
         mm.set_concurrent_ddl_retries(0);
 
         successes = co_await map_reduce(boost::irange(2*N, 3*N), std::bind_front(perform_schema_changes, std::ref(e), M), 0, std::plus{});

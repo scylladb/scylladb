@@ -31,8 +31,9 @@ raft_group0::raft_group0(seastar::abort_source& abort_source,
         netw::messaging_service& ms,
         gms::gossiper& gs,
         cql3::query_processor& qp,
-        service::migration_manager& mm)
-    : _abort_source(abort_source), _raft_gr(raft_gr), _ms(ms), _gossiper(gs), _qp(qp), _mm(mm)
+        service::migration_manager& mm,
+        raft_group0_client& client)
+    : _abort_source(abort_source), _raft_gr(raft_gr), _ms(ms), _gossiper(gs), _qp(qp), _mm(mm), _client(client)
 {
 }
 
@@ -54,7 +55,7 @@ raft_server_for_group raft_group0::create_server_for_group(raft::group_id gid,
         raft::server_address my_addr) {
 
     _raft_gr.address_map().set(my_addr);
-    auto state_machine = std::make_unique<group0_state_machine>(_mm, _qp.proxy());
+    auto state_machine = std::make_unique<group0_state_machine>(_client, _mm, _qp.proxy());
     auto rpc = std::make_unique<raft_rpc>(*state_machine, _ms, _raft_gr.address_map(), gid, my_addr.id,
             [this] (gms::inet_address addr, bool added) {
                 // FIXME: we should eventually switch to UUID-based (not IP-based) node identification/communication scheme.

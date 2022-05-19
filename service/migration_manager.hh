@@ -23,6 +23,7 @@
 #include "utils/UUID.hh"
 #include "utils/serialized_action.hh"
 #include "service/raft/raft_group_registry.hh"
+#include "service/raft/raft_group0_client.hh"
 
 #include <vector>
 
@@ -52,34 +53,6 @@ class storage_proxy;
 template<typename M>
 concept MergeableMutation = std::is_same<M, canonical_mutation>::value || std::is_same<M, frozen_mutation>::value;
 
-// Obtaining this object means that all previously finished operations on group 0 are visible on this node.
-// It is also required in order to perform group 0 changes (through `announce`).
-// See `group0_guard::impl` for more detailed explanations.
-class group0_guard {
-    friend class migration_manager;
-    struct impl;
-    std::unique_ptr<impl> _impl;
-
-    group0_guard(std::unique_ptr<impl>);
-
-public:
-    ~group0_guard();
-    group0_guard(group0_guard&&) noexcept;
-
-    utils::UUID observed_group0_state_id() const;
-    utils::UUID new_group0_state_id() const;
-
-    // Use this timestamp when creating group 0 mutations.
-    api::timestamp_type write_timestamp() const;
-};
-
-class group0_concurrent_modification : public std::runtime_error {
-public:
-    group0_concurrent_modification()
-        : std::runtime_error("Failed to apply group 0 change due to concurrent modification")
-    {}
-};
-
 class migration_manager : public seastar::async_sharded_service<migration_manager>,
                             public gms::i_endpoint_state_change_subscriber,
                             public seastar::peering_sharded_service<migration_manager> {
@@ -95,21 +68,15 @@ private:
     service::storage_proxy& _storage_proxy;
     gms::gossiper& _gossiper;
     seastar::abort_source _as;
-    service::raft_group_registry& _raft_gr;
+    service::raft_group0_client& _group0_client;
     sharded<db::system_keyspace>& _sys_ks;
     serialized_action _schema_push;
     utils::UUID _schema_version_to_publish;
 
-    friend class group0_state_machine;
-    // See `group0_guard::impl` for explanation of the purpose of these locks.
-    semaphore _group0_read_apply_mutex;
-    semaphore _group0_operation_mutex;
-
-    gc_clock::duration _group0_history_gc_duration;
-
+    friend class group0_state_machine; // needed for access to _messaging
     size_t _concurrent_ddl_retries;
 public:
-    migration_manager(migration_notifier&, gms::feature_service&, netw::messaging_service& ms, service::storage_proxy&, gms::gossiper& gossiper, service::raft_group_registry& raft_gr, sharded<db::system_keyspace>& sysks);
+    migration_manager(migration_notifier&, gms::feature_service&, netw::messaging_service& ms, service::storage_proxy&, gms::gossiper& gossiper, service::raft_group0_client& group0_client, sharded<db::system_keyspace>& sysks);
 
     migration_notifier& get_notifier() { return _notifier; }
     const migration_notifier& get_notifier() const { return _notifier; }
@@ -190,7 +157,7 @@ public:
     future<group0_guard> start_group0_operation();
 
     // used to check if raft is enabled on the cluster
-    bool is_raft_enabled() { return _raft_gr.is_enabled(); }
+    bool is_raft_enabled() { return _group0_client.is_enabled(); }
 
     // Apply a group 0 change.
     // The future resolves after the change is applied locally.
@@ -252,13 +219,7 @@ private:
 
 public:
     // For tests only.
-    void set_group0_history_gc_duration(gc_clock::duration);
-
-    // For tests only.
     void set_concurrent_ddl_retries(size_t);
-
-    // For tests only.
-    semaphore& group0_operation_mutex();
 };
 
 future<column_mapping> get_column_mapping(utils::UUID table_id, table_schema_version v);

@@ -17,6 +17,7 @@ namespace gms { class gossiper; }
 namespace service {
 
 class migration_manager;
+class raft_group0_client;
 
 // Wrapper for `discovery` which persists the learned peers on disk.
 class persistent_discovery {
@@ -65,6 +66,8 @@ public:
     gms::gossiper& _gossiper;
     cql3::query_processor& _qp;
     service::migration_manager& _mm;
+    raft_group0_client& _client;
+
     // Status of leader discovery. Initially there is no group 0,
     // and the variant contains no state. During initial cluster
     // bootstrap a discovery object is created, which is then
@@ -86,7 +89,8 @@ public:
         netw::messaging_service& ms,
         gms::gossiper& gs,
         cql3::query_processor& qp,
-        migration_manager& mm);
+        migration_manager& mm,
+        raft_group0_client& client);
 
     future<> abort() {
         if (!_abort_source.abort_requested()) {

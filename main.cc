@@ -88,6 +88,7 @@
 #include "tools/entry_point.hh"
 
 #include "service/raft/raft_group_registry.hh"
+#include "service/raft/raft_group0_client.hh"
 
 #include <boost/algorithm/string/join.hpp>
 
@@ -1005,11 +1006,15 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_forward_service_handlers = defer_verbose_shutdown("forward service", [&forward_service] {
                 forward_service.stop().get();
             });
+
+            // gropu0 client exists only on shard 0
+            service::raft_group0_client group0_client(raft_gr.local());
+
             // #293 - do not stop anything
             // engine().at_exit([&proxy] { return proxy.stop(); });
             supervisor::notify("starting migration manager");
             debug::the_migration_manager = &mm;
-            mm.start(std::ref(mm_notifier), std::ref(feature_service), std::ref(messaging), std::ref(proxy), std::ref(gossiper), std::ref(raft_gr), std::ref(sys_ks)).get();
+            mm.start(std::ref(mm_notifier), std::ref(feature_service), std::ref(messaging), std::ref(proxy), std::ref(gossiper), std::ref(group0_client), std::ref(sys_ks)).get();
             auto stop_migration_manager = defer_verbose_shutdown("migration manager", [&mm] {
                 mm.stop().get();
             });
@@ -1268,7 +1273,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }).get();
 
             with_scheduling_group(maintenance_scheduling_group, [&] {
-                return ss.local().init_server(qp.local());
+                return ss.local().init_server(qp.local(), group0_client);
             }).get();
 
             // Raft group0 can be joined before we wait for gossip to settle

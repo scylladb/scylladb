@@ -37,11 +37,6 @@
 #include "serializer_impl.hh"
 #include "idl/frozen_schema.dist.impl.hh"
 #include "idl/uuid.dist.impl.hh"
-#include "idl/raft_storage.dist.hh"
-#include "idl/raft_storage.dist.impl.hh"
-#include "idl/group0_state_machine.dist.hh"
-#include "idl/group0_state_machine.dist.impl.hh"
-
 
 namespace service {
 
@@ -53,12 +48,10 @@ const std::chrono::milliseconds migration_manager::migration_delay = 60000ms;
 static future<schema_ptr> get_schema_definition(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms, service::storage_proxy& sp);
 
 migration_manager::migration_manager(migration_notifier& notifier, gms::feature_service& feat, netw::messaging_service& ms,
-            service::storage_proxy& storage_proxy, gms::gossiper& gossiper, service::raft_group_registry& raft_gr, sharded<db::system_keyspace>& sysks) :
-        _notifier(notifier), _feat(feat), _messaging(ms), _storage_proxy(storage_proxy), _gossiper(gossiper), _raft_gr(raft_gr)
+            service::storage_proxy& storage_proxy, gms::gossiper& gossiper, service::raft_group0_client& group0_client, sharded<db::system_keyspace>& sysks) :
+        _notifier(notifier), _feat(feat), _messaging(ms), _storage_proxy(storage_proxy), _gossiper(gossiper), _group0_client(group0_client)
         , _sys_ks(sysks)
         , _schema_push([this] { return passive_announce(); })
-        , _group0_read_apply_mutex{1}, _group0_operation_mutex{1}
-        , _group0_history_gc_duration{std::chrono::duration_cast<gc_clock::duration>(std::chrono::weeks{1})}
         , _concurrent_ddl_retries{10}
 {
 }
@@ -138,7 +131,7 @@ void migration_manager::init_messaging_service()
         auto features = self._feat.cluster_schema_features();
         auto& proxy = self._storage_proxy.container();
         auto cm = co_await db::schema_tables::convert_schema_to_mutations(proxy, features);
-        if (self._raft_gr.is_enabled() && options->group0_snapshot_transfer) {
+        if (self.is_raft_enabled() && options->group0_snapshot_transfer) {
             // if `group0_snapshot_transfer` is `true`, the sender must also understand canonical mutations
             // (`group0_snapshot_transfer` was added more recently).
             if (!cm_retval_supported) {
@@ -890,166 +883,18 @@ future<> migration_manager::push_schema_mutation(const gms::inet_address& endpoi
     return _messaging.send_definitions_update(id, std::move(fm), std::move(cm));
 }
 
-/* *** Linearizing group 0 operations ***
- *
- * Group 0 changes (e.g. schema changes) are performed through Raft commands, which are executing in the same order
- * on every node, according to the order they appear in the Raft log
- * (executing a command happens in `group0_state_machine::apply`).
- * The commands contain mutations which modify tables that store group 0 state.
- *
- * However, constructing these mutations often requires reading the current state and validating the change against it.
- * This happens outside the code which applies the commands in order and may race with it. At the moment of applying
- * a command, the mutations stored within may be 'invalid' because a different command managed to be concurrently applied,
- * changing the state.
- *
- * For example, consider the sequence of commands:
- *
- * C1, C2, C3.
- *
- * Suppose that mutations inside C2 were constructed on a node which already applied C1. Thus, when applying C2,
- * the state of group 0 is the same as when the change was validated and its mutations were constructed.
- *
- * On the other hand, suppose that mutations inside C3 were also constructed on a node which applied C1, but didn't
- * apply C2 yet. This could easily happen e.g. when C2 and C3 were constructed concurrently on two different nodes.
- * Thus, when applying C3, the state of group 0 is different than it was when validating the change and constructing
- * its mutations: the state consists of the changes from C1 and C2, but when C3 was created, it used the state consisting
- * of changes from C1 (but not C2). Thus the mutations in C3 are not valid and we must not apply them.
- *
- * To protect ourselves from applying such 'obsolete' changes, we detect such commands during `group0_state_machine:apply`
- * and skip their mutations.
- *
- * For this, group 0 state was extended with a 'history table' (system.group0_history), which stores a sequence of
- * 'group 0 state IDs' (which are timeuuids). Each group 0 command also holds a unique state ID; if the command is successful,
- * the ID is appended to the history table. Each command also stores a 'previous state ID'; the change described by the command
- * is only applied when this 'previous state ID' is equal to the last state ID in the history table. If it's different,
- * we skip the change.
- *
- * To perform a group 0 change the user must first read the last state ID from the history table. This happens by obtaining
- * a `group0_guard` through `migration_manager::start_group0_operation`; the observed last state ID is stored in
- * `_observed_group0_state_id`. `start_group0_operation` also generates a new state ID for this change and stores it in
- * `_new_group0_state_id`. We ensure that the new state ID is greater than the observed state ID (in timeuuid order).
- *
- * The user then reads group 0 state, validates the change against the observed state, and constructs the mutations
- * which modify group 0 state. Finally, the user calls `announce`, passing the mutations and the guard.
- *
- * `announce` constructs a command for the group 0 state machine. The command stores the mutations and the state IDs.
- *
- * When the command is applied, we compare the stored observed state ID against the last state ID in the history table.
- * If it's the same, that means no change happened in between - no other command managed to 'sneak in' between the moment
- * the user started the operation and the moment the command was applied.
- *
- * The user must use `group0_guard::write_timestamp()` when constructing the mutations. The timestamp is extracted
- * from the new state ID. This ensures that mutations applied by successful commands have monotonic timestamps.
- * Indeed: the state IDs of successful commands are increasing (the previous state ID of a command that is successful
- * is equal to the new state ID of the previous successful command, and we ensure that the new state ID of a command
- * is greater than the previous state ID of this command).
- *
- * To perform a linearized group 0 read the user must also obtain a `group0_guard`. This ensures that all previously
- * completed changes are visible on this node, as obtaining the guard requires performing a Raft read barrier.
- *
- * Furthermore, obtaining the guard ensures that we don't read partial state, since it holds a lock that is also taken
- * during command application (`_read_apply_mutex_holder`). The lock is released just before sending the command to Raft.
- * TODO: we may still read partial state if we crash in the middle of command application.
- * See `group0_state_machine::apply` for a proposed fix.
- *
- * Obtaining the guard also ensures that there is no concurrent group 0 operation running on this node using another lock
- * (`_operation_mutex_holder`); if we allowed multiple concurrent operations to run, some of them could fail
- * due to the state ID protection. Concurrent operations may still run on different nodes. This lock is thus used
- * for improving liveness of operations running on the same node by serializing them.
- */
-struct group0_guard::impl {
-    semaphore_units<> _operation_mutex_holder;
-    semaphore_units<> _read_apply_mutex_holder;
-
-    utils::UUID _observed_group0_state_id;
-    utils::UUID _new_group0_state_id;
-
-    impl(const impl&) = delete;
-    impl& operator=(const impl&) = delete;
-
-    impl(semaphore_units<> operation_mutex_holder, semaphore_units<> read_apply_mutex_holder, utils::UUID observed_group0_state_id, utils::UUID new_group0_state_id)
-        : _operation_mutex_holder(std::move(operation_mutex_holder)), _read_apply_mutex_holder(std::move(read_apply_mutex_holder)),
-          _observed_group0_state_id(observed_group0_state_id), _new_group0_state_id(new_group0_state_id)
-    {}
-
-    void release_read_apply_mutex() {
-        assert(_read_apply_mutex_holder.count() == 1);
-        _read_apply_mutex_holder.return_units(1);
-    }
-};
-
-group0_guard::group0_guard(std::unique_ptr<impl> p) : _impl(std::move(p)) {}
-
-group0_guard::~group0_guard() = default;
-
-group0_guard::group0_guard(group0_guard&&) noexcept = default;
-
-utils::UUID group0_guard::observed_group0_state_id() const {
-    return _impl->_observed_group0_state_id;
-}
-
-utils::UUID group0_guard::new_group0_state_id() const {
-    return _impl->_new_group0_state_id;
-}
-
-api::timestamp_type group0_guard::write_timestamp() const {
-    return utils::UUID_gen::micros_timestamp(_impl->_new_group0_state_id);
-}
-
 future<> migration_manager::announce_with_raft(std::vector<mutation> schema, group0_guard guard, std::string_view description) {
     assert(this_shard_id() == 0);
     auto schema_features = _feat.cluster_schema_features();
     auto adjusted_schema = db::schema_tables::adjust_schema_for_schema_features(schema, schema_features);
 
-    group0_command group0_cmd {
-        .change{schema_change{
+    auto group0_cmd = _group0_client.prepare_command(
+        schema_change{
             .mutations{adjusted_schema.begin(), adjusted_schema.end()},
-        }},
+        },
+        guard, std::move(description));
 
-        .history_append{db::system_keyspace::make_group0_history_state_id_mutation(
-                guard.new_group0_state_id(), _group0_history_gc_duration, description)},
-
-        // IMPORTANT: the retry mechanism below assumes that `prev_state_id` is engaged (not nullopt).
-        // Here it is: the return type of `guard.observerd_group0_state_id()` is `utils::UUID`.
-        .prev_state_id{guard.observed_group0_state_id()},
-        .new_state_id{guard.new_group0_state_id()},
-
-        .creator_addr{utils::fb_utilities::get_broadcast_address()},
-        .creator_id{_raft_gr.group0().id()},
-    };
-    raft::command cmd;
-    ser::serialize(cmd, group0_cmd);
-
-    // Release the read_apply mutex so `group0_state_machine::apply` can take it.
-    guard._impl->release_read_apply_mutex();
-
-    bool retry;
-    do {
-        retry = false;
-        try {
-            co_await _raft_gr.group0().add_entry(cmd, raft::wait_type::applied, &_as);
-        } catch (const raft::dropped_entry& e) {
-            mlogger.warn("`announce_with_raft`: `add_entry` returned \"{}\". Retrying the command (prev_state_id: {}, new_state_id: {})",
-                    e, group0_cmd.prev_state_id, group0_cmd.new_state_id);
-            retry = true;
-        } catch (const raft::commit_status_unknown& e) {
-            mlogger.warn("`announce_with_raft`: `add_entry` returned \"{}\". Retrying the command (prev_state_id: {}, new_state_id: {})",
-                    e, group0_cmd.prev_state_id, group0_cmd.new_state_id);
-            retry = true;
-        } catch (const raft::not_a_leader& e) {
-            // This should not happen since follower-to-leader entry forwarding is enabled in group 0.
-            // Just fail the operation by propagating the error.
-            mlogger.error("`announce_with_raft`: unexpected `not_a_leader` error: \"{}\". Please file an issue.", e);
-            throw;
-        }
-
-        // Thanks to the `prev_state_id` check in `group0_state_machine::apply`, the command is idempotent.
-        // It's safe to retry it, even if it means it will be applied multiple times; only the first time
-        // can have an effect.
-    } while (retry);
-
-    // dropping the guard releases `_group0_operation_mutex`, allowing other operations
-    // on this node to proceed
+    co_return co_await _group0_client.add_entry(std::move(group0_cmd), std::move(guard), &_as);
 }
 
 future<> migration_manager::announce_without_raft(std::vector<mutation> schema) {
@@ -1075,71 +920,18 @@ future<> migration_manager::announce_without_raft(std::vector<mutation> schema) 
 
 // Returns a future on the local application of the schema
 future<> migration_manager::announce(std::vector<mutation> schema, group0_guard guard, std::string_view description) {
-    if (_raft_gr.is_enabled()) {
-        if (this_shard_id() != 0) {
-            // This should not happen since all places which construct `group0_guard` also check that they are on shard 0.
-            // Note: `group0_guard::impl` is private to this module, making this easy to verify.
-            on_internal_error(mlogger, "announce: must run on shard 0");
-        }
+    if (is_raft_enabled()) {
+        auto schema_features = _feat.cluster_schema_features();
+        auto adjusted_schema = db::schema_tables::adjust_schema_for_schema_features(schema, schema_features);
 
-        auto new_group0_state_id = guard.new_group0_state_id();
         co_await announce_with_raft(std::move(schema), std::move(guard), std::move(description));
-
-        if (!(co_await db::system_keyspace::group0_history_contains(new_group0_state_id))) {
-            // The command was applied but the history table does not contain the new group 0 state ID.
-            // This means `apply` skipped the change due to previous state ID mismatch.
-            throw group0_concurrent_modification{};
-        }
     } else {
         co_await announce_without_raft(std::move(schema));
     }
 }
 
-static utils::UUID generate_group0_state_id(utils::UUID prev_state_id) {
-    auto ts = api::new_timestamp();
-    if (prev_state_id != utils::UUID{}) {
-        auto lower_bound = utils::UUID_gen::micros_timestamp(prev_state_id);
-        if (ts <= lower_bound) {
-            ts = lower_bound + 1;
-        }
-    }
-    return utils::UUID_gen::get_random_time_UUID_from_micros(std::chrono::microseconds{ts});
-}
-
 future<group0_guard> migration_manager::start_group0_operation() {
-    if (_raft_gr.is_enabled()) {
-        if (this_shard_id() != 0) {
-            on_internal_error(mlogger, "start_group0_operation: must run on shard 0");
-        }
-
-        auto operation_holder = co_await get_units(_group0_operation_mutex, 1);
-        co_await _raft_gr.group0().read_barrier(&_as);
-
-        // Take `_group0_read_apply_mutex` *after* read barrier.
-        // Read barrier may wait for `group0_state_machine::apply` which also takes this mutex.
-        auto read_apply_holder = co_await get_units(_group0_read_apply_mutex, 1);
-
-        auto observed_group0_state_id = co_await db::system_keyspace::get_last_group0_state_id();
-        auto new_group0_state_id = generate_group0_state_id(observed_group0_state_id);
-
-        co_return group0_guard {
-            std::make_unique<group0_guard::impl>(
-                std::move(operation_holder),
-                std::move(read_apply_holder),
-                observed_group0_state_id,
-                new_group0_state_id
-            )
-        };
-    }
-
-    co_return group0_guard {
-        std::make_unique<group0_guard::impl>(
-            semaphore_units<>{},
-            semaphore_units<>{},
-            utils::UUID{},
-            generate_group0_state_id(utils::UUID{})
-        )
-    };
+    return _group0_client.start_operation(&_as);
 }
 
 /**
@@ -1366,16 +1158,8 @@ future<> migration_manager::on_alive(gms::inet_address endpoint, gms::endpoint_s
     return make_ready_future();
 }
 
-void migration_manager::set_group0_history_gc_duration(gc_clock::duration d) {
-    _group0_history_gc_duration = d;
-}
-
 void migration_manager::set_concurrent_ddl_retries(size_t n) {
     _concurrent_ddl_retries = n;
-}
-
-semaphore& migration_manager::group0_operation_mutex() {
-    return _group0_operation_mutex;
 }
 
 }

@@ -88,6 +88,7 @@ namespace service {
 class storage_service;
 class migration_manager;
 class raft_group0;
+class raft_group0_client;
 
 enum class disk_error { regular, commit };
 
@@ -371,7 +372,7 @@ public:
      *
      * \see init_messaging_service_part
      */
-    future<> init_server(cql3::query_processor& qp);
+    future<> init_server(cql3::query_processor& qp, raft_group0_client& client);
 
     future<> join_cluster();
 

@@ -26,6 +26,7 @@
 #include "service/migration_manager.hh"
 #include "db/system_keyspace.hh"
 #include "service/storage_proxy.hh"
+#include "service/raft/raft_group0_client.hh"
 
 namespace service {
 
@@ -57,7 +58,7 @@ future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
                 cmd.prev_state_id, cmd.new_state_id, cmd.creator_addr, cmd.creator_id);
         slogger.trace("cmd.history_append: {}", cmd.history_append);
 
-        auto read_apply_mutex_holder = co_await get_units(_mm._group0_read_apply_mutex, 1);
+        auto read_apply_mutex_holder = co_await get_units(_client._read_apply_mutex, 1);
 
         if (cmd.prev_state_id) {
             auto last_group0_state_id = co_await db::system_keyspace::get_last_group0_state_id();
@@ -128,7 +129,7 @@ future<> group0_state_machine::transfer_snapshot(gms::inet_address from, raft::s
 
     // TODO ensure atomicity of snapshot application in presence of crashes (see TODO in `apply`)
 
-    auto read_apply_mutex_holder = co_await get_units(_mm._group0_read_apply_mutex, 1);
+    auto read_apply_mutex_holder = co_await get_units(_client._read_apply_mutex, 1);
 
     co_await _mm.merge_schema_from(addr, std::move(*cm));
 

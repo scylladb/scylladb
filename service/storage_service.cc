@@ -1304,14 +1304,14 @@ future<> storage_service::uninit_messaging_service_part() {
     return container().invoke_on_all(&service::storage_service::uninit_messaging_service);
 }
 
-future<> storage_service::init_server(cql3::query_processor& qp) {
+future<> storage_service::init_server(cql3::query_processor& qp, raft_group0_client& client) {
     assert(this_shard_id() == 0);
 
-    return seastar::async([this, &qp] {
+    return seastar::async([this, &qp, &client] {
         set_mode(mode::STARTING);
 
         _group0 = std::make_unique<raft_group0>(_abort_source, _raft_gr, _messaging.local(),
-            _gossiper, qp, _migration_manager.local());
+            _gossiper, qp, _migration_manager.local(), client);
 
         std::unordered_set<inet_address> loaded_endpoints;
         if (_db.local().get_config().load_ring_state()) {
