@@ -61,8 +61,7 @@ future<> gce_snitch::load_config() {
                 return container().invoke_on_all([this] (snitch_ptr& local_s) {
                     // Distribute the new values on all CPUs but the current one
                     if (this_shard_id() != io_cpu_id()) {
-                        local_s->set_my_dc(_my_dc);
-                        local_s->set_my_rack(_my_rack);
+                        local_s->set_my_dc_and_rack(_my_dc, _my_rack);
                     }
                 });
             });

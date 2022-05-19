@@ -172,8 +172,7 @@ future<> gossiping_property_file_snitch::reload_configuration() {
 
             // Distribute the new values on all CPUs but the current one
             if (this_shard_id() != _file_reader_cpu_id) {
-                local_s->set_my_dc(_my_dc);
-                local_s->set_my_rack(_my_rack);
+                local_s->set_my_dc_and_rack(_my_dc, _my_rack);
                 local_s->set_prefer_local(_prefer_local);
             }
         }).then([this] {
