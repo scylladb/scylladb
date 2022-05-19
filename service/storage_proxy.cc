@@ -4092,7 +4092,7 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
     return db::read_repair_decision::NONE;
 }
 
-::shared_ptr<abstract_read_executor> storage_proxy::get_read_executor(lw_shared_ptr<query::read_command> cmd,
+result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw_shared_ptr<query::read_command> cmd,
         schema_ptr schema,
         dht::partition_range pr,
         db::consistency_level cl,
@@ -4254,11 +4254,14 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
         const auto replicas = it == query_options.preferred_replicas.end()
             ? inet_address_vector_replica_set{} : replica_ids_to_endpoints(*tmptr, it->second);
 
-        auto read_executor = get_read_executor(cmd, schema, std::move(pr), cl, repair_decision,
-                                               query_options.trace_state, replicas, is_read_non_local,
-                                               query_options.permit);
+        auto r_read_executor = get_read_executor(cmd, schema, std::move(pr), cl, repair_decision,
+                                                 query_options.trace_state, replicas, is_read_non_local,
+                                                 query_options.permit);
+        if (!r_read_executor) {
+            co_return std::move(r_read_executor).as_failure();
+        }
 
-        exec.emplace_back(read_executor, std::move(token_range));
+        exec.emplace_back(r_read_executor.value(), std::move(token_range));
     }
     if (is_read_non_local) {
         get_stats().reads_coordinator_outside_replica_set++;
