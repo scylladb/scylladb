@@ -360,6 +360,7 @@ cqlStatement returns [std::unique_ptr<raw::parsed_statement> stmt]
     | st45=detachServiceLevelStatement { $stmt = std::move(st45); }
     | st46=listServiceLevelStatement { $stmt = std::move(st46); }
     | st47=listServiceLevelAttachStatement { $stmt = std::move(st47); }
+    | st48=pruneMaterializedViewStatement  { $stmt = std::move(st48); }
     ;
 
 /*
@@ -382,12 +383,12 @@ selectStatement returns [std::unique_ptr<raw::select_statement> expr]
         std::optional<expression> per_partition_limit;
         raw::select_statement::parameters::orderings_type orderings;
         bool allow_filtering = false;
-        bool is_json = false;
+        raw::select_statement::parameters::statement_subtype statement_subtype = raw::select_statement::parameters::statement_subtype::REGULAR;
         bool bypass_cache = false;
         auto attrs = std::make_unique<cql3::attributes::raw>();
     }
     : K_SELECT (
-                ( K_JSON { is_json = true; } )?
+                ( K_JSON { statement_subtype = raw::select_statement::parameters::statement_subtype::JSON; } )?
                 ( K_DISTINCT { is_distinct = true; } )?
                 sclause=selectClause
                )
@@ -401,7 +402,7 @@ selectStatement returns [std::unique_ptr<raw::select_statement> expr]
       ( K_BYPASS K_CACHE { bypass_cache = true; })?
       ( usingClause[attrs] )?
       {
-          auto params = make_lw_shared<raw::select_statement::parameters>(std::move(orderings), is_distinct, allow_filtering, is_json, bypass_cache);
+          auto params = make_lw_shared<raw::select_statement::parameters>(std::move(orderings), is_distinct, allow_filtering, statement_subtype, bypass_cache);
           $expr = std::make_unique<raw::select_statement>(std::move(cf), std::move(params),
             std::move(sclause), std::move(wclause), std::move(limit), std::move(per_partition_limit),
             std::move(gbcolumns), std::move(attrs));
@@ -587,6 +588,26 @@ deleteOp returns [std::unique_ptr<cql3::operation::raw_deletion> op]
     | c=cident '[' t=term ']' { $op = std::make_unique<cql3::operation::element_deletion>(std::move(c), std::move(t)); }
     | c=cident '.' field=ident { $op = std::make_unique<cql3::operation::field_deletion>(std::move(c), std::move(field)); }
     ;
+
+pruneMaterializedViewStatement returns [std::unique_ptr<raw::select_statement> expr]
+    @init {
+        bool is_distinct = false;
+        std::optional<expression> limit;
+        std::optional<expression> per_partition_limit;
+        raw::select_statement::parameters::orderings_type orderings;
+        bool allow_filtering = false;
+        raw::select_statement::parameters::statement_subtype statement_subtype = raw::select_statement::parameters::statement_subtype::PRUNE_MATERIALIZED_VIEW;
+        bool bypass_cache = false;
+        auto attrs = std::make_unique<cql3::attributes::raw>();
+    }
+	: K_PRUNE K_MATERIALIZED K_VIEW cf=columnFamilyName (K_WHERE wclause=whereClause)? ( usingClause[attrs] )?
+	  {
+	        auto params = make_lw_shared<raw::select_statement::parameters>(std::move(orderings), is_distinct, allow_filtering, statement_subtype, bypass_cache);
+	        return std::make_unique<raw::select_statement>(std::move(cf), std::move(params),
+            std::vector<shared_ptr<raw_selector>>(), std::move(wclause), std::move(limit), std::move(per_partition_limit),
+            std::vector<::shared_ptr<cql3::column_identifier::raw>>(), std::move(attrs));
+	  }
+	;
 
 /**
  * BEGIN BATCH
@@ -1925,6 +1946,7 @@ basic_unreserved_keyword returns [sstring str]
         | K_SERVICE
         | K_LEVEL
         | K_LEVELS
+        | K_PRUNE
         ) { $str = $k.text; }
     ;
 
@@ -2093,6 +2115,7 @@ K_GROUP:       G R O U P;
 K_LIKE:        L I K E;
 
 K_TIMEOUT:     T I M E O U T;
+K_PRUNE:       P R U N E;
 
 // Case-insensitive alpha characters
 fragment A: ('a'|'A');

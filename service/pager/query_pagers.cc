@@ -17,6 +17,8 @@
 #include "service/storage_proxy.hh"
 #include "to_string.hh"
 #include "utils/result_combinators.hh"
+#include "view_info.hh"
+#include "db/view/delete_ghost_rows_visitor.hh"
 
 template<typename T = void>
 using result = service::pager::query_pager::result<T>;
@@ -269,6 +271,44 @@ protected:
     }
 };
 
+/*
+ * This pager is used to perform an action on each fetched row:
+ * it verifies if returned data belongs to a ghost row and issues a deletion
+ * with consistency level ALL if it is qualified as such.
+ * It does not actually return any data to the caller.
+ */
+class ghost_row_deleting_query_pager : public service::pager::query_pager {
+    service::storage_proxy& _proxy;
+    db::timeout_clock::duration _timeout_duration;
+public:
+    ghost_row_deleting_query_pager(schema_ptr s, shared_ptr<const cql3::selection::selection> selection,
+                service::query_state& state,
+                const cql3::query_options& options,
+                lw_shared_ptr<query::read_command> cmd,
+                dht::partition_range_vector ranges,
+                cql3::cql_stats& stats,
+                service::storage_proxy& proxy,
+                db::timeout_clock::duration timeout_duration)
+        : query_pager(proxy, s, selection, state, options, std::move(cmd), std::move(ranges))
+        , _proxy(proxy)
+        , _timeout_duration(timeout_duration)
+    {}
+    virtual ~ghost_row_deleting_query_pager() {}
+
+    virtual future<result<>> fetch_page_result(cql3::selection::result_set_builder& builder, uint32_t page_size, gc_clock::time_point now, db::timeout_clock::time_point timeout) override {
+        return do_fetch_page(page_size, now, timeout).then(utils::result_wrap([this, &builder, page_size, now] (service::storage_proxy::coordinator_query_result qr) {
+            _last_replicas = std::move(qr.last_replicas);
+            _query_read_repair_decision = qr.read_repair_decision;
+            qr.query_result->ensure_counts();
+            return seastar::async([this, query_result = std::move(qr.query_result), page_size, now] () mutable -> result<> {
+                handle_result(db::view::delete_ghost_rows_visitor{_proxy, _state, view_ptr(_schema), _timeout_duration},
+                        std::move(query_result), page_size, now);
+                return bo::success();
+            });
+        }));
+    }
+};
+
 template<typename Base>
 class query_pager::query_result_visitor : public Base {
     using visitor = Base;
@@ -428,4 +468,16 @@ std::unique_ptr<service::pager::query_pager> service::pager::query_pagers::pager
     }
     return std::make_unique<query_pager>(proxy, std::move(s), std::move(selection), state,
             options, std::move(cmd), std::move(ranges));
+}
+
+::shared_ptr<service::pager::query_pager> service::pager::query_pagers::ghost_row_deleting_pager(
+        schema_ptr s, shared_ptr<const cql3::selection::selection> selection,
+        service::query_state& state, const cql3::query_options& options,
+        lw_shared_ptr<query::read_command> cmd,
+        dht::partition_range_vector ranges,
+        cql3::cql_stats& stats,
+        storage_proxy& proxy,
+        db::timeout_clock::duration duration) {
+    return ::make_shared<ghost_row_deleting_query_pager>(std::move(s), std::move(selection), state,
+            options, std::move(cmd), std::move(ranges), stats, proxy, duration);
 }

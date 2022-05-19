@@ -92,6 +92,7 @@
 #include "utils/result_loop.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/result_try.hh"
+#include "utils/error_injection.hh"
 
 namespace bi = boost::intrusive;
 
@@ -4466,6 +4467,7 @@ storage_proxy::query(schema_ptr s,
     db::consistency_level cl,
     storage_proxy::coordinator_query_options query_options)
 {
+    utils::get_local_injector().inject("storage_proxy_query_failure", [] { throw std::runtime_error("Error injection: failing a query"); });
     return query_result(std::move(s), std::move(cmd), std::move(partition_ranges), cl, std::move(query_options))
             .then(utils::result_into_future<result<storage_proxy::coordinator_query_result>>);
 }

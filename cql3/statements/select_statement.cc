@@ -12,6 +12,8 @@
 #include "cql3/expr/expression.hh"
 #include "cql3/statements/raw/select_statement.hh"
 #include "cql3/query_processor.hh"
+#include "cql3/statements/prune_materialized_view_statement.hh"
+
 #include "transport/messages/result_message.hh"
 #include "cql3/functions/as_json_function.hh"
 #include "cql3/selection/selection.hh"
@@ -88,7 +90,7 @@ thread_local const lw_shared_ptr<const select_statement::parameters> select_stat
 select_statement::parameters::parameters()
     : _is_distinct{false}
     , _allow_filtering{false}
-    , _is_json{false}
+    , _statement_subtype{statement_subtype::REGULAR}
 { }
 
 select_statement::parameters::parameters(orderings_type orderings,
@@ -97,18 +99,18 @@ select_statement::parameters::parameters(orderings_type orderings,
     : _orderings{std::move(orderings)}
     , _is_distinct{is_distinct}
     , _allow_filtering{allow_filtering}
-    , _is_json{false}
+    , _statement_subtype{statement_subtype::REGULAR}
 { }
 
 select_statement::parameters::parameters(orderings_type orderings,
                                          bool is_distinct,
                                          bool allow_filtering,
-                                         bool is_json,
+                                         statement_subtype statement_subtype,
                                          bool bypass_cache)
     : _orderings{std::move(orderings)}
     , _is_distinct{is_distinct}
     , _allow_filtering{allow_filtering}
-    , _is_json{is_json}
+    , _statement_subtype{statement_subtype}
     , _bypass_cache{bypass_cache}
 { }
 
@@ -117,7 +119,7 @@ bool select_statement::parameters::is_distinct() const {
 }
 
 bool select_statement::parameters::is_json() const {
-   return _is_json;
+   return _statement_subtype == statement_subtype::JSON;
 }
 
 bool select_statement::parameters::allow_filtering() const {
@@ -126,6 +128,10 @@ bool select_statement::parameters::allow_filtering() const {
 
 bool select_statement::parameters::bypass_cache() const {
     return _bypass_cache;
+}
+
+bool select_statement::parameters::is_prune_materialized_view() const {
+    return _statement_subtype == statement_subtype::PRUNE_MATERIALIZED_VIEW;
 }
 
 select_statement::parameters::orderings_type const& select_statement::parameters::orderings() const {
@@ -1634,7 +1640,21 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
             && db.get_config().enable_parallelized_aggregation();
     };
 
-    if (restrictions->uses_secondary_indexing()) {
+    if (_parameters->is_prune_materialized_view()) {
+        stmt = ::make_shared<cql3::statements::prune_materialized_view_statement>(
+                schema,
+                ctx.bound_variables_size(),
+                _parameters,
+                std::move(selection),
+                std::move(restrictions),
+                std::move(group_by_cell_indices),
+                is_reversed_,
+                std::move(ordering_comparator),
+                prepare_limit(db, ctx, _limit),
+                prepare_limit(db, ctx, _per_partition_limit),
+                stats,
+                std::move(prepared_attrs));
+    } else if (restrictions->uses_secondary_indexing()) {
         stmt = indexed_table_select_statement::prepare(
                 db,
                 schema,

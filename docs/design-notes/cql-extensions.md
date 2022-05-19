@@ -102,6 +102,31 @@ Storage options can be inspected by checking the new system schema table: `syste
      keyspace_name | storage_options                                | storage_type
     ---------------+------------------------------------------------+--------------
                ksx | {'bucket': '/tmp/xx', 'endpoint': 'localhost'} |           S3
-    ```
-
 ```
+
+## PRUNE MATERIALIZED VIEW statements
+
+A special statement is dedicated for pruning ghost rows from materialized views.
+Ghost row is an inconsistency issue which manifests itself by having rows
+in a materialized view which do not correspond to any base table rows.
+Such inconsistencies should be prevented altogether and Scylla is striving to avoid
+them, but *if* they happen, this statement can be used to restore a materialized view
+to a fully consistent state without rebuilding it from scratch.
+
+Example usages:
+```cql
+  PRUNE MATERIALIZED VIEW my_view;
+  PRUNE MATERIALIZED VIEW my_view WHERE token(v) > 7 AND token(v) < 1535250;
+  PRUNE MATERIALIZED VIEW my_view WHERE v = 19;
+```
+
+The statement works by fetching requested rows from a materialized view
+and then trying to fetch their corresponding rows from the base table.
+If it turns out that the base row does not exist, the row is considered
+a ghost row and is thus deleted. The statement implicitly works with
+consistency level ALL when fetching from the base table to avoid false
+positives. As the example shows, a materialized view can be pruned
+in one go, but one can also specify specific primary keys or token ranges,
+which is recommended in order to make the operation less heavyweight
+and allow for running multiple parallel pruning statements for non-overlapping
+token ranges.

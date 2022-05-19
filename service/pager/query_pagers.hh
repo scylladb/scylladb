@@ -38,6 +38,15 @@ public:
             lw_shared_ptr<query::read_command>,
             dht::partition_range_vector,
             ::shared_ptr<cql3::restrictions::statement_restrictions> filtering_restrictions = nullptr);
+    static ::shared_ptr<query_pager> ghost_row_deleting_pager(schema_ptr,
+            shared_ptr<const cql3::selection::selection>,
+            service::query_state&,
+            const cql3::query_options&,
+            lw_shared_ptr<query::read_command>,
+            dht::partition_range_vector,
+            cql3::cql_stats& stats,
+            storage_proxy& proxy,
+            db::timeout_clock::duration timeout_duration);
 };
 
 }
