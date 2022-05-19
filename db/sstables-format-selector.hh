@@ -57,8 +57,6 @@ class sstables_format_selector {
     future<> select_format(sstables::sstable_version_types new_format);
     future<> read_sstables_format();
 
-    future<> do_maybe_select_format(sstables::sstable_version_types new_format);
-
 public:
     sstables_format_selector(gms::gossiper& g, sharded<gms::feature_service>& f, sharded<replica::database>& db);
 
@@ -66,10 +64,6 @@ public:
     future<> stop();
 
     future<> maybe_select_format(sstables::sstable_version_types new_format);
-
-    void sync() {
-        get_units(_sem, 1).get0();
-    }
 };
 
 } // namespace sstables
