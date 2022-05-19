@@ -5279,5 +5279,23 @@ SEASTAR_TEST_CASE(test_null_and_unset_in_collections) {
                                 exceptions::invalid_request_exception, check_unset_msg());
         BOOST_REQUIRE_EXCEPTION(e.execute_prepared(add_map, {map_with_unset_value}).get(),
                                 exceptions::invalid_request_exception, check_unset_msg());
+
+        // List of IN values is also a list that can't contain nulls
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("SELECT * FROM null_in_col WHERE p IN (1, null, 2)").get(),
+                                exceptions::invalid_request_exception, check_null_msg());
+
+        auto where_in_list_with_marker = e.prepare("SELECT * FROM null_in_col WHERE p IN (1, ?, 2)").get0();
+
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(where_in_list_with_marker, {null_value}).get(),
+                                exceptions::invalid_request_exception, check_null_msg());
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(where_in_list_with_marker, {unset_value}).get(),
+                                exceptions::invalid_request_exception, check_unset_msg());
+
+        auto where_in_list_marker = e.prepare("SELECT * FROM null_in_col WHERE p IN ?").get0();
+
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(where_in_list_marker, {list_with_null}).get(),
+                                exceptions::invalid_request_exception, check_null_msg());
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(where_in_list_marker, {list_with_unset}).get(),
+                                exceptions::invalid_request_exception, check_unset_msg());
     });
 }
