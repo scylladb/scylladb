@@ -239,18 +239,17 @@ distributed_loader::reshape(sharded<sstables::sstable_directory>& dir, sharded<r
         std::function<bool (const sstables::shared_sstable&)> filter) {
 
     auto start = std::chrono::steady_clock::now();
-    return dir.map_reduce0([&dir, &db, ks_name = std::move(ks_name), table_name = std::move(table_name), creator = std::move(creator), mode, filter] (sstables::sstable_directory& d) {
+    auto total_size = co_await dir.map_reduce0([&dir, &db, ks_name = std::move(ks_name), table_name = std::move(table_name), creator = std::move(creator), mode, filter] (sstables::sstable_directory& d) {
         auto& table = db.local().find_column_family(ks_name, table_name);
         auto& cm = db.local().get_compaction_manager();
         auto& iop = service::get_local_streaming_priority();
         return d.reshape(cm, table, creator, iop, mode, filter);
-    }, uint64_t(0), std::plus<uint64_t>()).then([start] (uint64_t total_size) {
+    }, uint64_t(0), std::plus<uint64_t>());
+    // FIXME: indentation
         if (total_size > 0) {
             auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - start);
             dblog.info("{}", fmt::format("Reshaped {} in {:.2f} seconds, {}", sstables::pretty_printed_data_size(total_size), duration.count(), sstables::pretty_printed_throughput(total_size, duration)));
         }
-        return make_ready_future<>();
-    });
 }
 
 // Loads SSTables into the main directory (or staging) and returns how many were loaded
