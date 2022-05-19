@@ -259,12 +259,12 @@ future<> mutation_partition_view::do_accept_gently(const column_mapping& cm, Vis
     read_and_visit_row(mpv.static_row(), cm, column_kind::static_column, static_row_cell_visitor{visitor});
     co_await coroutine::maybe_yield();
 
-    for (auto&& rt : mpv.range_tombstones()) {
+    for (auto rt : mpv.range_tombstones()) {
         visitor.accept_row_tombstone(rt);
         co_await coroutine::maybe_yield();
     }
 
-    for (auto&& cr : mpv.rows()) {
+    for (auto cr : mpv.rows()) {
         auto t = row_tombstone(cr.deleted_at(), shadowable_tombstone(cr.shadowable_deleted_at()));
         auto key = cr.key();
         visitor.accept_row(position_in_partition_view::for_key(key), t, read_row_marker(cr.marker()), is_dummy::no, is_continuous::yes);
@@ -318,7 +318,7 @@ std::optional<clustering_key> mutation_partition_view::first_row_key() const
     if (rows.empty()) {
         return { };
     }
-    return rows.front().key();
+    return (*rows.begin()).key();
 }
 
 std::optional<clustering_key> mutation_partition_view::last_row_key() const
@@ -329,7 +329,12 @@ std::optional<clustering_key> mutation_partition_view::last_row_key() const
     if (rows.empty()) {
         return { };
     }
-    return rows.back().key();
+    auto it = rows.begin();
+    auto next = it;
+    while (++next != rows.end()) {
+        it = next;
+    }
+    return (*it).key();
 }
 
 mutation_partition_view mutation_partition_view::from_view(ser::mutation_partition_view v)

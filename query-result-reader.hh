@@ -58,11 +58,11 @@ public:
     result_row_view(ser::qr_row_view v) : _v(v) {}
 
     class iterator_type {
-        using cells_vec = std::vector<std::optional<ser::qr_cell_view>>;
-        cells_vec _cells;
-        cells_vec::iterator _i;
+        using cells_deserializer = ser::vector_deserializer<std::optional<ser::qr_cell_view>>;
+        cells_deserializer _cells;
+        cells_deserializer::iterator _i;
     public:
-        iterator_type(ser::qr_row_view v)
+        iterator_type(const ser::qr_row_view& v)
             : _cells(v.cells())
             , _i(_cells.begin())
         { }
@@ -182,10 +182,11 @@ public:
     }
 
     std::tuple<uint32_t, uint64_t> count_partitions_and_rows() const {
-        auto&& ps = _v.partitions();
-        auto rows = boost::accumulate(ps | boost::adaptors::transformed([] (auto& p) {
-            return std::max(p.rows().size(), size_t(1));
-        }), uint64_t(0));
+        auto ps = _v.partitions();
+        uint64_t rows = 0;
+        for (auto p : ps) {
+            rows += std::max(p.rows().size(), size_t(1));
+        }
         return std::make_tuple(ps.size(), rows);
     }
 
@@ -193,9 +194,23 @@ public:
     get_last_partition_and_clustering_key() const {
         auto ps = _v.partitions();
         assert(!ps.empty());
-        auto& p = ps.back();
+        auto pit = ps.begin();
+        auto pnext = pit;
+        while (++pnext != ps.end()) {
+            pit = pnext;
+        }
+        auto p = *pit;
         auto rs = p.rows();
-        return { p.key().value(), !rs.empty() ? rs.back().key() : std::optional<clustering_key>() };
+        std::optional<clustering_key> last_row;
+        if (!rs.empty()) {
+            auto rit = rs.begin();
+            auto rnext = rit;
+            while (++rnext != rs.end()) {
+                rit = rnext;
+            }
+            last_row = (*rit).key();
+        }
+        return { p.key().value(), std::move(last_row) };
     }
 };
 
