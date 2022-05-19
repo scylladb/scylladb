@@ -164,20 +164,22 @@ collect_all_shared_sstables(sharded<sstables::sstable_directory>& dir) {
 // Returns a reshard_shard_descriptor per shard indicating the work that each shard has to do.
 future<std::vector<reshard_shard_descriptor>>
 distribute_reshard_jobs(sstables::sstable_directory::sstable_info_vector source) {
-    return do_with(std::move(source), std::vector<reshard_shard_descriptor>(smp::count),
-            [] (sstables::sstable_directory::sstable_info_vector& source, std::vector<reshard_shard_descriptor>& destinations) mutable {
+    auto destinations = std::vector<reshard_shard_descriptor>(smp::count);
+
+    // FIXME: indentation
         std::sort(source.begin(), source.end(), [] (const sstables::foreign_sstable_open_info& a, const sstables::foreign_sstable_open_info& b) {
             // Sort on descending SSTable sizes.
             return a.uncompressed_data_size > b.uncompressed_data_size;
         });
-        return do_for_each(source, [&destinations] (sstables::foreign_sstable_open_info& info) mutable {
+
+        for (auto& info : source) {
             auto shard_it = boost::min_element(destinations, std::mem_fn(&reshard_shard_descriptor::total_size_smaller));
             shard_it->uncompressed_data_size += info.uncompressed_data_size;
             shard_it->info_vec.push_back(std::move(info));
-        }).then([&destinations] () mutable {
-            return make_ready_future<std::vector<reshard_shard_descriptor>>(std::move(destinations));
-        });
-    });
+            co_await coroutine::maybe_yield();
+        }
+
+            co_return destinations;
 }
 
 future<> run_resharding_jobs(sharded<sstables::sstable_directory>& dir, std::vector<reshard_shard_descriptor> reshard_jobs,
