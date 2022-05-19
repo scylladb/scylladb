@@ -5063,3 +5063,221 @@ SEASTAR_TEST_CASE(test_parallelized_select_count) {
         BOOST_CHECK_EQUAL(stat_parallelized + 1, qp.get_cql_stats().select_parallelized);
     });
 }
+
+cql3::raw_value make_collection_raw_value(size_t size_to_write, const std::vector<cql3::raw_value>& elements_to_write) {
+    cql_serialization_format sf = cql_serialization_format::latest();
+
+    size_t serialized_len = 0;
+    serialized_len += collection_size_len(sf);
+    for (const cql3::raw_value& val : elements_to_write) {
+        serialized_len += collection_value_len(sf);
+        if (val.is_value()) {
+            serialized_len += val.to_view().with_value([](const FragmentedView auto& view) {
+                return view.size_bytes();
+            });
+        }
+    }
+
+    bytes b(bytes::initialized_later(), serialized_len);
+    bytes::iterator out = b.begin();
+
+    write_collection_size(out, size_to_write, sf);
+    for (const cql3::raw_value& val : elements_to_write) {
+        if (val.is_null()) {
+                write_int32(out, -1);
+        } else if (val.is_unset_value()) {
+                write_int32(out, -2);
+        } else {
+            val.to_view().with_value([&](const FragmentedView auto& val_view) {
+                write_collection_value(out, sf, linearized(val_view));
+            });
+        }
+    }
+
+    return cql3::raw_value::make_value(b);
+}
+
+SEASTAR_TEST_CASE(test_null_and_unset_in_collections) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("CREATE TABLE null_in_col (p int primary key, l list<int>, s set<int>, m map<int, int>);").get();
+
+        // The predicate that checks the message has to be a lambda to preserve source_location
+        auto check_null_msg = [](std::experimental::source_location loc = std::experimental::source_location::current()) {
+            return exception_predicate::message_equals("null is not supported inside collections", loc);
+        };
+
+        auto check_unset_msg = [](std::experimental::source_location loc = std::experimental::source_location::current()) {
+            return exception_predicate::message_equals("unset value is not supported inside collections", loc);
+        };
+
+        // Test null when specified inside a collection literal
+        // It's impossible to specify unset value this way
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("INSERT INTO null_in_col (p, l) VALUES (0, [1, null, 3])").get(),
+                                exceptions::invalid_request_exception, check_null_msg());
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("INSERT INTO null_in_col (p, s) VALUES (0, {1, null, 3})").get(),
+                                exceptions::invalid_request_exception, check_null_msg());
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("INSERT INTO null_in_col (p, m) VALUES (0, {0:1, null:3, 4:5})").get(),
+                                exceptions::invalid_request_exception, check_null_msg());
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("INSERT INTO null_in_col (p, m) VALUES (0, {0:1, 2:null, 4:5})").get(),
+                                exceptions::invalid_request_exception, check_null_msg());
+
+
+        // Test null and unset when sent as bind marker for collection value
+        auto insert_list_with_marker = e.prepare("INSERT INTO null_in_col (p, l) VALUES (0, [1, ?, 3])").get0();
+        auto insert_set_with_marker = e.prepare("INSERT INTO null_in_col (p, s) VALUES (0, {1, ?, 3})").get0();
+        auto insert_map_with_key_marker = e.prepare("INSERT INTO null_in_col (p, m) VALUES (0, {0:1, ?:3, 4:5})").get0();
+        auto insert_map_with_value_marker = e.prepare("INSERT INTO null_in_col (p, m) VALUES (0, {0:1, 2:?, 4:5})").get0();
+
+        cql3::raw_value null_value = cql3::raw_value::make_null();
+        cql3::raw_value unset_value = cql3::raw_value::make_unset_value();
+
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(insert_list_with_marker, {null_value}).get(),
+                                exceptions::invalid_request_exception, check_null_msg());
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(insert_set_with_marker, {null_value}).get(),
+                                exceptions::invalid_request_exception, check_null_msg());
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(insert_map_with_key_marker, {null_value}).get(),
+                                exceptions::invalid_request_exception, check_null_msg());
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(insert_map_with_value_marker, {null_value}).get(),
+                                exceptions::invalid_request_exception, check_null_msg());
+
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(insert_list_with_marker, {unset_value}).get(),
+                                exceptions::invalid_request_exception, check_unset_msg());
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(insert_set_with_marker, {unset_value}).get(),
+                                exceptions::invalid_request_exception, check_unset_msg());
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(insert_map_with_key_marker, {unset_value}).get(),
+                                exceptions::invalid_request_exception, check_unset_msg());
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(insert_map_with_value_marker, {unset_value}).get(),
+                                exceptions::invalid_request_exception, check_unset_msg());
+
+
+        // Test sending whole collections with null and unset inside as bound value
+        auto insert_list = e.prepare("INSERT INTO null_in_col (p, l) VALUES (0, ?)").get0();
+        auto insert_set = e.prepare("INSERT INTO null_in_col (p, s) VALUES (0, ?)").get0();
+        auto insert_map = e.prepare("INSERT INTO null_in_col (p, m) VALUES (0, ?)").get0();
+
+        auto make_int = [](int val) -> cql3::raw_value {
+            return cql3::raw_value::make_value(int32_type->decompose(val));
+        };
+
+        cql_serialization_format sf = cql_serialization_format::latest();
+        cql3::raw_value list_with_null = make_collection_raw_value(3, {make_int(1), null_value, make_int(2)});
+        cql3::raw_value set_with_null = make_collection_raw_value(3, {make_int(1), null_value, make_int(2)});
+
+        cql3::raw_value map_with_null_key = make_collection_raw_value(3, {make_int(0), make_int(1),
+                                                                     null_value, make_int(3),
+                                                                     make_int(4), make_int(5)});
+
+        cql3::raw_value map_with_null_value = make_collection_raw_value(3, {make_int(0), make_int(1),
+                                                                       make_int(2), null_value,
+                                                                       make_int(4), make_int(5)});
+
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(insert_list, {list_with_null}).get(),
+                                exceptions::invalid_request_exception, check_null_msg());
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(insert_set, {set_with_null}).get(),
+                                exceptions::invalid_request_exception, check_null_msg());
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(insert_map, {map_with_null_key}).get(),
+                                exceptions::invalid_request_exception, check_null_msg());
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(insert_map, {map_with_null_value}).get(),
+                                exceptions::invalid_request_exception, check_null_msg());
+
+
+        cql3::raw_value list_with_unset = make_collection_raw_value(3, {make_int(1), unset_value, make_int(2)});
+        cql3::raw_value set_with_unset = make_collection_raw_value(3, {make_int(1), unset_value, make_int(2)});
+
+        cql3::raw_value map_with_unset_key = make_collection_raw_value(3, {make_int(0), make_int(1),
+                                                                     unset_value, make_int(3),
+                                                                     make_int(4), make_int(5)});
+
+        cql3::raw_value map_with_unset_value = make_collection_raw_value(3, {make_int(0), make_int(1),
+                                                                       make_int(2), unset_value,
+                                                                       make_int(4), make_int(5)});
+
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(insert_list, {list_with_unset}).get(),
+                                exceptions::invalid_request_exception, check_unset_msg());
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(insert_set, {set_with_unset}).get(),
+                                exceptions::invalid_request_exception, check_unset_msg());
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(insert_map, {map_with_unset_key}).get(),
+                                exceptions::invalid_request_exception, check_unset_msg());
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(insert_map, {map_with_unset_value}).get(),
+                                exceptions::invalid_request_exception, check_unset_msg());
+
+
+        // Update setting to bad collection value
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("UPDATE null_in_col SET l = [1, null, 2] WHERE p = 0").get(),
+                                exceptions::invalid_request_exception, check_null_msg());
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("UPDATE null_in_col SET s = {1, null, 2} WHERE p = 0").get(),
+                                exceptions::invalid_request_exception, check_null_msg());
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("UPDATE null_in_col SET m = {0:1, null:3, 4:5} WHERE p = 0").get(),
+                                exceptions::invalid_request_exception, check_null_msg());
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("UPDATE null_in_col SET m = {0:1, 2:null, 4:5} WHERE p = 0").get(),
+                                exceptions::invalid_request_exception, check_null_msg());
+
+        // Update adding a bad single-element collection value
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("UPDATE null_in_col SET l = l + [null] WHERE p = 0").get(),
+                                exceptions::invalid_request_exception, check_null_msg());
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("UPDATE null_in_col SET s = s + {null} WHERE p = 0").get(),
+                                exceptions::invalid_request_exception, check_null_msg());
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("UPDATE null_in_col SET m = m + {null:3} WHERE p = 0").get(),
+                                exceptions::invalid_request_exception, check_null_msg());
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("UPDATE null_in_col SET m = m + {2:null} WHERE p = 0").get(),
+                                exceptions::invalid_request_exception, check_null_msg());
+
+        // Update adding a bad collection value
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("UPDATE null_in_col SET l = l + [1, null, 2] WHERE p = 0").get(),
+                                exceptions::invalid_request_exception, check_null_msg());
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("UPDATE null_in_col SET s = s + {1, null, 2} WHERE p = 0").get(),
+                                exceptions::invalid_request_exception, check_null_msg());
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("UPDATE null_in_col SET m = m + {0:1, null:3, 4:5} WHERE p = 0").get(),
+                                exceptions::invalid_request_exception, check_null_msg());
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("UPDATE null_in_col SET m = m + {0:1, 2:null, 4:5} WHERE p = 0").get(),
+                                exceptions::invalid_request_exception, check_null_msg());
+
+        // Update adding a collection value with bad bind marker
+        auto add_list_with_marker = e.prepare("UPDATE null_in_col SET l = l + [1, ?, 2] WHERE p = 0").get0();
+        auto add_set_with_marker = e.prepare("UPDATE null_in_col SET s = s + {1, ?, 2} WHERE p = 0").get0();
+        auto add_map_with_key_marker = e.prepare("UPDATE null_in_col SET m = m + {0:1, ?:3, 4:5} WHERE p = 0").get0();
+        auto add_map_with_value_marker = e.prepare("UPDATE null_in_col SET m = m + {0:1, 2:?, 4:5} WHERE p = 0").get0();
+
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(add_list_with_marker, {null_value}).get(),
+                                exceptions::invalid_request_exception, check_null_msg());
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(add_set_with_marker, {null_value}).get(),
+                                exceptions::invalid_request_exception, check_null_msg());
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(add_map_with_key_marker, {null_value}).get(),
+                                exceptions::invalid_request_exception, check_null_msg());
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(add_map_with_value_marker, {null_value}).get(),
+                                exceptions::invalid_request_exception, check_null_msg());
+
+
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(add_list_with_marker, {unset_value}).get(),
+                                exceptions::invalid_request_exception, check_unset_msg());
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(add_set_with_marker, {unset_value}).get(),
+                                exceptions::invalid_request_exception, check_unset_msg());
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(add_map_with_key_marker, {unset_value}).get(),
+                                exceptions::invalid_request_exception, check_unset_msg());
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(add_map_with_value_marker, {unset_value}).get(),
+                                exceptions::invalid_request_exception, check_unset_msg());
+
+        // Update adding a collection value with bad bind marker
+        auto add_list = e.prepare("UPDATE null_in_col SET l = l + ? WHERE p = 0").get0();
+        auto add_set = e.prepare("UPDATE null_in_col SET s = s + ? WHERE p = 0").get0();
+        auto add_map = e.prepare("UPDATE null_in_col SET m = m + ? WHERE p = 0").get0();
+
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(add_list, {list_with_null}).get(),
+                                exceptions::invalid_request_exception, check_null_msg());
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(add_set, {set_with_null}).get(),
+                                exceptions::invalid_request_exception, check_null_msg());
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(add_map, {map_with_null_key}).get(),
+                                exceptions::invalid_request_exception, check_null_msg());
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(add_map, {map_with_null_value}).get(),
+                                exceptions::invalid_request_exception, check_null_msg());
+
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(add_list, {list_with_unset}).get(),
+                                exceptions::invalid_request_exception, check_unset_msg());
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(add_set, {set_with_unset}).get(),
+                                exceptions::invalid_request_exception, check_unset_msg());
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(add_map, {map_with_unset_key}).get(),
+                                exceptions::invalid_request_exception, check_unset_msg());
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(add_map, {map_with_unset_value}).get(),
+                                exceptions::invalid_request_exception, check_unset_msg());
+    });
+}
