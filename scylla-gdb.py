@@ -253,6 +253,34 @@ class intrusive_btree:
                 yield r
 
 
+class bplus_tree:
+    def __init__(self, ref):
+        self.tree = ref
+        self.leaf_node_flag = int(gdb.parse_and_eval(self.tree.type.name + "::node::NODE_LEAF"))
+        self.rightmost_leaf_flag = int(gdb.parse_and_eval(self.tree.type.name + "::node::NODE_RIGHTMOST"))
+
+    def __len__(self):
+        i = 0
+        for _ in self:
+            i += 1
+        return i
+
+    def __iter__(self):
+        node_p = self.tree['_left']
+        while node_p:
+            node = node_p.dereference()
+            if not node['_flags'] & self.leaf_node_flag:
+                raise ValueError("Expected B+ leaf node")
+
+            for i in range(0, node['_num_keys']):
+                yield node['_kids'][i+1]['d'].dereference()['value']
+
+            if node['_flags'] & self.rightmost_leaf_flag:
+                node_p = None
+            else:
+                node_p = node['__next']
+
+
 class double_decker:
     def __init__(self, ref):
         self.tree = ref['_tree']
@@ -313,10 +341,10 @@ class std_variant:
     def index(self):
         return int(self.ref['_M_index'])
 
-    def get(self):
+    # workaround for when template arguments refuses to work
+    def get_with_type(self, current_type):
         index = self.index()
         variadic_union = self.ref['_M_u']
-        current_type = self.member_types[index].strip_typedefs()
         for i in range(index):
             variadic_union = variadic_union['_M_rest']
 
@@ -327,6 +355,11 @@ class std_variant:
 
         # non-literal types are stored via a __gnu_cxx::__aligned_membuf
         return wrapper['_M_storage'].reinterpret_cast(current_type.pointer()).dereference()
+
+    def get(self):
+        index = self.index()
+        current_type = self.member_types[index].strip_typedefs()
+        return self.get_with_type(index, current_type)
 
 
 class std_map:
@@ -696,6 +729,74 @@ class std_list:
     def dereference_iterator(it):
         deref = std_list._make_dereference_func(it.type.strip_typedefs().template_argument(0))
         return deref(it['_M_node'])
+
+
+class managed_vector:
+    def __init__(self, ref):
+        self._ref = ref
+
+    def __len__(self):
+        return int(self._ref['_size'])
+
+    def __nonzero__(self):
+        return self.__len__() > 0
+
+    def __bool__(self):
+        return self.__len__() > 0
+
+    def __iter__(self):
+        for i in range(len(self)):
+            yield self._ref['_data'][i]
+
+
+class chunked_managed_vector:
+    def __init__(self, ref):
+        self._ref = ref
+
+    def __len__(self):
+        return int(self._ref['_size'])
+
+    def __nonzero__(self):
+        return self.__len__() > 0
+
+    def __bool__(self):
+        return self.__len__() > 0
+
+    def __iter__(self):
+        for chunk in managed_vector(self._ref['_chunks']):
+            for e in managed_vector(chunk):
+                yield e
+
+
+class sstring:
+    def __init__(self, ref):
+        self.ref = ref
+
+    @staticmethod
+    def to_hex(data, size):
+        inf = gdb.selected_inferior()
+        return bytes(inf.read_memory(data, size)).hex()
+
+    def as_hex(self):
+        return self.to_hex(self.data(), len(self))
+
+    def is_internal(self):
+        return self.ref['u']['internal']['size'] >= 0
+
+    def __len__(self):
+        if self.is_internal():
+            return self.ref['u']['internal']['size']
+        else:
+            return self.ref['u']['external']['size']
+
+    def data(self):
+        if self.is_internal():
+            return self.ref['u']['internal']['str']
+        else:
+            return self.ref['u']['external']['str']
+
+    def __str__(self):
+        return self.as_hex()
 
 
 def uint64_t(val):
@@ -2904,6 +3005,15 @@ class small_vector(object):
     def __init__(self, ref):
         self.ref = ref
 
+    def __len__(self):
+        return self.ref['_begin'] - self.ref['_end']
+
+    def __iter__(self):
+        e = self.ref['_begin']
+        while e != self.ref['_end']:
+            yield e.dereference()
+            e += 1
+
     def external_memory_footprint(self):
         if self.ref['_begin'] == self.ref['_internal']['storage'].address:
             return 0
@@ -2927,6 +3037,21 @@ class boost_small_vector(object):
 class chunked_vector(object):
     def __init__(self, ref):
         self.ref = ref
+        self._max_contiguous_allocation = int(list(template_arguments(self.ref.type))[1])
+
+    def max_chunk_capacity(self):
+        return max(self._max_contiguous_allocation / self.ref.type.sizeof, 1);
+
+    def __len__(self):
+        return int(self.ref['_size'])
+
+    def __iter__(self):
+        sz = len(self)
+        for chunk in small_vector(self.ref['_chunks']):
+            chunk = std_unique_ptr(chunk).get()
+            for i in range(min(sz, self.max_chunk_capacity())):
+                yield chunk[i]
+                sz -= 1
 
     def external_memory_footprint(self):
         return int(self.ref['_capacity']) * self.ref.type.template_argument(0).sizeof \
@@ -4380,6 +4505,130 @@ class scylla_schema(gdb.Command):
                     cdef['_is_counter']))
 
 
+class scylla_sstable_summary(gdb.Command):
+    """Print content of sstable summary
+
+    Usage: scylla sstable-summary $sst
+
+    Where $sst has to be a sstables::sstable value or reference, or a
+    sstables::shared_sstable instance.
+
+    Example:
+
+        (gdb) scylla sstable-summary $sst
+        header: {min_index_interval = 128, size = 1, memory_size = 21, sampling_level = 128, size_at_full_sampling = 0}
+        first_key: 63617373616e647261
+        last_key: 63617373616e647261
+        [0]: {
+          token: 356242581507269238,
+          key: 63617373616e647261,
+          position: 0}
+
+    Keys are printed in the hexadecimal notation.
+    """
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla sstable-summary', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
+        self.inf = gdb.selected_inferior()
+
+    def to_hex(self, data, size):
+        return bytes(self.inf.read_memory(data, size)).hex()
+
+    def invoke(self, arg, for_tty):
+        arg = gdb.parse_and_eval(arg)
+        typ = arg.type.strip_typedefs()
+        if typ.name.startswith("seastar::lw_shared_ptr"):
+            sst = seastar_lw_shared_ptr(arg).get().dereference()
+        else:
+            sst = arg
+        summary = seastar_lw_shared_ptr(sst['_components']['_value']).get().dereference()['summary']
+
+        gdb.write("header: {}\n".format(summary['header']))
+        gdb.write("first_key: {}\n".format(sstring(summary['first_key']['value'])))
+        gdb.write("last_key: {}\n".format(sstring(summary['last_key']['value'])))
+
+        entries = list(chunked_vector(summary['entries']))
+        for i in range(len(entries)):
+            e = entries[i]
+            gdb.write("[{}]: {{\n  token: {},\n  key: {},\n  position: {}}}\n".format(i,
+                e['token']['_data'],
+                self.to_hex(e['key']['_M_str'], int(e['key']['_M_len'])),
+                e['position']))
+
+
+class scylla_sstable_index_cache(gdb.Command):
+    """Print content of sstable partition-index cache
+
+    Prints index pages present in the partition-cache. Promoted index is
+    not printed.
+
+    Usage: scylla sstable-index-cache $sst
+
+    Where $sst has to be a sstables::sstable value or reference, or a
+    sstables::shared_sstable instance.
+
+    Output format is:
+
+        [$summary_index] : [
+            { key: $partition_key, token: $token, position: $position_in_data_file }
+            ...
+        ]
+        ...
+
+    Example:
+
+        (gdb) scylla sstable-index-cache $sst
+        [0]: [
+          { key: 63617373616e647261, token: 356242581507269238, position: 0 }
+        ]
+        Total: 1 page(s) (1 loaded, 0 loading)
+
+    Keys are printed in the hexadecimal notation.
+    """
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla sstable-index-cache', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
+
+    def invoke(self, arg, for_tty):
+        arg = gdb.parse_and_eval(arg)
+        typ = arg.type
+        if typ.code == gdb.TYPE_CODE_PTR or typ.code == gdb.TYPE_CODE_REF or typ.code == gdb.TYPE_CODE_RVALUE_REF:
+            typ = typ.target().strip_typedefs()
+        if typ.name == "sstables::partition_index_cache":
+            cache = arg
+        else:
+            if typ.name.startswith("seastar::lw_shared_ptr"):
+                sst = seastar_lw_shared_ptr(arg).get()
+            else:
+                sst = arg
+            cache = std_unique_ptr(sst['_index_cache']).get().dereference()
+        tree = bplus_tree(cache['_cache'])
+        loaded_pages = 0
+        loading_pages = 0
+        partition_index_page_type = gdb.lookup_type('sstables::partition_index_page')
+        for n in tree:
+            t = n['_page'].type
+            page = std_variant(n['_page'])
+            if page.index() == 0:
+                loading_pages += 1
+                continue
+            loaded_pages += 1
+            page = page.get_with_type(partition_index_page_type)
+            gdb.write("[{}]: [\n".format(int(n['_key'])))
+            for entry in chunked_managed_vector(page['_entries']):
+                entry = entry['_ptr'].dereference()['_value']
+                key = entry['_key']
+                token = std_optional(entry['_token'])
+                if token:
+                    token = str(int(token.get()['_data']))
+                else:
+                    token = 'null'
+                position = int(entry['_position'])
+
+                gdb.write("  {{ key: {}, token: {}, position: {} }}\n".format(key, token, position))
+            gdb.write(']\n')
+
+        gdb.write("Total: {} page(s) ({} loaded, {} loading)\n".format(loaded_pages + loading_pages, loaded_pages, loading_pages))
+
+
 class permit_stats:
     def __init__(self, *args):
         if len(args) == 2:
@@ -4805,6 +5054,8 @@ scylla_active_sstables()
 scylla_netw()
 scylla_gms()
 scylla_cache()
+scylla_sstable_summary()
+scylla_sstable_index_cache()
 scylla_sstables()
 scylla_memtables()
 scylla_generate_object_graph()
