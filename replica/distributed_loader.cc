@@ -393,20 +393,19 @@ distributed_loader::get_sstables_from_upload_dir(distributed<replica::database>&
 future<> distributed_loader::cleanup_column_family_temp_sst_dirs(sstring sstdir) {
     std::vector<future<>> futures;
 
-    // FIXME: indentation
-        co_await lister::scan_dir(sstdir, { directory_entry_type::directory }, [&] (fs::path sstdir, directory_entry de) {
-            // push futures that remove files/directories into an array of futures,
-            // so that the supplied callback will not block scan_dir() from
-            // reading the next entry in the directory.
-            fs::path dirpath = sstdir / de.name;
-            if (sstables::sstable::is_temp_dir(dirpath)) {
-                dblog.info("Found temporary sstable directory: {}, removing", dirpath);
-                futures.push_back(io_check([dirpath = std::move(dirpath)] () { return lister::rmdir(dirpath); }));
-            }
-            return make_ready_future<>();
-        });
+    co_await lister::scan_dir(sstdir, { directory_entry_type::directory }, [&] (fs::path sstdir, directory_entry de) {
+        // push futures that remove files/directories into an array of futures,
+        // so that the supplied callback will not block scan_dir() from
+        // reading the next entry in the directory.
+        fs::path dirpath = sstdir / de.name;
+        if (sstables::sstable::is_temp_dir(dirpath)) {
+            dblog.info("Found temporary sstable directory: {}, removing", dirpath);
+            futures.push_back(io_check([dirpath = std::move(dirpath)] () { return lister::rmdir(dirpath); }));
+        }
+        return make_ready_future<>();
+    });
 
-            co_await when_all_succeed(futures.begin(), futures.end()).discard_result();
+    co_await when_all_succeed(futures.begin(), futures.end()).discard_result();
 }
 
 future<> distributed_loader::handle_sstables_pending_delete(sstring pending_delete_dir) {
