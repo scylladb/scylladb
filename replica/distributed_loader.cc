@@ -391,8 +391,10 @@ distributed_loader::get_sstables_from_upload_dir(distributed<replica::database>&
 }
 
 future<> distributed_loader::cleanup_column_family_temp_sst_dirs(sstring sstdir) {
-    return do_with(std::vector<future<>>(), [sstdir = std::move(sstdir)] (std::vector<future<>>& futures) {
-        return lister::scan_dir(sstdir, { directory_entry_type::directory }, [&futures] (fs::path sstdir, directory_entry de) {
+    std::vector<future<>> futures;
+
+    // FIXME: indentation
+        co_await lister::scan_dir(sstdir, { directory_entry_type::directory }, [&] (fs::path sstdir, directory_entry de) {
             // push futures that remove files/directories into an array of futures,
             // so that the supplied callback will not block scan_dir() from
             // reading the next entry in the directory.
@@ -402,10 +404,9 @@ future<> distributed_loader::cleanup_column_family_temp_sst_dirs(sstring sstdir)
                 futures.push_back(io_check([dirpath = std::move(dirpath)] () { return lister::rmdir(dirpath); }));
             }
             return make_ready_future<>();
-        }).then([&futures] {
-            return when_all_succeed(futures.begin(), futures.end()).discard_result();
         });
-    });
+
+            co_await when_all_succeed(futures.begin(), futures.end()).discard_result();
 }
 
 future<> distributed_loader::handle_sstables_pending_delete(sstring pending_delete_dir) {
