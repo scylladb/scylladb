@@ -245,11 +245,11 @@ distributed_loader::reshape(sharded<sstables::sstable_directory>& dir, sharded<r
         auto& iop = service::get_local_streaming_priority();
         return d.reshape(cm, table, creator, iop, mode, filter);
     }, uint64_t(0), std::plus<uint64_t>());
-    // FIXME: indentation
-        if (total_size > 0) {
-            auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - start);
-            dblog.info("{}", fmt::format("Reshaped {} in {:.2f} seconds, {}", sstables::pretty_printed_data_size(total_size), duration.count(), sstables::pretty_printed_throughput(total_size, duration)));
-        }
+
+    if (total_size > 0) {
+        auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - start);
+        dblog.info("{}", fmt::format("Reshaped {} in {:.2f} seconds, {}", sstables::pretty_printed_data_size(total_size), duration.count(), sstables::pretty_printed_throughput(total_size, duration)));
+    }
 }
 
 // Loads SSTables into the main directory (or staging) and returns how many were loaded
