@@ -192,6 +192,84 @@ SEASTAR_TEST_CASE(test_loading_shared_values_parallel_loading_explicit_eviction)
     });
 }
 
+SEASTAR_TEST_CASE(test_loading_cache_disable_and_enable) {
+    return seastar::async([] {
+        using namespace std::chrono;
+        load_count = 0;
+        utils::loading_cache<int, sstring, 1, utils::loading_cache_reload_enabled::yes> loading_cache({num_loaders, 1h, 50ms}, testlog, loader);
+        auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
+
+        prepare().get();
+
+        loading_cache.get(0).discard_result().get();
+        loading_cache.get(0).discard_result().get();
+
+        // Disable
+        load_count = 0;
+        loading_cache.update_config({num_loaders, 0ms, 50ms});
+
+        sleep(150ms).get();
+        BOOST_REQUIRE_EQUAL(load_count, 0);
+
+        // Reenable
+        load_count = 0;
+        loading_cache.update_config({num_loaders, 1h, 50ms});
+        sleep(50ms).get();
+
+        // Push the entry into the privileged section. Make sure it's being reloaded.
+        loading_cache.get_ptr(0).discard_result().get();
+        loading_cache.get_ptr(0).discard_result().get();
+
+        BOOST_REQUIRE(eventually_true([&] { return load_count >= 3; }));
+    });
+}
+
+SEASTAR_TEST_CASE(test_loading_cache_reset) {
+    return seastar::async([] {
+        using namespace std::chrono;
+        utils::loading_cache<int, sstring> loading_cache(num_loaders, 1h, testlog);
+        auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
+
+        prepare().get();
+
+        for (int i = 0; i < num_loaders; ++i) {
+            loading_cache.get_ptr(i, loader).discard_result().get();
+        }
+
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), num_loaders);
+
+        loading_cache.reset();
+
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 0);
+    });
+}
+
+SEASTAR_TEST_CASE(test_loading_cache_update_config) {
+    return seastar::async([] {
+        using namespace std::chrono;
+        utils::loading_cache<int, sstring, 1, utils::loading_cache_reload_enabled::yes> loading_cache({num_loaders, 1h, 1h}, testlog, loader);
+        auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
+
+        prepare().get();
+
+        for (int i = 0; i < num_loaders; ++i) {
+            loading_cache.get_ptr(i, loader).discard_result().get();
+        }
+
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), num_loaders);
+
+        loading_cache.update_config({2, 50ms, 50ms});
+
+        sleep(50ms).get();
+
+        for (int i = num_loaders; i < 2 * num_loaders; ++i) {
+            loading_cache.get_ptr(i, loader).discard_result().get();
+        }
+
+        REQUIRE_EVENTUALLY_EQUAL(loading_cache.size(), 2);
+    });
+}
+
 SEASTAR_TEST_CASE(test_loading_cache_loading_same_key) {
     return seastar::async([] {
         using namespace std::chrono;
