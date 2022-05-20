@@ -80,7 +80,6 @@ static logging::logger slogger("storage_service");
 
 storage_service::storage_service(abort_source& abort_source,
     distributed<replica::database>& db, gms::gossiper& gossiper,
-    sharded<db::system_distributed_keyspace>& sys_dist_ks,
     sharded<db::system_keyspace>& sys_ks,
     gms::feature_service& feature_service,
     storage_service_config config,
@@ -107,7 +106,6 @@ storage_service::storage_service(abort_source& abort_source,
         , _erm_factory(erm_factory)
         , _lifecycle_notifier(elc_notif)
         , _batchlog_manager(bm)
-        , _sys_dist_ks(sys_dist_ks)
         , _sys_ks(sys_ks)
         , _snitch_reconfigure([this] { return snitch_reconfigured(); })
 {
@@ -220,11 +218,6 @@ future<> storage_service::snitch_reconfigured() {
     return update_topology(utils::fb_utilities::get_broadcast_address());
 }
 
-future<> storage_service::start_sys_dist_ks() {
-    supervisor::notify("starting system distributed keyspace");
-    co_await _sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
-}
-
 /* Broadcasts the chosen tokens through gossip,
  * together with a CDC generation timestamp and STATUS=NORMAL.
  *
@@ -283,6 +276,7 @@ future<> storage_service::wait_for_ring_to_settle(std::chrono::milliseconds dela
 }
 
 future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_service,
+        sharded<db::system_distributed_keyspace>& sys_dist_ks,
         std::unordered_set<gms::inet_address> initial_contact_nodes,
         std::unordered_set<gms::inet_address> loaded_endpoints,
         std::unordered_map<gms::inet_address, sstring> loaded_peer_features,
@@ -519,12 +513,13 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
             slogger.info("Replacing a node with token(s): {}", bootstrap_tokens);
             // bootstrap_tokens was previously set using tokens gossiped by the replaced node
         }
-        co_await start_sys_dist_ks();
-        co_await mark_existing_views_as_built();
+        co_await sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
+        co_await mark_existing_views_as_built(sys_dist_ks);
         co_await _sys_ks.local().update_tokens(bootstrap_tokens);
         co_await bootstrap(cdc_gen_service, bootstrap_tokens, cdc_gen_id);
     } else {
-        co_await start_sys_dist_ks();
+        supervisor::notify("starting system distributed keyspace");
+        co_await sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
         bootstrap_tokens = co_await db::system_keyspace::get_saved_tokens();
         if (bootstrap_tokens.empty()) {
             bootstrap_tokens = boot_strapper::get_bootstrap_tokens(get_token_metadata_ptr(), _db.local().get_config(), dht::check_token_endpoint::no);
@@ -609,12 +604,12 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     co_await cdc_gen_service.after_join(std::move(cdc_gen_id));
 }
 
-future<> storage_service::mark_existing_views_as_built() {
-    return _db.invoke_on(0, [this] (replica::database& db) {
-        return do_with(db.get_views(), [this] (std::vector<view_ptr>& views) {
-            return parallel_for_each(views, [this] (view_ptr& view) {
-                return db::system_keyspace::mark_view_as_built(view->ks_name(), view->cf_name()).then([this, view] {
-                    return _sys_dist_ks.local().finish_view_build(view->ks_name(), view->cf_name());
+future<> storage_service::mark_existing_views_as_built(sharded<db::system_distributed_keyspace>& sys_dist_ks) {
+    return _db.invoke_on(0, [this, &sys_dist_ks] (replica::database& db) {
+        return do_with(db.get_views(), [this, &sys_dist_ks] (std::vector<view_ptr>& views) {
+            return parallel_for_each(views, [this, &sys_dist_ks] (view_ptr& view) {
+                return db::system_keyspace::mark_view_as_built(view->ks_name(), view->cf_name()).then([this, view, &sys_dist_ks] {
+                    return sys_dist_ks.local().finish_view_build(view->ks_name(), view->cf_name());
                 });
             });
         });
@@ -1336,10 +1331,10 @@ future<> storage_service::uninit_messaging_service_part() {
     return container().invoke_on_all(&service::storage_service::uninit_messaging_service);
 }
 
-future<> storage_service::join_cluster(cql3::query_processor& qp, raft_group0_client& client, cdc::generation_service& cdc_gen_service) {
+future<> storage_service::join_cluster(cql3::query_processor& qp, raft_group0_client& client, cdc::generation_service& cdc_gen_service, sharded<db::system_distributed_keyspace>& sys_dist_ks) {
     assert(this_shard_id() == 0);
 
-    return seastar::async([this, &qp, &client, &cdc_gen_service] {
+    return seastar::async([this, &qp, &client, &cdc_gen_service, &sys_dist_ks] {
         set_mode(mode::STARTING);
 
         _group0 = std::make_unique<raft_group0>(_abort_source, _raft_gr, _messaging.local(),
@@ -1393,7 +1388,7 @@ future<> storage_service::join_cluster(cql3::query_processor& qp, raft_group0_cl
         for (auto& x : loaded_peer_features) {
             slogger.info("peer={}, supported_features={}", x.first, x.second);
         }
-        join_token_ring(cdc_gen_service, std::move(initial_contact_nodes), std::move(loaded_endpoints), std::move(loaded_peer_features), get_ring_delay()).get();
+        join_token_ring(cdc_gen_service, sys_dist_ks, std::move(initial_contact_nodes), std::move(loaded_endpoints), std::move(loaded_peer_features), get_ring_delay()).get();
     });
 }
 

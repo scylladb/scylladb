@@ -707,7 +707,7 @@ public:
             sscfg.available_memory = memory::stats().total_memory();
             ss.start(std::ref(abort_sources), std::ref(db),
                 std::ref(gossiper),
-                std::ref(sys_dist_ks), std::ref(sys_ks),
+                std::ref(sys_ks),
                 std::ref(feature_service), sscfg, std::ref(mm),
                 std::ref(token_metadata), std::ref(erm_factory), std::ref(ms),
                 std::ref(repair),
@@ -782,7 +782,7 @@ public:
             });
 
             try {
-                ss.local().join_cluster(qp.local(), group0_client, cdc_generation_service.local()).get();
+                ss.local().join_cluster(qp.local(), group0_client, cdc_generation_service.local(), sys_dist_ks).get();
             } catch (std::exception& e) {
                 // if any of the defers crashes too, we'll never see
                 // the error

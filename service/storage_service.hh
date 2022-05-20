@@ -172,7 +172,6 @@ private:
 public:
     storage_service(abort_source& as, distributed<replica::database>& db,
         gms::gossiper& gossiper,
-        sharded<db::system_distributed_keyspace>&,
         sharded<db::system_keyspace>&,
         gms::feature_service& feature_service,
         storage_service_config config,
@@ -346,7 +345,8 @@ public:
      *
      * \see init_messaging_service_part
      */
-    future<> join_cluster(cql3::query_processor& qp, raft_group0_client& client, cdc::generation_service& cdc_gen_service);
+    future<> join_cluster(cql3::query_processor& qp, raft_group0_client& client, cdc::generation_service& cdc_gen_service,
+            sharded<db::system_distributed_keyspace>& sys_dist_ks);
 
     future<> drain_on_shutdown();
 
@@ -358,6 +358,7 @@ private:
     bool is_replacing();
     bool is_first_node();
     future<> join_token_ring(cdc::generation_service& cdc_gen_service,
+            sharded<db::system_distributed_keyspace>& sys_dist_ks,
             std::unordered_set<gms::inet_address> initial_contact_nodes,
             std::unordered_set<gms::inet_address> loaded_endpoints,
             std::unordered_map<gms::inet_address, sstring> loaded_peer_features,
@@ -369,7 +370,7 @@ public:
 
 private:
     void set_mode(mode m);
-    future<> mark_existing_views_as_built();
+    future<> mark_existing_views_as_built(sharded<db::system_distributed_keyspace>&);
 
     // Stream data for which we become a new replica.
     // Before that, if we're not replacing another node, inform other nodes about our chosen tokens
@@ -500,7 +501,6 @@ private:
 private:
     // Should be serialized under token_metadata_lock.
     future<> replicate_to_all_cores(mutable_token_metadata_ptr tmptr) noexcept;
-    sharded<db::system_distributed_keyspace>& _sys_dist_ks;
     sharded<db::system_keyspace>& _sys_ks;
     locator::snitch_signal_slot_t _snitch_reconfigure;
     std::unordered_set<gms::inet_address> _replacing_nodes_pending_ranges_updater;
