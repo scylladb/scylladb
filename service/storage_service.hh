@@ -384,7 +384,7 @@ private:
             std::unordered_set<gms::inet_address> initial_contact_nodes,
             std::unordered_set<gms::inet_address> loaded_endpoints,
             std::unordered_map<gms::inet_address, sstring> loaded_peer_features);
-    void join_token_ring(std::chrono::milliseconds);
+    future<> join_token_ring(std::chrono::milliseconds);
     future<> start_sys_dist_ks();
 public:
 

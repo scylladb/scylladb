@@ -436,11 +436,10 @@ future<> storage_service::wait_for_ring_to_settle(std::chrono::milliseconds dela
     slogger.info("Checking bootstrapping/leaving nodes: ok");
 }
 
-// Runs inside seastar::async context
-void storage_service::join_token_ring(std::chrono::milliseconds delay) {
+future<> storage_service::join_token_ring(std::chrono::milliseconds delay) {
     set_mode(mode::JOINING);
 
-    _group0->join_group0().get();
+    co_await _group0->join_group0();
 
     // We bootstrap if we haven't successfully bootstrapped before, as long as we are not a seed.
     // If we are a seed, or if the user manually sets auto_bootstrap to false,
@@ -456,13 +455,13 @@ void storage_service::join_token_ring(std::chrono::milliseconds delay) {
         if (resume_bootstrap) {
             slogger.warn("Detected previous bootstrap failure; retrying");
         } else {
-            _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::IN_PROGRESS).get();
+            co_await _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::IN_PROGRESS);
         }
         slogger.info("waiting for ring information");
 
         // if our schema hasn't matched yet, keep sleeping until it does
         // (post CASSANDRA-1391 we don't expect this to be necessary very often, but it doesn't hurt to be careful)
-        wait_for_ring_to_settle(delay).get();
+        co_await wait_for_ring_to_settle(delay);
 
         if (!is_replacing()) {
             auto tmptr = get_token_metadata_ptr();
@@ -472,7 +471,7 @@ void storage_service::join_token_ring(std::chrono::milliseconds delay) {
             }
             slogger.info("getting bootstrap token");
             if (resume_bootstrap) {
-                _bootstrap_tokens = db::system_keyspace::get_saved_tokens().get0();
+                _bootstrap_tokens = co_await db::system_keyspace::get_saved_tokens();
                 if (!_bootstrap_tokens.empty()) {
                     slogger.info("Using previously saved tokens = {}", _bootstrap_tokens);
                 } else {
@@ -486,7 +485,7 @@ void storage_service::join_token_ring(std::chrono::milliseconds delay) {
             if (*replace_addr != get_broadcast_address()) {
                 // Sleep additionally to make sure that the server actually is not alive
                 // and giving it more time to gossip if alive.
-                sleep_abortable(service::load_broadcaster::BROADCAST_INTERVAL, _abort_source).get();
+                co_await sleep_abortable(service::load_broadcaster::BROADCAST_INTERVAL, _abort_source);
 
                 // check for operator errors...
                 const auto tmptr = get_token_metadata_ptr();
@@ -502,21 +501,21 @@ void storage_service::join_token_ring(std::chrono::milliseconds delay) {
                     }
                 }
             } else {
-                sleep_abortable(get_ring_delay(), _abort_source).get();
+                co_await sleep_abortable(get_ring_delay(), _abort_source);
             }
             slogger.info("Replacing a node with token(s): {}", _bootstrap_tokens);
             // _bootstrap_tokens was previously set in prepare_to_join using tokens gossiped by the replaced node
         }
-        start_sys_dist_ks().get();
-        mark_existing_views_as_built().get();
-        _sys_ks.local().update_tokens(_bootstrap_tokens).get();
-        bootstrap().get(); // blocks until finished
+        co_await start_sys_dist_ks();
+        co_await mark_existing_views_as_built();
+        co_await _sys_ks.local().update_tokens(_bootstrap_tokens);
+        co_await bootstrap();
     } else {
-        start_sys_dist_ks().get();
-        _bootstrap_tokens = db::system_keyspace::get_saved_tokens().get0();
+        co_await start_sys_dist_ks();
+        _bootstrap_tokens = co_await db::system_keyspace::get_saved_tokens();
         if (_bootstrap_tokens.empty()) {
             _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(get_token_metadata_ptr(), _db.local().get_config(), dht::check_token_endpoint::no);
-            _sys_ks.local().update_tokens(_bootstrap_tokens).get();
+            co_await _sys_ks.local().update_tokens(_bootstrap_tokens);
         } else {
             size_t num_tokens = _db.local().get_config().num_tokens();
             if (_bootstrap_tokens.size() != num_tokens) {
@@ -528,12 +527,12 @@ void storage_service::join_token_ring(std::chrono::milliseconds delay) {
     }
 
     slogger.debug("Setting tokens to {}", _bootstrap_tokens);
-    mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) {
+    co_await mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) {
         // This node must know about its chosen tokens before other nodes do
         // since they may start sending writes to this node after it gossips status = NORMAL.
         // Therefore, in case we haven't updated _token_metadata with our tokens yet, do it now.
         return tmptr->update_normal_tokens(_bootstrap_tokens, get_broadcast_address());
-    }).get();
+    });
 
     if (!_sys_ks.local().bootstrap_complete()) {
         // If we're not bootstrapping then we shouldn't have chosen a CDC streams timestamp yet.
@@ -541,7 +540,7 @@ void storage_service::join_token_ring(std::chrono::milliseconds delay) {
 
         // Don't try rewriting CDC stream description tables.
         // See cdc.md design notes, `Streams description table V1 and rewriting` section, for explanation.
-        db::system_keyspace::cdc_set_rewritten(std::nullopt).get();
+        co_await db::system_keyspace::cdc_set_rewritten(std::nullopt);
     }
 
     if (!_cdc_gen_id) {
@@ -562,7 +561,7 @@ void storage_service::join_token_ring(std::chrono::milliseconds delay) {
                 && (!_sys_ks.local().bootstrap_complete()
                     || cdc::should_propose_first_generation(get_broadcast_address(), _gossiper))) {
             try {
-                _cdc_gen_id = _cdc_gen_service.local().make_new_generation(_bootstrap_tokens, !is_first_node()).get0();
+                _cdc_gen_id = co_await _cdc_gen_service.local().make_new_generation(_bootstrap_tokens, !is_first_node());
             } catch (...) {
                 cdc_log.warn(
                     "Could not create a new CDC generation: {}. This may make it impossible to use CDC or cause performance problems."
@@ -573,18 +572,18 @@ void storage_service::join_token_ring(std::chrono::milliseconds delay) {
 
     // Persist the CDC streams timestamp before we persist bootstrap_state = COMPLETED.
     if (_cdc_gen_id) {
-        db::system_keyspace::update_cdc_generation_id(*_cdc_gen_id).get();
+        co_await db::system_keyspace::update_cdc_generation_id(*_cdc_gen_id);
     }
     // If we crash now, we will choose a new CDC streams timestamp anyway (because we will also choose a new set of tokens).
     // But if we crash after setting bootstrap_state = COMPLETED, we will keep using the persisted CDC streams timestamp after restarting.
 
-    _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED).get();
+    co_await _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED);
     // At this point our local tokens and CDC streams timestamp are chosen (_bootstrap_tokens, _cdc_gen_id) and will not be changed.
 
-    _group0->become_voter().get();
+    co_await _group0->become_voter();
 
     // start participating in the ring.
-    set_gossip_tokens(_gossiper, _bootstrap_tokens, _cdc_gen_id).get();
+    co_await set_gossip_tokens(_gossiper, _bootstrap_tokens, _cdc_gen_id);
 
     set_mode(mode::NORMAL);
 
@@ -594,7 +593,7 @@ void storage_service::join_token_ring(std::chrono::milliseconds delay) {
         throw std::runtime_error(err);
     }
 
-    _cdc_gen_service.local().after_join(std::move(_cdc_gen_id)).get();
+    co_await _cdc_gen_service.local().after_join(std::move(_cdc_gen_id));
 }
 
 future<> storage_service::mark_existing_views_as_built() {
@@ -1382,7 +1381,7 @@ future<> storage_service::join_cluster(cql3::query_processor& qp, raft_group0_cl
             slogger.info("peer={}, supported_features={}", x.first, x.second);
         }
         prepare_to_join(std::move(initial_contact_nodes), std::move(loaded_endpoints), std::move(loaded_peer_features)).get();
-        join_token_ring(get_ring_delay());
+        join_token_ring(get_ring_delay()).get();
     });
 }
 
