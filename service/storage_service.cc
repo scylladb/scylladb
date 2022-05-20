@@ -289,6 +289,7 @@ future<> storage_service::join_token_ring(
         std::unordered_set<gms::inet_address> loaded_endpoints,
         std::unordered_map<gms::inet_address, sstring> loaded_peer_features,
         std::chrono::milliseconds delay) {
+    std::unordered_set<token> bootstrap_tokens;
     std::map<gms::application_state, gms::versioned_value> app_states;
     if (_sys_ks.local().was_decommissioned()) {
         if (_db.local().get_config().override_decommission()) {
@@ -310,7 +311,7 @@ future<> storage_service::join_token_ring(
         if (_sys_ks.local().bootstrap_complete()) {
             throw std::runtime_error("Cannot replace address with a node that is already bootstrapped");
         }
-        _bootstrap_tokens = co_await prepare_replacement_info(initial_contact_nodes, loaded_peer_features);
+        bootstrap_tokens = co_await prepare_replacement_info(initial_contact_nodes, loaded_peer_features);
         auto replace_address = get_replace_address();
         replacing_a_node_with_same_ip = *replace_address == get_broadcast_address();
         replacing_a_node_with_diff_ip = *replace_address != get_broadcast_address();
@@ -318,7 +319,7 @@ future<> storage_service::join_token_ring(
         slogger.info("Replacing a node with {} IP address, my address={}, node being replaced={}",
             get_broadcast_address() == *replace_address ? "the same" : "a different",
             get_broadcast_address(), *replace_address);
-        co_await tmptr->update_normal_tokens(_bootstrap_tokens, *replace_address);
+        co_await tmptr->update_normal_tokens(bootstrap_tokens, *replace_address);
     } else if (should_bootstrap()) {
         co_await check_for_endpoint_collision(initial_contact_nodes, loaded_peer_features);
     } else {
@@ -401,7 +402,7 @@ future<> storage_service::join_token_ring(
         app_states.emplace(gms::application_state::STATUS, versioned_value::normal(my_tokens));
     }
     if (replacing_a_node_with_same_ip || replacing_a_node_with_diff_ip) {
-        app_states.emplace(gms::application_state::TOKENS, versioned_value::tokens(_bootstrap_tokens));
+        app_states.emplace(gms::application_state::TOKENS, versioned_value::tokens(bootstrap_tokens));
     }
     auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
     app_states.emplace(gms::application_state::SNITCH_NAME, versioned_value::snitch_name(snitch->get_name()));
@@ -470,14 +471,14 @@ future<> storage_service::join_token_ring(
             }
             slogger.info("getting bootstrap token");
             if (resume_bootstrap) {
-                _bootstrap_tokens = co_await db::system_keyspace::get_saved_tokens();
-                if (!_bootstrap_tokens.empty()) {
-                    slogger.info("Using previously saved tokens = {}", _bootstrap_tokens);
+                bootstrap_tokens = co_await db::system_keyspace::get_saved_tokens();
+                if (!bootstrap_tokens.empty()) {
+                    slogger.info("Using previously saved tokens = {}", bootstrap_tokens);
                 } else {
-                    _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(tmptr, _db.local().get_config(), dht::check_token_endpoint::yes);
+                    bootstrap_tokens = boot_strapper::get_bootstrap_tokens(tmptr, _db.local().get_config(), dht::check_token_endpoint::yes);
                 }
             } else {
-                _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(tmptr, _db.local().get_config(), dht::check_token_endpoint::yes);
+                bootstrap_tokens = boot_strapper::get_bootstrap_tokens(tmptr, _db.local().get_config(), dht::check_token_endpoint::yes);
             }
         } else {
             auto replace_addr = get_replace_address();
@@ -488,7 +489,7 @@ future<> storage_service::join_token_ring(
 
                 // check for operator errors...
                 const auto tmptr = get_token_metadata_ptr();
-                for (auto token : _bootstrap_tokens) {
+                for (auto token : bootstrap_tokens) {
                     auto existing = tmptr->get_endpoint(token);
                     if (existing) {
                         auto* eps = _gossiper.get_endpoint_state_for_endpoint_ptr(*existing);
@@ -502,35 +503,35 @@ future<> storage_service::join_token_ring(
             } else {
                 co_await sleep_abortable(get_ring_delay(), _abort_source);
             }
-            slogger.info("Replacing a node with token(s): {}", _bootstrap_tokens);
-            // _bootstrap_tokens was previously set in prepare_to_join using tokens gossiped by the replaced node
+            slogger.info("Replacing a node with token(s): {}", bootstrap_tokens);
+            // bootstrap_tokens was previously set using tokens gossiped by the replaced node
         }
         co_await start_sys_dist_ks();
         co_await mark_existing_views_as_built();
-        co_await _sys_ks.local().update_tokens(_bootstrap_tokens);
-        co_await bootstrap();
+        co_await _sys_ks.local().update_tokens(bootstrap_tokens);
+        co_await bootstrap(bootstrap_tokens);
     } else {
         co_await start_sys_dist_ks();
-        _bootstrap_tokens = co_await db::system_keyspace::get_saved_tokens();
-        if (_bootstrap_tokens.empty()) {
-            _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(get_token_metadata_ptr(), _db.local().get_config(), dht::check_token_endpoint::no);
-            co_await _sys_ks.local().update_tokens(_bootstrap_tokens);
+        bootstrap_tokens = co_await db::system_keyspace::get_saved_tokens();
+        if (bootstrap_tokens.empty()) {
+            bootstrap_tokens = boot_strapper::get_bootstrap_tokens(get_token_metadata_ptr(), _db.local().get_config(), dht::check_token_endpoint::no);
+            co_await _sys_ks.local().update_tokens(bootstrap_tokens);
         } else {
             size_t num_tokens = _db.local().get_config().num_tokens();
-            if (_bootstrap_tokens.size() != num_tokens) {
-                throw std::runtime_error(format("Cannot change the number of tokens from {:d} to {:d}", _bootstrap_tokens.size(), num_tokens));
+            if (bootstrap_tokens.size() != num_tokens) {
+                throw std::runtime_error(format("Cannot change the number of tokens from {:d} to {:d}", bootstrap_tokens.size(), num_tokens));
             } else {
-                slogger.info("Using saved tokens {}", _bootstrap_tokens);
+                slogger.info("Using saved tokens {}", bootstrap_tokens);
             }
         }
     }
 
-    slogger.debug("Setting tokens to {}", _bootstrap_tokens);
-    co_await mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) {
+    slogger.debug("Setting tokens to {}", bootstrap_tokens);
+    co_await mutate_token_metadata([this, &bootstrap_tokens] (mutable_token_metadata_ptr tmptr) {
         // This node must know about its chosen tokens before other nodes do
         // since they may start sending writes to this node after it gossips status = NORMAL.
         // Therefore, in case we haven't updated _token_metadata with our tokens yet, do it now.
-        return tmptr->update_normal_tokens(_bootstrap_tokens, get_broadcast_address());
+        return tmptr->update_normal_tokens(bootstrap_tokens, get_broadcast_address());
     });
 
     if (!_sys_ks.local().bootstrap_complete()) {
@@ -560,7 +561,7 @@ future<> storage_service::join_token_ring(
                 && (!_sys_ks.local().bootstrap_complete()
                     || cdc::should_propose_first_generation(get_broadcast_address(), _gossiper))) {
             try {
-                _cdc_gen_id = co_await _cdc_gen_service.local().make_new_generation(_bootstrap_tokens, !is_first_node());
+                _cdc_gen_id = co_await _cdc_gen_service.local().make_new_generation(bootstrap_tokens, !is_first_node());
             } catch (...) {
                 cdc_log.warn(
                     "Could not create a new CDC generation: {}. This may make it impossible to use CDC or cause performance problems."
@@ -577,12 +578,12 @@ future<> storage_service::join_token_ring(
     // But if we crash after setting bootstrap_state = COMPLETED, we will keep using the persisted CDC streams timestamp after restarting.
 
     co_await _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED);
-    // At this point our local tokens and CDC streams timestamp are chosen (_bootstrap_tokens, _cdc_gen_id) and will not be changed.
+    // At this point our local tokens and CDC streams timestamp are chosen (bootstrap_tokens, _cdc_gen_id) and will not be changed.
 
     co_await _group0->become_voter();
 
     // start participating in the ring.
-    co_await set_gossip_tokens(_gossiper, _bootstrap_tokens, _cdc_gen_id);
+    co_await set_gossip_tokens(_gossiper, bootstrap_tokens, _cdc_gen_id);
 
     set_mode(mode::NORMAL);
 
@@ -628,8 +629,8 @@ std::list<gms::inet_address> storage_service::get_ignore_dead_nodes_for_replace(
 }
 
 // Runs inside seastar::async context
-future<> storage_service::bootstrap() {
-    return seastar::async([this] {
+future<> storage_service::bootstrap(std::unordered_set<token>& bootstrap_tokens) {
+    return seastar::async([this, &bootstrap_tokens] {
         auto bootstrap_rbno = is_repair_based_node_ops_enabled(streaming::stream_reason::bootstrap);
 
         set_mode(mode::BOOTSTRAP);
@@ -672,10 +673,10 @@ future<> storage_service::bootstrap() {
             if (!bootstrap_rbno) {
                 // When is_repair_based_node_ops_enabled is true, the bootstrap node
                 // will use node_ops_cmd to bootstrap, node_ops_cmd will update the pending ranges.
-                slogger.debug("bootstrap: update pending ranges: endpoint={} bootstrap_tokens={}", get_broadcast_address(), _bootstrap_tokens);
-                mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) {
+                slogger.debug("bootstrap: update pending ranges: endpoint={} bootstrap_tokens={}", get_broadcast_address(), bootstrap_tokens);
+                mutate_token_metadata([this, &bootstrap_tokens] (mutable_token_metadata_ptr tmptr) {
                     auto endpoint = get_broadcast_address();
-                    tmptr->add_bootstrap_tokens(_bootstrap_tokens, endpoint);
+                    tmptr->add_bootstrap_tokens(bootstrap_tokens, endpoint);
                     return update_pending_ranges(std::move(tmptr), format("bootstrapping node {}", endpoint));
                 }).get();
             }
@@ -684,20 +685,20 @@ future<> storage_service::bootstrap() {
             // We don't do any other generation switches (unless we crash before complecting bootstrap).
             assert(!_cdc_gen_id);
 
-            _cdc_gen_id = _cdc_gen_service.local().make_new_generation(_bootstrap_tokens, !is_first_node()).get0();
+            _cdc_gen_id = _cdc_gen_service.local().make_new_generation(bootstrap_tokens, !is_first_node()).get0();
 
             if (!bootstrap_rbno) {
                 // When is_repair_based_node_ops_enabled is true, the bootstrap node
                 // will use node_ops_cmd to bootstrap, bootstrapping gossip status is not needed for bootstrap.
                 _gossiper.add_local_application_state({
-                    { gms::application_state::TOKENS, versioned_value::tokens(_bootstrap_tokens) },
+                    { gms::application_state::TOKENS, versioned_value::tokens(bootstrap_tokens) },
                     { gms::application_state::CDC_GENERATION_ID, versioned_value::cdc_generation_id(_cdc_gen_id) },
-                    { gms::application_state::STATUS, versioned_value::bootstrapping(_bootstrap_tokens) },
+                    { gms::application_state::STATUS, versioned_value::bootstrapping(bootstrap_tokens) },
                 }).get();
 
                 slogger.info("sleeping {} ms for pending range setup", get_ring_delay().count());
                 _gossiper.wait_for_range_setup().get();
-                dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), _bootstrap_tokens, get_token_metadata_ptr());
+                dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), bootstrap_tokens, get_token_metadata_ptr());
                 slogger.info("Starting to bootstrap...");
                 bs.bootstrap(streaming::stream_reason::bootstrap, _gossiper).get();
             } else {
@@ -706,7 +707,7 @@ future<> storage_service::bootstrap() {
                     { gms::application_state::CDC_GENERATION_ID, versioned_value::cdc_generation_id(_cdc_gen_id) },
                 }).get();
                 slogger.info("Starting to bootstrap...");
-                run_bootstrap_ops();
+                run_bootstrap_ops(bootstrap_tokens);
             }
         } else {
             auto replace_addr = get_replace_address();
@@ -714,7 +715,7 @@ future<> storage_service::bootstrap() {
             _sys_ks.local().remove_endpoint(*replace_addr).get();
             _group0->leave_group0(replace_addr).get();
             slogger.info("Starting to bootstrap...");
-            run_replace_ops();
+            run_replace_ops(bootstrap_tokens);
         }
 
         _db.invoke_on_all([this] (replica::database& db) {
@@ -723,7 +724,7 @@ future<> storage_service::bootstrap() {
             }
         }).get();
 
-        slogger.info("Bootstrap completed! for the tokens {}", _bootstrap_tokens);
+        slogger.info("Bootstrap completed! for the tokens {}", bootstrap_tokens);
     });
 }
 
@@ -1971,7 +1972,7 @@ future<> storage_service::decommission() {
 }
 
 // Runs inside seastar::async context
-void storage_service::run_bootstrap_ops() {
+void storage_service::run_bootstrap_ops(std::unordered_set<token>& bootstrap_tokens) {
     auto uuid = utils::make_random_uuid();
     // TODO: Specify ignore_nodes
     std::list<gms::inet_address> ignore_nodes;
@@ -2021,7 +2022,7 @@ void storage_service::run_bootstrap_ops() {
     std::unordered_set<gms::inet_address> nodes_unknown_verb;
     std::unordered_set<gms::inet_address> nodes_down;
     std::unordered_set<gms::inet_address> nodes_aborted;
-    auto tokens = std::list<dht::token>(_bootstrap_tokens.begin(), _bootstrap_tokens.end());
+    auto tokens = std::list<dht::token>(bootstrap_tokens.begin(), bootstrap_tokens.end());
     std::unordered_map<gms::inet_address, std::list<dht::token>> bootstrap_nodes = {
         {get_broadcast_address(), tokens},
     };
@@ -2060,7 +2061,7 @@ void storage_service::run_bootstrap_ops() {
         });
 
         // Step 5: Sync data for bootstrap
-        _repair.local().bootstrap_with_repair(get_token_metadata_ptr(), _bootstrap_tokens).get();
+        _repair.local().bootstrap_with_repair(get_token_metadata_ptr(), bootstrap_tokens).get();
 
         // Step 6: Finish
         req.cmd = node_ops_cmd::bootstrap_done;
@@ -2092,7 +2093,7 @@ void storage_service::run_bootstrap_ops() {
 }
 
 // Runs inside seastar::async context
-void storage_service::run_replace_ops() {
+void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_tokens) {
     auto replace_address = get_replace_address().value();
     auto uuid = utils::make_random_uuid();
     std::list<gms::inet_address> ignore_nodes = get_ignore_dead_nodes_for_replace();
@@ -2179,10 +2180,10 @@ void storage_service::run_replace_ops() {
         // Step 7: Sync data for replace
         if (is_repair_based_node_ops_enabled(streaming::stream_reason::replace)) {
             slogger.info("replace[{}]: Using repair based node ops to sync data", uuid);
-            _repair.local().replace_with_repair(get_token_metadata_ptr(), _bootstrap_tokens, ignore_nodes).get();
+            _repair.local().replace_with_repair(get_token_metadata_ptr(), bootstrap_tokens, ignore_nodes).get();
         } else {
             slogger.info("replace[{}]: Using streaming based node ops to sync data", uuid);
-            dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), _bootstrap_tokens, get_token_metadata_ptr());
+            dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), bootstrap_tokens, get_token_metadata_ptr());
             bs.bootstrap(streaming::stream_reason::replace, _gossiper, replace_address).get();
         }
 

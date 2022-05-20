@@ -286,8 +286,6 @@ private:
     endpoint_lifecycle_notifier& _lifecycle_notifier;
     sharded<db::batchlog_manager>& _batchlog_manager;
 
-    std::unordered_set<token> _bootstrap_tokens;
-
     /* The timestamp of the CDC streams generation that this node has proposed when joining.
      * This value is nullopt only when:
      * 1. this node is being upgraded from a non-CDC version,
@@ -330,8 +328,8 @@ private:
     future<replacement_info> prepare_replacement_info(std::unordered_set<gms::inet_address> initial_contact_nodes,
             const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features);
 
-    void run_replace_ops();
-    void run_bootstrap_ops();
+    void run_replace_ops(std::unordered_set<token>& bootstrap_tokens);
+    void run_bootstrap_ops(std::unordered_set<token>& bootstrap_tokens);
 
     std::list<gms::inet_address> get_ignore_dead_nodes_for_replace();
     future<> wait_for_ring_to_settle(std::chrono::milliseconds delay);
@@ -395,9 +393,9 @@ private:
     future<> mark_existing_views_as_built();
 
     // Stream data for which we become a new replica.
-    // Before that, if we're not replacing another node, inform other nodes about our chosen tokens (_bootstrap_tokens)
+    // Before that, if we're not replacing another node, inform other nodes about our chosen tokens
     // and wait for RING_DELAY ms so that we receive new writes from coordinators during streaming.
-    future<> bootstrap();
+    future<> bootstrap(std::unordered_set<token>& bootstrap_tokens);
 
 public:
     /**
