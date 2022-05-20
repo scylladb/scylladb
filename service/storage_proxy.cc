@@ -1982,7 +1982,7 @@ storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::tok
     live_endpoints.reserve(all.size());
     dead_endpoints.reserve(all.size());
     std::partition_copy(all.begin(), all.end(), std::back_inserter(live_endpoints),
-            std::back_inserter(dead_endpoints), std::bind1st(std::mem_fn(&gms::gossiper::is_alive), &_gossiper));
+            std::back_inserter(dead_endpoints), std::bind_front(std::mem_fn(&gms::gossiper::is_alive), &_gossiper));
 
     slogger.trace("creating write handler with live: {} dead: {}", live_endpoints, dead_endpoints);
     tracing::trace(tr_state, "Creating write handler with live: {} dead: {}", live_endpoints, dead_endpoints);
@@ -2291,7 +2291,7 @@ storage_proxy::get_paxos_participants(const sstring& ks_name, const dht::token &
     live_endpoints.reserve(participants);
 
     boost::copy(boost::range::join(natural_endpoints, pending_endpoints) |
-            boost::adaptors::filtered(std::bind1st(std::mem_fn(&gms::gossiper::is_alive), &_gossiper)), std::back_inserter(live_endpoints));
+            boost::adaptors::filtered(std::bind_front(std::mem_fn(&gms::gossiper::is_alive), &_gossiper)), std::back_inserter(live_endpoints));
 
     if (live_endpoints.size() < required_participants) {
         throw exceptions::unavailable_exception(cl_for_paxos, required_participants, live_endpoints.size());
@@ -4827,7 +4827,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
 inet_address_vector_replica_set storage_proxy::get_live_endpoints(replica::keyspace& ks, const dht::token& token) const {
     auto erm = ks.get_effective_replication_map();
     inet_address_vector_replica_set eps = erm->get_natural_endpoints_without_node_being_replaced(token);
-    auto itend = boost::range::remove_if(eps, std::not1(std::bind1st(std::mem_fn(&gms::gossiper::is_alive), &_gossiper)));
+    auto itend = boost::range::remove_if(eps, std::not_fn(std::bind_front(std::mem_fn(&gms::gossiper::is_alive), &_gossiper)));
     eps.erase(itend, eps.end());
     return eps;
 }
