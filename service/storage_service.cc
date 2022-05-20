@@ -354,6 +354,18 @@ future<> storage_service::prepare_to_join(
     auto generation_number = co_await db::system_keyspace::increment_and_get_generation();
     auto advertise = gms::advertise_myself(!replacing_a_node_with_same_ip);
     co_await _gossiper.start_gossiping(generation_number, app_states, advertise);
+
+    // Raft group0 can be joined before we wait for gossip to settle
+    // if one of the following applies:
+    //  - it's a fresh node start (in a fresh cluster)
+    //  - it's a restart of an existing node, which have already joined some group0
+    const bool can_join_with_raft =
+        _db.local().get_config().check_experimental(db::experimental_features_t::RAFT) && (
+            _sys_ks.local().bootstrap_needed() ||
+            !_sys_ks.local().get_raft_group0_id().get().is_null());
+    if (can_join_with_raft) {
+        co_await _group0->join_group0();
+    }
 }
 
 future<> storage_service::start_sys_dist_ks() {
@@ -3660,11 +3672,6 @@ future<> storage_service::node_ops_abort_thread() {
         }
     }
     slogger.info("Stopped node_ops_abort_thread");
-}
-
-future<> storage_service::join_group0() {
-    assert(_group0);
-    return _group0->join_group0();
 }
 
 } // namespace service

@@ -1276,20 +1276,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 return ss.local().init_server(qp.local(), group0_client);
             }).get();
 
-            // Raft group0 can be joined before we wait for gossip to settle
-            // if one of the following applies:
-            //  - it's a fresh node start (in a fresh cluster)
-            //  - it's a restart of an existing node, which have already joined some group0
-            const bool can_join_with_raft =
-                cfg->check_experimental(db::experimental_features_t::RAFT) && (
-                    sys_ks.local().bootstrap_needed() ||
-                    !sys_ks.local().get_raft_group0_id().get().is_null());
-            if (can_join_with_raft) {
-                with_scheduling_group(maintenance_scheduling_group, [&ss] {
-                    return ss.local().join_group0();
-                }).get();
-            }
-
             auto schema_change_announce = db.local().observable_schema_version().observe([&mm] (utils::UUID schema_version) mutable {
                 mm.local().passive_announce(std::move(schema_version));
             });
