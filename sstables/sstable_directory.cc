@@ -430,9 +430,9 @@ sstable_directory::do_for_each_sstable(std::function<future<>(sstables::shared_s
 template <typename Container, typename Func>
 future<>
 sstable_directory::parallel_for_each_restricted(Container&& C, Func&& func) {
-    return do_with(std::move(C), [this, func = std::move(func)] (Container& c) mutable {
-      return max_concurrent_for_each(c, _load_parallelism, [this, func = std::move(func)] (auto& el) mutable {
-        return with_semaphore(_load_semaphore, 1, [this, func,  el = std::move(el)] () mutable {
+    return do_with(std::move(C), std::move(func), [this] (Container& c, Func& func) mutable {
+      return max_concurrent_for_each(c, _load_parallelism, [this, &func] (auto& el) mutable {
+        return with_semaphore(_load_semaphore, 1, [this, &func,  el = std::move(el)] () mutable {
             return func(el);
         });
       });
