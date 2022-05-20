@@ -136,7 +136,7 @@ Next, the node starts gossiping the ID of the new generation together with its s
 ```
         _gossiper.add_local_application_state({
             { gms::application_state::TOKENS, versioned_value::tokens(bootstrap_tokens) },
-            { gms::application_state::CDC_GENERATION_ID, versioned_value::cdc_generation_id(_cdc_gen_id) },
+            { gms::application_state::CDC_GENERATION_ID, versioned_value::cdc_generation_id(cdc_gen_id) },
             { gms::application_state::STATUS, versioned_value::bootstrapping(bootstrap_tokens) },
         }).get();
 ```

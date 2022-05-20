@@ -286,21 +286,6 @@ private:
     endpoint_lifecycle_notifier& _lifecycle_notifier;
     sharded<db::batchlog_manager>& _batchlog_manager;
 
-    /* The timestamp of the CDC streams generation that this node has proposed when joining.
-     * This value is nullopt only when:
-     * 1. this node is being upgraded from a non-CDC version,
-     * 2. this node is starting for the first time or restarting with CDC previously disabled,
-     *    in which case the value should become populated before we leave the join_token_ring procedure.
-     *
-     * Important: this variable is using only during the startup procedure. It is moved out from
-     * at the end of `join_token_ring`; the responsibility handling of CDC generations is passed
-     * to cdc::generation_service.
-     *
-     * DO NOT use this variable after `join_token_ring` (i.e. after we call `generation_service::after_join`
-     * and pass it the ownership of the timestamp.
-     */
-    std::optional<cdc::generation_id> _cdc_gen_id;
-
 public:
     // should only be called via JMX
     future<> stop_gossiping();
@@ -395,7 +380,7 @@ private:
     // Stream data for which we become a new replica.
     // Before that, if we're not replacing another node, inform other nodes about our chosen tokens
     // and wait for RING_DELAY ms so that we receive new writes from coordinators during streaming.
-    future<> bootstrap(std::unordered_set<token>& bootstrap_tokens);
+    future<> bootstrap(std::unordered_set<token>& bootstrap_tokens, std::optional<cdc::generation_id>& cdc_gen_id);
 
 public:
     /**

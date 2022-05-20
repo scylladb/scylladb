@@ -291,6 +291,21 @@ future<> storage_service::join_token_ring(
         std::chrono::milliseconds delay) {
     std::unordered_set<token> bootstrap_tokens;
     std::map<gms::application_state, gms::versioned_value> app_states;
+    /* The timestamp of the CDC streams generation that this node has proposed when joining.
+     * This value is nullopt only when:
+     * 1. this node is being upgraded from a non-CDC version,
+     * 2. this node is starting for the first time or restarting with CDC previously disabled,
+     *    in which case the value should become populated before we leave the join_token_ring procedure.
+     *
+     * Important: this variable is using only during the startup procedure. It is moved out from
+     * at the end of `join_token_ring`; the responsibility handling of CDC generations is passed
+     * to cdc::generation_service.
+     *
+     * DO NOT use this variable after `join_token_ring` (i.e. after we call `generation_service::after_join`
+     * and pass it the ownership of the timestamp.
+     */
+    std::optional<cdc::generation_id> cdc_gen_id;
+
     if (_sys_ks.local().was_decommissioned()) {
         if (_db.local().get_config().override_decommission()) {
             slogger.warn("This node was decommissioned, but overriding by operator request.");
@@ -350,8 +365,8 @@ future<> storage_service::join_token_ring(
         // Therefore we update _token_metadata now, before gossip starts.
         co_await tmptr->update_normal_tokens(my_tokens, get_broadcast_address());
 
-        _cdc_gen_id = co_await db::system_keyspace::get_cdc_generation_id();
-        if (!_cdc_gen_id) {
+        cdc_gen_id = co_await db::system_keyspace::get_cdc_generation_id();
+        if (!cdc_gen_id) {
             // We could not have completed joining if we didn't generate and persist a CDC streams timestamp,
             // unless we are restarting after upgrading from non-CDC supported version.
             // In that case we won't begin a CDC generation: it should be done by one of the nodes
@@ -398,7 +413,7 @@ future<> storage_service::join_token_ring(
         // Order is important: both the CDC streams timestamp and tokens must be known when a node handles our status.
         // Exception: there might be no CDC streams timestamp proposed by us if we're upgrading from a non-CDC version.
         app_states.emplace(gms::application_state::TOKENS, versioned_value::tokens(my_tokens));
-        app_states.emplace(gms::application_state::CDC_GENERATION_ID, versioned_value::cdc_generation_id(_cdc_gen_id));
+        app_states.emplace(gms::application_state::CDC_GENERATION_ID, versioned_value::cdc_generation_id(cdc_gen_id));
         app_states.emplace(gms::application_state::STATUS, versioned_value::normal(my_tokens));
     }
     if (replacing_a_node_with_same_ip || replacing_a_node_with_diff_ip) {
@@ -509,7 +524,7 @@ future<> storage_service::join_token_ring(
         co_await start_sys_dist_ks();
         co_await mark_existing_views_as_built();
         co_await _sys_ks.local().update_tokens(bootstrap_tokens);
-        co_await bootstrap(bootstrap_tokens);
+        co_await bootstrap(bootstrap_tokens, cdc_gen_id);
     } else {
         co_await start_sys_dist_ks();
         bootstrap_tokens = co_await db::system_keyspace::get_saved_tokens();
@@ -536,14 +551,14 @@ future<> storage_service::join_token_ring(
 
     if (!_sys_ks.local().bootstrap_complete()) {
         // If we're not bootstrapping then we shouldn't have chosen a CDC streams timestamp yet.
-        assert(should_bootstrap() || !_cdc_gen_id);
+        assert(should_bootstrap() || !cdc_gen_id);
 
         // Don't try rewriting CDC stream description tables.
         // See cdc.md design notes, `Streams description table V1 and rewriting` section, for explanation.
         co_await db::system_keyspace::cdc_set_rewritten(std::nullopt);
     }
 
-    if (!_cdc_gen_id) {
+    if (!cdc_gen_id) {
         // If we didn't observe any CDC generation at this point, then either
         // 1. we're replacing a node,
         // 2. we've already bootstrapped, but are upgrading from a non-CDC version,
@@ -561,7 +576,7 @@ future<> storage_service::join_token_ring(
                 && (!_sys_ks.local().bootstrap_complete()
                     || cdc::should_propose_first_generation(get_broadcast_address(), _gossiper))) {
             try {
-                _cdc_gen_id = co_await _cdc_gen_service.local().make_new_generation(bootstrap_tokens, !is_first_node());
+                cdc_gen_id = co_await _cdc_gen_service.local().make_new_generation(bootstrap_tokens, !is_first_node());
             } catch (...) {
                 cdc_log.warn(
                     "Could not create a new CDC generation: {}. This may make it impossible to use CDC or cause performance problems."
@@ -571,19 +586,19 @@ future<> storage_service::join_token_ring(
     }
 
     // Persist the CDC streams timestamp before we persist bootstrap_state = COMPLETED.
-    if (_cdc_gen_id) {
-        co_await db::system_keyspace::update_cdc_generation_id(*_cdc_gen_id);
+    if (cdc_gen_id) {
+        co_await db::system_keyspace::update_cdc_generation_id(*cdc_gen_id);
     }
     // If we crash now, we will choose a new CDC streams timestamp anyway (because we will also choose a new set of tokens).
     // But if we crash after setting bootstrap_state = COMPLETED, we will keep using the persisted CDC streams timestamp after restarting.
 
     co_await _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED);
-    // At this point our local tokens and CDC streams timestamp are chosen (bootstrap_tokens, _cdc_gen_id) and will not be changed.
+    // At this point our local tokens and CDC streams timestamp are chosen (bootstrap_tokens, cdc_gen_id) and will not be changed.
 
     co_await _group0->become_voter();
 
     // start participating in the ring.
-    co_await set_gossip_tokens(_gossiper, bootstrap_tokens, _cdc_gen_id);
+    co_await set_gossip_tokens(_gossiper, bootstrap_tokens, cdc_gen_id);
 
     set_mode(mode::NORMAL);
 
@@ -593,7 +608,7 @@ future<> storage_service::join_token_ring(
         throw std::runtime_error(err);
     }
 
-    co_await _cdc_gen_service.local().after_join(std::move(_cdc_gen_id));
+    co_await _cdc_gen_service.local().after_join(std::move(cdc_gen_id));
 }
 
 future<> storage_service::mark_existing_views_as_built() {
@@ -629,8 +644,8 @@ std::list<gms::inet_address> storage_service::get_ignore_dead_nodes_for_replace(
 }
 
 // Runs inside seastar::async context
-future<> storage_service::bootstrap(std::unordered_set<token>& bootstrap_tokens) {
-    return seastar::async([this, &bootstrap_tokens] {
+future<> storage_service::bootstrap(std::unordered_set<token>& bootstrap_tokens, std::optional<cdc::generation_id>& cdc_gen_id) {
+    return seastar::async([this, &bootstrap_tokens, &cdc_gen_id] {
         auto bootstrap_rbno = is_repair_based_node_ops_enabled(streaming::stream_reason::bootstrap);
 
         set_mode(mode::BOOTSTRAP);
@@ -683,16 +698,16 @@ future<> storage_service::bootstrap(std::unordered_set<token>& bootstrap_tokens)
 
             // After we pick a generation timestamp, we start gossiping it, and we stick with it.
             // We don't do any other generation switches (unless we crash before complecting bootstrap).
-            assert(!_cdc_gen_id);
+            assert(!cdc_gen_id);
 
-            _cdc_gen_id = _cdc_gen_service.local().make_new_generation(bootstrap_tokens, !is_first_node()).get0();
+            cdc_gen_id = _cdc_gen_service.local().make_new_generation(bootstrap_tokens, !is_first_node()).get0();
 
             if (!bootstrap_rbno) {
                 // When is_repair_based_node_ops_enabled is true, the bootstrap node
                 // will use node_ops_cmd to bootstrap, bootstrapping gossip status is not needed for bootstrap.
                 _gossiper.add_local_application_state({
                     { gms::application_state::TOKENS, versioned_value::tokens(bootstrap_tokens) },
-                    { gms::application_state::CDC_GENERATION_ID, versioned_value::cdc_generation_id(_cdc_gen_id) },
+                    { gms::application_state::CDC_GENERATION_ID, versioned_value::cdc_generation_id(cdc_gen_id) },
                     { gms::application_state::STATUS, versioned_value::bootstrapping(bootstrap_tokens) },
                 }).get();
 
@@ -704,7 +719,7 @@ future<> storage_service::bootstrap(std::unordered_set<token>& bootstrap_tokens)
             } else {
                 // Even with RBNO bootstrap we need to announce the new CDC generation immediately after it's created.
                 _gossiper.add_local_application_state({
-                    { gms::application_state::CDC_GENERATION_ID, versioned_value::cdc_generation_id(_cdc_gen_id) },
+                    { gms::application_state::CDC_GENERATION_ID, versioned_value::cdc_generation_id(cdc_gen_id) },
                 }).get();
                 slogger.info("Starting to bootstrap...");
                 run_bootstrap_ops(bootstrap_tokens);
