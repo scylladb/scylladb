@@ -510,7 +510,7 @@ void storage_service::join_token_ring(std::chrono::milliseconds delay) {
         start_sys_dist_ks().get();
         mark_existing_views_as_built().get();
         _sys_ks.local().update_tokens(_bootstrap_tokens).get();
-        bootstrap(); // blocks until finished
+        bootstrap().get(); // blocks until finished
     } else {
         start_sys_dist_ks().get();
         _bootstrap_tokens = db::system_keyspace::get_saved_tokens().get0();
@@ -630,7 +630,9 @@ std::list<gms::inet_address> storage_service::get_ignore_dead_nodes_for_replace(
 }
 
 // Runs inside seastar::async context
-void storage_service::bootstrap() {
+future<> storage_service::bootstrap() {
+    return seastar::async([this] {
+
     auto bootstrap_rbno = is_repair_based_node_ops_enabled(streaming::stream_reason::bootstrap);
 
     set_mode(mode::BOOTSTRAP);
@@ -725,6 +727,8 @@ void storage_service::bootstrap() {
     }).get();
 
     slogger.info("Bootstrap completed! for the tokens {}", _bootstrap_tokens);
+
+    });
 }
 
 sstring
