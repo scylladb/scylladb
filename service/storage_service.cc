@@ -632,102 +632,100 @@ std::list<gms::inet_address> storage_service::get_ignore_dead_nodes_for_replace(
 // Runs inside seastar::async context
 future<> storage_service::bootstrap() {
     return seastar::async([this] {
+        auto bootstrap_rbno = is_repair_based_node_ops_enabled(streaming::stream_reason::bootstrap);
 
-    auto bootstrap_rbno = is_repair_based_node_ops_enabled(streaming::stream_reason::bootstrap);
+        set_mode(mode::BOOTSTRAP);
+        slogger.debug("bootstrap: rbno={} replacing={}", bootstrap_rbno, is_replacing());
 
-    set_mode(mode::BOOTSTRAP);
-    slogger.debug("bootstrap: rbno={} replacing={}", bootstrap_rbno, is_replacing());
+        // Wait until we know tokens of existing node before announcing replacing status.
+        slogger.info("Wait until local node knows tokens of peer nodes");
+        _gossiper.wait_for_range_setup().get();
 
-    // Wait until we know tokens of existing node before announcing replacing status.
-    slogger.info("Wait until local node knows tokens of peer nodes");
-    _gossiper.wait_for_range_setup().get();
-
-    _db.invoke_on_all([this] (replica::database& db) {
-        for (auto& cf : db.get_non_system_column_families()) {
-            cf->notify_bootstrap_or_replace_start();
-        }
-    }).get();
-
-    if (!is_replacing()) {
-        int retry = 0;
-        while (get_token_metadata_ptr()->count_normal_token_owners() == 0) {
-            if (retry++ < 500) {
-                sleep_abortable(std::chrono::milliseconds(10), _abort_source).get();
-                continue;
+        _db.invoke_on_all([this] (replica::database& db) {
+            for (auto& cf : db.get_non_system_column_families()) {
+                cf->notify_bootstrap_or_replace_start();
             }
-            // We're joining an existing cluster, so there are normal nodes in the cluster.
-            // We've waited for tokens to arrive.
-            // But we didn't see any normal token owners. Something's wrong, we cannot proceed.
-            throw std::runtime_error{
-                    "Failed to learn about other nodes' tokens during bootstrap. Make sure that:\n"
-                    " - the node can contact other nodes in the cluster,\n"
-                    " - the `ring_delay` parameter is large enough (the 30s default should be enough for small-to-middle-sized clusters),\n"
-                    " - a node with this IP didn't recently leave the cluster. If it did, wait for some time first (the IP is quarantined),\n"
-                    "and retry the bootstrap."};
-        }
+        }).get();
 
-        // Even if we reached this point before but crashed, we will make a new CDC generation.
-        // It doesn't hurt: other nodes will (potentially) just do more generation switches.
-        // We do this because with this new attempt at bootstrapping we picked a different set of tokens.
+        if (!is_replacing()) {
+            int retry = 0;
+            while (get_token_metadata_ptr()->count_normal_token_owners() == 0) {
+                if (retry++ < 500) {
+                    sleep_abortable(std::chrono::milliseconds(10), _abort_source).get();
+                    continue;
+                }
+                // We're joining an existing cluster, so there are normal nodes in the cluster.
+                // We've waited for tokens to arrive.
+                // But we didn't see any normal token owners. Something's wrong, we cannot proceed.
+                throw std::runtime_error{
+                        "Failed to learn about other nodes' tokens during bootstrap. Make sure that:\n"
+                        " - the node can contact other nodes in the cluster,\n"
+                        " - the `ring_delay` parameter is large enough (the 30s default should be enough for small-to-middle-sized clusters),\n"
+                        " - a node with this IP didn't recently leave the cluster. If it did, wait for some time first (the IP is quarantined),\n"
+                        "and retry the bootstrap."};
+            }
 
-        // Update pending ranges now, so we correctly count ourselves as a pending replica
-        // when inserting the new CDC generation.
-        if (!bootstrap_rbno) {
-            // When is_repair_based_node_ops_enabled is true, the bootstrap node
-            // will use node_ops_cmd to bootstrap, node_ops_cmd will update the pending ranges.
-            slogger.debug("bootstrap: update pending ranges: endpoint={} bootstrap_tokens={}", get_broadcast_address(), _bootstrap_tokens);
-            mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) {
-                auto endpoint = get_broadcast_address();
-                tmptr->add_bootstrap_tokens(_bootstrap_tokens, endpoint);
-                return update_pending_ranges(std::move(tmptr), format("bootstrapping node {}", endpoint));
-            }).get();
-        }
+            // Even if we reached this point before but crashed, we will make a new CDC generation.
+            // It doesn't hurt: other nodes will (potentially) just do more generation switches.
+            // We do this because with this new attempt at bootstrapping we picked a different set of tokens.
 
-        // After we pick a generation timestamp, we start gossiping it, and we stick with it.
-        // We don't do any other generation switches (unless we crash before complecting bootstrap).
-        assert(!_cdc_gen_id);
+            // Update pending ranges now, so we correctly count ourselves as a pending replica
+            // when inserting the new CDC generation.
+            if (!bootstrap_rbno) {
+                // When is_repair_based_node_ops_enabled is true, the bootstrap node
+                // will use node_ops_cmd to bootstrap, node_ops_cmd will update the pending ranges.
+                slogger.debug("bootstrap: update pending ranges: endpoint={} bootstrap_tokens={}", get_broadcast_address(), _bootstrap_tokens);
+                mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) {
+                    auto endpoint = get_broadcast_address();
+                    tmptr->add_bootstrap_tokens(_bootstrap_tokens, endpoint);
+                    return update_pending_ranges(std::move(tmptr), format("bootstrapping node {}", endpoint));
+                }).get();
+            }
 
-        _cdc_gen_id = _cdc_gen_service.local().make_new_generation(_bootstrap_tokens, !is_first_node()).get0();
+            // After we pick a generation timestamp, we start gossiping it, and we stick with it.
+            // We don't do any other generation switches (unless we crash before complecting bootstrap).
+            assert(!_cdc_gen_id);
 
-        if (!bootstrap_rbno) {
-            // When is_repair_based_node_ops_enabled is true, the bootstrap node
-            // will use node_ops_cmd to bootstrap, bootstrapping gossip status is not needed for bootstrap.
-            _gossiper.add_local_application_state({
-                { gms::application_state::TOKENS, versioned_value::tokens(_bootstrap_tokens) },
-                { gms::application_state::CDC_GENERATION_ID, versioned_value::cdc_generation_id(_cdc_gen_id) },
-                { gms::application_state::STATUS, versioned_value::bootstrapping(_bootstrap_tokens) },
-            }).get();
+            _cdc_gen_id = _cdc_gen_service.local().make_new_generation(_bootstrap_tokens, !is_first_node()).get0();
 
-            slogger.info("sleeping {} ms for pending range setup", get_ring_delay().count());
-            _gossiper.wait_for_range_setup().get();
-            dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), _bootstrap_tokens, get_token_metadata_ptr());
-            slogger.info("Starting to bootstrap...");
-            bs.bootstrap(streaming::stream_reason::bootstrap, _gossiper).get();
+            if (!bootstrap_rbno) {
+                // When is_repair_based_node_ops_enabled is true, the bootstrap node
+                // will use node_ops_cmd to bootstrap, bootstrapping gossip status is not needed for bootstrap.
+                _gossiper.add_local_application_state({
+                    { gms::application_state::TOKENS, versioned_value::tokens(_bootstrap_tokens) },
+                    { gms::application_state::CDC_GENERATION_ID, versioned_value::cdc_generation_id(_cdc_gen_id) },
+                    { gms::application_state::STATUS, versioned_value::bootstrapping(_bootstrap_tokens) },
+                }).get();
+
+                slogger.info("sleeping {} ms for pending range setup", get_ring_delay().count());
+                _gossiper.wait_for_range_setup().get();
+                dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), _bootstrap_tokens, get_token_metadata_ptr());
+                slogger.info("Starting to bootstrap...");
+                bs.bootstrap(streaming::stream_reason::bootstrap, _gossiper).get();
+            } else {
+                // Even with RBNO bootstrap we need to announce the new CDC generation immediately after it's created.
+                _gossiper.add_local_application_state({
+                    { gms::application_state::CDC_GENERATION_ID, versioned_value::cdc_generation_id(_cdc_gen_id) },
+                }).get();
+                slogger.info("Starting to bootstrap...");
+                run_bootstrap_ops();
+            }
         } else {
-            // Even with RBNO bootstrap we need to announce the new CDC generation immediately after it's created.
-            _gossiper.add_local_application_state({
-                { gms::application_state::CDC_GENERATION_ID, versioned_value::cdc_generation_id(_cdc_gen_id) },
-            }).get();
+            auto replace_addr = get_replace_address();
+            slogger.debug("Removing replaced endpoint {} from system.peers", *replace_addr);
+            _sys_ks.local().remove_endpoint(*replace_addr).get();
+            _group0->leave_group0(replace_addr).get();
             slogger.info("Starting to bootstrap...");
-            run_bootstrap_ops();
+            run_replace_ops();
         }
-    } else {
-        auto replace_addr = get_replace_address();
-        slogger.debug("Removing replaced endpoint {} from system.peers", *replace_addr);
-        _sys_ks.local().remove_endpoint(*replace_addr).get();
-        _group0->leave_group0(replace_addr).get();
-        slogger.info("Starting to bootstrap...");
-        run_replace_ops();
-    }
 
-    _db.invoke_on_all([this] (replica::database& db) {
-        for (auto& cf : db.get_non_system_column_families()) {
-            cf->notify_bootstrap_or_replace_end();
-        }
-    }).get();
+        _db.invoke_on_all([this] (replica::database& db) {
+            for (auto& cf : db.get_non_system_column_families()) {
+                cf->notify_bootstrap_or_replace_end();
+            }
+        }).get();
 
-    slogger.info("Bootstrap completed! for the tokens {}", _bootstrap_tokens);
-
+        slogger.info("Bootstrap completed! for the tokens {}", _bootstrap_tokens);
     });
 }
 
