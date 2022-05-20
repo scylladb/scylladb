@@ -710,7 +710,6 @@ public:
                 std::ref(sys_dist_ks), std::ref(sys_ks),
                 std::ref(feature_service), sscfg, std::ref(mm),
                 std::ref(token_metadata), std::ref(erm_factory), std::ref(ms),
-                std::ref(cdc_generation_service),
                 std::ref(repair),
                 std::ref(stream_manager),
                 std::ref(raft_gr), std::ref(elc_notif),
@@ -783,7 +782,7 @@ public:
             });
 
             try {
-                ss.local().join_cluster(qp.local(), group0_client).get();
+                ss.local().join_cluster(qp.local(), group0_client, cdc_generation_service.local()).get();
             } catch (std::exception& e) {
                 // if any of the defers crashes too, we'll never see
                 // the error

@@ -180,7 +180,6 @@ public:
         locator::shared_token_metadata& stm,
         locator::effective_replication_map_factory& erm_factory,
         sharded<netw::messaging_service>& ms,
-        sharded<cdc::generation_service>&,
         sharded<repair_service>& repair,
         sharded<streaming::stream_manager>& stream_manager,
         raft_group_registry& raft_gr,
@@ -263,11 +262,6 @@ private:
     shared_token_metadata& _shared_token_metadata;
     locator::effective_replication_map_factory& _erm_factory;
 
-    /* CDC generation management service.
-     * It is sharded<>& and not simply a reference because the service will not yet be started
-     * when storage_service is constructed (but it will be when init_server is called)
-     */
-    sharded<cdc::generation_service>& _cdc_gen_service;
 public:
     std::chrono::milliseconds get_ring_delay();
 private:
@@ -352,7 +346,7 @@ public:
      *
      * \see init_messaging_service_part
      */
-    future<> join_cluster(cql3::query_processor& qp, raft_group0_client& client);
+    future<> join_cluster(cql3::query_processor& qp, raft_group0_client& client, cdc::generation_service& cdc_gen_service);
 
     future<> drain_on_shutdown();
 
@@ -363,7 +357,7 @@ private:
     std::optional<gms::inet_address> get_replace_address();
     bool is_replacing();
     bool is_first_node();
-    future<> join_token_ring(
+    future<> join_token_ring(cdc::generation_service& cdc_gen_service,
             std::unordered_set<gms::inet_address> initial_contact_nodes,
             std::unordered_set<gms::inet_address> loaded_endpoints,
             std::unordered_map<gms::inet_address, sstring> loaded_peer_features,
@@ -380,7 +374,7 @@ private:
     // Stream data for which we become a new replica.
     // Before that, if we're not replacing another node, inform other nodes about our chosen tokens
     // and wait for RING_DELAY ms so that we receive new writes from coordinators during streaming.
-    future<> bootstrap(std::unordered_set<token>& bootstrap_tokens, std::optional<cdc::generation_id>& cdc_gen_id);
+    future<> bootstrap(cdc::generation_service& cdc_gen_service, std::unordered_set<token>& bootstrap_tokens, std::optional<cdc::generation_id>& cdc_gen_id);
 
 public:
     /**
