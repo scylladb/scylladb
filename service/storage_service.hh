@@ -86,6 +86,7 @@ class gossiper;
 namespace service {
 
 class storage_service;
+class storage_proxy;
 class migration_manager;
 class raft_group0;
 class raft_group0_client;
@@ -346,7 +347,7 @@ public:
      * \see init_messaging_service_part
      */
     future<> join_cluster(cql3::query_processor& qp, raft_group0_client& client, cdc::generation_service& cdc_gen_service,
-            sharded<db::system_distributed_keyspace>& sys_dist_ks);
+            sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy);
 
     future<> drain_on_shutdown();
 
@@ -359,6 +360,7 @@ private:
     bool is_first_node();
     future<> join_token_ring(cdc::generation_service& cdc_gen_service,
             sharded<db::system_distributed_keyspace>& sys_dist_ks,
+            sharded<service::storage_proxy>& proxy,
             std::unordered_set<gms::inet_address> initial_contact_nodes,
             std::unordered_set<gms::inet_address> loaded_endpoints,
             std::unordered_map<gms::inet_address, sstring> loaded_peer_features,

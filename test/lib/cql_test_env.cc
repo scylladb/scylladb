@@ -782,7 +782,7 @@ public:
             });
 
             try {
-                ss.local().join_cluster(qp.local(), group0_client, cdc_generation_service.local(), sys_dist_ks).get();
+                ss.local().join_cluster(qp.local(), group0_client, cdc_generation_service.local(), sys_dist_ks, proxy).get();
             } catch (std::exception& e) {
                 // if any of the defers crashes too, we'll never see
                 // the error

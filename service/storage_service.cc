@@ -22,7 +22,6 @@
 #include "gms/inet_address.hh"
 #include "log.hh"
 #include "service/migration_manager.hh"
-#include "service/storage_proxy.hh"
 #include "service/raft/raft_group0.hh"
 #include "to_string.hh"
 #include "gms/gossiper.hh"
@@ -277,6 +276,7 @@ future<> storage_service::wait_for_ring_to_settle(std::chrono::milliseconds dela
 
 future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_service,
         sharded<db::system_distributed_keyspace>& sys_dist_ks,
+        sharded<service::storage_proxy>& proxy,
         std::unordered_set<gms::inet_address> initial_contact_nodes,
         std::unordered_set<gms::inet_address> loaded_endpoints,
         std::unordered_map<gms::inet_address, sstring> loaded_peer_features,
@@ -388,7 +388,6 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     tmlock.reset();
 
     auto broadcast_rpc_address = utils::fb_utilities::get_broadcast_rpc_address();
-    auto& proxy = service::get_storage_proxy();
     // Ensure we know our own actual Schema UUID in preparation for updates
     co_await db::schema_tables::recalculate_schema_version(_sys_ks, proxy, _feature_service);
     app_states.emplace(gms::application_state::NET_VERSION, versioned_value::network_version());
@@ -1331,10 +1330,11 @@ future<> storage_service::uninit_messaging_service_part() {
     return container().invoke_on_all(&service::storage_service::uninit_messaging_service);
 }
 
-future<> storage_service::join_cluster(cql3::query_processor& qp, raft_group0_client& client, cdc::generation_service& cdc_gen_service, sharded<db::system_distributed_keyspace>& sys_dist_ks) {
+future<> storage_service::join_cluster(cql3::query_processor& qp, raft_group0_client& client, cdc::generation_service& cdc_gen_service,
+        sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy) {
     assert(this_shard_id() == 0);
 
-    return seastar::async([this, &qp, &client, &cdc_gen_service, &sys_dist_ks] {
+    return seastar::async([this, &qp, &client, &cdc_gen_service, &sys_dist_ks, &proxy] {
         set_mode(mode::STARTING);
 
         _group0 = std::make_unique<raft_group0>(_abort_source, _raft_gr, _messaging.local(),
@@ -1388,7 +1388,7 @@ future<> storage_service::join_cluster(cql3::query_processor& qp, raft_group0_cl
         for (auto& x : loaded_peer_features) {
             slogger.info("peer={}, supported_features={}", x.first, x.second);
         }
-        join_token_ring(cdc_gen_service, sys_dist_ks, std::move(initial_contact_nodes), std::move(loaded_endpoints), std::move(loaded_peer_features), get_ring_delay()).get();
+        join_token_ring(cdc_gen_service, sys_dist_ks, proxy, std::move(initial_contact_nodes), std::move(loaded_endpoints), std::move(loaded_peer_features), get_ring_delay()).get();
     });
 }
 
