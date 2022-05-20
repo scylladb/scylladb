@@ -380,11 +380,11 @@ private:
     std::optional<gms::inet_address> get_replace_address();
     bool is_replacing();
     bool is_first_node();
-    future<> prepare_to_join(
+    future<> join_token_ring(
             std::unordered_set<gms::inet_address> initial_contact_nodes,
             std::unordered_set<gms::inet_address> loaded_endpoints,
-            std::unordered_map<gms::inet_address, sstring> loaded_peer_features);
-    future<> join_token_ring(std::chrono::milliseconds);
+            std::unordered_map<gms::inet_address, sstring> loaded_peer_features,
+            std::chrono::milliseconds);
     future<> start_sys_dist_ks();
 public:
 

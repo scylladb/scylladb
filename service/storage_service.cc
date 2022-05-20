@@ -284,10 +284,11 @@ future<> storage_service::wait_for_ring_to_settle(std::chrono::milliseconds dela
     slogger.info("Checking bootstrapping/leaving nodes: ok");
 }
 
-future<> storage_service::prepare_to_join(
+future<> storage_service::join_token_ring(
         std::unordered_set<gms::inet_address> initial_contact_nodes,
         std::unordered_set<gms::inet_address> loaded_endpoints,
-        std::unordered_map<gms::inet_address, sstring> loaded_peer_features) {
+        std::unordered_map<gms::inet_address, sstring> loaded_peer_features,
+        std::chrono::milliseconds delay) {
     std::map<gms::application_state, gms::versioned_value> app_states;
     if (_sys_ks.local().was_decommissioned()) {
         if (_db.local().get_config().override_decommission()) {
@@ -434,9 +435,7 @@ future<> storage_service::prepare_to_join(
     });
     _listeners.emplace_back(make_lw_shared(std::move(schema_change_announce)));
     co_await _gossiper.wait_for_gossip_to_settle();
-}
 
-future<> storage_service::join_token_ring(std::chrono::milliseconds delay) {
     set_mode(mode::JOINING);
 
     co_await _group0->join_group0();
@@ -1380,8 +1379,7 @@ future<> storage_service::join_cluster(cql3::query_processor& qp, raft_group0_cl
         for (auto& x : loaded_peer_features) {
             slogger.info("peer={}, supported_features={}", x.first, x.second);
         }
-        prepare_to_join(std::move(initial_contact_nodes), std::move(loaded_endpoints), std::move(loaded_peer_features)).get();
-        join_token_ring(get_ring_delay()).get();
+        join_token_ring(std::move(initial_contact_nodes), std::move(loaded_endpoints), std::move(loaded_peer_features), get_ring_delay()).get();
     });
 }
 
