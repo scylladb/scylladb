@@ -193,6 +193,8 @@ class votes {
 public:
     votes(configuration configuration);
 
+    // A server is a member of this set iff
+    // it is a voter in the current or previous configuration.
     const server_address_set& voters() const {
         return _voters;
     }

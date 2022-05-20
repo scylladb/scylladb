@@ -216,15 +216,15 @@ template index_t tracker::committed(index_t);
 template read_id tracker::committed(read_id);
 
 votes::votes(configuration configuration)
-        :_voters(configuration.current)
-        , _current(configuration.current) {
+        : _current(configuration.current) {
+    for (auto* cfg: {&configuration.previous, &configuration.current}) {
+        std::copy_if(cfg->begin(), cfg->end(), std::inserter(_voters, _voters.end()),
+                [] (const server_address& srv) { return srv.can_vote; });
+    }
 
     if (configuration.is_joint()) {
         _previous.emplace(configuration.previous);
-        _voters.insert(configuration.previous.begin(), configuration.previous.end());
     }
-    // Filter out non voting members
-    std::erase_if(_voters, [] (const server_address& s) { return !s.can_vote; });
 }
 
 void votes::register_vote(server_id from, bool granted) {
