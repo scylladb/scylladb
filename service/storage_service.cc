@@ -366,6 +366,11 @@ future<> storage_service::prepare_to_join(
     if (can_join_with_raft) {
         co_await _group0->join_group0();
     }
+
+    auto schema_change_announce = _db.local().observable_schema_version().observe([this] (utils::UUID schema_version) mutable {
+        _migration_manager.local().passive_announce(std::move(schema_version));
+    });
+    _listeners.emplace_back(make_lw_shared(std::move(schema_change_announce)));
 }
 
 future<> storage_service::start_sys_dist_ks() {

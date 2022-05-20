@@ -1276,9 +1276,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 return ss.local().init_server(qp.local(), group0_client);
             }).get();
 
-            auto schema_change_announce = db.local().observable_schema_version().observe([&mm] (utils::UUID schema_version) mutable {
-                mm.local().passive_announce(std::move(schema_version));
-            });
             gossiper.local().wait_for_gossip_to_settle().get();
 
             with_scheduling_group(maintenance_scheduling_group, [&] {
