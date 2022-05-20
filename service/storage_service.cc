@@ -508,7 +508,7 @@ void storage_service::join_token_ring(std::chrono::milliseconds delay) {
             // _bootstrap_tokens was previously set in prepare_to_join using tokens gossiped by the replaced node
         }
         start_sys_dist_ks().get();
-        mark_existing_views_as_built();
+        mark_existing_views_as_built().get();
         _sys_ks.local().update_tokens(_bootstrap_tokens).get();
         bootstrap(); // blocks until finished
     } else {
@@ -597,8 +597,8 @@ void storage_service::join_token_ring(std::chrono::milliseconds delay) {
     _cdc_gen_service.local().after_join(std::move(_cdc_gen_id)).get();
 }
 
-void storage_service::mark_existing_views_as_built() {
-    _db.invoke_on(0, [this] (replica::database& db) {
+future<> storage_service::mark_existing_views_as_built() {
+    return _db.invoke_on(0, [this] (replica::database& db) {
         return do_with(db.get_views(), [this] (std::vector<view_ptr>& views) {
             return parallel_for_each(views, [this] (view_ptr& view) {
                 return db::system_keyspace::mark_view_as_built(view->ks_name(), view->cf_name()).then([this, view] {
@@ -606,7 +606,7 @@ void storage_service::mark_existing_views_as_built() {
                 });
             });
         });
-    }).get();
+    });
 }
 
 std::list<gms::inet_address> storage_service::get_ignore_dead_nodes_for_replace() {

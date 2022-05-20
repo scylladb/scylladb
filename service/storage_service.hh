@@ -392,7 +392,7 @@ public:
 
 private:
     void set_mode(mode m);
-    void mark_existing_views_as_built();
+    future<> mark_existing_views_as_built();
 
     // Stream data for which we become a new replica.
     // Before that, if we're not replacing another node, inform other nodes about our chosen tokens (_bootstrap_tokens)
