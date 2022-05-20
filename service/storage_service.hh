@@ -362,9 +362,6 @@ public:
      *
      * The storage_service initialization is done in two parts.
      *
-     * you first call init_messaging_service_part and then
-     * you call init_server_without_the_messaging_service_part.
-     *
      * It is safe to start the API after init_messaging_service_part
      * completed
      *
@@ -372,9 +369,7 @@ public:
      *
      * \see init_messaging_service_part
      */
-    future<> init_server(cql3::query_processor& qp, raft_group0_client& client);
-
-    future<> join_cluster();
+    future<> join_cluster(cql3::query_processor& qp, raft_group0_client& client);
 
     future<> drain_on_shutdown();
 

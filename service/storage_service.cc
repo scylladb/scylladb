@@ -1322,7 +1322,7 @@ future<> storage_service::uninit_messaging_service_part() {
     return container().invoke_on_all(&service::storage_service::uninit_messaging_service);
 }
 
-future<> storage_service::init_server(cql3::query_processor& qp, raft_group0_client& client) {
+future<> storage_service::join_cluster(cql3::query_processor& qp, raft_group0_client& client) {
     assert(this_shard_id() == 0);
 
     return seastar::async([this, &qp, &client] {
@@ -1380,11 +1380,6 @@ future<> storage_service::init_server(cql3::query_processor& qp, raft_group0_cli
             slogger.info("peer={}, supported_features={}", x.first, x.second);
         }
         prepare_to_join(std::move(initial_contact_nodes), std::move(loaded_endpoints), std::move(loaded_peer_features)).get();
-    });
-}
-
-future<> storage_service::join_cluster() {
-    return seastar::async([this] {
         join_token_ring(get_ring_delay());
     });
 }

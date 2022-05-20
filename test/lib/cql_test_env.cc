@@ -782,9 +782,8 @@ public:
                 cdc.stop().get();
             });
 
-            ss.local().init_server(qp.local(), group0_client).get();
             try {
-                ss.local().join_cluster().get();
+                ss.local().join_cluster(qp.local(), group0_client).get();
             } catch (std::exception& e) {
                 // if any of the defers crashes too, we'll never see
                 // the error
