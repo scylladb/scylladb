@@ -1276,8 +1276,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 return ss.local().init_server(qp.local(), group0_client);
             }).get();
 
-            gossiper.local().wait_for_gossip_to_settle().get();
-
             with_scheduling_group(maintenance_scheduling_group, [&] {
                 return ss.local().join_cluster();
             }).get();

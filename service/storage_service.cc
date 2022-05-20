@@ -371,6 +371,7 @@ future<> storage_service::prepare_to_join(
         _migration_manager.local().passive_announce(std::move(schema_version));
     });
     _listeners.emplace_back(make_lw_shared(std::move(schema_change_announce)));
+    co_await _gossiper.wait_for_gossip_to_settle();
 }
 
 future<> storage_service::start_sys_dist_ks() {
