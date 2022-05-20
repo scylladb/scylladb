@@ -222,6 +222,68 @@ future<> storage_service::snitch_reconfigured() {
     return update_topology(utils::fb_utilities::get_broadcast_address());
 }
 
+future<> storage_service::start_sys_dist_ks() {
+    supervisor::notify("starting system distributed keyspace");
+    co_await _sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
+}
+
+/* Broadcasts the chosen tokens through gossip,
+ * together with a CDC generation timestamp and STATUS=NORMAL.
+ *
+ * Assumes that no other functions modify CDC_GENERATION_ID, TOKENS or STATUS
+ * in the gossiper's local application state while this function runs.
+ */
+static future<> set_gossip_tokens(gms::gossiper& g,
+        const std::unordered_set<dht::token>& tokens, std::optional<cdc::generation_id> cdc_gen_id) {
+    assert(!tokens.empty());
+
+    // Order is important: both the CDC streams timestamp and tokens must be known when a node handles our status.
+    return g.add_local_application_state({
+        { gms::application_state::TOKENS, gms::versioned_value::tokens(tokens) },
+        { gms::application_state::CDC_GENERATION_ID, gms::versioned_value::cdc_generation_id(cdc_gen_id) },
+        { gms::application_state::STATUS, gms::versioned_value::normal(tokens) }
+    });
+}
+
+/*
+ * The helper waits for two things
+ *  1) for schema agreement
+ *  2) there's no pending node operations
+ * before proceeding with the bootstrap or replace
+ */
+future<> storage_service::wait_for_ring_to_settle(std::chrono::milliseconds delay) {
+    // first sleep the delay to make sure we see *at least* one other node
+    for (int i = 0; i < delay.count() && _gossiper.get_live_members().size() < 2; i += 1000) {
+        co_await sleep_abortable(std::chrono::seconds(1), _abort_source);
+    }
+
+    auto t = gms::gossiper::clk::now();
+    while (true) {
+        while (!_migration_manager.local().have_schema_agreement()) {
+            slogger.info("waiting for schema information to complete");
+            co_await sleep_abortable(std::chrono::seconds(1), _abort_source);
+        }
+        co_await update_pending_ranges("joining");
+
+        auto tmptr = get_token_metadata_ptr();
+        if (!_db.local().get_config().consistent_rangemovement() ||
+                (tmptr->get_bootstrap_tokens().empty() && tmptr->get_leaving_endpoints().empty())) {
+            break;
+        }
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(gms::gossiper::clk::now() - t).count();
+        slogger.info("Checking bootstrapping/leaving nodes: tokens {}, leaving {}, sleep 1 second and check again ({} seconds elapsed)",
+                tmptr->get_bootstrap_tokens().size(),
+                tmptr->get_leaving_endpoints().size(),
+                elapsed);
+
+        if (gms::gossiper::clk::now() > t + std::chrono::seconds(60)) {
+            throw std::runtime_error("Other bootstrapping/leaving nodes detected, cannot bootstrap while consistent_rangemovement is true");
+        }
+        co_await sleep_abortable(std::chrono::seconds(1), _abort_source);
+    }
+    slogger.info("Checking bootstrapping/leaving nodes: ok");
+}
+
 future<> storage_service::prepare_to_join(
         std::unordered_set<gms::inet_address> initial_contact_nodes,
         std::unordered_set<gms::inet_address> loaded_endpoints,
@@ -372,68 +434,6 @@ future<> storage_service::prepare_to_join(
     });
     _listeners.emplace_back(make_lw_shared(std::move(schema_change_announce)));
     co_await _gossiper.wait_for_gossip_to_settle();
-}
-
-future<> storage_service::start_sys_dist_ks() {
-    supervisor::notify("starting system distributed keyspace");
-    co_await _sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
-}
-
-/* Broadcasts the chosen tokens through gossip,
- * together with a CDC generation timestamp and STATUS=NORMAL.
- *
- * Assumes that no other functions modify CDC_GENERATION_ID, TOKENS or STATUS
- * in the gossiper's local application state while this function runs.
- */
-static future<> set_gossip_tokens(gms::gossiper& g,
-        const std::unordered_set<dht::token>& tokens, std::optional<cdc::generation_id> cdc_gen_id) {
-    assert(!tokens.empty());
-
-    // Order is important: both the CDC streams timestamp and tokens must be known when a node handles our status.
-    return g.add_local_application_state({
-        { gms::application_state::TOKENS, gms::versioned_value::tokens(tokens) },
-        { gms::application_state::CDC_GENERATION_ID, gms::versioned_value::cdc_generation_id(cdc_gen_id) },
-        { gms::application_state::STATUS, gms::versioned_value::normal(tokens) }
-    });
-}
-
-/*
- * The helper waits for two things
- *  1) for schema agreement
- *  2) there's no pending node operations
- * before proceeding with the bootstrap or replace
- */
-future<> storage_service::wait_for_ring_to_settle(std::chrono::milliseconds delay) {
-    // first sleep the delay to make sure we see *at least* one other node
-    for (int i = 0; i < delay.count() && _gossiper.get_live_members().size() < 2; i += 1000) {
-        co_await sleep_abortable(std::chrono::seconds(1), _abort_source);
-    }
-
-    auto t = gms::gossiper::clk::now();
-    while (true) {
-        while (!_migration_manager.local().have_schema_agreement()) {
-            slogger.info("waiting for schema information to complete");
-            co_await sleep_abortable(std::chrono::seconds(1), _abort_source);
-        }
-        co_await update_pending_ranges("joining");
-
-        auto tmptr = get_token_metadata_ptr();
-        if (!_db.local().get_config().consistent_rangemovement() ||
-                (tmptr->get_bootstrap_tokens().empty() && tmptr->get_leaving_endpoints().empty())) {
-            break;
-        }
-        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(gms::gossiper::clk::now() - t).count();
-        slogger.info("Checking bootstrapping/leaving nodes: tokens {}, leaving {}, sleep 1 second and check again ({} seconds elapsed)",
-                tmptr->get_bootstrap_tokens().size(),
-                tmptr->get_leaving_endpoints().size(),
-                elapsed);
-
-        if (gms::gossiper::clk::now() > t + std::chrono::seconds(60)) {
-            throw std::runtime_error("Other bootstrapping/leaving nodes detected, cannot bootstrap while consistent_rangemovement is true");
-        }
-        co_await sleep_abortable(std::chrono::seconds(1), _abort_source);
-    }
-    slogger.info("Checking bootstrapping/leaving nodes: ok");
 }
 
 future<> storage_service::join_token_ring(std::chrono::milliseconds delay) {
