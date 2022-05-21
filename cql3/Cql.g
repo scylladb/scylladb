@@ -449,7 +449,7 @@ countArgument
     ;
 
 whereClause returns [std::vector<expression> clause]
-    : relation[$clause] (K_AND relation[$clause])*
+    : e1=relation { $clause.push_back(std::move(e1)); } (K_AND en=relation { $clause.push_back(std::move(en)); })*
     ;
 
 orderByClause[raw::select_statement::parameters::orderings_type& orderings]
@@ -1640,91 +1640,83 @@ relationType returns [oper_t op]
     | K_LIKE { $op = oper_t::LIKE; }
     ;
 
-relation[std::vector<expression>& clauses]
+relation returns [expression e]
     @init{ oper_t rt; }
-    : name=cident type=relationType t=term { $clauses.emplace_back(binary_operator(unresolved_identifier{std::move(name)}, type, std::move(t))); }
+    : name=cident type=relationType t=term { $e = binary_operator(unresolved_identifier{std::move(name)}, type, std::move(t)); }
 
     | K_TOKEN l=tupleOfIdentifiers type=relationType t=term
-        { $clauses.emplace_back(binary_operator(token{std::move(l.elements)}, type, std::move(t))); }
+        { $e = binary_operator(token{std::move(l.elements)}, type, std::move(t)); }
     | name=cident K_IS K_NOT K_NULL {
-          $clauses.emplace_back(binary_operator(unresolved_identifier{std::move(name)}, oper_t::IS_NOT, null())); }
+          $e = binary_operator(unresolved_identifier{std::move(name)}, oper_t::IS_NOT, null()); }
     | name=cident K_IN marker=inMarker
-        { $clauses.emplace_back(binary_operator(unresolved_identifier{std::move(name)}, oper_t::IN, std::move(marker))); }
+        { $e = binary_operator(unresolved_identifier{std::move(name)}, oper_t::IN, std::move(marker)); }
     | name=cident K_IN in_values=singleColumnInValues
-        { $clauses.emplace_back(binary_operator(unresolved_identifier{std::move(name)}, oper_t::IN,
+        { $e = binary_operator(unresolved_identifier{std::move(name)}, oper_t::IN,
         collection_constructor {
             .style = collection_constructor::style_type::list,
             .elements = std::move(in_values)
-        })); }
+        }); }
     | name=cident K_CONTAINS { rt = oper_t::CONTAINS; } (K_KEY { rt = oper_t::CONTAINS_KEY; })?
-        t=term { $clauses.emplace_back(binary_operator(unresolved_identifier{std::move(name)}, rt, std::move(t))); }
-    | name=cident '[' key=term ']' type=relationType t=term { $clauses.emplace_back(binary_operator(subscript{.val = unresolved_identifier{std::move(name)}, .sub = std::move(key)}, type, std::move(t))); }
+        t=term { $e = binary_operator(unresolved_identifier{std::move(name)}, rt, std::move(t)); }
+    | name=cident '[' key=term ']' type=relationType t=term { $e = binary_operator(subscript{.val = unresolved_identifier{std::move(name)}, .sub = std::move(key)}, type, std::move(t)); }
     | ids=tupleOfIdentifiers
       ( K_IN
           ( '(' ')'
               {
-                $clauses.emplace_back(
-                  binary_operator(
+                $e = binary_operator(
                     ids,
                     oper_t::IN,
                     collection_constructor {
                       .style = collection_constructor::style_type::list,
                       .elements = std::vector<expression>()
                     }
-                  )
-                );
+                  );
               }
           | tupleInMarker=inMarkerForTuple /* (a, b, c) IN ? */
               {
-                $clauses.emplace_back(
-                  binary_operator(
+                $e = binary_operator(
                     ids,
                     oper_t::IN,
                     std::move(tupleInMarker)
-                  )
-                );
+                  );
               }
           | literals=tupleOfTupleLiterals /* (a, b, c) IN ((1, 2, 3), (4, 5, 6), ...) */
               {
-                $clauses.emplace_back(
-                  binary_operator(
+                $e = binary_operator(
                     ids,
                     oper_t::IN,
                     collection_constructor {
                       .style = collection_constructor::style_type::list,
                       .elements = std::move(literals)
                     }
-                  )
-                );
+                  );
               }
           | markers=tupleOfMarkersForTuples /* (a, b, c) IN (?, ?, ...) */
               {
-                $clauses.emplace_back(
-                  binary_operator(
+                $e = binary_operator(
                     ids,
                     oper_t::IN,
                     collection_constructor {
                       .style = collection_constructor::style_type::list,
                       .elements = std::move(markers)
                     }
-                  )
-                );
+                  );
               }
           )
       | type=relationType literal=tupleLiteral /* (a, b, c) > (1, 2, 3) or (a, b, c) > (?, ?, ?) */
           {
-              $clauses.emplace_back(binary_operator(ids, type, std::move(literal)));
+              $e = binary_operator(ids, type, std::move(literal));
           }
       | type=relationType K_SCYLLA_CLUSTERING_BOUND literal=tupleLiteral /* (a, b, c) > (1, 2, 3) or (a, b, c) > (?, ?, ?) */
           {
-              $clauses.emplace_back(binary_operator(ids, type, std::move(literal), cql3::expr::comparison_order::clustering));
+              $e = binary_operator(ids, type, std::move(literal), cql3::expr::comparison_order::clustering);
           }
       | type=relationType tupleMarker=markerForTuple /* (a, b, c) >= ? */
           {
-              $clauses.emplace_back(binary_operator(ids, type, std::move(tupleMarker)));
+              $e = binary_operator(ids, type, std::move(tupleMarker));
           }
       )
-    | '(' relation[$clauses] ')'
+    | '(' e1=relation ')' { $e = std::move(e1); }
     ;
 
 inMarker returns [expression marker]
