@@ -462,8 +462,7 @@ orderByClause[raw::select_statement::parameters::orderings_type& orderings]
 jsonValue returns [expression value]
     :
     | s=STRING_LITERAL { $value = untyped_constant{untyped_constant::string, $s.text}; }
-    | ':' id=ident     { $value = new_bind_variables(id); }
-    | QMARK            { $value = new_bind_variables(shared_ptr<cql3::column_identifier>{}); }
+    | m=marker         { $value = std::move(m); }
     ;
 
 /**
@@ -1486,15 +1485,18 @@ value returns [expression value]
     | u=usertypeLiteral    { $value = std::move(u); }
     | t=tupleLiteral       { $value = std::move(t); }
     | K_NULL               { $value = null(); }
-    | ':' id=ident         { $value = new_bind_variables(id); }
+    | e=marker             { $value = std::move(e); }
+    ;
+
+marker returns [expression value]
+    : ':' id=ident         { $value = new_bind_variables(id); }
     | QMARK                { $value = new_bind_variables(shared_ptr<cql3::column_identifier>{}); }
     ;
 
 intValue returns [expression value]
     :
     | t=INTEGER     { $value = untyped_constant{untyped_constant::integer, $t.text}; }
-    | ':' id=ident  { $value = new_bind_variables(id); }
-    | QMARK         { $value = new_bind_variables(shared_ptr<cql3::column_identifier>{}); }
+    | e=marker      { $value = std::move(e); }
     ;
 
 functionName returns [cql3::functions::function_name s]
@@ -1598,13 +1600,13 @@ columnCondition[conditions_type& conditions]
         ( op=relationType t=term { conditions.emplace_back(key, cql3::column_condition::raw::simple_condition(t, {}, op)); }
         | K_IN
             ( values=singleColumnInValues { conditions.emplace_back(key, cql3::column_condition::raw::in_condition({}, {}, values)); }
-            | marker=inMarker { conditions.emplace_back(key, cql3::column_condition::raw::in_condition({}, marker, {})); }
+            | marker1=marker { conditions.emplace_back(key, cql3::column_condition::raw::in_condition({}, marker1, {})); }
             )
         | '[' element=term ']'
             ( op=relationType t=term { conditions.emplace_back(key, cql3::column_condition::raw::simple_condition(t, element, op)); }
             | K_IN
                 ( values=singleColumnInValues { conditions.emplace_back(key, cql3::column_condition::raw::in_condition(element, {}, values)); }
-                | marker=inMarker { conditions.emplace_back(key, cql3::column_condition::raw::in_condition(element, marker, {})); }
+                | marker1=marker { conditions.emplace_back(key, cql3::column_condition::raw::in_condition(element, marker1, {})); }
                 )
             )
         )
@@ -1648,8 +1650,8 @@ relation returns [expression e]
         { $e = binary_operator(token{std::move(l.elements)}, type, std::move(t)); }
     | name=cident K_IS K_NOT K_NULL {
           $e = binary_operator(unresolved_identifier{std::move(name)}, oper_t::IS_NOT, null()); }
-    | name=cident K_IN marker=inMarker
-        { $e = binary_operator(unresolved_identifier{std::move(name)}, oper_t::IN, std::move(marker)); }
+    | name=cident K_IN marker1=marker
+        { $e = binary_operator(unresolved_identifier{std::move(name)}, oper_t::IN, std::move(marker1)); }
     | name=cident K_IN in_values=singleColumnInValues
         { $e = binary_operator(unresolved_identifier{std::move(name)}, oper_t::IN,
         collection_constructor {
@@ -1672,7 +1674,7 @@ relation returns [expression e]
                     }
                   );
               }
-          | tupleInMarker=inMarkerForTuple /* (a, b, c) IN ? */
+          | tupleInMarker=marker /* (a, b, c) IN ? */
               {
                 $e = binary_operator(
                     ids,
@@ -1711,17 +1713,12 @@ relation returns [expression e]
           {
               $e = binary_operator(ids, type, std::move(literal), cql3::expr::comparison_order::clustering);
           }
-      | type=relationType tupleMarker=markerForTuple /* (a, b, c) >= ? */
+      | type=relationType tupleMarker=marker /* (a, b, c) >= ? */
           {
               $e = binary_operator(ids, type, std::move(tupleMarker));
           }
       )
     | '(' e1=relation ')' { $e = std::move(e1); }
-    ;
-
-inMarker returns [expression marker]
-    : QMARK { $marker = new_bind_variables(nullptr); }
-    | ':' name=ident { $marker = new_bind_variables(name); }
     ;
 
 tupleOfIdentifiers returns [tuple_constructor tup]
@@ -1740,18 +1737,8 @@ tupleOfTupleLiterals returns [std::vector<expression> literals]
     : '(' t1=tupleLiteral { $literals.emplace_back(std::move(t1)); } (',' ti=tupleLiteral { $literals.emplace_back(std::move(ti)); })* ')'
     ;
 
-markerForTuple returns [expression marker]
-    : QMARK { $marker = new_bind_variables(nullptr); }
-    | ':' name=ident { $marker = new_bind_variables(name); }
-    ;
-
 tupleOfMarkersForTuples returns [std::vector<expression> markers]
-    : '(' m1=markerForTuple { $markers.emplace_back(std::move(m1)); } (',' mi=markerForTuple { $markers.emplace_back(std::move(mi)); })* ')'
-    ;
-
-inMarkerForTuple returns [expression marker]
-    : QMARK { $marker = new_bind_variables(nullptr); }
-    | ':' name=ident { $marker = new_bind_variables(name); }
+    : '(' m1=marker { $markers.emplace_back(std::move(m1)); } (',' mi=marker { $markers.emplace_back(std::move(mi)); })* ')'
     ;
 
 // The comparator_type rule is used for users' queries (internal=false)
