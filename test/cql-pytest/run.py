@@ -81,7 +81,7 @@ run_with_temporary_dir_pids = set()
 def abort_run_with_temporary_dir(pid):
     tmpdir = pid_to_dir(pid)
     try:
-        os.kill(pid, 9)
+        os.killpg(pid, 9)
         os.waitpid(pid, 0) # don't leave an annoying zombie
     except ProcessLookupError:
         pass
@@ -110,7 +110,7 @@ def cleanup_all():
     # server killed.
     for pid in run_pytest_pids:
         try:
-            os.kill(pid, 9)
+            os.killpg(pid, 9)
             os.waitpid(pid, 0) # don't leave an annoying zombie
         except ProcessLookupError:
             pass
@@ -127,6 +127,13 @@ def cleanup_all():
 # subprocesses (e.g., Scylla) is killed and its temporary storage directory
 # is deleted. It also shows the subprocesses's output log.
 atexit.register(cleanup_all)
+
+# If Python doesn't catch a particular signal, the atexit handler will not
+# get called. By default SIGINT is caught, but SIGTERM and SIGHUP are not,
+# so let's catch them explicitly:
+for sig in [signal.SIGTERM, signal.SIGHUP]:
+    signal.signal(sig, lambda sig, frame:
+        sys.exit(f'Received signal {signal.Signals(sig).name}. Exiting.'))
 
 ##############################
 
@@ -338,6 +345,7 @@ def run_pytest(pytest_dir, additional_parameters):
         run_with_temporary_dir_pids = set() # no children to clean up on child
         run_pytest_pids = set()
         os.chdir(pytest_dir)
+        os.setsid()
         os.execvp('pytest', ['pytest',
             '-o', 'junit_family=xunit2'] + additional_parameters)
         exit(1)
