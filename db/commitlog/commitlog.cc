@@ -330,6 +330,8 @@ public:
         uint64_t flush_count = 0;
         uint64_t allocation_count = 0;
         uint64_t bytes_written = 0;
+        uint64_t bytes_released = 0;
+        uint64_t bytes_flush_requested = 0;
         uint64_t bytes_slack = 0;
         uint64_t segments_created = 0;
         uint64_t segments_destroyed = 0;
@@ -698,6 +700,7 @@ public:
             clogger.debug("Segment {} is no longer active and will submitted for delete now", *this);
             ++_segment_manager->totals.segments_destroyed;
             _segment_manager->totals.active_size_on_disk -= file_position();
+            _segment_manager->totals.bytes_released += file_position();
             _segment_manager->totals.wasted_size_on_disk -= _waste;
             mode = dispose_mode::Delete;
         } else if (_segment_manager->cfg.warn_about_segments_left_on_disk_after_shutdown) {
@@ -1459,6 +1462,12 @@ void db::commitlog::segment_manager::create_counters(const sstring& metrics_cate
                        sm::description("Counts number of bytes written to the disk. "
                                        "Divide this value by \"alloc\" to get the average number of bytes per mutation written to the disk.")),
 
+        sm::make_counter("bytes_released", totals.bytes_released,
+                       sm::description("Counts number of bytes released from disk. (Deleted/recycled)")),
+
+        sm::make_counter("bytes_flush_requested", totals.bytes_flush_requested,
+                       sm::description("Counts number of bytes requested to be flushed (persisted).")),
+
         sm::make_counter("slack", totals.bytes_slack,
                        sm::description("Counts number of unused bytes written to the disk due to disk segment alignment.")),
 
@@ -1565,6 +1574,7 @@ void db::commitlog::segment_manager::flush_segments(uint64_t size_to_remove) {
     }
 
     _flush_position = high;
+    totals.bytes_flush_requested += flushing;
 }
 
 future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::allocate_segment_ex(descriptor d, named_file f, open_flags flags) {
