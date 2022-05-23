@@ -130,3 +130,13 @@ in one go, but one can also specify specific primary keys or token ranges,
 which is recommended in order to make the operation less heavyweight
 and allow for running multiple parallel pruning statements for non-overlapping
 token ranges.
+
+## Expressions
+
+### Lists elements for filtering
+
+Subscripting a list in a WHERE clause is supported as are maps.
+
+```cql
+WHERE some_list[:index] = :value
+```
