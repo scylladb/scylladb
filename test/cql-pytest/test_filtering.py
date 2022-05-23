@@ -194,7 +194,7 @@ def test_filtering_with_subscript(cql, test_keyspace, cassandra_bug):
         # expression - because there will be no rows to filter.
 
         # A subscript is not allowed on a non-map column (in this case, a set)
-        with pytest.raises(InvalidRequest, match='cannot be used as a map'):
+        with pytest.raises(InvalidRequest, match='cannot be subscripted'):
             cql.execute(f"SELECT p FROM {table} WHERE s[2] = 3 ALLOW FILTERING")
         # A wrong type is passed for the subscript is not allowed
         with pytest.raises(InvalidRequest, match=re.escape('key(m1)')):

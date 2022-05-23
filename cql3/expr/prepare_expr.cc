@@ -130,6 +130,14 @@ map_key_spec_of(const column_specification& column) {
 
 static
 lw_shared_ptr<column_specification>
+list_key_spec_of(const column_specification& column) {
+    return make_lw_shared<column_specification>(column.ks_name, column.cf_name,
+                ::make_shared<column_identifier>(format("index({})", *column.name), true),
+                int32_type);
+}
+
+static
+lw_shared_ptr<column_specification>
 map_value_spec_of(const column_specification& column) {
     return make_lw_shared<column_specification>(column.ks_name, column.cf_name,
                 ::make_shared<column_identifier>(format("value({})", *column.name), true),
@@ -982,13 +990,19 @@ static expression prepare_binop_lhs(const expression& lhs, data_dictionary::data
             }, sub.val);
 
             const abstract_type& sub_col_type = sub_col->column_specification->type->without_reversed();
-            if (!sub_col_type.is_map()) {
-                throw exceptions::invalid_request_exception(format("Column {} is not a map, cannot be used as a map", sub_col->name_as_text()));
+
+            lw_shared_ptr<column_specification> subscript_column_spec;
+            if (sub_col_type.is_map()) {
+                subscript_column_spec = map_key_spec_of(*sub_col->column_specification);
+            } else if (sub_col_type.is_list()) {
+                subscript_column_spec = list_key_spec_of(*sub_col->column_specification);
+            } else {
+                throw exceptions::invalid_request_exception(format("Column {} is not a map/list, cannot be subscripted", sub_col->name_as_text()));
             }
 
             return subscript {
                 .val = column_value(sub_col),
-                .sub = prepare_expression(sub.sub, db, schema.ks_name(), map_key_spec_of(*sub_col->column_specification))
+                .sub = prepare_expression(sub.sub, db, schema.ks_name(), std::move(subscript_column_spec))
             };
         },
         [](const auto& e) -> expression {
@@ -1005,7 +1019,11 @@ static lw_shared_ptr<column_specification> get_lhs_receiver(const expression& pr
         },
         [](const subscript& col_val) -> lw_shared_ptr<column_specification> {
             const column_value& sub_col = get_subscripted_column(col_val);
-            return map_value_spec_of(*sub_col.col->column_specification);
+            if (sub_col.col->type->is_map()) {
+                return map_value_spec_of(*sub_col.col->column_specification);
+            } else {
+                return list_value_spec_of(*sub_col.col->column_specification);
+            }
         },
         [&](const tuple_constructor& tup) -> lw_shared_ptr<column_specification> {
             std::ostringstream tuple_name;
