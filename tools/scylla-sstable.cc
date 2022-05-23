@@ -2169,7 +2169,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
                     schema = tools::load_one_schema_from_file(std::filesystem::path(app_config["schema-file"].as<sstring>())).get();
                 }
             } catch (...) {
-                fmt::print(std::cerr, "error: could not load {} '{}': {}", schema_source_opt, app_config[schema_source_opt].as<sstring>(), std::current_exception());
+                fmt::print(std::cerr, "error: could not load {} '{}': {}\n", schema_source_opt, app_config[schema_source_opt].as<sstring>(), std::current_exception());
                 return 1;
             }
 
