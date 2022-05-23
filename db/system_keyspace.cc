@@ -2029,7 +2029,8 @@ public:
         for (auto& ks_data : keyspace_names) {
             co_await result.emit_partition_start(ks_data.key);
 
-            const auto snapshots_by_tables = co_await _db.map_reduce(snapshot_reducer(), [ks_name = ks_data.name] (replica::database& db) -> future<snapshots_by_tables_map> {
+            const auto snapshots_by_tables = co_await _db.map_reduce(snapshot_reducer(), [ks_name_ = ks_data.name] (replica::database& db) mutable -> future<snapshots_by_tables_map> {
+                auto ks_name = std::move(ks_name_);
                 snapshots_by_tables_map snapshots_by_tables;
                 for (auto& [_, table] : db.get_column_families()) {
                     if (table->schema()->ks_name() != ks_name) {
