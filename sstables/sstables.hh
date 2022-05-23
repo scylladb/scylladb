@@ -101,6 +101,7 @@ extern size_t summary_byte_cost(double summary_ratio);
 
 struct sstable_writer_config {
     size_t promoted_index_block_size;
+    size_t promoted_index_auto_scale_threshold;
     uint64_t max_sstable_size = std::numeric_limits<uint64_t>::max();
     bool backup = false;
     bool leave_unsealed = false;

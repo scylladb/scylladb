@@ -957,6 +957,44 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic) {
         mt->apply(std::move(m));
         sstable_writer_config cfg = env.manager().configure_writer();
         cfg.promoted_index_block_size = 1;
+        cfg.promoted_index_auto_scale_threshold = 0; // disable auto-scaling
+
+        auto sst = make_sstable_easy(env, dir.path(), mt, cfg);
+        assert_that(get_index_reader(sst, env.make_reader_permit())).has_monotonic_positions(*s);
+    });
+}
+
+SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_with_auto_scaling) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto dir = tmpdir();
+        schema_builder builder("ks", "cf");
+        builder.with_column("p", utf8_type, column_kind::partition_key);
+        builder.with_column("c1", int32_type, column_kind::clustering_key);
+        builder.with_column("c2", int32_type, column_kind::clustering_key);
+        builder.with_column("v", int32_type);
+        auto s = builder.build();
+
+        auto k = partition_key::from_exploded(*s, {to_bytes(make_local_key(s))});
+        auto cell = atomic_cell::make_live(*int32_type, 1, int32_type->decompose(88), { });
+        mutation m(s, k);
+
+        for (int i = 1; i <= 1024; i++) {
+          auto ck = clustering_key::from_exploded(*s, {int32_type->decompose(i), int32_type->decompose(i*2)});
+          m.set_clustered_cell(ck, *s->get_column_definition("v"), atomic_cell(*int32_type, cell));
+        }
+
+        m.partition().apply_row_tombstone(*s, range_tombstone(
+                clustering_key_prefix::from_exploded(*s, {int32_type->decompose(1)}),
+                bound_kind::excl_start,
+                clustering_key_prefix::from_exploded(*s, {int32_type->decompose(2)}),
+                bound_kind::incl_end,
+                {1, gc_clock::now()}));
+
+        auto mt = make_lw_shared<replica::memtable>(s);
+        mt->apply(std::move(m));
+        sstable_writer_config cfg = env.manager().configure_writer();
+        cfg.promoted_index_block_size = 1;
+        cfg.promoted_index_auto_scale_threshold = 100;  // set to a low value to trigger auto-scaling
 
         auto sst = make_sstable_easy(env, dir.path(), mt, cfg);
         assert_that(get_index_reader(sst, env.make_reader_permit())).has_monotonic_positions(*s);

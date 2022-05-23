@@ -190,6 +190,7 @@ public:
     named_value<uint32_t> memtable_heap_space_in_mb;
     named_value<uint32_t> memtable_offheap_space_in_mb;
     named_value<uint32_t> column_index_size_in_kb;
+    named_value<uint32_t> column_index_auto_scale_threshold_in_kb;
     named_value<uint32_t> index_summary_capacity_in_mb;
     named_value<uint32_t> index_summary_resize_interval_in_minutes;
     named_value<double> reduce_cache_capacity_to;

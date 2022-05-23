@@ -1983,6 +1983,7 @@ SEASTAR_TEST_CASE(test_skipping_using_index) {
         tmpdir dir;
         sstable_writer_config cfg = env.manager().configure_writer();
         cfg.promoted_index_block_size = 1; // So that every fragment is indexed
+        cfg.promoted_index_auto_scale_threshold = 0; // disable auto-scaling
         auto sst = make_sstable_easy(env, dir.path(), make_flat_mutation_reader_from_mutations_v2(table.schema(), env.make_reader_permit(), partitions), cfg, 1, version);
 
         auto ms = as_mutation_source(sst);
