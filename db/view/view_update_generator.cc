@@ -113,7 +113,7 @@ future<> view_update_generator::start() {
                 auto& [t, sstables] = *it;
                 try {
                     inject_failure("view_update_generator_move_staging_sstable");
-                    t->move_sstables_from_staging(sstables).get();
+                    t->remove_sstables_from_staging(sstables).get();
                 } catch (...) {
                     // Move from staging will be retried upon restart.
                     vug_logger.warn("Moving some sstable from staging failed: {}. Ignoring...", std::current_exception());
