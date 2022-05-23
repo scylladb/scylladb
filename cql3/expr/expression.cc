@@ -178,9 +178,6 @@ static managed_bytes_opt get_value(const column_maybe_subscripted& col, const co
             const column_definition* cdef = get_subscripted_column(*s).col;
 
             auto col_type = static_pointer_cast<const collection_type_impl>(cdef->type);
-            if (!col_type->is_map()) {
-                throw exceptions::invalid_request_exception(format("subscripting non-map column {}", cdef->name_as_text()));
-            }
             int32_t index = data.sel.index_of(*cdef);
             if (index == -1) {
                 throw std::runtime_error(
@@ -193,9 +190,8 @@ static managed_bytes_opt get_value(const column_maybe_subscripted& col, const co
                 return std::nullopt;
             }
             const auto deserialized = cdef->type->deserialize(managed_bytes_view(*serialized));
-            const auto& data_map = value_cast<map_type_impl::native_type>(deserialized);
             const auto key = evaluate(s->sub, options);
-            auto&& key_type = col_type->name_comparator();
+            auto&& key_type = col_type->is_map() ? col_type->name_comparator() : int32_type;
             if (key.is_null()) {
                 // For m[null] return null.
                 // This is different from Cassandra - which treats m[null]
@@ -225,6 +221,8 @@ static managed_bytes_opt get_value(const column_maybe_subscripted& col, const co
                     format("Tried to evaluate expression with wrong type for subscript of {}",
                         cdef->name_as_text()));
             }
+          if (col_type->is_map()) {
+            const auto& data_map = value_cast<map_type_impl::native_type>(deserialized);
             const auto found = key.view().with_linearized([&] (bytes_view key_bv) {
                 using entry = std::pair<data_value, data_value>;
                 return std::find_if(data_map.cbegin(), data_map.cend(), [&] (const entry& element) {
@@ -232,6 +230,19 @@ static managed_bytes_opt get_value(const column_maybe_subscripted& col, const co
                 });
             });
             return found == data_map.cend() ? std::nullopt : managed_bytes_opt(found->second.serialize_nonnull());
+          } else if (col_type->is_list()) {
+            const auto& data_list = value_cast<list_type_impl::native_type>(deserialized);
+            auto key_deserialized = key.view().with_linearized([&] (bytes_view key_bv) {
+                return key_type->deserialize(key_bv);
+            });
+            auto key_int = value_cast<int32_t>(key_deserialized);
+            if (key_int < 0 || size_t(key_int) >= data_list.size()) {
+                return std::nullopt;
+            }
+            return managed_bytes_opt(data_list[key_int].serialize_nonnull());
+          } else {
+            throw exceptions::invalid_request_exception(format("subscripting non-map, non-list column {}", cdef->name_as_text()));
+          }
         }
     }, col);
 }
