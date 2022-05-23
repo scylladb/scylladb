@@ -200,7 +200,9 @@ public:
         return _hints_batchlog_flushed;
     }
 
-    future<> repair_range(const dht::token_range& range);
+    future<> repair_range(const dht::token_range& range, utils::UUID table_id);
+
+    size_t ranges_size();
 };
 
 // The repair_tracker tracks ongoing repair operations and their progress.

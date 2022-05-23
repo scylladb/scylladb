@@ -67,6 +67,7 @@ public:
     uint64_t repair_finished_ranges_sum{0};
 private:
     seastar::metrics::metric_groups _metrics;
+public:
     float bootstrap_finished_percentage();
     float replace_finished_percentage();
     float rebuild_finished_percentage();
