@@ -911,9 +911,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             sscfg.available_memory = memory::stats().total_memory();
             debug::the_storage_service = &ss;
             ss.start(std::ref(stop_signal.as_sharded_abort_source()),
-                std::ref(db), std::ref(gossiper), std::ref(sys_dist_ks), std::ref(sys_ks),
+                std::ref(db), std::ref(gossiper), std::ref(sys_ks),
                 std::ref(feature_service), sscfg, std::ref(mm), std::ref(token_metadata), std::ref(erm_factory),
-                std::ref(messaging), std::ref(cdc_generation_service), std::ref(repair),
+                std::ref(messaging), std::ref(repair),
                 std::ref(stream_manager), std::ref(raft_gr), std::ref(lifecycle_notifier), std::ref(bm)).get();
 
             auto stop_storage_service = defer_verbose_shutdown("storage_service", [&] {
@@ -1273,30 +1273,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }).get();
 
             with_scheduling_group(maintenance_scheduling_group, [&] {
-                return ss.local().init_server(qp.local(), group0_client);
-            }).get();
-
-            // Raft group0 can be joined before we wait for gossip to settle
-            // if one of the following applies:
-            //  - it's a fresh node start (in a fresh cluster)
-            //  - it's a restart of an existing node, which have already joined some group0
-            const bool can_join_with_raft =
-                cfg->check_experimental(db::experimental_features_t::RAFT) && (
-                    sys_ks.local().bootstrap_needed() ||
-                    !sys_ks.local().get_raft_group0_id().get().is_null());
-            if (can_join_with_raft) {
-                with_scheduling_group(maintenance_scheduling_group, [&ss] {
-                    return ss.local().join_group0();
-                }).get();
-            }
-
-            auto schema_change_announce = db.local().observable_schema_version().observe([&mm] (utils::UUID schema_version) mutable {
-                mm.local().passive_announce(std::move(schema_version));
-            });
-            gossiper.local().wait_for_gossip_to_settle().get();
-
-            with_scheduling_group(maintenance_scheduling_group, [&] {
-                return ss.local().join_cluster();
+                return ss.local().join_cluster(qp.local(), group0_client, cdc_generation_service.local(), sys_dist_ks, proxy);
             }).get();
 
             sl_controller.invoke_on_all([&lifecycle_notifier] (qos::service_level_controller& controller) {

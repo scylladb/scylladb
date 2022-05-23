@@ -578,6 +578,7 @@ public:
             gms::gossip_config gcfg;
             gcfg.cluster_name = "Test Cluster";
             gcfg.seeds = std::move(seeds);
+            gcfg.skip_wait_for_gossip_to_settle = 0;
             gossiper.start(std::ref(abort_sources), std::ref(feature_service), std::ref(token_metadata), std::ref(ms), std::ref(sys_ks), std::ref(*cfg), std::move(gcfg)).get();
             auto stop_ms_fd_gossiper = defer([&gossiper] {
                 gossiper.stop().get();
@@ -706,10 +707,9 @@ public:
             sscfg.available_memory = memory::stats().total_memory();
             ss.start(std::ref(abort_sources), std::ref(db),
                 std::ref(gossiper),
-                std::ref(sys_dist_ks), std::ref(sys_ks),
+                std::ref(sys_ks),
                 std::ref(feature_service), sscfg, std::ref(mm),
                 std::ref(token_metadata), std::ref(erm_factory), std::ref(ms),
-                std::ref(cdc_generation_service),
                 std::ref(repair),
                 std::ref(stream_manager),
                 std::ref(raft_gr), std::ref(elc_notif),
@@ -781,9 +781,8 @@ public:
                 cdc.stop().get();
             });
 
-            ss.local().init_server(qp.local(), group0_client).get();
             try {
-                ss.local().join_cluster().get();
+                ss.local().join_cluster(qp.local(), group0_client, cdc_generation_service.local(), sys_dist_ks, proxy).get();
             } catch (std::exception& e) {
                 // if any of the defers crashes too, we'll never see
                 // the error

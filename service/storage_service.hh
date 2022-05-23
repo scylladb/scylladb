@@ -86,6 +86,7 @@ class gossiper;
 namespace service {
 
 class storage_service;
+class storage_proxy;
 class migration_manager;
 class raft_group0;
 class raft_group0_client;
@@ -172,7 +173,6 @@ private:
 public:
     storage_service(abort_source& as, distributed<replica::database>& db,
         gms::gossiper& gossiper,
-        sharded<db::system_distributed_keyspace>&,
         sharded<db::system_keyspace>&,
         gms::feature_service& feature_service,
         storage_service_config config,
@@ -180,7 +180,6 @@ public:
         locator::shared_token_metadata& stm,
         locator::effective_replication_map_factory& erm_factory,
         sharded<netw::messaging_service>& ms,
-        sharded<cdc::generation_service>&,
         sharded<repair_service>& repair,
         sharded<streaming::stream_manager>& stream_manager,
         raft_group_registry& raft_gr,
@@ -263,11 +262,6 @@ private:
     shared_token_metadata& _shared_token_metadata;
     locator::effective_replication_map_factory& _erm_factory;
 
-    /* CDC generation management service.
-     * It is sharded<>& and not simply a reference because the service will not yet be started
-     * when storage_service is constructed (but it will be when init_server is called)
-     */
-    sharded<cdc::generation_service>& _cdc_gen_service;
 public:
     std::chrono::milliseconds get_ring_delay();
 private:
@@ -285,23 +279,6 @@ private:
 
     endpoint_lifecycle_notifier& _lifecycle_notifier;
     sharded<db::batchlog_manager>& _batchlog_manager;
-
-    std::unordered_set<token> _bootstrap_tokens;
-
-    /* The timestamp of the CDC streams generation that this node has proposed when joining.
-     * This value is nullopt only when:
-     * 1. this node is being upgraded from a non-CDC version,
-     * 2. this node is starting for the first time or restarting with CDC previously disabled,
-     *    in which case the value should become populated before we leave the join_token_ring procedure.
-     *
-     * Important: this variable is using only during the startup procedure. It is moved out from
-     * at the end of `join_token_ring`; the responsibility handling of CDC generations is passed
-     * to cdc::generation_service.
-     *
-     * DO NOT use this variable after `join_token_ring` (i.e. after we call `generation_service::after_join`
-     * and pass it the ownership of the timestamp.
-     */
-    std::optional<cdc::generation_id> _cdc_gen_id;
 
 public:
     // should only be called via JMX
@@ -330,8 +307,8 @@ private:
     future<replacement_info> prepare_replacement_info(std::unordered_set<gms::inet_address> initial_contact_nodes,
             const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features);
 
-    void run_replace_ops();
-    void run_bootstrap_ops();
+    void run_replace_ops(std::unordered_set<token>& bootstrap_tokens);
+    void run_bootstrap_ops(std::unordered_set<token>& bootstrap_tokens);
 
     std::list<gms::inet_address> get_ignore_dead_nodes_for_replace();
     future<> wait_for_ring_to_settle(std::chrono::milliseconds delay);
@@ -362,9 +339,6 @@ public:
      *
      * The storage_service initialization is done in two parts.
      *
-     * you first call init_messaging_service_part and then
-     * you call init_server_without_the_messaging_service_part.
-     *
      * It is safe to start the API after init_messaging_service_part
      * completed
      *
@@ -372,27 +346,25 @@ public:
      *
      * \see init_messaging_service_part
      */
-    future<> init_server(cql3::query_processor& qp, raft_group0_client& client);
-
-    future<> join_cluster();
+    future<> join_cluster(cql3::query_processor& qp, raft_group0_client& client, cdc::generation_service& cdc_gen_service,
+            sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy);
 
     future<> drain_on_shutdown();
 
     future<> stop_transport();
-
-    // delegates work to `raft_group0::join_group0`
-    future<> join_group0();
 
 private:
     bool should_bootstrap();
     std::optional<gms::inet_address> get_replace_address();
     bool is_replacing();
     bool is_first_node();
-    future<> prepare_to_join(
+    future<> join_token_ring(cdc::generation_service& cdc_gen_service,
+            sharded<db::system_distributed_keyspace>& sys_dist_ks,
+            sharded<service::storage_proxy>& proxy,
             std::unordered_set<gms::inet_address> initial_contact_nodes,
             std::unordered_set<gms::inet_address> loaded_endpoints,
-            std::unordered_map<gms::inet_address, sstring> loaded_peer_features);
-    void join_token_ring(std::chrono::milliseconds);
+            std::unordered_map<gms::inet_address, sstring> loaded_peer_features,
+            std::chrono::milliseconds);
     future<> start_sys_dist_ks();
 public:
 
@@ -400,12 +372,12 @@ public:
 
 private:
     void set_mode(mode m);
-    void mark_existing_views_as_built();
+    future<> mark_existing_views_as_built(sharded<db::system_distributed_keyspace>&);
 
     // Stream data for which we become a new replica.
-    // Before that, if we're not replacing another node, inform other nodes about our chosen tokens (_bootstrap_tokens)
+    // Before that, if we're not replacing another node, inform other nodes about our chosen tokens
     // and wait for RING_DELAY ms so that we receive new writes from coordinators during streaming.
-    void bootstrap();
+    future<> bootstrap(cdc::generation_service& cdc_gen_service, std::unordered_set<token>& bootstrap_tokens, std::optional<cdc::generation_id>& cdc_gen_id);
 
 public:
     /**
@@ -531,7 +503,6 @@ private:
 private:
     // Should be serialized under token_metadata_lock.
     future<> replicate_to_all_cores(mutable_token_metadata_ptr tmptr) noexcept;
-    sharded<db::system_distributed_keyspace>& _sys_dist_ks;
     sharded<db::system_keyspace>& _sys_ks;
     locator::snitch_signal_slot_t _snitch_reconfigure;
     std::unordered_set<gms::inet_address> _replacing_nodes_pending_ranges_updater;
