@@ -344,3 +344,23 @@ def test_index_weird_chars_in_col_name(cql, test_keyspace):
             iswordchar = lambda x: str.isalnum(x) or x == '_'
             cleaned_up_column_name = ''.join(filter(iswordchar, magic_path))
             assert index_name == cf + '_' + cleaned_up_column_name + '_idx'
+
+# Cassandra does not allow IN restrictions on non-primary-key columns,
+# and Scylla does (see test_filtering.py::test_filter_in_restriction).
+# However Scylla currently allows this only with ALLOW FILTERING.
+# In theory, on an index column we could allow it also without filtering,
+# just like we allow it on the partition key. But currently we don't
+# so the following test is marked xfail. It's also cassandra_bug because
+# Cassandra doesn't support it either (it gives the message "not yet
+# supported" suggesting it may be fixed in the future).
+@pytest.mark.xfail
+def test_index_in_restriction(cql, test_keyspace, cassandra_bug):
+    schema = 'pk int, ck int, x int, PRIMARY KEY (pk, ck)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f'CREATE INDEX ON {table}(x)')
+        stmt = cql.prepare(f'INSERT INTO {table} (pk, ck, x) VALUES (?, ?, ?)')
+        for i in range(3):
+            cql.execute(stmt, [1, i, i*2])
+        assert [(1,), (2,)] == list(cql.execute(f'SELECT ck FROM {table} WHERE x IN (2, 4)'))
+        assert [(1,)] == list(cql.execute(f'SELECT ck FROM {table} WHERE x IN (2, 7)'))
+        assert [] == list(cql.execute(f'SELECT ck FROM {table} WHERE x IN (3, 7)'))

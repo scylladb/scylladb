@@ -11,6 +11,7 @@ import random
 import time
 import socket
 import os
+import collections
 from contextlib import contextmanager
 
 def random_string(length=10, chars=string.ascii_uppercase + string.digits):
@@ -74,6 +75,15 @@ def new_test_table(cql, keyspace, schema, extra=""):
     finally:
         cql.execute("DROP TABLE " + table)
 
+# A utility function for creating a new temporary user-defined type.
+@contextmanager
+def new_type(cql, keyspace, cmd):
+    type_name = keyspace + "." + unique_name()
+    cql.execute("CREATE TYPE " + type_name + " " + cmd)
+    try:
+        yield type_name
+    finally:
+        cql.execute("DROP TYPE " + type_name)
 
 # A utility function for creating a new temporary user-defined function.
 @contextmanager
@@ -170,3 +180,9 @@ def local_process_id(cql):
             # Ignore errors. We can't check processes we don't own.
             pass
     return None
+
+# user_type("a", 1, "b", 2) creates a named tuple with component names "a", "b"
+# and values 1, 2. The return of this function can be used to bind to a UDT.
+# The number of arguments is assumed to be even.
+def user_type(*args):
+    return collections.namedtuple('user_type', args[::2])(*args[1::2])
