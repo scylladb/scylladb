@@ -49,10 +49,18 @@ static void add_entry(logalloc::region& r,
 
 static partition_index_page make_page0(logalloc::region& r, simple_schema& s) {
     partition_index_page page;
+    auto destroy_page = defer([&] {
+        with_allocator(r.allocator(), [&] {
+           auto p = std::move(page);
+        });
+    });
+
     add_entry(r, *s.schema(), page, s.make_pkey(0).key(), 0);
     add_entry(r, *s.schema(), page, s.make_pkey(1).key(), 1);
     add_entry(r, *s.schema(), page, s.make_pkey(2).key(), 2);
     add_entry(r, *s.schema(), page, s.make_pkey(3).key(), 3);
+
+    destroy_page.cancel();
     return page;
 }
 
@@ -141,6 +149,47 @@ SEASTAR_THREAD_TEST_CASE(test_caching) {
         BOOST_REQUIRE_EQUAL(cache.shard_stats().misses, old_stats.misses + 2);
         BOOST_REQUIRE_EQUAL(cache.shard_stats().populations, old_stats.populations + 2);
     }
+}
+
+template <typename T>
+static future<> ignore_result(future<T>&& f) {
+    return f.then_wrapped([] (auto&& f) {
+        try {
+            f.get();
+        } catch (...) {
+            // expected, silence warnings about ignored failed futures
+        }
+    });
+}
+
+SEASTAR_THREAD_TEST_CASE(test_exception_while_loading) {
+    ::lru lru;
+    simple_schema s;
+    logalloc::region r;
+    partition_index_cache cache(lru, r);
+
+    auto clear_lru = defer([&] {
+        with_allocator(r.allocator(), [&] {
+            lru.evict_all();
+        });
+    });
+
+    auto page0_loader = [&] (partition_index_cache::key_type k) {
+        return later().then([&] {
+            return make_page0(r, s);
+        });
+    };
+
+    memory::with_allocation_failures([&] {
+        cache.evict_gently().get();
+        auto f0 = ignore_result(cache.get_or_load(0, page0_loader));
+        auto f1 = ignore_result(cache.get_or_load(0, page0_loader));
+        f0.get();
+        f1.get();
+    });
+
+    auto ptr = cache.get_or_load(0, page0_loader).get0();
+    has_page0(ptr);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_auto_clear) {
