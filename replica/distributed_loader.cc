@@ -546,9 +546,12 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
 
         try {
             co_await ks.make_directory_for_column_family(cfname, uuid);
+            // Populate the table base directory first so we can clone
+            // staging sstables into it later when populating the table
+            // from the staging_dir.
+            co_await distributed_loader::populate_column_family(db, sstdir, ks_name, cfname, allow_offstrategy_compaction::yes);
             co_await distributed_loader::populate_column_family(db, sstdir + "/" + sstables::staging_dir, ks_name, cfname, allow_offstrategy_compaction::no);
             co_await distributed_loader::populate_column_family(db, sstdir + "/" + sstables::quarantine_dir, ks_name, cfname, allow_offstrategy_compaction::no, must_exist::no);
-            co_await distributed_loader::populate_column_family(db, sstdir, ks_name, cfname, allow_offstrategy_compaction::yes);
         } catch (...) {
             std::exception_ptr eptr = std::current_exception();
             std::string msg =
