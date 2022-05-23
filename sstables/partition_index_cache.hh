@@ -55,7 +55,12 @@ private:
         entry(entry&&) noexcept = default;
 
         ~entry() {
-            assert(!is_referenced());
+            if (is_referenced()) {
+                // Live entry_ptr should keep the entry alive, except when the entry failed on loading.
+                // In that case, entry_ptr holders are not supposed to use the pointer, so it's safe
+                // to nullify those entry_ptrs.
+                assert(!ready());
+            }
         }
 
         void on_evicted() noexcept override;
