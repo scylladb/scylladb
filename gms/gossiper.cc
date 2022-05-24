@@ -29,6 +29,7 @@
 #include <seastar/core/metrics.hh>
 #include <seastar/util/defer.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 #include <chrono>
 #include "db/config.hh"
 #include <boost/range/algorithm/set_algorithm.hpp>
@@ -603,7 +604,7 @@ future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state> ma
     boost::partition(endpoints, node_is_seed);
     logger.debug("apply_state_locally_endpoints={}", endpoints);
 
-    co_await parallel_for_each(endpoints, [this, &map] (auto&& ep) -> future<> {
+    co_await coroutine::parallel_for_each(endpoints, [this, &map] (auto&& ep) -> future<> {
         if (ep == this->get_broadcast_address() && !this->is_in_shadow_round()) {
             return make_ready_future<>();
         }
@@ -783,7 +784,7 @@ future<> gossiper::failure_detector_loop() {
             auto nodes = _live_endpoints;
             auto live_endpoints_version = _live_endpoints_version;
             auto generation_number = _endpoint_state_map[get_broadcast_address()].get_heart_beat_state().get_generation();
-            co_await parallel_for_each(boost::irange(size_t(0), nodes.size()), [this, generation_number, live_endpoints_version, &nodes] (size_t idx) {
+            co_await coroutine::parallel_for_each(boost::irange(size_t(0), nodes.size()), [this, generation_number, live_endpoints_version, &nodes] (size_t idx) {
                 const auto& node = nodes[idx];
                 auto shard = idx % smp::count;
                 logger.debug("failure_detector_loop: Started new round for node={} on shard={}, live_nodes={}, live_endpoints_version={}",

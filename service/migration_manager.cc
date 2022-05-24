@@ -11,6 +11,7 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 #include "schema_registry.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
@@ -74,7 +75,7 @@ future<> migration_manager::drain()
 
     co_await uninit_messaging_service();
     try {
-        co_await parallel_for_each(_schema_pulls, [] (auto&& e) {
+        co_await coroutine::parallel_for_each(_schema_pulls, [] (auto&& e) {
             return e.second.join();
         });
     } catch (...) {
@@ -909,7 +910,7 @@ future<> migration_manager::announce_without_raft(std::vector<mutation> schema) 
                 _messaging.knows_version(endpoint) &&
                 _messaging.get_raw_version(endpoint) == netw::messaging_service::current_version;
         });
-        co_await parallel_for_each(live_members.begin(), live_members.end(),
+        co_await coroutine::parallel_for_each(live_members.begin(), live_members.end(),
             std::bind(std::mem_fn(&migration_manager::push_schema_mutation), this, std::placeholders::_1, schema));
     } catch (...) {
         mlogger.error("failed to announce migration to all nodes: {}", std::current_exception());

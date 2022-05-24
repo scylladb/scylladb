@@ -14,6 +14,7 @@
 #include <boost/mp11/algorithm.hpp>
 #include <boost/implicit_cast.hpp>
 
+#include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/util/variant_utils.hh>
 #include "utils/chunked_vector.hh"
 
@@ -396,7 +397,7 @@ public:
 private:
     future<> exit() {
         auto fs = _invocations.release();
-        co_await parallel_for_each(fs, [this] (future<std::pair<operation::execute_result<Op>, operation::thread_id>>& f) -> future<> {
+        co_await coroutine::parallel_for_each(fs, [this] (future<std::pair<operation::execute_result<Op>, operation::thread_id>>& f) -> future<> {
             auto [res, tid] = co_await std::move(f);
             _record(operation::completion<Op>{
                 .result = std::move(res),

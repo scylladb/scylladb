@@ -39,6 +39,7 @@
 #include <seastar/util/defer.hh>
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/core/sleep.hh>
 
 #include <cfloat>
@@ -933,7 +934,7 @@ static future<> do_repair_ranges(lw_shared_ptr<repair_info> ri) {
         // repair all the ranges in limited parallelism
         rlogger.info("repair[{}]: Started to repair {} out of {} tables in keyspace={}, table={}, table_id={}, repair_reason={}",
                 ri->id.uuid, idx + 1, ri->table_ids.size(), ri->keyspace, table_name, table_id, ri->reason);
-        co_await parallel_for_each(ri->ranges, [ri, table_id] (auto&& range) {
+        co_await coroutine::parallel_for_each(ri->ranges, [ri, table_id] (auto&& range) {
             return with_semaphore(ri->rs.repair_tracker().range_parallelism_semaphore(), 1, [ri, &range, table_id] {
                 return ri->repair_range(range, table_id).then([ri] {
                     if (ri->reason == streaming::stream_reason::bootstrap) {

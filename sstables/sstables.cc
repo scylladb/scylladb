@@ -28,6 +28,7 @@
 #include <iterator>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 
 #include "dht/sharder.hh"
 #include "types.hh"
@@ -2105,7 +2106,7 @@ future<> sstable::move_to_new_dir(sstring new_dir, generation_type new_generatio
     co_await create_links_and_mark_for_removal(new_dir, new_generation);
     _dir = new_dir;
     generation_type old_generation = std::exchange(_generation, new_generation);
-    co_await parallel_for_each(all_components(), [this, old_generation, old_dir] (auto p) {
+    co_await coroutine::parallel_for_each(all_components(), [this, old_generation, old_dir] (auto p) {
         return sstable_write_io_check(remove_file, sstable::filename(old_dir, _schema->ks_name(), _schema->cf_name(), _version, old_generation, _format, p.second));
     });
     auto temp_toc = sstable_version_constants::get_component_map(_version).at(component_type::TemporaryTOC);
@@ -2711,7 +2712,7 @@ remove_by_toc_name(sstring sstable_toc_name) {
     if (ex) {
         std::rethrow_exception(std::move(ex));
     }
-    co_await parallel_for_each(components, [&prefix] (sstring component) -> future<> {
+    co_await coroutine::parallel_for_each(components, [&prefix] (sstring component) -> future<> {
         if (component.empty()) {
             // eof
             co_return;

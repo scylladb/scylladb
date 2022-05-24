@@ -14,6 +14,7 @@
 #include <seastar/core/gate.hh>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 #include <boost/range/adaptors.hpp>
 #include "utils/div_ceil.hh"
 #include "db/extensions.hh"
@@ -183,7 +184,7 @@ future<> manager::wait_for_sync_point(abort_source& as, const sync_point::shard_
     }
 
     bool was_aborted = false;
-    co_await parallel_for_each(_ep_managers, [this, &was_aborted, &rps, &local_as] (auto& p) {
+    co_await coroutine::parallel_for_each(_ep_managers, [this, &was_aborted, &rps, &local_as] (auto& p) {
         const auto addr = p.first;
         auto& ep_man = p.second;
 

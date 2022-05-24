@@ -15,6 +15,7 @@
 #include <seastar/core/metrics.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/switch_to.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 #include "sstables/exceptions.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "utils/fb_utilities.hh"
@@ -700,7 +701,7 @@ future<> compaction_manager::stop_tasks(std::vector<shared_ptr<task>> tasks, sst
         cmlog.debug("Stopping {}", *t);
         t->stop(reason);
     }
-    co_await parallel_for_each(tasks, [this] (auto& task) -> future<> {
+    co_await coroutine::parallel_for_each(tasks, [this] (auto& task) -> future<> {
         try {
             co_await task->compaction_done();
         } catch (sstables::compaction_stopped_exception&) {

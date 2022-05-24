@@ -16,6 +16,7 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/loop.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/util/log.hh>
 #include <seastar/util/later.hh>
 #include <seastar/util/variant_utils.hh>
@@ -848,7 +849,7 @@ future<> raft_cluster<Clock>::reset_server(size_t id, initial_state state) {
 
 template <typename Clock>
 future<> raft_cluster<Clock>::start_all() {
-    co_await parallel_for_each(_servers, [] (auto& r) {
+    co_await coroutine::parallel_for_each(_servers, [] (auto& r) {
         return r.server->start();
     });
     co_await init_raft_tickers();
@@ -924,7 +925,7 @@ void raft_cluster<Clock>::pause_tickers() {
 template <typename Clock>
 future<> raft_cluster<Clock>::restart_tickers() {
     if (_tick_delays.size()) {
-        co_await parallel_for_each(_in_configuration, [&] (size_t s) -> future<> {
+        co_await coroutine::parallel_for_each(_in_configuration, [&] (size_t s) -> future<> {
             co_await seastar::sleep(_tick_delays[s]);
             _tickers[s].rearm_periodic(_tick_delta);
         });

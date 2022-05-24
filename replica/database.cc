@@ -765,7 +765,7 @@ do_parse_schema_tables(distributed<service::storage_proxy>& proxy, const sstring
         auto keyspace_name = r.template get_nonnull<sstring>("keyspace_name");
         names.emplace(keyspace_name);
     }
-    co_await parallel_for_each(names.begin(), names.end(), [&] (sstring name) mutable -> future<> {
+    co_await coroutine::parallel_for_each(names.begin(), names.end(), [&] (sstring name) mutable -> future<> {
         if (is_system_keyspace(name)) {
             co_return;
         }
@@ -803,7 +803,7 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
     });
     co_await do_parse_schema_tables(proxy, db::schema_tables::TABLES, [&] (schema_result_value_type &v) -> future<> {
         std::map<sstring, schema_ptr> tables = co_await create_tables_from_tables_partition(proxy, v.second);
-        co_await parallel_for_each(tables.begin(), tables.end(), [&] (auto& t) -> future<> {
+        co_await coroutine::parallel_for_each(tables.begin(), tables.end(), [&] (auto& t) -> future<> {
             co_await this->add_column_family_and_make_directory(t.second);
             auto s = t.second;
             // Recreate missing column mapping entries in case
@@ -817,7 +817,7 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
     });
     co_await do_parse_schema_tables(proxy, db::schema_tables::VIEWS, [&] (schema_result_value_type &v) -> future<> {
         std::vector<view_ptr> views = co_await create_views_from_schema_partition(proxy, v.second);
-        co_await parallel_for_each(views.begin(), views.end(), [&] (auto&& v) -> future<> {
+        co_await coroutine::parallel_for_each(views.begin(), views.end(), [&] (auto&& v) -> future<> {
             // TODO: Remove once computed columns are guaranteed to be featured in the whole cluster.
             // we fix here the schema in place in oreder to avoid races (write commands comming from other coordinators).
             view_ptr fixed_v = maybe_fix_legacy_secondary_index_mv_schema(*this, v, nullptr, preserve_version::yes);
@@ -1981,7 +1981,7 @@ schema_ptr database::find_indexed_table(const sstring& ks_name, const sstring& i
 
 future<> database::close_tables(table_kind kind_to_close) {
     auto b = defer([this] { _stop_barrier.abort(); });
-    co_await parallel_for_each(_column_families, [this, kind_to_close](auto& val_pair) -> future<> {
+    co_await coroutine::parallel_for_each(_column_families, [this, kind_to_close](auto& val_pair) -> future<> {
         table_kind k = is_system_table(*val_pair.second->schema()) ? table_kind::system : table_kind::user;
         if (k == kind_to_close) {
             co_await val_pair.second->stop();
@@ -2134,7 +2134,7 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
     cres.reserve(1 + cf.views().size());
 
     cres.emplace_back(co_await _compaction_manager->stop_and_disable_compaction(&cf));
-    co_await parallel_for_each(cf.views(), [&, this] (view_ptr v) -> future<> {
+    co_await coroutine::parallel_for_each(cf.views(), [&, this] (view_ptr v) -> future<> {
         auto& vcf = find_column_family(v);
         cres.emplace_back(co_await _compaction_manager->stop_and_disable_compaction(&vcf));
     });
@@ -2170,7 +2170,7 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
     // creating the sstables that would create them.
     assert(!did_flush || low_mark <= rp || rp == db::replay_position());
     rp = std::max(low_mark, rp);
-    co_await parallel_for_each(cf.views(), [this, truncated_at, should_flush] (view_ptr v) -> future<> {
+    co_await coroutine::parallel_for_each(cf.views(), [this, truncated_at, should_flush] (view_ptr v) -> future<> {
         auto& vcf = find_column_family(v);
             if (should_flush) {
                 co_await vcf.flush();

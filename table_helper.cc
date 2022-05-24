@@ -8,6 +8,7 @@
  */
 
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 #include "table_helper.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/statements/create_table_statement.hh"
@@ -145,7 +146,7 @@ future<> table_helper::setup_keyspace(cql3::query_processor& qp, std::string_vie
     qs.get_client_state().set_keyspace(db.real_database(), keyspace_name);
 
     // Create tables
-    co_await parallel_for_each(tables, [&qp] (table_helper* t) {
+    co_await coroutine::parallel_for_each(tables, [&qp] (table_helper* t) {
         return table_helper::setup_table(qp, t->_create_cql);
     });
 }
