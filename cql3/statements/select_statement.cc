@@ -10,6 +10,7 @@
 
 #include "cql3/statements/select_statement.hh"
 #include "cql3/expr/expression.hh"
+#include "cql3/statements/index_target.hh"
 #include "cql3/statements/raw/select_statement.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/statements/prune_materialized_view_statement.hh"
@@ -1335,6 +1336,8 @@ indexed_table_select_statement::find_index_clustering_rows(query_processor& qp, 
         auto rs = cql3::untyped_result_set(rows);
         std::vector<primary_key> primary_keys;
         primary_keys.reserve(rs.size());
+
+        std::optional<std::reference_wrapper<primary_key>> last_primary_key;
         for (size_t i = 0; i < rs.size(); i++) {
             const auto& row = rs.at(i);
             auto pk_columns = _schema->partition_key_columns() | boost::adaptors::transformed([&] (auto& cdef) {
@@ -1346,7 +1349,24 @@ indexed_table_select_statement::find_index_clustering_rows(query_processor& qp, 
                 return row.get_blob(cdef.name_as_text());
             });
             auto ck = clustering_key::from_range(ck_columns);
+
+            if (_index.target_type() == cql3::statements::index_target::target_type::collection_values) {
+                // The index on collection values is special in a way, as its' clustering key contains not only the
+                // base primary key, but also a column that holds the keys of the cells in the collection, which
+                // allows to distinguish cells with different keys but the same value.
+                // This has an unwanted consequence, that it's possible to receive two identical base table primary
+                // keys. Thankfully, they are guaranteed to occur consequently.
+                if (last_primary_key) {
+                    const auto& [last_dk, last_ck] = last_primary_key->get();
+                    if (last_dk.equal(*_schema, dk) && last_ck.equal(*_schema, ck)) {
+                        continue;
+                    }
+                }
+            }
+
             primary_keys.emplace_back(primary_key{std::move(dk), std::move(ck)});
+            // Last use of this reference will be before next .emplace_back to the vector.
+            last_primary_key = primary_keys.back();
         }
         auto paging_state = rows->rs().get_metadata().paging_state();
         return make_ready_future<coordinator_result<value_type>>(value_type(std::move(primary_keys), std::move(paging_state)));
