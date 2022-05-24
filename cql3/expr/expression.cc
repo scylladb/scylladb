@@ -491,7 +491,7 @@ bool like(const column_value& cv, const raw_value_view& pattern, const column_va
 
 /// True iff the column value is in the set defined by rhs.
 bool is_one_of(const column_maybe_subscripted& col, const expression& rhs, const column_value_eval_bag& bag) {
-    const constant in_list = evaluate_IN_list(rhs, bag.options);
+    const constant in_list = evaluate(rhs, bag.options);
     const column_definition* cdef = get_subscripted_column(col).col;
     statements::request_validations::check_false(
             in_list.is_null(), "Invalid null value for column {}", cdef->name_as_text());
@@ -506,7 +506,7 @@ bool is_one_of(const column_maybe_subscripted& col, const expression& rhs, const
 
 /// True iff the tuple of column values is in the set defined by rhs.
 bool is_one_of(const tuple_constructor& tuple, const expression& rhs, const column_value_eval_bag& bag) {
-    constant in_list = evaluate_IN_list(rhs, bag.options);
+    constant in_list = evaluate(rhs, bag.options);
     if (!in_list.type->without_reversed().is_list()) {
         throw std::logic_error("unexpected expression type in is_one_of(multi-column)");
     }
@@ -728,7 +728,7 @@ const auto deref = boost::adaptors::transformed([] (const managed_bytes_opt& b) 
 value_list get_IN_values(
         const expression& e, const query_options& options, const serialized_compare& comparator,
         sstring_view column_name) {
-    const constant in_list = evaluate_IN_list(e, options);
+    const constant in_list = evaluate(e, options);
     if (in_list.is_unset_value()) {
         throw exceptions::invalid_request_exception(format("Invalid unset value for column {}", column_name));
     }
@@ -743,7 +743,7 @@ value_list get_IN_values(
 /// Returns possible values for k-th column from t, which must be RHS of IN.
 value_list get_IN_values(const expression& e, size_t k, const query_options& options,
                          const serialized_compare& comparator) {
-        const constant in_list = evaluate_IN_list(e, options);
+        const constant in_list = evaluate(e, options);
     if (!in_list.type->without_reversed().is_list()) {
         throw std::logic_error(format("get_IN_values(multi-column) on invalid expression {}", e));
     }
@@ -2121,16 +2121,6 @@ constant evaluate(const function_call& fun_call, const query_options& options) {
     }
 
     return constant(raw_value::make_value(std::move(*result)), scalar_fun->return_type());
-}
-
-constant evaluate_IN_list(const expression& e, const query_options& options) {
-    if (auto collection = expr::as_if<collection_constructor>(&e)) {
-        if (collection->style == collection_constructor::style_type::list) {
-            return evaluate_list(*collection, options, true);
-        }
-    }
-
-    return evaluate(e, options);
 }
 
 static void ensure_can_get_value_elements(const constant& val,

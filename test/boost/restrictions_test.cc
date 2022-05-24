@@ -657,7 +657,6 @@ SEASTAR_THREAD_TEST_CASE(scalar_in) {
         require_rows(e, "select r from t where r in (22,25) and s>='25' allow filtering", {{F(25), T("35")}});
         require_rows(e, "select r from t where r in (25) and s>='25' allow filtering", {{F(25), T("35")}});
         require_rows(e, "select r from t where r in (25) allow filtering", {{F(25)}});
-        require_rows(e, "select r from t where r in (null,25) allow filtering", {{F(25)}});
         cquery_nofail(e, "delete from t where p=2");
         require_rows(e, "select r from t where r in (22,25) allow filtering", {{F(25)}});
         require_rows(e, "select s from t where s in ('34','35') allow filtering", {{T("34")}, {T("34")}, {T("35")}});
@@ -728,8 +727,6 @@ SEASTAR_THREAD_TEST_CASE(map_in) {
                          {{c1a}, {c1b}});
         require_rows(e, "select c from t where c in ({10:11}, {10:10}, {10:10,11:11}) and r=12 allow filtering",
                          {{c1b, I(12)}});
-        require_rows(e, "select c from t where c in ({10:11}, {10:10}, {10:10,11:11}) and r in (12,null) "
-                         "allow filtering", {{c1b, I(12)}});
         require_rows(e, "select c from t where c in ({10:11}, {10:10}, {10:10,11:11}) and p in ({1:1},{2:2})",
                      {{c1a}, {c1b}});
     }).get();

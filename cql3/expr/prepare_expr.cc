@@ -376,7 +376,7 @@ list_test_assignment(const collection_constructor& c, data_dictionary::database 
 
 static
 expression
-list_prepare_expression(const collection_constructor& c, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver, bool is_in_list) {
+list_prepare_expression(const collection_constructor& c, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
     list_validate_assignable_to(c, db, keyspace, *receiver);
 
     // In Cassandra, an empty (unfrozen) map/set/list is equivalent to the column being null. In
@@ -405,11 +405,7 @@ list_prepare_expression(const collection_constructor& c, data_dictionary::databa
         .type = receiver->type
     };
     if (all_terminal) {
-        if (is_in_list) {
-            return evaluate_IN_list(value, query_options::DEFAULT);
-        } else {
-            return evaluate(value, query_options::DEFAULT);
-        }
+        return evaluate(value, query_options::DEFAULT);
     } else {
         return value;
     }
@@ -821,7 +817,7 @@ prepare_expression(const expression& expr, data_dictionary::database db, const s
         },
         [&] (const collection_constructor& c) -> expression {
             switch (c.style) {
-            case collection_constructor::style_type::list: return list_prepare_expression(c, db, keyspace, receiver, false);
+            case collection_constructor::style_type::list: return list_prepare_expression(c, db, keyspace, receiver);
             case collection_constructor::style_type::set: return set_prepare_expression(c, db, keyspace, receiver);
             case collection_constructor::style_type::map: return map_prepare_expression(c, db, keyspace, receiver);
             }
@@ -1086,23 +1082,12 @@ static lw_shared_ptr<column_specification> get_rhs_receiver(lw_shared_ptr<column
     }
 }
 
-static expression prepare_binop_rhs(const expression& rhs, const lw_shared_ptr<column_specification>& rhs_receiver, oper_t oper, data_dictionary::database db, const sstring& keyspace) {
-    // Lists of IN values must be handled separately during preparation
-    // because they might contain nulls and bind markers.
-    if (oper == oper_t::IN && is<collection_constructor>(rhs)) {
-        const collection_constructor& rhs_in_list = as<collection_constructor>(rhs);
-        return list_prepare_expression(rhs_in_list, db, keyspace, rhs_receiver, true);
-    }
-
-    return prepare_expression(rhs, db, keyspace, rhs_receiver);
-}
-
 binary_operator prepare_binary_operator(const binary_operator& binop, data_dictionary::database db, schema_ptr schema, prepare_context& ctx) {
     expression prepared_lhs = prepare_binop_lhs(binop.lhs, db, *schema, binop);
     lw_shared_ptr<column_specification> lhs_receiver = get_lhs_receiver(prepared_lhs, *schema);
 
     lw_shared_ptr<column_specification> rhs_receiver = get_rhs_receiver(lhs_receiver, binop.op);
-    expression prepared_rhs = prepare_binop_rhs(binop.rhs, rhs_receiver, binop.op, db, schema->ks_name());
+    expression prepared_rhs = prepare_expression(binop.rhs, db, schema->ks_name(), rhs_receiver);
 
     return binary_operator(std::move(prepared_lhs), binop.op, std::move(prepared_rhs), binop.order);
 }

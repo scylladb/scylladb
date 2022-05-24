@@ -653,10 +653,6 @@ std::vector<expression> extract_single_column_restrictions_for_column(const expr
 
 std::optional<bool> get_bool_value(const constant&);
 
-// Similar to evaluate(), but ignores any NULL values in the final list value.
-// In an IN restriction nulls can be ignored, because nothing equals NULL.
-constant evaluate_IN_list(const expression&, const query_options&);
-
 // Takes a prepared expression and calculates its value.
 // Evaluates bound values, calls functions and returns just the bytes and type.
 constant evaluate(const expression& e, const query_options&);
