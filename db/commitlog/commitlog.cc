@@ -325,13 +325,47 @@ public:
     requires std::derived_from<T, db::commitlog::entry_writer> && std::same_as<R, decltype(std::declval<T>().result())>
     future<R> allocate_when_possible(T writer, db::timeout_clock::time_point timeout);
 
-    struct stats {
+    template<typename T>
+    struct byte_flow {
+        T bytes_written = 0;
+        T bytes_released = 0;
+        T bytes_flush_requested = 0;
+
+        byte_flow operator+(const byte_flow& rhs) const {
+            return byte_flow{
+                .bytes_written = bytes_written + rhs.bytes_written,
+                .bytes_released = bytes_released + rhs.bytes_released,
+                .bytes_flush_requested = bytes_flush_requested + rhs.bytes_flush_requested,
+            };
+        }
+        byte_flow operator-(const byte_flow& rhs) const {
+            return byte_flow{
+                .bytes_written = bytes_written - rhs.bytes_written,
+                .bytes_released = bytes_released - rhs.bytes_released,
+                .bytes_flush_requested = bytes_flush_requested - rhs.bytes_flush_requested,
+            };
+        }
+        byte_flow<double> operator/(double d) const {
+            return byte_flow<double>{
+                .bytes_written = bytes_written / d,
+                .bytes_released = bytes_released / d,
+                .bytes_flush_requested = bytes_flush_requested / d,
+            };
+        }
+
+        friend std::ostream& operator<<(std::ostream& os, const byte_flow& r) {
+            return os << std::fixed
+                << "[written=" << r.bytes_written
+                << ", released=" << r.bytes_released
+                << ", flush_req=" << r.bytes_flush_requested
+                << "]";
+        }
+    };
+
+    struct stats : public byte_flow<uint64_t> {
         uint64_t cycle_count = 0;
         uint64_t flush_count = 0;
         uint64_t allocation_count = 0;
-        uint64_t bytes_written = 0;
-        uint64_t bytes_released = 0;
-        uint64_t bytes_flush_requested = 0;
         uint64_t bytes_slack = 0;
         uint64_t segments_created = 0;
         uint64_t segments_destroyed = 0;
@@ -347,6 +381,10 @@ public:
     };
 
     stats totals;
+    byte_flow<uint64_t> last_bytes;
+    byte_flow<double> bytes_rate;
+
+    typename std::chrono::high_resolution_clock::time_point last_time;
 
     size_t pending_allocations() const {
         return _request_controller.waiters();
@@ -2136,16 +2174,46 @@ void db::commitlog::segment_manager::on_timer() {
         if (cfg.mode != sync_mode::BATCH) {
             sync();
         }
+
+        byte_flow<uint64_t> curr = totals;
+        auto diff = curr - std::exchange(last_bytes, curr);
+        auto now = std::chrono::high_resolution_clock::now();
+        auto seconds = std::chrono::duration_cast<std::chrono::duration<double>>(now - last_time).count();
+        auto rate = diff / seconds;
+
+        // not using yet. but should maybe, adjust for time windows etc.
+        // for now, use simple "timer frequency" based diffs (i.e. rate per 10s)
+        // to try to predict where disk foot print will be by the next timer call.
+        bytes_rate = rate;
+        last_time = now;
+
+        clogger.debug("Rate: {} / s ({} s)", rate, seconds);
+
         // IFF a new segment was put in use since last we checked, and we're
         // above threshold, request flush.
         if (_new_counter > 0) {
             auto max = disk_usage_threshold;
             auto cur = totals.active_size_on_disk + totals.wasted_size_on_disk;
+            uint64_t extra = 0;
 
-            if (max != 0 && cur >= max) {
-                clogger.debug("Used size on disk {} MB exceeds local threshold {} MB", cur / (1024 * 1024), max / (1024 * 1024));
+            // TODO: better heuristics? Do a semi-pessimistic approach, guess that half
+            // of flush request will manage to finish by next lap, so count it as half.
+            auto returned = diff.bytes_released + diff.bytes_flush_requested/2;
+            if (diff.bytes_written > returned) {
+                // we are guessing we are gonna add at least this.
+                extra = (diff.bytes_written - returned);
+            }
+
+            // do not just measure current footprint, but maybe include expected
+            // footprint that will be added.
+            if (max != 0 && (cur + extra) >= max) {
+                clogger.debug("Used size on disk {} MB ({} MB projected) exceeds local threshold {} MB"
+                    , (cur) / (1024 * 1024)
+                    , (cur+extra) / (1024 * 1024)
+                    , max / (1024 * 1024)
+                );
                 _new_counter = 0;
-                flush_segments(cur - max);
+                flush_segments(cur + extra - max);
             }
         }
         return do_pending_deletes();
