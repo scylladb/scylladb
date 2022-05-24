@@ -185,9 +185,11 @@ def test_filtering_with_in_relation(cql, test_keyspace, cassandra_bug):
 # This test is a superset of test test_null.py::test_map_subscript_null which
 # tests only the special case of a null subscript.
 # Reproduces #10361
+#
+# Also test list subscripts. These also don't work in Cassandra.
 def test_filtering_with_subscript(cql, test_keyspace, cassandra_bug):
     with new_test_table(cql, test_keyspace,
-            "p int, m1 map<int, int>, m2 map<text, text>, s set<int>, PRIMARY KEY (p)") as table:
+            "p int, m1 map<int, int>, m2 map<text, text>, s set<int>, l list<text>, PRIMARY KEY (p)") as table:
         # Check for *errors* in subscript expressions - such as wrong type or
         # null - with an empty table. This will force the implementation to
         # check for these errors before actually evaluating the filter
@@ -238,6 +240,30 @@ def test_filtering_with_subscript(cql, test_keyspace, cassandra_bug):
         assert list(cql.execute(f"select p from {table} where m1[null] = 2 ALLOW FILTERING")) == []
         with pytest.raises(InvalidRequest, match='Unsupported unset map key for column m1'):
             cql.execute(stmt, [UNSET_VALUE])
+
+        # check subscripted list filtering
+        cql.execute(f"INSERT INTO {table} (p, l) VALUES (11, ['zero', 'one', 'two'])")
+        res = cql.execute(f"SELECT p FROM {table} WHERE l[1] = 'one' ALLOW FILTERING")
+        assert list(res) == [(11,)]
+        res = cql.execute(f"SELECT p FROM {table} WHERE l[1] = 'eight' ALLOW FILTERING")
+        assert list(res) == []
+        res = cql.execute(f"SELECT p FROM {table} WHERE l[-5] = 'minus five' ALLOW FILTERING")
+        assert list(res) == []
+        res = cql.execute(f"SELECT p FROM {table} WHERE l[3] = 'three' ALLOW FILTERING")
+        assert list(res) == []
+
+        # check list filtering type checking
+        with pytest.raises(InvalidRequest, match=re.escape('Invalid STRING constant')):
+            cql.execute(f"select * from {table} where l['hi'] = 'hi' ALLOW FILTERING")
+        with pytest.raises(InvalidRequest, match=re.escape('Invalid INTEGER constant')):
+            cql.execute(f"select * from {table} where l[3] = 3 ALLOW FILTERING")
+
+        # check that NULL lists or NULL indexes don't confuse the system
+        cql.execute(f"INSERT INTO {table} (p) VALUES (12)")
+        res = cql.execute(f"SELECT p FROM {table} WHERE l[1] = 'one' ALLOW FILTERING")
+        assert list(res) == [(11,)]
+        res = cql.execute(f"SELECT p FROM {table} WHERE l[NULL] = 'one' ALLOW FILTERING")
+        assert list(res) == []
 
 # Beyond the tests of map subscript expressions above, also test what happens
 # when the expression is fine (e.g., m[2] = 3) but the *data* itself is null.
