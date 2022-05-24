@@ -1020,7 +1020,7 @@ private:
             _new_unused_sstables.insert(_new_unused_sstables.end(), unused_gc_sstables.begin(), unused_gc_sstables.end());
 
             auto exhausted_ssts = std::vector<shared_sstable>(exhausted, _sstables.end());
-            log_debug("Replacing earlier exhausted sstable(s) {} by new sstable {}", formatted_sstables_list(exhausted_ssts, false), sst->get_filename());
+            log_debug("Replacing earlier exhausted sstable(s) {} by new sstable(s) {}", formatted_sstables_list(exhausted_ssts, false), formatted_sstables_list(_new_unused_sstables, true));
             _replacer(get_compaction_completion_desc(exhausted_ssts, std::move(_new_unused_sstables)));
             _sstables.erase(exhausted, _sstables.end());
             _monitor_generator.remove_exhausted_sstables(exhausted_ssts);
