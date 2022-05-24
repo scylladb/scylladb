@@ -364,3 +364,101 @@ def test_index_in_restriction(cql, test_keyspace, cassandra_bug):
         assert [(1,), (2,)] == list(cql.execute(f'SELECT ck FROM {table} WHERE x IN (2, 4)'))
         assert [(1,)] == list(cql.execute(f'SELECT ck FROM {table} WHERE x IN (2, 7)'))
         assert [] == list(cql.execute(f'SELECT ck FROM {table} WHERE x IN (3, 7)'))
+
+# Test that a LIMIT works correctly in conjunction filtering - with an
+# without a secondary index. The LIMIT is supposed to control the number
+# of rows that the query returns - after filtering - not the number of
+# rows before filtering.
+# Reproduces #10649 - when use_index=True the test failed because LIMIT
+# returned fewer than the requested number of rows.
+@pytest.mark.parametrize("use_index", [
+        pytest.param(True, marks=pytest.mark.xfail(reason="#10649")), False])
+def test_filter_and_limit(cql, test_keyspace, use_index):
+    with new_test_table(cql, test_keyspace, 'pk int primary key, x int, y int') as table:
+        if use_index:
+            cql.execute(f'CREATE INDEX ON {table}(x)')
+        stmt = cql.prepare(f'INSERT INTO {table} (pk, x, y) VALUES (?, ?, ?)')
+        cql.execute(stmt, [0, 1, 0])
+        cql.execute(stmt, [1, 1, 1])
+        cql.execute(stmt, [2, 1, 0])
+        cql.execute(stmt, [3, 1, 1])
+        cql.execute(stmt, [4, 1, 0])
+        cql.execute(stmt, [5, 1, 1])
+        cql.execute(stmt, [6, 1, 0])
+        cql.execute(stmt, [7, 1, 1])
+        results = list(cql.execute(f'SELECT pk FROM {table} WHERE x = 1 AND y = 0 ALLOW FILTERING'))
+        assert sorted(results) == [(0,), (2,), (4,), (6,)]
+        # Make sure that with LIMIT 3 we get back exactly 3 results - not
+        # less and also not more.
+        results = list(cql.execute(f'SELECT pk FROM {table} WHERE x = 1 AND y = 0 LIMIT 3 ALLOW FILTERING'))
+        assert sorted(results) == [(0,), (2,), (4,)]
+        # Make the test even harder (exercising more code paths) by asking
+        # to fetch the 3 results in tiny one-result pages instead of one page.
+        s = cql.prepare(f'SELECT pk FROM {table} WHERE x = 1 AND y = 0 LIMIT 3 ALLOW FILTERING')
+        s.fetch_size = 1
+        assert sorted(cql.execute(s)) == [(0,), (2,), (4,)]
+
+# The following test is similar to the previous one (test_filter_and_limit)
+# with one main difference: Whereas in the previous test the table's schema
+# had only a partition key, here we also add a clustering key.
+# This variantion in the test is important because Scylla's index-using code
+# has a different code path for the case that the index lookup results in a
+# list of matching partitions (the previous test) and when it results in a
+# list of matching rows (this test).
+# Reproduces #10649 - when use_index=True the test failed because LIMIT
+# returned fewer than the requested number of rows.
+@pytest.mark.parametrize("use_index", [
+        pytest.param(True, marks=pytest.mark.xfail(reason="#10649")), False])
+def test_filter_and_limit_clustering(cql, test_keyspace, use_index):
+    with new_test_table(cql, test_keyspace, 'pk int, ck int, x int, PRIMARY KEY(pk, ck)') as table:
+        if use_index:
+            cql.execute(f'CREATE INDEX ON {table}(x)')
+        stmt = cql.prepare(f'INSERT INTO {table} (pk, ck, x) VALUES (?, ?, ?)')
+        cql.execute(stmt, [0, 0, 1])
+        cql.execute(stmt, [1, 1, 1])
+        cql.execute(stmt, [2, 0, 1])
+        cql.execute(stmt, [3, 1, 1])
+        cql.execute(stmt, [4, 0, 1])
+        cql.execute(stmt, [5, 1, 1])
+        cql.execute(stmt, [6, 0, 1])
+        cql.execute(stmt, [7, 1, 1])
+        results = list(cql.execute(f'SELECT pk FROM {table} WHERE x = 1 AND ck = 0 ALLOW FILTERING'))
+        assert sorted(results) == [(0,), (2,), (4,), (6,)]
+        # Make sure that with LIMIT 3 we get back exactly 3 results - not
+        # less and also not more.
+        results = list(cql.execute(f'SELECT pk FROM {table} WHERE x = 1 AND ck = 0 LIMIT 3 ALLOW FILTERING'))
+        assert sorted(results) == [(0,), (2,), (4,)]
+        # Make the test even harder (exercising more code paths) by asking
+        # to fetch the 3 results in tiny one-result pages instead of one page.
+        s = cql.prepare(f'SELECT pk FROM {table} WHERE x = 1 AND ck = 0 LIMIT 3 ALLOW FILTERING')
+        s.fetch_size = 1
+        assert sorted(cql.execute(s)) == [(0,), (2,), (4,)]
+
+# Another reproducer for #10649, similar to the previous test
+# (test_filter_and_limit_clustering) but indexes the clustering
+# key column. This test is closer to the use case of the original user
+# who discovered #10649, and involves slightly different code paths in
+# Scylla (the index-driver query needs to read individual rows, not
+# entire partitions, from the base table).
+@pytest.mark.xfail(reason="#10649")
+def test_filter_and_limit_2(cql, test_keyspace):
+    schema = 'pk int, ck1 int, ck2 int, x int, PRIMARY KEY (pk, ck1, ck2)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f'CREATE INDEX ON {table}(ck2)')
+        stmt = cql.prepare(f'INSERT INTO {table} (pk, ck1, ck2, x) VALUES (?, ?, ?, ?)')
+        N = 10
+        J = 3
+        for i in range(N):
+            for j in range(J):
+                cql.execute(stmt, [1, i, j, j+i%2])
+        results = list(cql.execute(f'SELECT ck1 FROM {table} WHERE ck2 = 2 AND x = 3 ALLOW FILTERING'))
+        # Note in the data-adding loop above, all rows match our pk=1, and
+        # when ck=2 it means j=2 and at that point - x=3 if i%2==1. So the
+        # expected results are:
+        assert results == [(i,) for i in range(N) if i%2==1]
+        for i in [3, 1, N]:
+            assert results[0:i] == list(cql.execute(f'SELECT ck1 FROM {table} WHERE ck2 = 2 AND x = 3 LIMIT {i} ALLOW FILTERING'))
+        # Try exactly the same with adding pk=1, which shouldn't change
+        # anything in the result (because all our rows have pk=1).
+        for i in [3, 1, N]:
+            assert results[0:i] == list(cql.execute(f'SELECT ck1 FROM {table} WHERE pk = 1 AND ck2 = 2 AND x = 3 LIMIT {i} ALLOW FILTERING'))
