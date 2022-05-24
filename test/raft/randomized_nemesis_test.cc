@@ -438,7 +438,6 @@ private:
         promise<>
     >;
     std::unordered_map<reply_id_t, reply_promise> _reply_promises;
-    reply_id_t _counter = 0;
 
     // Used to ensure that when `abort()` returns there are
     // no more in-progress methods running on this object.
@@ -455,6 +454,11 @@ private:
             .handle_exception_type([] (const gate_closed_exception&) -> decltype(f()) {
                 throw raft::stopped_error{};
             });
+    }
+
+    static reply_id_t new_reply_id() {
+        static size_t counter = 0;
+        return counter++;
     }
 
 public:
@@ -640,7 +644,7 @@ public:
                 throw snapshot_not_found{ .id = ins.snp.id };
             }
 
-            auto id = _counter++;
+            auto id = new_reply_id();
             promise<raft::snapshot_reply> p;
             auto f = p.get_future();
             _reply_promises.emplace(id, std::move(p));
@@ -675,7 +679,7 @@ public:
 
     virtual future<raft::add_entry_reply> send_add_entry(raft::server_id dst, const raft::command& cmd) override {
         co_return co_await with_gate([&] () -> future<raft::add_entry_reply> {
-            auto id = _counter++;
+            auto id = new_reply_id();
             promise<raft::add_entry_reply> p;
             auto f = p.get_future();
             _reply_promises.emplace(id, std::move(p));
@@ -700,7 +704,7 @@ public:
                 const std::vector<raft::server_address>& add,
                 const std::vector<raft::server_id>& del) override {
         co_return co_await with_gate([&] () -> future<raft::add_entry_reply> {
-            auto id = _counter++;
+            auto id = new_reply_id();
             promise<raft::add_entry_reply> p;
             auto f = p.get_future();
             _reply_promises.emplace(id, std::move(p));
@@ -724,7 +728,7 @@ public:
     }
     virtual future<raft::read_barrier_reply> execute_read_barrier_on_leader(raft::server_id dst) override {
         co_return co_await with_gate([&] () -> future<raft::read_barrier_reply> {
-            auto id = _counter++;
+            auto id = new_reply_id();
             promise<raft::read_barrier_reply> p;
             auto f = p.get_future();
             _reply_promises.emplace(id, std::move(p));
@@ -745,7 +749,7 @@ public:
 
     future<> ping(raft::server_id dst, abort_source& as) {
         co_await with_gate([&] () -> future<> {
-            auto id = _counter++;
+            auto id = new_reply_id();
             promise<> p;
             auto f = p.get_future();
             _reply_promises.emplace(id, std::move(p));
@@ -1275,6 +1279,8 @@ future<reconfigure_result_t> modify_config(
         co_return e;
     } catch (raft::request_aborted&) {
         co_return timed_out_error{};
+    } catch (seastar::timed_out_error e) {
+        co_return e;
     } catch (...) {
         tlogger.error("unexpected exception from modify_config: {}", std::current_exception());
         assert(false);
@@ -2289,8 +2295,7 @@ struct bouncing {
                 --bounces;
 
                 if (n_a_l->leader) {
-                    assert(n_a_l->leader != srv_id);
-                    if (!tried.contains(n_a_l->leader)) {
+                    if (n_a_l->leader == srv_id || !tried.contains(n_a_l->leader)) {
                         co_await timer.sleep(known_leader_delay);
                         srv_id = n_a_l->leader;
                         tlogger.trace("bouncing call: got `not_a_leader`, rerouted to {}", srv_id);
@@ -2447,7 +2452,42 @@ struct reconfiguration {
 
     using result_type = reconfigure_result_t;
 
-    future<result_type> execute(state_type& s, const operation::context& ctx) {
+    future<result_type> execute_modify_config(state_type& s, const operation::context&) {
+        assert(s.all_servers.size() > 1);
+        std::vector<raft::server_id> nodes{s.all_servers.begin(), s.all_servers.end()};
+
+        std::shuffle(nodes.begin(), nodes.end(), s.rnd);
+        size_t added_ix = std::uniform_int_distribution<size_t>{1, nodes.size()}(s.rnd);
+        std::vector<raft::server_id> added {nodes.begin(), nodes.begin() + added_ix};
+        std::vector<raft::server_id> removed {nodes.begin() + added_ix, nodes.end()};
+
+        assert(s.known.size() > 0);
+        auto [res, last] = co_await bouncing{
+                [&added, &removed, timeout = s.timer.now() + timeout, &timer = s.timer, &env = s.env] (raft::server_id id) {
+            return env.modify_config(id, added, removed, timeout, timer);
+        }}(s.timer, s.known, *s.known.begin(), 10, 10_t, 10_t);
+
+        std::visit(make_visitor(
+        [&, last = last] (std::monostate) {
+            tlogger.debug("reconfig successful known {} added {} removed {} by {}", s.known, added, removed, last);
+            s.known.merge(std::unordered_set<raft::server_id>{added.begin(), added.end()});
+            for (auto id: removed) {
+                s.known.erase(id);
+            }
+        },
+        [&, last = last] (raft::not_a_leader& e) {
+            tlogger.debug("reconfig failed, not a leader: {} tried to add {}, remove {} by {}", e, added, removed, last);
+        },
+        [&, last = last] (auto& e) {
+            s.known.merge(std::unordered_set<raft::server_id>{added.begin(), added.end()});
+            tlogger.debug("reconfig failed: {}, tried to add {}, remove {}, after merge {} by {}", e, added, removed, s.known, last);
+        }
+        ), res);
+
+        co_return res;
+    }
+
+    future<result_type> execute_reconfigure(state_type& s, const operation::context&) {
         assert(s.all_servers.size() > 1);
         std::vector<raft::server_id> nodes{s.all_servers.begin(), s.all_servers.end()};
 
@@ -2476,6 +2516,15 @@ struct reconfiguration {
         ), res);
 
         co_return res;
+    }
+
+    future<result_type> execute(state_type& s, const operation::context& ctx) {
+        static std::bernoulli_distribution bdist{0.5};
+        if (bdist(s.rnd)) {
+            return execute_modify_config(s, ctx);
+        } else {
+            return execute_reconfigure(s, ctx);
+        }
     }
 
     friend std::ostream& operator<<(std::ostream& os, const reconfiguration& r) {
