@@ -8,7 +8,6 @@
 
 #include "mutation.hh"
 #include "query-result-writer.hh"
-#include "readers/flat_mutation_reader.hh"
 #include "mutation_rebuilder.hh"
 
 mutation::data::data(dht::decorated_key&& key, schema_ptr&& schema)
@@ -171,19 +170,6 @@ mutation& mutation::operator+=(mutation&& other) {
 
 mutation mutation::sliced(const query::clustering_row_ranges& ranges) const {
     return mutation(schema(), decorated_key(), partition().sliced(*schema(), ranges));
-}
-
-future<mutation_opt> read_mutation_from_flat_mutation_reader(flat_mutation_reader& r) {
-    if (r.is_buffer_empty()) {
-        if (r.is_end_of_stream()) {
-            return make_ready_future<mutation_opt>();
-        }
-        return r.fill_buffer().then([&r] {
-            return read_mutation_from_flat_mutation_reader(r);
-        });
-    }
-    // r.is_buffer_empty() is always false at this point
-    return r.consume(mutation_rebuilder(r.schema()));
 }
 
 mutation reverse(mutation mut) {

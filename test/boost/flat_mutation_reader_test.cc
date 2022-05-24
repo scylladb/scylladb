@@ -14,8 +14,8 @@
 
 #include "mutation.hh"
 #include "mutation_fragment.hh"
+#include "readers/flat_mutation_reader_v2.hh"
 #include "test/lib/mutation_source_test.hh"
-#include "readers/flat_mutation_reader.hh"
 #include "readers/reversing_v2.hh"
 #include "readers/delegating_v2.hh"
 #include "readers/multi_range.hh"
@@ -966,14 +966,6 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_reader_v2_is_mutation_source) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_allow_reader_early_destruction) {
-    struct test_reader_impl : public flat_mutation_reader::impl {
-        using flat_mutation_reader::impl::impl;
-        virtual future<> fill_buffer() override { return make_ready_future<>(); }
-        virtual future<> next_partition() override { return make_ready_future<>(); }
-        virtual future<> fast_forward_to(const dht::partition_range&) override { return make_ready_future<>(); }
-        virtual future<> fast_forward_to(position_range) override { return make_ready_future<>(); }
-        virtual future<> close() noexcept override { return make_ready_future<>(); };
-    };
     struct test_reader_v2_impl : public flat_mutation_reader_v2::impl {
         using flat_mutation_reader_v2::impl::impl;
         virtual future<> fill_buffer() override { return make_ready_future<>(); }
@@ -985,7 +977,6 @@ SEASTAR_THREAD_TEST_CASE(test_allow_reader_early_destruction) {
 
     simple_schema s;
     tests::reader_concurrency_semaphore_wrapper semaphore;
-    // These readers are not closed, but didn't start any operations, so it's safe for them to be destroyed.
-    auto reader = make_flat_mutation_reader<test_reader_impl>(s.schema(), semaphore.make_permit());
+    // This reader is not closed, but didn't start any operations, so it's safe for it to be destroyed.
     auto reader_v2 = make_flat_mutation_reader_v2<test_reader_v2_impl>(s.schema(), semaphore.make_permit());
 }

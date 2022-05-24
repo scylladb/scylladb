@@ -16,7 +16,6 @@
 #include "test/lib/simple_position_reader_queue.hh"
 #include "test/perf/perf.hh"
 
-#include "readers/flat_mutation_reader.hh"
 #include "readers/from_mutations_v2.hh"
 #include "readers/mutation_fragment_v1_stream.hh"
 #include "readers/empty_v2.hh"
@@ -388,15 +387,6 @@ protected:
         _partition_range.emplace(dht::partition_range::make(dht::ring_position(start_dk),
                                                             {dht::ring_position(end_dk), false}));
         return *_partition_range;
-    }
-
-    future<> consume_all(flat_mutation_reader mr) const {
-        return with_closeable(std::move(mr), [] (auto& mr) {
-            return mr.consume_pausable([] (mutation_fragment mf) {
-                perf_tests::do_not_optimize(mf);
-                return stop_iteration::no;
-            });
-        });
     }
 
     future<> consume_all(flat_mutation_reader_v2 mr) const {
