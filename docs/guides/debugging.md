@@ -149,8 +149,9 @@ places. You can always load it by hand if GDB refuses or fails to load it:
 
     (gdb) source /path/to/your/.gdbinit
 
-Scylla provides the following [gdbinit](../../gdbinit) file helpful for debugging scylla
-at the root of the source tree.
+Scylla provides a `gdbinit` file helpful for debugging scylla
+at the root of the source tree. You can `source` it from your
+local `.gdbinit` file if you wish.
 
 #### TUI
 
