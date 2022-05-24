@@ -61,6 +61,7 @@
 #include "utils/generation-number.hh"
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 #include "utils/stall_free.hh"
 
 #include <boost/algorithm/string/split.hpp>
@@ -1829,14 +1830,17 @@ future<> storage_service::node_ops_cmd_heartbeat_updater(node_ops_cmd cmd, utils
     slogger.info("{}[{}]: Started heartbeat_updater", ops, uuid);
     while (!(*heartbeat_updater_done)) {
         auto req = node_ops_cmd_request{cmd, uuid, {}, {}, {}};
-        co_await parallel_for_each(nodes, [this, ops, uuid, &req] (const gms::inet_address& node) {
+        try {
+          co_await coroutine::parallel_for_each(nodes, [this, ops, uuid, &req] (const gms::inet_address& node) {
             return _messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([ops, uuid, node] (node_ops_cmd_response resp) {
                 slogger.debug("{}[{}]: Got heartbeat response from node={}", ops, uuid, node);
                 return make_ready_future<>();
             });
-        }).handle_exception([ops, uuid] (std::exception_ptr ep) {
+          });
+        } catch (...) {
+            auto ep = std::current_exception();
             slogger.warn("{}[{}]: Failed to send heartbeat: {}", ops, uuid, ep);
-        });
+        }
         int nr_seconds = 10;
         while (!(*heartbeat_updater_done) && nr_seconds--) {
             co_await sleep(std::chrono::seconds(1));

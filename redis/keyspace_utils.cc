@@ -7,6 +7,7 @@
  */
 
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 #include "redis/keyspace_utils.hh"
 #include "schema_builder.hh"
 #include "types.hh"
@@ -219,7 +220,7 @@ future<> create_keyspace_if_not_exists_impl(seastar::sharded<service::storage_pr
         std::move(muts.begin(), muts.end(), std::back_inserter(table_mutations));
     }, db, std::ref(mml), std::ref(table_mutations), group0_guard.write_timestamp());
 
-    co_await parallel_for_each(ks_names, [table_gen = std::move(table_gen)] (const sstring& ks_name) mutable {
+    co_await coroutine::parallel_for_each(ks_names, [table_gen = std::move(table_gen)] (const sstring& ks_name) mutable {
         return parallel_for_each(tables, [ks_name, table_gen = std::move(table_gen)] (table t) {
             return table_gen(ks_name, t.name, t.schema(ks_name));
         }).discard_result();

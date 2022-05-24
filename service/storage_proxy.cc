@@ -1059,7 +1059,7 @@ future<paxos::prepare_summary> paxos_response_handler::prepare_ballot(utils::UUI
             };
             std::visit(on_prepare_response, std::move(response));
         };
-        co_return co_await parallel_for_each(_live_endpoints, handle_one_msg);
+        co_return co_await coroutine::parallel_for_each(_live_endpoints, handle_one_msg);
     });
 
     return f;
@@ -1199,7 +1199,7 @@ future<bool> paxos_response_handler::accept_proposal(lw_shared_ptr<paxos::propos
                 }
             } // wait for more replies
         };
-        co_return co_await parallel_for_each(_live_endpoints, handle_one_msg);
+        co_return co_await coroutine::parallel_for_each(_live_endpoints, handle_one_msg);
     }); // do_with
 
     return f;
@@ -5420,7 +5420,7 @@ future<db::hints::sync_point> storage_proxy::create_hint_sync_point(const std::v
     spoint.regular_per_shard_rps.resize(smp::count);
     spoint.mv_per_shard_rps.resize(smp::count);
     spoint.host_id = _db.local().get_config().host_id;
-    co_await parallel_for_each(boost::irange<unsigned>(0, smp::count), [this, &target_hosts, &spoint] (unsigned shard) {
+    co_await coroutine::parallel_for_each(boost::irange<unsigned>(0, smp::count), [this, &target_hosts, &spoint] (unsigned shard) {
         const auto& sharded_sp = container();
         // sharded::invoke_on does not have a const-method version, so we cannot use it here
         return smp::submit_to(shard, [&sharded_sp, &target_hosts] {

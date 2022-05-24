@@ -34,6 +34,7 @@
 #include <seastar/core/queue.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/net/byteorder.hh>
 #include <seastar/util/defer.hh>
 
@@ -1853,7 +1854,7 @@ future<> db::commitlog::segment_manager::sync_all_segments() {
     // #8952 - calls that do sync/cycle can end up altering
     // _segments (end_flush()->discard_unused())
     auto def_copy = _segments;
-    co_await parallel_for_each(def_copy, [] (sseg_ptr s) -> future<> {
+    co_await coroutine::parallel_for_each(def_copy, [] (sseg_ptr s) -> future<> {
         co_await s->sync();
         clogger.debug("Synced segment {}", *s);
     });
@@ -1864,7 +1865,7 @@ future<> db::commitlog::segment_manager::shutdown_all_segments() {
     // #8952 - calls that do sync/cycle can end up altering
     // _segments (end_flush()->discard_unused())
     auto def_copy = _segments;
-    co_await parallel_for_each(def_copy, [] (sseg_ptr s) -> future<> {
+    co_await coroutine::parallel_for_each(def_copy, [] (sseg_ptr s) -> future<> {
         co_await s->shutdown();
         clogger.debug("Shutdown segment {}", *s);
     });

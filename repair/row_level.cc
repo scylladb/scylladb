@@ -24,6 +24,7 @@
 #include <seastar/util/bool_class.hh>
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 #include <list>
 #include <vector>
 #include <algorithm>
@@ -2690,7 +2691,7 @@ private:
         repair_update_system_table_request req{_ri.id.uuid, _table_id, _ri.keyspace, _cf_name, _range, repair_time};
         auto all_nodes = _all_live_peer_nodes;
         all_nodes.push_back(utils::fb_utilities::get_broadcast_address());
-        co_await parallel_for_each(all_nodes, [this, req] (gms::inet_address node) -> future<> {
+        co_await coroutine::parallel_for_each(all_nodes, [this, req] (gms::inet_address node) -> future<> {
             try {
                 auto& ms = _ri.messaging.local();
                 repair_update_system_table_response resp = co_await ser::partition_checksum_rpc_verbs::send_repair_update_system_table(&ms, netw::messaging_service::msg_addr(node), req);

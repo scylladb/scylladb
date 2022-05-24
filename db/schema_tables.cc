@@ -209,7 +209,7 @@ future<> save_system_schema(cql3::query_processor& qp, const sstring & ksname) {
     auto ksm = ks.metadata();
 
     // delete old, possibly obsolete entries in schema tables
-    co_await parallel_for_each(all_table_names(schema_features::full()), [ksm] (sstring cf) -> future<> {
+    co_await coroutine::parallel_for_each(all_table_names(schema_features::full()), [ksm] (sstring cf) -> future<> {
         auto deletion_timestamp = system_keyspace::schema_creation_timestamp() - 1;
         co_await qctx->execute_cql(format("DELETE FROM {}.{} USING TIMESTAMP {} WHERE keyspace_name = ?", NAME, cf,
             deletion_timestamp), ksm->name()).discard_result();
@@ -1281,21 +1281,21 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
         // First drop views and *only then* the tables, if interleaved it can lead
         // to a mv not finding its schema when snapshoting since the main table
         // was already dropped (see https://github.com/scylladb/scylla/issues/5614)
-        co_await parallel_for_each(views_diff.dropped, [&] (schema_diff::dropped_schema& dt) -> future<> {
+        co_await coroutine::parallel_for_each(views_diff.dropped, [&] (schema_diff::dropped_schema& dt) -> future<> {
             auto& s = *dt.schema.get();
             co_await db.drop_column_family(s.ks_name(), s.cf_name(), [&] { return dt.jp.value(); });
         });
-        co_await parallel_for_each(tables_diff.dropped, [&] (schema_diff::dropped_schema& dt) -> future<> {
+        co_await coroutine::parallel_for_each(tables_diff.dropped, [&] (schema_diff::dropped_schema& dt) -> future<> {
             auto& s = *dt.schema.get();
             co_await db.drop_column_family(s.ks_name(), s.cf_name(), [&] { return dt.jp.value(); });
         });
 
         // In order to avoid possible races we first create the tables and only then the views.
         // That way if a view seeks information about its base table it's guarantied to find it.
-        co_await parallel_for_each(tables_diff.created, [&] (global_schema_ptr& gs) -> future<> {
+        co_await coroutine::parallel_for_each(tables_diff.created, [&] (global_schema_ptr& gs) -> future<> {
             co_await db.add_column_family_and_make_directory(gs);
         });
-        co_await parallel_for_each(views_diff.created, [&] (global_schema_ptr& gs) -> future<> {
+        co_await coroutine::parallel_for_each(views_diff.created, [&] (global_schema_ptr& gs) -> future<> {
             co_await db.add_column_family_and_make_directory(gs);
         });
         for (auto&& gs : boost::range::join(tables_diff.created, views_diff.created)) {
@@ -2460,7 +2460,7 @@ future<schema_ptr> create_table_from_name(distributed<service::storage_proxy>& p
 future<std::map<sstring, schema_ptr>> create_tables_from_tables_partition(distributed<service::storage_proxy>& proxy, const schema_result::mapped_type& result)
 {
     auto tables = std::map<sstring, schema_ptr>();
-    co_await parallel_for_each(result->rows().begin(), result->rows().end(), [&] (const query::result_set_row& row) -> future<> {
+    co_await coroutine::parallel_for_each(result->rows().begin(), result->rows().end(), [&] (const query::result_set_row& row) -> future<> {
         schema_ptr cfm = co_await create_table_from_table_row(proxy, row);
         tables.emplace(cfm->cf_name(), std::move(cfm));
     });
@@ -2958,7 +2958,7 @@ static future<view_ptr> create_view_from_table_row(distributed<service::storage_
 future<std::vector<view_ptr>> create_views_from_schema_partition(distributed<service::storage_proxy>& proxy, const schema_result::mapped_type& result)
 {
     std::vector<view_ptr> views;
-    co_await parallel_for_each(result->rows().begin(), result->rows().end(), [&] (auto&& row) -> future<> {
+    co_await coroutine::parallel_for_each(result->rows().begin(), result->rows().end(), [&] (auto&& row) -> future<> {
         auto v = co_await create_view_from_table_row(proxy, row);
         views.push_back(std::move(v));
     });

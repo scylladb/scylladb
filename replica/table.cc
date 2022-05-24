@@ -10,6 +10,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/exception.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/util/closeable.hh>
 
 #include "replica/database.hh"
@@ -705,7 +706,7 @@ table::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_
         auto post_flush = [this, old = std::move(old), &newtabs, f = std::move(f)] () mutable -> future<stop_iteration> {
             try {
                 co_await std::move(f);
-                co_await parallel_for_each(newtabs, [] (auto& newtab) -> future<> {
+                co_await coroutine::parallel_for_each(newtabs, [] (auto& newtab) -> future<> {
                     co_await newtab->open_data();
                     tlogger.debug("Flushing to {} done", newtab->get_filename());
                 });
@@ -2261,7 +2262,7 @@ future<> table::move_sstables_from_staging(std::vector<sstables::shared_sstable>
             throw;
         }
     }
-    co_await parallel_for_each(dirs_to_sync, [] (sstring dir) {
+    co_await coroutine::parallel_for_each(dirs_to_sync, [] (sstring dir) {
         return sync_directory(dir);
     });
 }

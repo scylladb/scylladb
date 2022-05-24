@@ -7,6 +7,7 @@
  */
 
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/rpc/rpc.hh>
 #include "sstables_loader.hh"
 #include "replica/distributed_loader.hh"
@@ -180,7 +181,7 @@ future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
                 }
                 frozen_mutation_fragment fmf = freeze(*s, *mf);
                 num_bytes_read += fmf.representation().size();
-                co_await parallel_for_each(current_targets, [&metas, &fmf, is_partition_start] (const gms::inet_address& node) {
+                co_await coroutine::parallel_for_each(current_targets, [&metas, &fmf, is_partition_start] (const gms::inet_address& node) {
                     return metas.at(node).send(fmf, is_partition_start);
                 });
             }
@@ -192,7 +193,7 @@ future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
         }
         co_await reader.close();
         try {
-            co_await parallel_for_each(metas.begin(), metas.end(), [failed] (std::pair<const gms::inet_address, send_meta_data>& pair) {
+            co_await coroutine::parallel_for_each(metas.begin(), metas.end(), [failed] (std::pair<const gms::inet_address, send_meta_data>& pair) {
                 auto& meta = pair.second;
                 return meta.finish(failed);
             });
@@ -204,7 +205,7 @@ future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
         }
         if (!failed) {
             try {
-                co_await parallel_for_each(sst_processed, [&] (sstables::shared_sstable& sst) {
+                co_await coroutine::parallel_for_each(sst_processed, [&] (sstables::shared_sstable& sst) {
                     llog.debug("load_and_stream: ops_uuid={}, ks={}, table={}, remove sst={}",
                             ops_uuid, ks_name, cf_name, sst->component_filenames());
                     return sst->unlink();
