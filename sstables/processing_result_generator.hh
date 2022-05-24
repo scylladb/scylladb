@@ -11,8 +11,8 @@
 #include <seastar/core/coroutine.hh>
 #include "sstables/consumer.hh"
 
-// Clang < 15 only supports the TS
-#if __has_include(<coroutine>) && (!defined(__clang__) || __clang_major__ >= 15)
+// Clang < 14 only supports the TS
+#if __has_include(<coroutine>) && (!defined(__clang__) || __clang_major__ >= 14)
 #  define COROUTINE_NS std
 #else
 #  define COROUTINE_NS std::experimental
