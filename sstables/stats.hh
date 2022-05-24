@@ -35,6 +35,7 @@ class sstables_stats {
         uint64_t open_for_writing = 0;
         uint64_t closed_for_writing = 0;
         uint64_t deleted = 0;
+        uint64_t promoted_index_auto_scale_events = 0;
     } _shard_stats;
 
     stats& _stats = _shard_stats;
@@ -124,6 +125,10 @@ public:
 
     inline void on_delete() noexcept {
         ++_stats.deleted;
+    }
+
+    inline void on_promoted_index_auto_scale() noexcept {
+        ++_stats.promoted_index_auto_scale_events;
     }
 };
 

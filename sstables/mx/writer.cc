@@ -857,6 +857,7 @@ void writer::add_pi_block() {
     if (_pi_write_m.blocks.size() >= _pi_write_m.auto_scale_threshold) {
         _pi_write_m.desired_block_size *= 2;
         _pi_write_m.auto_scale_threshold += _pi_write_m.promoted_index_auto_scale_threshold;
+        _sst.get_stats().on_promoted_index_auto_scale();
     }
 }
 
