@@ -375,7 +375,6 @@ public:
         seastar::scheduling_group statement_scheduling_group;
         seastar::scheduling_group streaming_scheduling_group;
         bool enable_metrics_reporting = false;
-        sstables::sstables_manager* sstables_manager;
         db::timeout_semaphore* view_update_concurrency_semaphore;
         size_t view_update_concurrency_semaphore_limit;
         db::data_listeners* data_listeners = nullptr;
@@ -446,6 +445,7 @@ private:
     db::commitlog* _commitlog;
     bool _durable_writes;
     compaction_manager& _compaction_manager;
+    sstables::sstables_manager& _sstables_manager;
     secondary_index::secondary_index_manager _index_manager;
     bool _compaction_disabled_by_user = false;
     utils::phased_barrier _flush_barrier;
@@ -1006,9 +1006,12 @@ public:
         return _index_manager;
     }
 
-    sstables::sstables_manager& get_sstables_manager() const {
-        assert(_config.sstables_manager);
-        return *_config.sstables_manager;
+    sstables::sstables_manager& get_sstables_manager() noexcept {
+        return _sstables_manager;
+    }
+
+    const sstables::sstables_manager& get_sstables_manager() const noexcept {
+        return _sstables_manager;
     }
 
     // Reader's schema must be the same as the base schema of each of the views.

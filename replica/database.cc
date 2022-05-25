@@ -879,15 +879,21 @@ void database::drop_keyspace(const sstring& name) {
     _keyspaces.erase(name);
 }
 
+static bool is_system_table(const schema& s) {
+    return s.ks_name() == db::system_keyspace::NAME || s.ks_name() == db::system_distributed_keyspace::NAME
+        || s.ks_name() == db::system_distributed_keyspace::NAME_EVERYWHERE;
+}
+
 void database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg) {
     schema = local_schema_registry().learn(schema);
     schema->registry_entry()->mark_synced();
-
+    // avoid self-reporting
+    auto& sst_manager = is_system_table(*schema) ? get_system_sstables_manager() : get_user_sstables_manager();
     lw_shared_ptr<column_family> cf;
     if (cfg.enable_commitlog && _commitlog) {
-       cf = make_lw_shared<column_family>(schema, std::move(cfg), *_commitlog, *_compaction_manager, *cfg.sstables_manager, *_cl_stats, _row_cache_tracker);
+       cf = make_lw_shared<column_family>(schema, std::move(cfg), *_commitlog, *_compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker);
     } else {
-       cf = make_lw_shared<column_family>(schema, std::move(cfg), column_family::no_commitlog(), *_compaction_manager, *cfg.sstables_manager, *_cl_stats, _row_cache_tracker);
+       cf = make_lw_shared<column_family>(schema, std::move(cfg), column_family::no_commitlog(), *_compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker);
     }
     cf->set_durable_writes(ks.metadata()->durable_writes());
 
@@ -1109,12 +1115,6 @@ void keyspace::mark_as_populated() {
     }
 }
 
-
-static bool is_system_table(const schema& s) {
-    return s.ks_name() == db::system_keyspace::NAME || s.ks_name() == db::system_distributed_keyspace::NAME
-        || s.ks_name() == db::system_distributed_keyspace::NAME_EVERYWHERE;
-}
-
 column_family::config
 keyspace::make_column_family_config(const schema& s, const database& db) const {
     column_family::config cfg;
@@ -1144,14 +1144,6 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     cfg.enable_metrics_reporting = db_config.enable_keyspace_column_family_metrics();
     cfg.reversed_reads_auto_bypass_cache = db_config.reversed_reads_auto_bypass_cache;
     cfg.enable_optimized_reversed_reads = db_config.enable_optimized_reversed_reads;
-
-    // avoid self-reporting
-    if (is_system_table(s)) {
-        cfg.sstables_manager = &db.get_system_sstables_manager();
-    } else {
-        cfg.sstables_manager = &db.get_user_sstables_manager();
-    }
-
     cfg.view_update_concurrency_semaphore = _config.view_update_concurrency_semaphore;
     cfg.view_update_concurrency_semaphore_limit = _config.view_update_concurrency_semaphore_limit;
     cfg.data_listeners = &db.data_listeners();

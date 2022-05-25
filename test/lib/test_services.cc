@@ -37,7 +37,6 @@ gms::feature_service test_feature_service(gms::feature_config_from_db_config(tes
 
 replica::column_family::config column_family_test_config(sstables::sstables_manager& sstables_manager, reader_concurrency_semaphore& compaction_semaphore) {
     replica::column_family::config cfg;
-    cfg.sstables_manager = &sstables_manager;
     cfg.compaction_concurrency_semaphore = &compaction_semaphore;
     return cfg;
 }
