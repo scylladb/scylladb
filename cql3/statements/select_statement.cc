@@ -1702,7 +1702,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
 
     auto partition_key_bind_indices = ctx.get_partition_key_bind_indexes(*schema);
 
-    return make_unique<prepared_statement>(std::move(stmt), ctx, move(partition_key_bind_indices), move(warnings));
+    return make_unique<prepared_statement>(std::move(stmt), ctx, std::move(partition_key_bind_indices), std::move(warnings));
 }
 
 ::shared_ptr<restrictions::statement_restrictions>

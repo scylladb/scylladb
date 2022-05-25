@@ -54,44 +54,44 @@ auto T(const char* t) { return utf8_type->decompose(t); }
 const auto open_ended = query::clustering_range::make_open_ended_both_sides();
 
 auto singular(std::vector<bytes> values) {
-    return query::clustering_range::make_singular(clustering_key_prefix(move(values)));
+    return query::clustering_range::make_singular(clustering_key_prefix(std::move(values)));
 }
 
 constexpr bool inclusive = true, exclusive = false;
 
 auto left_open(std::vector<bytes> lb) {
-    return query::clustering_range::make_starting_with({clustering_key_prefix(move(lb)), exclusive});
+    return query::clustering_range::make_starting_with({clustering_key_prefix(std::move(lb)), exclusive});
 }
 
 auto left_closed(std::vector<bytes> lb) {
-    return query::clustering_range::make_starting_with({clustering_key_prefix(move(lb)), inclusive});
+    return query::clustering_range::make_starting_with({clustering_key_prefix(std::move(lb)), inclusive});
 }
 
 auto right_open(std::vector<bytes> ub) {
-    return query::clustering_range::make_ending_with({clustering_key_prefix(move(ub)), exclusive});
+    return query::clustering_range::make_ending_with({clustering_key_prefix(std::move(ub)), exclusive});
 }
 
 auto right_closed(std::vector<bytes> ub) {
-    return query::clustering_range::make_ending_with({clustering_key_prefix(move(ub)), inclusive});
+    return query::clustering_range::make_ending_with({clustering_key_prefix(std::move(ub)), inclusive});
 }
 
 auto left_open_right_closed(std::vector<bytes> lb, std::vector<bytes> ub) {
-    clustering_key_prefix cklb(move(lb)), ckub(move(ub));
+    clustering_key_prefix cklb(std::move(lb)), ckub(std::move(ub));
     return query::clustering_range({{cklb, exclusive}}, {{ckub, inclusive}});
 }
 
 auto left_closed_right_open(std::vector<bytes> lb, std::vector<bytes> ub) {
-    clustering_key_prefix cklb(move(lb)), ckub(move(ub));
+    clustering_key_prefix cklb(std::move(lb)), ckub(std::move(ub));
     return query::clustering_range({{cklb, inclusive}}, {{ckub, exclusive}});
 }
 
 auto both_open(std::vector<bytes> lb, std::vector<bytes> ub) {
-    clustering_key_prefix cklb(move(lb)), ckub(move(ub));
+    clustering_key_prefix cklb(std::move(lb)), ckub(std::move(ub));
     return query::clustering_range({{cklb, exclusive}}, {{ckub, exclusive}});
 }
 
 auto both_closed(std::vector<bytes> lb, std::vector<bytes> ub) {
-    clustering_key_prefix cklb(move(lb)), ckub(move(ub));
+    clustering_key_prefix cklb(std::move(lb)), ckub(std::move(ub));
     return query::clustering_range({{cklb, inclusive}}, {{ckub, inclusive}});
 }
 

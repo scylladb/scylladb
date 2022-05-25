@@ -375,7 +375,7 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
     expr::visit(v, where_clause);
 
     if (!v.multi.empty()) {
-        return move(v.multi);
+        return std::move(v.multi);
     }
 
     std::vector<expression> prefix;
@@ -798,7 +798,7 @@ dht::partition_range_vector partition_ranges_from_singles(
                     }
                     product_size *= lst->size();
                     error_if_exceeds(product_size, size_limit);
-                    column_values[schema.position(*cv->col)] = move(*lst);
+                    column_values[schema.position(*cv->col)] = std::move(*lst);
                 } else {
                     throw exceptions::invalid_request_exception(
                             "Only EQ and IN relation are supported on the partition key "
@@ -1333,7 +1333,7 @@ opt_bound make_prefix_bound(
     std::vector<bytes> partial_bound(
             whole_bound.cbegin(), whole_bound.cbegin() + std::min(prefix_len, whole_bound.size()));
     return query::clustering_range::bound(
-            clustering_key_prefix(move(partial_bound)),
+            clustering_key_prefix(std::move(partial_bound)),
             prefix_len >= whole_bound.size() && whole_bound_is_inclusive);
 }
 
