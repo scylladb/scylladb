@@ -468,6 +468,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     /* Cache and index settings */
     , column_index_size_in_kb(this, "column_index_size_in_kb", value_status::Used, 64,
         "Granularity of the index of rows within a partition. For huge rows, decrease this setting to improve seek time. If you use key cache, be careful not to make this setting too large because key cache will be overwhelmed. If you're unsure of the size of the rows, it's best to use the default setting.")
+    , column_index_auto_scale_threshold_in_kb(this, "column_index_auto_scale_threshold_in_kb", liveness::LiveUpdate, value_status::Used, 10240,
+        "Auto-reduce the promoted index granularity by half when reaching this threshold, to prevent promoted index bloating due to partitions with too many rows. Set to 0 to disable this feature.")
     , index_summary_capacity_in_mb(this, "index_summary_capacity_in_mb", value_status::Unused, 0,
         "Fixed memory pool size in MB for SSTable index summaries. If the memory usage of all index summaries exceeds this limit, any SSTables with low read rates shrink their index summaries to meet this limit. This is a best-effort process. In extreme conditions, Cassandra may need to use more than this amount of memory.")
     , index_summary_resize_interval_in_minutes(this, "index_summary_resize_interval_in_minutes", value_status::Unused, 60,

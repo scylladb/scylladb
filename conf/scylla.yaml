@@ -386,6 +386,15 @@ commitlog_total_space_in_mb: -1
 #      you can cache more hot rows
 # column_index_size_in_kb: 64
 
+# Auto-scaling of the promoted index prevents running out of memory
+# when the promoted index grows too large (due to partitions with many rows
+# vs. too small column_index_size_in_kb).  When the serialized representation
+# of the promoted index grows by this threshold, the desired block size
+# for this partition (initialized to column_index_size_in_kb)
+# is doubled, to decrease the sampling resolution by half.
+#
+# To disable promoted index auto-scaling, set the threshold to 0.
+# column_index_auto_scale_threshold_in_kb: 10240
 
 # Log a warning when writing partitions larger than this value
 # compaction_large_partition_warning_threshold_mb: 1000

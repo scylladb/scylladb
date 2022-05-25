@@ -3112,6 +3112,9 @@ future<> init_metrics() {
             sm::description("Number of tombstones written")),
         sm::make_counter("range_tombstone_writes", [] { return sstables_stats::get_shard_stats().range_tombstone_writes; },
             sm::description("Number of range tombstones written")),
+        sm::make_counter("pi_auto_scale_events", [] { return sstables_stats::get_shard_stats().promoted_index_auto_scale_events; },
+            sm::description("Number of promoted index auto-scaling events")),
+
         sm::make_counter("range_tombstone_reads", [] { return sstables_stats::get_shard_stats().range_tombstone_reads; },
             sm::description("Number of range tombstones read")),
         sm::make_counter("row_tombstone_reads", [] { return sstables_stats::get_shard_stats().row_tombstone_reads; },

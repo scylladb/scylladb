@@ -581,7 +581,14 @@ private:
         uint64_t block_next_start_offset;
         std::optional<clustering_info> first_clustering;
         std::optional<clustering_info> last_clustering;
+
+        // for this partition
         size_t desired_block_size;
+        size_t auto_scale_threshold;
+
+        // from write config
+        size_t promoted_index_block_size;
+        size_t promoted_index_auto_scale_threshold;
     } _pi_write_m;
     utils::UUID _run_identifier;
     bool _write_regular_as_static; // See #4139
@@ -785,7 +792,8 @@ public:
 
         _cfg.monitor->on_write_started(_data_writer->offset_tracker());
         _sst._components->filter = utils::i_filter::get_filter(estimated_partitions, _schema.bloom_filter_fp_chance(), utils::filter_format::m_format);
-        _pi_write_m.desired_block_size = cfg.promoted_index_block_size;
+        _pi_write_m.promoted_index_block_size = cfg.promoted_index_block_size;
+        _pi_write_m.promoted_index_auto_scale_threshold = cfg.promoted_index_auto_scale_threshold;
         _index_sampling_state.summary_byte_cost = _cfg.summary_byte_cost;
         prepare_summary(_sst._components->summary, estimated_partitions, _schema.min_index_interval());
     }
@@ -844,6 +852,13 @@ void writer::add_pi_block() {
 
     write_pi_block(block);
     ++_pi_write_m.promoted_index_size;
+
+    // auto-scale?
+    if (_pi_write_m.blocks.size() >= _pi_write_m.auto_scale_threshold) {
+        _pi_write_m.desired_block_size *= 2;
+        _pi_write_m.auto_scale_threshold += _pi_write_m.promoted_index_auto_scale_threshold;
+        _sst.get_stats().on_promoted_index_auto_scale();
+    }
 }
 
 void writer::maybe_add_pi_block() {
@@ -920,6 +935,8 @@ void writer::consume_new_partition(const dht::decorated_key& dk) {
     _pi_write_m.tomb = {};
     _pi_write_m.first_clustering.reset();
     _pi_write_m.last_clustering.reset();
+    _pi_write_m.desired_block_size = _pi_write_m.promoted_index_block_size;
+    _pi_write_m.auto_scale_threshold = _pi_write_m.promoted_index_auto_scale_threshold;
 
     write(_sst.get_version(), *_data_writer, p_key);
     _partition_header_length = _data_writer->offset() - _c_stats.start_offset;

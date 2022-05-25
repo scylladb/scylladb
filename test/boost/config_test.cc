@@ -561,7 +561,7 @@ tombstone_failure_threshold: 100000
 #      rows (as part of the key cache), so a larger granularity means
 #      you can cache more hot rows
 column_index_size_in_kb: 64
-
+column_index_auto_scale_threshold_in_kb: 1024
 
 # Log WARN on any batch size exceeding this value. 5kb per batch by default.
 # Caution should be taken on increasing the size of this threshold as it can lead to node instability.
