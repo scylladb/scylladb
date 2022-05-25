@@ -38,7 +38,7 @@ extern db::nop_large_data_handler nop_lp_handler;
 extern db::config test_db_config;
 extern gms::feature_service test_feature_service;
 
-replica::column_family::config column_family_test_config(sstables::sstables_manager& sstables_manager, reader_concurrency_semaphore& compaction_semaphore);
+replica::column_family::config column_family_test_config(reader_concurrency_semaphore& compaction_semaphore);
 
 struct column_family_for_tests {
     struct data {
