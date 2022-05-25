@@ -1167,7 +1167,7 @@ table::make_memtable_list() {
 }
 
 table::table(schema_ptr schema, config config, db::commitlog* cl, compaction_manager& compaction_manager,
-             cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker)
+        sstables::sstables_manager& sst_manager, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker)
     : _schema(std::move(schema))
     , _config(std::move(config))
     , _view_stats(format("{}_{}_view_replica_update", _schema->ks_name(), _schema->cf_name()),

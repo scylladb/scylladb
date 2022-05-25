@@ -746,12 +746,12 @@ public:
 
     logalloc::occupancy_stats occupancy() const;
 private:
-    table(schema_ptr schema, config cfg, db::commitlog* cl, compaction_manager&, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker);
+    table(schema_ptr schema, config cfg, db::commitlog* cl, compaction_manager&, sstables::sstables_manager&, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker);
 public:
-    table(schema_ptr schema, config cfg, db::commitlog& cl, compaction_manager& cm, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker)
-        : table(schema, std::move(cfg), &cl, cm, cl_stats, row_cache_tracker) {}
-    table(schema_ptr schema, config cfg, no_commitlog, compaction_manager& cm, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker)
-        : table(schema, std::move(cfg), nullptr, cm, cl_stats, row_cache_tracker) {}
+    table(schema_ptr schema, config cfg, db::commitlog& cl, compaction_manager& cm, sstables::sstables_manager& sm, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker)
+        : table(schema, std::move(cfg), &cl, cm, sm, cl_stats, row_cache_tracker) {}
+    table(schema_ptr schema, config cfg, no_commitlog, compaction_manager& cm, sstables::sstables_manager& sm, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker)
+        : table(schema, std::move(cfg), nullptr, cm, sm, cl_stats, row_cache_tracker) {}
     table(column_family&&) = delete; // 'this' is being captured during construction
     ~table();
     const schema_ptr& schema() const { return _schema; }

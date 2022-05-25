@@ -65,6 +65,6 @@ column_family_for_tests::column_family_for_tests(sstables::sstables_manager& sst
     _data->cfg.cf_stats = &_data->cf_stats;
     _data->cfg.enable_commitlog = false;
     _data->cm.enable();
-    _data->cf = make_lw_shared<replica::column_family>(_data->s, _data->cfg, replica::column_family::no_commitlog(), _data->cm, _data->cl_stats, _data->tracker);
+    _data->cf = make_lw_shared<replica::column_family>(_data->s, _data->cfg, replica::column_family::no_commitlog(), _data->cm, sstables_manager, _data->cl_stats, _data->tracker);
     _data->cf->mark_ready_for_writes();
 }

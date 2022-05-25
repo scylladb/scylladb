@@ -203,7 +203,7 @@ SEASTAR_TEST_CASE(compaction_manager_basic_test) {
     cfg.enable_incremental_backups = false;
     auto cl_stats = make_lw_shared<cell_locker_stats>();
     auto tracker = make_lw_shared<cache_tracker>();
-    auto cf = make_lw_shared<replica::column_family>(s, cfg, replica::column_family::no_commitlog(), *cm, *cl_stats, *tracker);
+    auto cf = make_lw_shared<replica::column_family>(s, cfg, replica::column_family::no_commitlog(), *cm, env.manager(), *cl_stats, *tracker);
     cf->start();
     cf->mark_ready_for_writes();
     cf->set_compaction_strategy(sstables::compaction_strategy_type::size_tiered);
@@ -272,7 +272,7 @@ SEASTAR_TEST_CASE(compact) {
     auto cm = make_lw_shared<compaction_manager>(compaction_manager::for_testing_tag{});
     auto cl_stats = make_lw_shared<cell_locker_stats>();
     auto tracker = make_lw_shared<cache_tracker>();
-    auto cf = make_lw_shared<replica::column_family>(s, column_family_test_config(env.manager(), env.semaphore()), replica::column_family::no_commitlog(), *cm, *cl_stats, *tracker);
+    auto cf = make_lw_shared<replica::column_family>(s, column_family_test_config(env.manager(), env.semaphore()), replica::column_family::no_commitlog(), *cm, env.manager(), *cl_stats, *tracker);
     cf->mark_ready_for_writes();
 
     return test_setup::do_with_tmp_directory([s, generation, cf, cm] (test_env& env, sstring tmpdir_path) {
@@ -2127,7 +2127,7 @@ SEASTAR_TEST_CASE(sstable_cleanup_correctness_test) {
             auto run_identifier = sst->run_identifier();
 
             auto cf = make_lw_shared<replica::column_family>(s, column_family_test_config(env.manager(), env.semaphore()), replica::column_family::no_commitlog(),
-                db.get_compaction_manager(), cl_stats, db.row_cache_tracker());
+                db.get_compaction_manager(), env.manager(), cl_stats, db.row_cache_tracker());
             cf->mark_ready_for_writes();
             cf->start();
 
@@ -2278,7 +2278,7 @@ SEASTAR_TEST_CASE(sstable_scrub_validate_mode_test) {
             auto cfg = column_family_test_config(env.manager(), env.semaphore());
             cfg.datadir = tmp.path().string();
             auto table = make_lw_shared<replica::column_family>(schema, cfg, replica::column_family::no_commitlog(),
-                db.get_compaction_manager(), cl_stats, db.row_cache_tracker());
+                db.get_compaction_manager(), env.manager(), cl_stats, db.row_cache_tracker());
             auto stop_table = defer([table] {
                 table->stop().get();
             });
@@ -2477,7 +2477,7 @@ SEASTAR_TEST_CASE(sstable_scrub_skip_mode_test) {
             auto cfg = column_family_test_config(env.manager(), env.semaphore());
             cfg.datadir = tmp.path().string();
             auto table = make_lw_shared<replica::column_family>(schema, cfg, replica::column_family::no_commitlog(),
-                db.get_compaction_manager(), cl_stats, db.row_cache_tracker());
+                db.get_compaction_manager(), env.manager(), cl_stats, db.row_cache_tracker());
             auto stop_table = defer([table] {
                 table->stop().get();
             });
@@ -2574,7 +2574,7 @@ SEASTAR_TEST_CASE(sstable_scrub_segregate_mode_test) {
             auto cfg = column_family_test_config(env.manager(), env.semaphore());
             cfg.datadir = tmp.path().string();
             auto table = make_lw_shared<replica::column_family>(schema, cfg, replica::column_family::no_commitlog(),
-                db.get_compaction_manager(), cl_stats, db.row_cache_tracker());
+                db.get_compaction_manager(), env.manager(), cl_stats, db.row_cache_tracker());
             auto stop_table = defer([table] {
                 table->stop().get();
             });
@@ -2686,7 +2686,7 @@ SEASTAR_TEST_CASE(sstable_scrub_quarantine_mode_test) {
                 auto cfg = column_family_test_config(env.manager(), env.semaphore());
                 cfg.datadir = tmp.path().string();
                 auto table = make_lw_shared<replica::column_family>(schema, cfg, replica::column_family::no_commitlog(),
-                    db.get_compaction_manager(), cl_stats, db.row_cache_tracker());
+                    db.get_compaction_manager(), env.manager(), cl_stats, db.row_cache_tracker());
                 auto stop_table = defer([table] {
                     table->stop().get();
                 });
@@ -3260,7 +3260,7 @@ SEASTAR_TEST_CASE(partial_sstable_run_filtered_out_test) {
         cfg.enable_incremental_backups = false;
         auto cl_stats = make_lw_shared<cell_locker_stats>();
         auto tracker = make_lw_shared<cache_tracker>();
-        auto cf = make_lw_shared<replica::column_family>(s, cfg, replica::column_family::no_commitlog(), *cm, *cl_stats, *tracker);
+        auto cf = make_lw_shared<replica::column_family>(s, cfg, replica::column_family::no_commitlog(), *cm, env.manager(), *cl_stats, *tracker);
         cf->start();
         cf->mark_ready_for_writes();
 
@@ -3526,7 +3526,7 @@ SEASTAR_TEST_CASE(incremental_compaction_data_resurrection_test) {
         cfg.enable_cache = true;
         cfg.enable_incremental_backups = false;
         auto tracker = make_lw_shared<cache_tracker>();
-        auto cf = make_lw_shared<replica::column_family>(s, cfg, replica::column_family::no_commitlog(), *cm, cl_stats, *tracker);
+        auto cf = make_lw_shared<replica::column_family>(s, cfg, replica::column_family::no_commitlog(), *cm, env.manager(), cl_stats, *tracker);
         auto stop_cf = deferred_stop(*cf);
         cf->mark_ready_for_writes();
         cf->start();
@@ -3634,7 +3634,7 @@ SEASTAR_TEST_CASE(twcs_major_compaction_test) {
         cfg.enable_cache = false;
         cfg.enable_incremental_backups = false;
         auto tracker = make_lw_shared<cache_tracker>();
-        auto cf = make_lw_shared<replica::column_family>(s, cfg, replica::column_family::no_commitlog(), *cm, cl_stats, *tracker);
+        auto cf = make_lw_shared<replica::column_family>(s, cfg, replica::column_family::no_commitlog(), *cm, env.manager(), cl_stats, *tracker);
         cf->mark_ready_for_writes();
         cf->start();
         cf->set_compaction_strategy(sstables::compaction_strategy_type::time_window);
@@ -3670,7 +3670,7 @@ SEASTAR_TEST_CASE(autocompaction_control_test) {
         cfg.enable_commitlog = false;
         cfg.enable_disk_writes = true;
 
-        auto cf = make_lw_shared<replica::column_family>(s, cfg, replica::column_family::no_commitlog(), cm, cl_stats, tracker);
+        auto cf = make_lw_shared<replica::column_family>(s, cfg, replica::column_family::no_commitlog(), cm, env.manager(), cl_stats, tracker);
         cf->set_compaction_strategy(sstables::compaction_strategy_type::size_tiered);
         cf->mark_ready_for_writes();
 
@@ -3774,7 +3774,7 @@ SEASTAR_TEST_CASE(test_bug_6472) {
         cfg.enable_incremental_backups = false;
         auto tracker = make_lw_shared<cache_tracker>();
         cell_locker_stats cl_stats;
-        auto cf = make_lw_shared<replica::column_family>(s, cfg, replica::column_family::no_commitlog(), *cm, cl_stats, *tracker);
+        auto cf = make_lw_shared<replica::column_family>(s, cfg, replica::column_family::no_commitlog(), *cm, env.manager(), cl_stats, *tracker);
         cf->mark_ready_for_writes();
         cf->start();
 
@@ -3906,7 +3906,7 @@ SEASTAR_TEST_CASE(test_twcs_partition_estimate) {
         cfg.enable_incremental_backups = false;
         auto tracker = make_lw_shared<cache_tracker>();
         cell_locker_stats cl_stats;
-        auto cf = make_lw_shared<replica::column_family>(s, cfg, replica::column_family::no_commitlog(), *cm, cl_stats, *tracker);
+        auto cf = make_lw_shared<replica::column_family>(s, cfg, replica::column_family::no_commitlog(), *cm, env.manager(), cl_stats, *tracker);
         cf->mark_ready_for_writes();
         cf->start();
 
@@ -4033,7 +4033,7 @@ SEASTAR_TEST_CASE(test_twcs_interposer_on_memtable_flush) {
         cfg.enable_cache = false;
         auto tracker = make_lw_shared<cache_tracker>();
         cell_locker_stats cl_stats;
-        auto cf = make_lw_shared<replica::column_family>(s, cfg, replica::column_family::no_commitlog(), *cm, cl_stats, *tracker);
+        auto cf = make_lw_shared<replica::column_family>(s, cfg, replica::column_family::no_commitlog(), *cm, env.manager(), cl_stats, *tracker);
         cf->mark_ready_for_writes();
         cf->start();
 
@@ -4144,7 +4144,7 @@ SEASTAR_TEST_CASE(test_offstrategy_sstable_compaction) {
             cfg.enable_cache = false;
             auto tracker = make_lw_shared<cache_tracker>();
             cell_locker_stats cl_stats;
-            auto cf = make_lw_shared<replica::column_family>(s, cfg, replica::column_family::no_commitlog(), *cm, cl_stats, *tracker);
+            auto cf = make_lw_shared<replica::column_family>(s, cfg, replica::column_family::no_commitlog(), *cm, env.manager(), cl_stats, *tracker);
             // Make sure we release reference to all sstables, allowing them to be deleted before dir is destroyed
             auto stop_cf = defer([cf] {
                 cf->stop().get();
@@ -4427,7 +4427,7 @@ SEASTAR_TEST_CASE(test_twcs_single_key_reader_filtering) {
         cfg.datadir = tmp.path().string();
         auto tracker = make_lw_shared<cache_tracker>();
         cell_locker_stats cl_stats;
-        replica::column_family cf(s, cfg, replica::column_family::no_commitlog(), *cm, cl_stats, *tracker);
+        replica::column_family cf(s, cfg, replica::column_family::no_commitlog(), *cm, env.manager(), cl_stats, *tracker);
         cf.mark_ready_for_writes();
         cf.start();
 
@@ -4527,7 +4527,7 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
                 return env.make_sstable(s, dir, (*gen)++, sstables::sstable::version_types::md, big);
             };
 
-            auto cf = make_lw_shared<replica::column_family>(s, cfg, replica::column_family::no_commitlog(), *cm, *cl_stats, *tracker);
+            auto cf = make_lw_shared<replica::column_family>(s, cfg, replica::column_family::no_commitlog(), *cm, env.manager(), *cl_stats, *tracker);
             cf->start();
             cf->mark_ready_for_writes();
 
@@ -4726,7 +4726,7 @@ SEASTAR_TEST_CASE(twcs_single_key_reader_through_compound_set_test) {
         cfg.enable_cache = false;
         auto tracker = make_lw_shared<cache_tracker>();
         cell_locker_stats cl_stats;
-        auto cf = make_lw_shared<replica::column_family>(s, cfg, replica::column_family::no_commitlog(), *cm, cl_stats, *tracker);
+        auto cf = make_lw_shared<replica::column_family>(s, cfg, replica::column_family::no_commitlog(), *cm, env.manager(), cl_stats, *tracker);
         cf->mark_ready_for_writes();
         cf->start();
 
@@ -4851,7 +4851,7 @@ SEASTAR_TEST_CASE(simple_backlog_controller_test) {
             cfg.datadir = "";
             cfg.enable_disk_writes = true;
             cfg.enable_cache = false;
-            auto t = make_lw_shared<replica::table>(s, cfg, replica::table::no_commitlog(), manager, cl_stats, *tracker);
+            auto t = make_lw_shared<replica::table>(s, cfg, replica::table::no_commitlog(), manager, env.manager(), cl_stats, *tracker);
             t->mark_ready_for_writes();
             t->start();
             t->set_compaction_strategy(compaction_strategy_type);
