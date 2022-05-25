@@ -2113,7 +2113,7 @@ future<> sstable::set_generation(generation_type new_generation) {
 future<> sstable::move_to_new_dir(sstring new_dir, generation_type new_generation, bool do_sync_dirs) {
     sstring old_dir = get_dir();
     sstlog.debug("Moving {} old_generation={} to {} new_generation={} do_sync_dirs={}",
-            get_filename(), old_dir, _generation, new_dir, new_generation, do_sync_dirs);
+            get_filename(), _generation, new_dir, new_generation, do_sync_dirs);
     co_await create_links_and_mark_for_removal(new_dir, new_generation);
     _dir = new_dir;
     generation_type old_generation = std::exchange(_generation, new_generation);
