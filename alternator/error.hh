@@ -73,6 +73,9 @@ public:
     static api_error serialization(std::string msg) {
         return api_error("SerializationException", std::move(msg));
     }
+    static api_error table_not_found(std::string msg) {
+        return api_error("TableNotFoundException", std::move(msg));
+    }
     static api_error internal(std::string msg) {
         return api_error("InternalServerError", std::move(msg), reply::status_type::internal_server_error);
     }
