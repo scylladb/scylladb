@@ -385,6 +385,14 @@ static auto defer_verbose_shutdown(const char* what, Func&& func) {
                         break;
                     }
                 }
+            } catch (const seastar::abort_requested_exception&) {
+                do_abort = false;
+            } catch (const seastar::broken_semaphore&) {
+                do_abort = false;
+            } catch (const seastar::gate_closed_exception&) {
+                do_abort = false;
+            } catch (const utils::barrier_aborted_exception&) {
+                do_abort = false;
             } catch (...) {
             }
             auto msg = fmt::format("Unexpected error shutting down {}: {}", what, ex);
