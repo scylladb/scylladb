@@ -401,10 +401,6 @@ sstring executor::table_name(const schema& s) {
     return s.cf_name();
 }
 
-sstring executor::make_keyspace_name(const sstring& table_name) {
-    return sstring(KEYSPACE_NAME_PREFIX) + table_name;
-}
-
 future<executor::request_return_type> executor::describe_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
     _stats.api_operations.describe_table++;
     elogger.trace("Describing table {}", request);
