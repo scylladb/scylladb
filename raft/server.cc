@@ -35,6 +35,11 @@ struct active_read {
     optimized_optional<abort_source::subscription> abort;
 };
 
+struct awaited_index {
+    promise<> promise;
+    optimized_optional<abort_source::subscription> abort;
+};
+
 static const seastar::metrics::label server_id_label("id");
 static const seastar::metrics::label log_entry_type("log_entry_type");
 static const seastar::metrics::label message_type("message_type");
@@ -99,7 +104,7 @@ private:
     // Index of the last entry applied to `_state_machine`.
     index_t _applied_idx;
     std::list<active_read> _reads;
-    std::multimap<index_t, promise<>> _awaited_indexes;
+    std::multimap<index_t, awaited_index> _awaited_indexes;
 
     // Set to true when abort() is called
     bool _aborted = false;
@@ -260,7 +265,7 @@ private:
     // Wait for a read barrier index to be applied. The index
     // is typically already committed, so we don't worry about the
     // term.
-    future<> wait_for_apply(index_t idx);
+    future<> wait_for_apply(index_t idx, abort_source*);
     // Set configuration but don't wait for transition joint ->
     // non_joint.
     future<> enter_joint_configuration(server_address_set c_new, seastar::abort_source* as);
@@ -714,7 +719,7 @@ void server_impl::signal_applied() {
         if (it->first > _applied_idx) {
             break;
         }
-        it->second.set_value();
+        it->second.promise.set_value();
         it = _awaited_indexes.erase(it);
     }
 }
@@ -1060,16 +1065,30 @@ term_t server_impl::get_current_term() const {
     return _fsm->get_current_term();
 }
 
-future<> server_impl::wait_for_apply(index_t idx) {
+future<> server_impl::wait_for_apply(index_t idx, abort_source* as) {
+    if (as && as->abort_requested()) {
+        throw request_aborted();
+    }
     if (idx > _applied_idx) {
         // The index is not applied yet. Wait for it.
         // This will be signalled when read_idx is applied
-        auto it = _awaited_indexes.emplace(idx, promise<>());
-        co_await it->second.get_future();
+        auto it = _awaited_indexes.emplace(idx, awaited_index{{}, {}});
+        if (as) {
+            it->second.abort = as->subscribe([this, it] () noexcept {
+                it->second.promise.set_exception(request_aborted());
+                _awaited_indexes.erase(it);
+            });
+            assert(it->second.abort);
+        }
+        co_await it->second.promise.get_future();
     }
 }
 
 future<read_barrier_reply> server_impl::execute_read_barrier(server_id from, seastar::abort_source* as) {
+    if (_aborted) {
+        throw stopped_error();
+    }
+
     logger.trace("[{}] execute_read_barrier start", _id);
 
     std::optional<std::pair<read_id, index_t>> rid;
@@ -1088,7 +1107,7 @@ future<read_barrier_reply> server_impl::execute_read_barrier(server_id from, sea
         return make_exception_future<read_barrier_reply>(request_aborted());
     }
     _reads.push_back({rid->first, rid->second, {}, {}});
-    auto read = --_reads.end();
+    auto read = std::prev(_reads.end());
     if (as) {
         read->abort = as->subscribe([this, read] () noexcept {
             read->promise.set_exception(request_aborted());
@@ -1129,7 +1148,7 @@ future<> server_impl::read_barrier(seastar::abort_source* as) {
                 // committed any entries yet, so wait for any entry to be
                 // committed (if non were since start of the attempt) and retry.
                 logger.trace("[{}] read_barrier leader not ready", _id);
-                co_await wait_for_apply(++applied);
+                co_await wait_for_apply(++applied, as);
             } else if (std::holds_alternative<raft::not_a_leader>(res)) {
                 leader = std::get<not_a_leader>(res).leader;
             } else {
@@ -1139,7 +1158,7 @@ future<> server_impl::read_barrier(seastar::abort_source* as) {
     }
 
     logger.trace("[{}] read_barrier read index {}, append index {}", _id, read_idx, _applied_idx);
-    co_return co_await wait_for_apply(read_idx);
+    co_return co_await wait_for_apply(read_idx, as);
 }
 
 void server_impl::abort_snapshot_transfer(server_id id) {
@@ -1188,8 +1207,6 @@ future<> server_impl::abort() {
     // Destroy entry waiters before waiting for `abort_rpc`,
     // since the RPC implementation may wait for forwarded `modify_config` calls to finish
     // (and `modify_config` does not finish until the configuration entry is committed or an error occurs).
-    // FIXME: probably need to do the same with read barriers (`_reads`)
-    // (not doing it yet because I want to catch the problem first in nemesis test)
     for (auto& ac: _awaited_commits) {
         ac.second.done.set_exception(stopped_error());
     }
@@ -1199,12 +1216,6 @@ future<> server_impl::abort() {
     _awaited_commits.clear();
     _awaited_applies.clear();
 
-    co_await seastar::when_all_succeed(std::move(abort_rpc), std::move(abort_sm), std::move(abort_persistence)).discard_result();
-
-    if (_leader_promise) {
-        _leader_promise->set_exception(stopped_error());
-    }
-
     // Complete all read attempts with not_a_leader
     for (auto& r: _reads) {
         r.promise.set_value(raft::not_a_leader{server_id{}});
@@ -1213,9 +1224,15 @@ future<> server_impl::abort() {
 
     // Abort all read_barriers with an exception
     for (auto& i : _awaited_indexes) {
-        i.second.set_exception(stopped_error());
+        i.second.promise.set_exception(stopped_error());
     }
     _awaited_indexes.clear();
+
+    co_await seastar::when_all_succeed(std::move(abort_rpc), std::move(abort_sm), std::move(abort_persistence)).discard_result();
+
+    if (_leader_promise) {
+        _leader_promise->set_exception(stopped_error());
+    }
 
     abort_snapshot_transfers();
 
