@@ -740,10 +740,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     }
     opts.tcp_nodelay = must_tcp_nodelay;
     opts.reuseaddr = true;
-    // We send cookies only for non-default statement tenant clients.
-    if (idx >= PER_SHARD_CONNECTION_COUNT + PER_TENANT_CONNECTION_COUNT) {
-        opts.isolation_cookie = _scheduling_info_for_connection_index[idx].isolation_cookie;
-    }
+    opts.isolation_cookie = _scheduling_info_for_connection_index[idx].isolation_cookie;
 
     auto client = must_encrypt ?
                     ::make_shared<rpc_protocol_client_wrapper>(_rpc->protocol(), std::move(opts),
