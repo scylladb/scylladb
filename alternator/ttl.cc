@@ -94,10 +94,7 @@ future<executor::request_return_type> executor::update_time_to_live(client_state
 }
 
 future<executor::request_return_type> executor::describe_time_to_live(client_state& client_state, service_permit permit, rjson::value request) {
-    _stats.api_operations.update_time_to_live++;
-    if (!_proxy.get_db().local().features().cluster_supports_alternator_ttl()) {
-        co_return api_error::unknown_operation("DescribeTimeToLive not yet supported. Experimental support is available if the 'alternator_ttl' experimental feature is enabled on all nodes.");
-    }
+    _stats.api_operations.describe_time_to_live++;
     schema_ptr schema = get_table(_proxy, request);
     std::map<sstring, sstring> tags_map = get_tags_of_table(schema);
     rjson::value desc = rjson::empty_object();
