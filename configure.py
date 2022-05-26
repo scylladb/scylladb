@@ -1908,9 +1908,8 @@ with open(buildfile, 'w') as f:
                 if dep.endswith('/src/lib.rs'):
                     lib = dep.replace('/src/lib.rs', '.a').replace('rust/','lib')
                     objs.append('$builddir/' + mode + '/rust/release/' + lib)
-            if binary.endswith('.a'):
-                f.write('build $builddir/{}/{}: ar.{} {}\n'.format(mode, binary, mode, str.join(' ', objs)))
-            else:
+
+            if True:
                 objs.extend(['$builddir/' + mode + '/' + artifact for artifact in [
                     'libdeflate/libdeflate.a',
                 ] + [
