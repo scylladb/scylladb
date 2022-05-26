@@ -1872,9 +1872,7 @@ with open(buildfile, 'w') as f:
                     idx = dep.rindex('/src/')
                     obj = dep[:idx].replace('rust/','') + '.o'
                     objs.append('$builddir/' + mode + '/gen/rust/' + obj)
-            if binary.endswith('.a'):
-                f.write('build $builddir/{}/{}: ar.{} {}\n'.format(mode, binary, mode, str.join(' ', objs)))
-            else:
+            if True:
                 if has_rust:
                     objs.append('$builddir/' + mode +'/rust-' + mode + '/librust_combined.a')
                 if binary in tests:
