@@ -1872,34 +1872,33 @@ with open(buildfile, 'w') as f:
                     idx = dep.rindex('/src/')
                     obj = dep[:idx].replace('rust/','') + '.o'
                     objs.append('$builddir/' + mode + '/gen/rust/' + obj)
-            if True:
-                if has_rust:
-                    objs.append('$builddir/' + mode +'/rust-' + mode + '/librust_combined.a')
-                if binary in tests:
-                    local_libs = '$seastar_libs_{} $libs'.format(mode)
-                    if binary in pure_boost_tests:
-                        local_libs += ' ' + maybe_static(args.staticboost, '-lboost_unit_test_framework')
-                    if binary not in tests_not_using_seastar_test_framework:
-                        pc_path = pc[mode].replace('seastar.pc', 'seastar-testing.pc')
-                        local_libs += ' ' + pkg_config(pc_path, '--libs', '--static')
-                    if has_thrift:
-                        local_libs += ' ' + thrift_libs + ' ' + maybe_static(args.staticboost, '-lboost_system')
-                    # Our code's debugging information is huge, and multiplied
-                    # by many tests yields ridiculous amounts of disk space.
-                    # So we strip the tests by default; The user can very
-                    # quickly re-link the test unstripped by adding a "_g"
-                    # to the test name, e.g., "ninja build/release/testname_g"
-                    link_rule = perf_tests_link_rule if binary.startswith('test/perf/') else tests_link_rule
-                    f.write('build $builddir/{}/{}: {}.{} {} | {} {}\n'.format(mode, binary, link_rule, mode, str.join(' ', objs), seastar_dep, seastar_testing_dep))
-                    f.write('   libs = {}\n'.format(local_libs))
-                    f.write('build $builddir/{}/{}_g: {}.{} {} | {} {}\n'.format(mode, binary, regular_link_rule, mode, str.join(' ', objs), seastar_dep, seastar_testing_dep))
-                    f.write('   libs = {}\n'.format(local_libs))
-                else:
-                    f.write('build $builddir/{}/{}: {}.{} {} | {}\n'.format(mode, binary, regular_link_rule, mode, str.join(' ', objs), seastar_dep))
-                    if has_thrift:
-                        f.write('   libs =  {} {} $seastar_libs_{} $libs\n'.format(thrift_libs, maybe_static(args.staticboost, '-lboost_system'), mode))
-                    f.write(f'build $builddir/{mode}/{binary}.stripped: strip $builddir/{mode}/{binary}\n')
-                    f.write(f'build $builddir/{mode}/{binary}.debug: phony $builddir/{mode}/{binary}.stripped\n')
+            if has_rust:
+                objs.append('$builddir/' + mode +'/rust-' + mode + '/librust_combined.a')
+            if binary in tests:
+                local_libs = '$seastar_libs_{} $libs'.format(mode)
+                if binary in pure_boost_tests:
+                    local_libs += ' ' + maybe_static(args.staticboost, '-lboost_unit_test_framework')
+                if binary not in tests_not_using_seastar_test_framework:
+                    pc_path = pc[mode].replace('seastar.pc', 'seastar-testing.pc')
+                    local_libs += ' ' + pkg_config(pc_path, '--libs', '--static')
+                if has_thrift:
+                    local_libs += ' ' + thrift_libs + ' ' + maybe_static(args.staticboost, '-lboost_system')
+                # Our code's debugging information is huge, and multiplied
+                # by many tests yields ridiculous amounts of disk space.
+                # So we strip the tests by default; The user can very
+                # quickly re-link the test unstripped by adding a "_g"
+                # to the test name, e.g., "ninja build/release/testname_g"
+                link_rule = perf_tests_link_rule if binary.startswith('test/perf/') else tests_link_rule
+                f.write('build $builddir/{}/{}: {}.{} {} | {} {}\n'.format(mode, binary, link_rule, mode, str.join(' ', objs), seastar_dep, seastar_testing_dep))
+                f.write('   libs = {}\n'.format(local_libs))
+                f.write('build $builddir/{}/{}_g: {}.{} {} | {} {}\n'.format(mode, binary, regular_link_rule, mode, str.join(' ', objs), seastar_dep, seastar_testing_dep))
+                f.write('   libs = {}\n'.format(local_libs))
+            else:
+                f.write('build $builddir/{}/{}: {}.{} {} | {}\n'.format(mode, binary, regular_link_rule, mode, str.join(' ', objs), seastar_dep))
+                if has_thrift:
+                    f.write('   libs =  {} {} $seastar_libs_{} $libs\n'.format(thrift_libs, maybe_static(args.staticboost, '-lboost_system'), mode))
+                f.write(f'build $builddir/{mode}/{binary}.stripped: strip $builddir/{mode}/{binary}\n')
+                f.write(f'build $builddir/{mode}/{binary}.debug: phony $builddir/{mode}/{binary}.stripped\n')
             for src in srcs:
                 if src.endswith('.cc'):
                     obj = '$builddir/' + mode + '/' + src.replace('.cc', '.o')
