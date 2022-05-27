@@ -570,15 +570,16 @@ public:
 };
 
 future<>
-table::seal_active_memtable(flush_permit&& permit) noexcept {
-  try {
+table::seal_active_memtable(flush_permit&& flush_permit) noexcept {
     auto old = _memtables->back();
     tlogger.debug("Sealing active memtable of {}.{}, partitions: {}, occupancy: {}", _schema->ks_name(), _schema->cf_name(), old->partition_count(), old->occupancy());
 
     if (old->empty()) {
         tlogger.debug("Memtable is empty");
-        return _flush_barrier.advance_and_await();
+        co_return co_await _flush_barrier.advance_and_await();
     }
+
+    auto permit = std::move(flush_permit);
 
     utils::get_local_injector().inject("table_seal_active_memtable_pre_flush", []() {
         throw std::bad_alloc();
@@ -600,38 +601,34 @@ table::seal_active_memtable(flush_permit&& permit) noexcept {
     _config.cf_stats->pending_memtables_flushes_count++;
     _config.cf_stats->pending_memtables_flushes_bytes += memtable_size;
 
-    return do_with(std::move(permit), [this, old] (auto& permit) {
-        return repeat([this, old, &permit] () mutable {
+    std::exception_ptr ex;
+    try {
+        for (;;) {
             auto sstable_write_permit = permit.release_sstable_write_permit();
-            return this->try_flush_memtable_to_sstable(old, std::move(sstable_write_permit)).then([this, &permit] (auto should_stop) mutable {
-                if (should_stop) {
-                    return make_ready_future<stop_iteration>(should_stop);
+            if (co_await this->try_flush_memtable_to_sstable(old, std::move(sstable_write_permit)) == stop_iteration::yes) {
+                    break;
                 }
-                return sleep(10s).then([this, &permit] () mutable {
-                    return std::move(permit).reacquire_sstable_write_permit().then([this, &permit] (auto new_permit) mutable {
-                        permit = std::move(new_permit);
-                        return make_ready_future<stop_iteration>(stop_iteration::no);
-                    });
-                });
-            });
-        });
-    }).then_wrapped([this, memtable_size, old, op = std::move(op), previous_flush = std::move(previous_flush)] (future<> f) mutable {
+                co_await sleep(10s);
+                    permit = co_await std::move(permit).reacquire_sstable_write_permit();
+        }
+    } catch (...) {
+        ex = std::current_exception();
+    }
+
         _stats.pending_flushes--;
         _config.cf_stats->pending_memtables_flushes_count--;
         _config.cf_stats->pending_memtables_flushes_bytes -= memtable_size;
 
-        if (f.failed()) {
-            return f;
+        if (ex) {
+            co_await coroutine::return_exception_ptr(std::move(ex));
         }
 
         if (_commitlog) {
             _commitlog->discard_completed_segments(_schema->id(), old->get_and_discard_rp_set());
         }
-        return previous_flush.finally([op = std::move(op)] { });
-    });
-  } catch (...) {
-    return current_exception_as_future();
-  }
+        co_await std::move(previous_flush);
+    // keep `op` alive until after previous_flush resolves
+
     // FIXME: release commit log
     // FIXME: provide back-pressure to upper layers
 }
