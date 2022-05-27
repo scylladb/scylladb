@@ -565,7 +565,6 @@ raft_tests = set([
 
 apps = set([
     'scylla',
-    'test/tools/cql_repl',
 ])
 
 tests = scylla_tests | perf_tests | raft_tests
@@ -1160,7 +1159,6 @@ scylla_tools = ['tools/scylla-types.cc', 'tools/scylla-sstable.cc', 'tools/schem
 
 deps = {
     'scylla': idls + ['main.cc'] + scylla_core + api + alternator + redis + scylla_tools,
-    'test/tools/cql_repl': idls + ['test/tools/cql_repl.cc'] + scylla_core + scylla_tests_generic_dependencies,
 }
 
 pure_boost_tests = set([
@@ -1990,7 +1988,7 @@ with open(buildfile_tmp, 'w') as f:
         )
 
         f.write(
-            'build {mode}-test: test.{mode} {test_executables} $builddir/{mode}/test/tools/cql_repl $builddir/{mode}/scylla\n'.format(
+            'build {mode}-test: test.{mode} {test_executables} $builddir/{mode}/scylla\n'.format(
                 mode=mode,
                 test_executables=' '.join(['$builddir/{}/{}'.format(mode, binary) for binary in tests]),
             )

@@ -388,4 +388,4 @@ INSERT INTO conditional_deletes_on_static_with_null_batch (a, b, s1, v) values (
 DELETE s1 FROM conditional_deletes_on_static_with_null_batch WHERE a = 7 IF s2 != 7
 APPLY BATCH;
 SELECT * FROM conditional_deletes_on_static_with_null_batch       WHERE a = 7;
-
+DROP KEYSPACE ks1;

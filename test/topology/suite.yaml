@@ -1,0 +1,7 @@
+type: Python
+pool_size: 4
+topology:
+    class: Simple
+    replication_factor: 3
+disable:
+    - test_null

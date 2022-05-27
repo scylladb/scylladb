@@ -12,3 +12,5 @@ select "cdc$batch_seq_no", "cdc$operation", "cdc$ttl", pk, ck from tb3_scylla_cd
 -- Should add 3 rows (preimage + postimage + delta).
 insert into tb3 (pk, ck) VALUES (2, 22) USING TTL 2223;
 select "cdc$batch_seq_no", "cdc$operation", "cdc$ttl", pk, ck from tb3_scylla_cdc_log;
+drop table tb2;
+drop table tb3;

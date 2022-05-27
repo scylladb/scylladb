@@ -7,3 +7,4 @@ alter table tb2 with cdc = {'enabled': true, 'preimage': true, 'postimage': true
 -- Should add 3 rows (preimage + postimage + delta)
 insert into tb2 (pk, ck, i1) VALUES (3, 33, 333) USING TTL 3333;
 select "cdc$batch_seq_no", "cdc$operation", "cdc$ttl", pk, ck, i1 from tb2_scylla_cdc_log where pk = 3 and ck = 33 allow filtering;
+drop table tb2;

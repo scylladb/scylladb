@@ -1,1 +1,3 @@
-type: CQL
+type: Approval
+disable:
+    - cdc_with_lwt_test

@@ -1,13 +1,16 @@
+-- Error messages contain a keyspace name. Make the output stable.
+CREATE KEYSPACE ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
 -- setup
-create table my_table (key int primary key);
-insert into my_table (key) values (1);
+create table ks.my_table (key int primary key);
+insert into ks.my_table (key) values (1);
 
 -- test list<varint>
-create function my_func(val int) called on null input returns list<varint> language lua as 'return {1,2,3}';
-select my_func(key) from my_table;
-drop function my_func;
+create function ks.my_func(val int) called on null input returns list<varint> language lua as 'return {1,2,3}';
+select ks.my_func(key) from ks.my_table;
+drop function ks.my_func;
 
 -- test list<decimal>
-create function my_func(val int) called on null input returns list<decimal> language lua as 'return {1,2,3}';
-select my_func(key) from my_table;
-drop function my_func;
+create function ks.my_func(val int) called on null input returns list<decimal> language lua as 'return {1,2,3}';
+select ks.my_func(key) from ks.my_table;
+drop function ks.my_func;
+DROP KEYSPACE ks;

@@ -1,24 +1,15 @@
-CREATE KEYSPACE k WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
-{
-	"status" : "ok"
-}
-USE k;
-{
-	"status" : "ok"
-}
-CREATE TABLE t1 (userid int PRIMARY KEY);
-{
-	"status" : "ok"
-}
-CREATE TABLE t2 (userid int PRIMARY KEY);
-{
-	"status" : "ok"
-}
-BEGIN BATCH
-INSERT INTO t1 (userid) VALUES (1) IF NOT EXISTS
-INSERT INTO t2 (userid) VALUES (1) IF NOT EXISTS
-APPLY BATCH;
-{
-	"message" : "exceptions::invalid_request_exception (BATCH with conditions cannot span multiple tables)",
-	"status" : "error"
-}
+> CREATE KEYSPACE k WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
+OK
+> USE k;
+OK
+> CREATE TABLE t1 (userid int PRIMARY KEY);
+OK
+> CREATE TABLE t2 (userid int PRIMARY KEY);
+OK
+> BEGIN BATCH
+> INSERT INTO t1 (userid) VALUES (1) IF NOT EXISTS
+> INSERT INTO t2 (userid) VALUES (1) IF NOT EXISTS
+> APPLY BATCH;
+Error from server: code=2200 [Invalid query] message="BATCH with conditions cannot span multiple tables"
+> DROP KEYSPACE k;
+OK

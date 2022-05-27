@@ -1,3 +1,5 @@
+-- Error messages contain a keyspace name. Make the output stable.
+CREATE KEYSPACE ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
 CREATE TABLE ks.tbl_cdc_lwt (pk int, ck int, val int, PRIMARY KEY(pk, ck)) WITH cdc = {'enabled':true, 'preimage':true};
 
 -- (0) successful insert
@@ -17,3 +19,4 @@ SELECT "cdc$batch_seq_no", "cdc$operation", ck, pk, val FROM ks.tbl_cdc_lwt_scyl
 
 -- there should be 6 rows in total: (0) + preimg(0) + (2) + preimg(2) + (4) + preimg(4)
 SELECT count(*) FROM ks.tbl_cdc_lwt_scylla_cdc_log;
+DROP KEYSPACE ks;
