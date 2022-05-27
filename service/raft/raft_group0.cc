@@ -183,6 +183,11 @@ raft_group0::do_discover_group0(raft::server_address my_addr) {
     }
 }
 
+future<> raft_group0::abort() {
+    return _shutdown_gate.close();
+}
+
+
 future<> raft_group0::join_group0() {
     assert(this_shard_id() == 0);
     // do nothing either if raft group registry is not enabled or we've already
