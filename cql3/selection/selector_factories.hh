@@ -41,6 +41,11 @@ private:
     bool _contains_ttl_factory;
 
     /**
+     * The number of factories creating simple selectors.
+     */
+    uint32_t _number_of_simple_factories;
+
+    /**
      * The number of factories creating aggregates.
      */
     uint32_t _number_of_aggregate_factories;
@@ -77,6 +82,17 @@ public:
      * @param index the index of the column definition in the Selection's list of columns
      */
     void add_selector_for_post_processing(const column_definition& def, uint32_t index);
+
+    /**
+     * Checks if this <code>SelectorFactories</code> contains only factories for simple selectors.
+     *
+     * @return <code>true</code> if this <code>SelectorFactories</code> contains only factories for simple selectors,
+     * <code>false</code> otherwise.
+     */
+    bool contains_only_simple_selection() const {
+        auto size = _factories.size();
+        return _number_of_simple_factories == (size - _number_of_factories_for_post_processing);
+    }
 
     /**
      * Checks if this <code>SelectorFactories</code> contains only factories for aggregates.

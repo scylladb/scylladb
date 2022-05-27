@@ -70,6 +70,10 @@ abstract_function_selector::new_factory(shared_ptr<functions::function> fun, sha
             return _fun->is_aggregate() || _factories->contains_only_aggregate_functions();
         }
 
+        virtual bool contains_only_simple_arguments() const override {
+            return _factories->contains_only_simple_selection();
+        }
+
         virtual bool is_count_selector_factory() const override {
             auto p = dynamic_cast<functions::abstract_function*>(_fun.get());
             if (!p) {

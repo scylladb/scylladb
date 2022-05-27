@@ -117,6 +117,26 @@ public:
     virtual ::shared_ptr<selector> new_instance() const = 0;
 
     /**
+     * Checks if this factory creates simple selectors instances.
+     *
+     * @return <code>true</code> if this factory creates simple selectors instances,
+     * <code>false</code> otherwise
+     */
+    virtual bool is_simple_selector_factory() const {
+        return false;
+    }
+
+    /**
+     * Checks if arguments for this factory contains only simple slectors.
+     *
+     * @return <code>true</code> if this factory contains 
+     * <code>false</code> otherwise, or if it isn't function selector factory
+     */
+    virtual bool contains_only_simple_arguments() const {
+        return false;
+    }
+
+    /**
      * Checks if this factory creates selectors instances that creates aggregates.
      *
      * @return <code>true</code> if this factory creates selectors instances that creates aggregates,
