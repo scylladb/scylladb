@@ -47,13 +47,7 @@ public:
         cql3::query_processor& qp,
         migration_manager& mm);
 
-    future<> abort() {
-        if (!_abort_source.abort_requested()) {
-            _abort_source.request_abort();
-        }
-        return _shutdown_gate.close();
-    }
-
+    future<> abort();
 
     // Join this node to the cluster-wide Raft group
     // Called during bootstrap. Is idempotent - it
