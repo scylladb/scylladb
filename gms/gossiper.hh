@@ -635,7 +635,7 @@ public:
         std::unordered_map<inet_address, direct_failure_detector::pinger::endpoint_id> _addr_to_id;
 
         // This node's gossip generation number, updated by gossiper's loop and replicated to every shard.
-        int64_t _generation_number;
+        int64_t _generation_number{0};
 
         future<> update_generation_number(int64_t n);
 
