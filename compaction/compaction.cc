@@ -68,6 +68,7 @@ static const std::unordered_map<compaction_type, sstring> compaction_types = {
     { compaction_type::Reshard, "RESHARD" },
     { compaction_type::Upgrade, "UPGRADE" },
     { compaction_type::Reshape, "RESHAPE" },
+    { compaction_type::Emergency, "EMERGENCY" },
 };
 
 sstring compaction_name(compaction_type type) {
@@ -97,6 +98,7 @@ std::string_view to_string(compaction_type type) {
     case compaction_type::Reshard: return "Reshard";
     case compaction_type::Upgrade: return "Upgrade";
     case compaction_type::Reshape: return "Reshape";
+    case compaction_type::Emergency: return "Emergency";
     }
     on_internal_error_noexcept(clogger, format("Invalid compaction type {}", int(type)));
     return "(invalid)";

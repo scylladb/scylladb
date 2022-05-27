@@ -31,6 +31,7 @@ enum class compaction_type {
     Reshard = 5,
     Upgrade = 6,
     Reshape = 7,
+    Emergency = 8,
 };
 
 std::ostream& operator<<(std::ostream& os, compaction_type type);

@@ -220,6 +220,7 @@ public:
     class rewrite_sstables_compaction_task;
     class cleanup_sstables_compaction_task;
     class validate_sstables_compaction_task;
+    class emergency_compaction_task;
     class compaction_manager_test_task;
 
 private:
@@ -394,6 +395,15 @@ public:
     // Submit a table for major compaction.
     future<> perform_major_compaction(replica::table* t);
 
+    // Submit a table for emergency compaction. This compaction will not be
+    // serialized with other compactions and is meant to handle accumulation of
+    // small sstables. It's a one-off best effort. If it fails for whatever
+    // reason, either a new one will be kicked off after next flush or regular
+    // compaction will handle the sstables. A failure will be logged, but won't
+    // be rescheduled or reported up the call stack. Internally, it performs
+    // quick checks if the compaction is necessary and, apart from exceptional
+    // situations, no compaction will be triggered.
+    future<> perform_emergency_compaction(replica::table* t);
 
     // Run a custom job for a given table, defined by a function
     // it completes when future returned by job is ready or returns immediately

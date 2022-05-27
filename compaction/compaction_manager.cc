@@ -1185,6 +1185,57 @@ future<> compaction_manager::perform_sstable_scrub_validate_mode(replica::table*
     return perform_task(seastar::make_shared<validate_sstables_compaction_task>(*this, t, std::move(all_sstables)));
 }
 
+class compaction_manager::emergency_compaction_task : public compaction_manager::task {
+public:
+    emergency_compaction_task(compaction_manager& cm, replica::table* t)
+        : task(cm, t, sstables::compaction_type::Emergency, "Emergency compaction due to heavy flushing")
+    {}
+
+protected:
+    virtual future<> do_run() override {
+        co_await coroutine::switch_to(_cm._compaction_controller.sg());
+        // Fetch up to t.schema()->max_compaction_threshold() smallest sstables
+        // that were never compacted.  If the number of fetched sstables is
+        // lower than this threshold, there's no need for emergency compaction.
+        replica::table& t = *_compacting_table;
+        auto sstables = boost::copy_range<std::vector<sstables::shared_sstable>>(
+                *(t.get_sstables()) |
+                boost::adaptors::filtered([](const sstables::shared_sstable& s) { return s->get_origin() == "memtable"; }));
+        sstables = _cm.get_non_compacting_sstables(sstables);
+        int32_t n = t.schema()->max_compaction_threshold();
+        if (sstables.size() < n || !can_proceed() || t.is_auto_compaction_disabled_by_user()) {
+            co_return;
+        }
+        std::partial_sort(sstables.begin(), sstables.begin() + n, sstables.end(),
+            [](sstables::shared_sstable lhs, sstables::shared_sstable rhs) { return lhs->bytes_on_disk() < rhs->bytes_on_disk(); });
+        sstables.erase(sstables.begin() + n);
+
+        sstables::compaction_strategy cs = t.get_compaction_strategy();
+        sstables::compaction_descriptor descriptor = cs.get_sstables_for_compaction(t.as_table_state(), _cm.get_strategy_control(), sstables);
+
+        auto compacting = compacting_sstable_registration(_cm, descriptor.sstables);
+        auto release_exhausted = [&compacting] (const std::vector<sstables::shared_sstable>& exhausted_sstables) {
+            compacting.release_compacting(exhausted_sstables);
+        };
+        cmlog.debug("Accepted emergency compaction job: task={} ({} sstable(s)) for {}.{}",
+            fmt::ptr(this), descriptor.sstables.size(), t.schema()->ks_name(), t.schema()->cf_name());
+
+        setup_new_compaction(descriptor.run_identifier);
+
+        try {
+            co_await compact_sstables(std::move(descriptor), _compaction_data, std::move(release_exhausted));
+            finish_compaction();
+        } catch (const std::exception& e) {
+            cmlog.warn("Emergency compaction failed: {}", e.what());
+            finish_compaction(state::failed);
+        }
+    }
+};
+
+future<> compaction_manager::perform_emergency_compaction(replica::table* t) {
+    return perform_task(seastar::make_shared<emergency_compaction_task>(*this, t));
+}
+
 class compaction_manager::cleanup_sstables_compaction_task : public compaction_manager::task {
     const sstables::compaction_type_options _cleanup_options;
     compacting_sstable_registration _compacting;
