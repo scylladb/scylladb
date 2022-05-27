@@ -432,7 +432,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     const bool can_join_with_raft =
         _db.local().get_config().check_experimental(db::experimental_features_t::RAFT) && (
             _sys_ks.local().bootstrap_needed() ||
-            !_sys_ks.local().get_raft_group0_id().get().is_null());
+            !(co_await _sys_ks.local().get_raft_group0_id()).is_null());
     if (can_join_with_raft) {
         co_await _group0->join_group0();
     }
