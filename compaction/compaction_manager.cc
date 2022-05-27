@@ -199,7 +199,6 @@ std::vector<sstables::shared_sstable> compaction_manager::get_candidates(const r
     auto partial_run_identifiers = boost::copy_range<std::unordered_set<utils::UUID>>(_tasks
             | boost::adaptors::filtered(std::mem_fn(&task::generating_output_run))
             | boost::adaptors::transformed(std::mem_fn(&task::output_run_id)));
-    auto& cs = t.get_compaction_strategy();
 
     // Filter out sstables that are being compacted.
     for (auto& sst : t.in_strategy_sstables()) {
