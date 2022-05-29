@@ -174,11 +174,11 @@ public:
 
     /// Returns a pointer to the first element of the buffer.
     /// Valid only when engaged.
-    char_type* get() { return _buf; }
-    const char_type* get() const { return _buf; }
+    char_type* get() noexcept { return _buf; }
+    const char_type* get() const noexcept { return _buf; }
 
     /// Returns the number of bytes in the buffer.
-    size_t size() const { return _size; }
+    size_t size() const noexcept { return _size; }
 
     /// Returns true iff the pointer is engaged.
     explicit operator bool() const noexcept { return bool(_link); }
