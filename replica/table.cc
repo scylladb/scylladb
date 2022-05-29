@@ -13,6 +13,7 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/util/closeable.hh>
+#include <seastar/util/defer.hh>
 
 #include "replica/database.hh"
 #include "replica/data_dictionary_impl.hh"
@@ -588,15 +589,11 @@ table::seal_active_memtable(flush_permit&& flush_permit) noexcept {
     size_t memtable_size;
     future<> previous_flush = make_ready_future<>();
 
-    // FIXME: the retried func returns a stop_iteration value for now,
-    // since try_flush_memtable_to_sstable is still doing some error handling on its own.
-    auto with_retry = [&] (std::function<future<stop_iteration>()> func) -> future<> {
+    auto with_retry = [&] (std::function<future<>()> func) -> future<> {
         for (;;) {
             std::exception_ptr ex;
             try {
-                if ((co_await func()) == stop_iteration::yes) {
-                    co_return;
-                }
+                co_return co_await func();
             } catch (...) {
                 ex = std::current_exception();
                 _config.cf_stats->failed_memtables_flushes_count++;
@@ -608,6 +605,10 @@ table::seal_active_memtable(flush_permit&& flush_permit) noexcept {
                     // This is a temporary measure just to make this patch that
                     // moved this error handling code from flush_when_needed
                     // easier to review
+                    //
+                    // FIXME: enter maintenance mode when available.
+                    // since replaying the commitlog with a corrupt mutation
+                    // may end up in an infinite crash loop.
                     try {
                         // At this point we don't know what has happened and it's better to potentially
                         // take the node down and rely on commitlog to replay.
@@ -618,6 +619,11 @@ table::seal_active_memtable(flush_permit&& flush_permit) noexcept {
                         // at this point. The error is logged and we can try again later
                     }
                 }
+            }
+            if (_async_gate.is_closed()) {
+                tlogger.warn("Memtable flush failed due to: {}. Dropped due to shutdown", ex);
+                co_await std::move(previous_flush);
+                co_await coroutine::return_exception_ptr(std::move(ex));
             }
             tlogger.warn("Memtable flush failed due to: {}. Will retry in {}ms", ex, r.sleep_time().count());
             co_await r.retry();
@@ -642,7 +648,7 @@ table::seal_active_memtable(flush_permit&& flush_permit) noexcept {
             old->region().ground_evictable_occupancy();
             memtable_size = old->occupancy().total_space();
         }();
-        return make_ready_future<stop_iteration>(stop_iteration::yes);
+        return make_ready_future<>();
     });
 
     co_await with_retry([&] {
@@ -653,10 +659,16 @@ table::seal_active_memtable(flush_permit&& flush_permit) noexcept {
         _stats.pending_flushes++;
         _config.cf_stats->pending_memtables_flushes_count++;
         _config.cf_stats->pending_memtables_flushes_bytes += memtable_size;
-        return make_ready_future<stop_iteration>(stop_iteration::yes);
+        return make_ready_future<>();
     });
 
-    co_await with_retry([&] () -> future<stop_iteration> {
+    auto undo_stats = std::make_optional(deferred_action([this, memtable_size] () noexcept {
+        _stats.pending_flushes--;
+        _config.cf_stats->pending_memtables_flushes_count--;
+        _config.cf_stats->pending_memtables_flushes_bytes -= memtable_size;
+    }));
+
+    co_await with_retry([&] () -> future<> {
         // Reacquiring the write permit might be needed if retrying flush
         if (!permit.has_sstable_write_permit()) {
             tlogger.debug("seal_active_memtable: reacquiring write permit");
@@ -667,9 +679,7 @@ table::seal_active_memtable(flush_permit&& flush_permit) noexcept {
         co_return co_await this->try_flush_memtable_to_sstable(old, std::move(write_permit));
     });
 
-    _stats.pending_flushes--;
-    _config.cf_stats->pending_memtables_flushes_count--;
-    _config.cf_stats->pending_memtables_flushes_bytes -= memtable_size;
+    undo_stats.reset();
 
     if (_commitlog) {
         _commitlog->discard_completed_segments(_schema->id(), old->get_and_discard_rp_set());
@@ -681,9 +691,9 @@ table::seal_active_memtable(flush_permit&& flush_permit) noexcept {
     // FIXME: provide back-pressure to upper layers
 }
 
-future<stop_iteration>
+future<>
 table::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_permit&& permit) {
-    auto try_flush = [this, old = std::move(old), permit = make_lw_shared(std::move(permit))] () mutable -> future<stop_iteration> {
+    auto try_flush = [this, old = std::move(old), permit = make_lw_shared(std::move(permit))] () mutable -> future<> {
         // Note that due to our sharded architecture, it is possible that
         // in the face of a value change some shards will backup sstables
         // while others won't.
@@ -742,7 +752,7 @@ table::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_
             if (!fragment) {
                 co_await reader.close();
                 _memtables->erase(old);
-                co_return stop_iteration::yes;
+                co_return;
             }
         } catch (...) {
             err = std::current_exception();
@@ -750,7 +760,7 @@ table::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_
         if (err) {
             tlogger.error("failed to flush memtable for {}.{}: {}", old->schema()->ks_name(), old->schema()->cf_name(), err);
             co_await reader.close();
-            co_return stop_iteration(_async_gate.is_closed());
+            co_await coroutine::return_exception_ptr(std::move(err));
         }
 
         auto f = consumer(std::move(reader));
@@ -758,7 +768,7 @@ table::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_
         // Switch back to default scheduling group for post-flush actions, to avoid them being staved by the memtable flush
         // controller. Cache update does not affect the input of the memtable cpu controller, so it can be subject to
         // priority inversion.
-        auto post_flush = [this, old = std::move(old), &newtabs, f = std::move(f)] () mutable -> future<stop_iteration> {
+        auto post_flush = [this, old = std::move(old), &newtabs, f = std::move(f)] () mutable -> future<> {
             try {
                 co_await std::move(f);
                 co_await coroutine::parallel_for_each(newtabs, [] (auto& newtab) -> future<> {
@@ -766,12 +776,12 @@ table::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_
                     tlogger.debug("Flushing to {} done", newtab->get_filename());
                 });
 
-                co_await with_scheduling_group(_config.memtable_to_cache_scheduling_group, [this, old, &newtabs] () -> future<> {
+                co_await with_scheduling_group(_config.memtable_to_cache_scheduling_group, [this, old, &newtabs] {
                     return update_cache(old, newtabs);
                 });
                 _memtables->erase(old);
                 tlogger.debug("Memtable for {}.{} replaced, into {} sstables", old->schema()->ks_name(), old->schema()->cf_name(), newtabs.size());
-                co_return stop_iteration::yes;
+                co_return;
             } catch (const std::exception& e) {
                 for (auto& newtab : newtabs) {
                     newtab->mark_for_deletion();
@@ -781,7 +791,7 @@ table::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_
                 // If we failed this write we will try the write again and that will create a new flush reader
                 // that will decrease dirty memory again. So we need to reset the accounting.
                 old->revert_flushed_memory();
-                co_return stop_iteration(_async_gate.is_closed());
+                throw;
             }
         };
         co_return co_await with_scheduling_group(default_scheduling_group(), std::ref(post_flush));
