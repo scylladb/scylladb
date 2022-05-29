@@ -459,9 +459,9 @@ public:
     future<> do_pending_deletes();
     future<> delete_segments(std::vector<sstring>);
 
-    void discard_unused_segments();
-    void discard_completed_segments(const cf_id_type&);
-    void discard_completed_segments(const cf_id_type&, const rp_set&);
+    void discard_unused_segments() noexcept;
+    void discard_completed_segments(const cf_id_type&) noexcept;
+    void discard_completed_segments(const cf_id_type&, const rp_set&) noexcept;
     void on_timer();
     void sync();
     void arm(uint32_t extra = 0) {
@@ -1261,7 +1261,7 @@ public:
         _segment_manager->account_memory_usage(fill_size);
         return size;
     }
-    void mark_clean(const cf_id_type& id, uint64_t count) {
+    void mark_clean(const cf_id_type& id, uint64_t count) noexcept {
         auto i = _cf_dirty.find(id);
         if (i != _cf_dirty.end()) {
             assert(i->second >= count);
@@ -1271,10 +1271,10 @@ public:
             }
         }
     }
-    void mark_clean(const cf_id_type& id) {
+    void mark_clean(const cf_id_type& id) noexcept {
         _cf_dirty.erase(id);
     }
-    void mark_clean() {
+    void mark_clean() noexcept {
         _cf_dirty.clear();
     }
     bool is_still_allocating() const noexcept {
@@ -1855,7 +1855,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
  * go through all segments, clear id up to pos. if segment becomes clean and unused by this,
  * it is discarded.
  */
-void db::commitlog::segment_manager::discard_completed_segments(const cf_id_type& id, const rp_set& used) {
+void db::commitlog::segment_manager::discard_completed_segments(const cf_id_type& id, const rp_set& used) noexcept {
     auto& usage = used.usage();
 
     clogger.debug("Discarding {}: {}", id, usage);
@@ -1869,7 +1869,7 @@ void db::commitlog::segment_manager::discard_completed_segments(const cf_id_type
     discard_unused_segments();
 }
 
-void db::commitlog::segment_manager::discard_completed_segments(const cf_id_type& id) {
+void db::commitlog::segment_manager::discard_completed_segments(const cf_id_type& id) noexcept {
     clogger.debug("Discard all data for {}", id);
     for (auto&s : _segments) {
         s->mark_clean(id);
@@ -1893,7 +1893,7 @@ std::ostream& operator<<(std::ostream& out, const db::replay_position& p) {
 
 }
 
-void db::commitlog::segment_manager::discard_unused_segments() {
+void db::commitlog::segment_manager::discard_unused_segments() noexcept {
     clogger.trace("Checking for unused segments ({} active)", _segments.size());
 
     std::erase_if(_segments, [=](sseg_ptr s) {
