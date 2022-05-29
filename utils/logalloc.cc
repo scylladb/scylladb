@@ -530,15 +530,15 @@ size_t tracker::reclaim(size_t bytes) {
     return _impl->reclaim(bytes, is_preemptible::no);
 }
 
-occupancy_stats tracker::region_occupancy() {
+occupancy_stats tracker::region_occupancy() const noexcept {
     return _impl->region_occupancy();
 }
 
-occupancy_stats tracker::occupancy() {
+occupancy_stats tracker::occupancy() const noexcept {
     return _impl->occupancy();
 }
 
-size_t tracker::non_lsa_used_space() const {
+size_t tracker::non_lsa_used_space() const noexcept {
     return _impl->non_lsa_used_space();
 }
 
@@ -2104,11 +2104,11 @@ lsa_buffer::~lsa_buffer() {
     }
 }
 
-size_t tracker::reclamation_step() const {
+size_t tracker::reclamation_step() const noexcept {
     return _impl->reclamation_step();
 }
 
-bool tracker::should_abort_on_bad_alloc() {
+bool tracker::should_abort_on_bad_alloc() const noexcept {
     return _impl->should_abort_on_bad_alloc();
 }
 

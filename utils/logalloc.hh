@@ -97,20 +97,20 @@ public:
     void reclaim_all_free_segments();
 
     // Returns aggregate statistics for all pools.
-    occupancy_stats region_occupancy();
+    occupancy_stats region_occupancy() const noexcept;
 
     // Returns statistics for all segments allocated by LSA on this shard.
-    occupancy_stats occupancy();
+    occupancy_stats occupancy() const noexcept;
 
     // Returns amount of allocated memory not managed by LSA
-    size_t non_lsa_used_space() const;
+    size_t non_lsa_used_space() const noexcept;
 
-    impl& get_impl() { return *_impl; }
+    impl& get_impl() noexcept { return *_impl; }
 
     // Returns the minimum number of segments reclaimed during single reclamation cycle.
-    size_t reclamation_step() const;
+    size_t reclamation_step() const noexcept;
 
-    bool should_abort_on_bad_alloc();
+    bool should_abort_on_bad_alloc() const noexcept;
 };
 
 class tracker_reclaimer_lock {
