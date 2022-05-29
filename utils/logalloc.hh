@@ -283,19 +283,19 @@ public:
 private:
     shared_ptr<basic_region_impl> _impl;
 private:
-    region_impl& get_impl();
-    const region_impl& get_impl() const;
+    region_impl& get_impl() noexcept;
+    const region_impl& get_impl() const noexcept;
 public:
     region();
     ~region();
-    region(region&& other);
-    region& operator=(region&& other);
+    region(region&& other) noexcept;
+    region& operator=(region&& other) noexcept;
     region(const region& other) = delete;
 
     void listen(region_listener* listener);
     void unlisten();
 
-    occupancy_stats occupancy() const;
+    occupancy_stats occupancy() const noexcept;
 
     allocation_strategy& allocator() noexcept {
         return *_impl;
@@ -323,15 +323,15 @@ public:
     // Changes the reclaimability state of this region. When region is not
     // reclaimable, it won't be considered by tracker::reclaim(). By default region is
     // reclaimable after construction.
-    void set_reclaiming_enabled(bool e) { _impl->set_reclaiming_enabled(e); }
+    void set_reclaiming_enabled(bool e) noexcept { _impl->set_reclaiming_enabled(e); }
 
     // Returns the reclaimability state of this region.
-    bool reclaiming_enabled() const { return _impl->reclaiming_enabled(); }
+    bool reclaiming_enabled() const noexcept { return _impl->reclaiming_enabled(); }
 
     // Returns a value which is increased when this region is either compacted or
     // evicted from, which invalidates references into the region.
     // When the value returned by this method doesn't change, references remain valid.
-    uint64_t reclaim_counter() const {
+    uint64_t reclaim_counter() const noexcept {
         return allocator().invalidate_counter();
     }
 
@@ -340,16 +340,16 @@ public:
 
     // Follows region's occupancy in the parent region group. Less fine-grained than occupancy().
     // After ground_evictable_occupancy() is called returns 0.
-    occupancy_stats evictable_occupancy();
+    occupancy_stats evictable_occupancy() const noexcept;
 
     // Makes this region an evictable region. Supplied function will be called
     // when data from this region needs to be evicted in order to reclaim space.
     // The function should free some space from this region.
-    void make_evictable(eviction_fn);
+    void make_evictable(eviction_fn) noexcept;
 
-    const eviction_fn& evictor() const;
+    const eviction_fn& evictor() const noexcept;
 
-    uint64_t id() const;
+    uint64_t id() const noexcept;
 
     friend class allocating_section;
 };

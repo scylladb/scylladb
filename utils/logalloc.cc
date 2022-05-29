@@ -2147,14 +2147,14 @@ region::unlisten() {
     get_impl().unlisten();
 }
 
-region_impl& region::get_impl() {
+region_impl& region::get_impl() noexcept {
     return *static_cast<region_impl*>(_impl.get());
 }
-const region_impl& region::get_impl() const {
+const region_impl& region::get_impl() const noexcept {
     return *static_cast<const region_impl*>(_impl.get());
 }
 
-region::region(region&& other) {
+region::region(region&& other) noexcept {
     this->_impl = std::move(other._impl);
     get_impl()._region = this;
     if (_impl) {
@@ -2165,7 +2165,7 @@ region::region(region&& other) {
     }
 }
 
-region& region::operator=(region&& other) {
+region& region::operator=(region&& other) noexcept {
     if (this == &other || _impl == other._impl) {
         return *this;
     }
@@ -2199,7 +2199,7 @@ region::~region() {
     }
 }
 
-occupancy_stats region::occupancy() const {
+occupancy_stats region::occupancy() const noexcept {
     return get_impl().occupancy();
 }
 
@@ -2233,7 +2233,7 @@ memory::reclaiming_result region::evict_some() {
     return memory::reclaiming_result::reclaimed_nothing;
 }
 
-void region::make_evictable(eviction_fn fn) {
+void region::make_evictable(eviction_fn fn) noexcept {
     get_impl().make_evictable(std::move(fn));
 }
 
@@ -2241,15 +2241,15 @@ void region::ground_evictable_occupancy() {
     get_impl().ground_evictable_occupancy();
 }
 
-occupancy_stats region::evictable_occupancy() {
+occupancy_stats region::evictable_occupancy() const noexcept {
     return get_impl().evictable_occupancy();
 }
 
-const eviction_fn& region::evictor() const {
+const eviction_fn& region::evictor() const noexcept {
     return get_impl().evictor();
 }
 
-uint64_t region::id() const {
+uint64_t region::id() const noexcept {
     return get_impl().id();
 }
 
