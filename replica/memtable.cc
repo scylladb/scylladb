@@ -803,7 +803,7 @@ memtable::apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_han
     update(std::move(h));
 }
 
-logalloc::occupancy_stats memtable::occupancy() const {
+logalloc::occupancy_stats memtable::occupancy() const noexcept {
     return logalloc::region::occupancy();
 }
 
@@ -835,11 +835,11 @@ void memtable::mark_flushed(mutation_source underlying) noexcept {
     _underlying = std::move(underlying);
 }
 
-bool memtable::is_flushed() const {
+bool memtable::is_flushed() const noexcept {
     return bool(_underlying);
 }
 
-bool memtable::has_any_tombstones() const {
+bool memtable::has_any_tombstones() const noexcept {
     return _table_stats.memtable_app_stats.has_any_tombstones;
 }
 
