@@ -471,11 +471,11 @@ public:
 
 future<> prime_segment_pool(size_t available_memory, size_t min_free_memory);
 
-uint64_t memory_allocated();
-uint64_t memory_freed();
-uint64_t memory_compacted();
-uint64_t memory_evicted();
+uint64_t memory_allocated() noexcept;
+uint64_t memory_freed() noexcept;
+uint64_t memory_compacted() noexcept;
+uint64_t memory_evicted() noexcept;
 
-occupancy_stats lsa_global_occupancy_stats();
+occupancy_stats lsa_global_occupancy_stats() noexcept;
 
 }

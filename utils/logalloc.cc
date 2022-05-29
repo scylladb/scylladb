@@ -2743,23 +2743,23 @@ future<> prime_segment_pool(size_t available_memory, size_t min_free_memory) {
     });
 }
 
-uint64_t memory_allocated() {
+uint64_t memory_allocated() noexcept {
     return shard_segment_pool.statistics().memory_allocated;
 }
 
-uint64_t memory_freed() {
+uint64_t memory_freed() noexcept {
     return shard_segment_pool.statistics().memory_freed;
 }
 
-uint64_t memory_compacted() {
+uint64_t memory_compacted() noexcept {
     return shard_segment_pool.statistics().memory_compacted;
 }
 
-uint64_t memory_evicted() {
+uint64_t memory_evicted() noexcept {
     return shard_segment_pool.statistics().memory_evicted;
 }
 
-occupancy_stats lsa_global_occupancy_stats() {
+occupancy_stats lsa_global_occupancy_stats() noexcept {
     return occupancy_stats(shard_segment_pool.total_free_memory(), shard_segment_pool.total_memory_in_use());
 }
 
