@@ -252,12 +252,12 @@ protected:
     bool _reclaiming_enabled = true;
     seastar::shard_id _cpu = this_shard_id();
 public:
-    void set_reclaiming_enabled(bool enabled) {
+    void set_reclaiming_enabled(bool enabled) noexcept {
         assert(this_shard_id() == _cpu);
         _reclaiming_enabled = enabled;
     }
 
-    bool reclaiming_enabled() const {
+    bool reclaiming_enabled() const noexcept {
         return _reclaiming_enabled;
     }
 };
