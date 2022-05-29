@@ -2656,7 +2656,7 @@ bool segment_pool::compact_segment(segment* seg) {
     return true;
 }
 
-allocating_section::guard::guard()
+allocating_section::guard::guard() noexcept
     : _prev(shard_segment_pool.emergency_reserve_max())
 { }
 

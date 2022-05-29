@@ -388,7 +388,7 @@ class allocating_section {
 private:
     struct guard {
         size_t _prev;
-        guard();
+        guard() noexcept;
         ~guard();
     };
     void reserve();
