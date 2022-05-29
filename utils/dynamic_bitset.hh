@@ -24,7 +24,6 @@ class dynamic_bitset {
 private:
     std::vector<std::vector<int_type>> _bits; // level n+1 = 64:1 summary of level n
     size_t _bits_count = 0;
-    unsigned _nlevels = 0;
 private:
     // For n in range 0..(bits_per_int-1), produces a mask with all bits < n set
     static int_type mask_lower_bits(size_t n) {
@@ -42,7 +41,6 @@ private:
     static unsigned level_remainder(unsigned level, size_t n) {
         return (n >> (level * level_shift)) & (bits_per_int - 1);
     }
-    void do_resize(size_t n, bool set);
 public:
     enum : size_t {
         npos = std::numeric_limits<size_t>::max()
