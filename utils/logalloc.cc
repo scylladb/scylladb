@@ -617,19 +617,19 @@ struct segment_descriptor : public log_heap_hook<segment_descriptor_hist_options
     segment::size_type _free_space;
     region::impl* _region;
 
-    segment::size_type free_space() const {
+    segment::size_type free_space() const noexcept {
         return _free_space & free_space_mask;
     }
 
-    void set_free_space(segment::size_type free_space) {
+    void set_free_space(segment::size_type free_space) noexcept {
         _free_space = (_free_space & ~free_space_mask) | free_space;
     }
 
-    segment_kind kind() const {
+    segment_kind kind() const noexcept {
         return static_cast<segment_kind>((_free_space & segment_kind_mask) >> shift_for_segment_kind);
     }
 
-    void set_kind(segment_kind kind) {
+    void set_kind(segment_kind kind) noexcept {
         _free_space = (_free_space & ~segment_kind_mask)
                 | static_cast<segment::size_type>(kind) << shift_for_segment_kind;
     }
@@ -643,23 +643,23 @@ struct segment_descriptor : public log_heap_hook<segment_descriptor_hist_options
     // Also, not all entangled objects may be engaged.
     std::vector<entangled> _buf_pointers;
 
-    segment_descriptor()
+    segment_descriptor() noexcept
         : _region(nullptr)
     { }
 
-    bool is_empty() const {
+    bool is_empty() const noexcept {
         return free_space() == segment::size;
     }
 
-    occupancy_stats occupancy() const {
+    occupancy_stats occupancy() const noexcept {
         return { free_space(), segment::size };
     }
 
-    void record_alloc(segment::size_type size) {
+    void record_alloc(segment::size_type size) noexcept {
         _free_space -= size;
     }
 
-    void record_free(segment::size_type size) {
+    void record_free(segment::size_type size) noexcept {
         _free_space += size;
     }
 };
