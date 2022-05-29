@@ -131,6 +131,8 @@ public:
 
         state switch_state(state new_state);
 
+        future<semaphore_units<named_semaphore_exception_factory>> acquire_semaphore(named_semaphore& sem, size_t units = 1);
+
         // Return true if the task isn't stopped
         // and the compaction manager allows proceeding.
         inline bool can_proceed(throw_if_stopping do_throw_if_stopping = throw_if_stopping::no) const;
