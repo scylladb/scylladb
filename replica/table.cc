@@ -570,7 +570,8 @@ public:
 };
 
 future<>
-table::seal_active_memtable(flush_permit&& permit) {
+table::seal_active_memtable(flush_permit&& permit) noexcept {
+  try {
     auto old = _memtables->back();
     tlogger.debug("Sealing active memtable of {}.{}, partitions: {}, occupancy: {}", _schema->ks_name(), _schema->cf_name(), old->partition_count(), old->occupancy());
 
@@ -628,6 +629,9 @@ table::seal_active_memtable(flush_permit&& permit) {
         }
         return previous_flush.finally([op = std::move(op)] { });
     });
+  } catch (...) {
+    return current_exception_as_future();
+  }
     // FIXME: release commit log
     // FIXME: provide back-pressure to upper layers
 }

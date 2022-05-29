@@ -575,7 +575,7 @@ public:
         return _virtual_region_group.memory_used();
     }
 
-    future<> flush_one(replica::memtable_list& cf, flush_permit&& permit);
+    future<> flush_one(replica::memtable_list& cf, flush_permit&& permit) noexcept;
 
     future<flush_permit> get_flush_permit() noexcept {
         return get_units(_background_work_flush_serializer, 1).then([this] (auto&& units) {

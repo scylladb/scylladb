@@ -233,7 +233,7 @@ public:
         return _memtables.size();
     }
 
-    future<> seal_active_memtable(flush_permit&& permit) {
+    future<> seal_active_memtable(flush_permit&& permit) noexcept {
         return _seal_immediate_fn(std::move(permit));
     }
 
@@ -1080,7 +1080,7 @@ private:
     // But it is possible to synchronously wait for the seal to complete by
     // waiting on this future. This is useful in situations where we want to
     // synchronously flush data to disk.
-    future<> seal_active_memtable(flush_permit&&);
+    future<> seal_active_memtable(flush_permit&&) noexcept;
 
     void check_valid_rp(const db::replay_position&) const;
 public:
