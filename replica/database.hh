@@ -162,7 +162,6 @@ using shared_memtable = lw_shared_ptr<memtable>;
 class memtable_list {
 public:
     using seal_immediate_fn_type = std::function<future<> (flush_permit&&)>;
-    using seal_delayed_fn_type = std::function<future<> ()>;
 private:
     std::vector<shared_memtable> _memtables;
     seal_immediate_fn_type _seal_immediate_fn;
