@@ -785,7 +785,7 @@ class segment_pool {
     struct allocation_lock {
         segment_pool& _pool;
         bool _prev;
-        allocation_lock(segment_pool& p)
+        allocation_lock(segment_pool& p) noexcept
             : _pool(p)
             , _prev(p._allocation_enabled)
         {
@@ -810,7 +810,7 @@ class segment_pool {
     //     - clear everywhere
 private:
     segment* allocate_segment(size_t reserve);
-    void deallocate_segment(segment* seg);
+    void deallocate_segment(segment* seg) noexcept;
     friend void* segment::operator new(size_t);
     friend void segment::operator delete(void*);
 
@@ -824,10 +824,10 @@ private:
     size_t idx_from_segment(const segment* seg) const noexcept {
         return _store.idx_from_segment(seg);
     }
-    size_t max_segments() const {
+    size_t max_segments() const noexcept {
         return _store.max_segments();
     }
-    bool can_allocate_more_segments() {
+    bool can_allocate_more_segments() const noexcept {
         return _allocation_enabled && _store.can_allocate_more_segments();
     }
     bool compact_segment(segment* seg);
@@ -835,41 +835,41 @@ public:
     segment_pool();
     void prime(size_t available_memory, size_t min_free_memory);
     segment* new_segment(region::impl* r);
-    segment_descriptor& descriptor(segment*);
+    segment_descriptor& descriptor(segment*) noexcept;
     // Returns segment containing given object or nullptr.
-    segment* containing_segment(const void* obj);
-    segment* segment_from(const segment_descriptor& desc);
+    segment* containing_segment(const void* obj) noexcept;
+    segment* segment_from(const segment_descriptor& desc) noexcept;
     void free_segment(segment*) noexcept;
     void free_segment(segment*, segment_descriptor&) noexcept;
-    size_t segments_in_use() const;
-    size_t current_emergency_reserve_goal() const { return _current_emergency_reserve_goal; }
-    void set_emergency_reserve_max(size_t new_size) { _emergency_reserve_max = new_size; }
-    size_t emergency_reserve_max() { return _emergency_reserve_max; }
-    void set_current_emergency_reserve_goal(size_t goal) { _current_emergency_reserve_goal = goal; }
-    void clear_allocation_failure_flag() { _allocation_failure_flag = false; }
-    bool allocation_failure_flag() { return _allocation_failure_flag; }
+    size_t segments_in_use() const noexcept;
+    size_t current_emergency_reserve_goal() const noexcept { return _current_emergency_reserve_goal; }
+    void set_emergency_reserve_max(size_t new_size) noexcept { _emergency_reserve_max = new_size; }
+    size_t emergency_reserve_max() const noexcept { return _emergency_reserve_max; }
+    void set_current_emergency_reserve_goal(size_t goal) noexcept { _current_emergency_reserve_goal = goal; }
+    void clear_allocation_failure_flag() noexcept { _allocation_failure_flag = false; }
+    bool allocation_failure_flag() const noexcept { return _allocation_failure_flag; }
     void refill_emergency_reserve();
-    void add_non_lsa_memory_in_use(size_t n) {
+    void add_non_lsa_memory_in_use(size_t n) noexcept {
         _non_lsa_memory_in_use += n;
     }
-    void subtract_non_lsa_memory_in_use(size_t n) {
+    void subtract_non_lsa_memory_in_use(size_t n) noexcept {
         assert(_non_lsa_memory_in_use >= n);
         _non_lsa_memory_in_use -= n;
     }
-    size_t non_lsa_memory_in_use() const {
+    size_t non_lsa_memory_in_use() const noexcept {
         return _non_lsa_memory_in_use;
     }
-    size_t total_memory_in_use() const {
+    size_t total_memory_in_use() const noexcept {
         return _non_lsa_memory_in_use + _segments_in_use * segment::size;
     }
-    size_t total_free_memory() const {
+    size_t total_free_memory() const noexcept {
         return _free_segments * segment::size;
     }
     struct reservation_goal;
-    void set_region(segment* seg, region::impl* r) {
+    void set_region(segment* seg, region::impl* r) noexcept {
         set_region(descriptor(seg), r);
     }
-    void set_region(segment_descriptor& desc, region::impl* r) {
+    void set_region(segment_descriptor& desc, region::impl* r) noexcept {
         desc._region = r;
     }
     size_t reclaim_segments(size_t target, is_preemptible preempt);
@@ -917,13 +917,13 @@ public:
 private:
     stats _stats{};
 public:
-    const stats& statistics() const { return _stats; }
-    void on_segment_compaction(size_t used_size);
-    void on_memory_allocation(size_t size);
-    void on_memory_deallocation(size_t size);
-    void on_memory_eviction(size_t size);
-    size_t unreserved_free_segments() const { return _free_segments - std::min(_free_segments, _emergency_reserve_max); }
-    size_t free_segments() const { return _free_segments; }
+    const stats& statistics() const noexcept { return _stats; }
+    inline void on_segment_compaction(size_t used_size) noexcept;
+    inline void on_memory_allocation(size_t size) noexcept;
+    inline void on_memory_deallocation(size_t size) noexcept;
+    inline void on_memory_eviction(size_t size) noexcept;
+    size_t unreserved_free_segments() const noexcept { return _free_segments - std::min(_free_segments, _emergency_reserve_max); }
+    size_t free_segments() const noexcept { return _free_segments; }
 };
 
 struct reclaim_timer {
@@ -1110,7 +1110,7 @@ segment* segment_pool::allocate_segment(size_t reserve)
     return nullptr;
 }
 
-void segment_pool::deallocate_segment(segment* seg)
+void segment_pool::deallocate_segment(segment* seg) noexcept
 {
     assert(_lsa_owned_segments_bitmap.test(idx_from_segment(seg)));
     _lsa_free_segments_bitmap.set(idx_from_segment(seg));
@@ -1129,13 +1129,13 @@ void segment_pool::refill_emergency_reserve() {
 }
 
 segment_descriptor&
-segment_pool::descriptor(segment* seg) {
+segment_pool::descriptor(segment* seg) noexcept {
     uintptr_t index = idx_from_segment(seg);
     return _segments[index];
 }
 
 segment*
-segment_pool::containing_segment(const void* obj) {
+segment_pool::containing_segment(const void* obj) noexcept {
     auto addr = reinterpret_cast<uintptr_t>(obj);
     auto offset = addr & (segment::size - 1);
     auto seg = reinterpret_cast<segment*>(addr - offset);
@@ -1149,7 +1149,7 @@ segment_pool::containing_segment(const void* obj) {
 }
 
 segment*
-segment_pool::segment_from(const segment_descriptor& desc) {
+segment_pool::segment_from(const segment_descriptor& desc) noexcept {
     assert(desc._region);
     auto index = &desc - &_segments[0];
     return segment_from_idx(index);
@@ -1214,20 +1214,20 @@ void segment_pool::prime(size_t available_memory, size_t min_free_memory) {
     reclaim_segments(_store.non_lsa_reserve / segment::size, is_preemptible::no);
 }
 
-void segment_pool::on_segment_compaction(size_t used_size) {
+inline void segment_pool::on_segment_compaction(size_t used_size) noexcept {
     _stats.segments_compacted++;
     _stats.memory_compacted += used_size;
 }
 
-void segment_pool::on_memory_allocation(size_t size) {
+inline void segment_pool::on_memory_allocation(size_t size) noexcept {
     _stats.memory_allocated += size;
 }
 
-void segment_pool::on_memory_deallocation(size_t size) {
+inline void segment_pool::on_memory_deallocation(size_t size) noexcept {
     _stats.memory_freed += size;
 }
 
-void segment_pool::on_memory_eviction(size_t size) {
+inline void segment_pool::on_memory_eviction(size_t size) noexcept {
     _stats.memory_evicted += size;
 }
 
@@ -1236,7 +1236,7 @@ class segment_pool::reservation_goal {
     segment_pool& _sp;
     size_t _old_goal;
 public:
-    reservation_goal(segment_pool& sp, size_t goal)
+    reservation_goal(segment_pool& sp, size_t goal) noexcept
             : _sp(sp), _old_goal(_sp.current_emergency_reserve_goal()) {
         _sp.set_current_emergency_reserve_goal(goal);
     }
@@ -1245,7 +1245,7 @@ public:
     }
 };
 
-size_t segment_pool::segments_in_use() const {
+size_t segment_pool::segments_in_use() const noexcept {
     return _segments_in_use;
 }
 
