@@ -1400,58 +1400,58 @@ class region_impl final : public basic_region_impl {
     private:
         uint32_t _n;
     private:
-        explicit object_descriptor(uint32_t n) : _n(n) {}
+        explicit object_descriptor(uint32_t n) noexcept : _n(n) {}
     public:
-        object_descriptor(allocation_strategy::migrate_fn migrator)
+        object_descriptor(allocation_strategy::migrate_fn migrator) noexcept
                 : _n(migrator->index() * 2 + 1)
         { }
 
-        static object_descriptor make_dead(size_t size) {
+        static object_descriptor make_dead(size_t size) noexcept {
             return object_descriptor(size * 2);
         }
 
-        allocation_strategy::migrate_fn migrator() const {
+        allocation_strategy::migrate_fn migrator() const noexcept {
             return static_migrators()[_n / 2];
         }
 
-        uint8_t alignment() const {
+        uint8_t alignment() const noexcept {
             return migrator()->align();
         }
 
         // excluding descriptor
-        segment::size_type live_size(const void* obj) const {
+        segment::size_type live_size(const void* obj) const noexcept {
             return migrator()->size(obj);
         }
 
         // including descriptor
-        segment::size_type dead_size() const {
+        segment::size_type dead_size() const noexcept {
             return _n / 2;
         }
 
-        bool is_live() const {
+        bool is_live() const noexcept {
             return (_n & 1) == 1;
         }
 
-        segment::size_type encoded_size() const {
+        segment::size_type encoded_size() const noexcept {
             return utils::uleb64_encoded_size(_n); // 0 is illegal
         }
 
-        void encode(char*& pos) const {
+        void encode(char*& pos) const noexcept {
             utils::uleb64_encode(pos, _n, poison<char>, unpoison);
         }
 
         // non-canonical encoding to allow padding (for alignment); encoded_size must be
         // sufficient (greater than this->encoded_size()), _n must be the migrator's
         // index() (i.e. -- suitable for express encoding)
-        void encode(char*& pos, size_t encoded_size, size_t size) const {
+        void encode(char*& pos, size_t encoded_size, size_t size) const noexcept {
             utils::uleb64_express_encode(pos, _n, encoded_size, size, poison<char>, unpoison);
         }
 
-        static object_descriptor decode_forwards(const char*& pos) {
+        static object_descriptor decode_forwards(const char*& pos) noexcept {
             return object_descriptor(utils::uleb64_decode_forwards(pos, poison<char>, unpoison));
         }
 
-        static object_descriptor decode_backwards(const char*& pos) {
+        static object_descriptor decode_backwards(const char*& pos) noexcept {
             return object_descriptor(utils::uleb64_decode_bacwards(pos, poison<char>, unpoison));
         }
 
