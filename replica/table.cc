@@ -1167,7 +1167,7 @@ table::make_memtable_list() {
 }
 
 table::table(schema_ptr schema, config config, db::commitlog* cl, compaction_manager& compaction_manager,
-             cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker)
+        sstables::sstables_manager& sst_manager, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker)
     : _schema(std::move(schema))
     , _config(std::move(config))
     , _view_stats(format("{}_{}_view_replica_update", _schema->ks_name(), _schema->cf_name()),
@@ -1183,6 +1183,7 @@ table::table(schema_ptr schema, config config, db::commitlog* cl, compaction_man
     , _commitlog(cl)
     , _durable_writes(true)
     , _compaction_manager(compaction_manager)
+    , _sstables_manager(sst_manager)
     , _index_manager(this->as_data_dictionary())
     , _counter_cell_locks(_schema->is_counter() ? std::make_unique<cell_locker>(_schema, cl_stats) : nullptr)
     , _table_state(std::make_unique<table_state>(*this))
