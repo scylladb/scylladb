@@ -565,19 +565,19 @@ struct alignas(segment_size) segment {
     segment() noexcept { }
 
     template<typename T = void>
-    const T* at(size_t offset) const {
+    const T* at(size_t offset) const noexcept {
         return reinterpret_cast<const T*>(data + offset);
     }
 
     template<typename T = void>
-    T* at(size_t offset) {
+    T* at(size_t offset) noexcept {
         return reinterpret_cast<T*>(data + offset);
     }
 
-    bool is_empty();
-    void record_alloc(size_type size);
-    void record_free(size_type size);
-    occupancy_stats occupancy();
+    bool is_empty() const noexcept;
+    void record_alloc(size_type size) noexcept;
+    void record_free(size_type size) noexcept;
+    occupancy_stats occupancy() const noexcept;
 
     static void* operator new(size_t size) = delete;
     static void* operator new(size_t, void* ptr) noexcept { return ptr; }
@@ -1258,20 +1258,20 @@ static segment_pool& get_shard_segment_pool() noexcept {
 
 static thread_local segment_pool& shard_segment_pool = get_shard_segment_pool();
 
-void segment::record_alloc(segment::size_type size) {
+void segment::record_alloc(segment::size_type size) noexcept {
     shard_segment_pool.descriptor(this).record_alloc(size);
 }
 
-void segment::record_free(segment::size_type size) {
+void segment::record_free(segment::size_type size) noexcept {
     shard_segment_pool.descriptor(this).record_free(size);
 }
 
-bool segment::is_empty() {
+bool segment::is_empty() const noexcept {
     return shard_segment_pool.descriptor(this).is_empty();
 }
 
 occupancy_stats
-segment::occupancy() {
+segment::occupancy() const noexcept {
     return { shard_segment_pool.descriptor(this).free_space(), segment::size };
 }
 
