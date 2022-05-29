@@ -444,6 +444,10 @@ public:
         return std::exchange(_sstable_write_permit, std::nullopt).value();
     }
 
+    bool has_sstable_write_permit() const noexcept {
+        return _sstable_write_permit.has_value();
+    }
+
     future<flush_permit> reacquire_sstable_write_permit() &&;
 };
 
