@@ -2664,7 +2664,7 @@ allocating_section::guard::~guard() {
     shard_segment_pool.set_emergency_reserve_max(_prev);
 }
 
-void allocating_section::maybe_decay_reserve() {
+void allocating_section::maybe_decay_reserve() noexcept {
     // The decay rate is inversely proportional to the reserve
     // (every (s_segments_per_decay/_lsa_reserve) allocations).
     //
@@ -2729,11 +2729,11 @@ void allocating_section::on_alloc_failure(logalloc::region& r) {
     reserve();
 }
 
-void allocating_section::set_lsa_reserve(size_t reserve) {
+void allocating_section::set_lsa_reserve(size_t reserve) noexcept {
     _lsa_reserve = reserve;
 }
 
-void allocating_section::set_std_reserve(size_t reserve) {
+void allocating_section::set_std_reserve(size_t reserve) noexcept {
     _std_reserve = reserve;
 }
 

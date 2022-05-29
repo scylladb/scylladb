@@ -392,12 +392,12 @@ private:
         ~guard();
     };
     void reserve();
-    void maybe_decay_reserve();
+    void maybe_decay_reserve() noexcept;
     void on_alloc_failure(logalloc::region&);
 public:
 
-    void set_lsa_reserve(size_t);
-    void set_std_reserve(size_t);
+    void set_lsa_reserve(size_t) noexcept;
+    void set_std_reserve(size_t) noexcept;
 
     //
     // Reserves standard allocator and LSA memory for subsequent operations that
