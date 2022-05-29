@@ -195,15 +195,15 @@ public:
         : memtable_list({}, std::move(cs), dirty_memory_manager, table_stats, compaction_scheduling_group) {
     }
 
-    bool may_flush() const {
+    bool may_flush() const noexcept {
         return bool(_seal_immediate_fn);
     }
 
-    bool can_flush() const {
+    bool can_flush() const noexcept {
         return may_flush() && !empty();
     }
 
-    bool empty() const {
+    bool empty() const noexcept {
         for (auto& m : _memtables) {
            if (!m->empty()) {
                return false;
@@ -211,13 +211,13 @@ public:
         }
         return true;
     }
-    shared_memtable back() {
+    shared_memtable back() const noexcept {
         return _memtables.back();
     }
 
     // # 8904 - this method is akin to std::set::erase(key_type), not
     // erase(iterator). Should be tolerant against non-existing.
-    void erase(const shared_memtable& element) {
+    void erase(const shared_memtable& element) noexcept {
         auto i = boost::range::find(_memtables, element);
         if (i != _memtables.end()) {
             _memtables.erase(i);
@@ -229,7 +229,7 @@ public:
     // Exception safe.
     std::vector<replica::shared_memtable> clear_and_add();
 
-    size_t size() const {
+    size_t size() const noexcept {
         return _memtables.size();
     }
 
@@ -253,7 +253,7 @@ public:
         return _memtables.end();
     }
 
-    memtable& active_memtable() {
+    memtable& active_memtable() noexcept {
         return *_memtables.back();
     }
 
@@ -261,7 +261,7 @@ public:
         _memtables.emplace_back(new_memtable());
     }
 
-    dirty_memory_manager_logalloc::region_group& region_group() {
+    dirty_memory_manager_logalloc::region_group& region_group() noexcept {
         return _dirty_memory_manager->region_group();
     }
     // This is used for explicit flushes. Will queue the memtable for flushing and proceed when the
