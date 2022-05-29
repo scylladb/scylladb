@@ -16,7 +16,7 @@
 
 namespace utils {
 
-void dynamic_bitset::set(size_t n) {
+void dynamic_bitset::set(size_t n) noexcept {
     for (auto& level : _bits) {
         auto idx = n / bits_per_int;
         auto old = level[idx];
@@ -28,7 +28,7 @@ void dynamic_bitset::set(size_t n) {
     }
 }
 
-void dynamic_bitset::clear(size_t n) {
+void dynamic_bitset::clear(size_t n) noexcept {
     for (auto& level : _bits) {
         auto idx = n / bits_per_int;
         auto old = level[idx];
@@ -40,7 +40,7 @@ void dynamic_bitset::clear(size_t n) {
     }
 }
 
-size_t dynamic_bitset::find_first_set() const
+size_t dynamic_bitset::find_first_set() const noexcept
 {
     size_t pos = 0;
     for (auto& vv : _bits | boost::adaptors::reversed) {
@@ -55,7 +55,7 @@ size_t dynamic_bitset::find_first_set() const
     return pos;
 }
 
-size_t dynamic_bitset::find_next_set(size_t n) const
+size_t dynamic_bitset::find_next_set(size_t n) const noexcept
 {
     ++n;
 
@@ -91,7 +91,7 @@ size_t dynamic_bitset::find_next_set(size_t n) const
     return n;
 }
 
-size_t dynamic_bitset::find_last_set() const
+size_t dynamic_bitset::find_last_set() const noexcept
 {
     size_t pos = 0;
     for (auto& vv : _bits | boost::adaptors::reversed) {
