@@ -360,7 +360,7 @@ public:
 struct reclaim_lock {
     region& _region;
     bool _prev;
-    reclaim_lock(region& r)
+    reclaim_lock(region& r) noexcept
         : _region(r)
         , _prev(r.reclaiming_enabled())
     {
