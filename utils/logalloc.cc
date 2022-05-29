@@ -505,7 +505,7 @@ private:
     size_t reclaim_locked(size_t bytes, is_preemptible p);
 };
 
-tracker_reclaimer_lock::tracker_reclaimer_lock() : _tracker_impl(shard_tracker().get_impl()) {
+tracker_reclaimer_lock::tracker_reclaimer_lock() noexcept : _tracker_impl(shard_tracker().get_impl()) {
     _tracker_impl.disable_reclaim();
 }
 

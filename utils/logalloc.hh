@@ -116,7 +116,7 @@ public:
 class tracker_reclaimer_lock {
     tracker::impl& _tracker_impl;
 public:
-    tracker_reclaimer_lock();
+    tracker_reclaimer_lock() noexcept;
     ~tracker_reclaimer_lock();
 };
 
