@@ -334,7 +334,7 @@ protected:
         co_await coroutine::switch_to(_cm._compaction_controller.sg());
 
         switch_state(state::pending);
-        auto units = co_await get_units(_cm._maintenance_ops_sem, 1, _compaction_data.abort);
+        auto units = co_await acquire_semaphore(_cm._maintenance_ops_sem);
         auto lock_holder = co_await _compaction_state.lock.hold_write_lock();
         if (!can_proceed()) {
             co_return;
@@ -383,7 +383,7 @@ protected:
             co_return;
         }
         switch_state(state::pending);
-        auto units = co_await get_units(_cm._maintenance_ops_sem, 1, _compaction_data.abort);
+        auto units = co_await acquire_semaphore(_cm._maintenance_ops_sem);
 
         if (!can_proceed(throw_if_stopping::yes)) {
             co_return;
@@ -548,6 +548,14 @@ sstables::shared_sstable compaction_manager::sstables_task::consume_sstable() {
     --_cm._stats.pending_tasks; // from this point on, switch_state(pending|active) works the same way as any other task
     cmlog.debug("{}", format("consumed {}", sst->get_filename()));
     return sst;
+}
+
+future<semaphore_units<named_semaphore_exception_factory>> compaction_manager::task::acquire_semaphore(named_semaphore& sem, size_t units) {
+    return seastar::get_units(sem, units, _compaction_data.abort).handle_exception_type([this] (const semaphore_aborted& e) {
+        auto s = _compacting_table->schema();
+        return make_exception_future<semaphore_units<named_semaphore_exception_factory>>(
+                sstables::compaction_stopped_exception(s->ks_name(), s->cf_name(), e.what()));
+    });
 }
 
 void compaction_manager::task::setup_new_compaction(utils::UUID output_run_id) {
@@ -995,7 +1003,7 @@ protected:
                 co_return;
             }
             switch_state(state::pending);
-            auto units = co_await get_units(_cm._off_strategy_sem, 1, _compaction_data.abort);
+            auto units = co_await acquire_semaphore(_cm._off_strategy_sem);
             if (!can_proceed()) {
                 co_return;
             }
@@ -1043,7 +1051,7 @@ public:
 protected:
     virtual future<> do_run() override {
         switch_state(state::pending);
-        auto maintenance_permit = co_await seastar::get_units(_cm._maintenance_ops_sem, 1, _compaction_data.abort);
+        auto maintenance_permit = co_await acquire_semaphore(_cm._maintenance_ops_sem);
 
         while (!_sstables.empty() && can_proceed()) {
             auto sst = consume_sstable();
@@ -1205,7 +1213,7 @@ public:
 protected:
     virtual future<> do_run() override {
         switch_state(state::pending);
-        auto maintenance_permit = co_await seastar::get_units(_cm._maintenance_ops_sem, 1, _compaction_data.abort);
+        auto maintenance_permit = co_await acquire_semaphore(_cm._maintenance_ops_sem);
 
         while (!_pending_cleanup_jobs.empty() && can_proceed()) {
             auto active_job = std::move(_pending_cleanup_jobs.back());
