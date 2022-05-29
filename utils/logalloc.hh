@@ -191,56 +191,56 @@ class occupancy_stats {
     size_t _free_space;
     size_t _total_space;
 public:
-    occupancy_stats() : _free_space(0), _total_space(0) {}
+    occupancy_stats() noexcept : _free_space(0), _total_space(0) {}
 
-    occupancy_stats(size_t free_space, size_t total_space)
+    occupancy_stats(size_t free_space, size_t total_space) noexcept
         : _free_space(free_space), _total_space(total_space) { }
 
-    bool operator<(const occupancy_stats& other) const {
+    bool operator<(const occupancy_stats& other) const noexcept {
         return used_fraction() < other.used_fraction();
     }
 
-    friend occupancy_stats operator+(const occupancy_stats& s1, const occupancy_stats& s2) {
+    friend occupancy_stats operator+(const occupancy_stats& s1, const occupancy_stats& s2) noexcept {
         occupancy_stats result(s1);
         result += s2;
         return result;
     }
 
-    friend occupancy_stats operator-(const occupancy_stats& s1, const occupancy_stats& s2) {
+    friend occupancy_stats operator-(const occupancy_stats& s1, const occupancy_stats& s2) noexcept {
         occupancy_stats result(s1);
         result -= s2;
         return result;
     }
 
-    occupancy_stats& operator+=(const occupancy_stats& other) {
+    occupancy_stats& operator+=(const occupancy_stats& other) noexcept {
         _total_space += other._total_space;
         _free_space += other._free_space;
         return *this;
     }
 
-    occupancy_stats& operator-=(const occupancy_stats& other) {
+    occupancy_stats& operator-=(const occupancy_stats& other) noexcept {
         _total_space -= other._total_space;
         _free_space -= other._free_space;
         return *this;
     }
 
-    size_t used_space() const {
+    size_t used_space() const noexcept {
         return _total_space - _free_space;
     }
 
-    size_t free_space() const {
+    size_t free_space() const noexcept {
         return _free_space;
     }
 
-    size_t total_space() const {
+    size_t total_space() const noexcept {
         return _total_space;
     }
 
-    float used_fraction() const {
+    float used_fraction() const noexcept {
         return _total_space ? float(used_space()) / total_space() : 0;
     }
 
-    explicit operator bool() const {
+    explicit operator bool() const noexcept {
         return _total_space > 0;
     }
 
