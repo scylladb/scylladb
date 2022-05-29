@@ -11,6 +11,7 @@
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/exception.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include <seastar/coroutine/as_future.hh>
 #include <seastar/util/closeable.hh>
 
 #include "replica/database.hh"
@@ -569,6 +570,8 @@ public:
     }
 };
 
+// The function never fails.
+// It either succeeds eventually after retrying or aborts.
 future<>
 table::seal_active_memtable(flush_permit&& flush_permit) noexcept {
     auto old = _memtables->back();
@@ -580,48 +583,93 @@ table::seal_active_memtable(flush_permit&& flush_permit) noexcept {
     }
 
     auto permit = std::move(flush_permit);
+    auto r = exponential_backoff_retry(100ms, 10s);
+    std::optional<utils::phased_barrier::operation> op;
+    size_t memtable_size;
+    future<> previous_flush = make_ready_future<>();
 
-    utils::get_local_injector().inject("table_seal_active_memtable_pre_flush", []() {
-        throw std::bad_alloc();
+    // FIXME: the retried func returns a stop_iteration value for now,
+    // since try_flush_memtable_to_sstable is still doing some error handling on its own.
+    auto with_retry = [&] (std::function<future<stop_iteration>()> func) -> future<> {
+        for (;;) {
+            std::exception_ptr ex;
+            try {
+                if ((co_await func()) == stop_iteration::yes) {
+                    co_return;
+                }
+            } catch (...) {
+                ex = std::current_exception();
+                _config.cf_stats->failed_memtables_flushes_count++;
+                if (try_catch<std::bad_alloc>(ex)) {
+                    // There is a chance something else will free the memory, so we can try again
+                    // FIXME: limit the number of retries
+                } else {
+                    // FIXME: we should just abort on unexpected errors.
+                    // This is a temporary measure just to make this patch that
+                    // moved this error handling code from flush_when_needed
+                    // easier to review
+                    try {
+                        // At this point we don't know what has happened and it's better to potentially
+                        // take the node down and rely on commitlog to replay.
+                        on_internal_error(tlogger, ex);
+                    } catch (const std::exception& ex) {
+                        // If the node is configured to not abort on internal error,
+                        // but propagate it up the chain, we can't do anything reasonable
+                        // at this point. The error is logged and we can try again later
+                    }
+                }
+            }
+            tlogger.warn("Memtable flush failed due to: {}. Will retry in {}ms", ex, r.sleep_time().count());
+            co_await r.retry();
+        }
+    };
+
+    co_await with_retry([&] {
+        tlogger.debug("seal_active_memtable: adding memtable");
+        utils::get_local_injector().inject("table_seal_active_memtable_pre_flush", []() {
+            throw std::bad_alloc();
+        });
+
+        _memtables->add_memtable();
+
+        // no exceptions allowed (nor expected) from this point on
+        _stats.memtable_switch_count++;
+        [&] () noexcept {
+            // This will set evictable occupancy of the old memtable region to zero, so that
+            // this region is considered last for flushing by dirty_memory_manager::flush_when_needed().
+            // If we don't do that, the flusher may keep picking up this memtable list for flushing after
+            // the permit is released even though there is not much to flush in the active memtable of this list.
+            old->region().ground_evictable_occupancy();
+            memtable_size = old->occupancy().total_space();
+        }();
+        return make_ready_future<stop_iteration>(stop_iteration::yes);
     });
 
-    _memtables->add_memtable();
-    _stats.memtable_switch_count++;
-    // This will set evictable occupancy of the old memtable region to zero, so that
-    // this region is considered last for flushing by dirty_memory_manager::flush_when_needed().
-    // If we don't do that, the flusher may keep picking up this memtable list for flushing after
-    // the permit is released even though there is not much to flush in the active memtable of this list.
-    old->region().ground_evictable_occupancy();
-    auto previous_flush = _flush_barrier.advance_and_await();
-    auto op = _flush_barrier.start();
+    co_await with_retry([&] {
+        previous_flush = _flush_barrier.advance_and_await();
+        op = _flush_barrier.start();
 
-    auto memtable_size = old->occupancy().total_space();
+        // no exceptions allowed (nor expected) from this point on
+        _stats.pending_flushes++;
+        _config.cf_stats->pending_memtables_flushes_count++;
+        _config.cf_stats->pending_memtables_flushes_bytes += memtable_size;
+        return make_ready_future<stop_iteration>(stop_iteration::yes);
+    });
 
-    _stats.pending_flushes++;
-    _config.cf_stats->pending_memtables_flushes_count++;
-    _config.cf_stats->pending_memtables_flushes_bytes += memtable_size;
-
-    std::exception_ptr ex;
-    try {
-        for (;;) {
-            auto sstable_write_permit = permit.release_sstable_write_permit();
-            if (co_await this->try_flush_memtable_to_sstable(old, std::move(sstable_write_permit)) == stop_iteration::yes) {
-                break;
-            }
-            co_await sleep(10s);
+    co_await with_retry([&] () -> future<stop_iteration> {
+        // Reacquiring the write permit might be needed if retrying flush
+        if (!permit.has_sstable_write_permit()) {
+            tlogger.debug("seal_active_memtable: reacquiring write permit");
             permit = co_await std::move(permit).reacquire_sstable_write_permit();
         }
-    } catch (...) {
-        ex = std::current_exception();
-    }
+        auto write_permit = permit.release_sstable_write_permit();
+
+        co_return co_await this->try_flush_memtable_to_sstable(old, std::move(write_permit));
+    });
 
     _stats.pending_flushes--;
     _config.cf_stats->pending_memtables_flushes_count--;
     _config.cf_stats->pending_memtables_flushes_bytes -= memtable_size;
-
-    if (ex) {
-        co_await coroutine::return_exception_ptr(std::move(ex));
-    }
 
     if (_commitlog) {
         _commitlog->discard_completed_segments(_schema->id(), old->get_and_discard_rp_set());

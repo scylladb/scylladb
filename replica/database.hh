@@ -1080,6 +1080,9 @@ private:
     // But it is possible to synchronously wait for the seal to complete by
     // waiting on this future. This is useful in situations where we want to
     // synchronously flush data to disk.
+    //
+    // The function never fails.
+    // It either succeeds eventually after retrying or aborts.
     future<> seal_active_memtable(flush_permit&&) noexcept;
 
     void check_valid_rp(const db::replay_position&) const;
