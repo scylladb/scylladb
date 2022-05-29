@@ -1790,7 +1790,7 @@ public:
     region_impl(region_impl&&) = delete;
     region_impl(const region_impl&) = delete;
 
-    bool empty() const {
+    bool empty() const noexcept {
         return occupancy().used_space() == 0;
     }
 
@@ -1812,7 +1812,7 @@ public:
     // Note: allocation is disallowed in this path
     // since we don't instantiate reclaiming_lock
     // while traversing _regions
-    occupancy_stats occupancy() const {
+    occupancy_stats occupancy() const noexcept {
         occupancy_stats total = _non_lsa_occupancy;
         total += _closed_occupancy;
         if (_active) {
@@ -1824,11 +1824,11 @@ public:
         return total;
     }
 
-    occupancy_stats compactible_occupancy() const {
+    occupancy_stats compactible_occupancy() const noexcept {
         return _closed_occupancy;
     }
 
-    occupancy_stats evictable_occupancy() const {
+    occupancy_stats evictable_occupancy() const noexcept {
         return occupancy_stats(0, _evictable_space & _evictable_space_mask);
     }
 
