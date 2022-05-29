@@ -34,7 +34,7 @@ public:
         return time_point(std::chrono::duration_cast<duration>(std::chrono::seconds(t)));
     }
 
-    static time_point now() {
+    static time_point now() noexcept {
         return time_point(std::chrono::duration_cast<duration>(base::now().time_since_epoch())) + get_clocks_offset();
     }
 
@@ -63,7 +63,7 @@ std::ostream& operator<<(std::ostream& os, gc_clock::time_point tp);
 template<>
 struct appending_hash<gc_clock::time_point> {
     template<typename Hasher>
-    void operator()(Hasher& h, gc_clock::time_point t) const {
+    void operator()(Hasher& h, gc_clock::time_point t) const noexcept {
         // Remain backwards-compatible with the 32-bit duration::rep (refs #4460).
         uint64_t d64 = t.time_since_epoch().count();
         feed_hash(h, uint32_t(d64 & 0xffff'ffff));
