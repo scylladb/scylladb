@@ -677,20 +677,20 @@ public:
         : _layout(memory::get_memory_layout())
         , _segments_base(align_down(_layout.start, (uintptr_t)segment::size)) {
     }
-    segment* segment_from_idx(size_t idx) const {
+    segment* segment_from_idx(size_t idx) const noexcept {
         return reinterpret_cast<segment*>(_segments_base) + idx;
     }
-    size_t idx_from_segment(segment* seg) const {
+    size_t idx_from_segment(segment* seg) const noexcept {
         return seg - reinterpret_cast<segment*>(_segments_base);
     }
-    size_t new_idx_for_segment(segment* seg) {
+    size_t new_idx_for_segment(segment* seg) noexcept {
         return idx_from_segment(seg);
     }
-    void free_segment(segment *seg) { }
-    size_t max_segments() const {
+    void free_segment(segment *seg) noexcept { }
+    size_t max_segments() const noexcept {
         return (_layout.end - _segments_base) / segment::size;
     }
-    bool can_allocate_more_segments() {
+    bool can_allocate_more_segments() noexcept {
         return memory::stats().free_memory() >= non_lsa_reserve + segment::size;
     }
 };
@@ -699,7 +699,7 @@ class segment_store {
     std::vector<segment*> _segments;
     std::unordered_map<segment*, size_t> _segment_indexes;
     static constexpr size_t _std_memory_available = size_t(1) << 30; // emulate 1GB per shard
-    std::vector<segment*>::iterator find_empty() {
+    std::vector<segment*>::iterator find_empty() noexcept {
         // segment 0 is a marker for no segment
         return std::find(_segments.begin() + 1, _segments.end(), nullptr);
     }
@@ -709,11 +709,11 @@ public:
     segment_store() : _segments(max_segments()) {
         _segment_indexes.reserve(max_segments());
     }
-    segment* segment_from_idx(size_t idx) const {
+    segment* segment_from_idx(size_t idx) const noexcept {
         assert(idx < _segments.size());
         return _segments[idx];
     }
-    size_t idx_from_segment(segment* seg) {
+    size_t idx_from_segment(segment* seg) const noexcept {
         // segment 0 is a marker for no segment
         auto i = _segment_indexes.find(seg);
         if (i == _segment_indexes.end()) {
@@ -721,7 +721,7 @@ public:
         }
         return i->second;
     }
-    size_t new_idx_for_segment(segment* seg) {
+    size_t new_idx_for_segment(segment* seg) noexcept {
         auto i = find_empty();
         assert(i != _segments.end());
         *i = seg;
@@ -729,7 +729,7 @@ public:
         _segment_indexes[seg] = ret;
         return ret;
     }
-    void free_segment(segment *seg) {
+    void free_segment(segment *seg) noexcept {
         size_t i = idx_from_segment(seg);
         assert(i != 0);
         _segment_indexes.erase(seg);
@@ -743,10 +743,10 @@ public:
             }
         }
     }
-    size_t max_segments() const {
+    size_t max_segments() const noexcept {
         return _std_memory_available / segment::size;
     }
-    bool can_allocate_more_segments() {
+    bool can_allocate_more_segments() noexcept {
         auto i = find_empty();
         return i != _segments.end();
     }
