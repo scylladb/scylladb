@@ -120,7 +120,7 @@ public:
     ~tracker_reclaimer_lock();
 };
 
-tracker& shard_tracker();
+tracker& shard_tracker() noexcept;
 
 class segment_descriptor;
 
