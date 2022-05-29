@@ -135,25 +135,25 @@ private:
     private:
         min_max_tracker<api::timestamp_type> min_max_timestamp;
 
-        void update_timestamp(api::timestamp_type ts);
+        void update_timestamp(api::timestamp_type ts) noexcept;
 
     public:
-        memtable_encoding_stats_collector();
-        void update(atomic_cell_view cell);
+        memtable_encoding_stats_collector() noexcept;
+        void update(atomic_cell_view cell) noexcept;
 
-        void update(tombstone tomb);
+        void update(tombstone tomb) noexcept;
 
         void update(const ::schema& s, const row& r, column_kind kind);
-        void update(const range_tombstone& rt);
-        void update(const row_marker& marker);
+        void update(const range_tombstone& rt) noexcept;
+        void update(const row_marker& marker) noexcept;
         void update(const ::schema& s, const deletable_row& dr);
         void update(const ::schema& s, const mutation_partition& mp);
 
-        api::timestamp_type get_min_timestamp() const {
+        api::timestamp_type get_min_timestamp() const noexcept {
             return min_max_timestamp.min();
         }
 
-        api::timestamp_type get_max_timestamp() const {
+        api::timestamp_type get_max_timestamp() const noexcept {
             return min_max_timestamp.max();
         }
     } _stats_collector;
