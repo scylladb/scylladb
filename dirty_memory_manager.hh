@@ -483,7 +483,7 @@ class dirty_memory_manager: public dirty_memory_manager_logalloc::region_group_r
     future<> _waiting_flush;
     virtual void start_reclaiming() noexcept override;
 
-    bool has_pressure() const {
+    bool has_pressure() const noexcept {
         return over_soft_limit();
     }
 
@@ -535,15 +535,15 @@ public:
         , _flush_serializer(1)
         , _waiting_flush(make_ready_future<>()) {}
 
-    static dirty_memory_manager& from_region_group(dirty_memory_manager_logalloc::region_group *rg) {
+    static dirty_memory_manager& from_region_group(dirty_memory_manager_logalloc::region_group *rg) noexcept {
         return *(boost::intrusive::get_parent_from_member(rg, &dirty_memory_manager::_virtual_region_group));
     }
 
-    dirty_memory_manager_logalloc::region_group& region_group() {
+    dirty_memory_manager_logalloc::region_group& region_group() noexcept {
         return _virtual_region_group;
     }
 
-    const dirty_memory_manager_logalloc::region_group& region_group() const {
+    const dirty_memory_manager_logalloc::region_group& region_group() const noexcept {
         return _virtual_region_group;
     }
 
@@ -567,41 +567,41 @@ public:
         _real_region_group.update(-delta);
     }
 
-    size_t real_dirty_memory() const {
+    size_t real_dirty_memory() const noexcept {
         return _real_region_group.memory_used();
     }
 
-    size_t virtual_dirty_memory() const {
+    size_t virtual_dirty_memory() const noexcept {
         return _virtual_region_group.memory_used();
     }
 
     future<> flush_one(replica::memtable_list& cf, flush_permit&& permit);
 
-    future<flush_permit> get_flush_permit() {
+    future<flush_permit> get_flush_permit() noexcept {
         return get_units(_background_work_flush_serializer, 1).then([this] (auto&& units) {
             return this->get_flush_permit(std::move(units));
         });
     }
 
-    future<flush_permit> get_all_flush_permits() {
+    future<flush_permit> get_all_flush_permits() noexcept {
         return get_units(_background_work_flush_serializer, _max_background_work).then([this] (auto&& units) {
             return this->get_flush_permit(std::move(units));
         });
     }
 
-    bool has_extraneous_flushes_requested() const {
+    bool has_extraneous_flushes_requested() const noexcept {
         return _extraneous_flushes > 0;
     }
 
-    void start_extraneous_flush() {
+    void start_extraneous_flush() noexcept {
         ++_extraneous_flushes;
     }
 
-    void finish_extraneous_flush() {
+    void finish_extraneous_flush() noexcept {
         --_extraneous_flushes;
     }
 private:
-    future<flush_permit> get_flush_permit(semaphore_units<>&& background_permit) {
+    future<flush_permit> get_flush_permit(semaphore_units<>&& background_permit) noexcept {
         return get_units(_flush_serializer, 1).then([this, background_permit = std::move(background_permit)] (auto&& units) mutable {
             return flush_permit(this, sstable_write_permit(std::move(units)), std::move(background_permit));
         });
