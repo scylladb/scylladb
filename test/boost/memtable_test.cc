@@ -793,10 +793,11 @@ SEASTAR_TEST_CASE(failed_flush_prevents_writes) {
 
         utils::get_local_injector().enable("table_seal_active_memtable_pre_flush");
 
-        // Trigger flush
-        dmm.notify_soft_pressure();
-
-        BOOST_ASSERT(eventually_true([&db]() { return db.cf_stats()->failed_memtables_flushes_count != 0; }));
+        BOOST_ASSERT(eventually_true([&] {
+            // Trigger flush
+            dmm.notify_soft_pressure();
+            return db.cf_stats()->failed_memtables_flushes_count != 0;
+        }));
 
         // The flush failed, make sure there is still data in memtable.
         BOOST_ASSERT(!t.active_memtable().empty());
