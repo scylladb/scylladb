@@ -28,6 +28,19 @@ static inline bool trim_range_tombstone(const schema& s, range_tombstone& rt, co
     return relevant;
 }
 
+static inline void match_compacted_mutation(const mutation_opt& mo, const mutation& m, gc_clock::time_point query_time,
+                                            const std::optional<query::clustering_row_ranges>& ck_ranges = {}) {
+    // If the passed in mutation is empty, allow for the reader to produce an empty or no partition.
+    if (m.partition().empty() && !mo) {
+        return;
+    }
+    BOOST_REQUIRE(bool(mo));
+    memory::scoped_critical_alloc_section dfg;
+    mutation got = *mo;
+    got.partition().compact_for_compaction(*m.schema(), always_gc, got.decorated_key(), query_time);
+    assert_that(got).is_equal_to(m, ck_ranges);
+}
+
 // Intended to be called in a seastar thread
 class flat_reader_assertions {
     flat_mutation_reader _reader;
@@ -982,16 +995,7 @@ public:
 
     flat_reader_assertions_v2& produces_compacted(const mutation& m, gc_clock::time_point query_time,
                                                const std::optional<query::clustering_row_ranges>& ck_ranges = {}) {
-        auto mo = read_mutation_from_flat_mutation_reader(_reader).get0();
-        // If the passed in mutation is empty, allow for the reader to produce an empty or no partition.
-        if (m.partition().empty() && !mo) {
-            return *this;
-        }
-        BOOST_REQUIRE(bool(mo));
-        memory::scoped_critical_alloc_section dfg;
-        mutation got = *mo;
-        got.partition().compact_for_compaction(*m.schema(), always_gc, got.decorated_key(), query_time);
-        assert_that(got).is_equal_to(m, ck_ranges);
+        match_compacted_mutation(read_mutation_from_flat_mutation_reader(_reader).get0(), m, query_time, ck_ranges);
         return *this;
     }
 
