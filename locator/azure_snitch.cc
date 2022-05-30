@@ -31,6 +31,10 @@ azure_snitch::azure_snitch(const snitch_config& cfg) : production_snitch_base(cf
 }
 
 future<> azure_snitch::load_config() {
+    if (this_shard_id() != io_cpu_id()) {
+        co_return;
+    }
+
     sstring region = co_await azure_api_call(REGION_NAME_QUERY_PATH);
     sstring azure_zone = co_await azure_api_call(ZONE_NAME_QUERY_PATH);
 
@@ -43,12 +47,8 @@ future<> azure_snitch::load_config() {
     _my_rack = azure_zone;
     _my_dc = azure_region;
 
-    co_return co_await container().invoke_on_all([this] (snitch_ptr& local_s) {
-        // Distribute the new values on all CPUs but the current one
-        if (this_shard_id() != io_cpu_id()) {
-            local_s->set_my_dc(_my_dc);
-            local_s->set_my_rack(_my_rack);
-        }
+    co_return co_await container().invoke_on_others([this] (snitch_ptr& local_s) {
+        local_s->set_my_dc_and_rack(_my_dc, _my_rack);
     });
 }
 

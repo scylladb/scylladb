@@ -50,8 +50,7 @@ private:
     std::optional<sstring> get_endpoint_info(inet_address endpoint, gms::application_state key);
     sstring get_endpoint_info(inet_address endpoint, gms::application_state key,
                               const sstring& default_val);
-    virtual void set_my_dc(const sstring& new_dc) override;
-    virtual void set_my_rack(const sstring& new_rack) override;
+    virtual void set_my_dc_and_rack(const sstring& new_dc, const sstring& new_rack) override;
     virtual void set_prefer_local(bool prefer_local) override;
     void parse_property_file();
 
