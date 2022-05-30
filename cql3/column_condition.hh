@@ -26,7 +26,7 @@ public:
     // E.g. if column type is list<string> and expression is "a = ['test']", then the type of the
     // column definition below is list<string>. If expression is "a[0] = 'test'", then the column
     // object stands for the string cell. See column_condition::raw::prepare() for details.
-    const column_definition& column;
+    const column_definition& _column;
 private:
     // For collection, when testing the equality of a specific element, nullopt otherwise.
     std::optional<expr::expression> _collection_element;
@@ -40,7 +40,7 @@ public:
     column_condition(const column_definition& column, std::optional<expr::expression> collection_element,
         std::optional<expr::expression> value, std::vector<expr::expression> in_values,
         std::unique_ptr<like_matcher> matcher, expr::oper_t op)
-            : column(column)
+            : _column(column)
             , _collection_element(std::move(collection_element))
             , _value(std::move(value))
             , _in_values(std::move(in_values))
