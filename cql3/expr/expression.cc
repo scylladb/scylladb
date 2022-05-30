@@ -2323,5 +2323,65 @@ size_t count_if(const expression& e, const noncopyable_function<bool (const bina
     return ret;
 }
 
+data_type
+type_of(const expression& e) {
+    return visit(overloaded_functor{
+        [] (const conjunction& e) {
+            return boolean_type;
+        },
+        [] (const binary_operator& e) {
+            // All our binary operators are relations
+            return boolean_type;
+        },
+        [] (const column_value& e) {
+            return e.col->type;
+        },
+        [] (const token& e) {
+            return long_type;
+        },
+        [] (const unresolved_identifier& e) -> data_type {
+            on_internal_error(expr_logger, "evaluating type of unresolved_identifier");
+        },
+        [] (const column_mutation_attribute& e) {
+            switch (e.kind) {
+            case column_mutation_attribute::attribute_kind::writetime:
+                return long_type;
+            case column_mutation_attribute::attribute_kind::ttl:
+                return int32_type;
+            }
+            on_internal_error(expr_logger, "evaluating type of illegal column mutation attribute kind");
+        },
+        [] (const function_call& e) {
+            return std::visit(overloaded_functor{
+                [] (const functions::function_name& unprepared) -> data_type {
+                    on_internal_error(expr_logger, "evaluating type of unprepared function call");
+                },
+                [] (const shared_ptr<functions::function>& f) {
+                    return f->return_type();
+                },
+            }, e.func);
+        },
+        [] (const bind_variable& e) {
+            return e.receiver->type;
+        },
+        [] (const untyped_constant& e) -> data_type {
+            on_internal_error(expr_logger, "evaluating type of untyped_constant call");
+        },
+        [] (const cast& e) {
+            return std::visit(overloaded_functor{
+                [] (const shared_ptr<cql3_type::raw>& unprepared) -> data_type {
+                    on_internal_error(expr_logger, "evaluating type of unprepared cast");
+                },
+                [] (const data_type& t) {
+                    return t;
+                },
+            }, e.type);
+        },
+        [] (const ExpressionElement auto& e) -> data_type {
+            return e.type;
+        }
+    }, e);
+}
+
 } // namespace expr
 } // namespace cql3
