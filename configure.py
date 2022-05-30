@@ -294,7 +294,7 @@ def find_headers(repodir, excluded_dirs):
             dirpath = dirpath[2:]
         headers += [os.path.join(dirpath, hh) for hh in filter(is_hh, files)]
 
-    return headers
+    return sorted(headers)
 
 
 modes = {
@@ -1228,7 +1228,7 @@ for t in tests_not_using_seastar_test_framework:
     if t not in scylla_tests:
         raise Exception("Test %s not found in scylla_tests" % (t))
 
-for t in scylla_tests:
+for t in sorted(scylla_tests):
     deps[t] = [t + '.cc']
     if t not in tests_not_using_seastar_test_framework:
         deps[t] += scylla_tests_dependencies
@@ -1239,7 +1239,7 @@ perf_tests_seastar_deps = [
     'seastar/tests/perf/perf_tests.cc'
 ]
 
-for t in perf_tests:
+for t in sorted(perf_tests):
     deps[t] = [t + '.cc'] + scylla_tests_dependencies + perf_tests_seastar_deps
     deps[t] += ['test/perf/perf.cc', 'seastar/tests/perf/linux_perf_event.cc']
 
@@ -1869,7 +1869,7 @@ with open(buildfile, 'w') as f:
         f.write(
             'build {mode}-build: phony {artifacts}\n'.format(
                 mode=mode,
-                artifacts=str.join(' ', ('$builddir/' + mode + '/' + x for x in build_artifacts))
+                artifacts=str.join(' ', ['$builddir/' + mode + '/' + x for x in sorted(build_artifacts)])
             )
         )
         include_cxx_target = f'{mode}-build' if not args.dist_only else ''
@@ -1885,7 +1885,7 @@ with open(buildfile, 'w') as f:
         rust_libs = {}
         seastar_dep = '$builddir/{}/seastar/libseastar.a'.format(mode)
         seastar_testing_dep = '$builddir/{}/seastar/libseastar_testing.a'.format(mode)
-        for binary in build_artifacts:
+        for binary in sorted(build_artifacts):
             if binary in other:
                 continue
             srcs = deps[binary]
@@ -1984,7 +1984,7 @@ with open(buildfile, 'w') as f:
         f.write(
             'build {mode}-test: test.{mode} {test_executables} $builddir/{mode}/scylla\n'.format(
                 mode=mode,
-                test_executables=' '.join(['$builddir/{}/{}'.format(mode, binary) for binary in tests]),
+                test_executables=' '.join(['$builddir/{}/{}'.format(mode, binary) for binary in sorted(tests)]),
             )
         )
         f.write(
@@ -2221,7 +2221,7 @@ with open(buildfile, 'w') as f:
             command = /usr/bin/env echo -e '{unit_test_list}'
             description = List configured unit tests
         build unit_test_list: unit_test_list
-        ''').format(unit_test_list="\\n".join(unit_test_list)))
+        ''').format(unit_test_list="\\n".join(sorted(unit_test_list))))
     f.write(textwrap.dedent('''\
         build always: phony
         rule scylla_version_gen
