@@ -32,8 +32,8 @@ developer_mode: true
 enable_user_defined_functions: true
 experimental: true
 experimental_features:
+    - raft
     - udf
-#    - raft
 
 data_file_directories:
     - {workdir}/data
