@@ -219,10 +219,6 @@ SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_sourc
     test_database(run_mutation_source_tests_plain);
 }
 
-SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_source_downgrade) {
-    test_database(run_mutation_source_tests_downgrade);
-}
-
 SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_source_reverse) {
     test_database(run_mutation_source_tests_reverse);
 }
