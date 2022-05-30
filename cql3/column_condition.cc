@@ -87,6 +87,21 @@ uint32_t read_and_check_list_index(const cql3::raw_value_view& key) {
 
 namespace cql3 {
 
+column_condition::column_condition(const column_definition& column, std::optional<expr::expression> collection_element,
+    std::optional<expr::expression> value, std::vector<expr::expression> in_values,
+    std::unique_ptr<like_matcher> matcher, expr::oper_t op)
+        : _column(column)
+        , _collection_element(std::move(collection_element))
+        , _value(std::move(value))
+        , _in_values(std::move(in_values))
+        , _matcher(std::move(matcher))
+        , _op(op)
+{
+    if (op != expr::oper_t::IN) {
+        assert(_in_values.empty());
+    }
+}
+
 void column_condition::collect_marker_specificaton(prepare_context& ctx) {
     if (_collection_element) {
         expr::fill_prepare_context(*_collection_element, ctx);

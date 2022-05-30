@@ -39,18 +39,8 @@ private:
 public:
     column_condition(const column_definition& column, std::optional<expr::expression> collection_element,
         std::optional<expr::expression> value, std::vector<expr::expression> in_values,
-        std::unique_ptr<like_matcher> matcher, expr::oper_t op)
-            : _column(column)
-            , _collection_element(std::move(collection_element))
-            , _value(std::move(value))
-            , _in_values(std::move(in_values))
-            , _matcher(std::move(matcher))
-            , _op(op)
-    {
-        if (op != expr::oper_t::IN) {
-            assert(_in_values.empty());
-        }
-    }
+        std::unique_ptr<like_matcher> matcher, expr::oper_t op);
+
     /**
      * Collects the column specification for the bind variables of this operation.
      *
