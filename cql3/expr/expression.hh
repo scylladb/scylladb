@@ -309,7 +309,7 @@ struct function_call {
 
 struct cast {
     expression arg;
-    std::variant<cql3_type, shared_ptr<cql3_type::raw>> type;
+    std::variant<data_type, shared_ptr<cql3_type::raw>> type;
 };
 
 struct field_selection {
