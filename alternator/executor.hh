@@ -196,6 +196,7 @@ public:
     future<request_return_type> describe_stream(client_state& client_state, service_permit permit, rjson::value request);
     future<request_return_type> get_shard_iterator(client_state& client_state, service_permit permit, rjson::value request);
     future<request_return_type> get_records(client_state& client_state, tracing::trace_state_ptr, service_permit permit, rjson::value request);
+    future<request_return_type> describe_continuous_backups(client_state& client_state, service_permit permit, rjson::value request);
 
     future<> start();
     future<> stop() { return make_ready_future<>(); }
@@ -212,7 +213,6 @@ private:
     friend class rmw_operation;
 
     static bool is_alternator_keyspace(const sstring& ks_name);
-    static sstring make_keyspace_name(const sstring& table_name);
     static void describe_key_schema(rjson::value& parent, const schema&, std::unordered_map<std::string,std::string> * = nullptr);
     static void describe_key_schema(rjson::value& parent, const schema& schema, std::unordered_map<std::string,std::string>&);
     

@@ -522,6 +522,9 @@ server::server(executor& exec, service::storage_proxy& proxy, gms::gossiper& gos
         {"GetRecords", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
             return e.get_records(client_state, std::move(trace_state), std::move(permit), std::move(json_request));
         }},
+        {"DescribeContinuousBackups", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
+            return e.describe_continuous_backups(client_state, std::move(permit), std::move(json_request));
+        }},
     } {
 }
 

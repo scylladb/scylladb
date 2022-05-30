@@ -401,10 +401,6 @@ sstring executor::table_name(const schema& s) {
     return s.cf_name();
 }
 
-sstring executor::make_keyspace_name(const sstring& table_name) {
-    return sstring(KEYSPACE_NAME_PREFIX) + table_name;
-}
-
 future<executor::request_return_type> executor::describe_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
     _stats.api_operations.describe_table++;
     elogger.trace("Describing table {}", request);
@@ -4283,6 +4279,29 @@ static std::map<sstring, sstring> get_network_topology_options(gms::gossiper& go
         options.emplace(locator::i_endpoint_snitch::get_local_snitch_ptr()->get_datacenter(addr), rf_str);
     };
     return options;
+}
+
+future<executor::request_return_type> executor::describe_continuous_backups(client_state& client_state, service_permit permit, rjson::value request) {
+    _stats.api_operations.describe_continuous_backups++;
+    // Unlike most operations which return ResourceNotFound when the given
+    // table doesn't exists, this operation returns a TableNoteFoundException.
+    // So we can't use the usual get_table() wrapper and need a bit more code:
+    std::string table_name = get_table_name(request);
+    schema_ptr schema;
+    try {
+        schema = _proxy.data_dictionary().find_schema(sstring(executor::KEYSPACE_NAME_PREFIX) + table_name, table_name);
+    } catch(data_dictionary::no_such_column_family&) {
+        throw api_error::table_not_found(
+                format("Table {} not found", table_name));
+    }
+    rjson::value desc = rjson::empty_object();
+    rjson::add(desc, "ContinuousBackupsStatus", "DISABLED");
+    rjson::value pitr = rjson::empty_object();
+    rjson::add(pitr, "PointInTimeRecoveryStatus", "DISABLED");
+    rjson::add(desc, "PointInTimeRecoveryDescription", std::move(pitr));
+    rjson::value response = rjson::empty_object();
+    rjson::add(response, "ContinuousBackupsDescription", std::move(desc));
+    co_return make_jsonable(std::move(response));
 }
 
 // Create the keyspace in which we put the alternator table, if it doesn't
