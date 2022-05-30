@@ -59,6 +59,13 @@ public:
     //
     // The caller may pass a pointer to an abort_source to make the operation abortable.
     // If abort is requested before the operation finishes, the future will contain `raft::request_aborted` exception.
+    //
+    // Successfull `add_entry` with `wait_type::committed` does not guarantee that `state_machine::apply` will be called
+    // locally for this entry. Between the commit and the application we may receive a snapshot containing this entry,
+    // so the state machine's state 'jumps' forward in time, skipping the entry application.
+    // However, for `wait_type::applied`, we guarantee that the entry will be applied locally with `state_machine::apply`.
+    // If a snapshot causes the state machine to jump over the entry, `add_entry` will return `commit_status_unknown`
+    // (even if the snapshot included that entry).
     virtual future<> add_entry(command command, wait_type type, seastar::abort_source* as = nullptr) = 0;
 
     // Set a new cluster configuration. If the configuration is

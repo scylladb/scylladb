@@ -366,12 +366,23 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abor
 
             _stats.waiters_awoken++;
 
-            if (term && *term == eid.term) {
-                co_return;
+            if (!term) {
+                throw commit_status_unknown();
             }
-            // An entry with a different term has been committed.
-            // It implies this entry was dropped.
-            throw dropped_entry();
+
+            if (*term != eid.term) {
+                throw dropped_entry();
+            }
+
+            if (type == wait_type::applied && _fsm->log_last_snapshot_idx() >= eid.idx) {
+                // We know the entry was committed but the wait type is `applied`
+                // and we don't know if the entry was applied with `state_machine::apply`
+                // (we may've loaded a snapshot before we managed to apply the entry).
+                // As specified by `add_entry`, throw `commit_status_unknown` in this case.
+                throw commit_status_unknown();
+            }
+
+            co_return;
         }
     }
 
