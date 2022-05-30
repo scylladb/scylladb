@@ -205,16 +205,9 @@ future<query::forward_result> forward_service::dispatch_to_shards(
         [req, tr_info] (auto& fs) {
             return fs.execute_on_this_shard(req, tr_info);
         },
-        std::optional<query::forward_result>(),
-        [reduction_types = req.reduction_types] (std::optional<query::forward_result> partial, query::forward_result mapped) -> std::optional<query::forward_result>{
-            if (partial) {
-                mapped.merge(*partial, reduction_types);
-            }
-            return {mapped};
-        }
-    ).then(
-        [] (std::optional<query::forward_result> result) {
-            return *result;
+        query::forward_result(),
+        [reduction_types = req.reduction_types] (query::forward_result partial, query::forward_result mapped) -> query::forward_result {
+            return mapped.merge(partial, reduction_types);
         }
     );
 }
