@@ -964,11 +964,8 @@ void test_mutation_reader_fragments_have_monotonic_positions(tests::reader_concu
     for_each_mutation([&semaphore, &populate] (const mutation& m) {
         auto ms = populate(m.schema(), {m}, gc_clock::now());
 
-        auto rd = ms.make_reader(m.schema(), semaphore.make_permit());
+        auto rd = ms.make_reader_v2(m.schema(), semaphore.make_permit());
         assert_that(std::move(rd)).has_monotonic_positions();
-
-        auto rd2 = ms.make_reader_v2(m.schema(), semaphore.make_permit());
-        assert_that(std::move(rd2)).has_monotonic_positions();
     });
 }
 
@@ -1318,24 +1315,6 @@ void test_slicing_with_overlapping_range_tombstones(tests::reader_concurrency_se
     // upper bound ends before the row in m2, so that the raw is fetched after next fast forward.
     auto range = ss.make_ckey_range(0, 3);
 
-    {
-        auto slice = partition_slice_builder(*s).with_range(range).build();
-        auto rd = ds.make_reader(s, semaphore.make_permit(), query::full_partition_range, slice);
-        auto close_rd = deferred_close(rd);
-
-        auto prange = position_range(range);
-        mutation result(m1.schema(), m1.decorated_key());
-
-        rd.consume_pausable([&] (mutation_fragment&& mf) {
-            if (mf.position().has_clustering_key() && !mf.range().overlaps(*s, prange.start(), prange.end())) {
-                BOOST_FAIL(format("Received fragment which is not relevant for the slice: {}, slice: {}", mutation_fragment::printer(*s, mf), range));
-            }
-            result.partition().apply(*s, std::move(mf));
-            return stop_iteration::no;
-        }).get();
-
-        assert_that(result).is_equal_to(m1 + m2, query::clustering_row_ranges({range}));
-    }
     {
         auto slice = partition_slice_builder(*s).with_range(range).build();
         auto rd = ds.make_reader_v2(s, semaphore.make_permit(), query::full_partition_range, slice);
@@ -1739,23 +1718,6 @@ void run_mutation_source_tests_reverse(populate_fn_ex populate, bool with_partit
         }
         auto ms = populate(table_schema, reversed_mutations, t);
 
-      if (ms.native_version() == mutation_source::version::v1) {
-        return mutation_source([table_schema, ms = std::move(ms), reversed_slices = std::list<query::partition_slice>()] (
-                    schema_ptr query_schema,
-                    reader_permit permit,
-                    const dht::partition_range& pr,
-                    const query::partition_slice& slice,
-                    const io_priority_class& pc,
-                    tracing::trace_state_ptr tr,
-                    streamed_mutation::forwarding fwd,
-                    mutation_reader::forwarding mr_fwd) mutable {
-            reversed_slices.emplace_back(partition_slice_builder(*table_schema, query::native_reverse_slice_to_legacy_reverse_slice(*table_schema, slice))
-                        .with_option<query::partition_slice::option::reversed>()
-                        .build());
-
-            return ms.make_reader(query_schema, std::move(permit), pr, reversed_slices.back(), pc, tr, fwd, mr_fwd);
-        });
-      } else {
           return mutation_source([table_schema, ms = std::move(ms), reversed_slices = std::list<query::partition_slice>()] (
                     schema_ptr query_schema,
                     reader_permit permit,
@@ -1771,7 +1733,6 @@ void run_mutation_source_tests_reverse(populate_fn_ex populate, bool with_partit
 
             return ms.make_reader_v2(query_schema, std::move(permit), pr, reversed_slices.back(), pc, tr, fwd, mr_fwd);
         });
-      }
     }, false); // FIXME: pass with_partition_range_forwarding after all natively reversing sources have fast-forwarding support
 }
 
