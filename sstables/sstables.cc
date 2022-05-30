@@ -2320,6 +2320,7 @@ static future<bool> do_validate_compressed(input_stream<char>& stream, const sst
     uint64_t offset = 0;
     uint32_t actual_full_checksum = ChecksumType::init_checksum();
 
+    size_t i = 0;
     for (auto it = c.offsets.begin(); it != c.offsets.end(); ++it) {
         auto next_it = std::next(it);
         auto current_pos = *it;
@@ -2343,7 +2344,7 @@ static future<bool> do_validate_compressed(input_stream<char>& stream, const sst
         auto expected_checksum = read_be<uint32_t>(buf.get() + compressed_len);
         auto actual_checksum = ChecksumType::checksum(buf.get(), compressed_len);
         if (actual_checksum != expected_checksum) {
-            sstlog.error("Compressed chunk checksum mismatch at offset {}, for chunk of size {}: expected={}, actual={}", offset, chunk_len, expected_checksum, actual_checksum);
+            sstlog.error("Compressed chunk checksum mismatch at chunk {}, offset {}, for chunk of size {}: expected={}, actual={}", i, offset, chunk_len, expected_checksum, actual_checksum);
             valid = false;
         }
 
@@ -2355,6 +2356,7 @@ static future<bool> do_validate_compressed(input_stream<char>& stream, const sst
         }
 
         offset += chunk_len;
+        ++i;
     }
 
     if (actual_full_checksum != expected_digest) {
