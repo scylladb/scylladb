@@ -384,7 +384,7 @@ struct forward_result {
     // vector storing query result for each selected column
     std::vector<bytes_opt> query_results;
 
-    void merge(const forward_result& other, const std::vector<forward_request::reduction_type>& types);
+    forward_result& merge(const forward_result& other, const std::vector<forward_request::reduction_type>& types);
 
     struct printer {
         const std::vector<forward_request::reduction_type>& types;

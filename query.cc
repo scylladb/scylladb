@@ -401,14 +401,14 @@ static bytes_opt merge_singular_results(bytes_opt r1, bytes_opt r2, forward_requ
     throw std::runtime_error("unknown reduction type");
 }
 
-void forward_result::merge(const forward_result& other, const std::vector<forward_request::reduction_type>& reduction_types) {
+forward_result& forward_result::merge(const forward_result& other, const std::vector<forward_request::reduction_type>& reduction_types) {
     if (query_results.empty()) {
         // Merging empty result (this) with a non empty one (other) requires copying the other
         query_results = other.query_results;
-        return;
+        return *this;
     } else if (other.query_results.empty()) {
         // Merging non empty result (this) with an empty one (other) is a noop
-        return;
+        return *this;
     }
 
     if (query_results.size() != other.query_results.size() || query_results.size() != reduction_types.size()) {
@@ -425,6 +425,8 @@ void forward_result::merge(const forward_result& other, const std::vector<forwar
     for (size_t i = 0; i < query_results.size(); i++) {
         query_results[i] = merge_singular_results(query_results[i], other.query_results[i], reduction_types[i]);
     }
+
+    return *this;
 }
 
 std::ostream& operator<<(std::ostream& out, const query::forward_result::printer& p) {
