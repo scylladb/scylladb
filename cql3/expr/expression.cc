@@ -1717,8 +1717,14 @@ constant evaluate(const expression& e, const query_options& options) {
         [](const column_mutation_attribute&) -> constant {
             on_internal_error(expr_logger, "Can't evaluate a column_mutation_attribute");
         },
-        [](const cast&) -> constant {
-            on_internal_error(expr_logger, "Can't evaluate a cast");
+        [&](const cast& c) -> constant {
+            auto ret = evaluate(c.arg, options);
+            auto type = std::get_if<data_type>(&c.type);
+            if (!type) {
+                on_internal_error(expr_logger, "attempting to evaluate an unprepared cast");
+            }
+            ret.type = *type;
+            return ret;
         },
         [](const field_selection&) -> constant {
             on_internal_error(expr_logger, "Can't evaluate a field_selection");

@@ -683,7 +683,10 @@ cast_prepare_expression(const cast& c, data_dictionary::database db, const sstri
     if (!is_assignable(cast_test_assignment(c, db, keyspace, *receiver))) {
         throw exceptions::invalid_request_exception(format("Cannot assign value {} to {} of type {}", c, receiver->name, receiver->type->as_cql3_type()));
     }
-    return prepare_expression(c.arg, db, keyspace, receiver);
+    return cast{
+        .arg = prepare_expression(c.arg, db, keyspace, receiver),
+        .type = receiver->type,
+    };
 }
 
 expr::expression
