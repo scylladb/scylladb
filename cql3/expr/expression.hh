@@ -213,6 +213,7 @@ struct column_value {
 struct subscript {
     expression val;
     expression sub;
+    data_type type; // may be null before prepare
 };
 
 /// Gets the subscripted column_value out of the subscript.
@@ -315,9 +316,11 @@ struct cast {
 struct field_selection {
     expression structure;
     shared_ptr<column_identifier_raw> field;
+    data_type type; // may be null before prepare
 };
 
 struct null {
+    data_type type; // may be null before prepare
 };
 
 struct bind_variable {
