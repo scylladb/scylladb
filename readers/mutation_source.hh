@@ -14,6 +14,7 @@
 #include "tracing/trace_state.hh"
 #include "readers/flat_mutation_reader.hh"
 #include "readers/flat_mutation_reader_v2.hh"
+#include "readers/mutation_fragment_v1_stream.hh"
 
 /// A partition_presence_checker quickly returns whether a key is known not to exist
 /// in a data source (it may return false positives, but not false negatives).
@@ -184,6 +185,34 @@ public:
     mutation_source& operator=(const mutation_source& other) = default;
     mutation_source(mutation_source&&) = default;
     mutation_source& operator=(mutation_source&&) = default;
+
+    mutation_fragment_v1_stream
+    make_fragment_v1_stream(
+        schema_ptr s,
+        reader_permit permit,
+        partition_range range,
+        const query::partition_slice& slice,
+        io_priority pc = default_priority_class(),
+        tracing::trace_state_ptr trace_state = nullptr,
+        streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
+        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes) const
+    {
+        if (_fn_v2) {
+            return mutation_fragment_v1_stream(
+                    (*_fn_v2)(std::move(s), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr));
+        }
+        return mutation_fragment_v1_stream(upgrade_to_v2((*_fn)(std::move(s), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr)));
+    }
+
+    mutation_fragment_v1_stream
+    make_fragment_v1_stream(
+        schema_ptr s,
+        reader_permit permit,
+        partition_range range = query::full_partition_range) const
+    {
+        auto& full_slice = s->full_slice();
+        return this->make_fragment_v1_stream(std::move(s), std::move(permit), range, full_slice);
+    }
 
     // Creates a new reader.
     //
