@@ -25,7 +25,7 @@ outdir = 'build'
 
 tempfile.tempdir = f"{outdir}/tmp"
 
-configure_args = str.join(' ', [shlex.quote(x) for x in sys.argv[1:]])
+configure_args = str.join(' ', [shlex.quote(x) for x in sys.argv[1:] if not x.startswith('--out=')])
 
 if os.path.exists('/etc/os-release'):
     for line in open('/etc/os-release'):
@@ -294,7 +294,7 @@ def find_headers(repodir, excluded_dirs):
             dirpath = dirpath[2:]
         headers += [os.path.join(dirpath, hh) for hh in filter(is_hh, files)]
 
-    return headers
+    return sorted(headers)
 
 
 modes = {
@@ -576,6 +576,8 @@ other = set([
 all_artifacts = apps | tests | other
 
 arg_parser = argparse.ArgumentParser('Configure scylla')
+arg_parser.add_argument('--out', dest='buildfile', action='store', default='build.ninja',
+                        help='Output build-file name (by default build.ninja)')
 arg_parser.add_argument('--static', dest='static', action='store_const', default='',
                         const='-static',
                         help='Static link (useful for running on hosts outside the build environment')
@@ -1226,7 +1228,7 @@ for t in tests_not_using_seastar_test_framework:
     if t not in scylla_tests:
         raise Exception("Test %s not found in scylla_tests" % (t))
 
-for t in scylla_tests:
+for t in sorted(scylla_tests):
     deps[t] = [t + '.cc']
     if t not in tests_not_using_seastar_test_framework:
         deps[t] += scylla_tests_dependencies
@@ -1237,7 +1239,7 @@ perf_tests_seastar_deps = [
     'seastar/tests/perf/perf_tests.cc'
 ]
 
-for t in perf_tests:
+for t in sorted(perf_tests):
     deps[t] = [t + '.cc'] + scylla_tests_dependencies + perf_tests_seastar_deps
     deps[t] += ['test/perf/perf.cc', 'seastar/tests/perf/linux_perf_event.cc']
 
@@ -1738,8 +1740,6 @@ if args.staticthrift:
 else:
     thrift_libs = "-lthrift"
 
-buildfile = 'build.ninja'
-
 os.makedirs(outdir, exist_ok=True)
 
 if args.antlr3_exec:
@@ -1756,13 +1756,7 @@ if not args.dist_only:
     for mode, mode_config in build_modes.items():
         configure_abseil(outdir, mode, mode_config)
 
-# configure.py may run automatically from an already-existing build.ninja.
-# If the user interrupts configure.py in the middle, we need build.ninja
-# to remain in a valid state.  So we write our output to a temporary
-# file, and only when done we rename it atomically to build.ninja.
-buildfile_tmp = buildfile + ".tmp"
-
-with open(buildfile_tmp, 'w') as f:
+with open(buildfile, 'w') as f:
     f.write(textwrap.dedent('''\
         configure_args = {configure_args}
         builddir = {outdir}
@@ -1875,7 +1869,7 @@ with open(buildfile_tmp, 'w') as f:
         f.write(
             'build {mode}-build: phony {artifacts}\n'.format(
                 mode=mode,
-                artifacts=str.join(' ', ('$builddir/' + mode + '/' + x for x in build_artifacts))
+                artifacts=str.join(' ', ['$builddir/' + mode + '/' + x for x in sorted(build_artifacts)])
             )
         )
         include_cxx_target = f'{mode}-build' if not args.dist_only else ''
@@ -1891,7 +1885,7 @@ with open(buildfile_tmp, 'w') as f:
         rust_libs = {}
         seastar_dep = '$builddir/{}/seastar/libseastar.a'.format(mode)
         seastar_testing_dep = '$builddir/{}/seastar/libseastar_testing.a'.format(mode)
-        for binary in build_artifacts:
+        for binary in sorted(build_artifacts):
             if binary in other:
                 continue
             srcs = deps[binary]
@@ -1990,7 +1984,7 @@ with open(buildfile_tmp, 'w') as f:
         f.write(
             'build {mode}-test: test.{mode} {test_executables} $builddir/{mode}/scylla\n'.format(
                 mode=mode,
-                test_executables=' '.join(['$builddir/{}/{}'.format(mode, binary) for binary in tests]),
+                test_executables=' '.join(['$builddir/{}/{}'.format(mode, binary) for binary in sorted(tests)]),
             )
         )
         f.write(
@@ -2203,8 +2197,9 @@ with open(buildfile_tmp, 'w') as f:
 
     f.write(textwrap.dedent('''\
         rule configure
-          command = {python} configure.py $configure_args
+          command = {python} configure.py --out=build.ninja.new $configure_args && mv build.ninja.new build.ninja
           generator = 1
+          description = CONFIGURE $configure_args
         build build.ninja {build_ninja_list}: configure | configure.py SCYLLA-VERSION-GEN {args.seastar_path}/CMakeLists.txt
         rule cscope
             command = find -name '*.[chS]' -o -name "*.cc" -o -name "*.hh" | cscope -bq -i-
@@ -2226,7 +2221,7 @@ with open(buildfile_tmp, 'w') as f:
             command = /usr/bin/env echo -e '{unit_test_list}'
             description = List configured unit tests
         build unit_test_list: unit_test_list
-        ''').format(unit_test_list="\\n".join(unit_test_list)))
+        ''').format(unit_test_list="\\n".join(sorted(unit_test_list))))
     f.write(textwrap.dedent('''\
         build always: phony
         rule scylla_version_gen
@@ -2243,8 +2238,6 @@ with open(buildfile_tmp, 'w') as f:
         build help: print_help | always
         ''').format(**globals()))
 
-os.rename(buildfile_tmp, buildfile)
-
 # create compdbs
 compdb = 'compile_commands.json'
 for mode in selected_modes:
@@ -2252,7 +2245,7 @@ for mode in selected_modes:
     submodule_compdbs = [mode_out + '/' + sm + '/' + compdb
                          for sm in ['abseil', 'seastar']]
     subprocess.run(['/bin/sh', '-c',
-                    ninja + ' -t compdb ' +
+                    ninja + ' -f ' + buildfile + ' -t compdb ' +
                     '| ./scripts/merge-compdb.py build/' + mode + ' - ' +
                     ' '.join(submodule_compdbs) +
                     '> ' + mode_out + '/' + compdb])
