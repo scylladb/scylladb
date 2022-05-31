@@ -32,6 +32,7 @@
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/simple_schema.hh"
 #include "utils/error_injection.hh"
+#include "db/commitlog/commitlog.hh"
 
 static api::timestamp_type next_timestamp() {
     static thread_local api::timestamp_type next_timestamp = 1;
@@ -813,5 +814,92 @@ SEASTAR_TEST_CASE(failed_flush_prevents_writes) {
         BOOST_ASSERT(eventually_true([&t]() { return t.active_memtable().empty(); }));
     });
 #endif
+}
+
+SEASTAR_TEST_CASE(flushing_rate_is_reduced_if_compaction_doesnt_keep_up) {
+    // The test simulates a situation where N threads issue flushes to N
+    // tables. Half are issuing lots of small flushes and the other half
+    // issues a few large ones. This can lead to a situation where lots of
+    // small sstables accumulate on disk, and, if compaction never has a chance
+    // to keep up, resources can be exhausted.
+    return do_with_cql_env([](cql_test_env& env) -> future<> {
+        using result_t = std::tuple<unsigned, unsigned, unsigned>;
+        struct flusher {
+            cql_test_env& env;
+            const int num_flushes;
+            const int num_mutations_per_flush;
+            const int num_concurrent_flushes;
+            const int mutations_per_commitlog_sync = 50;
+
+            static sstring cf_name(unsigned thread_id) {
+                return format("cf_{}", thread_id);
+            }
+
+            static sstring ks_name() {
+                return "ks";
+            }
+
+            future<> create_table(schema_ptr s) {
+                service::migration_manager& mm = env.migration_manager().local();
+                auto group0_guard = co_await mm.start_group0_operation();
+                auto ts = group0_guard.write_timestamp();
+                auto announcement = co_await mm.prepare_new_column_family_announcement(s, ts);
+                co_await mm.announce(std::move(announcement), std::move(group0_guard));
+            }
+
+            future<result_t> operator()() {
+                const sstring ks_name = this->ks_name();
+                const sstring cf_name = this->cf_name(this_shard_id());
+                random_mutation_generator gen{
+                    random_mutation_generator::generate_counters::no,
+                    local_shard_only::yes,
+                    random_mutation_generator::generate_uncompactable::no,
+                    std::nullopt,
+                    ks_name.c_str(),
+                    cf_name.c_str()
+                };
+                schema_ptr s = gen.schema();
+
+                co_await create_table(s);
+                replica::database& db = env.local_db();
+                replica::table& t = db.find_column_family(ks_name, cf_name);
+
+                size_t max_sstables_count = 0;
+                semaphore sem{num_concurrent_flushes};
+                unsigned mutations_applied = 0;
+                auto range = boost::irange<int>(0, num_flushes);
+                co_await seastar::parallel_for_each(range.begin(), range.end(), [&](int value) -> future<> {
+                    auto permit = co_await get_units(sem, 1);
+                    std::vector<mutation> mutations = gen(num_mutations_per_flush);
+                    for (auto&& m : mutations) {
+                        auto sync = mutations_applied % mutations_per_commitlog_sync == 0 ? db::commitlog::force_sync::yes : db::commitlog::force_sync::no;
+                        co_await db.apply(t.schema(), freeze(m), tracing::trace_state_ptr(), sync, db::no_timeout);
+                    }
+                    co_await t.flush();
+                    max_sstables_count = std::max(t.sstables_count(), max_sstables_count);
+                });
+                co_return std::make_tuple(this_shard_id(), max_sstables_count, t.schema()->max_compaction_threshold() * 2);
+            }
+        };
+
+        replica::database& db = env.local_db();
+        const unsigned thread_count = smp::count;
+
+        std::vector<unsigned> concurrent_flushes{2, 2};
+        std::vector<unsigned> mutations_per_flush{1, 400};
+        std::vector<unsigned> num_flushes{500, 10};
+        std::vector<future<result_t>> futures;
+        for (unsigned thread_id : boost::irange<unsigned>(0, thread_count)) {
+            auto idx = thread_id % 2;
+            futures.push_back(smp::submit_to(thread_id, flusher{.env=env, .num_flushes=num_flushes[idx], .num_mutations_per_flush=mutations_per_flush[idx], .num_concurrent_flushes=concurrent_flushes[idx]}));
+        }
+        std::vector<result_t> results;
+        for (auto&& f : futures) {
+            results.push_back(co_await std::move(f));
+        }
+        for (const auto& [thread, max_sstables_count, limit] : results) {
+            BOOST_ASSERT(max_sstables_count < limit);
+        }
+    });
 }
 
