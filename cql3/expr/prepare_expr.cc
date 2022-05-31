@@ -70,8 +70,11 @@ usertype_constructor_test_assignment(const usertype_constructor& u, data_diction
 }
 
 static
-expression
+std::optional<expression>
 usertype_constructor_prepare_expression(const usertype_constructor& u, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
+    if (!receiver) {
+        return std::nullopt; // cannot infer type from {field: value}
+    }
     usertype_constructor_validate_assignable_to(u, db, keyspace, *receiver);
     auto&& ut = static_pointer_cast<const user_type_impl>(receiver->type);
     bool all_terminal = true;
@@ -196,8 +199,12 @@ map_test_assignment(const collection_constructor& c, data_dictionary::database d
 }
 
 static
-expression
+std::optional<expression>
 map_prepare_expression(const collection_constructor& c, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
+    if (!receiver) {
+        // TODO: It is possible to infer the type of a map from the types of the key/value pairs
+        return std::nullopt;
+    }
     map_validate_assignable_to(c, db, keyspace, *receiver);
 
     auto key_spec = maps::key_spec_of(*receiver);
@@ -287,8 +294,12 @@ set_test_assignment(const collection_constructor& c, data_dictionary::database d
 }
 
 static
-expression
+std::optional<expression>
 set_prepare_expression(const collection_constructor& c, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
+    if (!receiver) {
+        // TODO: It is possible to infer the type of a set from the types of the values
+        return std::nullopt;
+    }
     set_validate_assignable_to(c, db, keyspace, *receiver);
 
     if (c.elements.empty()) {
@@ -383,8 +394,12 @@ list_test_assignment(const collection_constructor& c, data_dictionary::database 
 
 
 static
-expression
+std::optional<expression>
 list_prepare_expression(const collection_constructor& c, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
+    if (!receiver) {
+        // TODO: It is possible to infer the type of a list from the types of the key/value pairs
+        return std::nullopt;
+    }
     list_validate_assignable_to(c, db, keyspace, *receiver);
 
     // In Cassandra, an empty (unfrozen) map/set/list is equivalent to the column being null. In
@@ -462,8 +477,12 @@ tuple_constructor_test_assignment(const tuple_constructor& tc, data_dictionary::
 }
 
 static
-expression
+std::optional<expression>
 tuple_constructor_prepare_nontuple(const tuple_constructor& tc, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
+    if (!receiver) {
+        // TODO: It is possible to infer the type of a tuple from the types of the elements
+        return std::nullopt;
+    }
     tuple_constructor_validate_assignable_to(tc, db, keyspace, *receiver);
     std::vector<expression> values;
     bool all_terminal = true;
@@ -595,9 +614,13 @@ untyped_constant_test_assignment(const untyped_constant& uc, data_dictionary::da
 }
 
 static
-constant
+std::optional<expression>
 untyped_constant_prepare_expression(const untyped_constant& uc, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver)
 {
+    if (!receiver) {
+        // TODO: It is possible to infer the type of a constant by looking at the value and selecting the smallest fit
+        return std::nullopt;
+    }
     if (!is_assignable(untyped_constant_test_assignment(uc, db, keyspace, *receiver))) {
         throw exceptions::invalid_request_exception(format("Invalid {} constant ({}) for \"{}\" of type {}",
             uc.partial_type, uc.raw_text, *receiver->name, receiver->type->as_cql3_type().to_string()));
@@ -633,8 +656,12 @@ null_test_assignment(data_dictionary::database db,
 }
 
 static
-constant
+std::optional<expression>
 null_prepare_expression(data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
+    if (!receiver) {
+        // TODO: It is not possible to infer the type of NULL, but perhaps we can have a matcing null_type that can be cast to anything
+        return std::nullopt;
+    }
     if (!is_assignable(null_test_assignment(db, keyspace, *receiver))) {
         throw exceptions::invalid_request_exception("Invalid null value for counter increment/decrement");
     }
@@ -674,8 +701,12 @@ cast_test_assignment(const cast& c, data_dictionary::database db, const sstring&
 }
 
 static
-expression
+std::optional<expression>
 cast_prepare_expression(const cast& c, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
+    if (!receiver) {
+        // TODO: It is possible to infer the type of a cast (it's a given)
+        return std::nullopt;
+    }
     auto type = std::get<shared_ptr<cql3_type::raw>>(c.type);
     if (!is_assignable(test_assignment(c.arg, db, keyspace, *casted_spec_of(c, db, keyspace, *receiver)))) {
         throw exceptions::invalid_request_exception(format("Cannot cast value {} to type {}", c.arg, type));
@@ -689,8 +720,12 @@ cast_prepare_expression(const cast& c, data_dictionary::database db, const sstri
     };
 }
 
-expr::expression
+std::optional<expression>
 prepare_function_call(const expr::function_call& fc, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
+    if (!receiver) {
+        // TODO: It is possible to infer the type of a function call if there is only one overload, or if all overloads return the same type
+        return std::nullopt;
+    }
     auto&& fun = std::visit(overloaded_functor{
         [] (const shared_ptr<functions::function>& func) {
             return func;
@@ -778,55 +813,55 @@ test_assignment_function_call(const cql3::expr::function_call& fc, data_dictiona
     }
 }
 
-expression
-prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
+std::optional<expression>
+try_prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
     return expr::visit(overloaded_functor{
-        [] (const constant&) -> expression {
+        [] (const constant&) -> std::optional<expression> {
             on_internal_error(expr_logger, "Can't prepare constant_value, it should not appear in parser output");
         },
-        [&] (const binary_operator&) -> expression {
+        [&] (const binary_operator&) -> std::optional<expression> {
             on_internal_error(expr_logger, "binary_operators are not yet reachable via prepare_expression()");
         },
-        [&] (const conjunction&) -> expression {
+        [&] (const conjunction&) -> std::optional<expression> {
             on_internal_error(expr_logger, "conjunctions are not yet reachable via prepare_expression()");
         },
-        [&] (const column_value&) -> expression {
+        [&] (const column_value&) -> std::optional<expression> {
             on_internal_error(expr_logger, "column_values are not yet reachable via prepare_expression()");
         },
-        [&] (const subscript&) -> expression {
+        [&] (const subscript&) -> std::optional<expression> {
             on_internal_error(expr_logger, "subscripts are not yet reachable via prepare_expression()");
         },
-        [&] (const token&) -> expression {
+        [&] (const token&) -> std::optional<expression> {
             on_internal_error(expr_logger, "tokens are not yet reachable via prepare_expression()");
         },
-        [&] (const unresolved_identifier&) -> expression {
+        [&] (const unresolved_identifier&) -> std::optional<expression> {
             on_internal_error(expr_logger, "unresolved_identifiers are not yet reachable via prepare_expression()");
         },
-        [&] (const column_mutation_attribute&) -> expression {
+        [&] (const column_mutation_attribute&) -> std::optional<expression> {
             on_internal_error(expr_logger, "column_mutation_attributes are not yet reachable via prepare_expression()");
         },
-        [&] (const function_call& fc) -> expression {
+        [&] (const function_call& fc) -> std::optional<expression> {
             return prepare_function_call(fc, db, keyspace, std::move(receiver));
         },
-        [&] (const cast& c) -> expression {
+        [&] (const cast& c) -> std::optional<expression> {
             return cast_prepare_expression(c, db, keyspace, receiver);
         },
-        [&] (const field_selection&) -> expression {
+        [&] (const field_selection&) -> std::optional<expression> {
             on_internal_error(expr_logger, "field_selections are not yet reachable via prepare_expression()");
         },
-        [&] (const null&) -> expression {
+        [&] (const null&) -> std::optional<expression> {
             return null_prepare_expression(db, keyspace, receiver);
         },
-        [&] (const bind_variable& bv) -> expression {
+        [&] (const bind_variable& bv) -> std::optional<expression> {
             return bind_variable_prepare_expression(bv, db, keyspace, receiver);
         },
-        [&] (const untyped_constant& uc) -> expression {
+        [&] (const untyped_constant& uc) -> std::optional<expression> {
             return untyped_constant_prepare_expression(uc, db, keyspace, receiver);
         },
-        [&] (const tuple_constructor& tc) -> expression {
+        [&] (const tuple_constructor& tc) -> std::optional<expression> {
             return tuple_constructor_prepare_nontuple(tc, db, keyspace, receiver);
         },
-        [&] (const collection_constructor& c) -> expression {
+        [&] (const collection_constructor& c) -> std::optional<expression> {
             switch (c.style) {
             case collection_constructor::style_type::list: return list_prepare_expression(c, db, keyspace, receiver);
             case collection_constructor::style_type::set: return set_prepare_expression(c, db, keyspace, receiver);
@@ -834,7 +869,7 @@ prepare_expression(const expression& expr, data_dictionary::database db, const s
             }
             on_internal_error(expr_logger, fmt::format("unexpected collection_constructor style {}", static_cast<unsigned>(c.style)));
         },
-        [&] (const usertype_constructor& uc) -> expression {
+        [&] (const usertype_constructor& uc) -> std::optional<expression> {
             return usertype_constructor_prepare_expression(uc, db, keyspace, receiver);
         },
     }, expr);
@@ -902,6 +937,15 @@ test_assignment(const expression& expr, data_dictionary::database db, const sstr
             return usertype_constructor_test_assignment(uc, db, keyspace, receiver);
         },
     }, expr);
+}
+
+expression
+prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
+    auto e_opt = try_prepare_expression(expr, db, keyspace, std::move(receiver));
+    if (!e_opt) {
+        throw exceptions::invalid_request_exception(fmt::format("Could not infer type of {}", expr));
+    }
+    return std::move(*e_opt);
 }
 
 assignment_testable::test_result
