@@ -706,6 +706,7 @@ table::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_
         auto post_flush = [this, old = std::move(old), &newtabs, f = std::move(f)] () mutable -> future<stop_iteration> {
             try {
                 co_await std::move(f);
+                co_await _compaction_manager.perform_emergency_compaction(this);
                 co_await coroutine::parallel_for_each(newtabs, [] (auto& newtab) -> future<> {
                     co_await newtab->open_data();
                     tlogger.debug("Flushing to {} done", newtab->get_filename());
