@@ -993,7 +993,7 @@ static const column_value resolve_column(const unresolved_identifier& col_ident,
 
 // Resolves columns on LHS of binary_operator and prepares the index in case of a subscripted column.
 // Last argument is a relation to print in the error message in case of failure.
-static expression prepare_binop_lhs(const expression& lhs, data_dictionary::database db, const schema& schema, const binary_operator& printable_relation) {
+static expression prepare_binop_lhs(const expression& lhs, data_dictionary::database db, const schema& schema) {
     return expr::visit(overloaded_functor{
         [&](const unresolved_identifier& unin) -> expression {
             return resolve_column(unin, schema);
@@ -1004,7 +1004,7 @@ static expression prepare_binop_lhs(const expression& lhs, data_dictionary::data
             new_elements.reserve(tc.elements.size());
 
             for (const expression& elem : tc.elements) {
-                new_elements.emplace_back(prepare_binop_lhs(elem, db, schema, printable_relation));
+                new_elements.emplace_back(prepare_binop_lhs(elem, db, schema));
             }
 
             return tuple_constructor {
@@ -1016,7 +1016,7 @@ static expression prepare_binop_lhs(const expression& lhs, data_dictionary::data
             prepared_token_args.reserve(tk.args.size());
 
             for (const expression& arg : tk.args) {
-                prepared_token_args.emplace_back(prepare_binop_lhs(arg, db, schema, printable_relation));
+                prepared_token_args.emplace_back(prepare_binop_lhs(arg, db, schema));
             }
 
             return token(std::move(prepared_token_args));
@@ -1147,7 +1147,7 @@ static lw_shared_ptr<column_specification> get_rhs_receiver(lw_shared_ptr<column
 }
 
 binary_operator prepare_binary_operator(const binary_operator& binop, data_dictionary::database db, schema_ptr schema) {
-    expression prepared_lhs = prepare_binop_lhs(binop.lhs, db, *schema, binop);
+    expression prepared_lhs = prepare_binop_lhs(binop.lhs, db, *schema);
     lw_shared_ptr<column_specification> lhs_receiver = get_lhs_receiver(prepared_lhs, *schema);
 
     lw_shared_ptr<column_specification> rhs_receiver = get_rhs_receiver(lhs_receiver, binop.op);
