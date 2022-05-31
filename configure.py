@@ -1652,6 +1652,7 @@ for mode in build_modes:
     seastar_pc_cflags, seastar_pc_libs = query_seastar_flags(pc[mode], link_static_cxx=args.staticcxx)
     modes[mode]['seastar_cflags'] = seastar_pc_cflags
     modes[mode]['seastar_libs'] = seastar_pc_libs
+    modes[mode]['seastar_testing_libs'] = pkg_config(pc[mode].replace('seastar.pc', 'seastar-testing.pc'), '--libs', '--static')
 
 abseil_pkgs = [
     'absl_raw_hash_set',
@@ -1779,6 +1780,7 @@ with open(buildfile, 'w') as f:
             cxxflags_{mode} = $cxx_ld_flags_{mode} {cxxflags} -iquote. -iquote $builddir/{mode}/gen
             libs_{mode} = -l{fmt_lib}
             seastar_libs_{mode} = {seastar_libs}
+            seastar_testing_libs_{mode} = {seastar_testing_libs}
             rule cxx.{mode}
               command = $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags_{mode} $cxxflags $obj_cxxflags -c -o $out $in
               description = CXX $out
@@ -1881,8 +1883,7 @@ with open(buildfile, 'w') as f:
                 if binary in pure_boost_tests:
                     local_libs += ' ' + maybe_static(args.staticboost, '-lboost_unit_test_framework')
                 if binary not in tests_not_using_seastar_test_framework:
-                    pc_path = pc[mode].replace('seastar.pc', 'seastar-testing.pc')
-                    local_libs += ' ' + pkg_config(pc_path, '--libs', '--static')
+                    local_libs += ' ' + "$seastar_testing_libs_{}".format(mode)
                 # Our code's debugging information is huge, and multiplied
                 # by many tests yields ridiculous amounts of disk space.
                 # So we strip the tests by default; The user can very
