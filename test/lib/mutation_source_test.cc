@@ -1340,7 +1340,7 @@ void test_slicing_with_overlapping_range_tombstones(tests::reader_concurrency_se
 
     // Check fast_forward_to()
     {
-        auto rd = ds.make_reader(s, semaphore.make_permit(), query::full_partition_range, s->full_slice(), default_priority_class(),
+        auto rd = ds.make_fragment_v1_stream(s, semaphore.make_permit(), query::full_partition_range, s->full_slice(), default_priority_class(),
             nullptr, streamed_mutation::forwarding::yes);
         auto close_rd = deferred_close(rd);
 
