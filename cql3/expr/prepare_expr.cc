@@ -24,7 +24,6 @@
 
 namespace cql3::expr {
 
-static expression prepare_binop_lhs(const expression& lhs, data_dictionary::database db, const schema& schema);
 static const column_value resolve_column(const unresolved_identifier& col_ident, const schema& schema);
 
 static
@@ -886,7 +885,11 @@ try_prepare_expression(const expression& expr, data_dictionary::database db, con
             }
             auto& schema = *schema_opt;
 
-            auto sub_col = prepare_binop_lhs(sub.val, db, schema);
+            auto sub_col_opt = try_prepare_expression(sub.val, db, keyspace, schema_opt, receiver);
+            if (!sub_col_opt) {
+                return std::nullopt;
+            }
+            auto& sub_col = *sub_col_opt;
             const abstract_type& sub_col_type = type_of(sub_col)->without_reversed();
 
             auto col_spec = column_specification_of(sub_col);
@@ -914,7 +917,11 @@ try_prepare_expression(const expression& expr, data_dictionary::database db, con
             prepared_token_args.reserve(tk.args.size());
 
             for (const expression& arg : tk.args) {
-                prepared_token_args.emplace_back(prepare_binop_lhs(arg, db, schema));
+                auto prepared_arg_opt = try_prepare_expression(arg, db, keyspace, schema_opt, receiver);
+                if (!prepared_arg_opt) {
+                    return std::nullopt;
+                }
+                prepared_token_args.emplace_back(std::move(*prepared_arg_opt));
             }
 
             return token(std::move(prepared_token_args));
@@ -1079,16 +1086,6 @@ static const column_value resolve_column(const unresolved_identifier& col_ident,
     return column_value(def);
 }
 
-// Resolves columns on LHS of binary_operator and prepares the index in case of a subscripted column.
-// Last argument is a relation to print in the error message in case of failure.
-static expression prepare_binop_lhs(const expression& lhs, data_dictionary::database db, const schema& schema) {
-    auto expr_opt = try_prepare_expression(lhs, db, "", &schema, {});
-    if (!expr_opt) {
-        throw exceptions::invalid_request_exception(fmt::format("Could not infer type of {}", lhs));
-    }
-    return std::move(*expr_opt);
-}
-
 // Finds the type of a prepared LHS of binary_operator and creates a receiver with it.
 static lw_shared_ptr<column_specification> get_lhs_receiver(const expression& prepared_lhs, const schema& schema) {
     return expr::visit(overloaded_functor{
@@ -1179,7 +1176,11 @@ static lw_shared_ptr<column_specification> get_rhs_receiver(lw_shared_ptr<column
 }
 
 binary_operator prepare_binary_operator(const binary_operator& binop, data_dictionary::database db, schema_ptr schema) {
-    expression prepared_lhs = prepare_binop_lhs(binop.lhs, db, *schema);
+    std::optional<expression> prepared_lhs_opt = try_prepare_expression(binop.lhs, db, "", schema.get(), {});
+    if (!prepared_lhs_opt) {
+        throw exceptions::invalid_request_exception(fmt::format("Could not infer type of {}", binop.lhs));
+    }
+    auto& prepared_lhs = *prepared_lhs_opt;
     lw_shared_ptr<column_specification> lhs_receiver = get_lhs_receiver(prepared_lhs, *schema);
 
     lw_shared_ptr<column_specification> rhs_receiver = get_rhs_receiver(lhs_receiver, binop.op);
