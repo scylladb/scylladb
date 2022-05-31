@@ -1147,7 +1147,7 @@ static lw_shared_ptr<column_specification> get_rhs_receiver(lw_shared_ptr<column
     }
 }
 
-binary_operator prepare_binary_operator(const binary_operator& binop, data_dictionary::database db, schema_ptr schema, prepare_context& ctx) {
+binary_operator prepare_binary_operator(const binary_operator& binop, data_dictionary::database db, schema_ptr schema) {
     expression prepared_lhs = prepare_binop_lhs(binop.lhs, db, *schema, binop);
     lw_shared_ptr<column_specification> lhs_receiver = get_lhs_receiver(prepared_lhs, *schema);
 

@@ -620,7 +620,7 @@ extern expression prepare_expression(const expression& expr, data_dictionary::da
 
 // Prepares a binary operator received from the parser.
 // Does some basic type checks but no advanced validation.
-extern binary_operator prepare_binary_operator(const binary_operator& binop, data_dictionary::database db, schema_ptr schema, prepare_context& ctx);
+extern binary_operator prepare_binary_operator(const binary_operator& binop, data_dictionary::database db, schema_ptr schema);
 
 
 /**
