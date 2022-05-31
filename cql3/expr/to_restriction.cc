@@ -67,14 +67,14 @@ void validate_single_column_relation(const column_value& lhs, oper_t oper, const
     }
 
     if (is_lhs_subscripted) {
-        check_false(lhs_col_type.is_list(),
-                    "Indexes on list entries ({}[index] = value) are not currently supported.",
-                    lhs_col_name);
-        check_true(lhs_col_type.is_map(), "Column {} cannot be used as a map", lhs_col_name);
-        check_true(lhs_col_type.is_multi_cell(),
+        check_true(lhs_col_type.is_map() || lhs_col_type.is_list(), "Column {} cannot be subscripted", lhs_col_name);
+        check_true(!lhs_col_type.is_map() || lhs_col_type.is_multi_cell(),
                    "Map-entry equality predicates on frozen map column {} are not supported",
                    lhs_col_name);
-        check_true(oper == oper_t::EQ, "Only EQ relations are supported on map entries");
+        check_true(!lhs_col_type.is_list() || lhs_col_type.is_multi_cell(),
+                   "List element equality predicates on frozen list column {} are not supported",
+                   lhs_col_name);
+        check_true(oper == oper_t::EQ, "Only EQ relations are supported on map/list entries");
     }
 
     if (lhs_col_type.is_collection()) {
