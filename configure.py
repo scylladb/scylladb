@@ -1915,15 +1915,16 @@ with open(buildfile, 'w') as f:
                 'abseil/' + x for x in abseil_libs
             ]])
             objs.append('$builddir/' + mode + '/gen/utils/gz/crc_combine_table.o')
+
+            local_libs = '$seastar_libs_{} $libs'.format(mode)
+            if has_thrift:
+                local_libs += ' ' + thrift_libs + ' ' + maybe_static(args.staticboost, '-lboost_system')
             if binary in tests:
-                local_libs = '$seastar_libs_{} $libs'.format(mode)
                 if binary in pure_boost_tests:
                     local_libs += ' ' + maybe_static(args.staticboost, '-lboost_unit_test_framework')
                 if binary not in tests_not_using_seastar_test_framework:
                     pc_path = pc[mode].replace('seastar.pc', 'seastar-testing.pc')
                     local_libs += ' ' + pkg_config(pc_path, '--libs', '--static')
-                if has_thrift:
-                    local_libs += ' ' + thrift_libs + ' ' + maybe_static(args.staticboost, '-lboost_system')
                 # Our code's debugging information is huge, and multiplied
                 # by many tests yields ridiculous amounts of disk space.
                 # So we strip the tests by default; The user can very
@@ -1935,8 +1936,7 @@ with open(buildfile, 'w') as f:
                 f.write('   libs = {}\n'.format(local_libs))
             else:
                 f.write('build $builddir/{}/{}: {}.{} {} | {}\n'.format(mode, binary, regular_link_rule, mode, str.join(' ', objs), seastar_dep))
-                if has_thrift:
-                    f.write('   libs =  {} {} $seastar_libs_{} $libs\n'.format(thrift_libs, maybe_static(args.staticboost, '-lboost_system'), mode))
+                f.write('   libs = {}\n'.format(local_libs))
             for src in srcs:
                 if src.endswith('.cc'):
                     obj = '$builddir/' + mode + '/' + src.replace('.cc', '.o')
