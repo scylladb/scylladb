@@ -26,6 +26,41 @@ namespace cql3::expr {
 
 static
 lw_shared_ptr<column_specification>
+column_specification_of(const expression& e) {
+    return visit(overloaded_functor{
+        [] (const column_value& cv) {
+            return cv.col->column_specification;
+        },
+        [&] (const ExpressionElement auto& other) {
+            auto type = type_of(e);
+            if (!type) {
+                throw exceptions::invalid_request_exception(fmt::format("cannot infer type of {}", e));
+            }
+            // Fake out a column_identifier
+            //
+            // FIXME: come up with something better
+            // This works for now because the we only call this when preparing
+            // a subscript, and the grammar only allows column_values to be subscripted.
+            // So we never end up in this branch. In case we do, we'll see the internal
+            // representation of the expression, rather than what the user typed in.
+            //
+            // The correct fix is to augment expressions with a source_location member so
+            // we can just point at the line and column (and quote the text) of the expression
+            // we're naming. As an example, if we allow
+            //
+            //    WHERE {'a': 3, 'b': 5}[19.5] = 3
+            //
+            // then the column_identifier should be "key type of {'a': 3, 'b': 5}" - it
+            // doesn't identify a column but some subexpression that we're using to infer the
+            // type of the "19.5" (and failing).
+            auto col_id = ::make_shared<column_identifier>(fmt::format("{}", e), true);
+            return make_lw_shared<column_specification>("", "", std::move(col_id), std::move(type));
+        }
+    }, e);
+}
+
+static
+lw_shared_ptr<column_specification>
 usertype_field_spec_of(const column_specification& column, size_t field) {
     auto&& ut = static_pointer_cast<const user_type_impl>(column.type);
     auto&& name = ut->field_name(field);
@@ -1036,32 +1071,21 @@ static expression prepare_binop_lhs(const expression& lhs, data_dictionary::data
             return token(std::move(prepared_token_args));
         },
         [&](const subscript& sub) -> expression {
-            const column_definition* sub_col = expr::visit(overloaded_functor {
-                [&](const unresolved_identifier& unin) -> const column_definition* {
-                    return resolve_column(unin, schema).col;
-                },
-                [](const column_value& cv) -> const column_definition* {
-                    return cv.col;
-                },
-                [](const auto& e) -> const column_definition* {
-                    on_internal_error(expr_logger,
-                        fmt::format("Only columns can be subscripted using the [] operator, got {}", e));
-                }
-            }, sub.val);
+            auto sub_col = prepare_binop_lhs(sub.val, db, schema);
+            const abstract_type& sub_col_type = type_of(sub_col)->without_reversed();
 
-            const abstract_type& sub_col_type = sub_col->column_specification->type->without_reversed();
-
+            auto col_spec = column_specification_of(sub_col);
             lw_shared_ptr<column_specification> subscript_column_spec;
             if (sub_col_type.is_map()) {
-                subscript_column_spec = map_key_spec_of(*sub_col->column_specification);
+                subscript_column_spec = map_key_spec_of(*col_spec);
             } else if (sub_col_type.is_list()) {
-                subscript_column_spec = list_key_spec_of(*sub_col->column_specification);
+                subscript_column_spec = list_key_spec_of(*col_spec);
             } else {
-                throw exceptions::invalid_request_exception(format("Column {} is not a map/list, cannot be subscripted", sub_col->name_as_text()));
+                throw exceptions::invalid_request_exception(format("Column {} is not a map/list, cannot be subscripted", col_spec->name->text()));
             }
 
             return subscript {
-                .val = column_value(sub_col),
+                .val = sub_col,
                 .sub = prepare_expression(sub.sub, db, schema.ks_name(), &schema, std::move(subscript_column_spec))
             };
         },
