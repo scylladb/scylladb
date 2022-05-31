@@ -1566,11 +1566,14 @@ args.user_ldflags = forced_ldflags + ' ' + args.user_ldflags
 
 args.user_cflags += f" -ffile-prefix-map={curdir}=."
 
-seastar_cflags = args.user_cflags
-
 if args.target != '':
-    seastar_cflags += ' -march=' + args.target
-seastar_ldflags = args.user_ldflags
+    args.user_cflags += ' -march=' + args.target
+
+for mode in modes:
+    # Those flags are passed not only to Scylla objects, but also to libraries
+    # that we compile ourselves.
+    modes[mode]['lib_cflags'] = args.user_cflags
+    modes[mode]['lib_ldflags'] = args.user_ldflags + linker_flags
 
 # cmake likes to separate things with semicolons
 def semicolon_separated(*flags):
@@ -1590,8 +1593,8 @@ def configure_seastar(build_dir, mode, mode_config):
         '-DCMAKE_C_COMPILER={}'.format(args.cc),
         '-DCMAKE_CXX_COMPILER={}'.format(args.cxx),
         '-DCMAKE_EXPORT_NO_PACKAGE_REGISTRY=ON',
-        '-DSeastar_CXX_FLAGS={}'.format((seastar_cflags).replace(' ', ';')),
-        '-DSeastar_LD_FLAGS={}'.format(semicolon_separated(seastar_ldflags, modes[mode]['cxx_ld_flags'])),
+        '-DSeastar_CXX_FLAGS={}'.format((mode_config['lib_cflags']).replace(' ', ';')),
+        '-DSeastar_LD_FLAGS={}'.format(semicolon_separated(mode_config['lib_ldflags'], mode_config['cxx_ld_flags'])),
         '-DSeastar_CXX_DIALECT=gnu++20',
         '-DSeastar_API_LEVEL=6',
         '-DSeastar_UNUSED_RESULT_ERROR=ON',
@@ -1662,7 +1665,6 @@ abseil_pkgs = [
 pkgs += abseil_pkgs
 
 args.user_cflags += " " + pkg_config('jsoncpp', '--cflags')
-args.user_cflags += ' -march=' + args.target
 libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-llz4', '-lz', '-lsnappy', pkg_config('jsoncpp', '--libs'),
                  ' -lstdc++fs', ' -lcrypt', ' -lcryptopp', ' -lpthread',
                  # Must link with static version of libzstd, since
@@ -1776,8 +1778,8 @@ with open(buildfile, 'w') as f:
         fmt_lib = 'fmt'
         f.write(textwrap.dedent('''\
             cxx_ld_flags_{mode} = {cxx_ld_flags}
-            ld_flags_{mode} = $cxx_ld_flags_{mode}
-            cxxflags_{mode} = $cxx_ld_flags_{mode} {cxxflags} -iquote. -iquote $builddir/{mode}/gen
+            ld_flags_{mode} = $cxx_ld_flags_{mode} {lib_ldflags}
+            cxxflags_{mode} = $cxx_ld_flags_{mode} {lib_cflags} {cxxflags} -iquote. -iquote $builddir/{mode}/gen
             libs_{mode} = -l{fmt_lib}
             seastar_libs_{mode} = {seastar_libs}
             seastar_testing_libs_{mode} = {seastar_testing_libs}
