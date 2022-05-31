@@ -314,7 +314,13 @@ modes = {
         'cxx_ld_flags': '-Wl,--gc-sections',
         'stack-usage-threshold': 1024*13,
         'optimization-level': '3',
-        'per_src_extra_cxxflags': {},
+        'per_src_extra_cxxflags': {
+            # Our custom inline threshold was observed to cause extremely long compilation times for types.o,
+            # when compiling with LTO.
+            # This is a band-aid fix for that. It can be reverted at any time once when our toolchain doesn't have
+            # that problem.
+            "types.cc": "-mllvm -inline-threshold=225",
+        },
         'cmake_build_type': 'RelWithDebInfo',
         'can_have_debug_info': True,
         'default': True,
