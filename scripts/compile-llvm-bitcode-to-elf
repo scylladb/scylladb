@@ -1,0 +1,79 @@
+#!/bin/bash -eu
+
+# This script compiles .o files output by clang with -flto (which are just LLVM IR files
+# with some extra annotations) to regular ELF object files.
+# It also compiles .a archives containing the IR .o files to .a archives containing
+# only regular ELF .o files.
+
+# This is motivated by a want to compile some executables (the main program) with LTO,
+# and some others (tests) without LTO in a single build.
+# GCC can output mixed (called "fat") IR/ELF objects to faciliate that, but clang lacks such an option,
+# and can only emit IR when compiling for LTO.
+# But we still can use those objects for non-LTO builds, by manually compile them to regular objects (with this script),
+# and simply linking them clasically.
+
+self=`realpath "$0"`
+input_file="$1"
+shift
+clang="$1"
+shift
+clang_flags="$@"
+
+# The number of concurrent child unpack/compile jobs.
+# In general it would be the best to leave all parallelism to the build system,
+# but integrating this script with ninja would be unreasonably hard.
+# Fortunately we don't have many static libraries to repack in our build, so allowing
+# each repack job to spawn NUM_CORES compile jobs doesn't exhaust memory and is good enough.
+parallelism=$((`grep processor /proc/cpuinfo | wc -l` + 1))
+
+extract_archive () {
+    # It would be cool if `llvm-ar x "${file_name}"` worked, but unfortunately it clobbers
+    # files when the archive contains repeated filenames, which libseastar.a does, e.g. files.cc.o.
+    # So we have to extract files one at a time and manually prevent clobbering.
+    # Here, after unpacking a file, we add a discriminating index as a suffix,
+    # so two different files.cc.o will be extracted to files.cc.o.1 and files.cc.o.2.
+    declare -A files=()
+    for f in $(llvm-ar t "$1"); do
+        ((files[$f] += 1))
+        llvm-ar xN ${files[$f]} "$1" "$f"
+        mv "$f" "$f".${files[$f]}
+    done
+}
+
+convert_bitcode () {
+    local file_name=`realpath ${1}`
+    local file_type=`file ${file_name}`
+
+    # FIXME: add an exit hook to remove the tmpdir even if the script fails,
+    # to avoid leaving garbage in /tmp in that scenario.
+    local tmpdir=`mktemp -d`
+    pushd "${tmpdir}" >/dev/null
+
+    if [[ "${file_type}" == *"LLVM IR bitcode"*  ]]; then
+        cp "${file_name}" "tmp.bc"
+        "${clang}" -c "${clang_flags[@]}" -fno-lto -Wno-unused-command-line-argument "tmp.bc" -o "${file_name}.elf"
+    elif [[ "${file_type}" == *"current ar archive"*  ]]; then
+        extract_archive "${file_name}"
+        archived_files=(*)
+
+        # Recursively process the archive contents.
+        # With GNU parallel we could do just `parallel convert_bitcode ::: "${archived_files[@]}"`,
+        # but we use xargs to avoid the dependency.
+        printf "%s\0" "${archived_files[@]}" | xargs -P$parallelism -0 -i "$self" '{}' "${clang}" "${clang_flags[@]}"
+
+        rm "${archived_files[@]}"
+        llvm-ar qc lib.a *
+        mv lib.a "${file_name}".elf
+    elif [[ "${file_type}" == *"ELF"*  ]]; then
+        ln -f "${file_name}" "${file_name}.elf"
+	fi
+
+    popd >/dev/null
+    rm -r "${tmpdir}"
+}
+
+# If we wanted to use GNU parallel instead of xargs in the way described earlier,
+# we would need this:
+# export -f convert_bitcode
+
+convert_bitcode ${input_file}

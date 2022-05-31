@@ -308,6 +308,7 @@ modes = {
         'can_have_debug_info': True,
         'default': True,
         'description': 'a mode with no optimizations, with sanitizers, and with additional debug checks enabled, used for testing',
+        'advanced_optimizations': False,
     },
     'release': {
         'cxxflags': '-ffunction-sections -fdata-sections ',
@@ -325,6 +326,7 @@ modes = {
         'can_have_debug_info': True,
         'default': True,
         'description': 'a mode with optimizations and no debug checks, used for production builds',
+        'advanced_optimizations': True,
     },
     'dev': {
         'cxxflags': '-DDEVEL -DSEASTAR_ENABLE_ALLOC_FAILURE_INJECTION -DSCYLLA_ENABLE_ERROR_INJECTION',
@@ -336,6 +338,7 @@ modes = {
         'can_have_debug_info': False,
         'default': True,
         'description': 'a mode with no optimizations and no debug checks, optimized for fast build times, used for development',
+        'advanced_optimizations': False,
     },
     'sanitize': {
         'cxxflags': '-DDEBUG -DSANITIZE -DDEBUG_LSA_SANITIZER -DSCYLLA_ENABLE_ERROR_INJECTION',
@@ -347,6 +350,7 @@ modes = {
         'can_have_debug_info': True,
         'default': False,
         'description': 'a mode with optimizations and sanitizers enabled, used for finding memory errors',
+        'advanced_optimizations': False,
     },
     'coverage': {
         'cxxflags': '-fprofile-instr-generate -fcoverage-mapping -g -gz',
@@ -358,6 +362,7 @@ modes = {
         'can_have_debug_info': True,
         'default': False,
         'description': 'a mode exclusively used for generating test coverage reports',
+        'advanced_optimizations': False,
     },
 }
 
@@ -573,6 +578,10 @@ apps = set([
     'scylla',
 ])
 
+lto_binaries = set([
+    'scylla'
+])
+
 tests = scylla_tests | perf_tests | raft_tests
 
 other = set([
@@ -651,6 +660,8 @@ arg_parser.add_argument('--clang-inline-threshold', action='store', type=int, de
                         help="LLVM-specific inline threshold compilation parameter")
 arg_parser.add_argument('--list-artifacts', dest='list_artifacts', action='store_true', default=False,
                         help='List all available build artifacts, that can be passed to --with')
+arg_parser.add_argument('--lto', dest='lto', action='store_true', default=False,
+                        help='Enable link-time optimization.')
 args = arg_parser.parse_args()
 
 if args.list_artifacts:
@@ -1583,6 +1594,18 @@ for mode in modes:
     # that we compile ourselves.
     modes[mode]['lib_cflags'] = args.user_cflags
     modes[mode]['lib_ldflags'] = args.user_ldflags + linker_flags
+    if modes[mode]['advanced_optimizations']:
+        if args.lto:
+            modes[mode]['lib_cflags'] += " -flto=thin"
+            modes[mode]['lib_ldflags'] += " -flto=thin"
+            # The ifunc feature ("indirect function", which allows to compile a function for
+            # multiple architectures and choose the best one at dynamic link time) is not
+            # compatible with thin LTO, so we have to exclude files using it from LTO
+            # and link them classically.
+            # The issue is tracked at https://bugs.llvm.org/show_bug.cgi?id=46488,
+            # but there's no active work on it.
+            modes[mode]['per_src_extra_cxxflags'].setdefault('utils/array-search.cc', '')
+            modes[mode]['per_src_extra_cxxflags']['utils/array-search.cc'] += ' -fno-lto'
 
 # cmake likes to separate things with semicolons
 def semicolon_separated(*flags):
@@ -1665,6 +1688,8 @@ for mode in build_modes:
     modes[mode]['seastar_cflags'] = seastar_pc_cflags
     modes[mode]['seastar_libs'] = seastar_pc_libs
     modes[mode]['seastar_testing_libs'] = pkg_config(pc[mode].replace('seastar.pc', 'seastar-testing.pc'), '--libs', '--static')
+    modes[mode]['seastar_libs_elf'] = modes[mode]['seastar_libs'].replace(".a", ".a.elf") # FIXME. replace() is hacky and fragile here.
+    modes[mode]['seastar_testing_libs_elf'] = modes[mode]['seastar_testing_libs'].replace(".a", ".a.elf") # FIXME. replace() is hacky and fragile here.
 
 def configure_abseil(build_dir, mode, mode_config):
     abseil_build_dir = os.path.join(build_dir, mode, 'abseil')
@@ -1823,6 +1848,8 @@ with open(buildfile, 'w') as f:
             libs_{mode} = -l{fmt_lib}
             seastar_libs_{mode} = {seastar_libs}
             seastar_testing_libs_{mode} = {seastar_testing_libs}
+            seastar_libs_{mode}_elf = {seastar_libs_elf}
+            seastar_testing_libs_{mode}_elf = {seastar_testing_libs_elf}
             rule cxx.{mode}
               command = $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags_{mode} $cxxflags $obj_cxxflags -c -o $out $in
               description = CXX $out
@@ -1874,6 +1901,9 @@ with open(buildfile, 'w') as f:
             rule rust_lib.{mode}
               command = CARGO_HOME=build/{mode}/rust/.cargo cargo build --release --manifest-path=rust/Cargo.toml --target-dir=build/{mode}/rust -p ${{pkg}}
               description = RUST_LIB $out
+            rule compile_bitcode.{mode}
+              command = scripts/compile-llvm-bitcode-to-elf $in $cxx {seastar_cflags} $cxxflags_{mode} $cxxflags $obj_cxxflags
+              description = COMPILE_BITCODE $out
             ''').format(mode=mode, antlr3_exec=antlr3_exec, fmt_lib=fmt_lib, test_repeat=test_repeat, test_timeout=test_timeout, **modeval))
         f.write(
             'build {mode}-build: phony {artifacts}\n'.format(
@@ -1892,46 +1922,79 @@ with open(buildfile, 'w') as f:
         antlr3_grammars = set()
         rust_headers = {}
         rust_libs = {}
-        seastar_dep = '$builddir/{}/seastar/libseastar.a'.format(mode)
-        seastar_testing_dep = '$builddir/{}/seastar/libseastar_testing.a'.format(mode)
+
+        # We want LTO, but the cost of compiling all executables (think: tests) with LTO is prohibitively high.
+        # So when we enable LTO, we perform a dual compilation of object files: from source to LTO-ready LLVM IR
+        # and then from the IR objects to regular ELF objects. We choose which ones to use when linking depending on
+        # the target executable: IR for scylla and ELF for everything else.
+        # Even though we don't really want that, iotune (which is built in seastar/) is also linked from the IR files.
+        # It's just not possible to avoid without making seastar's build instructions LTO-aware.
+        # Fortunately the impact of LTO-linking iotune is very small (compared to LTO-linking Scylla),
+        # so we ignore that.
+        # In bitcode_objs we remember the objects that need a dual compilation rule when using LTO. Those are all
+        # files that we compile ourselves: scylla sources and submoduled static libraries.
+        bitcode_objs = set()
+
         for binary in sorted(build_artifacts):
             if binary in other:
                 continue
             srcs = deps[binary]
-            objs = ['$builddir/' + mode + '/' + src.replace('.cc', '.o')
+
+            # Objects not compiled by us. We have no control over their compilation flags.
+            # They are simple link dependencies for the binary.
+            external_objs = []
+            # Objects compiled by us. We control their compilation flags and can LTO/PGO them.
+            # Those objects will be remembered in bitcode_objs.
+            internal_objs = []
+            internal_objs += ['$builddir/' + mode + '/' + src.replace('.cc', '.o')
                     for src in srcs
                     if src.endswith('.cc')]
-            objs.append('$builddir/../utils/arch/powerpc/crc32-vpmsum/crc32.S')
+            external_objs.append('$builddir/../utils/arch/powerpc/crc32-vpmsum/crc32.S')
             if has_wasmtime:
-                objs.append('/usr/lib64/libwasmtime.a')
+                external_objs.append('/usr/lib64/libwasmtime.a')
             has_thrift = False
             for dep in deps[binary]:
                 if isinstance(dep, Thrift):
                     has_thrift = True
-                    objs += dep.objects('$builddir/' + mode + '/gen')
+                    internal_objs += dep.objects('$builddir/' + mode + '/gen')
                 if isinstance(dep, Antlr3Grammar):
-                    objs += dep.objects('$builddir/' + mode + '/gen')
+                    internal_objs += dep.objects('$builddir/' + mode + '/gen')
                 if isinstance(dep, Json2Code):
-                    objs += dep.objects('$builddir/' + mode + '/gen')
+                    internal_objs += dep.objects('$builddir/' + mode + '/gen')
                 if dep.endswith('/src/lib.rs'):
                     lib = dep.replace('/src/lib.rs', '.a').replace('rust/','lib')
-                    objs.append('$builddir/' + mode + '/rust/release/' + lib)
+                    external_objs.append('$builddir/' + mode + '/rust/release/' + lib)
 
-            objs.extend(['$builddir/' + mode + '/' + artifact for artifact in [
+            internal_objs += ['$builddir/' + mode + '/' + artifact for artifact in [
                 'libdeflate/libdeflate.a',
             ] + [
                 'abseil/' + x for x in abseil_libs
-            ]])
-            objs.append('$builddir/' + mode + '/gen/utils/gz/crc_combine_table.o')
+            ]]
+            internal_objs.append('$builddir/' + mode + '/gen/utils/gz/crc_combine_table.o')
 
-            local_libs = '$seastar_libs_{} $libs'.format(mode)
+            bitcode_objs.update(internal_objs)
+
+            if binary in lto_binaries:
+                objs = internal_objs + external_objs
+                seastar_dep = '$builddir/{}/seastar/libseastar.a'.format(mode)
+                seastar_testing_dep = '$builddir/{}/seastar/libseastar_testing.a'.format(mode)
+                seastar_libs = '$seastar_libs_{}'.format(mode)
+                seastar_testing_libs = '$seastar_testing_libs_{}'.format(mode)
+            else:
+                objs = [f"{o}.elf" for o in internal_objs] + external_objs
+                seastar_dep = '$builddir/{}/seastar/libseastar.a.elf'.format(mode)
+                seastar_testing_dep = '$builddir/{}/seastar/libseastar_testing.a.elf'.format(mode)
+                seastar_libs = '$seastar_libs_{}_elf'.format(mode)
+                seastar_testing_libs = '$seastar_testing_libs_{}_elf'.format(mode)
+
+            local_libs = '{} $libs'.format(seastar_libs)
             if has_thrift:
-                local_libs += ' ' + thrift_libs + ' ' + maybe_static(args.staticboost, '-lboost_system')
+                local_libs += " {} {}".format(thrift_libs, maybe_static(args.staticboost, '-lboost_system'))
             if binary in tests:
                 if binary in pure_boost_tests:
                     local_libs += ' ' + maybe_static(args.staticboost, '-lboost_unit_test_framework')
                 if binary not in tests_not_using_seastar_test_framework:
-                    local_libs += ' ' + "$seastar_testing_libs_{}".format(mode)
+                    local_libs += ' ' + "{}".format(seastar_testing_libs)
                 # Our code's debugging information is huge, and multiplied
                 # by many tests yields ridiculous amounts of disk space.
                 # So we strip the tests by default; The user can very
@@ -2012,11 +2075,17 @@ with open(buildfile, 'w') as f:
         gen_headers += list(rust_headers.keys())
         gen_headers_dep = ' '.join(gen_headers)
 
+        # When compiling to IR (which we do for LTO), some (backend-related) flags are discarded.
+        # They need to be passed to the next stage (LTO-link or compile-to-ELF) to take effect.
+        # Here we remember any additional flags so we can pass them again to COMPILE_BITCODE.
+        extra_cxxflags = {}
+
         for obj in compiles:
             src = compiles[obj]
             f.write('build {}: cxx.{} {} || {} {}\n'.format(obj, mode, src, seastar_dep, gen_headers_dep))
             if src in modeval['per_src_extra_cxxflags']:
-                f.write('    cxxflags = {seastar_cflags} $cxxflags $cxxflags_{mode} {extra_cxxflags}\n'.format(mode=mode, extra_cxxflags=modeval["per_src_extra_cxxflags"][src], **modeval))
+                extra_cxxflags[obj] = modeval["per_src_extra_cxxflags"][src]
+                f.write('    cxxflags = {seastar_cflags} $cxxflags $cxxflags_{mode} {extra_cxxflags}\n'.format(mode=mode, extra_cxxflags=extra_cxxflags[obj], **modeval))
         for swagger in swaggers:
             hh = swagger.headers(gen_dir)[0]
             cc = swagger.sources(gen_dir)[0]
@@ -2055,22 +2124,31 @@ with open(buildfile, 'w') as f:
                     flags = '-O1'
                     if has_sanitize_address_use_after_scope:
                         flags += ' -fno-sanitize-address-use-after-scope'
+                    extra_cxxflags[obj] = flags
                     f.write('  obj_cxxflags = %s\n' % flags)
         f.write(f'build $builddir/{mode}/gen/empty.cc: gen\n')
         for hh in headers:
             f.write('build $builddir/{mode}/{hh}.o: checkhh.{mode} {hh} | $builddir/{mode}/gen/empty.cc || {gen_headers_dep}\n'.format(
                     mode=mode, hh=hh, gen_headers_dep=gen_headers_dep))
+        for bc in bitcode_objs:
+            f.write('build {bc}.elf: compile_bitcode.{mode} {bc}\n'.format(bc=bc, mode=mode))
+            if bc in extra_cxxflags:
+                f.write('    cxxflags = {seastar_cflags} $cxxflags $cxxflags_{mode} {extra_cxxflags}\n'.format(mode=mode, extra_cxxflags=extra_cxxflags[bc], **modeval))
 
         f.write('build $builddir/{mode}/seastar/libseastar.a: ninja $builddir/{mode}/seastar/build.ninja | always\n'
                 .format(**locals()))
         f.write('  pool = submodule_pool\n')
         f.write('  subdir = $builddir/{mode}/seastar\n'.format(**locals()))
         f.write('  target = seastar\n'.format(**locals()))
+        f.write('build $builddir/{mode}/seastar/libseastar.a.elf: compile_bitcode.{mode} $builddir/{mode}/seastar/libseastar.a\n'
+                .format(mode=mode, **modeval))
         f.write('build $builddir/{mode}/seastar/libseastar_testing.a: ninja $builddir/{mode}/seastar/build.ninja | always\n'
                 .format(**locals()))
         f.write('  pool = submodule_pool\n')
         f.write('  subdir = $builddir/{mode}/seastar\n'.format(**locals()))
         f.write('  target = seastar_testing\n'.format(**locals()))
+        f.write('build $builddir/{mode}/seastar/libseastar_testing.a.elf: compile_bitcode.{mode} $builddir/{mode}/seastar/libseastar_testing.a\n'
+                .format(mode=mode, **modeval))
         f.write('build $builddir/{mode}/seastar/apps/iotune/iotune: ninja $builddir/{mode}/seastar/build.ninja\n'
                 .format(**locals()))
         f.write('  pool = submodule_pool\n')
