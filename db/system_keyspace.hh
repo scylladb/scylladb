@@ -342,6 +342,8 @@ public:
      */
     future<std::unordered_map<gms::inet_address, locator::host_id>> load_host_ids();
 
+    future<std::vector<gms::inet_address>> load_peers();
+
     /*
      * Read this node's tokens stored in the LOCAL table.
      * Used to initialize a restarting node.
