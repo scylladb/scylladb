@@ -19,6 +19,7 @@
 #include "log.hh"
 #include "schema_builder.hh"
 #include "readers/combined.hh"
+#include "readers/mutation_fragment_v1_stream.hh"
 #include "replica/memtable.hh"
 #include "test/perf/perf.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
@@ -72,8 +73,8 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
         auto permit = semaphore.make_permit();
         // Create a reader which tests the case of memtable snapshots
         // going away after memtable was merged to cache.
-        auto rd = std::make_unique<flat_mutation_reader>(
-            downgrade_to_v1(make_combined_reader(s, permit, cache.make_reader(s, permit), mt->make_flat_reader(s, permit))));
+        auto rd = std::make_unique<mutation_fragment_v1_stream>(
+            mutation_fragment_v1_stream(make_combined_reader(s, permit, cache.make_reader(s, permit), mt->make_flat_reader(s, permit))));
         auto close_rd = defer([&rd] { rd->close().get(); });
         rd->set_max_buffer_size(1);
         rd->fill_buffer().get();

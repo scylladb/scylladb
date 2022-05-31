@@ -50,6 +50,7 @@
 #include "readers/from_mutations_v2.hh"
 #include "readers/forwardable_v2.hh"
 #include "readers/from_fragments_v2.hh"
+#include "readers/mutation_fragment_v1_stream.hh"
 #include "readers/generating_v2.hh"
 #include "readers/empty_v2.hh"
 #include "readers/next_partition_adaptor.hh"
@@ -1068,7 +1069,7 @@ SEASTAR_TEST_CASE(test_fast_forwarding_combined_reader_is_consistent_with_slicin
                 mutation_reader::forwarding::yes));
         }
 
-        flat_mutation_reader rd = downgrade_to_v1(make_combined_reader(s, permit, std::move(readers),
+        auto rd = mutation_fragment_v1_stream(make_combined_reader(s, permit, std::move(readers),
             streamed_mutation::forwarding::yes,
             mutation_reader::forwarding::yes));
         auto close_rd = deferred_close(rd);
@@ -1140,7 +1141,7 @@ SEASTAR_TEST_CASE(test_combined_reader_slicing_with_overlapping_range_tombstones
             readers.push_back(ds1.make_reader_v2(s, permit, query::full_partition_range, slice));
             readers.push_back(ds2.make_reader_v2(s, permit, query::full_partition_range, slice));
 
-            auto rd = downgrade_to_v1(make_combined_reader(s, permit, std::move(readers),
+            auto rd = mutation_fragment_v1_stream(make_combined_reader(s, permit, std::move(readers),
                 streamed_mutation::forwarding::no, mutation_reader::forwarding::no));
             auto close_rd = deferred_close(rd);
 
@@ -1166,7 +1167,7 @@ SEASTAR_TEST_CASE(test_combined_reader_slicing_with_overlapping_range_tombstones
             readers.push_back(ds2.make_reader_v2(s, permit, query::full_partition_range, s->full_slice(), default_priority_class(),
                 nullptr, streamed_mutation::forwarding::yes));
 
-            auto rd = downgrade_to_v1(make_combined_reader(s, permit, std::move(readers),
+            auto rd = mutation_fragment_v1_stream(make_combined_reader(s, permit, std::move(readers),
                 streamed_mutation::forwarding::yes, mutation_reader::forwarding::no));
             auto close_rd = deferred_close(rd);
 
@@ -2314,13 +2315,13 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_streaming_reader) {
         auto& local_partitioner = schema->get_sharder();
         auto remote_partitioner = dht::sharder(local_partitioner.shard_count() - 1, local_partitioner.sharding_ignore_msb());
 
-        auto tested_reader = downgrade_to_v1(make_multishard_streaming_reader(env.db(), schema, make_reader_permit(env),
+        auto tested_reader = make_multishard_streaming_reader(env.db(), schema, make_reader_permit(env),
                 [sharder = dht::selective_token_range_sharder(remote_partitioner, token_range, 0)] () mutable -> std::optional<dht::partition_range> {
             if (auto next = sharder.next()) {
                 return dht::to_partition_range(*next);
             }
             return std::nullopt;
-        }));
+        });
         auto close_tested_reader = deferred_close(tested_reader);
 
         auto reader_factory = [db = &env.db()] (
@@ -4159,14 +4160,14 @@ SEASTAR_THREAD_TEST_CASE(test_clustering_combining_of_empty_readers) {
         .lower = position_in_partition::before_all_clustered_rows(),
         .upper = position_in_partition::after_all_clustered_rows()
     });
-    auto r = downgrade_to_v1(make_clustering_combined_reader(
+    auto r = make_clustering_combined_reader(
             s, permit, streamed_mutation::forwarding::no,
-            std::make_unique<simple_position_reader_queue>(*s, std::move(rs))));
+            std::make_unique<simple_position_reader_queue>(*s, std::move(rs)));
     auto close_r = deferred_close(r);
 
     auto mf = r().get0();
     if (mf) {
-        BOOST_FAIL(format("reader combined of empty readers returned fragment {}", mutation_fragment::printer(*s, *mf)));
+        BOOST_FAIL(format("reader combined of empty readers returned fragment {}", mutation_fragment_v2::printer(*s, *mf)));
     }
 }
 
@@ -4191,7 +4192,8 @@ SEASTAR_THREAD_TEST_CASE(test_generating_reader_v1) {
                 tracing::trace_state_ptr trace_state,
                 streamed_mutation::forwarding fwd_sm,
                 mutation_reader::forwarding fwd_mr) {
-            auto underlying = downgrade_to_v1(make_flat_mutation_reader_from_mutations_v2(schema, permit, squash_mutations(muts), range, slice));
+            auto underlying = mutation_fragment_v1_stream
+                              (make_flat_mutation_reader_from_mutations_v2(schema, permit, squash_mutations(muts), range, slice));
             auto rd = make_next_partition_adaptor(make_generating_reader_v1(schema, permit, closing_holder(std::move(underlying))));
             if (fwd_sm == streamed_mutation::forwarding::yes) {
                 return make_forwardable(std::move(rd));

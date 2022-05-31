@@ -18,6 +18,7 @@
 
 #include "readers/flat_mutation_reader.hh"
 #include "readers/from_mutations_v2.hh"
+#include "readers/mutation_fragment_v1_stream.hh"
 #include "readers/empty_v2.hh"
 #include "readers/combined.hh"
 #include "replica/memtable.hh"
@@ -140,7 +141,7 @@ std::vector<std::vector<mutation>> combined::create_overlapping_partitions_disjo
 
 future<> combined::consume_all(flat_mutation_reader_v2 mr) const
 {
-    return with_closeable(downgrade_to_v1(std::move(mr)), [] (auto& mr) {
+    return with_closeable(mutation_fragment_v1_stream(std::move(mr)), [] (auto& mr) {
         perf_tests::start_measuring_time();
         return mr.consume_pausable([] (mutation_fragment mf) {
             perf_tests::do_not_optimize(mf);
@@ -267,7 +268,7 @@ std::vector<mutation_bounds> clustering_combined::create_almost_disjoint_ranges(
 
 future<size_t> clustering_combined::consume_all(flat_mutation_reader_v2 mr) const
 {
-    return do_with(downgrade_to_v1(std::move(mr)), size_t(0), [] (auto& mr, size_t& num_mfs) {
+    return do_with(mutation_fragment_v1_stream(std::move(mr)), size_t(0), [] (auto& mr, size_t& num_mfs) {
         perf_tests::start_measuring_time();
         return mr.consume_pausable([&num_mfs] (mutation_fragment mf) {
             ++num_mfs;

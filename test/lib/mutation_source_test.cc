@@ -1587,9 +1587,9 @@ void test_reader_conversions(tests::reader_concurrency_semaphore_wrapper& semaph
         m_compacted.partition().compact_for_compaction(*m_compacted.schema(), always_gc, m_compacted.decorated_key(), query_time);
 
         {
-            auto rd = ms.make_reader_v2(m.schema(), semaphore.make_permit());
-            assert_that(downgrade_to_v1(std::move(rd)))
-                    .produces_compacted(m_compacted, query_time);
+            auto rd = ms.make_fragment_v1_stream(m.schema(), semaphore.make_permit());
+            match_compacted_mutation(read_mutation_from_flat_mutation_reader(rd).get0(), m_compacted, query_time);
+            rd.close().get();
         }
     });
 }
