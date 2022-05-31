@@ -1,0 +1,47 @@
+From 0f9872ec48b38c4e9ad9cc95144557b15a4c10e5 Mon Sep 17 00:00:00 2001
+Message-Id: <0f9872ec48b38c4e9ad9cc95144557b15a4c10e5.1655215246.git.michal.chojnowski@scylladb.com>
+From: =?UTF-8?q?Micha=C5=82=20Chojnowski?= <michal.chojnowski@scylladb.com>
+Date: Tue, 14 Jun 2022 15:58:56 +0200
+Subject: [PATCH] Fix concurrency bugs in BOLT instrumentation runtime
+
+---
+ bolt/runtime/common.h  | 2 +-
+ bolt/runtime/instr.cpp | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/bolt/runtime/common.h b/bolt/runtime/common.h
+index 1f055b044150..a9693db71476 100644
+--- a/bolt/runtime/common.h
++++ b/bolt/runtime/common.h
+@@ -475,7 +475,7 @@ class Mutex {
+ public:
+   bool acquire() {
+     bool Result = true;
+-    asm volatile("lock; xchg %0, %1" : "+m"(InUse), "=r"(Result) : : "cc");
++    asm volatile("lock; xchg %0, %1" : "+m"(InUse), "+r"(Result) : : "cc");
+     return !Result;
+   }
+   void release() { InUse = false; }
+diff --git a/bolt/runtime/instr.cpp b/bolt/runtime/instr.cpp
+index d111599e3b7c..44c060919a0a 100644
+--- a/bolt/runtime/instr.cpp
++++ b/bolt/runtime/instr.cpp
+@@ -289,6 +289,7 @@ public:
+   /// Traverses all elements in the table
+   template <typename... Args>
+   void forEachElement(void (*Callback)(MapEntry &, Args...), Args... args) {
++    Lock L(M);
+     if (!TableRoot)
+       return;
+     return forEachElement(Callback, InitialSize, TableRoot, args...);
+@@ -378,7 +379,6 @@ template <typename T> void resetIndCallCounter(T &Entry) {
+ 
+ template <typename T, uint32_t X, uint32_t Y>
+ void SimpleHashTable<T, X, Y>::resetCounters() {
+-  Lock L(M);
+   forEachElement(resetIndCallCounter);
+ }
+ 
+-- 
+2.36.1
+
