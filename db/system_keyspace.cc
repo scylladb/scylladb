@@ -1528,6 +1528,17 @@ future<std::unordered_map<gms::inet_address, locator::host_id>> system_keyspace:
     });
 }
 
+future<std::vector<gms::inet_address>> system_keyspace::load_peers() {
+    auto res = co_await execute_cql(format("SELECT peer FROM system.{}", PEERS));
+    assert(res);
+
+    std::vector<gms::inet_address> ret;
+    for (auto& row: *res) {
+        ret.emplace_back(row.get_as<net::inet_address>("peer"));
+    }
+    co_return ret;
+}
+
 future<std::unordered_map<gms::inet_address, sstring>> system_keyspace::load_peer_features() {
     sstring req = format("SELECT peer, supported_features FROM system.{}", PEERS);
     return qctx->execute_cql(req).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
