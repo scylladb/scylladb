@@ -24,6 +24,9 @@
 
 namespace cql3::expr {
 
+static expression prepare_binop_lhs(const expression& lhs, data_dictionary::database db, const schema& schema);
+static const column_value resolve_column(const unresolved_identifier& col_ident, const schema& schema);
+
 static
 lw_shared_ptr<column_specification>
 column_specification_of(const expression& e) {
@@ -874,17 +877,53 @@ try_prepare_expression(const expression& expr, data_dictionary::database db, con
         [&] (const conjunction&) -> std::optional<expression> {
             on_internal_error(expr_logger, "conjunctions are not yet reachable via prepare_expression()");
         },
-        [&] (const column_value&) -> std::optional<expression> {
-            on_internal_error(expr_logger, "column_values are not yet reachable via prepare_expression()");
+        [] (const column_value& cv) -> std::optional<expression> {
+            return cv;
         },
-        [&] (const subscript&) -> std::optional<expression> {
-            on_internal_error(expr_logger, "subscripts are not yet reachable via prepare_expression()");
+        [&] (const subscript& sub) -> std::optional<expression> {
+            if (!schema_opt) {
+                throw exceptions::invalid_request_exception("cannot process subscript operation without schema");
+            }
+            auto& schema = *schema_opt;
+
+            auto sub_col = prepare_binop_lhs(sub.val, db, schema);
+            const abstract_type& sub_col_type = type_of(sub_col)->without_reversed();
+
+            auto col_spec = column_specification_of(sub_col);
+            lw_shared_ptr<column_specification> subscript_column_spec;
+            if (sub_col_type.is_map()) {
+                subscript_column_spec = map_key_spec_of(*col_spec);
+            } else if (sub_col_type.is_list()) {
+                subscript_column_spec = list_key_spec_of(*col_spec);
+            } else {
+                throw exceptions::invalid_request_exception(format("Column {} is not a map/list, cannot be subscripted", col_spec->name->text()));
+            }
+
+            return subscript {
+                .val = sub_col,
+                .sub = prepare_expression(sub.sub, db, schema.ks_name(), &schema, std::move(subscript_column_spec))
+            };
         },
-        [&] (const token&) -> std::optional<expression> {
-            on_internal_error(expr_logger, "tokens are not yet reachable via prepare_expression()");
+        [&] (const token& tk) -> std::optional<expression> {
+            if (!schema_opt) {
+                throw exceptions::invalid_request_exception("cannot process token() function without schema");
+            }
+            auto& schema = *schema_opt;
+
+            std::vector<expression> prepared_token_args;
+            prepared_token_args.reserve(tk.args.size());
+
+            for (const expression& arg : tk.args) {
+                prepared_token_args.emplace_back(prepare_binop_lhs(arg, db, schema));
+            }
+
+            return token(std::move(prepared_token_args));
         },
-        [&] (const unresolved_identifier&) -> std::optional<expression> {
-            on_internal_error(expr_logger, "unresolved_identifiers are not yet reachable via prepare_expression()");
+        [&] (const unresolved_identifier& unin) -> std::optional<expression> {
+            if (!schema_opt) {
+                throw exceptions::invalid_request_exception(fmt::format("Cannot resolve column {} without schema", unin.ident->to_cql_string()));
+            }
+            return resolve_column(unin, *schema_opt);
         },
         [&] (const column_mutation_attribute&) -> std::optional<expression> {
             on_internal_error(expr_logger, "column_mutation_attributes are not yet reachable via prepare_expression()");
@@ -1043,56 +1082,11 @@ static const column_value resolve_column(const unresolved_identifier& col_ident,
 // Resolves columns on LHS of binary_operator and prepares the index in case of a subscripted column.
 // Last argument is a relation to print in the error message in case of failure.
 static expression prepare_binop_lhs(const expression& lhs, data_dictionary::database db, const schema& schema) {
-    return expr::visit(overloaded_functor{
-        [&](const unresolved_identifier& unin) -> expression {
-            return resolve_column(unin, schema);
-        },
-        [](const column_value& cv) -> expression { return cv; },
-        [&](const tuple_constructor& tc) -> expression {
-            std::vector<expression> new_elements;
-            new_elements.reserve(tc.elements.size());
-
-            for (const expression& elem : tc.elements) {
-                new_elements.emplace_back(prepare_binop_lhs(elem, db, schema));
-            }
-
-            return tuple_constructor {
-                .elements = std::move(new_elements)
-            };
-        },
-        [&](const token& tk) -> expression {
-            std::vector<expression> prepared_token_args;
-            prepared_token_args.reserve(tk.args.size());
-
-            for (const expression& arg : tk.args) {
-                prepared_token_args.emplace_back(prepare_binop_lhs(arg, db, schema));
-            }
-
-            return token(std::move(prepared_token_args));
-        },
-        [&](const subscript& sub) -> expression {
-            auto sub_col = prepare_binop_lhs(sub.val, db, schema);
-            const abstract_type& sub_col_type = type_of(sub_col)->without_reversed();
-
-            auto col_spec = column_specification_of(sub_col);
-            lw_shared_ptr<column_specification> subscript_column_spec;
-            if (sub_col_type.is_map()) {
-                subscript_column_spec = map_key_spec_of(*col_spec);
-            } else if (sub_col_type.is_list()) {
-                subscript_column_spec = list_key_spec_of(*col_spec);
-            } else {
-                throw exceptions::invalid_request_exception(format("Column {} is not a map/list, cannot be subscripted", col_spec->name->text()));
-            }
-
-            return subscript {
-                .val = sub_col,
-                .sub = prepare_expression(sub.sub, db, schema.ks_name(), &schema, std::move(subscript_column_spec))
-            };
-        },
-        [](const auto& e) -> expression {
-            on_internal_error(expr_logger, format("prepare_binop_lhs: Unhandled expression: {}", e));
-        }
-    }, lhs);
+    auto expr_opt = try_prepare_expression(lhs, db, "", &schema, {});
+    if (!expr_opt) {
+        throw exceptions::invalid_request_exception(fmt::format("Could not infer type of {}", lhs));
+    }
+    return std::move(*expr_opt);
 }
 
 // Finds the type of a prepared LHS of binary_operator and creates a receiver with it.
