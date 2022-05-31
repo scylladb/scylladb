@@ -982,12 +982,11 @@ public:
 }
 
 // Finds column_defintion for given column name in the schema.
-// Second argument is a relation to print in the error message in case of failure.
-static const column_value resolve_column(const unresolved_identifier& col_ident, const schema& schema, const binary_operator& printable_relation) {
+static const column_value resolve_column(const unresolved_identifier& col_ident, const schema& schema) {
     ::shared_ptr<column_identifier> id = col_ident.ident->prepare_column_identifier(schema);
     const column_definition* def = get_column_definition(schema, *id);
     if (!def || def->is_hidden_from_cql()) {
-        throw exceptions::unrecognized_entity_exception(*id, fmt::format("{}", printable_relation));
+        throw exceptions::unrecognized_entity_exception(*id, fmt::format("{}", col_ident));
     }
     return column_value(def);
 }
@@ -997,7 +996,7 @@ static const column_value resolve_column(const unresolved_identifier& col_ident,
 static expression prepare_binop_lhs(const expression& lhs, data_dictionary::database db, const schema& schema, const binary_operator& printable_relation) {
     return expr::visit(overloaded_functor{
         [&](const unresolved_identifier& unin) -> expression {
-            return resolve_column(unin, schema, printable_relation);
+            return resolve_column(unin, schema);
         },
         [](const column_value& cv) -> expression { return cv; },
         [&](const tuple_constructor& tc) -> expression {
@@ -1025,7 +1024,7 @@ static expression prepare_binop_lhs(const expression& lhs, data_dictionary::data
         [&](const subscript& sub) -> expression {
             const column_definition* sub_col = expr::visit(overloaded_functor {
                 [&](const unresolved_identifier& unin) -> const column_definition* {
-                    return resolve_column(unin, schema, printable_relation).col;
+                    return resolve_column(unin, schema).col;
                 },
                 [](const column_value& cv) -> const column_definition* {
                     return cv.col;
