@@ -32,12 +32,13 @@ When in doubt, `DESCRIBE index_name` or `SELECT * FROM system_schema.indexes` co
 
 Global index's target is usually just the indexed column name, unless the index has a specific type. All supported types are:
  - regular index: v
- - full collection index: FULL(v)
+ - full collection index (for frozen collection): FULL(v)
  - index on map keys: KEYS(v)
- - index on map values: ENTRIES(v)
+ - index on map, set or list values: VALUES(v)
+ - index on map entries: ENTRIES(v)
 
 Their serialization is just string representation, so:
-"v", "FULL(v)", "KEYS(v)", "ENTRIES(v)" are all valid targets.
+"v", "FULL(v)", "KEYS(v)", "VALUES(v)", "ENTRIES(v)" are all valid targets.
 
 ## Local index
 
