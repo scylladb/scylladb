@@ -1,0 +1,33 @@
+#!/bin/bash -eu
+
+trap 'pkill -P $$ || true' EXIT
+
+DIR=`dirname $(realpath $0)`
+BIN=`realpath $1`
+OUT=`realpath $2`
+TYPE="$3"
+cd "$DIR"
+
+mkdir -p `dirname "$OUT"`
+mkdir "$OUT"
+
+case "$TYPE" in
+llvm)
+    ;;
+*)
+    echo "Unknown profile type $TYPE" 1>&2
+    exit 1
+    ;;
+esac
+
+for W in workloads/*/; do
+    SUBOUT="$OUT"/`basename "$W"`
+    mkdir "$SUBOUT"
+    "$W"/run "$BIN" "$TYPE" "$SUBOUT"
+done
+
+case "$TYPE" in
+llvm)
+    llvm-profdata merge "$OUT"/*/*.profdata -output "$OUT/prof.profdata"
+    ;;
+esac

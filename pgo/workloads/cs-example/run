@@ -1,0 +1,48 @@
+#!/bin/bash -eu
+
+trap 'pkill -P $$ || true' EXIT
+
+DIR=`dirname $(realpath "$0")`
+BIN=`realpath "$1"`
+TYPE="$2"
+OUT=`realpath "$3"`
+cd "$DIR"
+
+function wait_for_port {
+    timeout --foreground "$3" bash -c 'until printf "" 2>>/dev/null >>/dev/tcp/'"$1/$2"'; do sleep 0.1 || exit 1; done'
+}
+
+SERVER_ADDRS=(127.42.42.1 127.42.42.2 127.42.42.3)
+SERVER_PIDS=()
+
+for ADDR in "${SERVER_ADDRS[@]}"; do
+    cd "$OUT" # chdir to OUT so that bolt instrumentation leaves its output there
+    env LLVM_PROFILE_FILE="$OUT/$ADDR-%m.profraw" "$BIN" --options-file="$DIR/scylla.yaml" --workdir="$OUT"/workdir-"$ADDR" --ring-delay-ms=1000 --overprovisioned --developer-mode=yes --smp=2 --memory=1G --seed-provider-parameters=seeds="${SERVER_ADDRS[0]}" --listen-address="$ADDR" --rpc-address="$ADDR" --api-address="$ADDR" 2>"$OUT/$ADDR.log" ${BOLT_OPTION:-} &
+    cd -
+    if ! wait_for_port "$ADDR" 7000 60; then
+        echo "Server "$ADDR" did not set up the RPC socket in 60 seconds. Aborting" 1>&2
+        exit 1
+    fi
+    SERVER_PIDS+=($!)
+done
+for ADDR in "${SERVER_ADDRS[@]}"; do
+    if ! wait_for_port "$ADDR" 9042 60; then
+        echo "Server "$ADDR" did not set up the CQL socket in 60 seconds. Aborting" 1>&2
+        exit 1
+    fi
+done
+
+printf -v PIDLIST '%s,' "${SERVER_PIDS[@]}"
+
+DURATION=30s
+N_PARTITIONS=10000000
+../../../tools/java/tools/bin/cassandra-stress write n="$N_PARTITIONS" cl=quorum no-warmup -mode native cql3 -node 127.42.42.1
+../../../tools/java/tools/bin/cassandra-stress mixed 'ratio(write=1,read=1)' cl=quorum no-warmup duration="$DURATION" -pop dist="UNIFORM(1..$N_PARTITIONS)" -mode native cql3 -node 127.42.42.1 -rate threads=200
+
+kill "${SERVER_PIDS[@]}" && wait "${SERVER_PIDS[@]}"
+
+case "$TYPE" in
+llvm)
+    llvm-profdata merge "$OUT"/*.profraw -output "$OUT/prof.profdata"
+    ;;
+esac
