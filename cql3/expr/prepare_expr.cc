@@ -479,23 +479,37 @@ tuple_constructor_test_assignment(const tuple_constructor& tc, data_dictionary::
 static
 std::optional<expression>
 tuple_constructor_prepare_nontuple(const tuple_constructor& tc, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver) {
-    if (!receiver) {
-        // TODO: It is possible to infer the type of a tuple from the types of the elements
-        return std::nullopt;
+    if (receiver) {
+        tuple_constructor_validate_assignable_to(tc, db, keyspace, *receiver);
     }
-    tuple_constructor_validate_assignable_to(tc, db, keyspace, *receiver);
     std::vector<expression> values;
     bool all_terminal = true;
     for (size_t i = 0; i < tc.elements.size(); ++i) {
-        expression value = prepare_expression(tc.elements[i], db, keyspace, schema_opt, component_spec_of(*receiver, i));
+        lw_shared_ptr<column_specification> component_receiver;
+        if (receiver) {
+            component_receiver = component_spec_of(*receiver, i);
+        }
+        std::optional<expression> value_opt = try_prepare_expression(tc.elements[i], db, keyspace, schema_opt, component_receiver);
+        if (!value_opt) {
+            return std::nullopt;
+        }
+        auto& value = *value_opt;
         if (!is<constant>(value)) {
             all_terminal = false;
         }
         values.push_back(std::move(value));
     }
+    data_type type;
+    if (receiver) {
+        type = receiver->type;
+    } else {
+        type = tuple_type_impl::get_instance(boost::copy_range<std::vector<data_type>>(
+                values
+                | boost::adaptors::transformed(type_of)));
+    }
     tuple_constructor value {
         .elements  = std::move(values),
-        .type = static_pointer_cast<const tuple_type_impl>(receiver->type)
+        .type = std::move(type),
     };
     if (all_terminal) {
         return evaluate(value, query_options::DEFAULT);
