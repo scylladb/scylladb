@@ -1296,6 +1296,8 @@ const char* to_string(sstables::scylla_metadata_type t) {
         case sstables::scylla_metadata_type::RunIdentifier: return "run_identifier";
         case sstables::scylla_metadata_type::LargeDataStats: return "large_data_stats";
         case sstables::scylla_metadata_type::SSTableOrigin: return "sstable_origin";
+        case sstables::scylla_metadata_type::ScyllaVersion: return "scylla_version";
+        case sstables::scylla_metadata_type::ScyllaBuildId: return "scylla_build_id";
     }
     std::abort();
 }
