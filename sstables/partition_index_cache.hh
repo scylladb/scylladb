@@ -254,22 +254,26 @@ public:
 
     // Evicts all unreferenced entries.
     future<> evict_gently() {
-        auto i = _cache.begin();
-        while (i != _cache.end()) {
-            with_allocator(_region.allocator(), [&] {
-                if (i->is_referenced()) {
-                    ++i;
-                } else {
-                    on_evicted(*i);
-                    i = i.erase(key_less_comparator());
-                }
-            });
-            if (need_preempt() && i != _cache.end()) {
-                auto key = i->key();
-                co_await coroutine::maybe_yield();
-                i = _cache.lower_bound(key);
+        return seastar::repeat([i = _cache.begin(), key = std::optional<key_type>(), this] () mutable {
+            if (key) {
+                i = _cache.lower_bound(*key);
             }
-        }
+            while (i != _cache.end()) {
+                with_allocator(_region.allocator(), [&] {
+                    if (i->is_referenced()) {
+                        ++i;
+                    } else {
+                        on_evicted(*i);
+                        i = i.erase(key_less_comparator());
+                    }
+                });
+                if (need_preempt() && i != _cache.end()) {
+                    key = i->key();
+                    return make_ready_future<stop_iteration>(stop_iteration::no);
+                }
+            }
+            return make_ready_future<stop_iteration>(stop_iteration::yes);
+        });
     }
 };
 
