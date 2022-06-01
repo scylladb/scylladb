@@ -12,7 +12,7 @@
 #include "schema.hh"
 #include "db/extensions.hh"
 
-namespace alternator {
+namespace db {
 
 class tags_extension : public schema_extension {
 public:

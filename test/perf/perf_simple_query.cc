@@ -26,7 +26,7 @@
 #include "cql3/query_processor.hh"
 #include "db/config.hh"
 #include "db/extensions.hh"
-#include "alternator/tags_extension.hh"
+#include "db/tags/extension.hh"
 #include "gms/gossiper.hh"
 
 static const sstring table_name = "cf";
@@ -531,7 +531,7 @@ int main(int argc, char** argv) {
             seastar::testing::local_random_engine.seed(seed + this_shard_id());
         }).then([&app] () -> future<> {
             auto ext = std::make_shared<db::extensions>();
-            ext->add_schema_extension<alternator::tags_extension>(alternator::tags_extension::NAME);
+            ext->add_schema_extension<db::tags_extension>(db::tags_extension::NAME);
             auto db_cfg = ::make_shared<db::config>(ext);
 
             const auto enable_cache = app.configuration()["enable-cache"].as<bool>();
