@@ -244,11 +244,18 @@ raft_rpc& raft_group_registry::get_rpc(raft::group_id gid) {
 }
 
 raft::server& raft_group_registry::get_server(raft::group_id gid) {
-    return *(server_for_group(gid).server);
+    auto ptr = server_for_group(gid).server.get();
+    if (!ptr) {
+        on_internal_error(rslog, format("get_server(): no server for group {}", gid));
+    }
+    return *ptr;
 }
 
 raft::server& raft_group_registry::group0() {
-    return *(server_for_group(*_group0_id).server);
+    if (!_group0_id) {
+        on_internal_error(rslog, "group0(): _group0_id not present");
+    }
+    return get_server(*_group0_id);
 }
 
 future<> raft_group_registry::start_server_for_group(raft_server_for_group new_grp) {
