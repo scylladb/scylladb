@@ -1757,7 +1757,7 @@ get_fully_expired_sstables(const table_state& table_s, const std::vector<sstable
         // Get ancestors from sstable which is empty after restart. It works for this purpose because
         // we only need to check that a sstable compacted *in this instance* hasn't an ancestor undeleted.
         // Not getting it from sstable metadata because mc format hasn't it available.
-        return boost::algorithm::any_of(candidate->compaction_ancestors(), [&compacted_undeleted_gens] (auto gen) {
+        return boost::algorithm::any_of(candidate->compaction_ancestors(), [&compacted_undeleted_gens] (const generation_type& gen) {
             return compacted_undeleted_gens.contains(gen);
         });
     };
