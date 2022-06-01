@@ -852,6 +852,12 @@ def test_index_quoted_names(cql, test_keyspace):
         for name in quoted_names:
             assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE {name} CONTAINS KEY 3'))
 
+@pytest.mark.xfail(reason="#10713 - local collection indexing is not implemented yet")
+def test_local_secondary_index_on_collection(cql, test_keyspace):
+    schema = 'pk int, ck int, l list<int>, PRIMARY KEY (pk, ck)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f'CREATE INDEX ON {table}((pk), l)')
+
 # Test that queries with the index over collection provide the same answer as it
 # would be without index, but with ALLOW FILTERING.
 # The operations on collections here are picked up randomly.
