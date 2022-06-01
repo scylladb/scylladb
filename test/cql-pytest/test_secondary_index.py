@@ -465,6 +465,12 @@ def test_filter_and_limit_2(cql, test_keyspace):
         for i in [3, 1, N]:
             assert results[0:i] == list(cql.execute(f'SELECT ck1 FROM {table} WHERE pk = 1 AND ck2 = 2 AND x = 3 LIMIT {i} ALLOW FILTERING'))
 
+@pytest.mark.xfail(reason="#10713 - local collection indexing is not implemented yet")
+def test_local_secondary_index_on_collection(cql, test_keyspace):
+    schema = 'pk int, ck int, l list<int>, PRIMARY KEY (pk, ck)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f'CREATE INDEX ON {table}((pk), l)')
+
 # Test that queries with the index over collection provide the same answer as it
 # would be without index, but with ALLOW FILTERING.
 # The operations on collections here are picked up randomly.
