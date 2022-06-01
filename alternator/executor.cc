@@ -41,7 +41,8 @@
 #include "collection_mutation.hh"
 #include "db/query_context.hh"
 #include "schema.hh"
-#include "alternator/tags_extension.hh"
+#include "db/tags/extension.hh"
+#include "db/tags/utils.hh"
 #include "alternator/rmw_operation.hh"
 #include <seastar/core/coroutine.hh>
 #include <boost/range/adaptors.hpp>
@@ -638,34 +639,6 @@ static schema_ptr get_table_from_arn(service::storage_proxy& proxy, std::string_
     }
 }
 
-const std::map<sstring, sstring>& get_tags_of_table(schema_ptr schema) {
-    auto it = schema->extensions().find(tags_extension::NAME);
-    if (it == schema->extensions().end()) {
-        throw api_error::validation(format("Table {} does not have valid tagging information", schema->ks_name()));
-    }
-    auto tags_extension = static_pointer_cast<alternator::tags_extension>(it->second);
-    return tags_extension->tags();
-}
-
-// find_tag() returns the value of a specific tag, or nothing if it doesn't
-// exist. Unlike get_tags_of_table() above, if the table is missing the
-// tags extension (e.g., is not an Alternator table) it's not an error -
-// we return nothing, as in the case that tags exist but not this tag.
-std::optional<std::string> find_tag(const schema& s, const sstring& tag) {
-    auto it1 = s.extensions().find(tags_extension::NAME);
-    if (it1 == s.extensions().end()) {
-        return std::nullopt;
-    }
-    const std::map<sstring, sstring>& tags_map =
-        static_pointer_cast<alternator::tags_extension>(it1->second)->tags();
-    auto it2 = tags_map.find(tag);
-    if (it2 == tags_map.end()) {
-        return std::nullopt;
-    } else {
-        return it2->second;
-    }
-}
-
 static bool is_legal_tag_char(char c) {
     // FIXME: According to docs, unicode strings should also be accepted.
     // Alternator currently uses a simplified ASCII approach
@@ -760,22 +733,13 @@ static void update_tags_map(const rjson::value& tags, std::map<sstring, sstring>
     validate_tags(tags_map);
 }
 
-// FIXME: Updating tags currently relies on updating schema, which may be subject
-// to races during concurrent updates of the same table. Once Scylla schema updates
-// are fixed, this issue will automatically get fixed as well.
-future<> update_tags(service::migration_manager& mm, schema_ptr schema, std::map<sstring, sstring>&& tags_map) {
-    co_await mm.container().invoke_on(0, [s = global_schema_ptr(std::move(schema)), tags_map = std::move(tags_map)] (service::migration_manager& mm) -> future<> {
-        // FIXME: the following needs to be in a loop. If mm.announce() below
-        // fails, we need to retry the whole thing.
-        auto group0_guard = co_await mm.start_group0_operation();
-
-        schema_builder builder(s);
-        builder.add_extension(tags_extension::NAME, ::make_shared<tags_extension>(tags_map));
-
-        auto m = co_await mm.prepare_column_family_update_announcement(builder.build(), false, std::vector<view_ptr>(), group0_guard.write_timestamp());
-
-        co_await mm.announce(std::move(m), std::move(group0_guard));
-    });
+const std::map<sstring, sstring>& get_tags_of_table_or_throw(schema_ptr schema) {
+    auto tags_ptr = db::get_tags_of_table(schema);
+    if (tags_ptr) {
+        return *tags_ptr;
+    } else {
+        throw api_error::validation(format("Table {} does not have valid tagging information", schema->ks_name()));
+    }
 }
 
 future<executor::request_return_type> executor::tag_resource(client_state& client_state, service_permit permit, rjson::value request) {
@@ -786,7 +750,7 @@ future<executor::request_return_type> executor::tag_resource(client_state& clien
         co_return api_error::access_denied("Incorrect resource identifier");
     }
     schema_ptr schema = get_table_from_arn(_proxy, rjson::to_string_view(*arn));
-    std::map<sstring, sstring> tags_map = get_tags_of_table(schema);
+    std::map<sstring, sstring> tags_map = get_tags_of_table_or_throw(schema);
     const rjson::value* tags = rjson::find(request, "Tags");
     if (!tags || !tags->IsArray()) {
         co_return api_error::validation("Cannot parse tags");
@@ -795,7 +759,7 @@ future<executor::request_return_type> executor::tag_resource(client_state& clien
         co_return api_error::validation("The number of tags must be at least 1") ;
     }
     update_tags_map(*tags, tags_map,  update_tags_action::add_tags);
-    co_await update_tags(_mm, schema, std::move(tags_map));
+    co_await db::update_tags(_mm, schema, std::move(tags_map));
     co_return json_string("");
 }
 
@@ -813,9 +777,9 @@ future<executor::request_return_type> executor::untag_resource(client_state& cli
 
     schema_ptr schema = get_table_from_arn(_proxy, rjson::to_string_view(*arn));
 
-    std::map<sstring, sstring> tags_map = get_tags_of_table(schema);
+    std::map<sstring, sstring> tags_map = get_tags_of_table_or_throw(schema);
     update_tags_map(*tags, tags_map, update_tags_action::delete_tags);
-    co_await update_tags(_mm, schema, std::move(tags_map));
+    co_await db::update_tags(_mm, schema, std::move(tags_map));
     co_return json_string("");
 }
 
@@ -827,7 +791,7 @@ future<executor::request_return_type> executor::list_tags_of_resource(client_sta
     }
     schema_ptr schema = get_table_from_arn(_proxy, rjson::to_string_view(*arn));
 
-    auto tags_map = get_tags_of_table(schema);
+    auto tags_map = get_tags_of_table_or_throw(schema);
     rjson::value ret = rjson::empty_object();
     rjson::add(ret, "Tags", rjson::empty_array());
 
@@ -1046,7 +1010,7 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
     if (tags && tags->IsArray()) {
         update_tags_map(*tags, tags_map, update_tags_action::add_tags);
     }
-    builder.add_extension(tags_extension::NAME, ::make_shared<tags_extension>(tags_map));
+    builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(tags_map));
 
     schema_ptr schema = builder.build();
     auto where_clause_it = where_clauses.begin();
@@ -1061,7 +1025,7 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
         }
         const bool include_all_columns = true;
         view_builder.with_view_info(*schema, include_all_columns, *where_clause_it);
-        view_builder.add_extension(tags_extension::NAME, ::make_shared<tags_extension>());
+        view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>());
         ++where_clause_it;
     }
 
@@ -1455,7 +1419,7 @@ std::optional<mutation> rmw_operation::apply(foreign_ptr<lw_shared_ptr<query::re
 }
 
 rmw_operation::write_isolation rmw_operation::get_write_isolation_for_schema(schema_ptr schema) {
-    const auto& tags = get_tags_of_table(schema);
+    const auto& tags = get_tags_of_table_or_throw(schema);
     auto it = tags.find(WRITE_ISOLATION_TAG_KEY);
     if (it == tags.end() || it->second.empty()) {
         return default_write_isolation;
