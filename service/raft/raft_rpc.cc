@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 #include <seastar/core/coroutine.hh>
+#include "service/raft/messaging.hh"
 #include "service/raft/raft_rpc.hh"
 #include "gms/inet_address.hh"
 #include "gms/inet_address_serializer.hh"
@@ -137,9 +138,7 @@ future<raft::read_barrier_reply> raft_rpc::execute_read_barrier_on_leader(raft::
 }
 
 void raft_rpc::add_server(raft::server_id id, raft::server_info info) {
-    // Parse gms::inet_address from server_info
-    auto in = ser::as_input_stream(bytes_view(info));
-    auto addr = ser::deserialize(in, boost::type<gms::inet_address>());
+    auto addr = raft_addr_to_inet_addr(info);
     // Entries explicitly managed via `rpc::add_server` and `rpc::remove_server` should never expire
     // while entries learnt upon receiving an rpc message should be expirable.
     _address_map.set(id, addr, false);
@@ -218,6 +217,18 @@ future<raft::add_entry_reply> raft_rpc::execute_modify_config(raft::server_id fr
     return raft_with_gate(_shutdown_gate, [&] {
         return _client->execute_modify_config(from, std::move(add), std::move(del), nullptr);
     });
+}
+
+gms::inet_address raft_addr_to_inet_addr(const raft::server_info& info) {
+    return ser::deserialize_from_buffer(info, boost::type<gms::inet_address>());
+}
+
+gms::inet_address raft_addr_to_inet_addr(const raft::server_address& addr) {
+    return raft_addr_to_inet_addr(addr.info);
+}
+
+raft::server_info inet_addr_to_raft_addr(const gms::inet_address& addr) {
+    return ser::serialize_to_buffer<bytes>(addr);
 }
 
 } // end of namespace service
