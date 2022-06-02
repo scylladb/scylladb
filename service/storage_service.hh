@@ -147,8 +147,6 @@ private:
     gms::feature_service& _feature_service;
     distributed<replica::database>& _db;
     gms::gossiper& _gossiper;
-    // Container for all Raft instances running on this shard.
-    raft_group_registry& _raft_gr;
     std::unique_ptr<service::raft_group0> _group0;
     sharded<netw::messaging_service>& _messaging;
     sharded<service::migration_manager>& _migration_manager;
@@ -182,13 +180,12 @@ public:
         sharded<netw::messaging_service>& ms,
         sharded<repair_service>& repair,
         sharded<streaming::stream_manager>& stream_manager,
-        raft_group_registry& raft_gr,
         endpoint_lifecycle_notifier& elc_notif,
         sharded<db::batchlog_manager>& bm);
 
     // Needed by distributed<>
     future<> stop();
-    void init_messaging_service();
+    void init_messaging_service(raft_group_registry& raft_gr);
     future<> uninit_messaging_service();
 
 private:
@@ -328,7 +325,7 @@ public:
      * API.
      * \see init_server_without_the_messaging_service_part
      */
-    future<> init_messaging_service_part();
+    future<> init_messaging_service_part(sharded<raft_group_registry>& raft_gr);
     /*!
      * \brief Uninit the messaging service part of the service.
      */
@@ -347,7 +344,7 @@ public:
      * \see init_messaging_service_part
      */
     future<> join_cluster(cql3::query_processor& qp, raft_group0_client& client, cdc::generation_service& cdc_gen_service,
-            sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy);
+            sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy, raft_group_registry& raft_gr);
 
     future<> drain_on_shutdown();
 
