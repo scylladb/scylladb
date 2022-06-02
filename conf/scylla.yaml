@@ -66,16 +66,18 @@ commitlog_sync_period_in_ms: 10000
 commitlog_segment_size_in_mb: 32
 
 # seed_provider class_name is saved for future use.
-# seeds address(es) are mandatory!
+# A seed address is mandatory.
 seed_provider:
-    # Addresses of hosts that are deemed contact points. 
-    # Scylla nodes use this list of hosts to find each other and learn
-    # the topology of the ring.  You must change this if you are running
-    # multiple nodes!
+    # The addresses of hosts that will serve as contact points for the joining node. 
+    # It allows the node to discover the cluster ring topology on startup (when 
+    # joining the cluster).
+    # Once the node has joined the cluster, the seed list has no function.
     - class_name: org.apache.cassandra.locator.SimpleSeedProvider
       parameters:
-          # seeds is actually a comma-delimited list of addresses.
-          # Ex: "<ip1>,<ip2>,<ip3>"
+          # In a new cluster, provide the address of the first node.
+          # In an existing cluster, specify the address of at least one existing node.
+          # If you specify addresses of more than one node, use a comma to separate them.
+          # For example: "<IP1>,<IP2>,<IP3>"
           - seeds: "127.0.0.1"
 
 # Address to bind to and tell other Scylla nodes to connect to.
