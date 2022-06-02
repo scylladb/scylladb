@@ -140,9 +140,9 @@ def this_dc(cql):
 # and automatically deleted at the end. We use scope="session" so that all
 # tests will reuse the same keyspace.
 @pytest.fixture(scope="session")
-def keyspace(cql, this_dc):
+async def keyspace(cql, this_dc):
     name = unique_name()
-    cql.execute("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" +
+    await cql.run_async("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" +
                 this_dc + "' : 1 }")
     yield name
-    cql.execute("DROP KEYSPACE " + name)
+    await cql.run_async("DROP KEYSPACE " + name)
