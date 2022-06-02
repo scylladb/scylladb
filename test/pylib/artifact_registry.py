@@ -47,7 +47,7 @@ class ArtifactRegistry:
         the suite. Executing exit artifacts right away is a good idea
         because it kills running processes and frees their resources
         early."""
-        logging.info("Cleaning up after suite %s...", suite)
+        logging.info("Cleaning up after suite %s...", suite.suite_key)
         # Only drop suite artifacts if the suite executed successfully.
         if not failed and suite in self.suite_artifacts:
             await asyncio.gather(*self.suite_artifacts[suite])
@@ -55,7 +55,7 @@ class ArtifactRegistry:
         if suite in self.exit_artifacts:
             await asyncio.gather(*self.exit_artifacts[suite])
             del self.exit_artifacts[suite]
-        logging.info("Done cleaning up after suite %s...", suite)
+        logging.info("Done cleaning up after suite %s...", suite.suite_key)
 
     def add_suite_artifact(self, suite: Suite, artifact: Callable[[], Artifact]) -> None:
         self.suite_artifacts.setdefault(suite, []).append(artifact())
