@@ -1510,6 +1510,7 @@ static future<std::unique_ptr<rjson::value>> get_previous_item(
     stats.reads_before_write++;
     auto selection = cql3::selection::selection::wildcard(schema);
     auto command = previous_item_read_command(proxy, schema, ck, selection);
+    command->allow_limit = db::allow_per_partition_rate_limit::yes;
     auto cl = db::consistency_level::LOCAL_QUORUM;
 
     return proxy.query(schema, command, to_partition_ranges(*schema, pk), cl, service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state)).then(
@@ -3253,6 +3254,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
             auto selection = cql3::selection::selection::wildcard(rs.schema);
             auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
             auto command = ::make_lw_shared<query::read_command>(rs.schema->id(), rs.schema->version(), partition_slice, _proxy.get_max_result_size(partition_slice));
+            command->allow_limit = db::allow_per_partition_rate_limit::yes;
             future<std::vector<rjson::value>> f = _proxy.query(rs.schema, std::move(command), std::move(partition_ranges), rs.cl,
                     service::storage_proxy::coordinator_query_options(executor::default_timeout(), permit, client_state, trace_state)).then(
                     [schema = rs.schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = rs.attrs_to_get] (service::storage_proxy::coordinator_query_result qr) mutable {

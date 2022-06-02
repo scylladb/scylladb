@@ -4140,7 +4140,7 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
     auto p = shared_from_this();
 
     db::per_partition_rate_limit::info rate_limit_info;
-    if (false /* TODO: Pass the correct allow_limit */ && _db.local().can_apply_per_partition_rate_limit(*schema, db::operation_type::read)) {
+    if (cmd->allow_limit && _db.local().can_apply_per_partition_rate_limit(*schema, db::operation_type::read)) {
         auto r_rate_limit_info = choose_rate_limit_info(_db.local(), !is_read_non_local, db::operation_type::read, schema, token, trace_state);
         if (!r_rate_limit_info) {
             return std::move(r_rate_limit_info).as_failure();

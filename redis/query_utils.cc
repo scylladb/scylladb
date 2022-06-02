@@ -8,6 +8,7 @@
 
 
 #include "redis/query_utils.hh"
+#include "db/per_partition_rate_limit_info.hh"
 #include "redis/options.hh"
 #include "timeout_config.hh"
 #include "service/client_state.hh"

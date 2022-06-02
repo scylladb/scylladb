@@ -405,8 +405,10 @@ public:
         clustering_ranges.emplace_back(query::clustering_range::make_open_ended_both_sides());
         auto slice = query::partition_slice(std::move(clustering_ranges), { }, std::move(regular_columns), opts,
                 std::move(specific_ranges), cql_serialization_format::internal());
-        return make_lw_shared<query::read_command>(s.id(), s.version(), std::move(slice), proxy.get_max_result_size(slice),
+        auto cmd = make_lw_shared<query::read_command>(s.id(), s.version(), std::move(slice), proxy.get_max_result_size(slice),
                 query::row_limit(row_limit), query::partition_limit(partition_limit));
+        cmd->allow_limit = db::allow_per_partition_rate_limit::yes;
+        return cmd;
     }
 
     static future<> do_get_paged_slice(
@@ -692,6 +694,7 @@ public:
             auto& proxy = _proxy.local();
             auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(), std::move(slice), proxy.get_max_result_size(slice),
                     query::row_limit(row_limit));
+            cmd->allow_limit = db::allow_per_partition_rate_limit::yes;
             auto f = _query_state.get_client_state().has_schema_access(_db, *schema, auth::permission::SELECT);
             return f.then([this, &proxy, dk = std::move(dk), cmd, schema, column_limit = request.count, cl = request.consistency_level, permit = std::move(permit)] () mutable {
                 auto timeout = db::timeout_clock::now() + _timeout_config.read_timeout;
@@ -1611,7 +1614,9 @@ private:
         }
         auto slice = query::partition_slice(std::move(clustering_ranges), {}, std::move(regular_columns), opts,
                 nullptr, cql_serialization_format::internal(), per_partition_row_limit);
-        return make_lw_shared<query::read_command>(s.id(), s.version(), std::move(slice), proxy.get_max_result_size(slice));
+        auto cmd = make_lw_shared<query::read_command>(s.id(), s.version(), std::move(slice), proxy.get_max_result_size(slice));
+        cmd->allow_limit = db::allow_per_partition_rate_limit::yes;
+        return cmd;
     }
     static ColumnParent column_path_to_column_parent(const ColumnPath& column_path) {
         ColumnParent ret;
