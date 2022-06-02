@@ -1389,7 +1389,8 @@ public:
         }
         _writer.EndObject();
     }
-    void operator()(const sstables::scylla_metadata::sstable_origin& val) const {
+    template <typename Size>
+    void operator()(const sstables::disk_string<Size>& val) const {
         _writer.String(disk_string_to_string(val));
     }
 
