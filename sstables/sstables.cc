@@ -2322,11 +2322,10 @@ static future<bool> do_validate_compressed(input_stream<char>& stream, const sst
     uint64_t offset = 0;
     uint32_t actual_full_checksum = ChecksumType::init_checksum();
 
-    size_t i = 0;
-    for (auto it = c.offsets.begin(); it != c.offsets.end(); ++it) {
-        auto next_it = std::next(it);
-        auto current_pos = *it;
-        auto next_pos = next_it == c.offsets.end() ? c.compressed_file_length() : *next_it;
+    auto accessor = c.offsets.get_accessor();
+    for (size_t i = 0; i < c.offsets.size(); ++i) {
+        auto current_pos = accessor.at(i);
+        auto next_pos = i + 1 == c.offsets.size() ? c.compressed_file_length() : accessor.at(i + 1);
         auto chunk_len = next_pos - current_pos;
         auto buf = co_await stream.read_exactly(chunk_len);
 
@@ -2346,7 +2345,7 @@ static future<bool> do_validate_compressed(input_stream<char>& stream, const sst
         auto expected_checksum = read_be<uint32_t>(buf.get() + compressed_len);
         auto actual_checksum = ChecksumType::checksum(buf.get(), compressed_len);
         if (actual_checksum != expected_checksum) {
-            sstlog.error("Compressed chunk checksum mismatch at chunk {}, offset {}, for chunk of size {}: expected={}, actual={}", i, offset, chunk_len, expected_checksum, actual_checksum);
+            sstlog.error("Compressed chunk checksum mismatch at offset {}, for chunk #{} of size {}: expected={}, actual={}", offset, i, chunk_len, expected_checksum, actual_checksum);
             valid = false;
         }
 
@@ -2358,7 +2357,6 @@ static future<bool> do_validate_compressed(input_stream<char>& stream, const sst
         }
 
         offset += chunk_len;
-        ++i;
     }
 
     if (actual_full_checksum != expected_digest) {
@@ -2375,7 +2373,8 @@ static future<bool> do_validate_uncompressed(input_stream<char>& stream, const c
     uint64_t offset = 0;
     uint32_t actual_full_checksum = ChecksumType::init_checksum();
 
-    for (const auto expected_checksum : checksum.checksums) {
+    for (size_t i = 0; i < checksum.checksums.size(); ++i) {
+        const auto expected_checksum = checksum.checksums[i];
         auto buf = co_await stream.read_exactly(checksum.chunk_size);
 
         if (buf.empty()) {
@@ -2387,7 +2386,7 @@ static future<bool> do_validate_uncompressed(input_stream<char>& stream, const c
         auto actual_checksum = ChecksumType::checksum(buf.get(), buf.size());
 
         if (actual_checksum != expected_checksum) {
-            sstlog.error("Chunk checksum mismatch at offset {}, for chunk of size {}: expected={}, actual={}", offset, checksum.chunk_size, expected_checksum, actual_checksum);
+            sstlog.error("Chunk checksum mismatch at offset {}, for chunk #{} of size {}: expected={}, actual={}", offset, i, checksum.chunk_size, expected_checksum, actual_checksum);
             valid = false;
         }
 
