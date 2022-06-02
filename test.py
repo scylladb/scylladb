@@ -79,6 +79,7 @@ class TestSuite(ABC):
     suites = dict()
     artifacts = ArtifactRegistry()
     hosts = HostRegistry()
+    FLAKY_RETRIES = 5
     _next_id = 0
 
     def __init__(self, path, cfg, options, mode):
@@ -99,6 +100,7 @@ class TestSuite(ABC):
         self.disabled_tests = set(self.cfg.get("disable", []))
         # Skip tests disabled in specific mode.
         self.disabled_tests.update(self.cfg.get("skip_in_" + mode, []))
+        self.flaky_tests = set(self.cfg.get("flaky", []))
         # If this mode is one of the debug modes, and there are
         # tests disabled in a debug mode, add these tests to the skip list.
         if mode in debug_modes:
@@ -175,7 +177,13 @@ class TestSuite(ABC):
 
     async def run(self, test, options):
         try:
-            await test.run(options)
+            for i in range(1, self.FLAKY_RETRIES):
+                await test.run(options)
+                if test.success or not test.is_flaky or test.is_cancelled:
+                    break
+                logging.info("Retrying test %s after a flaky fail, retry %d", test.uname, i)
+                test.is_flaky_failure = True
+                test.reset()
         finally:
             self.pending_test_count -= 1
             self.n_failed += int(not test.success)
@@ -412,6 +420,12 @@ class Test:
         # Unique file name, which is also readable by human, as filename prefix
         self.uname = "{}.{}".format(self.shortname, self.id)
         self.log_filename = os.path.join(suite.options.tmpdir, self.mode, self.uname + ".log")
+        self.is_flaky = self.shortname in suite.flaky_tests
+        # True if the test was retried after it failed
+        self.is_flaky_failure = False
+        # True if the test was cancelled by a ctrl-c or timeout, so
+        # shouldn't be retried, even if it is flaky
+        self.is_cancelled = False
         Test._reset(self)
 
     def reset(self):
@@ -554,6 +568,9 @@ class CQLApprovalTest(Test):
         self.unidiff = None
         self.server_log = None
         self.env = dict()
+        old_tmpfile = pathlib.Path(self.tmpfile)
+        if old_tmpfile.exists():
+            old_tmpfile.unlink()
 
     async def run(self, options):
         self.success = False
@@ -726,10 +743,20 @@ class TabularConsoleOutput:
 
     def print_progress(self, test):
         self.last_test_no += 1
+        status = ""
+        if test.success:
+            logging.info("Test {} is flaky {}".format(test.uname,
+                                                      test.is_flaky_failure))
+            if test.is_flaky_failure:
+                status = palette.warn("[ FLKY ]")
+            else:
+                status = palette.ok("[ PASS ]")
+        else:
+            status = palette.fail("[ FAIL ]")
         msg = "{:10s} {:^8s} {:^7s} {:8s} {}".format(
             "[{}/{}]".format(self.last_test_no, self.test_count),
             test.suite.name, test.mode[:7],
-            palette.ok("[ PASS ]") if test.success else palette.fail("[ FAIL ]"),
+            status,
             test.uname
         )
         if self.verbose is False:
@@ -818,6 +845,7 @@ async def run_test(test, options, gentle_kill=False, env=dict()):
                 # return False
             return True
         except (asyncio.TimeoutError, asyncio.CancelledError) as e:
+            test.is_cancelled = True
             if process is not None:
                 if gentle_kill:
                     process.terminate()
