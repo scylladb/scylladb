@@ -65,9 +65,17 @@ static int callback(dl_phdr_info* info, size_t size, void* data) {
     return 1;
 }
 
-std::string get_build_id() {
+static std::string really_get_build_id() {
     std::string ret;
     int r = dl_iterate_phdr(callback, &ret);
     assert(r == 1);
     return ret;
+}
+
+std::string get_build_id() {
+    static thread_local std::string cache;
+    if (cache.empty()) {
+        cache = really_get_build_id();
+    }
+    return cache;
 }
