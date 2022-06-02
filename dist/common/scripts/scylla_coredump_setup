@@ -127,10 +127,14 @@ WantedBy=multi-user.target
         #  - Storage: /path/to/file (inacessible)
         #  - Storage: /path/to/file
         #
+        # After systemd-v248, available coredump file output changed like this:
+        #  - Storage: /path/to/file (present)
+        # We need to support both versions.
+        #
         # reference: https://github.com/systemd/systemd/commit/47f50642075a7a215c9f7b600599cbfee81a2913
 
         corefail = False
-        res = re.findall(r'Storage: (.*)$', coreinfo, flags=re.MULTILINE)
+        res = re.findall(r'Storage: (\S+)(?: \(.+\))?$', coreinfo, flags=re.MULTILINE)
         # v232 or later
         if res:
             corepath = res[0]
