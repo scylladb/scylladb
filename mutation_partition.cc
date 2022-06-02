@@ -32,6 +32,7 @@
 #include "clustering_key_filter.hh"
 #include "mutation_partition_view.hh"
 #include "tombstone_gc.hh"
+#include "utils/unconst.hh"
 
 logging::logger mplog("mutation_partition");
 
@@ -741,21 +742,6 @@ mutation_partition::range(const schema& schema, const query::clustering_range& r
     return boost::make_iterator_range(lower_bound(schema, r), upper_bound(schema, r));
 }
 
-template <typename Container>
-boost::iterator_range<typename Container::iterator>
-unconst(Container& c, boost::iterator_range<typename Container::const_iterator> r) {
-    return boost::make_iterator_range(
-        c.erase(r.begin(), r.begin()),
-        c.erase(r.end(), r.end())
-    );
-}
-
-template <typename Container>
-typename Container::iterator
-unconst(Container& c, typename Container::const_iterator i) {
-    return c.erase(i, i);
-}
-
 boost::iterator_range<mutation_partition::rows_type::iterator>
 mutation_partition::range(const schema& schema, const query::clustering_range& r) {
     return unconst(_rows, static_cast<const mutation_partition*>(this)->range(schema, r));
@@ -979,8 +965,7 @@ static void get_compacted_row_slice(const schema& s,
     }
 }
 
-bool has_any_live_data(const schema& s, column_kind kind, const row& cells, tombstone tomb = tombstone(),
-                       gc_clock::time_point now = gc_clock::time_point::min()) {
+bool has_any_live_data(const schema& s, column_kind kind, const row& cells, tombstone tomb, gc_clock::time_point now) {
     bool any_live = false;
     cells.for_each_cell_until([&] (column_id id, const atomic_cell_or_collection& cell_or_collection) {
         const column_definition& def = s.column_at(kind, id);

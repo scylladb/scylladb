@@ -1449,3 +1449,6 @@ inline
 mutation_partition& mutation_partition::container_of(rows_type& rows) {
     return *boost::intrusive::get_parent_from_member(&rows, &mutation_partition::_rows);
 }
+
+bool has_any_live_data(const schema& s, column_kind kind, const row& cells, tombstone tomb = tombstone(),
+                       gc_clock::time_point now = gc_clock::time_point::min());

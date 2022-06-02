@@ -9,6 +9,7 @@
 #pragma once
 
 #include "mutation_partition.hh"
+#include "mutation_partition_v2.hh"
 #include "utils/anchorless_list.hh"
 #include "utils/logalloc.hh"
 #include "utils/coroutine.hh"
