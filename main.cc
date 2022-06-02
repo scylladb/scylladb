@@ -895,25 +895,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 fd.stop().get();
             });
 
-            raft_gr.start(cfg->check_experimental(db::experimental_features_t::RAFT),
-                std::ref(messaging), std::ref(gossiper), std::ref(feature_service), std::ref(fd)).get();
-
-            // group0 client exists only on shard 0
-            // The client has to be created before `stop_raft` since during
-            // desctructiun is has to exists untill raft_gr.stop() completes
-            service::raft_group0_client group0_client(raft_gr.local());
-
-            // XXX: stop_raft has to happen before query_processor
-            // is stopped, since some groups keep using the query
-            // processor until are stopped inside stop_raft.
-            auto stop_raft = defer_verbose_shutdown("Raft", [&raft_gr] {
-                raft_gr.stop().get();
-            });
-            if (cfg->check_experimental(db::experimental_features_t::RAFT)) {
-                supervisor::notify("starting Raft Group Registry service");
-            }
-            raft_gr.invoke_on_all(&service::raft_group_registry::start).get();
-
             supervisor::notify("initializing storage service");
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
@@ -1017,12 +998,33 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             // #293 - do not stop anything
             // engine().at_exit([&proxy] { return proxy.stop(); });
+
+            raft_gr.start(cfg->check_experimental(db::experimental_features_t::RAFT),
+                std::ref(messaging), std::ref(gossiper), std::ref(feature_service), std::ref(fd)).get();
+
+            // gropu0 client exists only on shard 0
+            // The client has to be created before `stop_raft` since during
+            // desctructiun is has to exists untill raft_gr.stop() completes
+            service::raft_group0_client group0_client(raft_gr.local());
+
             supervisor::notify("starting migration manager");
             debug::the_migration_manager = &mm;
             mm.start(std::ref(mm_notifier), std::ref(feature_service), std::ref(messaging), std::ref(proxy), std::ref(gossiper), std::ref(group0_client), std::ref(sys_ks)).get();
             auto stop_migration_manager = defer_verbose_shutdown("migration manager", [&mm] {
                 mm.stop().get();
             });
+
+            // XXX: stop_raft has to happen before query_processor and migration_manager
+            // is stopped, since some groups keep using the query
+            // processor until are stopped inside stop_raft.
+            auto stop_raft = defer_verbose_shutdown("Raft", [&raft_gr] {
+                raft_gr.stop().get();
+            });
+            if (cfg->check_experimental(db::experimental_features_t::RAFT)) {
+                supervisor::notify("starting Raft Group Registry service");
+            }
+            raft_gr.invoke_on_all(&service::raft_group_registry::start).get();
+
             supervisor::notify("starting query processor");
             cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
             debug::the_query_processor = &qp;
