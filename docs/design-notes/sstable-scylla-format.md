@@ -27,6 +27,9 @@ in individual sections
         | extension_attributes
         | run_identifier
         | large_data_stats
+        | sstable_origin
+        | scylla_build_id
+        | scylla_version
 
 `sharding_metadata` (tag 1): describes what token sub-ranges are included in this
 sstable. This is used, when loading the sstable, to determine which shard(s)
@@ -39,8 +42,18 @@ it occupies.
 `run_identifier` (tag 4): a uuid that is the same for all sstables in the same run
 (and different for sstables in different runs).
 
-`large_data_stats`: a map<large_data_type, large_data_stats_entry> with statistics
+`large_data_stats` (tag 5): a `map<large_data_type, large_data_stats_entry>` with statistics
 about large data entities in the sstable.
+
+`sstable_origin` (tag 6): a string describing the origin of the
+sstable ("memtable" for memtable flush, "garbage collection" for
+compaction, etc.).
+
+`scylla_build_id` (tag 7): a string containing the build id of the
+Scylla executable that created the sstable.
+
+`scylla_version` (tag 8): a string containing the version of the
+Scylla executable that created the sstable.
 
 ## sharding_metadata subcomponent
 
