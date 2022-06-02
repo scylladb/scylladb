@@ -412,6 +412,16 @@ class Test:
         # Unique file name, which is also readable by human, as filename prefix
         self.uname = "{}.{}".format(self.shortname, self.id)
         self.log_filename = os.path.join(suite.options.tmpdir, self.mode, self.uname + ".log")
+        Test._reset(self)
+
+    def reset(self):
+        """Reset this object, including all derived state."""
+        for cls in reversed(self.__class__.__mro__):
+            if hasattr(cls, "_reset"):
+                cls._reset(self)
+
+    def _reset(self):
+        """Reset the test before a retry, if it is retried as flaky"""
         self.success = None
 
     @abstractmethod
@@ -446,6 +456,11 @@ class UnitTest(Test):
             self.env = coverage.env(self.path)
         else:
             self.env = dict()
+        UnitTest._reset(self)
+
+    def _reset(self):
+        """Reset the test before a retry, if it is retried as flaky"""
+        pass
 
     def print_summary(self):
         print("Output of {} {}:".format(self.path, " ".join(self.args)))
@@ -474,6 +489,10 @@ class BoostTest(UnitTest):
         boost_args += ['--']
         self.args = boost_args + self.args
         self.casename = casename
+        BoostTest._reset(self)
+
+    def _reset(self):
+        """Reset the test before a retry, if it is retried as flaky"""
         self.__junit_etree = None
 
     def get_junit_etree(self):
@@ -522,6 +541,10 @@ class CQLApprovalTest(Test):
             "--input={}".format(self.cql),
             "--output={}".format(self.tmpfile),
         ]
+        CQLApprovalTest._reset(self)
+
+    def _reset(self):
+        """Reset the test before a retry, if it is retried as flaky"""
         self.is_before_test_ok = False
         self.is_executed_ok = False
         self.is_new = False
@@ -617,6 +640,11 @@ class RunTest(Test):
         self.path = os.path.join(suite.path, shortname)
         self.xmlout = os.path.join(suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
         self.args = ["--junit-xml={}".format(self.xmlout)]
+        RunTest._reset(self)
+
+    def _reset(self):
+        """Reset the test before a retry, if it is retried as flaky"""
+        pass
 
     def print_summary(self):
         print("Output of {} {}:".format(self.path, " ".join(self.args)))
@@ -635,13 +663,17 @@ class PythonTest(Test):
     def __init__(self, test_no, shortname, suite):
         super().__init__(test_no, shortname, suite)
         self.path = "pytest"
-        self.server_log = None
-        self.is_before_test_ok = False
-        self.is_after_test_ok = False
         self.xmlout = os.path.join(self.suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
         self.args = ["-o", "junit_family=xunit2",
                      "--junit-xml={}".format(self.xmlout),
                      os.path.join(suite.path, shortname + ".py")]
+        PythonTest._reset(self)
+
+    def _reset(self):
+        """Reset the test before a retry, if it is retried as flaky"""
+        self.server_log = None
+        self.is_before_test_ok = False
+        self.is_after_test_ok = False
 
     def print_summary(self):
         print("Output of {} {}:".format(self.path, " ".join(self.args)))
