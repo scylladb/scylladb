@@ -33,6 +33,7 @@ class test_env {
         cache_tracker cache_tracker;
         test_env_sstables_manager mgr;
         reader_concurrency_semaphore semaphore;
+        dirty_memory_manager dmm;
 
         impl()
             : mgr(nop_lp_handler, test_db_config, test_feature_service, cache_tracker)
@@ -83,8 +84,11 @@ public:
         return _impl->semaphore.make_tracking_only_permit(nullptr, "test", timeout);
     }
 
+    dirty_memory_manager& get_dirty_memory_manager() {
+        return _impl->dmm;
+    }
     replica::table::config make_table_config() {
-        return replica::table::config{.compaction_concurrency_semaphore = &_impl->semaphore};
+        return replica::table::config{.dirty_memory_manager = &_impl->dmm, .compaction_concurrency_semaphore = &_impl->semaphore};
     }
 
     future<> working_sst(schema_ptr schema, sstring dir, unsigned long generation) {
