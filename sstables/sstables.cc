@@ -79,6 +79,9 @@
 #include "readers/reversing_v2.hh"
 #include "readers/forwardable_v2.hh"
 
+#include "release.hh"
+#include "utils/build_id.hh"
+
 thread_local disk_error_signal_type sstable_read_error;
 thread_local disk_error_signal_type sstable_write_error;
 
@@ -1595,6 +1598,13 @@ sstable::write_scylla_metadata(const io_priority_class& pc, shard_id shard, ssta
         o.value = bytes(to_bytes_view(sstring_view(origin)));
         _components->scylla_metadata->data.set<scylla_metadata_type::SSTableOrigin>(std::move(o));
     }
+
+    scylla_metadata::scylla_version version;
+    version.value = bytes(to_bytes_view(sstring_view(scylla_version())));
+    _components->scylla_metadata->data.set<scylla_metadata_type::ScyllaVersion>(std::move(version));
+    scylla_metadata::scylla_build_id build_id;
+    build_id.value = bytes(to_bytes_view(sstring_view(get_build_id())));
+    _components->scylla_metadata->data.set<scylla_metadata_type::ScyllaBuildId>(std::move(build_id));
 
     write_simple<component_type::Scylla>(*_components->scylla_metadata, pc);
 }
