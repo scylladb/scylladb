@@ -214,6 +214,9 @@ u32 fast_crc32_combine(u32 crc, u32 crc2, ssize_t len2) {
 #include <zlib.h>
 
 u32 fast_crc32_combine(u32 crc, u32 crc2, ssize_t len2) {
+    if (len2 == 0) {
+        return crc;
+    }
     return crc32_combine(crc, crc2, len2);
 }
 
