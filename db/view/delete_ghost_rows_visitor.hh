@@ -6,6 +6,7 @@
 
 #include "query-result-reader.hh"
 #include "replica/database_fwd.hh"
+#include "db/timeout_clock.hh"
 
 namespace service {
 class storage_proxy;

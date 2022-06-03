@@ -3018,7 +3018,7 @@ static std::vector<sstables::shared_sstable> open_sstables(test_env& env, schema
     return result;
 }
 
-static flat_mutation_reader compacted_sstable_reader(test_env& env, schema_ptr s,
+static flat_mutation_reader_v2 compacted_sstable_reader(test_env& env, schema_ptr s,
                      sstring table_name, std::vector<unsigned long> generations) {
     auto cm = make_lw_shared<compaction_manager>(compaction_manager::for_testing_tag{});
     auto cl_stats = make_lw_shared<cell_locker_stats>();
@@ -3041,7 +3041,7 @@ static flat_mutation_reader compacted_sstable_reader(test_env& env, schema_ptr s
     sstables::compact_sstables(std::move(desc), cdata, cf->as_table_state()).get();
 
     auto compacted_sst = open_sstable(env, s, tmp.path().string(), new_generation);
-    return compacted_sst->as_mutation_source().make_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice());
+    return compacted_sst->as_mutation_source().make_reader_v2(s, env.make_reader_permit(), query::full_partition_range, s->full_slice());
 }
 
 SEASTAR_TEST_CASE(compact_deleted_row) {
@@ -3097,7 +3097,7 @@ SEASTAR_TEST_CASE(compact_deleted_row) {
      *   }
      * ]
      */
-    mutation_opt m = with_closeable(compacted_sstable_reader(env, s, table_name, {1, 2}), [&] (flat_mutation_reader& reader) {
+    mutation_opt m = with_closeable(compacted_sstable_reader(env, s, table_name, {1, 2}), [&] (flat_mutation_reader_v2& reader) {
         return read_mutation_from_flat_mutation_reader(reader);
     }).get0();
     BOOST_REQUIRE(m);
@@ -3169,7 +3169,7 @@ SEASTAR_TEST_CASE(compact_deleted_cell) {
      *]
      *
      */
-    mutation_opt m = with_closeable(compacted_sstable_reader(env, s, table_name, {1, 2}), [&] (flat_mutation_reader& reader) {
+    mutation_opt m = with_closeable(compacted_sstable_reader(env, s, table_name, {1, 2}), [&] (flat_mutation_reader_v2& reader) {
         return read_mutation_from_flat_mutation_reader(reader);
     }).get0();
     BOOST_REQUIRE(m);

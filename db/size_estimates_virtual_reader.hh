@@ -9,8 +9,8 @@
  */
 
 #include <seastar/core/io_priority_class.hh>
+#include "readers/flat_mutation_reader_fwd.hh"
 #include "readers/flat_mutation_reader_v2.hh"
-#include "readers/flat_mutation_reader.hh"
 #include "db/system_keyspace.hh"
 #include "tracing/trace_state.hh"
 

@@ -12,6 +12,7 @@
 #include "cql_serialization_format.hh"
 #include "utils/fragment_range.hh"
 #include "utils/managed_bytes.hh"
+#include "exceptions/exceptions.hh"
 #include "types.hh"
 
 int read_collection_size(bytes_view& in, cql_serialization_format sf);

@@ -9,6 +9,7 @@
 #pragma once
 
 #include "partition_version.hh"
+#include "readers/flat_mutation_reader_fwd.hh"
 #include "readers/flat_mutation_reader_v2.hh"
 #include "clustering_key_filter.hh"
 #include "query-request.hh"

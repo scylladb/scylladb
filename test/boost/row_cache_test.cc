@@ -787,7 +787,7 @@ SEASTAR_TEST_CASE(test_presence_checker_runs_under_right_allocator) {
                 tracing::trace_state_ptr tr,
                 streamed_mutation::forwarding fwd,
                 mutation_reader::forwarding mr_fwd) {
-                return ms.make_reader(s, std::move(permit), pr, slice, pc, std::move(tr), fwd, mr_fwd);
+                return ms.make_reader_v2(s, std::move(permit), pr, slice, pc, std::move(tr), fwd, mr_fwd);
             }, [] {
                 return [saved = managed_bytes()] (const dht::decorated_key& key) mutable {
                     // size large enough to defeat the small blob optimization

@@ -510,7 +510,7 @@ SEASTAR_TEST_CASE(broken_ranges_collection) {
   return test_env::do_with_async([] (test_env& env) {
     env.reusable_sst(peers_schema(), "test/resource/sstables/broken_ranges", 2).then([&env] (auto sstp) {
         auto s = peers_schema();
-        return with_closeable(sstp->as_mutation_source().make_reader(s, env.make_reader_permit(), query::full_partition_range), [s] (flat_mutation_reader& reader) {
+        return with_closeable(sstp->as_mutation_source().make_reader_v2(s, env.make_reader_permit(), query::full_partition_range), [s] (auto& reader) {
           return repeat([s, &reader] {
             return read_mutation_from_flat_mutation_reader(reader).then([s] (mutation_opt mut) {
                 auto key_equal = [s, &mut] (sstring ip) {
@@ -1421,13 +1421,13 @@ SEASTAR_TEST_CASE(test_large_index_pages_do_not_cause_large_allocations) {
 
     auto pr = dht::partition_range::make_singular(small_keys[0]);
 
-    mutation expected = *with_closeable(downgrade_to_v1(mt->make_flat_reader(s, env.make_reader_permit(), pr)), [] (flat_mutation_reader& mt_reader) {
+    mutation expected = *with_closeable(mt->make_flat_reader(s, env.make_reader_permit(), pr), [] (auto& mt_reader) {
         return read_mutation_from_flat_mutation_reader(mt_reader);
     }).get0();
 
     auto t0 = std::chrono::steady_clock::now();
     auto large_allocs_before = memory::stats().large_allocations();
-    mutation actual = *with_closeable(sst->as_mutation_source().make_reader(s, env.make_reader_permit(), pr), [] (flat_mutation_reader& sst_reader) {
+    mutation actual = *with_closeable(sst->as_mutation_source().make_reader_v2(s, env.make_reader_permit(), pr), [] (auto& sst_reader) {
         return read_mutation_from_flat_mutation_reader(sst_reader);
     }).get0();
     auto large_allocs_after = memory::stats().large_allocations();

@@ -54,7 +54,6 @@
 #include <seastar/util/optimized_optional.hh>
 
 class sstable_assertions;
-class flat_mutation_reader;
 class cached_file;
 
 namespace sstables {

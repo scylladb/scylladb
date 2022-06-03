@@ -16,6 +16,7 @@
 #include "test/lib/random_utils.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include <seastar/testing/test_case.hh>
+#include "readers/mutation_fragment_v1_stream.hh"
 
 // Helper mutation_fragment_queue that stores the received stream of
 // mutation_fragments in a passed in deque of mutation_fragment_v2.
@@ -83,7 +84,7 @@ repair_rows_on_wire make_random_repair_rows_on_wire(random_mutation_generator& g
         auto m2 = make_lw_shared<replica::memtable>(s);
         m->apply(mut);
         m2->apply(mut);
-        flat_mutation_reader reader = downgrade_to_v1(m2->make_flat_reader(s, permit));
+        auto reader = mutation_fragment_v1_stream(m2->make_flat_reader(s, permit));
         std::list<frozen_mutation_fragment> mfs;
         reader.consume_pausable([&input, s, &mfs](mutation_fragment mf) {
             if ((mf.is_partition_start() && !mf.as_partition_start().partition_tombstone()) || mf.is_end_of_partition()) {

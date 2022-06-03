@@ -16,7 +16,6 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/io_priority_class.hh>
 
-class flat_mutation_reader;
 class flat_mutation_reader_v2;
 class reader_permit;
 

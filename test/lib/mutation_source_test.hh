@@ -17,7 +17,6 @@ using populate_fn_ex = std::function<mutation_source(schema_ptr s, const std::ve
 void run_mutation_source_tests(populate_fn populate, bool with_partition_range_forwarding = true);
 void run_mutation_source_tests(populate_fn_ex populate, bool with_partition_range_forwarding = true);
 void run_mutation_source_tests_plain(populate_fn_ex populate, bool with_partition_range_forwarding = true);
-void run_mutation_source_tests_downgrade(populate_fn_ex populate, bool with_partition_range_forwarding = true);
 void run_mutation_source_tests_reverse(populate_fn_ex populate, bool with_partition_range_forwarding = true);
 
 enum are_equal { no, yes };

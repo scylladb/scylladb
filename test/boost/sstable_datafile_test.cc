@@ -660,7 +660,7 @@ SEASTAR_TEST_CASE(check_multi_schema) {
 void test_sliced_read_row_presence(shared_sstable sst, schema_ptr s, reader_permit permit, const query::partition_slice& ps,
     std::vector<std::pair<partition_key, std::vector<clustering_key>>> expected)
 {
-    auto reader = sst->as_mutation_source().make_reader(s, std::move(permit), query::full_partition_range, ps);
+    auto reader = sst->as_mutation_source().make_reader_v2(s, std::move(permit), query::full_partition_range, ps);
     auto close_reader = deferred_close(reader);
 
     partition_key::equality pk_eq(*s);
@@ -2797,7 +2797,7 @@ SEASTAR_TEST_CASE(test_zero_estimated_partitions) {
             sstable_writer_config cfg = env.manager().configure_writer();
             auto sst = make_sstable_easy(env, tmp, std::move(mr), cfg, 0, version, 0);
 
-            auto sst_mr = sst->as_mutation_source().make_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice());
+            auto sst_mr = sst->as_mutation_source().make_reader_v2(s, env.make_reader_permit(), query::full_partition_range, s->full_slice());
             auto close_mr = deferred_close(sst_mr);
             auto sst_mut = read_mutation_from_flat_mutation_reader(sst_mr).get0();
 

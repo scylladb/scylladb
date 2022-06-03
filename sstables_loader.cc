@@ -15,6 +15,7 @@
 #include "sstables/sstables.hh"
 #include "gms/inet_address.hh"
 #include "streaming/stream_mutation_fragments_cmd.hh"
+#include "readers/mutation_fragment_v1_stream.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "message/messaging_service.hh"
 
@@ -151,7 +152,7 @@ future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
         size_t num_bytes_read = 0;
         nr_sst_current += sst_processed.size();
         auto permit = co_await _db.local().obtain_reader_permit(table, "sstables_loader::load_and_stream()", db::no_timeout);
-        auto reader = downgrade_to_v1(table.make_streaming_reader(s, std::move(permit), full_partition_range, sst_set));
+        auto reader = mutation_fragment_v1_stream(table.make_streaming_reader(s, std::move(permit), full_partition_range, sst_set));
         std::exception_ptr eptr;
         bool failed = false;
         try {

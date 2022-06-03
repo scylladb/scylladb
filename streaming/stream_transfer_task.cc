@@ -15,7 +15,7 @@
 #include "streaming/stream_manager.hh"
 #include "streaming/stream_reason.hh"
 #include "streaming/stream_mutation_fragments_cmd.hh"
-#include "readers/flat_mutation_reader.hh"
+#include "readers/mutation_fragment_v1_stream.hh"
 #include "mutation_fragment_stream_validator.hh"
 #include "frozen_mutation.hh"
 #include "mutation.hh"
@@ -56,7 +56,7 @@ struct send_info {
     replica::column_family& cf;
     dht::token_range_vector ranges;
     dht::partition_range_vector prs;
-    flat_mutation_reader reader;
+    mutation_fragment_v1_stream reader;
     noncopyable_function<void(size_t)> update;
     send_info(netw::messaging_service& ms_, utils::UUID plan_id_, replica::table& tbl_, reader_permit permit_,
               dht::token_range_vector ranges_, netw::messaging_service::msg_addr id_,
@@ -70,7 +70,7 @@ struct send_info {
         , cf(tbl_)
         , ranges(std::move(ranges_))
         , prs(dht::to_partition_ranges(ranges))
-        , reader(downgrade_to_v1(cf.make_streaming_reader(cf.schema(), std::move(permit_), prs)))
+        , reader(cf.make_streaming_reader(cf.schema(), std::move(permit_), prs))
         , update(std::move(update_fn))
     {
     }
@@ -106,8 +106,8 @@ struct send_info {
 };
 
 future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
- return si->reader.peek().then([si] (mutation_fragment* mfp) {
-  if (!mfp) {
+ return si->reader.has_more_fragments().then([si] (bool there_is_more) {
+  if (!there_is_more) {
     // The reader contains no data
     sslog.info("[Stream #{}] Skip sending ks={}, cf={}, reader contains no data, with new rpc streaming",
         si->plan_id, si->cf.schema()->ks_name(), si->cf.schema()->cf_name());

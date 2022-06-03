@@ -24,7 +24,6 @@
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
-#include "readers/flat_mutation_reader.hh"
 #include "test/lib/data_model.hh"
 #include "test/lib/eventually.hh"
 #include "test/lib/random_utils.hh"

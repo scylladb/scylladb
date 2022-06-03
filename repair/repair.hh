@@ -29,8 +29,6 @@
 #include "repair/hash.hh"
 #include "repair/sync_boundary.hh"
 
-class flat_mutation_reader;
-
 namespace replica {
 class database;
 }

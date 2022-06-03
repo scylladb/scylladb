@@ -15,7 +15,6 @@
 #include "partition_snapshot_row_cursor.hh"
 #include "range_tombstone_assembler.hh"
 #include "read_context.hh"
-#include "readers/flat_mutation_reader.hh"
 #include "readers/delegating_v2.hh"
 #include "clustering_key_filter.hh"
 

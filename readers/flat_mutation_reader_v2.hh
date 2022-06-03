@@ -19,7 +19,6 @@
 #include "reader_permit.hh"
 
 using seastar::future;
-class flat_mutation_reader;
 
 /// \brief Represents a stream of mutation fragments.
 ///
@@ -162,7 +161,6 @@ public:
             return _buffer;
         }
 
-        virtual flat_mutation_reader* get_original() { return nullptr; }
     public:
         impl(schema_ptr s, reader_permit permit) : _buffer(permit), _schema(std::move(s)), _permit(std::move(permit)) { }
         virtual ~impl() {}
@@ -403,11 +401,6 @@ private:
     void do_upgrade_schema(const schema_ptr&);
     static void on_close_error(std::unique_ptr<impl>, std::exception_ptr ep) noexcept;
 
-    flat_mutation_reader* get_original() {
-        return _impl->get_original();
-    }
-    friend flat_mutation_reader downgrade_to_v1(flat_mutation_reader_v2);
-    friend flat_mutation_reader_v2 upgrade_to_v2(flat_mutation_reader);
 public:
     flat_mutation_reader_v2(std::unique_ptr<impl> impl) noexcept : _impl(std::move(impl)) {}
     flat_mutation_reader_v2(const flat_mutation_reader_v2&) = delete;

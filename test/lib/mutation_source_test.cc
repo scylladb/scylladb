@@ -964,11 +964,8 @@ void test_mutation_reader_fragments_have_monotonic_positions(tests::reader_concu
     for_each_mutation([&semaphore, &populate] (const mutation& m) {
         auto ms = populate(m.schema(), {m}, gc_clock::now());
 
-        auto rd = ms.make_reader(m.schema(), semaphore.make_permit());
+        auto rd = ms.make_reader_v2(m.schema(), semaphore.make_permit());
         assert_that(std::move(rd)).has_monotonic_positions();
-
-        auto rd2 = ms.make_reader_v2(m.schema(), semaphore.make_permit());
-        assert_that(std::move(rd2)).has_monotonic_positions();
     });
 }
 
@@ -1320,24 +1317,6 @@ void test_slicing_with_overlapping_range_tombstones(tests::reader_concurrency_se
 
     {
         auto slice = partition_slice_builder(*s).with_range(range).build();
-        auto rd = ds.make_reader(s, semaphore.make_permit(), query::full_partition_range, slice);
-        auto close_rd = deferred_close(rd);
-
-        auto prange = position_range(range);
-        mutation result(m1.schema(), m1.decorated_key());
-
-        rd.consume_pausable([&] (mutation_fragment&& mf) {
-            if (mf.position().has_clustering_key() && !mf.range().overlaps(*s, prange.start(), prange.end())) {
-                BOOST_FAIL(format("Received fragment which is not relevant for the slice: {}, slice: {}", mutation_fragment::printer(*s, mf), range));
-            }
-            result.partition().apply(*s, std::move(mf));
-            return stop_iteration::no;
-        }).get();
-
-        assert_that(result).is_equal_to(m1 + m2, query::clustering_row_ranges({range}));
-    }
-    {
-        auto slice = partition_slice_builder(*s).with_range(range).build();
         auto rd = ds.make_reader_v2(s, semaphore.make_permit(), query::full_partition_range, slice);
         auto close_rd = deferred_close(rd);
 
@@ -1361,7 +1340,7 @@ void test_slicing_with_overlapping_range_tombstones(tests::reader_concurrency_se
 
     // Check fast_forward_to()
     {
-        auto rd = ds.make_reader(s, semaphore.make_permit(), query::full_partition_range, s->full_slice(), default_priority_class(),
+        auto rd = ds.make_fragment_v1_stream(s, semaphore.make_permit(), query::full_partition_range, s->full_slice(), default_priority_class(),
             nullptr, streamed_mutation::forwarding::yes);
         auto close_rd = deferred_close(rd);
 
@@ -1393,32 +1372,6 @@ void test_slicing_with_overlapping_range_tombstones(tests::reader_concurrency_se
 
         assert_that(result).is_equal_to(m1 + m2);
     }
-}
-
-void test_downgrade_to_v1_clear_buffer(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
-    testlog.info(__PRETTY_FUNCTION__);
-
-    simple_schema s;
-    auto pkey = s.make_pkey();
-    sstring value(256, 'v');
-
-    // Enough to trigger is_buffer_full.
-    const size_t row_count = 1 + flat_mutation_reader_v2::default_max_buffer_size_in_bytes() / value.size();
-
-    std::vector<mutation> mutations {{s.schema(), pkey}};
-    mutation &m = mutations.front();
-
-    s.delete_range(m, s.make_ckey_range(0, row_count));
-    for (size_t i = 0; i < row_count; ++i) {
-        s.add_row(m, s.make_ckey(i), value);
-    }
-
-    auto ms = populate(s.schema(), mutations, gc_clock::now());
-
-    assert_that(downgrade_to_v1(ms.make_reader_v2(s.schema(), semaphore.make_permit())))
-            .produces_partition_start(pkey) // Read something.
-            .next_partition()               // Next partition clears buffer.
-            .produces_end_of_stream();      // Expect no active range tombstone at this point.
 }
 
 void test_range_tombstones_v2(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
@@ -1634,9 +1587,9 @@ void test_reader_conversions(tests::reader_concurrency_semaphore_wrapper& semaph
         m_compacted.partition().compact_for_compaction(*m_compacted.schema(), always_gc, m_compacted.decorated_key(), query_time);
 
         {
-            auto rd = ms.make_reader_v2(m.schema(), semaphore.make_permit());
-            assert_that(downgrade_to_v1(std::move(rd)))
-                    .produces_compacted(m_compacted, query_time);
+            auto rd = ms.make_fragment_v1_stream(m.schema(), semaphore.make_permit());
+            match_compacted_mutation(read_mutation_from_flat_mutation_reader(rd).get0(), m_compacted, query_time);
+            rd.close().get();
         }
     });
 }
@@ -1649,7 +1602,6 @@ void run_mutation_reader_tests(populate_fn_ex populate, bool with_partition_rang
     tests::reader_concurrency_semaphore_wrapper semaphore;
 
     test_range_tombstones_v2(semaphore, populate);
-    test_downgrade_to_v1_clear_buffer(semaphore, populate);
     test_reader_conversions(semaphore, populate);
     test_date_tiered_clustering_slicing(semaphore, populate);
     test_clustering_slices(semaphore, populate);
@@ -1716,7 +1668,6 @@ void run_mutation_source_tests(populate_fn populate, bool with_partition_range_f
 
 void run_mutation_source_tests(populate_fn_ex populate, bool with_partition_range_forwarding) {
     run_mutation_source_tests_plain(populate, with_partition_range_forwarding);
-    run_mutation_source_tests_downgrade(populate, with_partition_range_forwarding);
     run_mutation_source_tests_reverse(populate, with_partition_range_forwarding);
     // Some tests call the sub-types individually, mind checking them
     // if adding new stuff here
@@ -1725,24 +1676,6 @@ void run_mutation_source_tests(populate_fn_ex populate, bool with_partition_rang
 void run_mutation_source_tests_plain(populate_fn_ex populate, bool with_partition_range_forwarding) {
     testlog.info(__PRETTY_FUNCTION__);
     run_mutation_reader_tests(populate, with_partition_range_forwarding);
-}
-
-void run_mutation_source_tests_downgrade(populate_fn_ex populate, bool with_partition_range_forwarding) {
-    testlog.info(__PRETTY_FUNCTION__);
-    // ? -> v2 -> v1 -> *
-    run_mutation_reader_tests([populate] (schema_ptr s, const std::vector<mutation>& m, gc_clock::time_point t) -> mutation_source {
-        return mutation_source([ms = populate(s, m, t)] (schema_ptr s,
-                                              reader_permit permit,
-                                              const dht::partition_range& pr,
-                                              const query::partition_slice& slice,
-                                              const io_priority_class& pc,
-                                              tracing::trace_state_ptr tr,
-                                              streamed_mutation::forwarding fwd,
-                                              mutation_reader::forwarding mr_fwd) {
-            return downgrade_to_v1(
-                    ms.make_reader_v2(s, std::move(permit), pr, slice, pc, std::move(tr), fwd, mr_fwd));
-        });
-    }, with_partition_range_forwarding);
 }
 
 void run_mutation_source_tests_reverse(populate_fn_ex populate, bool with_partition_range_forwarding) {
@@ -1758,39 +1691,20 @@ void run_mutation_source_tests_reverse(populate_fn_ex populate, bool with_partit
         }
         auto ms = populate(table_schema, reversed_mutations, t);
 
-      if (ms.native_version() == mutation_source::version::v1) {
         return mutation_source([table_schema, ms = std::move(ms), reversed_slices = std::list<query::partition_slice>()] (
-                    schema_ptr query_schema,
-                    reader_permit permit,
-                    const dht::partition_range& pr,
-                    const query::partition_slice& slice,
-                    const io_priority_class& pc,
-                    tracing::trace_state_ptr tr,
-                    streamed_mutation::forwarding fwd,
-                    mutation_reader::forwarding mr_fwd) mutable {
+                schema_ptr query_schema,
+                reader_permit permit,
+                const dht::partition_range& pr,
+                const query::partition_slice& slice,
+                const io_priority_class& pc,
+                tracing::trace_state_ptr tr,
+                streamed_mutation::forwarding fwd,
+                mutation_reader::forwarding mr_fwd) mutable {
             reversed_slices.emplace_back(partition_slice_builder(*table_schema, query::native_reverse_slice_to_legacy_reverse_slice(*table_schema, slice))
-                        .with_option<query::partition_slice::option::reversed>()
-                        .build());
-
-            return ms.make_reader(query_schema, std::move(permit), pr, reversed_slices.back(), pc, tr, fwd, mr_fwd);
-        });
-      } else {
-          return mutation_source([table_schema, ms = std::move(ms), reversed_slices = std::list<query::partition_slice>()] (
-                    schema_ptr query_schema,
-                    reader_permit permit,
-                    const dht::partition_range& pr,
-                    const query::partition_slice& slice,
-                    const io_priority_class& pc,
-                    tracing::trace_state_ptr tr,
-                    streamed_mutation::forwarding fwd,
-                    mutation_reader::forwarding mr_fwd) mutable {
-            reversed_slices.emplace_back(partition_slice_builder(*table_schema, query::native_reverse_slice_to_legacy_reverse_slice(*table_schema, slice))
-                        .with_option<query::partition_slice::option::reversed>()
-                        .build());
-
+                    .with_option<query::partition_slice::option::reversed>()
+                    .build());
             return ms.make_reader_v2(query_schema, std::move(permit), pr, reversed_slices.back(), pc, tr, fwd, mr_fwd);
         });
-      }
     }, false); // FIXME: pass with_partition_range_forwarding after all natively reversing sources have fast-forwarding support
 }
 
