@@ -150,14 +150,16 @@ public:
     virtual cql3_type prepare_internal(const sstring& keyspace, const data_dictionary::user_types_metadata& user_types) override {
         assert(_values); // "Got null values type for a collection";
 
-        if (!is_frozen() && _values->supports_freezing() && !_values->is_frozen()) {
-            throw exceptions::invalid_request_exception(
-                    format("Non-frozen user types or collections are not allowed inside collections: {}", *this));
-        }
         if (_values->is_counter()) {
             throw exceptions::invalid_request_exception(format("Counters are not allowed inside collections: {}", *this));
         }
 
+        auto result = do_prepare(keyspace, user_types);
+
+        if (!is_frozen() && _values->supports_freezing() && !_values->is_frozen()) {
+            throw exceptions::invalid_request_exception(
+                    format("Non-frozen user types or collections are not allowed inside collections: {}", *this));
+        }
         if (_keys) {
             if (!is_frozen() && _keys->supports_freezing() && !_keys->is_frozen()) {
                 throw exceptions::invalid_request_exception(
@@ -165,6 +167,19 @@ public:
             }
         }
 
+        return result;
+    }
+
+    bool references_user_type(const sstring& name) const override {
+        return (_keys && _keys->references_user_type(name)) || _values->references_user_type(name);
+    }
+
+    bool is_duration() const override {
+        return false;
+    }
+
+private:
+    cql3_type do_prepare(const sstring& keyspace, const data_dictionary::user_types_metadata& user_types) {
         if (_kind == abstract_type::kind::list) {
             return cql3_type(list_type_impl::get_instance(_values->prepare_internal(keyspace, user_types).get_type(), !is_frozen()));
         } else if (_kind == abstract_type::kind::set) {
@@ -177,17 +192,11 @@ public:
             if (_keys->is_duration()) {
                 throw exceptions::invalid_request_exception(format("Durations are not allowed as map keys: {}", *this));
             }
-            return cql3_type(map_type_impl::get_instance(_keys->prepare_internal(keyspace, user_types).get_type(), _values->prepare_internal(keyspace, user_types).get_type(), !is_frozen()));
+            return cql3_type(map_type_impl::get_instance(_keys->prepare_internal(keyspace, user_types).get_type(),
+                                                         _values->prepare_internal(keyspace, user_types).get_type(),
+                                                         !is_frozen()));
         }
         abort();
-    }
-
-    bool references_user_type(const sstring& name) const override {
-        return (_keys && _keys->references_user_type(name)) || _values->references_user_type(name);
-    }
-
-    bool is_duration() const override {
-        return false;
     }
 };
 

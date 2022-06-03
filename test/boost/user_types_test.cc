@@ -111,16 +111,16 @@ SEASTAR_TEST_CASE(test_invalid_user_type_statements) {
 
         // non-frozen UDTs can't be inside collections, in create table statements...
         REQUIRE_INVALID(e, "create table bad (a int primary key, b list<ut1>)",
-                "Non-frozen user types or collections are not allowed inside collections: list<ut1>");
+                "Non-frozen user types or collections are not allowed inside collections: list<ks.ut1>");
         REQUIRE_INVALID(e, "create table bad (a int primary key, b set<ut1>)",
-                "Non-frozen user types or collections are not allowed inside collections: set<ut1>");
+                "Non-frozen user types or collections are not allowed inside collections: set<ks.ut1>");
         REQUIRE_INVALID(e, "create table bad (a int primary key, b map<int, ut1>)",
-                "Non-frozen user types or collections are not allowed inside collections: map<int, ut1>");
+                "Non-frozen user types or collections are not allowed inside collections: map<int, ks.ut1>");
         REQUIRE_INVALID(e, "create table bad (a int primary key, b map<ut1, int>)",
-                "Non-frozen user types or collections are not allowed inside collections: map<ut1, int>");
+                "Non-frozen user types or collections are not allowed inside collections: map<ks.ut1, int>");
         // ... and in user type definitions
         REQUIRE_INVALID(e, "create type ut2 (a int, b list<ut1>)",
-                "Non-frozen user types or collections are not allowed inside collections: list<ut1>");
+                "Non-frozen user types or collections are not allowed inside collections: list<ks.ut1>");
         //
         // non-frozen UDTs can't be inside UDTs
         REQUIRE_INVALID(e, "create type ut2 (a int, b ut1)",
@@ -139,6 +139,8 @@ SEASTAR_TEST_CASE(test_invalid_user_type_statements) {
         // can't reference non-existing UDT
         REQUIRE_INVALID(e, "create table bad (a int primary key, b ut2)",
                 "Unknown type ks.ut2");
+        REQUIRE_INVALID(e, "create type ut3 (a int, b list<ut2>)",
+                        "Unknown type ks.ut2");
 
         // can't delete fields of frozen UDT or non-UDT columns
         e.execute_cql("create table cf1 (a int primary key, b frozen<ut1>, c int)").discard_result().get();
