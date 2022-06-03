@@ -63,7 +63,8 @@ def cql(request):
                       auth_provider=PlainTextAuthProvider(username='cassandra', password='cassandra'),
                       ssl_context=ssl_context,
                       )
-    return cluster.connect()
+    yield cluster.connect()
+    cluster.shutdown()
 
 
 # A function-scoped autouse=True fixture allows us to test after every test
