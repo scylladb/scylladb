@@ -83,6 +83,10 @@ public:
         return _impl->semaphore.make_tracking_only_permit(nullptr, "test", timeout);
     }
 
+    replica::table::config make_table_config() {
+        return replica::table::config{.compaction_concurrency_semaphore = &_impl->semaphore};
+    }
+
     future<> working_sst(schema_ptr schema, sstring dir, unsigned long generation) {
         return reusable_sst(std::move(schema), dir, generation).then([] (auto ptr) { return make_ready_future<>(); });
     }

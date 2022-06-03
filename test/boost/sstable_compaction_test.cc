@@ -193,7 +193,7 @@ SEASTAR_TEST_CASE(compaction_manager_basic_test) {
     auto cm = compaction_manager_for_testing();
 
     auto tmp = tmpdir();
-    replica::column_family::config cfg = column_family_test_config(env.semaphore());
+    replica::column_family::config cfg = env.make_table_config();
     cfg.datadir = tmp.path().string();
     cfg.enable_commitlog = false;
     cfg.enable_incremental_backups = false;
@@ -268,7 +268,7 @@ SEASTAR_TEST_CASE(compact) {
     auto cm = compaction_manager_for_testing();
     auto cl_stats = make_lw_shared<cell_locker_stats>();
     auto tracker = make_lw_shared<cache_tracker>();
-    auto cf = make_lw_shared<replica::column_family>(s, column_family_test_config(env.semaphore()), replica::column_family::no_commitlog(), *cm, env.manager(), *cl_stats, *tracker);
+    auto cf = make_lw_shared<replica::column_family>(s, env.make_table_config(), replica::column_family::no_commitlog(), *cm, env.manager(), *cl_stats, *tracker);
     cf->mark_ready_for_writes();
 
     test_setup::do_with_tmp_directory([s, generation, cf, cm] (test_env& env, sstring tmpdir_path) {
@@ -2122,7 +2122,7 @@ SEASTAR_TEST_CASE(sstable_cleanup_correctness_test) {
             auto sst = make_sstable_containing(sst_gen, mutations);
             auto run_identifier = sst->run_identifier();
 
-            auto cf = make_lw_shared<replica::column_family>(s, column_family_test_config(env.semaphore()), replica::column_family::no_commitlog(),
+            auto cf = make_lw_shared<replica::column_family>(s, env.make_table_config(), replica::column_family::no_commitlog(),
                 db.get_compaction_manager(), env.manager(), cl_stats, db.row_cache_tracker());
             cf->mark_ready_for_writes();
             cf->start();
@@ -2271,7 +2271,7 @@ SEASTAR_TEST_CASE(sstable_scrub_validate_mode_test) {
 
             testlog.info("Loaded sstable {}", sst->get_filename());
 
-            auto cfg = column_family_test_config(env.semaphore());
+            auto cfg = env.make_table_config();
             cfg.datadir = tmp.path().string();
             auto table = make_lw_shared<replica::column_family>(schema, cfg, replica::column_family::no_commitlog(),
                 db.get_compaction_manager(), env.manager(), cl_stats, db.row_cache_tracker());
@@ -2470,7 +2470,7 @@ SEASTAR_TEST_CASE(sstable_scrub_skip_mode_test) {
 
             testlog.info("Loaded sstable {}", sst->get_filename());
 
-            auto cfg = column_family_test_config(env.semaphore());
+            auto cfg = env.make_table_config();
             cfg.datadir = tmp.path().string();
             auto table = make_lw_shared<replica::column_family>(schema, cfg, replica::column_family::no_commitlog(),
                 db.get_compaction_manager(), env.manager(), cl_stats, db.row_cache_tracker());
@@ -2567,7 +2567,7 @@ SEASTAR_TEST_CASE(sstable_scrub_segregate_mode_test) {
 
             testlog.info("Loaded sstable {}", sst->get_filename());
 
-            auto cfg = column_family_test_config(env.semaphore());
+            auto cfg = env.make_table_config();
             cfg.datadir = tmp.path().string();
             auto table = make_lw_shared<replica::column_family>(schema, cfg, replica::column_family::no_commitlog(),
                 db.get_compaction_manager(), env.manager(), cl_stats, db.row_cache_tracker());
@@ -2679,7 +2679,7 @@ SEASTAR_TEST_CASE(sstable_scrub_quarantine_mode_test) {
 
                 testlog.info("Loaded sstable {}", sst->get_filename());
 
-                auto cfg = column_family_test_config(env.semaphore());
+                auto cfg = env.make_table_config();
                 cfg.datadir = tmp.path().string();
                 auto table = make_lw_shared<replica::column_family>(schema, cfg, replica::column_family::no_commitlog(),
                     db.get_compaction_manager(), env.manager(), cl_stats, db.row_cache_tracker());
@@ -3246,7 +3246,7 @@ SEASTAR_TEST_CASE(partial_sstable_run_filtered_out_test) {
 
         auto cm = compaction_manager_for_testing();
 
-        replica::column_family::config cfg = column_family_test_config(env.semaphore());
+        replica::column_family::config cfg = env.make_table_config();
         cfg.datadir = tmp.path().string();
         cfg.enable_commitlog = false;
         cfg.enable_incremental_backups = false;
@@ -3511,7 +3511,7 @@ SEASTAR_TEST_CASE(incremental_compaction_data_resurrection_test) {
         forward_jump_clocks(std::chrono::seconds(ttl));
 
         auto cm = compaction_manager_for_testing();
-        replica::column_family::config cfg = column_family_test_config(env.semaphore());
+        replica::column_family::config cfg = env.make_table_config();
         cfg.datadir = tmp.path().string();
         cfg.enable_disk_writes = false;
         cfg.enable_commitlog = false;
@@ -3619,7 +3619,7 @@ SEASTAR_TEST_CASE(twcs_major_compaction_test) {
         auto mut4 = make_insert(1ms);
 
         auto cm = compaction_manager_for_testing();
-        replica::column_family::config cfg = column_family_test_config(env.semaphore());
+        replica::column_family::config cfg = env.make_table_config();
         cfg.datadir = tmp.path().string();
         cfg.enable_disk_writes = true;
         cfg.enable_commitlog = false;
@@ -3656,7 +3656,7 @@ SEASTAR_TEST_CASE(autocompaction_control_test) {
                 .build();
 
         auto tmp = tmpdir();
-        replica::column_family::config cfg = column_family_test_config(env.semaphore());
+        replica::column_family::config cfg = env.make_table_config();
         cfg.datadir = tmp.path().string();
         cfg.enable_commitlog = false;
         cfg.enable_disk_writes = true;
@@ -3757,7 +3757,7 @@ SEASTAR_TEST_CASE(test_bug_6472) {
         };
 
         auto cm = compaction_manager_for_testing();
-        replica::column_family::config cfg = column_family_test_config(env.semaphore());
+        replica::column_family::config cfg = env.make_table_config();
         cfg.datadir = tmpdir_path;
         cfg.enable_disk_writes = true;
         cfg.enable_commitlog = false;
@@ -3889,7 +3889,7 @@ SEASTAR_TEST_CASE(test_twcs_partition_estimate) {
         };
 
         auto cm = compaction_manager_for_testing();
-        replica::column_family::config cfg = column_family_test_config(env.semaphore());
+        replica::column_family::config cfg = env.make_table_config();
         cfg.datadir = tmpdir_path;
         cfg.enable_disk_writes = true;
         cfg.enable_commitlog = false;
@@ -4018,7 +4018,7 @@ SEASTAR_TEST_CASE(test_twcs_interposer_on_memtable_flush) {
 
         auto tmp = tmpdir();
         auto cm = compaction_manager_for_testing();
-        replica::column_family::config cfg = column_family_test_config(env.semaphore());
+        replica::column_family::config cfg = env.make_table_config();
         cfg.datadir = tmp.path().string();
         cfg.enable_disk_writes = true;
         cfg.enable_cache = false;
@@ -4126,7 +4126,7 @@ SEASTAR_TEST_CASE(test_offstrategy_sstable_compaction) {
 
             auto cm = compaction_manager_for_testing();
 
-            replica::column_family::config cfg = column_family_test_config(env.semaphore());
+            replica::column_family::config cfg = env.make_table_config();
             cfg.datadir = tmp.path().string();
             cfg.enable_disk_writes = true;
             cfg.enable_cache = false;
@@ -4409,7 +4409,7 @@ SEASTAR_TEST_CASE(test_twcs_single_key_reader_filtering) {
         auto dkey = sst1->get_first_decorated_key();
 
         auto cm = compaction_manager_for_testing();
-        replica::column_family::config cfg = column_family_test_config(env.semaphore());
+        replica::column_family::config cfg = env.make_table_config();
         replica::cf_stats cf_stats{0};
         cfg.cf_stats = &cf_stats;
         cfg.datadir = tmp.path().string();
@@ -4501,7 +4501,7 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
 
         auto make_table_with_single_fully_expired_sstable = [&] (auto idx) {
             auto s = make_schema(idx);
-            replica::column_family::config cfg = column_family_test_config(env.semaphore());
+            replica::column_family::config cfg = env.make_table_config();
             cfg.datadir = tmp.path().string() + "/" + std::to_string(idx);
             touch_directory(cfg.datadir).get();
             cfg.enable_commitlog = false;
@@ -4702,7 +4702,7 @@ SEASTAR_TEST_CASE(twcs_single_key_reader_through_compound_set_test) {
 
         auto tmp = tmpdir();
         auto cm = compaction_manager_for_testing();
-        replica::column_family::config cfg = column_family_test_config(env.semaphore());
+        replica::column_family::config cfg = env.make_table_config();
         replica::cf_stats cf_stats{0};
         cfg.cf_stats = &cf_stats;
         cfg.datadir = tmp.path().string();
@@ -4834,7 +4834,7 @@ SEASTAR_TEST_CASE(simple_backlog_controller_test) {
             simple_schema ss;
             auto s = ss.schema();
 
-            replica::column_family::config cfg = column_family_test_config(env.semaphore());
+            replica::column_family::config cfg = env.make_table_config();
             cfg.datadir = "";
             cfg.enable_disk_writes = true;
             cfg.enable_cache = false;
