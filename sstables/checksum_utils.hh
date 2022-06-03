@@ -65,6 +65,9 @@ struct zlib_crc32_checksummer {
     }
 
     inline static uint32_t checksum_combine(uint32_t first, uint32_t second, size_t input_len2) {
+        if (input_len2 == 0) {
+            return first;
+        }
         return crc32_combine(first, second, input_len2);
     }
 
