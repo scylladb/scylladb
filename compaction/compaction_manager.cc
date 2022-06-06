@@ -291,6 +291,14 @@ future<> compaction_manager::task::compact_sstables_and_update_history(sstables:
         co_return;
     }
 
+    bool should_update_history = this->should_update_history(descriptor.options.type());
+    sstables::compaction_result res = co_await compact_sstables(std::move(descriptor), cdata, std::move(release_exhausted), std::move(can_purge));
+
+    if (should_update_history) {
+        co_await update_history(*_compacting_table, res, cdata);
+    }
+}
+future<sstables::compaction_result> compaction_manager::task::compact_sstables(sstables::compaction_descriptor descriptor, sstables::compaction_data& cdata, release_exhausted_func_t release_exhausted, can_purge_tombstones can_purge) {
     replica::table& t = *_compacting_table;
     if (can_purge) {
         descriptor.enable_garbage_collection(t.get_sstable_set());
@@ -309,11 +317,7 @@ future<> compaction_manager::task::compact_sstables_and_update_history(sstables:
         }
     };
 
-    bool should_update_history = this->should_update_history(descriptor.options.type());
-    sstables::compaction_result res = co_await sstables::compact_sstables(std::move(descriptor), cdata, t.as_table_state());
-    if (should_update_history) {
-        co_await update_history(t, res, cdata);
-    }
+    co_return co_await sstables::compact_sstables(std::move(descriptor), cdata, t.as_table_state());
 }
 future<> compaction_manager::task::update_history(replica::table& t, const sstables::compaction_result& res, const sstables::compaction_data& cdata) {
     auto ended_at = std::chrono::duration_cast<std::chrono::milliseconds>(res.ended_at.time_since_epoch());
