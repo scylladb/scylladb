@@ -32,19 +32,23 @@ private:
     lw_shared_ptr<worker> _worker_state;
     mutation_application_stats& _app_stats;
     seastar::scheduling_group _scheduling_group;
+    std::function<void(size_t)> _on_space_freed;
 private:
     stop_iteration merge_some(partition_snapshot& snp) noexcept;
     stop_iteration merge_some() noexcept;
     void start_worker();
 public:
     mutation_cleaner_impl(logalloc::region& r, cache_tracker* t, mutation_cleaner* cleaner,
-            mutation_application_stats& app_stats, seastar::scheduling_group sg = seastar::current_scheduling_group())
+            mutation_application_stats& app_stats,
+            seastar::scheduling_group sg = seastar::current_scheduling_group(),
+            std::function<void(size_t)> on_space_freed = nullptr)
         : _region(r)
         , _tracker(t)
         , _cleaner(cleaner)
         , _worker_state(make_lw_shared<worker>())
         , _app_stats(app_stats)
         , _scheduling_group(sg)
+        , _on_space_freed(std::move(on_space_freed))
     {
         start_worker();
     }
@@ -104,8 +108,9 @@ class mutation_cleaner final {
     lw_shared_ptr<mutation_cleaner_impl> _impl;
 public:
     mutation_cleaner(logalloc::region& r, cache_tracker* t, mutation_application_stats& app_stats,
-            seastar::scheduling_group sg = seastar::current_scheduling_group())
-        : _impl(make_lw_shared<mutation_cleaner_impl>(r, t, this, app_stats, sg)) {
+            seastar::scheduling_group sg = seastar::current_scheduling_group(),
+            std::function<void(size_t)> on_space_freed = nullptr)
+        : _impl(make_lw_shared<mutation_cleaner_impl>(r, t, this, app_stats, sg, std::move(on_space_freed))) {
     }
 
     mutation_cleaner(mutation_cleaner&&) = delete;

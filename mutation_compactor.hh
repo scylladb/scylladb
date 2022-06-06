@@ -194,7 +194,7 @@ private:
             }
         }
         // If we have a previous active tombstone we emit the current one even if it is purged.
-        if (!can_purge || _current_emitted_tombstone) {
+        if (_current_emitted_tombstone || (rtc.tombstone() && !can_purge)) {
             partition_is_not_empty(consumer);
             _current_emitted_tombstone = rtc.tombstone();
             consumer_stop = consumer.consume(std::move(rtc));

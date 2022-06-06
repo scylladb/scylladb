@@ -295,7 +295,7 @@ mutation_partition::apply(const schema& s, const mutation_fragment& mf) {
 }
 
 stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation_partition&& p, cache_tracker* tracker,
-        mutation_application_stats& app_stats, is_preemptible preemptible) {
+        mutation_application_stats& app_stats, is_preemptible preemptible, apply_resume& res) {
 #ifdef SEASTAR_DEBUG
     assert(s.version() == _schema_version);
     assert(p._schema_version == _schema_version);
@@ -305,14 +305,106 @@ stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation
     _static_row.apply_monotonically(s, column_kind::static_column, std::move(p._static_row));
     _static_row_continuous |= p._static_row_continuous;
 
+    rows_entry::tri_compare cmp(s);
+    auto del = current_deleter<rows_entry>();
+
+    // Compacts rows in [i, end) with the tombstone.
+    // Erases entries which are left empty by compaction.
+    // Does not affect continuity.
+    auto apply_tombstone_to_rows = [&] (apply_resume::stage stage, tombstone tomb, rows_type::iterator i, rows_type::iterator end) -> stop_iteration {
+        if (!preemptible) {
+            // Compaction is attempted only in preemptible contexts because it can be expensive to perform and is not
+            // necessary for correctness.
+            return stop_iteration::yes;
+        }
+
+        while (i != end) {
+            rows_entry& e = *i;
+            can_gc_fn never_gc = [](tombstone) { return false; };
+
+            ++app_stats.rows_compacted_with_tombstones;
+            bool all_dead = e.dummy() || !e.row().compact_and_expire(s,
+                                                                     tomb,
+                                                                     gc_clock::time_point::min(),  // no TTL expiration
+                                                                     never_gc,                     // no GC
+                                                                     gc_clock::time_point::min()); // no GC
+
+            auto next_i = std::next(i);
+            bool inside_continuous_range = !tracker ||
+                    (e.continuous() && (next_i != _rows.end() && next_i->continuous()));
+
+            if (all_dead && e.row().empty() && inside_continuous_range) {
+                ++app_stats.rows_dropped_by_tombstones;
+                i = _rows.erase(i);
+                if (tracker) {
+                    tracker->on_remove();
+                }
+                del(&e);
+            } else {
+                i = next_i;
+            }
+
+            if (need_preempt() && i != end) {
+                res = apply_resume(stage, i->position());
+                return stop_iteration::no;
+            }
+        }
+        return stop_iteration::yes;
+    };
+
+    if (res._stage <= apply_resume::stage::range_tombstone_compaction) {
+        bool filtering_tombstones = res._stage == apply_resume::stage::range_tombstone_compaction;
+        for (const range_tombstone_entry& rt : p._row_tombstones) {
+            position_in_partition_view pos = rt.position();
+            if (filtering_tombstones) {
+                if (cmp(res._pos, rt.end_position()) >= 0) {
+                    continue;
+                }
+                filtering_tombstones = false;
+                if (cmp(res._pos, rt.position()) > 0) {
+                    pos = res._pos;
+                }
+            }
+            auto i = _rows.lower_bound(pos, cmp);
+            if (i == _rows.end()) {
+                break;
+            }
+            auto end = _rows.lower_bound(rt.end_position(), cmp);
+
+            auto tomb = _tombstone;
+            tomb.apply(rt.tombstone().tomb);
+
+            if (apply_tombstone_to_rows(apply_resume::stage::range_tombstone_compaction, tomb, i, end) == stop_iteration::no) {
+                return stop_iteration::no;
+            }
+        }
+    }
+
     if (_row_tombstones.apply_monotonically(s, std::move(p._row_tombstones), preemptible) == stop_iteration::no) {
         app_stats.has_any_tombstones |= !_row_tombstones.empty();
+        res = apply_resume::merging_range_tombstones();
         return stop_iteration::no;
     }
     app_stats.has_any_tombstones |= !_row_tombstones.empty();
 
-    rows_entry::tri_compare cmp(s);
-    auto del = current_deleter<rows_entry>();
+    if (p._tombstone) {
+        // p._tombstone is already applied to _tombstone
+        rows_type::iterator i;
+        if (res._stage == apply_resume::stage::partition_tombstone_compaction) {
+            i = _rows.lower_bound(res._pos, cmp);
+        } else {
+            i = _rows.begin();
+        }
+        if (apply_tombstone_to_rows(apply_resume::stage::partition_tombstone_compaction,
+                                               _tombstone, i, _rows.end()) == stop_iteration::no) {
+            return stop_iteration::no;
+        }
+        // TODO: Drop redundant range tombstones
+        p._tombstone = {};
+    }
+
+    res = apply_resume::merging_rows();
+
     auto p_i = p._rows.begin();
     auto i = _rows.begin();
     while (p_i != p._rows.end()) {
@@ -397,14 +489,26 @@ stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation
 }
 
 stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation_partition&& p, const schema& p_schema,
-        mutation_application_stats& app_stats, is_preemptible preemptible) {
+        mutation_application_stats& app_stats, is_preemptible preemptible, apply_resume& res) {
     if (s.version() == p_schema.version()) {
-        return apply_monotonically(s, std::move(p), no_cache_tracker, app_stats, preemptible);
+        return apply_monotonically(s, std::move(p), no_cache_tracker, app_stats, preemptible, res);
     } else {
         mutation_partition p2(s, p);
         p2.upgrade(p_schema, s);
-        return apply_monotonically(s, std::move(p2), no_cache_tracker, app_stats, is_preemptible::no); // FIXME: make preemptible
+        return apply_monotonically(s, std::move(p2), no_cache_tracker, app_stats, is_preemptible::no, res); // FIXME: make preemptible
     }
+}
+
+stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation_partition&& p, cache_tracker *tracker,
+                                                       mutation_application_stats& app_stats) {
+    apply_resume res;
+    return apply_monotonically(s, std::move(p), tracker, app_stats, is_preemptible::no, res);
+}
+
+stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation_partition&& p, const schema& p_schema,
+                                                       mutation_application_stats& app_stats) {
+    apply_resume res;
+    return apply_monotonically(s, std::move(p), p_schema, app_stats, is_preemptible::no, res);
 }
 
 void
@@ -1317,17 +1421,8 @@ uint32_t mutation_partition::do_compact(const schema& s,
             return stop_iteration::no;
         }
         deletable_row& row = e.row();
-        const auto higher_tomb = std::max(_tombstone, range_tombstone_for_row(s, e.key()));
-        row_tombstone tomb = row.deleted_at();
-        tomb.apply(higher_tomb);
-
-        bool is_live = row.marker().compact_and_expire(tomb.tomb(), query_time, can_gc, gc_before);
-        is_live |= row.cells().compact_and_expire(s, column_kind::regular_column, tomb, query_time, can_gc, gc_before, row.marker());
-
-        if (should_purge_row_tombstone(row.deleted_at()) || row.deleted_at().tomb() <= higher_tomb) {
-            row.remove_tombstone();
-        }
-
+        tombstone tomb = range_tombstone_for_row(s, e.key());
+        bool is_live = row.compact_and_expire(s, tomb, query_time, can_gc, gc_before, nullptr);
         return stop_iteration(is_live && ++row_count == row_limit);
     };
 
@@ -1672,6 +1767,29 @@ bool lazy_row::compact_and_expire(
 std::ostream& operator<<(std::ostream& os, const lazy_row::printer& p) {
     return os << row::printer(p._schema, p._kind, p._row.get());
 }
+
+bool deletable_row::compact_and_expire(const schema& s,
+                                       tombstone tomb,
+                                       gc_clock::time_point query_time,
+                                       can_gc_fn& can_gc,
+                                       gc_clock::time_point gc_before,
+                                       compaction_garbage_collector* collector)
+{
+    auto should_purge_row_tombstone = [&] (const row_tombstone& t) {
+        return t.max_deletion_time() < gc_before && can_gc(t.tomb());
+    };
+
+    apply(tomb);
+    bool is_live = marker().compact_and_expire(deleted_at().tomb(), query_time, can_gc, gc_before);
+    is_live |= cells().compact_and_expire(s, column_kind::regular_column, deleted_at(), query_time, can_gc, gc_before, marker(), collector);
+
+    if (deleted_at().tomb() <= tomb || should_purge_row_tombstone(deleted_at())) {
+        remove_tombstone();
+    }
+
+    return is_live;
+}
+
 
 deletable_row deletable_row::difference(const schema& s, column_kind kind, const deletable_row& other) const
 {
@@ -2416,6 +2534,12 @@ stop_iteration mutation_cleaner_impl::merge_some(partition_snapshot& snp) noexce
                 return stop_iteration::no;
             }
             try {
+                auto notify = defer([&, dirty_before = region.occupancy().total_space()] {
+                    auto dirty_after = region.occupancy().total_space();
+                    if (_on_space_freed && dirty_before > dirty_after) {
+                        _on_space_freed(dirty_before - dirty_after);
+                    }
+                });
                 return _worker_state->alloc_section(region, [&] {
                     return snp.merge_partition_versions(_app_stats);
                 });
