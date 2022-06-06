@@ -42,33 +42,7 @@ for arch in "${archs[@]}"; do
     fi
 done
 
-buildah manifest create "$(<tools/toolchain/image)"
-
-
-build_arch() {
-    local arch="$1"
-    image_id_file="$(mktemp)"
-    buildah bud --arch="$arch" --squash --no-cache --pull -f tools/toolchain/Dockerfile --iidfile "$image_id_file"
-    buildah manifest add --all "$(<tools/toolchain/image)" "$(<$image_id_file)"
-    rm "$image_id_file"
-}
-
-for arch in "${archs[@]}"; do
-    build_arch "$arch" &
-done
-
-fails=0
-
-for arch in "${archs[@]}"; do
-    if ! wait -n; then
-        (( fails += 1 ))
-    fi
-done
-
-if (( fails > 0 )); then
-    echo "$fails failures building arch-specific images"
-    exit 1
-fi
+buildah bud "${archs[@]/#/--platform=linux/}" --jobs 0 --squash --no-cache --pull -f tools/toolchain/Dockerfile --manifest "$(<tools/toolchain/image)"
 
 echo "Done building $(<tools/toolchain/image). You can now test it, and push with"
 echo ""
