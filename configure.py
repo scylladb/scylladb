@@ -2239,17 +2239,29 @@ with open(buildfile, 'w') as f:
         build help: print_help | always
         ''').format(**globals()))
 
-# create compdbs
 compdb = 'compile_commands.json'
-for mode in selected_modes:
-    mode_out = outdir + '/' + mode
-    submodule_compdbs = [mode_out + '/' + sm + '/' + compdb
-                         for sm in ['abseil', 'seastar']]
-    subprocess.run(['/bin/sh', '-c',
-                    ninja + ' -f ' + buildfile + ' -t compdb ' +
-                    '| ./scripts/merge-compdb.py build/' + mode + ' - ' +
-                    ' '.join(submodule_compdbs) +
-                    '> ' + mode_out + '/' + compdb])
+# per-mode compdbs are built by taking the relevant entries from the
+# output of "ninja -t compdb" and combining them with the CMake-made
+# compdbs for Seastar and Abseil in the relevant mode.
+#
+# "ninja -t compdb" output has to be filtered because
+# - it contains rules for all selected modes, and several entries for
+#   the same source file usually confuse indexers
+# - it contains lots of irrelevant entries (for linker invocations,
+#   header-only compilations, etc.)
+ensure_tmp_dir_exists()
+with tempfile.NamedTemporaryFile() as ninja_compdb:
+    subprocess.run([ninja, '-f', buildfile, '-t', 'compdb'], stdout=ninja_compdb.file.fileno())
+    ninja_compdb.file.flush()
+
+    # build mode-specific compdbs
+    for mode in selected_modes:
+        mode_out = outdir + '/' + mode
+        submodule_compdbs = [mode_out + '/' + submodule + '/' + compdb for submodule in ['abseil', 'seastar']]
+        with open(mode_out + '/' + compdb, 'w+b') as combined_mode_specific_compdb:
+            subprocess.run(['./scripts/merge-compdb.py', 'build/' + mode,
+                            ninja_compdb.name] + submodule_compdbs, stdout=combined_mode_specific_compdb)
+
 # make sure there is a valid compile_commands.json link in the source root
 if not os.path.exists(compdb):
     # sort modes by supposed indexing speed
