@@ -285,7 +285,7 @@ future<> compaction_manager::perform_task(shared_ptr<compaction_manager::task> t
     }
 }
 
-future<> compaction_manager::task::compact_sstables(sstables::compaction_descriptor descriptor, sstables::compaction_data& cdata, release_exhausted_func_t release_exhausted, can_purge_tombstones can_purge) {
+future<> compaction_manager::task::compact_sstables_and_update_history(sstables::compaction_descriptor descriptor, sstables::compaction_data& cdata, release_exhausted_func_t release_exhausted, can_purge_tombstones can_purge) {
     if (!descriptor.sstables.size()) {
         // if there is nothing to compact, just return.
         co_return;
@@ -357,7 +357,7 @@ protected:
         compaction_backlog_tracker bt(std::make_unique<user_initiated_backlog_tracker>(_cm._compaction_controller.backlog_of_shares(200), _cm._available_memory));
         _cm.register_backlog_tracker(bt);
 
-        co_await compact_sstables(std::move(descriptor), _compaction_data, std::move(release_exhausted));
+        co_await compact_sstables_and_update_history(std::move(descriptor), _compaction_data, std::move(release_exhausted));
 
         finish_compaction();
     }
@@ -879,7 +879,7 @@ protected:
             std::exception_ptr ex;
 
             try {
-                co_await compact_sstables(std::move(descriptor), _compaction_data, std::move(release_exhausted));
+                co_await compact_sstables_and_update_history(std::move(descriptor), _compaction_data, std::move(release_exhausted));
                 finish_compaction();
                 _cm.reevaluate_postponed_compactions();
                 continue;
@@ -1078,7 +1078,7 @@ private:
 
             std::exception_ptr ex;
             try {
-                co_await compact_sstables(std::move(descriptor), _compaction_data, std::move(release_exhausted), _can_purge);
+                co_await compact_sstables_and_update_history(std::move(descriptor), _compaction_data, std::move(release_exhausted), _can_purge);
                 finish_compaction();
                 _cm.reevaluate_postponed_compactions();
                 co_return;  // done with current sstable
@@ -1233,7 +1233,7 @@ private:
             std::exception_ptr ex;
             try {
                 setup_new_compaction(descriptor.run_identifier);
-                co_await compact_sstables(descriptor, _compaction_data,
+                co_await compact_sstables_and_update_history(descriptor, _compaction_data,
                                           std::bind(&cleanup_sstables_compaction_task::release_exhausted, this, std::placeholders::_1));
                 finish_compaction();
                 _cm.reevaluate_postponed_compactions();
