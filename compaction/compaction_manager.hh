@@ -147,6 +147,9 @@ public:
         using release_exhausted_func_t = std::function<void(const std::vector<sstables::shared_sstable>& exhausted_sstables)>;
         future<> compact_sstables(sstables::compaction_descriptor descriptor, sstables::compaction_data& cdata, release_exhausted_func_t release_exhausted,
                                   can_purge_tombstones can_purge = can_purge_tombstones::yes);
+        bool should_update_history(sstables::compaction_type ct) {
+            return ct == sstables::compaction_type::Compaction;
+        }
     public:
         future<> run() noexcept;
 

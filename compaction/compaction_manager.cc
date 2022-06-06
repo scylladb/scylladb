@@ -308,10 +308,10 @@ future<> compaction_manager::task::compact_sstables(sstables::compaction_descrip
             release_exhausted(desc.old_sstables);
         }
     };
-    auto compaction_type = descriptor.options.type();
 
+    bool should_update_history = this->should_update_history(descriptor.options.type());
     sstables::compaction_result res = co_await sstables::compact_sstables(std::move(descriptor), cdata, t.as_table_state());
-    if (compaction_type != sstables::compaction_type::Compaction) {
+    if (!should_update_history) {
         co_return;
     }
     auto ended_at = std::chrono::duration_cast<std::chrono::milliseconds>(res.ended_at.time_since_epoch());
