@@ -847,6 +847,8 @@ public:
     }
 };
 
+/// LSA may reserve more memory then requested via \p min_free_memory.
+/// A request for 0 reserves will be honored however.
 future<> prime_segment_pool(size_t available_memory, size_t min_free_memory);
 
 }
