@@ -137,6 +137,28 @@ def cql_test_connection(cql, request):
 def this_dc(cql):
     yield cql.execute("SELECT data_center FROM system.local").one()[0]
 
+# While the raft-based schema modifications are still experimental and only
+# optionally enabled some tests are expected to fail on Scylla without this
+# option enabled, and pass with it enabled (and also pass on Cassandra).
+# These tests should use the "fails_without_raft" fixture. When Raft mode
+# becomes the default, this fixture can be removed.
+@pytest.fixture(scope="session")
+async def check_pre_raft(cql):
+    # If not running on Scylla, return false.
+    names = [row.table_name for row in await cql.run_async("SELECT * FROM system_schema.tables WHERE keyspace_name = 'system'")]
+    if not any('scylla' in name for name in names):
+        return False
+    # In Scylla, we check Raft mode by inspecting the configuration via CQL.
+    experimental_features = list(await cql.run_async("SELECT value FROM system.config WHERE name = 'experimental_features'"))[0].value
+    return not '"raft"' in experimental_features
+
+
+@pytest.fixture(scope="function")
+async def fails_without_raft(request, check_pre_raft):
+    if check_pre_raft:
+        request.node.add_marker(pytest.mark.xfail(reason='Test expected to fail without Raft experimental feature on'))
+
+
 # "keyspace" fixture: Creates and returns a temporary keyspace to be
 # used in tests that need a keyspace. The keyspace is created with RF=1,
 # and automatically deleted at the end. We use scope="session" so that all
