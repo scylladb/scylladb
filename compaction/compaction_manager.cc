@@ -885,10 +885,24 @@ protected:
             try {
                 bool should_update_history = this->should_update_history(descriptor.options.type());
                 sstables::compaction_result res = co_await compact_sstables(std::move(descriptor), _compaction_data, std::move(release_exhausted));
+                finish_compaction();
                 if (should_update_history) {
+                    // update_history can take a long time compared to
+                    // compaction, as a call issued on shard S1 can be
+                    // handled on shard S2. If the other shard is under
+                    // heavy load, we may unnecessarily block kicking off a
+                    // new compaction. Normally it isn't a problem, as
+                    // compactions aren't super frequent, but there were
+                    // edge cases where the described behaviour caused
+                    // compaction to fail to keep up with excessive
+                    // flushing, leading to too many sstables on disk and
+                    // OOM during a read.  There is no need to wait with
+                    // next compaction until history is updated, so release
+                    // the weight earlier to remove unnecessary
+                    // serialization.
+                    weight_r.deregister();
                     co_await update_history(*_compacting_table, res, _compaction_data);
                 }
-                finish_compaction();
                 _cm.reevaluate_postponed_compactions();
                 continue;
             } catch (...) {
