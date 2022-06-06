@@ -27,7 +27,6 @@
 #
 
 import json
-import logging
 import re
 import sys
 
@@ -35,28 +34,17 @@ prefix = sys.argv[1]
 inputs = sys.argv[2:]
 
 def read_input(fname):
-    try:
-        if fname == '-':
-            f = sys.stdin
-        else:
-            f = open(fname)
-
+    with open(fname) as f:
         return json.load(f)
-    except Exception as e:
-        logging.error('failed to parse %s: %s', fname, e)
-        return [];
-    finally:
-        if fname != '-':
-            f.close()
 
 def is_indexable(e):
     return any(e['file'].endswith('.' + suffix) for suffix in ['c', 'C', 'cc', 'cxx'])
 
 # We can only definitely say whether an entry is built under the right
 # prefix when it has an "output" field, so those without are assumed
-# to be OK.  This works for our usage, where only the "-" input (which
-# results from "ninja -t compdb") has 'output' entries _and_ needs to
-# be filtered in the first place.
+# to be OK.  This works for our usage, where only "ninja -t compdb"
+# creates entries with an 'output' field _and_ needs to be filtered in
+# the first place.
 def is_relevant(e):
     return ('output' not in e) or (e['output'].startswith(prefix))
 
