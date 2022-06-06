@@ -27,10 +27,11 @@ import logging
 
 
 def scylla_excepthook(etype, value, tb):
+    os.makedirs('/var/tmp/scylla', mode=0o755, exist_ok=True)
     traceback.print_exception(etype, value, tb)
     exc_logger = logging.getLogger(__name__)
     exc_logger.setLevel(logging.DEBUG)
-    exc_logger_file = f'/var/tmp/{os.path.basename(sys.argv[0])}-{os.getpid()}-debug.log'
+    exc_logger_file = f'/var/tmp/scylla/{os.path.basename(sys.argv[0])}-{os.getpid()}-debug.log'
     exc_logger.addHandler(logging.FileHandler(exc_logger_file))
     traceback_with_variables.print_exc(e=value, file_=traceback_with_variables.LoggerAsFile(exc_logger))
     print(f'Debug log created: {exc_logger_file}')
