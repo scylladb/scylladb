@@ -309,7 +309,6 @@ future<> compaction_manager::task::compact_sstables(sstables::compaction_descrip
         }
     };
     auto compaction_type = descriptor.options.type();
-    auto start_size = boost::accumulate(descriptor.sstables | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::data_size)), uint64_t(0));
 
     sstables::compaction_result res = co_await sstables::compact_sstables(std::move(descriptor), cdata, t.as_table_state());
     if (compaction_type != sstables::compaction_type::Compaction) {
@@ -318,7 +317,7 @@ future<> compaction_manager::task::compact_sstables(sstables::compaction_descrip
     auto ended_at = std::chrono::duration_cast<std::chrono::milliseconds>(res.ended_at.time_since_epoch());
 
     co_return co_await t.as_table_state().update_compaction_history(cdata.compaction_uuid, t.schema()->ks_name(), t.schema()->cf_name(), ended_at,
-                                                                    start_size, res.end_size);
+                                                                    res.start_size, res.end_size);
 }
 
 class compaction_manager::major_compaction_task : public compaction_manager::task {
