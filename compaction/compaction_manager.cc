@@ -311,9 +311,11 @@ future<> compaction_manager::task::compact_sstables(sstables::compaction_descrip
 
     bool should_update_history = this->should_update_history(descriptor.options.type());
     sstables::compaction_result res = co_await sstables::compact_sstables(std::move(descriptor), cdata, t.as_table_state());
-    if (!should_update_history) {
-        co_return;
+    if (should_update_history) {
+        co_await update_history(t, res, cdata);
     }
+}
+future<> compaction_manager::task::update_history(replica::table& t, const sstables::compaction_result& res, const sstables::compaction_data& cdata) {
     auto ended_at = std::chrono::duration_cast<std::chrono::milliseconds>(res.ended_at.time_since_epoch());
 
     co_return co_await t.as_table_state().update_compaction_history(cdata.compaction_uuid, t.schema()->ks_name(), t.schema()->cf_name(), ended_at,
