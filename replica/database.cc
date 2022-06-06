@@ -898,7 +898,7 @@ static bool is_system_table(const schema& s) {
 void database::before_schema_keyspace_init() {
     assert(this_shard_id() == 0);
 
-    if (!_feat.schema_commitlog) {
+    if (!_feat.schema_commitlog && !_cfg.force_schema_commit_log()) {
         dblog.info("Not using schema commit log.");
         _listeners.push_back(_feat.schema_commitlog.when_enabled([] {
             dblog.warn("All nodes can now switch to use the schema commit log. Restart is needed for this to take effect.");

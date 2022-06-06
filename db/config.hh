@@ -376,6 +376,7 @@ public:
     named_value<tri_mode_restriction> restrict_dtcs;
 
     named_value<bool> ignore_truncation_record;
+    named_value<bool> force_schema_commit_log;
 
     seastar::logging_settings logging_settings(const log_cli::options&) const;
 
