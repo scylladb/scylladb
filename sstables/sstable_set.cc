@@ -400,10 +400,15 @@ void time_series_sstable_set::for_each_sstable(std::function<void(const shared_s
 
 // O(log n)
 void time_series_sstable_set::insert(shared_sstable sst) {
+  try {
     auto min_pos = sst->min_position();
     auto max_pos_reversed = sst->max_position().reversed();
     _sstables->emplace(std::move(min_pos), sst);
     _sstables_reversed->emplace(std::move(max_pos_reversed), std::move(sst));
+  } catch (...) {
+    erase(sst);
+    throw;
+  }
 }
 
 // O(n) worst case, but should be close to O(log n) most of the time
