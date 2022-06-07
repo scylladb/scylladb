@@ -35,218 +35,33 @@ using namespace std::chrono_literals;
 
 static thread_local mutation_application_stats app_stats_for_tests;
 
-// Verifies that tombstones in "list" are monotonic, overlap with the requested range,
-// and have information equivalent with "expected" in that range.
-static
-void check_tombstone_slice(const schema& s, const utils::chunked_vector<range_tombstone>& list,
-    const query::clustering_range& range,
-    const range_tombstone_list& expected)
-{
-    range_tombstone_list actual(s);
-    position_in_partition::less_compare less(s);
-    position_in_partition prev_pos = position_in_partition::before_all_clustered_rows();
-
-    for (auto&& rt : list) {
-        if (!less(rt.position(), position_in_partition::for_range_end(range))) {
-            BOOST_FAIL(format("Range tombstone out of range: {}, range: {}", rt, range));
-        }
-        if (!less(position_in_partition::for_range_start(range), rt.end_position())) {
-            BOOST_FAIL(format("Range tombstone out of range: {}, range: {}", rt, range));
-        }
-        if (less(rt.position(), prev_pos)) {
-            BOOST_FAIL(format("Range tombstone breaks position monotonicity: {}, list: {}", rt, list));
-        }
-        prev_pos = position_in_partition(rt.position());
-        actual.apply(s, rt);
-    }
-
-    actual.trim(s, query::clustering_row_ranges{range});
-
-    range_tombstone_list expected_list(expected);
-    expected_list.trim(s, query::clustering_row_ranges{range});
-
-    assert_that(s, actual).is_equal_to(expected_list);
-}
-
-static
-void check_tombstone_slice(const schema& s, const utils::chunked_vector<range_tombstone>& list,
-                           const query::clustering_range& range,
-                           std::initializer_list<range_tombstone> expected)
-{
-    range_tombstone_list expected_list(s);
-    for (auto&& rt : expected) {
-        expected_list.apply(s, rt);
-    }
-    check_tombstone_slice(s, list, range, expected_list);
-}
-
-
 // Reads the rest of the partition into a mutation_partition object.
 // There must be at least one entry ahead of the cursor.
 // The cursor must be pointing at a row and valid.
 // The cursor will not be pointing at a row after this.
 static mutation_partition read_partition_from(const schema& schema, partition_snapshot_row_cursor& cur) {
     mutation_partition p(schema.shared_from_this());
+    position_in_partition prev = position_in_partition::before_all_clustered_rows();
     do {
+        testlog.trace("cur: {}", cur);
         p.clustered_row(schema, cur.position(), is_dummy(cur.dummy()), is_continuous(cur.continuous()))
             .apply(schema, cur.row().as_deletable_row());
+        auto after_pos = position_in_partition::after_key(schema, cur.position());
+        auto before_pos = position_in_partition::before_key(cur.position());
+        if (cur.range_tombstone()) {
+            p.apply_row_tombstone(schema, range_tombstone(prev, before_pos, cur.range_tombstone()));
+        }
+        if (cur.range_tombstone_for_row()) {
+            p.apply_row_tombstone(schema, range_tombstone(before_pos, after_pos, cur.range_tombstone_for_row()));
+        }
+        prev = std::move(after_pos);
     } while (cur.next());
-    return p;
-}
 
-SEASTAR_TEST_CASE(test_range_tombstone_slicing) {
-    return seastar::async([] {
-        logalloc::region r;
-        mutation_cleaner cleaner(r, no_cache_tracker, app_stats_for_tests);
-        simple_schema table;
-        auto s = table.schema();
-        with_allocator(r.allocator(), [&] {
-            mutation_application_stats app_stats;
-            logalloc::reclaim_lock l(r);
-
-            auto rt1 = table.make_range_tombstone(table.make_ckey_range(1, 2));
-            auto rt2 = table.make_range_tombstone(table.make_ckey_range(4, 7));
-            auto rt3 = table.make_range_tombstone(table.make_ckey_range(6, 9));
-
-            mutation_partition m1(s);
-            m1.apply_delete(*s, rt1);
-            m1.apply_delete(*s, rt2);
-            m1.apply_delete(*s, rt3);
-
-            partition_entry e(mutation_partition(*s, m1));
-
-            auto snap = e.read(r, cleaner, s, no_cache_tracker);
-
-            auto check_range = [&s] (partition_snapshot& snap, const query::clustering_range& range,
-                    std::initializer_list<range_tombstone> expected) {
-                auto tombstones = snap.range_tombstones(
-                    position_in_partition::for_range_start(range),
-                    position_in_partition::for_range_end(range));
-                check_tombstone_slice(*s, tombstones, range, expected);
-            };
-
-            check_range(*snap, table.make_ckey_range(0, 0), {});
-            check_range(*snap, table.make_ckey_range(1, 1), {rt1});
-            check_range(*snap, table.make_ckey_range(3, 4), {rt2});
-            check_range(*snap, table.make_ckey_range(3, 5), {rt2});
-            check_range(*snap, table.make_ckey_range(3, 6), {rt2, rt3});
-            check_range(*snap, table.make_ckey_range(6, 6), {rt2, rt3});
-            check_range(*snap, table.make_ckey_range(7, 10), {rt2, rt3});
-            check_range(*snap, table.make_ckey_range(8, 10), {rt3});
-            check_range(*snap, table.make_ckey_range(10, 10), {});
-            check_range(*snap, table.make_ckey_range(0, 10), {rt1, rt2, rt3});
-
-            auto rt4 = table.make_range_tombstone(table.make_ckey_range(1, 2));
-            auto rt5 = table.make_range_tombstone(table.make_ckey_range(5, 8));
-
-            mutation_partition m2(s);
-            m2.apply_delete(*s, rt4);
-            m2.apply_delete(*s, rt5);
-
-            auto&& v2 = e.add_version(*s, no_cache_tracker);
-            v2.partition().apply_weak(*s, m2, *s, app_stats);
-            auto snap2 = e.read(r, cleaner, s, no_cache_tracker);
-
-            check_range(*snap2, table.make_ckey_range(0, 0), {});
-            check_range(*snap2, table.make_ckey_range(1, 1), {rt4});
-            check_range(*snap2, table.make_ckey_range(3, 4), {rt2});
-            check_range(*snap2, table.make_ckey_range(3, 5), {rt2, rt5});
-            check_range(*snap2, table.make_ckey_range(3, 6), {rt2, rt3, rt5});
-            check_range(*snap2, table.make_ckey_range(4, 4), {rt2});
-            check_range(*snap2, table.make_ckey_range(5, 5), {rt2, rt5});
-            check_range(*snap2, table.make_ckey_range(6, 6), {rt2, rt3, rt5});
-            check_range(*snap2, table.make_ckey_range(7, 10), {rt2, rt3, rt5});
-            check_range(*snap2, table.make_ckey_range(8, 8), {rt3, rt5});
-            check_range(*snap2, table.make_ckey_range(9, 9), {rt3});
-            check_range(*snap2, table.make_ckey_range(8, 10), {rt3, rt5});
-            check_range(*snap2, table.make_ckey_range(10, 10), {});
-            check_range(*snap2, table.make_ckey_range(0, 10), {rt4, rt2, rt3, rt5});
-        });
-    });
-
-}
-
-static query::clustering_range reversed(const query::clustering_range& range) {
-    if (!range.is_singular()) {
-        return query::clustering_range(range.end(), range.start());
+    if (cur.range_tombstone()) {
+        p.apply_row_tombstone(schema, range_tombstone(prev, position_in_partition::after_all_clustered_rows(), cur.range_tombstone()));
     }
-    return range;
-}
 
-SEASTAR_THREAD_TEST_CASE(test_range_tombstone_reverse_slicing) {
-    logalloc::region r;
-    mutation_cleaner cleaner(r, no_cache_tracker, app_stats_for_tests);
-    with_allocator(r.allocator(), [&] {
-        mutation_application_stats app_stats;
-        logalloc::reclaim_lock l(r);
-
-        random_mutation_generator gen(random_mutation_generator::generate_counters::no);
-        auto s = gen.schema();
-        auto rev_s = s->make_reversed();
-
-        mutation_partition m1(s);
-        mutation_partition m2(s); // m2 and m3 will have effectively m1 split among each other randomly
-        mutation_partition m3(s);
-        range_tombstone_list rts(*s);
-        range_tombstone_list rev_rts(*rev_s);
-        for (int i = 0; i < 12; ++i) {
-            auto rt = gen.make_random_range_tombstone();
-            rts.apply(*s, rt);
-            {
-                auto rev_rt = rt;
-                rev_rt.reverse();
-                rev_rts.apply(*rev_s, rev_rt);
-            }
-            m1.apply_delete(*s, rt);
-            if (i % 2 == 0) {
-                m2.apply_delete(*s, rt);
-            } else {
-                m3.apply_delete(*s, rt);
-            }
-        }
-
-        auto check_range = [&] (partition_snapshot& snap, query::clustering_range range, bool reverse = false) {
-            utils::chunked_vector<range_tombstone> result;
-
-            if (reverse) {
-                range = reversed(range);
-            }
-
-            auto start = position_in_partition::for_range_start(range);
-            auto end = position_in_partition::for_range_end(range);
-            snap.range_tombstones(start, end, [&] (range_tombstone rt) {
-                result.emplace_back(std::move(rt));
-                return stop_iteration::no;
-            }, reverse);
-
-            if (reverse) {
-                check_tombstone_slice(*rev_s, result, range, rev_rts);
-            } else {
-                check_tombstone_slice(*s, result, range, rts);
-            }
-        };
-
-        // Single version
-        {
-            partition_entry e(mutation_partition(*s, m1));
-            auto snap = e.read(r, cleaner, s, no_cache_tracker);
-            check_range(*snap, query::clustering_range::make_open_ended_both_sides());
-            check_range(*snap, query::clustering_range::make_open_ended_both_sides(), true);
-        }
-
-        // Two versions
-        {
-            partition_entry e(mutation_partition(*s, m2));
-            auto snap = e.read(r, cleaner, s, no_cache_tracker);
-
-            auto&& v2 = e.add_version(*s, no_cache_tracker);
-            v2.partition().apply_weak(*s, m3, *s, app_stats);
-            auto snap2 = e.read(r, cleaner, s, no_cache_tracker);
-
-            check_range(*snap2, query::clustering_range::make_open_ended_both_sides());
-            check_range(*snap2, query::clustering_range::make_open_ended_both_sides(), true);
-        }
-    });
+    return p;
 }
 
 class mvcc_partition;
@@ -398,7 +213,7 @@ mvcc_partition& mvcc_partition::operator+=(const mutation& m) {
 void mvcc_partition::apply(const mutation_partition& mp, schema_ptr mp_s) {
     with_allocator(region().allocator(), [&] {
         if (_evictable) {
-            apply_to_evictable(partition_entry(mutation_partition(*mp_s, mp)), mp_s);
+            apply_to_evictable(partition_entry(mutation_partition_v2(*mp_s, mp)), mp_s);
         } else {
             logalloc::allocating_section as;
             as(region(), [&] {
@@ -426,7 +241,7 @@ mvcc_partition mvcc_container::make_not_evictable(const mutation_partition& mp) 
     return with_allocator(region().allocator(), [&] {
         logalloc::allocating_section as;
         return as(region(), [&] {
-            return mvcc_partition(_schema, partition_entry(mutation_partition(*_schema, mp)), *this, false);
+            return mvcc_partition(_schema, partition_entry(mutation_partition_v2(*_schema, mp)), *this, false);
         });
     });
 }
@@ -630,9 +445,20 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete_respects_continuity) {
                 expected.apply_weak(*s, std::move(expected_to_apply_slice), app_stats);
 
                 e += to_apply;
-                assert_that(s, e.squashed())
-                    .is_equal_to_compacted(expected, e_continuity.to_clustering_row_ranges())
-                    .has_same_continuity(before);
+
+
+                auto sq = e.squashed();
+
+                // After applying to_apply the continuity can be more narrow due to compaction with tombstones
+                // present in to_apply.
+                auto continuity_after = sq.get_continuity(*s);
+                if (!continuity_after.contained_in(e_continuity)) {
+                    BOOST_FAIL(format("Expected later continuity to be contained in earlier, later={}\n, earlier={}",
+                                      continuity_after, e_continuity));
+                }
+
+                assert_that(s, std::move(sq))
+                    .is_equal_to_compacted(expected, e_continuity.to_clustering_row_ranges());
             };
 
             test(false);
@@ -642,15 +468,16 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete_respects_continuity) {
 }
 
 // Call with region locked.
-static mutation_partition read_using_cursor(partition_snapshot& snap) {
+static mutation_partition read_using_cursor(partition_snapshot& snap, bool reversed = false) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
-    partition_snapshot_row_cursor cur(*snap.schema(), snap);
-    cur.advance_to(position_in_partition::before_all_clustered_rows());
-    auto mp = read_partition_from(*snap.schema(), cur);
-    for (auto&& rt : snap.range_tombstones()) {
-        mp.apply_delete(*snap.schema(), rt);
+    auto s = snap.schema();
+    if (reversed) {
+        s = s->make_reversed();
     }
-    mp.apply(*snap.schema(), mutation_fragment(*snap.schema(), semaphore.make_permit(), static_row(snap.static_row(false))));
+    partition_snapshot_row_cursor cur(*s, snap, false, reversed);
+    cur.advance_to(position_in_partition::before_all_clustered_rows());
+    auto mp = read_partition_from(*s, cur);
+    mp.apply(*s, mutation_fragment(*s, semaphore.make_permit(), static_row(snap.static_row(false))));
     mp.set_static_row_continuous(snap.static_row_continuous());
     mp.apply(snap.partition_tombstone());
     return mp;
@@ -709,7 +536,7 @@ SEASTAR_TEST_CASE(test_snapshot_cursor_is_consistent_with_merging_for_nonevictab
             {
                 mutation_application_stats app_stats;
                 logalloc::reclaim_lock rl(r);
-                auto e = partition_entry(mutation_partition(*s, m3.partition()));
+                auto e = partition_entry(mutation_partition_v2(*s, m3.partition()));
                 auto snap1 = e.read(r, cleaner, s, no_cache_tracker);
                 e.apply(r, cleaner, *s, m2.partition(), *s, app_stats);
                 auto snap2 = e.read(r, cleaner, s, no_cache_tracker);
@@ -1371,7 +1198,7 @@ SEASTAR_TEST_CASE(test_apply_is_atomic) {
             size_t fail_offset = 0;
             while (true) {
                 mutation_partition m2 = mutation_partition(*second.schema(), second.partition());
-                auto e = partition_entry(mutation_partition(*target.schema(), target.partition()));
+                auto e = partition_entry(mutation_partition_v2(*target.schema(), target.partition()));
                 //auto snap1 = e.read(r, gen.schema());
 
                 alloc.fail_after(fail_offset++);
@@ -1419,7 +1246,7 @@ SEASTAR_TEST_CASE(test_versions_are_merged_when_snapshots_go_away) {
             m3.partition().make_fully_continuous();
 
             {
-                auto e = partition_entry(mutation_partition(*s, m1.partition()));
+                auto e = partition_entry(mutation_partition_v2(*s, m1.partition()));
                 auto snap1 = e.read(r, cleaner, s, nullptr);
 
                 {
@@ -1440,7 +1267,7 @@ SEASTAR_TEST_CASE(test_versions_are_merged_when_snapshots_go_away) {
             }
 
             {
-                auto e = partition_entry(mutation_partition(*s, m1.partition()));
+                auto e = partition_entry(mutation_partition_v2(*s, m1.partition()));
                 auto snap1 = e.read(r, cleaner, s, nullptr);
 
                 {

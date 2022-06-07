@@ -1221,7 +1221,7 @@ void cache_entry::on_evicted(cache_tracker& tracker) noexcept {
 }
 
 void rows_entry::on_evicted(cache_tracker& tracker) noexcept {
-    mutation_partition::rows_type::iterator it(this);
+    mutation_partition_v2::rows_type::iterator it(this);
 
     if (is_last_dummy()) {
         // Every evictable partition entry must have a dummy entry at the end,
@@ -1236,18 +1236,19 @@ void rows_entry::on_evicted(cache_tracker& tracker) noexcept {
         // When evicting a dummy with both sides continuous we don't need to break continuity.
         //
         auto still_continuous = continuous() && dummy();
-        mutation_partition::rows_type::key_grabber kg(it);
+        auto old_rt = range_tombstone();
+        mutation_partition_v2::rows_type::key_grabber kg(it);
         kg.release(current_deleter<rows_entry>());
-        if (!still_continuous) {
+        if (!still_continuous || old_rt != it->range_tombstone()) {
             it->set_continuous(false);
         }
         tracker.on_row_eviction();
     }
 
-    mutation_partition::rows_type* rows = it.tree_if_singular();
+    mutation_partition_v2::rows_type* rows = it.tree_if_singular();
     if (rows != nullptr) {
         assert(it->is_last_dummy());
-        partition_version& pv = partition_version::container_of(mutation_partition::container_of(*rows));
+        partition_version& pv = partition_version::container_of(mutation_partition_v2::container_of(*rows));
         if (pv.is_referenced_from_entry()) {
             partition_entry& pe = partition_entry::container_of(pv);
             if (!pe.is_locked()) {

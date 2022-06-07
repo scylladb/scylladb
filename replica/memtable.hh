@@ -54,7 +54,7 @@ public:
     memtable_entry(schema_ptr s, dht::decorated_key key, mutation_partition p)
         : _schema(std::move(s))
         , _key(std::move(key))
-        , _pe(std::move(p))
+        , _pe(*_schema, std::move(p))
     { }
 
     memtable_entry(memtable_entry&& o) noexcept;

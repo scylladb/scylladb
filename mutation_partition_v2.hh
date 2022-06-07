@@ -221,6 +221,8 @@ public:
     //
     // Strong exception guarantees.
     void upgrade(const schema& old_schema, const schema& new_schema);
+
+    mutation_partition as_mutation_partition(const schema&) const;
 private:
     // Erases the entry if it's safe to do so without changing the logical state of the partition.
     rows_type::iterator maybe_drop(const schema&, cache_tracker*, rows_type::iterator, mutation_application_stats&);

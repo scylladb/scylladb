@@ -50,6 +50,8 @@ public:
         uint64_t rows_processed_from_memtable;
         uint64_t rows_dropped_from_memtable;
         uint64_t rows_merged_from_memtable;
+        uint64_t dummy_processed_from_memtable;
+        uint64_t rows_covered_by_range_tombstones_from_memtable;
         uint64_t partition_evictions;
         uint64_t partition_removals;
         uint64_t row_evictions;
@@ -120,6 +122,7 @@ public:
     mutation_cleaner& memtable_cleaner() noexcept { return _memtable_cleaner; }
     uint64_t partitions() const noexcept { return _stats.partitions; }
     const stats& get_stats() const noexcept { return _stats; }
+    stats& get_stats() noexcept { return _stats; }
     void set_compaction_scheduling_group(seastar::scheduling_group);
     lru& get_lru() { return _lru; }
 };

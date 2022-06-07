@@ -961,6 +961,14 @@ mutation_partition_v2::upgrade(const schema& old_schema, const schema& new_schem
     *this = mutation_partition_v2(new_schema, std::move(tmp));
 }
 
+mutation_partition mutation_partition_v2::as_mutation_partition(const schema& s) const {
+    mutation_partition tmp(s.shared_from_this());
+    tmp.set_static_row_continuous(_static_row_continuous);
+    partition_builder v(s, tmp);
+    accept(s, v);
+    return tmp;
+}
+
 mutation_partition_v2::mutation_partition_v2(mutation_partition_v2::incomplete_tag, const schema& s, tombstone t)
     : _tombstone(t)
     , _static_row_continuous(!s.has_static_columns())

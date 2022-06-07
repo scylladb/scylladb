@@ -15,6 +15,7 @@
 #include <seastar/util/closeable.hh>
 
 #include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
 #include "test/lib/mutation_source_test.hh"
@@ -2603,7 +2604,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_reads) {
                 BOOST_REQUIRE(got_opt);
                 BOOST_REQUIRE(!read_mutation_from_flat_mutation_reader(rd).get0());
 
-                assert_that(*got_opt).is_equal_to(mut, ranges);
+                assert_that(*got_opt).is_equal_to_compacted(mut, ranges);
                 assert_that(cache.make_reader(s, semaphore.make_permit(), query::full_partition_range, slice))
                     .produces(mut, ranges);
             });
@@ -4269,7 +4270,7 @@ SEASTAR_TEST_CASE(test_populating_cache_with_expired_and_nonexpired_tombstones) 
         cache_entry& entry = t.get_row_cache().lookup(dk);
         auto& cp = entry.partition().version()->partition();
 
-        BOOST_REQUIRE_EQUAL(cp.tombstone_for_row(*s, ck1), row_tombstone(tombstone(1, dt_noexp))); // non-expired tombstone is in cache
+        BOOST_REQUIRE_EQUAL(cp.clustered_row(*s, ck1).deleted_at(), row_tombstone(tombstone(1, dt_noexp))); // non-expired tombstone is in cache
         BOOST_REQUIRE(cp.find_row(*s, ck2) == nullptr); // expired tombstone isn't in cache
 
         const auto rows = cp.non_dummy_rows();
