@@ -751,14 +751,11 @@ future<typename ResultBuilder::result_type> do_query(
     // Use coroutine::as_future to prevent exception on timesout.
     auto f = co_await coroutine::as_future(ctx->lookup_readers(timeout).then([&] {
         return read_page<ResultBuilder>(ctx, s, cmd, ranges, trace_state, std::move(result_builder));
-    }).then([&] (page_consume_result<ResultBuilder> r) {
-        auto f = make_ready_future<>();
+    }).then([&] (page_consume_result<ResultBuilder> r) -> future<typename ResultBuilder::result_type> {
         if (r.compaction_state->are_limits_reached() || r.result.is_short_read()) {
-            f = ctx->save_readers(std::move(r.unconsumed_fragments), std::move(*r.compaction_state).detach_state(), std::move(r.last_ckey));
+            co_await ctx->save_readers(std::move(r.unconsumed_fragments), std::move(*r.compaction_state).detach_state(), std::move(r.last_ckey));
         }
-        return f.then([result = std::move(r.result)] () mutable {
-            return std::move(result);
-        });
+        co_return std::move(r.result);
     }));
     co_await ctx->stop();
     if (f.failed()) {
