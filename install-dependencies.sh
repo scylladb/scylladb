@@ -128,6 +128,10 @@ pip_packages=(
     scylla-api-client
 )
 
+pip_symlinks=(
+    scylla-api-client
+)
+
 centos_packages=(
     gdb
     yaml-cpp-devel
@@ -223,12 +227,14 @@ print_usage() {
     echo ""
     echo "  --print-python3-runtime-packages Print required python3 packages for Scylla"
     echo "  --print-pip-runtime-packages Print required pip packages for Scylla"
+    echo "  --print-pip-symlinks Print list of pip provided commands which need to install to /usr/bin"
     echo "  --print-node-exporter-filename Print node_exporter filename"
     exit 1
 }
 
 PRINT_PYTHON3=false
 PRINT_PIP=false
+PRINT_PIP_SYMLINK=false
 PRINT_NODE_EXPORTER=false
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -238,6 +244,10 @@ while [ $# -gt 0 ]; do
             ;;
         "--print-pip-runtime-packages")
             PRINT_PIP=true
+            shift 1
+            ;;
+        "--print-pip-symlinks")
+            PRINT_PIP_SYMLINK=true
             shift 1
             ;;
         "--print-node-exporter-filename")
@@ -261,6 +271,11 @@ fi
 
 if $PRINT_PIP; then
     echo "${pip_packages[@]}"
+    exit 0
+fi
+
+if $PRINT_PIP_SYMLINK; then
+    echo "${pip_symlinks[@]}"
     exit 0
 fi
 
