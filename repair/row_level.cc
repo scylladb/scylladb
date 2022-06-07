@@ -1270,6 +1270,8 @@ private:
         // Repair rows in row_diff will be flushed to disk by flush_rows_in_working_row_buf,
         // so we skip calling do_apply_rows here.
         _dirty_on_master = is_dirty_on_master::yes;
+        // Clear gently to avoid stalls
+        utils::clear_gently(row_diff).get();
     }
 public:
     // Must run inside a seastar thread
