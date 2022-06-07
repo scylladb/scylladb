@@ -383,6 +383,8 @@ static auto defer_verbose_shutdown(const char* what, Func&& func) {
                         break;
                     }
                 }
+            } catch (const storage_io_error& e) {
+                do_abort = false;
             } catch (...) {
             }
             auto msg = fmt::format("Unexpected error shutting down {}: {}", what, ex);
