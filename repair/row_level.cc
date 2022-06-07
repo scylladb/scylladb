@@ -892,9 +892,9 @@ public:
     future<repair_hash_set>
     working_row_hashes() {
         return do_with(repair_hash_set(), [this] (repair_hash_set& hashes) {
-            return do_for_each(_working_row_buf, [&hashes] (repair_row& r) {
+            return do_for_each(_working_row_buf, [&hashes] (repair_row& r) mutable {
                 hashes.emplace(r.hash());
-            }).then([&hashes] {
+            }).then([&hashes] () mutable {
                 return std::move(hashes);
             });
         });
