@@ -690,7 +690,7 @@ public:
     size_t max_segments() const noexcept {
         return (_layout.end - _segments_base) / segment::size;
     }
-    bool can_allocate_more_segments() noexcept {
+    bool can_allocate_more_segments() const noexcept {
         return memory::stats().free_memory() >= non_lsa_reserve + segment::size;
     }
 };
@@ -702,6 +702,10 @@ class segment_store {
     std::vector<segment*>::iterator find_empty() noexcept {
         // segment 0 is a marker for no segment
         return std::find(_segments.begin() + 1, _segments.end(), nullptr);
+    }
+    std::vector<segment*>::const_iterator find_empty() const noexcept {
+        // segment 0 is a marker for no segment
+        return std::find(_segments.cbegin() + 1, _segments.cend(), nullptr);
     }
 
 public:
@@ -746,7 +750,7 @@ public:
     size_t max_segments() const noexcept {
         return _std_memory_available / segment::size;
     }
-    bool can_allocate_more_segments() noexcept {
+    bool can_allocate_more_segments() const noexcept {
         auto i = find_empty();
         return i != _segments.end();
     }
