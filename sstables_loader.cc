@@ -15,6 +15,7 @@
 #include "sstables/sstables.hh"
 #include "gms/inet_address.hh"
 #include "streaming/stream_mutation_fragments_cmd.hh"
+#include "streaming/stream_reason.hh"
 #include "readers/mutation_fragment_v1_stream.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "message/messaging_service.hh"

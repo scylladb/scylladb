@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <seastar/core/sleep.hh>
+#include <seastar/core/thread.hh>
 #include "service_level_controller.hh"
 #include "service/priority_manager.hh"
 #include "message/messaging_service.hh"

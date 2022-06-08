@@ -15,6 +15,7 @@
 #include "gms/gossiper.hh"
 
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/when_all.hh>
 
 namespace service {
 

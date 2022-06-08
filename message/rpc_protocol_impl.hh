@@ -1,8 +1,11 @@
-#include "message/messaging_service.hh"
-
 #include <seastar/rpc/rpc.hh>
+#include "messaging_service.hh"
+#include "serializer.hh"
+#include "seastarx.hh"
 
 namespace netw {
+
+struct serializer;
 
 // thunk from rpc serializers to generate serializers
 template <typename T, typename Output>
