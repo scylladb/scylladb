@@ -173,11 +173,10 @@ sstable_directory::process_sstable_dir(const ::io_priority_class& iop, bool sort
     directory_lister sstable_dir_lister(_sstable_dir, { directory_entry_type::regular }, &manifest_json_filter);
     std::exception_ptr ex;
     try {
-    // FIXME: indentation
-    while (auto de = co_await sstable_dir_lister.get()) {
-        auto comps = sstables::entry_descriptor::make_descriptor(_sstable_dir.native(), de->name);
-        handle_component(state, std::move(comps), _sstable_dir / de->name);
-    }
+        while (auto de = co_await sstable_dir_lister.get()) {
+            auto comps = sstables::entry_descriptor::make_descriptor(_sstable_dir.native(), de->name);
+            handle_component(state, std::move(comps), _sstable_dir / de->name);
+        }
     } catch (...) {
         ex = std::current_exception();
     }
