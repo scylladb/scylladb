@@ -835,7 +835,10 @@ public:
     segment_pool();
     void prime(size_t available_memory, size_t min_free_memory);
     segment* new_segment(region::impl* r);
-    segment_descriptor& descriptor(segment*) noexcept;
+    segment_descriptor& descriptor(segment* seg) noexcept {
+        uintptr_t index = idx_from_segment(seg);
+        return _segments[index];
+    }
     // Returns segment containing given object or nullptr.
     segment* containing_segment(const void* obj) noexcept;
     segment* segment_from(const segment_descriptor& desc) noexcept;
@@ -1126,12 +1129,6 @@ void segment_pool::refill_emergency_reserve() {
         ++_segments_in_use;
         free_segment(seg);
     }
-}
-
-segment_descriptor&
-segment_pool::descriptor(segment* seg) noexcept {
-    uintptr_t index = idx_from_segment(seg);
-    return _segments[index];
 }
 
 segment*
