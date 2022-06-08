@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-# Tests for batch operations - BatchWriteItem, BatchReadItem.
+# Tests for batch operations - BatchWriteItem, BatchGetItem.
 # Note that various other tests in other files also use these operations,
 # so they are actually tested by other tests as well.
 
@@ -305,6 +305,20 @@ def test_batch_unprocessed(test_table_s):
         test_table_s.name: {'Keys': [{'p': p}], 'ProjectionExpression': 'p, a', 'ConsistentRead': True}
     })
     assert 'UnprocessedKeys' in read_reply and read_reply['UnprocessedKeys'] == dict()
+
+# The BatchWriteItem documentation states that it is forbidden for the same
+# item to appear more than once in the same batch, and we have tests above
+# that confirm this. The BatchGetItem documentation does not mention this
+# constraint - but in fact it exists too: Trying to retrieve the same key
+# multiple times is not just wasteful - it is outright forbidden.
+@pytest.mark.xfail(reason="Issue #10757")
+def test_batch_get_item_duplicate(test_table, test_table_s):
+    p = random_string()
+    with pytest.raises(ClientError, match='ValidationException.*duplicates'):
+        test_table_s.meta.client.batch_get_item(RequestItems = {test_table_s.name: {'Keys': [{'p': p}, {'p': p}]}})
+    c = random_string()
+    with pytest.raises(ClientError, match='ValidationException.*duplicates'):
+        test_table.meta.client.batch_get_item(RequestItems = {test_table.name: {'Keys': [{'p': p, 'c': c}, {'p': p, 'c': c}]}})
 
 # According to the DynamoDB document, a single BatchWriteItem operation is
 # limited to 25 update requests, up to 400 KB each, or 16 MB total (25*400
