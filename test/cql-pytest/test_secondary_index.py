@@ -462,3 +462,390 @@ def test_filter_and_limit_2(cql, test_keyspace):
         # anything in the result (because all our rows have pk=1).
         for i in [3, 1, N]:
             assert results[0:i] == list(cql.execute(f'SELECT ck1 FROM {table} WHERE pk = 1 AND ck2 = 2 AND x = 3 LIMIT {i} ALLOW FILTERING'))
+
+# Tests for issue #2962 - different type of indexing on collection columns.
+# Note that we also have a randomized test for this feature as a C++ unit
+# tests, as well as many tests translated from Cassandra's unit tests (grep
+# the issue number #2962 to find them). Unlike the randomized test, the goal
+# here is to try to cover as many corner cases we can think of, explicitly.
+#
+# Note that we can assume that on a single-node cql-pytest, materialized view
+# (and therefore index) updates are synchronous, so none of these tests need
+# loops to wait for a change to be indexed.
+
+@pytest.mark.xfail(reason="collection indexing not implemented yet: issue #2962")
+def test_index_list(cql, test_keyspace):
+    schema = 'pk int, ck int, l list<int>, PRIMARY KEY (pk, ck)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        # Without an index, the "CONTAINS" restriction requires filtering
+        with pytest.raises(InvalidRequest, match="ALLOW FILTERING"):
+            cql.execute(f'SELECT pk,ck FROM {table} WHERE l CONTAINS 3')
+        cql.execute(f'CREATE INDEX ON {table}(l)')
+        # The list is still empty, nothing should match
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE l CONTAINS 3'))
+        # Add a values to the list, check they can be found
+        cql.execute(f'UPDATE {table} set l = l + [7] WHERE pk=1 AND ck=2')
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE l CONTAINS 7'))
+        cql.execute(f'UPDATE {table} set l = l + [8] WHERE pk=1 AND ck=2')
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE l CONTAINS 7'))
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE l CONTAINS 8'))
+        # Remove values from the list, check they can no longer be found
+        cql.execute(f'UPDATE {table} set l = l - [7] WHERE pk=1 AND ck=2')
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE l CONTAINS 7'))
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE l CONTAINS 8'))
+        cql.execute(f'UPDATE {table} set l = l - [8] WHERE pk=1 AND ck=2')
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE l CONTAINS 7'))
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE l CONTAINS 8'))
+        # Replace entire value of list, everything in it should be indexed
+        cql.execute(f'INSERT INTO {table} (pk, ck, l) VALUES (1, 2, [4, 5])')
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE l CONTAINS 4'))
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE l CONTAINS 5'))
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE l CONTAINS 7'))
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE l CONTAINS 8'))
+        cql.execute(f'UPDATE {table} set l = [2, 5] WHERE pk=1 AND ck=2')
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE l CONTAINS 2'))
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE l CONTAINS 5'))
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE l CONTAINS 4'))
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE l CONTAINS 7'))
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE l CONTAINS 8'))
+        # A list can have the same value more than once, here we append
+        # another 2 to the list which will now contain [2, 5, 2]. Searching
+        # for 2, we should find this row, but only once.
+        cql.execute(f'UPDATE {table} set l = l + [2] WHERE pk=1 AND ck=2')
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE l CONTAINS 2'))
+        # If we remove the first element from the list [2, 5, 2], there is
+        # still a 2 remaining, so it should still be found:
+        cql.execute(f'DELETE l[0] FROM {table} WHERE pk=1 AND ck=2')
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE l CONTAINS 2'))
+        # Removing the other 2 (now l=[5,2]) should leaving a search for 2
+        # returning nothing:
+        cql.execute(f'DELETE l[1] FROM {table} WHERE pk=1 AND ck=2')
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE l CONTAINS 2'))
+        # The list is now [5]. Replace the 5 with 2 and see 2 is found, 5 not:
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE l CONTAINS 5'))
+        cql.execute(f'UPDATE {table} set l[0] = 2 WHERE pk=1 AND ck=2')
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE l CONTAINS 2'))
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE l CONTAINS 5'))
+        # Replacing the list [2] with an empty list works as expected:
+        cql.execute(f'UPDATE {table} SET l = [] WHERE pk=1 AND ck=2')
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE l CONTAINS 2'))
+
+@pytest.mark.xfail(reason="collection indexing not implemented yet: issue #2962")
+def test_index_set(cql, test_keyspace):
+    schema = 'pk int, ck int, s set<int>, PRIMARY KEY (pk, ck)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        # Without an index, the "CONTAINS" restriction requires filtering
+        with pytest.raises(InvalidRequest, match="ALLOW FILTERING"):
+            cql.execute(f'SELECT pk,ck FROM {table} WHERE s CONTAINS 3')
+        cql.execute(f'CREATE INDEX ON {table}(s)')
+        # The set is still empty, nothing should match
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE s CONTAINS 3'))
+        # Add a values to the set, check they can be found
+        cql.execute(f'UPDATE {table} set s = s + {{7}} WHERE pk=1 AND ck=2')
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE s CONTAINS 7'))
+        cql.execute(f'UPDATE {table} set s = s + {{8}} WHERE pk=1 AND ck=2')
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE s CONTAINS 7'))
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE s CONTAINS 8'))
+        # Remove values from the set, check they can no longer be found
+        cql.execute(f'UPDATE {table} set s = s - {{7}} WHERE pk=1 AND ck=2')
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE s CONTAINS 7'))
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE s CONTAINS 8'))
+        cql.execute(f'UPDATE {table} set s = s - {{8}} WHERE pk=1 AND ck=2')
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE s CONTAINS 7'))
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE s CONTAINS 8'))
+        # Replace entire value of set, everything in it should be indexed
+        cql.execute(f'INSERT INTO {table} (pk, ck, s) VALUES (1, 2, {{4, 5}})')
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE s CONTAINS 4'))
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE s CONTAINS 5'))
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE s CONTAINS 7'))
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE s CONTAINS 8'))
+        cql.execute(f'UPDATE {table} set s = {{2, 5}} WHERE pk=1 AND ck=2')
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE s CONTAINS 2'))
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE s CONTAINS 5'))
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE s CONTAINS 4'))
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE s CONTAINS 7'))
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE s CONTAINS 8'))
+        # A set can only have the same value once. The set is now {2,5},
+        # trying to add 2 again makes no diffence - and removing it just once
+        # will remove this value:
+        cql.execute(f'UPDATE {table} set s = s + {{2}} WHERE pk=1 AND ck=2')
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE s CONTAINS 2'))
+        cql.execute(f'UPDATE {table} set s = s - {{2}} WHERE pk=1 AND ck=2')
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE s CONTAINS 2'))
+        # The set is now {5}. Replacing it with an empty set works as expected:
+        cql.execute(f'UPDATE {table} SET s = {{}} WHERE pk=1 AND ck=2')
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE s CONTAINS 5'))
+        # The DELETE operaiton does the same thing:
+        cql.execute(f'UPDATE {table} SET s = {{17,18}} WHERE pk=1 AND ck=2')
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE s CONTAINS 17'))
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE s CONTAINS 18'))
+        cql.execute(f'DELETE s FROM {table} WHERE pk=1 AND ck=2')
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE s CONTAINS 17'))
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE s CONTAINS 18'))
+
+@pytest.mark.xfail(reason="collection indexing not implemented yet: issue #2962")
+def test_index_map_values(cql, test_keyspace):
+    schema = 'pk int, ck int, m map<int,int>, PRIMARY KEY (pk, ck)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        # Without an index, the "CONTAINS" restriction requires filtering
+        with pytest.raises(InvalidRequest, match="ALLOW FILTERING"):
+            cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 3')
+        cql.execute(f'CREATE INDEX ON {table}(m)')
+        # indexing m (same as values(m)) will allow CONTAINS but not CONTAINS KEY
+        with pytest.raises(InvalidRequest, match="ALLOW FILTERING"):
+            cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS KEY 3')
+        # The map is still empty, nothing should match
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 3'))
+        # Add a elements to the map, check their values can be found
+        cql.execute(f'UPDATE {table} set m = m + {{10: 7}} WHERE pk=1 AND ck=2')
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 7'))
+        cql.execute(f'UPDATE {table} set m = m + {{11: 8}} WHERE pk=1 AND ck=2')
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 7'))
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 8'))
+        # Remove elements from the map, check they can no longer be found
+        cql.execute(f'DELETE m[10] FROM {table} WHERE pk=1 AND ck=2')
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 7'))
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 8'))
+        cql.execute(f'DELETE m[11] FROM {table} WHERE pk=1 AND ck=2')
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 7'))
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 8'))
+        # Replace entire value of map, everything in it should be indexed
+        cql.execute(f'INSERT INTO {table} (pk, ck, m) VALUES (1, 2, {{17: 4, 18: 5}})')
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 4'))
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 5'))
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 7'))
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 8'))
+        cql.execute(f'UPDATE {table} set m = {{3: 2, 4: 5}} WHERE pk=1 AND ck=2')
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 2'))
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 5'))
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 4'))
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 7'))
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 8'))
+        # A map can have multiple elements with the same *value*. The list is now
+        # {3:2, 4:5}, if we add another element of value 2, searching for value 2
+        # will return the item only once. But we'll need to delete both elements
+        # to no longer find the value 2:
+        cql.execute(f'UPDATE {table} set m = m + {{14: 2}} WHERE pk=1 AND ck=2')
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 2'))
+        cql.execute(f'DELETE m[3] FROM {table} WHERE pk=1 AND ck=2')
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 2'))
+        cql.execute(f'DELETE m[14] FROM {table} WHERE pk=1 AND ck=2')
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 2'))
+        # The map is now {4:5}. Change the value of 4 and see it take effect:
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 5'))
+        cql.execute(f'UPDATE {table} set m[4] = 6 WHERE pk=1 AND ck=2')
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 5'))
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 6'))
+        # The "-" operation also works as expected (it removes specific *key*,
+        # not *values*, depsite what some confused documentation claims):
+        cql.execute(f'UPDATE {table} set m = m - {{4}} WHERE pk=1 AND ck=2')
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 6'))
+
+@pytest.mark.xfail(reason="collection indexing not implemented yet: issue #2962")
+def test_index_map_keys(cql, test_keyspace):
+    schema = 'pk int, ck int, m map<int,int>, PRIMARY KEY (pk, ck)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        # Without an index, the "CONTAINS KEY" restriction requires filtering
+        with pytest.raises(InvalidRequest, match="ALLOW FILTERING"):
+            cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS KEY 3')
+        cql.execute(f'CREATE INDEX ON {table}(keys(m))')
+        # indexing keys(m) will allow CONTAINS KEY but not CONTAINS
+        with pytest.raises(InvalidRequest, match="ALLOW FILTERING"):
+            cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 3')
+        # The map is still empty, nothing should match
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS KEY 3'))
+        # Add a elements to the map, check their keys can be found
+        cql.execute(f'UPDATE {table} set m = m + {{10: 7}} WHERE pk=1 AND ck=2')
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS KEY 10'))
+        cql.execute(f'UPDATE {table} set m = m + {{11: 8}} WHERE pk=1 AND ck=2')
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS KEY 11'))
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS KEY 10'))
+        # Remove elements from the map, check they can no longer be found
+        cql.execute(f'DELETE m[10] FROM {table} WHERE pk=1 AND ck=2')
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS KEY 10'))
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS KEY 11'))
+        cql.execute(f'DELETE m[11] FROM {table} WHERE pk=1 AND ck=2')
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS KEY 10'))
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS KEY 11'))
+        # Replace entire value of map, everything in it should be indexed
+        cql.execute(f'INSERT INTO {table} (pk, ck, m) VALUES (1, 2, {{17: 4, 18: 5}})')
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS KEY 17'))
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS KEY 18'))
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS KEY 10'))
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS KEY 11'))
+        cql.execute(f'UPDATE {table} set m = {{3: 2, 4: 5}} WHERE pk=1 AND ck=2')
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS KEY 3'))
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS KEY 4'))
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS KEY 17'))
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS KEY 18'))
+        # The map is now {3:2, 4:5}. Change the value of 4 and see see it has
+        # no effect on keys:
+        cql.execute(f'UPDATE {table} set m[4] = 6 WHERE pk=1 AND ck=2')
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS KEY 3'))
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS KEY 4'))
+        # The "-" operation also works as expected (it removes specific *key*,
+        # not *values*, depsite what some confused documentation claims):
+        cql.execute(f'UPDATE {table} set m = m - {{4}} WHERE pk=1 AND ck=2')
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS KEY 3'))
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS KEY 4'))
+
+@pytest.mark.xfail(reason="collection indexing not implemented yet: issue #2962")
+def test_index_map_entries(cql, test_keyspace):
+    schema = 'pk int, ck int, m map<int,int>, PRIMARY KEY (pk, ck)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f'CREATE INDEX ON {table}(entries(m))')
+        # indexing entires(m) will allow neither CONTAINS KEY nor CONTAINS
+        with pytest.raises(InvalidRequest, match="ALLOW FILTERING"):
+            cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 3')
+        with pytest.raises(InvalidRequest, match="ALLOW FILTERING"):
+            cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS KEY 3')
+        # The map is still empty, nothing should match
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m[1] = 2'))
+        # Add a elements to the map, check their keys can be found
+        cql.execute(f'UPDATE {table} set m = m + {{10: 7}} WHERE pk=1 AND ck=2')
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m[10] = 7'))
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m[10] = 8'))
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m[11] = 7'))
+        cql.execute(f'UPDATE {table} set m = m + {{11: 8}} WHERE pk=1 AND ck=2')
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m[10] = 7'))
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m[11] = 8'))
+        # Remove elements from the map, check they can no longer be found
+        cql.execute(f'DELETE m[10] FROM {table} WHERE pk=1 AND ck=2')
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m[10] = 7'))
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m[11] = 8'))
+        cql.execute(f'DELETE m[11] FROM {table} WHERE pk=1 AND ck=2')
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m[10] = 7'))
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m[11] = 8'))
+        # Replace entire value of map, everything in it should be indexed
+        cql.execute(f'INSERT INTO {table} (pk, ck, m) VALUES (1, 2, {{17: 4, 18: 5}})')
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m[17] = 4'))
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m[18] = 5'))
+        cql.execute(f'UPDATE {table} set m = {{3: 2, 4: 5}} WHERE pk=1 AND ck=2')
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m[3] = 2'))
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m[4] = 5'))
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m[17] = 4'))
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m[18] = 5'))
+        # The map is now {3:2, 4:5}. Change the value of 4 and see see it has
+        # the expected effect
+        cql.execute(f'UPDATE {table} set m[4] = 6 WHERE pk=1 AND ck=2')
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m[4] = 6'))
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m[4] = 5'))
+        # The "-" operation also works as expected (it removes specific *key*,
+        # not *values*, depsite what some confused documentation claims):
+        cql.execute(f'UPDATE {table} set m = m - {{4}} WHERE pk=1 AND ck=2')
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m[3] = 2'))
+        assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m[4] = 6'))
+
+# Check that it is possible to index the same map column in different ways
+# (values, keys and entries) at the same time:
+@pytest.mark.xfail(reason="collection indexing not implemented yet: issue #2962")
+def test_index_map_multiple(cql, test_keyspace):
+    schema = 'pk int, ck int, m map<int,int>, PRIMARY KEY (pk, ck)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f'CREATE INDEX ON {table}(values(m))')
+        cql.execute(f'CREATE INDEX ON {table}(keys(m))')
+        cql.execute(f'CREATE INDEX ON {table}(entries(m))')
+        cql.execute(f'INSERT INTO {table} (pk, ck, m) VALUES (1, 2, {{17: 4, 18: 5}})')
+        # values(m) can do this:
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 4'))
+        # keys(m) can do this:
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS KEY 18'))
+        # entries(m) can do this:
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m[18] = 5'))
+
+# Test that indexing keys(x), values(x) or entries(x) is only allowed for
+# specific column types (namely, specific kinds of collections).
+@pytest.mark.xfail(reason="collection indexing not implemented yet: issue #2962")
+def test_index_collection_wrong_type(cql, test_keyspace):
+    schema = 'pk int primary key, x int, l list<int>, s set<int>, m map<int,int>, t tuple<int,int>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        # scalar type: only the bare column name is allowed:
+        cql.execute(f'CREATE INDEX ON {table}(x)')
+        with pytest.raises(InvalidRequest, match="keys()"):
+            cql.execute(f'CREATE INDEX ON {table}(keys(x))')
+        with pytest.raises(InvalidRequest, match="entries()"):
+            cql.execute(f'CREATE INDEX ON {table}(entries(x))')
+        with pytest.raises(InvalidRequest, match="values()"):
+            cql.execute(f'CREATE INDEX ON {table}(values(x))')
+        # list: bare column name and values() is allowed. Both of these
+        # refer to the same index - so you can't have both at the same time.
+        cql.execute(f'CREATE INDEX ON {table}(l)')
+        with pytest.raises(InvalidRequest, match="keys()"):
+            cql.execute(f'CREATE INDEX ON {table}(keys(l))')
+        with pytest.raises(InvalidRequest, match="entries()"):
+            cql.execute(f'CREATE INDEX ON {table}(entries(l))')
+        with pytest.raises(InvalidRequest, match="duplicate"):
+            cql.execute(f'CREATE INDEX ON {table}(values(l))')
+        cql.execute(f"DROP INDEX {test_keyspace}.{table.split('.')[1]}_l_idx")
+        cql.execute(f'CREATE INDEX ON {table}(values(l))')
+        # set: bare column name and values() is allowed. Both of these
+        # refer to the same index - so you can't have both at the same time.
+        cql.execute(f'CREATE INDEX ON {table}(s)')
+        with pytest.raises(InvalidRequest, match="keys()"):
+            cql.execute(f'CREATE INDEX ON {table}(keys(s))')
+        with pytest.raises(InvalidRequest, match="entries()"):
+            cql.execute(f'CREATE INDEX ON {table}(entries(s))')
+        with pytest.raises(InvalidRequest, match="duplicate"):
+            cql.execute(f'CREATE INDEX ON {table}(values(s))')
+        cql.execute(f"DROP INDEX {test_keyspace}.{table.split('.')[1]}_s_idx")
+        cql.execute(f'CREATE INDEX ON {table}(values(s))')
+        # map: bare column name, values(), keys() and entries() are all
+        # allowed. The first tworefer to the same index - so you can't have
+        # both at the same time.
+        cql.execute(f'CREATE INDEX ON {table}(m)')
+        cql.execute(f'CREATE INDEX ON {table}(keys(m))')
+        cql.execute(f'CREATE INDEX ON {table}(entries(m))')
+        with pytest.raises(InvalidRequest, match="duplicate"):
+            cql.execute(f'CREATE INDEX ON {table}(values(m))')
+        cql.execute(f"DROP INDEX {test_keyspace}.{table.split('.')[1]}_m_idx")
+        cql.execute(f'CREATE INDEX ON {table}(values(m))')
+        # A tuple is not a collection, and doesn't support indexing its
+        # elements separately (this would not have been possible, by the way,
+        # because it can have elements of different types).
+        cql.execute(f'CREATE INDEX ON {table}(t)')
+        with pytest.raises(InvalidRequest, match="keys()"):
+            cql.execute(f'CREATE INDEX ON {table}(keys(t))')
+        with pytest.raises(InvalidRequest, match="entries()"):
+            cql.execute(f'CREATE INDEX ON {table}(entries(t))')
+        with pytest.raises(InvalidRequest, match="values()"):
+            cql.execute(f'CREATE INDEX ON {table}(values(t))')
+        # None of the above types allow a FULL index - it is only
+        # allowed for *frozen* collections.
+        with pytest.raises(InvalidRequest, match="full()"):
+            cql.execute(f'CREATE INDEX ON {table}(full(t))')
+        with pytest.raises(InvalidRequest, match="full()"):
+            cql.execute(f'CREATE INDEX ON {table}(full(l))')
+        with pytest.raises(InvalidRequest, match="full()"):
+            cql.execute(f'CREATE INDEX ON {table}(full(m))')
+        with pytest.raises(InvalidRequest, match="full()"):
+            cql.execute(f'CREATE INDEX ON {table}(full(s))')
+        with pytest.raises(InvalidRequest, match="full()"):
+            cql.execute(f'CREATE INDEX ON {table}(full(t))')
+
+# Reproducer for issue #10707 - indexing a column whose name is a quoted
+# string should work fine. Even if the quoted string happens to look like
+# an instruction to index a collection, e.g., "keys(m)".
+@pytest.mark.xfail(reason="collection indexing not implemented yet: issue #2962, #10707")
+def test_index_quoted_names(cql, test_keyspace):
+    quoted_names = ['"hEllo"', '"x y"', '"keys(m)"', '"values(m)"', '"entries(m)"']
+    schema = 'pk int, ck int, m int, ' + ','.join([name + " int" for name in quoted_names]) + ', PRIMARY KEY (pk, ck)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        for name in quoted_names:
+            cql.execute(f'CREATE INDEX ON {table}({name})')
+        names = ','.join(quoted_names)
+        values = ','.join(['3' for name in quoted_names])
+        cql.execute(f'INSERT INTO {table} (pk, ck, {names}) VALUES (1, 2, {values})')
+        for name in quoted_names:
+            assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE {name} = 3'))
+
+    # Moreover, we can have a collection with a quoted name, and can then
+    # ask to index something strange-looking like keys("keys(m)").
+    schema = 'pk int, ck int, m int, ' + ','.join([name + " map<int,int>" for name in quoted_names]) + ', PRIMARY KEY (pk, ck)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        for name in quoted_names:
+            cql.execute(f'CREATE INDEX ON {table}(keys({name}))')
+        names = ','.join(quoted_names)
+        values = ','.join(['{3:4}' for name in quoted_names])
+        cql.execute(f'INSERT INTO {table} (pk, ck, {names}) VALUES (1, 2, {values})')
+        for name in quoted_names:
+            assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE {name} CONTAINS KEY 3'))
