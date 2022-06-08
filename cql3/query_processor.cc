@@ -55,7 +55,7 @@ public:
     }
 };
 
-query_processor::query_processor(service::storage_proxy& proxy, service::forward_service& forwarder, data_dictionary::database db, service::migration_notifier& mn, service::migration_manager& mm, query_processor::memory_config mcfg, cql_config& cql_cfg)
+query_processor::query_processor(service::storage_proxy& proxy, service::forward_service& forwarder, data_dictionary::database db, service::migration_notifier& mn, service::migration_manager& mm, query_processor::memory_config mcfg, cql_config& cql_cfg, utils::authorization_cache_config auth_prep_cache_cfg)
         : _migration_subscriber{std::make_unique<migration_subscriber>(this)}
         , _proxy(proxy)
         , _forwarder(forwarder)
@@ -65,11 +65,7 @@ query_processor::query_processor(service::storage_proxy& proxy, service::forward
         , _cql_config(cql_cfg)
         , _internal_state(new internal_state())
         , _prepared_cache(prep_cache_log, mcfg.prepared_statment_cache_size)
-        , _authorized_prepared_cache({mcfg.authorized_prepared_cache_size,
-                                      std::min(std::chrono::milliseconds(_db.get_config().permissions_validity_in_ms()),
-                                               std::chrono::duration_cast<std::chrono::milliseconds>(prepared_statements_cache::entry_expiry)),
-                                      std::chrono::milliseconds(_db.get_config().permissions_update_interval_in_ms())},
-                                     authorized_prepared_statements_cache_log) {
+        , _authorized_prepared_cache(std::move(auth_prep_cache_cfg), authorized_prepared_statements_cache_log) {
     namespace sm = seastar::metrics;
     namespace stm = statements;
     using clevel = db::consistency_level;
