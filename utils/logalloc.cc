@@ -835,6 +835,10 @@ public:
     segment_pool();
     void prime(size_t available_memory, size_t min_free_memory);
     segment* new_segment(region::impl* r);
+    const segment_descriptor& descriptor(const segment* seg) const noexcept {
+        uintptr_t index = idx_from_segment(seg);
+        return _segments[index];
+    }
     segment_descriptor& descriptor(segment* seg) noexcept {
         uintptr_t index = idx_from_segment(seg);
         return _segments[index];
