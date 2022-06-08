@@ -618,13 +618,15 @@ private:
         return _table_s.get_compaction_strategy().make_sstable_set(_schema);
     }
 
-    void setup() {
+    future<> setup() {
         auto ssts = make_lw_shared<sstables::sstable_set>(make_sstable_set_for_input());
         formatted_sstables_list formatted_msg;
         auto fully_expired = _table_s.fully_expired_sstables(_sstables, gc_clock::now());
         min_max_tracker<api::timestamp_type> timestamp_tracker;
 
+        _input_sstable_generations.reserve(_sstables.size());
         for (auto& sst : _sstables) {
+            co_await coroutine::maybe_yield();
             auto& sst_stats = sst->get_stats_metadata();
             timestamp_tracker.update(sst_stats.min_timestamp);
             timestamp_tracker.update(sst_stats.max_timestamp);
@@ -1572,7 +1574,7 @@ public:
 
 future<compaction_result> compaction::run(std::unique_ptr<compaction> c) {
     return seastar::async([c = std::move(c)] () mutable {
-        c->setup();
+        c->setup().get();
         auto consumer = c->consume();
 
         auto start_time = db_clock::now();
