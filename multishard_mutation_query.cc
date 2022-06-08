@@ -15,6 +15,7 @@
 #include "readers/multishard.hh"
 
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/as_future.hh>
 
 #include <boost/range/adaptor/reversed.hpp>
 
@@ -271,10 +272,10 @@ public:
         co_return permit;
     }
 
-    future<> lookup_readers(db::timeout_clock::time_point timeout);
+    future<> lookup_readers(db::timeout_clock::time_point timeout) noexcept;
 
     future<> save_readers(flat_mutation_reader_v2::tracked_buffer unconsumed_buffer, detached_compaction_state compaction_state,
-            std::optional<clustering_key_prefix> last_ckey);
+            std::optional<clustering_key_prefix> last_ckey) noexcept;
 
     future<> stop();
 };
@@ -542,21 +543,22 @@ future<> read_context::save_reader(shard_id shard, const dht::decorated_key& las
   });
 }
 
-future<> read_context::lookup_readers(db::timeout_clock::time_point timeout) {
+future<> read_context::lookup_readers(db::timeout_clock::time_point timeout) noexcept {
     if (_cmd.query_uuid == utils::UUID{} || _cmd.is_first_page) {
         return make_ready_future<>();
     }
-
-    return parallel_for_each(boost::irange(0u, smp::count), [this, timeout] (shard_id shard) {
-        return _db.invoke_on(shard, [this, shard, cmd = &_cmd, ranges = &_ranges, gs = global_schema_ptr(_schema),
+    try {
+        return _db.invoke_on_all([this, cmd = &_cmd, ranges = &_ranges, gs = global_schema_ptr(_schema),
                 gts = tracing::global_trace_state_ptr(_trace_state), timeout] (replica::database& db) mutable {
             auto schema = gs.get();
             auto querier_opt = db.get_querier_cache().lookup_shard_mutation_querier(cmd->query_uuid, *schema, *ranges, cmd->slice, gts.get(), timeout);
             auto& table = db.find_column_family(schema);
             auto& semaphore = this->semaphore();
+            auto shard = this_shard_id();
 
             if (!querier_opt) {
-                return reader_meta(reader_state::inexistent);
+                _readers[shard] = reader_meta(reader_state::inexistent);
+                return;
             }
 
             auto& q = *querier_opt;
@@ -571,20 +573,20 @@ future<> read_context::lookup_readers(db::timeout_clock::time_point timeout) {
             }
 
             auto handle = semaphore.register_inactive_read(std::move(q).reader());
-            return reader_meta(
+            _readers[shard] = reader_meta(
                     reader_state::successful_lookup,
                     reader_meta::remote_parts(q.permit(), std::move(q).reader_range(), std::move(q).reader_slice(), table.read_in_progress(),
                             std::move(handle)));
-        }).then([this, shard] (reader_meta rm) {
-            _readers[shard] = std::move(rm);
         });
-    });
+    } catch (...) {
+        return current_exception_as_future();
+    }
 }
 
 future<> read_context::save_readers(flat_mutation_reader_v2::tracked_buffer unconsumed_buffer, detached_compaction_state compaction_state,
-            std::optional<clustering_key_prefix> last_ckey) {
+            std::optional<clustering_key_prefix> last_ckey) noexcept {
     if (_cmd.query_uuid == utils::UUID{}) {
-        return make_ready_future<>();
+        co_return;
     }
 
     auto last_pkey = compaction_state.partition_start.key();
@@ -595,16 +597,13 @@ future<> read_context::save_readers(flat_mutation_reader_v2::tracked_buffer unco
     const auto cs_stats = dismantle_compaction_state(std::move(compaction_state));
     tracing::trace(_trace_state, "Dismantled compaction state: {}", cs_stats);
 
-    return do_with(std::move(last_pkey), std::move(last_ckey), [this] (const dht::decorated_key& last_pkey,
-            const std::optional<clustering_key_prefix>& last_ckey) {
-        return parallel_for_each(boost::irange(0u, smp::count), [this, &last_pkey, &last_ckey] (shard_id shard) {
-            auto& rm = _readers[shard];
-            if (rm.state == reader_state::successful_lookup || rm.state == reader_state::saving) {
-                return save_reader(shard, last_pkey, last_ckey);
-            }
+    co_await parallel_for_each(boost::irange(0u, smp::count), [this, &last_pkey, &last_ckey] (shard_id shard) {
+        auto& rm = _readers[shard];
+        if (rm.state == reader_state::successful_lookup || rm.state == reader_state::saving) {
+            return save_reader(shard, last_pkey, last_ckey);
+        }
 
-            return make_ready_future<>();
-        });
+        return make_ready_future<>();
     });
 }
 
@@ -710,10 +709,12 @@ future<page_consume_result<ResultBuilder>> read_page(
         reader = make_flat_mutation_reader_v2<multi_range_reader>(s, ctx->permit(), std::move(reader), ranges);
     }
 
-    std::exception_ptr ex;
-    try {
-        auto [ckey, result] = co_await query::consume_page(reader, compaction_state, cmd.slice, std::move(result_builder), cmd.get_row_limit(),
-                cmd.partition_limit, cmd.timestamp);
+    // Use coroutine::as_future to prevent exception on timesout.
+    auto f = co_await coroutine::as_future(query::consume_page(reader, compaction_state, cmd.slice, std::move(result_builder), cmd.get_row_limit(),
+                cmd.partition_limit, cmd.timestamp));
+    if (!f.failed()) {
+        // no exceptions are thrown in this block
+        auto [ckey, result] = std::move(f).get0();
         const auto& cstats = compaction_state->stats();
         tracing::trace(trace_state, "Page stats: {} partition(s), {} static row(s) ({} live, {} dead), {} clustering row(s) ({} live, {} dead) and {} range tombstone(s)",
                 cstats.partitions,
@@ -728,11 +729,10 @@ future<page_consume_result<ResultBuilder>> read_page(
         co_await reader.close();
         // page_consume_result cannot fail so there's no risk of double-closing reader.
         co_return page_consume_result<ResultBuilder>(std::move(ckey), std::move(result), std::move(buffer), std::move(compaction_state));
-    } catch (...) {
-        ex = std::current_exception();
     }
+
     co_await reader.close();
-    co_return coroutine::exception(std::move(ex));
+    co_return coroutine::exception(f.get_exception());
 }
 
 template <typename ResultBuilder>
@@ -743,29 +743,25 @@ future<typename ResultBuilder::result_type> do_query(
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
         db::timeout_clock::time_point timeout,
-        ResultBuilder&& result_builder) {
+        ResultBuilder&& result_builder_) {
     auto ctx = seastar::make_shared<read_context>(db, s, cmd, ranges, trace_state, timeout);
 
-    std::exception_ptr ex;
-
-    try {
-        co_await ctx->lookup_readers(timeout);
-
-        auto [last_ckey, result, unconsumed_buffer, compaction_state] = co_await read_page<ResultBuilder>(ctx, s, cmd, ranges, trace_state,
-                std::move(result_builder));
-
-        if (compaction_state->are_limits_reached() || result.is_short_read()) {
-            co_await ctx->save_readers(std::move(unconsumed_buffer), std::move(*compaction_state).detach_state(), std::move(last_ckey));
+    // "capture" result_builder so it won't be released if we yield.
+    auto result_builder = std::move(result_builder_);
+    // Use coroutine::as_future to prevent exception on timesout.
+    auto f = co_await coroutine::as_future(ctx->lookup_readers(timeout).then([&] {
+        return read_page<ResultBuilder>(ctx, s, cmd, ranges, trace_state, std::move(result_builder));
+    }).then([&] (page_consume_result<ResultBuilder> r) -> future<typename ResultBuilder::result_type> {
+        if (r.compaction_state->are_limits_reached() || r.result.is_short_read()) {
+            co_await ctx->save_readers(std::move(r.unconsumed_fragments), std::move(*r.compaction_state).detach_state(), std::move(r.last_ckey));
         }
-
-        co_await ctx->stop();
-        co_return std::move(result);
-    } catch (...) {
-        ex = std::current_exception();
-    }
-
+        co_return std::move(r.result);
+    }));
     co_await ctx->stop();
-    co_return coroutine::exception(std::move(ex));
+    if (f.failed()) {
+        co_return coroutine::exception(f.get_exception());
+    }
+    co_return f.get0();
 }
 
 template <typename ResultBuilder>
