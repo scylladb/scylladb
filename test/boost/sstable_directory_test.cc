@@ -204,6 +204,31 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_scan_incomplete_sstables) {
   });
 }
 
+// Test scanning a directory with unrecognized file
+// reproducing https://github.com/scylladb/scylla/issues/10697
+SEASTAR_TEST_CASE(sstable_directory_test_table_scan_invalid_file) {
+    return sstables::test_env::do_with_async([] (test_env& env) {
+        auto dir = tmpdir();
+        auto sst = make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), dir.path(), 1));
+
+        // Add a bogus file in the sstables directory
+        auto name = dir.path() / "bogus";
+        auto f = open_file_dma(name.native(), open_flags::rw | open_flags::create | open_flags::truncate).get0();
+        f.close().get();
+
+        with_sstable_directory(dir.path(), 1,
+            sstable_directory::need_mutate_level::no,
+            sstable_directory::lack_of_toc_fatal::no,
+            sstable_directory::enable_dangerous_direct_import_of_cassandra_counters::no,
+            sstable_directory::allow_loading_materialized_view::no,
+            sstable_from_existing_file(env),
+            [] (sharded<sstables::sstable_directory>& sstdir) {
+                auto expect_malformed_sstable = distributed_loader_for_tests::process_sstable_dir(sstdir);
+                BOOST_REQUIRE_THROW(expect_malformed_sstable.get(), sstables::malformed_sstable_exception);
+        });
+    });
+}
+
 // Test always-benign incomplete SSTable: temporaryTOC found
 SEASTAR_TEST_CASE(sstable_directory_test_table_temporary_toc) {
   return sstables::test_env::do_with_async([] (test_env& env) {
