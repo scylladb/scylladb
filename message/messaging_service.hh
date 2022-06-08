@@ -17,27 +17,19 @@
 #include "inet_address_vectors.hh"
 #include <seastar/rpc/rpc_types.hh>
 #include <unordered_map>
-#include "query-request.hh"
-#include "mutation_query.hh"
 #include "range.hh"
-#include "repair/repair.hh"
 #include "tracing/tracing.hh"
-#include "digest_algorithm.hh"
-#include "streaming/stream_reason.hh"
-#include "streaming/stream_mutation_fragments_cmd.hh"
-#include "cache_temperature.hh"
-#include "service/paxos/prepare_response.hh"
-#include "raft/raft.hh"
-#include "service/raft/messaging.hh"
 
 #include <list>
 #include <vector>
 #include <optional>
+#include <absl/container/btree_set.h>
 #include <seastar/net/tls.hh>
 
 // forward declarations
 namespace streaming {
     class prepare_message;
+    enum class stream_mutation_fragments_cmd : uint8_t;
 }
 
 namespace gms {
@@ -67,6 +59,10 @@ class canonical_mutation;
 
 namespace dht {
     class token;
+    class ring_position;
+    using partition_range = interval<ring_position>;
+    using token_range = interval<token>;
+    using token_range_vector = std::vector<token_range>;
 }
 
 namespace query {
@@ -78,6 +74,51 @@ namespace query {
 namespace compat {
 
 using wrapping_partition_range = wrapping_range<dht::ring_position>;
+
+}
+
+class repair_hash_with_cmd;
+class repair_row_on_wire_with_cmd;
+enum class repair_stream_cmd : uint8_t;
+class repair_stream_boundary;
+class frozen_mutation_fragment;
+class repair_hash;
+using get_combined_row_hash_response = repair_hash;
+using repair_hash_set = absl::btree_set<repair_hash>;
+class repair_sync_boundary;
+class get_sync_boundary_response;
+class partition_key_and_mutation_fragments;
+using repair_rows_on_wire = std::list<partition_key_and_mutation_fragments>;
+class repair_row_level_start_response;
+class node_ops_cmd_response;
+class node_ops_cmd_request;
+enum class row_level_diff_detect_algorithm : uint8_t;
+
+using table_schema_version = utils::UUID;
+
+namespace streaming {
+
+enum class stream_reason : uint8_t;
+
+}
+
+namespace service {
+
+class group0_peer_exchange;
+
+}
+
+namespace raft {
+
+namespace internal {
+
+template <typename T> class tagged_id;
+
+}
+
+class server_address;
+using group_id = internal::tagged_id<struct group_id_tag>;
+using server_id = internal::tagged_id<struct server_id_tag>;
 
 }
 
