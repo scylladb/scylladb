@@ -87,6 +87,21 @@ uint32_t read_and_check_list_index(const cql3::raw_value_view& key) {
 
 namespace cql3 {
 
+column_condition::column_condition(const column_definition& column, std::optional<expr::expression> collection_element,
+    std::optional<expr::expression> value, std::vector<expr::expression> in_values,
+    std::unique_ptr<like_matcher> matcher, expr::oper_t op)
+        : _column(column)
+        , _collection_element(std::move(collection_element))
+        , _value(std::move(value))
+        , _in_values(std::move(in_values))
+        , _matcher(std::move(matcher))
+        , _op(op)
+{
+    if (op != expr::oper_t::IN) {
+        assert(_in_values.empty());
+    }
+}
+
 void column_condition::collect_marker_specificaton(prepare_context& ctx) {
     if (_collection_element) {
         expr::fill_prepare_context(*_collection_element, ctx);
@@ -142,7 +157,7 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
             const map_type_impl& map_type = static_cast<const map_type_impl&>(cell_type);
             // A map is serialized as a vector of data value pairs.
             const std::vector<std::pair<data_value, data_value>>& map = map_type.from_value(*cell_value);
-            if (column.type->is_map()) {
+            if (_column.type->is_map()) {
                 // We're working with a map *type*, not only map *representation*.
                 key.with_linearized([&map, &map_type, &cell_value] (bytes_view key) {
                     auto end = map.end();
@@ -158,7 +173,7 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
                         cell_value = nullptr;
                     }
                 });
-            } else if (column.type->is_list()) {
+            } else if (_column.type->is_list()) {
                 // We're working with a list type, represented as map.
                 uint32_t idx = read_and_check_list_index(key);
                 cell_value = idx >= map.size() ? nullptr : &map[idx].second;
@@ -198,7 +213,7 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
         }
         // type::validate() is called earlier when creating the value, so it's safe to pass to_bytes() result
         // directly to compare.
-        return is_satisfied_by(_op, *cell_value->type(), *column.type, *cell_value, to_bytes(param.view()));
+        return is_satisfied_by(_op, *cell_value->type(), *_column.type, *cell_value, to_bytes(param.view()));
     }
 
     if (_op == expr::oper_t::LIKE) {
@@ -245,7 +260,7 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
     // If cell value is NULL, IN list must contain NULL or an empty set/list. Otherwise it must contain cell value.
     if (cell_value) {
         return std::any_of(in_values.begin(), in_values.end(), [this, cell_value] (const bytes_opt& value) {
-            return value.has_value() && is_satisfied_by(expr::oper_t::EQ, *cell_value->type(), *column.type, *cell_value, *value);
+            return value.has_value() && is_satisfied_by(expr::oper_t::EQ, *cell_value->type(), *_column.type, *cell_value, *value);
         });
     } else {
         return std::any_of(in_values.begin(), in_values.end(), [] (const bytes_opt& value) { return !value.has_value() || value->empty(); });
