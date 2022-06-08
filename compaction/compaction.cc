@@ -624,6 +624,7 @@ private:
         auto fully_expired = _table_s.fully_expired_sstables(_sstables, gc_clock::now());
         min_max_tracker<api::timestamp_type> timestamp_tracker;
 
+        _input_sstable_generations.reserve(_sstables.size());
         for (auto& sst : _sstables) {
             co_await coroutine::maybe_yield();
             auto& sst_stats = sst->get_stats_metadata();
