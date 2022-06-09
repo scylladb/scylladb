@@ -478,6 +478,11 @@ class RpcVerb(ASTBase):
     - [[with_timeout]] - an additional time_point parameter is supplied
       to the handler function and send* method uses send_message_*_timeout
       variant of internal function to actually send the message.
+      Incompatible with [[cancellable]].
+    - [[cancellable]] - an additional abort_source& parameter is supplied
+      to the handler function and send* method uses send_message_*_cancellable
+      variant of internal function to actually send the message.
+      Incompatible with [[with_timeout]].
     - [[one_way]] - the handler function is annotated by
       future<rpc::no_wait_type> return type to designate that a client
       doesn't need to wait for an answer.
@@ -486,16 +491,17 @@ class RpcVerb(ASTBase):
     the return type is set to be `future<>`.
     For one-way verbs, the use of return clause is prohibited and the
     signature of `send*` function always returns `future<>`."""
-    def __init__(self, name, parameters, return_values, with_client_info, with_timeout, one_way):
+    def __init__(self, name, parameters, return_values, with_client_info, with_timeout, cancellable, one_way):
         super().__init__(name)
         self.params = parameters
         self.return_values = return_values
         self.with_client_info = with_client_info
         self.with_timeout = with_timeout
+        self.cancellable = cancellable
         self.one_way = one_way
 
     def __str__(self):
-        return f"<RpcVerb(name={self.name}, params={self.params}, return_values={self.return_values}, with_client_info={self.with_client_info}, with_timeout={self.with_timeout}, one_way={self.one_way})>"
+        return f"<RpcVerb(name={self.name}, params={self.params}, return_values={self.return_values}, with_client_info={self.with_client_info}, with_timeout={self.with_timeout}, cancellable={self.cancellable}, one_way={self.one_way})>"
 
     def __repr__(self):
         return self.__str__()
@@ -506,6 +512,8 @@ class RpcVerb(ASTBase):
             send_fn += '_oneway'
         if self.with_timeout:
             send_fn += '_timeout'
+        if self.cancellable:
+            send_fn += '_cancellable'
         return send_fn
 
     def handler_function_return_values(self):
@@ -551,6 +559,8 @@ class RpcVerb(ASTBase):
         res = 'netw::messaging_service* ms, netw::msg_addr id'
         if self.with_timeout:
             res += ', netw::messaging_service::clock_type::time_point timeout'
+        if self.cancellable:
+            res += ', abort_source& as'
         if self.params:
             for idx, p in enumerate(self.params):
                 res += ', ' + p.to_string_send_fn_signature()
@@ -562,6 +572,8 @@ class RpcVerb(ASTBase):
         res = f'ms, {self.messaging_verb_enum_case()}, id'
         if self.with_timeout:
             res += ', timeout'
+        if self.cancellable:
+            res += ', as'
         if self.params:
             for idx, p in enumerate(self.params):
                 res += ', ' + f'std::move({p.name if p.name else f"_{idx + 1}"})'
@@ -675,11 +687,14 @@ def rpc_verb_parse_action(tokens):
     raw_attrs = tokens['attributes']
     params = tokens['params'] if 'params' in tokens else []
     with_timeout = not raw_attrs.empty() and 'with_timeout' in raw_attrs.attr_items
+    cancellable = not raw_attrs.empty() and 'cancellable' in raw_attrs.attr_items
     with_client_info = not raw_attrs.empty() and 'with_client_info' in raw_attrs.attr_items
     one_way = not raw_attrs.empty() and 'one_way' in raw_attrs.attr_items
     if one_way and 'return_values' in tokens:
         raise Exception(f"Invalid return type specification for one-way RPC verb '{name}'")
-    return RpcVerb(name=name, parameters=params, return_values=tokens.get('return_values'), with_client_info=with_client_info, with_timeout=with_timeout, one_way=one_way)
+    if with_timeout and cancellable:
+        raise Exception(f"Error in verb {name}: [[with_timeout]] cannot be used together with [[cancellable]] in the same verb")
+    return RpcVerb(name=name, parameters=params, return_values=tokens.get('return_values'), with_client_info=with_client_info, with_timeout=with_timeout, cancellable=cancellable, one_way=one_way)
 
 
 def namespace_parse_action(tokens):
