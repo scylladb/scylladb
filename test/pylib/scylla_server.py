@@ -364,6 +364,27 @@ Check the log files:
             self.control_connection = None
             self.control_cluster = None
 
+    async def stop_gracefully(self) -> None:
+        """Stop a running server. No-op if not running. Uses SIGTERM to
+        stop, so it is graceful. Waits for the process to exit before return."""
+        # Preserve for logging
+        hostname = self.hostname
+        logging.info("gracefully stopping server at host %s", hostname)
+        if not self.cmd:
+            return
+
+        try:
+            self.cmd.terminate()
+        except ProcessLookupError:
+            pass
+        else:
+            await self.cmd.wait()
+        finally:
+            if self.cmd:
+                logging.info("gracefully stopped server at host %s", hostname)
+            self.cmd = None
+            self.control_connection = None
+
     async def uninstall(self) -> None:
         """Clear all files left from a stopped server, including the
         data files and log files."""
