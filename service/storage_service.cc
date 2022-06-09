@@ -2752,10 +2752,6 @@ future<> storage_service::unbootstrap() {
         set_mode(mode::LEAVING);
 
         auto stream_success = stream_ranges(ranges_to_stream);
-        // Wait for batch log to complete before streaming hints.
-        slogger.debug("waiting for batch log processing.");
-        // Start with BatchLog replay, which may create hints but no writes since this is no longer a valid endpoint.
-        co_await get_batchlog_manager().local().do_batch_log_replay();
 
         slogger.info("streaming hints to other nodes");
 
