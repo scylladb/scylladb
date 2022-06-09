@@ -14,7 +14,6 @@ import pytest
 import re
 from util import new_test_table, new_type, user_type
 from cassandra.protocol import InvalidRequest
-from cassandra.connection import DRIVER_NAME, DRIVER_VERSION
 from cassandra.query import UNSET_VALUE
 
 # When filtering for "x > 0" or "x < 0", rows with an unset value for x
@@ -49,19 +48,7 @@ def test_filter_on_unset(cql, test_keyspace):
 # this test.
 
 # Reproducer for issue #8203, partition-range (whole-table) scan case
-def test_filtering_contiguous_nonmatching_partition_range(cql, test_keyspace):
-    # Verify that the Python driver is recent enough to contain the fix for
-    # the driver bug that caused this issue. If it's too old, this test cannot
-    # succeed, and we just skip it. Scylla drivers 3.24.5 or newer contain
-    # this fix, Datastax drivers 3.25.1 or newer contain it. The fix was
-    # introduced in the following commits:
-    # https://github.com/scylladb/python-driver/commit/6ed53d9f7004177e18d9f2ea000a7d159ff9278e,
-    # https://github.com/datastax/python-driver/commit/1d9077d3f4c937929acc14f45c7693e76dde39a9
-    scylla_driver = 'Scylla' in DRIVER_NAME
-    driver_version = tuple(int(x) for x in DRIVER_VERSION.split('.'))
-    if (scylla_driver and driver_version < (3, 24, 5) or
-            not scylla_driver and driver_version <= (3, 25, 0)):
-        pytest.skip("Python driver too old to run this test")
+def test_filtering_contiguous_nonmatching_partition_range(cql, test_keyspace, driver_bug_1):
     # The bug depends on the amount of data being scanned passing some
     # page size limit, so it doesn't matter if the reproducer has a lot of
     # small rows or fewer long rows - and inserting fewer long rows is
@@ -81,12 +68,7 @@ def test_filtering_contiguous_nonmatching_partition_range(cql, test_keyspace):
         assert list(cql.execute(f"SELECT p FROM {table} WHERE v={v} ALLOW FILTERING")) == [(p,)]
 
 # Reproducer for issue #8203, single-partition scan case
-def test_filtering_contiguous_nonmatching_single_partition(cql, test_keyspace):
-    scylla_driver = 'Scylla' in DRIVER_NAME
-    driver_version = tuple(int(x) for x in DRIVER_VERSION.split('.'))
-    if (scylla_driver and driver_version < (3, 24, 5) or
-            not scylla_driver and driver_version <= (3, 25, 0)):
-        pytest.skip("Python driver too old to run this test")
+def test_filtering_contiguous_nonmatching_single_partition(cql, test_keyspace, driver_bug_1):
     count = 100
     long='x'*60000
     with new_test_table(cql, test_keyspace,
