@@ -478,6 +478,14 @@ std::ostream& operator<<(std::ostream& os, const compaction_manager::task& task)
     return os << task.describe();
 }
 
+inline compaction_controller make_compaction_controller(compaction_manager::compaction_scheduling_group csg, uint64_t static_shares, std::function<double()> fn) {
+    if (static_shares > 0) {
+        return compaction_controller(csg.cpu, csg.io, static_shares);
+    }
+
+    return compaction_controller(csg.cpu, csg.io, 250ms, std::move(fn));
+}
+
 std::string compaction_manager::task::describe() const {
     auto* t = _compacting_table;
     auto s = t->schema();
@@ -587,8 +595,8 @@ sstables::compaction_stopped_exception compaction_manager::task::make_compaction
     return sstables::compaction_stopped_exception(s->ks_name(), s->cf_name(), _compaction_data.stop_requested);
 }
 
-compaction_manager::compaction_manager(compaction_scheduling_group csg, maintenance_scheduling_group msg, size_t available_memory, abort_source& as)
-    : _compaction_controller(csg.cpu, csg.io, 250ms, [this, available_memory] () -> float {
+compaction_manager::compaction_manager(compaction_scheduling_group csg, maintenance_scheduling_group msg, size_t available_memory, uint64_t shares, abort_source& as)
+    : _compaction_controller(make_compaction_controller(csg, shares, [this, available_memory] () -> float {
         _last_backlog = backlog();
         auto b = _last_backlog / available_memory;
         // This means we are using an unimplemented strategy
@@ -599,20 +607,7 @@ compaction_manager::compaction_manager(compaction_scheduling_group csg, maintena
             return compaction_controller::normalization_factor;
         }
         return b;
-    })
-    , _backlog_manager(_compaction_controller)
-    , _maintenance_sg(msg)
-    , _available_memory(available_memory)
-    , _early_abort_subscription(as.subscribe([this] () noexcept {
-        do_stop();
     }))
-    , _strategy_control(std::make_unique<strategy_control>(*this))
-{
-    register_metrics();
-}
-
-compaction_manager::compaction_manager(compaction_scheduling_group csg, maintenance_scheduling_group msg, size_t available_memory, uint64_t shares, abort_source& as)
-    : _compaction_controller(csg.cpu, csg.io, shares)
     , _backlog_manager(_compaction_controller)
     , _maintenance_sg(msg)
     , _available_memory(available_memory)

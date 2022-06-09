@@ -356,7 +356,6 @@ private:
     // about invoking it. Ref #10146
     compaction_manager();
 public:
-    compaction_manager(compaction_scheduling_group csg, maintenance_scheduling_group msg, size_t available_memory, abort_source& as);
     compaction_manager(compaction_scheduling_group csg, maintenance_scheduling_group msg, size_t available_memory, uint64_t shares, abort_source& as);
     ~compaction_manager();
     class for_testing_tag{};
