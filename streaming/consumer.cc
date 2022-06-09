@@ -59,8 +59,8 @@ std::function<future<> (flat_mutation_reader_v2)> make_streaming_consumer(sstrin
                                              cf->get_sstables_manager().configure_writer(origin),
                                              encoding_stats{}, pc).then([sst] {
                     return sst->open_data();
-                }).then([cf, sst, offstrategy, reason] {
-                    if (offstrategy && (reason == stream_reason::repair)) {
+                }).then([cf, sst, offstrategy, reason, origin] {
+                    if (offstrategy && sstables::repair_origin == origin) {
                         sstables::sstlog.debug("Enabled automatic off-strategy trigger for table {}.{}",
                                 cf->schema()->ks_name(), cf->schema()->cf_name());
                         cf->enable_off_strategy_trigger();
