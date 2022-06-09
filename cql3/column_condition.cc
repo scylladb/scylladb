@@ -298,13 +298,13 @@ column_condition::raw::prepare(data_dictionary::database db, const sstring& keys
             throw exceptions::invalid_request_exception(
                     format("Unsupported collection type {} in a condition with element access", ctype->cql3_type_name()));
         }
-        collection_element_expression = prepare_expression(*_collection_element, db, keyspace, element_spec);
+        collection_element_expression = prepare_expression(*_collection_element, db, keyspace, nullptr, element_spec);
     }
 
     if (is_compare(_op)) {
         validate_operation_on_durations(*receiver.type, _op);
         return column_condition::condition(receiver, std::move(collection_element_expression),
-                prepare_expression(*_value, db, keyspace, value_spec), nullptr, _op);
+                prepare_expression(*_value, db, keyspace, nullptr, value_spec), nullptr, _op);
     }
 
     if (_op == expr::oper_t::LIKE) {
@@ -313,14 +313,14 @@ column_condition::raw::prepare(data_dictionary::database db, const sstring& keys
             // Pass matcher object
             const sstring& pattern = literal_term->raw_text;
             return column_condition::condition(receiver, std::move(collection_element_expression),
-                    prepare_expression(*_value, db, keyspace, value_spec),
+                    prepare_expression(*_value, db, keyspace, nullptr, value_spec),
                     std::make_unique<like_matcher>(bytes_view(reinterpret_cast<const int8_t*>(pattern.data()), pattern.size())),
                     _op);
         } else {
             // Pass through rhs value, matcher object built on execution
             // TODO: caller should validate parametrized LIKE pattern
             return column_condition::condition(receiver, std::move(collection_element_expression),
-                    prepare_expression(*_value, db, keyspace, value_spec), nullptr, _op);
+                    prepare_expression(*_value, db, keyspace, nullptr, value_spec), nullptr, _op);
         }
     }
 
@@ -332,14 +332,14 @@ column_condition::raw::prepare(data_dictionary::database db, const sstring& keys
         assert(_in_values.empty());
         auto in_name = ::make_shared<column_identifier>(format("in({})", value_spec->name->text()), true);
         lw_shared_ptr<column_specification> in_list_receiver = make_lw_shared<column_specification>(value_spec->ks_name, value_spec->cf_name, in_name, list_type_impl::get_instance(receiver.type, false));
-        expr::expression multi_item_term = prepare_expression(*_in_marker, db, keyspace, in_list_receiver);
+        expr::expression multi_item_term = prepare_expression(*_in_marker, db, keyspace, nullptr, in_list_receiver);
         return column_condition::in_condition(receiver, collection_element_expression, std::move(multi_item_term), {});
     }
     // Both _in_values and in _in_marker can be missing in case of empty IN list: "a IN ()"
     std::vector<expr::expression> terms;
     terms.reserve(_in_values.size());
     for (auto&& value : _in_values) {
-        terms.push_back(prepare_expression(value, db, keyspace, value_spec));
+        terms.push_back(prepare_expression(value, db, keyspace, nullptr, value_spec));
     }
     return column_condition::in_condition(receiver, std::move(collection_element_expression),
                                           std::nullopt, std::move(terms));

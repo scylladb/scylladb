@@ -334,7 +334,7 @@ void preliminary_binop_vaidation_checks(const binary_operator& binop) {
         }
     }
 
-    binary_operator prepared_binop = prepare_binary_operator(binop_to_prepare, db, schema, ctx);
+    binary_operator prepared_binop = prepare_binary_operator(binop_to_prepare, db, schema);
 
     const column_value* lhs_pk_col_search_res = find_in_expression<column_value>(prepared_binop.lhs,
         [](const column_value& col) {

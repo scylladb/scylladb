@@ -1732,7 +1732,7 @@ select_statement::prepare_limit(data_dictionary::database db, prepare_context& c
         return std::nullopt;
     }
 
-    expr::expression prep_limit = prepare_expression(*limit, db, keyspace(), limit_receiver());
+    expr::expression prep_limit = prepare_expression(*limit, db, keyspace(), nullptr, limit_receiver());
     expr::fill_prepare_context(prep_limit, ctx);
     return prep_limit;
 }

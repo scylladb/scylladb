@@ -123,15 +123,15 @@ std::unique_ptr<attributes> attributes::raw::prepare(data_dictionary::database d
     std::optional<expr::expression> ts, ttl, to;
 
     if (timestamp.has_value()) {
-        ts = prepare_expression(*timestamp, db, ks_name, timestamp_receiver(ks_name, cf_name));
+        ts = prepare_expression(*timestamp, db, ks_name, nullptr, timestamp_receiver(ks_name, cf_name));
     }
 
     if (time_to_live.has_value()) {
-        ttl = prepare_expression(*time_to_live, db, ks_name, time_to_live_receiver(ks_name, cf_name));
+        ttl = prepare_expression(*time_to_live, db, ks_name, nullptr, time_to_live_receiver(ks_name, cf_name));
     }
 
     if (timeout.has_value()) {
-        to = prepare_expression(*timeout, db, ks_name, timeout_receiver(ks_name, cf_name));
+        to = prepare_expression(*timeout, db, ks_name, nullptr, timeout_receiver(ks_name, cf_name));
     }
 
     return std::unique_ptr<attributes>{new attributes{std::move(ts), std::move(ttl), std::move(to)}};

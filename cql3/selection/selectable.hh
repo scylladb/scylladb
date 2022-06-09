@@ -78,9 +78,9 @@ public:
 
 class selectable::with_cast : public selectable {
     ::shared_ptr<selectable> _arg;
-    cql3_type _type;
+    data_type _type;
 public:
-    with_cast(::shared_ptr<selectable> arg, cql3_type type)
+    with_cast(::shared_ptr<selectable> arg, data_type type)
         : _arg(std::move(arg)), _type(std::move(type)) {
     }
 

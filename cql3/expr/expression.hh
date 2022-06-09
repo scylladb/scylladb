@@ -213,6 +213,7 @@ struct column_value {
 struct subscript {
     expression val;
     expression sub;
+    data_type type; // may be null before prepare
 };
 
 /// Gets the subscripted column_value out of the subscript.
@@ -309,15 +310,17 @@ struct function_call {
 
 struct cast {
     expression arg;
-    std::variant<cql3_type, shared_ptr<cql3_type::raw>> type;
+    std::variant<data_type, shared_ptr<cql3_type::raw>> type;
 };
 
 struct field_selection {
     expression structure;
     shared_ptr<column_identifier_raw> field;
+    data_type type; // may be null before prepare
 };
 
 struct null {
+    data_type type; // may be null before prepare
 };
 
 struct bind_variable {
@@ -613,11 +616,12 @@ extern expression replace_token(const expression&, const column_definition*);
 extern expression search_and_replace(const expression& e,
         const noncopyable_function<std::optional<expression> (const expression& candidate)>& replace_candidate);
 
-extern expression prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver);
+extern expression prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver);
+std::optional<expression> try_prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver);
 
 // Prepares a binary operator received from the parser.
 // Does some basic type checks but no advanced validation.
-extern binary_operator prepare_binary_operator(const binary_operator& binop, data_dictionary::database db, schema_ptr schema, prepare_context& ctx);
+extern binary_operator prepare_binary_operator(const binary_operator& binop, data_dictionary::database db, schema_ptr schema);
 
 
 /**
@@ -652,6 +656,8 @@ inline oper_t pick_operator(statements::bound b, bool inclusive) {
 std::vector<expression> extract_single_column_restrictions_for_column(const expression&, const column_definition&);
 
 std::optional<bool> get_bool_value(const constant&);
+
+data_type type_of(const expression& e);
 
 // Takes a prepared expression and calculates its value.
 // Evaluates bound values, calls functions and returns just the bytes and type.
