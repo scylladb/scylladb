@@ -2727,7 +2727,10 @@ future<std::unordered_multimap<dht::token_range, inet_address>> storage_service:
 }
 
 future<> storage_service::unbootstrap() {
+    slogger.info("Started batchlog replay for decommission");
     co_await get_batchlog_manager().local().do_batch_log_replay();
+    slogger.info("Finished batchlog replay for decommission");
+
     if (is_repair_based_node_ops_enabled(streaming::stream_reason::decommission)) {
         co_await _repair.local().decommission_with_repair(get_token_metadata_ptr());
     } else {
