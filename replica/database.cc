@@ -21,6 +21,7 @@
 #include <seastar/core/seastar.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include <seastar/coroutine/as_future.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/metrics.hh>
 #include <boost/algorithm/string/erase.hpp>
@@ -1422,17 +1423,21 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_opti
     try {
         auto op = cf.read_in_progress();
 
+        future<> f = make_ready_future<>();
         if (querier_opt) {
-            co_await semaphore.with_ready_permit(querier_opt->permit(), read_func);
+            f = co_await coroutine::as_future(semaphore.with_ready_permit(querier_opt->permit(), read_func));
         } else {
-            co_await semaphore.with_permit(s.get(), "data-query", cf.estimate_read_memory_cost(), timeout, read_func);
+            f = co_await coroutine::as_future(semaphore.with_permit(s.get(), "data-query", cf.estimate_read_memory_cost(), timeout, read_func));
         }
 
-        if (cmd.query_uuid != utils::UUID{} && querier_opt) {
-            _querier_cache.insert(cmd.query_uuid, std::move(*querier_opt), std::move(trace_state));
+        if (!f.failed()) {
+            if (cmd.query_uuid != utils::UUID{} && querier_opt) {
+                _querier_cache.insert(cmd.query_uuid, std::move(*querier_opt), std::move(trace_state));
+            }
+        } else {
+            ex = f.get_exception();
         }
     } catch (...) {
-        ++semaphore.get_stats().total_failed_reads;
         ex = std::current_exception();
     }
 
@@ -1440,6 +1445,7 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_opti
         co_await querier_opt->close();
     }
     if (ex) {
+        ++semaphore.get_stats().total_failed_reads;
         co_return coroutine::exception(std::move(ex));
     }
 
@@ -1483,18 +1489,22 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
     try {
         auto op = cf.read_in_progress();
 
+        future<> f = make_ready_future<>();
         if (querier_opt) {
-            co_await semaphore.with_ready_permit(querier_opt->permit(), read_func);
+            f = co_await coroutine::as_future(semaphore.with_ready_permit(querier_opt->permit(), read_func));
         } else {
-            co_await semaphore.with_permit(s.get(), "mutation-query", cf.estimate_read_memory_cost(), timeout, read_func);
+            f = co_await coroutine::as_future(semaphore.with_permit(s.get(), "mutation-query", cf.estimate_read_memory_cost(), timeout, read_func));
         }
 
-        if (cmd.query_uuid != utils::UUID{} && querier_opt) {
-            _querier_cache.insert(cmd.query_uuid, std::move(*querier_opt), std::move(trace_state));
+        if (!f.failed()) {
+            if (cmd.query_uuid != utils::UUID{} && querier_opt) {
+                _querier_cache.insert(cmd.query_uuid, std::move(*querier_opt), std::move(trace_state));
+            }
+        } else {
+            ex = f.get_exception();
         }
 
     } catch (...) {
-        ++semaphore.get_stats().total_failed_reads;
         ex = std::current_exception();
     }
 
@@ -1502,6 +1512,7 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
         co_await querier_opt->close();
     }
     if (ex) {
+        ++semaphore.get_stats().total_failed_reads;
         co_return coroutine::exception(std::move(ex));
     }
 
