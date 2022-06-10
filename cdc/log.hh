@@ -60,6 +60,8 @@ struct operation_result_tracker;
 class db_context;
 class metadata;
 
+bool is_log_name(const std::string_view& table_name);
+
 /// \brief CDC service, responsible for schema listeners
 ///
 /// CDC service will listen for schema changes and iff CDC is enabled/changed

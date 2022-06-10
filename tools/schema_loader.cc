@@ -13,6 +13,8 @@
 #include <seastar/util/closeable.hh>
 #include <seastar/util/short_streams.hh>
 
+#include "cdc/cdc_partitioner.hh"
+#include "cdc/log.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/statements/create_keyspace_statement.hh"
 #include "cql3/statements/create_table_statement.hh"
@@ -252,6 +254,13 @@ std::vector<schema_ptr> do_load_schemas(std::string_view schema_str) {
             dd_impl.unwrap(ks).metadata->add_user_type(p->create_type(db));
         } else if (auto p = dynamic_cast<cql3::statements::create_table_statement*>(statement)) {
             schemas.push_back(p->get_cf_meta_data(db));
+            // CDC tables use a custom partitioner, which is not reflected when
+            // dumping the schema to schema.cql, so we have to manually set it here.
+            if (cdc::is_log_name(schemas.back()->cf_name())) {
+                schema_builder b(std::move(schemas.back()));
+                b.with_partitioner(cdc::cdc_partitioner::classname);
+                schemas.back() = b.build();
+            }
         } else if (auto p = dynamic_cast<cql3::statements::update_statement*>(statement)) {
             if (p->keyspace() != db::schema_tables::NAME && p->column_family() != db::schema_tables::DROPPED_COLUMNS) {
                 throw std::runtime_error(fmt::format("tools::do_load_schemas(): expected modification statement to be against {}.{}, but it is against {}.{}",
