@@ -790,11 +790,7 @@ void compaction_manager::do_stop() noexcept {
     try {
         really_do_stop();
     } catch (...) {
-        try {
-            cmlog.error("Failed to stop the manager: {}", std::current_exception());
-        } catch (...) {
-            // Nothing else we can do.
-        }
+        cmlog.error("Failed to stop the manager: {}", std::current_exception());
     }
 }
 
