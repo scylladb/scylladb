@@ -87,15 +87,13 @@ make_flush_controller(const db::config& cfg, backlog_controller::scheduling_grou
     return flush_controller(sg, 50ms, cfg.virtual_dirty_soft_limit(), std::move(fn));
 }
 
-inline
-std::unique_ptr<compaction_manager>
-make_compaction_manager(const db::config& cfg, database_config& dbcfg, abort_source& as) {
-        return std::make_unique<compaction_manager>(
-                compaction_manager::scheduling_group{dbcfg.compaction_scheduling_group, service::get_local_compaction_priority()},
-                compaction_manager::scheduling_group{dbcfg.streaming_scheduling_group, service::get_local_streaming_priority()},
-                dbcfg.available_memory,
-                cfg.compaction_static_shares(),
-                as);
+inline compaction_manager::config make_compaction_manager_config(const db::config& cfg, database_config& dbcfg) {
+    return compaction_manager::config {
+        .compaction_sched_group = compaction_manager::scheduling_group{dbcfg.compaction_scheduling_group, service::get_local_compaction_priority()},
+        .maintenance_sched_group = compaction_manager::scheduling_group{dbcfg.streaming_scheduling_group, service::get_local_streaming_priority()},
+        .available_memory = dbcfg.available_memory,
+        .static_shares = cfg.compaction_static_shares(),
+    };
 }
 
 keyspace::keyspace(lw_shared_ptr<keyspace_metadata> metadata, config cfg, locator::effective_replication_map_factory& erm_factory)
@@ -355,7 +353,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _row_cache_tracker(cache_tracker::register_metrics::yes)
     , _apply_stage("db_apply", &database::do_apply)
     , _version(empty_version)
-    , _compaction_manager(make_compaction_manager(_cfg, dbcfg, as))
+    , _compaction_manager(std::make_unique<compaction_manager>(make_compaction_manager_config(_cfg, dbcfg), as))
     , _enable_incremental_backups(cfg.incremental_backups())
     , _large_data_handler(std::make_unique<db::cql_table_large_data_handler>(_cfg.compaction_large_partition_warning_threshold_mb()*1024*1024,
               _cfg.compaction_large_row_warning_threshold_mb()*1024*1024,

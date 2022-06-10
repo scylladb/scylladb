@@ -595,10 +595,10 @@ sstables::compaction_stopped_exception compaction_manager::task::make_compaction
     return sstables::compaction_stopped_exception(s->ks_name(), s->cf_name(), _compaction_data.stop_requested);
 }
 
-compaction_manager::compaction_manager(scheduling_group csg, scheduling_group msg, size_t available_memory, uint64_t shares, abort_source& as)
-    : _compaction_sg(csg)
-    , _maintenance_sg(msg)
-    , _compaction_controller(make_compaction_controller(_compaction_sg, shares, [this, available_memory] () -> float {
+compaction_manager::compaction_manager(config cfg, abort_source& as)
+    : _compaction_sg(cfg.compaction_sched_group)
+    , _maintenance_sg(cfg.maintenance_sched_group)
+    , _compaction_controller(make_compaction_controller(_compaction_sg, cfg.static_shares, [this, available_memory = cfg.available_memory] () -> float {
         _last_backlog = backlog();
         auto b = _last_backlog / available_memory;
         // This means we are using an unimplemented strategy
@@ -611,7 +611,7 @@ compaction_manager::compaction_manager(scheduling_group csg, scheduling_group ms
         return b;
     }))
     , _backlog_manager(_compaction_controller)
-    , _available_memory(available_memory)
+    , _available_memory(cfg.available_memory)
     , _early_abort_subscription(as.subscribe([this] () noexcept {
         do_stop();
     }))

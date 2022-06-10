@@ -49,6 +49,12 @@ public:
         int64_t errors = 0;
     };
     using scheduling_group = backlog_controller::scheduling_group;
+    struct config {
+        scheduling_group compaction_sched_group;
+        scheduling_group maintenance_sched_group;
+        size_t available_memory;
+        uint64_t static_shares = 0;
+    };
 private:
     struct compaction_state {
         // Used both by compaction tasks that refer to the compaction_state
@@ -350,7 +356,7 @@ private:
     // about invoking it. Ref #10146
     compaction_manager();
 public:
-    compaction_manager(scheduling_group csg, scheduling_group msg, size_t available_memory, uint64_t shares, abort_source& as);
+    compaction_manager(config cfg, abort_source& as);
     ~compaction_manager();
     class for_testing_tag{};
     // An inline constructor for testing
