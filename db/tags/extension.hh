@@ -37,4 +37,9 @@ private:
     std::map<sstring, sstring> _tags;
 };
 
+// Information whether the view updates are synchronous is stored using the
+// SYNCHRONOUS_VIEW_UPDATES_TAG_KEY tag. Value of this tag is a stored as a
+// serialized boolean value ("true" or "false")
+static const sstring SYNCHRONOUS_VIEW_UPDATES_TAG_KEY("system:synchronous_view_updates");
+
 }

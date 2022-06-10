@@ -11,6 +11,7 @@
 #include "cql3/statements/cf_prop_defs.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "db/extensions.hh"
+#include "db/tags/extension.hh"
 #include "cdc/log.hh"
 #include "cdc/cdc_extension.hh"
 #include "gms/feature.hh"
@@ -336,6 +337,15 @@ void cf_prop_defs::apply_to_builder(schema_builder& builder, schema::extensions_
     }
 
     builder.set_extensions(std::move(schema_extensions));
+
+    if (has_property(KW_SYNCHRONOUS_UPDATES)) {
+        bool is_synchronous = get_synchronous_updates_flag();
+        std::map<sstring, sstring> tags_map = {
+            {db::SYNCHRONOUS_VIEW_UPDATES_TAG_KEY, is_synchronous ? "true" : "false"}
+        };
+
+        builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(tags_map));
+    }
 }
 
 void cf_prop_defs::validate_minimum_int(const sstring& field, int32_t minimum_value, int32_t default_value) const
