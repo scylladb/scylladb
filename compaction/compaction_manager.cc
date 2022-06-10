@@ -601,16 +601,11 @@ future<> compaction_manager::stop() {
     }
 }
 
-void compaction_manager::really_do_stop() {
-    if (_state == state::none || _state == state::stopped) {
-        return;
-    }
-
-    _state = state::stopped;
+future<> compaction_manager::really_do_stop() {
     cmlog.info("Asked to stop");
     // Reset the metrics registry
     _metrics.clear();
-    _stop_future.emplace(stop_ongoing_compactions("shutdown").then([this] () mutable {
+    return stop_ongoing_compactions("shutdown").then([this] () mutable {
         reevaluate_postponed_compactions();
         return std::move(_waiting_reevalution);
     }).then([this] {
@@ -618,12 +613,17 @@ void compaction_manager::really_do_stop() {
         _compaction_submission_timer.cancel();
         cmlog.info("Stopped");
         return _compaction_controller.shutdown();
-    }));
+    });
 }
 
 void compaction_manager::do_stop() noexcept {
+    if (_state == state::none || _state == state::stopped) {
+        return;
+    }
+
     try {
-        really_do_stop();
+        _state = state::stopped;
+        _stop_future = really_do_stop();
     } catch (...) {
         try {
             cmlog.error("Failed to stop the manager: {}", std::current_exception());

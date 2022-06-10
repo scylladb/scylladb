@@ -235,7 +235,7 @@ public:
 
     // Stop all fibers, without waiting. Safe to be called multiple times.
     void do_stop() noexcept;
-    void really_do_stop();
+    future<> really_do_stop();
 
     // Submit a table to be compacted.
     void submit(replica::table* t);
