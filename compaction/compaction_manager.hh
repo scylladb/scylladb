@@ -48,11 +48,7 @@ public:
         uint64_t active_tasks = 0; // Number of compaction going on.
         int64_t errors = 0;
     };
-    struct compaction_scheduling_group {
-        seastar::scheduling_group cpu;
-        const ::io_priority_class& io;
-    };
-    struct maintenance_scheduling_group {
+    struct scheduling_group {
         seastar::scheduling_group cpu;
         const ::io_priority_class& io;
     };
@@ -286,7 +282,7 @@ private:
 
     compaction_controller _compaction_controller;
     compaction_backlog_manager _backlog_manager;
-    maintenance_scheduling_group _maintenance_sg;
+    scheduling_group _maintenance_sg;
     size_t _available_memory;
     optimized_optional<abort_source::subscription> _early_abort_subscription;
 
@@ -356,7 +352,7 @@ private:
     // about invoking it. Ref #10146
     compaction_manager();
 public:
-    compaction_manager(compaction_scheduling_group csg, maintenance_scheduling_group msg, size_t available_memory, uint64_t shares, abort_source& as);
+    compaction_manager(scheduling_group csg, scheduling_group msg, size_t available_memory, uint64_t shares, abort_source& as);
     ~compaction_manager();
     class for_testing_tag{};
     // An inline constructor for testing

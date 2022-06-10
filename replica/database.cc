@@ -91,8 +91,8 @@ inline
 std::unique_ptr<compaction_manager>
 make_compaction_manager(const db::config& cfg, database_config& dbcfg, abort_source& as) {
         return std::make_unique<compaction_manager>(
-                compaction_manager::compaction_scheduling_group{dbcfg.compaction_scheduling_group, service::get_local_compaction_priority()},
-                compaction_manager::maintenance_scheduling_group{dbcfg.streaming_scheduling_group, service::get_local_streaming_priority()},
+                compaction_manager::scheduling_group{dbcfg.compaction_scheduling_group, service::get_local_compaction_priority()},
+                compaction_manager::scheduling_group{dbcfg.streaming_scheduling_group, service::get_local_streaming_priority()},
                 dbcfg.available_memory,
                 cfg.compaction_static_shares(),
                 as);

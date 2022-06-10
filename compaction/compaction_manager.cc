@@ -478,7 +478,7 @@ std::ostream& operator<<(std::ostream& os, const compaction_manager::task& task)
     return os << task.describe();
 }
 
-inline compaction_controller make_compaction_controller(compaction_manager::compaction_scheduling_group csg, uint64_t static_shares, std::function<double()> fn) {
+inline compaction_controller make_compaction_controller(compaction_manager::scheduling_group csg, uint64_t static_shares, std::function<double()> fn) {
     if (static_shares > 0) {
         return compaction_controller(csg.cpu, csg.io, static_shares);
     }
@@ -595,7 +595,7 @@ sstables::compaction_stopped_exception compaction_manager::task::make_compaction
     return sstables::compaction_stopped_exception(s->ks_name(), s->cf_name(), _compaction_data.stop_requested);
 }
 
-compaction_manager::compaction_manager(compaction_scheduling_group csg, maintenance_scheduling_group msg, size_t available_memory, uint64_t shares, abort_source& as)
+compaction_manager::compaction_manager(scheduling_group csg, scheduling_group msg, size_t available_memory, uint64_t shares, abort_source& as)
     : _compaction_controller(make_compaction_controller(csg, shares, [this, available_memory] () -> float {
         _last_backlog = backlog();
         auto b = _last_backlog / available_memory;
@@ -622,7 +622,7 @@ compaction_manager::compaction_manager(compaction_scheduling_group csg, maintena
 compaction_manager::compaction_manager()
     : _compaction_controller(seastar::default_scheduling_group(), default_priority_class(), 1)
     , _backlog_manager(_compaction_controller)
-    , _maintenance_sg(maintenance_scheduling_group{default_scheduling_group(), default_priority_class()})
+    , _maintenance_sg(scheduling_group{default_scheduling_group(), default_priority_class()})
     , _available_memory(1)
     , _strategy_control(std::make_unique<strategy_control>(*this))
 {
