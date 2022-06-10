@@ -331,21 +331,63 @@ public:
         }
 
         double b = _l0_scts.backlog(l0_partial_writes, l0_compacted);
-        // Backlog for a level: size_of_level * (max_level - n) * fan_out
-        //
-        // The fan_out is usually 10. But if the level above us is not
-        // fully populated-- which can happen when a level is still being born, we don't want that
-        // to jump abruptly. So what we will do instead is to define the fan out as the minimum
-        // between 10 and the number of sstables that are estimated to be there.
-        //
-        // Because of that, it's easier to write this code as an accumulator loop. If we are level
-        // L, for each level L + n, n > 0, we accumulate sizeof(L) * fan_out_of(L+n)
-        for (size_t level = 0; level < _size_per_level.size() - 1; ++level) {
-            auto lsize = effective_size_per_level[level];
-            for (size_t next = level + 1; next < _size_per_level.size() - 1; ++next) {
-                auto lsize_next = effective_size_per_level[next];
-                b += std::min(double(leveled_manifest::leveled_fan_out), double(lsize_next) / _max_sstable_size)  * lsize;
+
+        size_t max_populated_level = [&effective_size_per_level] () -> size_t {
+            auto it = std::find_if(effective_size_per_level.rbegin(), effective_size_per_level.rend(), [] (uint64_t s) {
+                return s != 0;
+            });
+            if (it == effective_size_per_level.rend()) {
+                return 0;
             }
+            return std::distance(it, effective_size_per_level.rend()) - 1;
+        }();
+
+        // The LCS goal is to achieve a layout where for every level L, sizeof(L+1) >= (sizeof(L) * fan_out)
+        // If table size is S, which is the sum of size of all levels, the target size of the highest level
+        // is S % 1.111, where 1.111 refers to strategy's space amplification goal.
+        // As level L is fan_out times smaller than L+1, level L-1 is fan_out^2 times smaller than L+1,
+        // and so on, the target size of any level can be easily calculated.
+
+        static constexpr auto fan_out = leveled_manifest::leveled_fan_out;
+        static constexpr double space_amplification_goal = 1.111;
+        uint64_t total_size = std::accumulate(effective_size_per_level.begin(), effective_size_per_level.end(), uint64_t(0));
+        uint64_t target_max_level_size = std::ceil(total_size / space_amplification_goal);
+
+        auto target_level_size = [&] (size_t level) {
+            auto r = std::ceil(target_max_level_size / std::pow(fan_out, max_populated_level - level));
+            return std::max(uint64_t(r), _max_sstable_size);
+        };
+
+        // The backlog for a level L is the amount of bytes to be compacted, such that:
+        // sizeof(L) <= sizeof(L+1) * fan_out
+        // If we start from L0, then L0 backlog is (sizeof(L0) - target_sizeof(L0)) * fan_out, where
+        // (sizeof(L0) - target_sizeof(L0)) is the amount of data to be promoted into next level
+        // By summing the backlog for each level, we get the total amount of work for all levels to
+        // reach their target size.
+        for (size_t level = 0; level < max_populated_level; ++level) {
+            auto lsize = effective_size_per_level[level];
+            auto target_lsize = target_level_size(level);
+
+            // Current level satisfies the goal, skip to the next one.
+            if (lsize <= target_lsize) {
+                continue;
+            }
+            auto next_level = level + 1;
+            auto bytes_for_next_level =  lsize - target_lsize;
+
+            // The fan_out is usually 10. But if the level above us is not fully populated -- which
+            // can happen when a level is still being born, we don't want that to jump abruptly.
+            // So what we will do instead is to define the fan out as the minimum between 10
+            // and the number of sstables that are estimated to be there.
+            unsigned estimated_next_level_ssts = (effective_size_per_level[next_level] + _max_sstable_size - 1) / _max_sstable_size;
+            auto estimated_fan_out = std::min(fan_out, estimated_next_level_ssts);
+
+            b += bytes_for_next_level * estimated_fan_out;
+
+            // Update size of next level, as data from current level can be promoted as many times
+            // as needed, and therefore needs to be included in backlog calculation for the next
+            // level, if needed.
+            effective_size_per_level[next_level] += bytes_for_next_level;
         }
         return b;
     }
