@@ -478,12 +478,12 @@ std::ostream& operator<<(std::ostream& os, const compaction_manager::task& task)
     return os << task.describe();
 }
 
-inline compaction_controller make_compaction_controller(compaction_manager::scheduling_group csg, uint64_t static_shares, std::function<double()> fn) {
+inline compaction_controller make_compaction_controller(compaction_manager::scheduling_group& csg, uint64_t static_shares, std::function<double()> fn) {
     if (static_shares > 0) {
-        return compaction_controller(csg.cpu, csg.io, static_shares);
+        return compaction_controller(csg, static_shares);
     }
 
-    return compaction_controller(csg.cpu, csg.io, 250ms, std::move(fn));
+    return compaction_controller(csg, 250ms, std::move(fn));
 }
 
 std::string compaction_manager::task::describe() const {
@@ -598,7 +598,7 @@ sstables::compaction_stopped_exception compaction_manager::task::make_compaction
 compaction_manager::compaction_manager(scheduling_group csg, scheduling_group msg, size_t available_memory, uint64_t shares, abort_source& as)
     : _compaction_sg(csg)
     , _maintenance_sg(msg)
-    , _compaction_controller(make_compaction_controller(csg, shares, [this, available_memory] () -> float {
+    , _compaction_controller(make_compaction_controller(_compaction_sg, shares, [this, available_memory] () -> float {
         _last_backlog = backlog();
         auto b = _last_backlog / available_memory;
         // This means we are using an unimplemented strategy
@@ -623,7 +623,7 @@ compaction_manager::compaction_manager(scheduling_group csg, scheduling_group ms
 compaction_manager::compaction_manager()
     : _compaction_sg(scheduling_group{default_scheduling_group(), default_priority_class()})
     , _maintenance_sg(scheduling_group{default_scheduling_group(), default_priority_class()})
-    , _compaction_controller(seastar::default_scheduling_group(), default_priority_class(), 1)
+    , _compaction_controller(_compaction_sg, 1)
     , _backlog_manager(_compaction_controller)
     , _available_memory(1)
     , _strategy_control(std::make_unique<strategy_control>(*this))

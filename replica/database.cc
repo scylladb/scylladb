@@ -80,11 +80,11 @@ namespace replica {
 
 inline
 flush_controller
-make_flush_controller(const db::config& cfg, seastar::scheduling_group sg, const ::io_priority_class& iop, std::function<double()> fn) {
+make_flush_controller(const db::config& cfg, backlog_controller::scheduling_group& sg, std::function<double()> fn) {
     if (cfg.memtable_flush_static_shares() > 0) {
-        return flush_controller(sg, iop, cfg.memtable_flush_static_shares());
+        return flush_controller(sg, cfg.memtable_flush_static_shares());
     }
-    return flush_controller(sg, iop, 50ms, cfg.virtual_dirty_soft_limit(), std::move(fn));
+    return flush_controller(sg, 50ms, cfg.virtual_dirty_soft_limit(), std::move(fn));
 }
 
 inline
@@ -325,8 +325,8 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _system_dirty_memory_manager(*this, 10 << 20, cfg.virtual_dirty_soft_limit(), default_scheduling_group())
     , _dirty_memory_manager(*this, dbcfg.available_memory * 0.50, cfg.virtual_dirty_soft_limit(), dbcfg.statement_scheduling_group)
     , _dbcfg(dbcfg)
-    , _flush_sg(scheduling_group{dbcfg.memtable_scheduling_group, service::get_local_memtable_flush_priority()})
-    , _memtable_controller(make_flush_controller(_cfg, dbcfg.memtable_scheduling_group, service::get_local_memtable_flush_priority(), [this, limit = float(_dirty_memory_manager.throttle_threshold())] {
+    , _flush_sg(backlog_controller::scheduling_group{dbcfg.memtable_scheduling_group, service::get_local_memtable_flush_priority()})
+    , _memtable_controller(make_flush_controller(_cfg, _flush_sg, [this, limit = float(_dirty_memory_manager.throttle_threshold())] {
         auto backlog = (_dirty_memory_manager.virtual_dirty_memory()) / limit;
         if (_dirty_memory_manager.has_extraneous_flushes_requested()) {
             backlog = std::max(backlog, _memtable_controller.backlog_of_shares(200));
@@ -442,11 +442,11 @@ float backlog_controller::backlog_of_shares(float shares) const {
 }
 
 void backlog_controller::update_controller(float shares) {
-    _scheduling_group.set_shares(shares);
+    _scheduling_group.cpu.set_shares(shares);
     if (!_inflight_update.available()) {
         return; // next timer will fix it
     }
-    _inflight_update = _io_priority.update_shares(uint32_t(shares));
+    _inflight_update = _scheduling_group.io.update_shares(uint32_t(shares));
 }
 
 void

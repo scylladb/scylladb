@@ -48,10 +48,7 @@ public:
         uint64_t active_tasks = 0; // Number of compaction going on.
         int64_t errors = 0;
     };
-    struct scheduling_group {
-        seastar::scheduling_group cpu;
-        const ::io_priority_class& io;
-    };
+    using scheduling_group = backlog_controller::scheduling_group;
 private:
     struct compaction_state {
         // Used both by compaction tasks that refer to the compaction_state
