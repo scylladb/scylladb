@@ -15,6 +15,7 @@ from typing import Optional, List, Callable
 from cassandra import InvalidRequest                    # type: ignore
 from cassandra.auth import PlainTextAuthProvider        # type: ignore
 from cassandra.cluster import Cluster, NoHostAvailable  # type: ignore
+from cassandra.cluster import Session                   # type: ignore
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT     # type: ignore
 from cassandra.policies import RoundRobinPolicy                          # type: ignore
 
@@ -108,6 +109,8 @@ class ScyllaServer:
         self.seeds = seed
         self.cmd: Optional[asyncio.subprocess.Process] = None
         self.log_savepoint = 0
+        self.control_cluster: Optional[Cluster] = None
+        self.control_connection: Optional[Session] = None
 
         async def stop_server() -> None:
             if self.is_running:
@@ -227,8 +230,9 @@ class ScyllaServer:
                     session.execute("CREATE KEYSPACE k WITH REPLICATION = {" +
                                     "'class' : 'SimpleStrategy', 'replication_factor' : 1 }")
                     session.execute("DROP KEYSPACE k")
-                    self.control_connection = Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},
-                                                      contact_points=[self.hostname], auth_provider=auth).connect()
+                    self.control_cluster = Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},
+                                                   contact_points=[self.hostname], auth_provider=auth)
+                    self.control_connection = self.control_cluster.connect()
                     return True
         except (NoHostAvailable, InvalidRequest):
             return False
@@ -316,6 +320,11 @@ Check the log files:
             return
 
         try:
+            if self.control_connection is not None:
+                self.control_connection.shutdown()
+            if self.control_cluster is not None:
+                self.control_cluster.shutdown()
+
             self.cmd.kill()
         except ProcessLookupError:
             pass
@@ -326,6 +335,7 @@ Check the log files:
                 logging.info("stopped server at host %s", hostname)
             self.cmd = None
             self.control_connection = None
+            self.control_cluster = None
 
     async def uninstall(self) -> None:
         """Clear all files left from a stopped server, including the
