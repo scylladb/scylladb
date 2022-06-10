@@ -770,15 +770,13 @@ future<> compaction_manager::really_do_stop() {
     cmlog.info("Asked to stop");
     // Reset the metrics registry
     _metrics.clear();
-    return stop_ongoing_compactions("shutdown").then([this] () mutable {
-        reevaluate_postponed_compactions();
-        return std::move(_waiting_reevalution);
-    }).then([this] {
-        _weight_tracker.clear();
-        _compaction_submission_timer.cancel();
-        cmlog.info("Stopped");
-        return _compaction_controller.shutdown();
-    });
+    co_await stop_ongoing_compactions("shutdown");
+    reevaluate_postponed_compactions();
+    co_await std::move(_waiting_reevalution);
+    _weight_tracker.clear();
+    _compaction_submission_timer.cancel();
+    co_await _compaction_controller.shutdown();
+    cmlog.info("Stopped");
 }
 
 void compaction_manager::do_stop() noexcept {
