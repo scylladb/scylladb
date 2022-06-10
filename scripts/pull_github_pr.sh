@@ -24,8 +24,10 @@ done
 NL=$'\n'
 
 PR_NUM=$1
-# convert full repo URL to its project/repo part:
-REMOTE_SLASH_BRANCH="$(git rev-parse --abbrev-ref --symbolic-full-name  @{upstream})"
+# convert full repo URL to its project/repo part, in case of failure default to origin/master:
+REMOTE_SLASH_BRANCH="$(git rev-parse --abbrev-ref --symbolic-full-name  @{upstream} \
+     || git rev-parse --abbrev-ref --symbolic-full-name master@{upstream} \
+     || echo 'origin/master')"
 REMOTE="${REMOTE_SLASH_BRANCH%/*}"
 REMOTE_URL="$(git config --get "remote.$REMOTE.url")"
 PROJECT=`sed 's/git@github.com://;s#https://github.com/##;s/\.git$//;' <<<"${REMOTE_URL}"`
