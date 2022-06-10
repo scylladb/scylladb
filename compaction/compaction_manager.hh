@@ -209,7 +209,7 @@ public:
 
     // Stop all fibers, without waiting. Safe to be called multiple times.
     void do_stop() noexcept;
-    void really_do_stop();
+    future<> really_do_stop();
 
     // Submit a column family to be compacted.
     void submit(column_family* cf);
