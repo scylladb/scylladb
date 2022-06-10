@@ -280,10 +280,10 @@ private:
     timer<lowres_clock> _compaction_submission_timer = timer<lowres_clock>(compaction_submission_callback());
     static constexpr std::chrono::seconds periodic_compaction_submission_interval() { return std::chrono::seconds(3600); }
 
-    compaction_controller _compaction_controller;
-    compaction_backlog_manager _backlog_manager;
     scheduling_group _compaction_sg;
     scheduling_group _maintenance_sg;
+    compaction_controller _compaction_controller;
+    compaction_backlog_manager _backlog_manager;
     size_t _available_memory;
     optimized_optional<abort_source::subscription> _early_abort_subscription;
 
