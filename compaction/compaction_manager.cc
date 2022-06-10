@@ -337,7 +337,7 @@ protected:
     // it cannot be the other way around, or minor compaction for this table would be
     // prevented while an ongoing major compaction doesn't release the semaphore.
     virtual future<> do_run() override {
-        co_await coroutine::switch_to(_cm._compaction_controller.sg());
+        co_await coroutine::switch_to(_cm._compaction_sg.cpu);
 
         switch_state(state::pending);
         auto units = co_await acquire_semaphore(_cm._maintenance_ops_sem);
@@ -609,6 +609,7 @@ compaction_manager::compaction_manager(scheduling_group csg, scheduling_group ms
         return b;
     }))
     , _backlog_manager(_compaction_controller)
+    , _compaction_sg(csg)
     , _maintenance_sg(msg)
     , _available_memory(available_memory)
     , _early_abort_subscription(as.subscribe([this] () noexcept {
@@ -622,6 +623,7 @@ compaction_manager::compaction_manager(scheduling_group csg, scheduling_group ms
 compaction_manager::compaction_manager()
     : _compaction_controller(seastar::default_scheduling_group(), default_priority_class(), 1)
     , _backlog_manager(_compaction_controller)
+    , _compaction_sg(scheduling_group{default_scheduling_group(), default_priority_class()})
     , _maintenance_sg(scheduling_group{default_scheduling_group(), default_priority_class()})
     , _available_memory(1)
     , _strategy_control(std::make_unique<strategy_control>(*this))
@@ -839,7 +841,7 @@ public:
     {}
 protected:
     virtual future<> do_run() override {
-        co_await coroutine::switch_to(_cm._compaction_controller.sg());
+        co_await coroutine::switch_to(_cm._compaction_sg.cpu);
 
         for (;;) {
             if (!can_proceed()) {
@@ -1073,7 +1075,7 @@ protected:
 
 private:
     future<> rewrite_sstable(const sstables::shared_sstable sst) {
-        co_await coroutine::switch_to(_cm._compaction_controller.sg());
+        co_await coroutine::switch_to(_cm._compaction_sg.cpu);
 
         for (;;) {
             switch_state(state::active);
@@ -1242,7 +1244,7 @@ private:
     }
 
     future<> run_cleanup_job(sstables::compaction_descriptor descriptor) {
-        co_await coroutine::switch_to(_cm._compaction_controller.sg());
+        co_await coroutine::switch_to(_cm._compaction_sg.cpu);
 
         for (;;) {
             compaction_backlog_tracker user_initiated(std::make_unique<user_initiated_backlog_tracker>(_cm._compaction_controller.backlog_of_shares(200), _cm._available_memory));

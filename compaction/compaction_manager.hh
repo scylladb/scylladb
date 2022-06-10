@@ -282,6 +282,7 @@ private:
 
     compaction_controller _compaction_controller;
     compaction_backlog_manager _backlog_manager;
+    scheduling_group _compaction_sg;
     scheduling_group _maintenance_sg;
     size_t _available_memory;
     optimized_optional<abort_source::subscription> _early_abort_subscription;
