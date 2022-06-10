@@ -347,7 +347,7 @@ private:
 
     // Stop all fibers, without waiting. Safe to be called multiple times.
     void do_stop() noexcept;
-    void really_do_stop();
+    future<> really_do_stop();
 
     // Propagate replacement of sstables to all ongoing compaction of a given table
     void propagate_replacement(replica::table* t, const std::vector<sstables::shared_sstable>& removed, const std::vector<sstables::shared_sstable>& added);
