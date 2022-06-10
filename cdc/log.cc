@@ -408,7 +408,7 @@ static const sstring cdc_meta_column_prefix = "cdc$";
 static const sstring cdc_deleted_column_prefix = cdc_meta_column_prefix + "deleted_";
 static const sstring cdc_deleted_elements_column_prefix = cdc_meta_column_prefix + "deleted_elements_";
 
-static bool is_log_name(const std::string_view& table_name) {
+bool is_log_name(const std::string_view& table_name) {
     return boost::ends_with(table_name, cdc_log_suffix);
 }
 
