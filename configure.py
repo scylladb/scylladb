@@ -673,6 +673,12 @@ arg_parser.add_argument('--pgo', dest='pgo', action='store_true', default=False,
                         help='Perform PGO using profiles collected at build time. Only supported with clang for now.')
 arg_parser.add_argument('--cspgo', dest='cspgo', action='store_true', default=False,
                         help='Perform CSPGO using profiles collected at build time. Only supported with clang for now.')
+arg_parser.add_argument('--bolt-preparation', dest='bolt_preparation', action='store_true', default=False,
+                        help='Add options needed for post-link optimization with BOLT.')
+arg_parser.add_argument('--bolt-profile-use', dest='bolt_profile_use', action='store', type=str, default=None,
+                        help='Run BOLT using the given profile file.')
+arg_parser.add_argument('--bolt', dest='bolt', action='store_true', default=False,
+                        help='Run BOLT using profiles collected at build time.')
 args = arg_parser.parse_args()
 
 if args.list_artifacts:
@@ -1654,6 +1660,21 @@ for mode in modes:
             modes[mode]['lib_cflags'] += f" -fprofile-use={profile_file}"
             modes[mode]['lib_ldflags'] += f" -fprofile-use={profile_file}"
             modes[mode]['profile_file'] = profile_file
+        if args.bolt or args.bolt_preparation:
+            # Clang 14 switched its defaults from DWARF 4 to DWARF 5.
+            # However, support for DWARF 5 in BOLT didn't make it into LLVM 14, so to use BOLT we need to stay with DWARF 4 for the moment.
+            # But support for DWARF 5 in BOLT is already merged, so this should only be necessary until LLVM 15.
+            modes[mode]['lib_cflags'] += " -gdwarf-4"
+            # BOLT needs relocation info to do the important optimizations.
+            modes[mode]['lib_ldflags'] += " -Wl,--emit-relocs"
+        modes[mode]['bolt_file'] = None
+        if args.bolt_profile_use:
+            modes[mode]['bolt_file'] = os.path.realpath(args.bolt_profile_use)
+        if args.bolt:
+            modes[mode]['bolt_file'] = f"$builddir/{mode}/profiles/prof.fdata"
+            modes[mode]['profile_recipe'] = f"build $builddir/{mode}/profiles/prof.fdata: run_profile $builddir/{mode}/scylla.prebolt\n"
+            modes[mode]['profile_recipe'] += f"   type = bolt\n"
+
         if args.profile_generate:
             # The default profile generation path can be overwritten at runtime with env LLVM_PROFILE_FILE.
             # See the LLVM documentation for its description.
@@ -1895,6 +1916,8 @@ with open(buildfile, 'w') as f:
         rule rust_header
             command = cxxbridge $in > $out
             description = RUST_HEADER $out
+        rule bolt
+          command = llvm-bolt $in -o $out.tmp -data=$profile_file -reorder-functions=hfsort -reorder-blocks=cache+ -split-functions=2 -split-all-cold -split-eh -dyno-stats --use-gnu-stack --update-debug-sections && strip --keep-section='*' --keep-section='!.rela.*' $out.tmp && mv $out.tmp $out
         rule run_profile
           command = rm -r `dirname $out` && pgo/run_all $in `dirname $out` $type
         rule merge_profdata
@@ -2074,7 +2097,12 @@ with open(buildfile, 'w') as f:
                 f.write('build $builddir/{}/{}_g: {}.{} {} | {} {}\n'.format(mode, binary, regular_link_rule, mode, str.join(' ', objs), seastar_dep, seastar_testing_dep))
                 f.write('   libs = {}\n'.format(local_libs))
             else:
-                f.write('build $builddir/{}/{}: {}.{} {} | {}\n'.format(mode, binary, regular_link_rule, mode, str.join(' ', objs), seastar_dep))
+                if binary == "scylla" and (bolt_file := modes[mode].get('bolt_file')):
+                    f.write(f'build $builddir/{mode}/{binary}: bolt $builddir/{mode}/{binary}.prebolt | {bolt_file}\n')
+                    f.write(f'    profile_file = {bolt_file}\n')
+                    f.write('build $builddir/{}/{}.prebolt: {}.{} {} | {}\n'.format(mode, binary, regular_link_rule, mode, str.join(' ', objs), seastar_dep))
+                else:
+                    f.write('build $builddir/{}/{}: {}.{} {} | {}\n'.format(mode, binary, regular_link_rule, mode, str.join(' ', objs), seastar_dep))
                 f.write('   libs = {}\n'.format(local_libs))
             for src in srcs:
                 if src.endswith('.cc'):
