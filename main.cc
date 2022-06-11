@@ -424,10 +424,16 @@ sharded<gms::gossiper> *the_gossiper;
 extern "C" void __attribute__((weak)) __llvm_profile_dump();
 
 [[gnu::noinline]]
-void dump_performance_profiles() {
+void dump_performance_profiles(const sstring& bolt_dump_addr) {
     if (__llvm_profile_dump) {
         startlog.info("Calling __llvm_profile_dump()");
         __llvm_profile_dump();
+    }
+    if (!bolt_dump_addr.empty()) {
+        auto addr = std::strtoull(bolt_dump_addr.c_str(), nullptr, 16);
+        auto ptr = reinterpret_cast<void(*)()>(addr);
+        startlog.info("Calling BOLT's profile dump function at {}", (void*)ptr);
+        ptr();
     }
 }
 
@@ -1539,7 +1545,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
           // With -fprofile-generate, LLVM inserts an exit hook which saves the profile counters to disk.
           // So does BOLT's instrumentation.
           // But since we exit abruptly and skip those hooks, we have to trigger the dump manually.
-          dump_performance_profiles();
+          dump_performance_profiles(cfg->bolt_instrumentation_dump_address());
 
           // We should be returning 0 here, but the system is not yet prepared for orderly rollback of main() objects
           // and thread_local variables.
