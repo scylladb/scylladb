@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright 2021-present ScyllaDB
+
+#pragma once
+
 #include <seastar/rpc/rpc.hh>
 #include "messaging_service.hh"
 #include "serializer.hh"
