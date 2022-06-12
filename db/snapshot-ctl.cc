@@ -75,7 +75,7 @@ future<> snapshot_ctl::do_take_snapshot(sstring tag, std::vector<sstring> keyspa
     });
 }
 
-future<> snapshot_ctl::take_column_family_snapshot(sstring ks_name, std::vector<sstring> tables, sstring tag, skip_flush sf) {
+future<> snapshot_ctl::take_column_family_snapshot(sstring ks_name, std::vector<sstring> tables, sstring tag, skip_flush sf, allow_view_snapshots av) {
     if (ks_name.empty()) {
         throw std::runtime_error("You must supply a keyspace name");
     }
@@ -86,25 +86,25 @@ future<> snapshot_ctl::take_column_family_snapshot(sstring ks_name, std::vector<
         throw std::runtime_error("You must supply a snapshot name.");
     }
 
-    return run_snapshot_modify_operation([this, ks_name = std::move(ks_name), tables = std::move(tables), tag = std::move(tag), sf] () mutable {
-        return do_take_column_family_snapshot(std::move(ks_name), std::move(tables), std::move(tag), sf);
+    return run_snapshot_modify_operation([this, ks_name = std::move(ks_name), tables = std::move(tables), tag = std::move(tag), sf, av] () mutable {
+        return do_take_column_family_snapshot(std::move(ks_name), std::move(tables), std::move(tag), sf, av);
     });
 }
 
-future<> snapshot_ctl::do_take_column_family_snapshot(sstring ks_name, std::vector<sstring> tables, sstring tag, skip_flush sf) {
+future<> snapshot_ctl::do_take_column_family_snapshot(sstring ks_name, std::vector<sstring> tables, sstring tag, skip_flush sf, allow_view_snapshots av) {
     co_await check_snapshot_not_exist(ks_name, tag, tables);
 
     for (const auto& table_name : tables) {
         auto& cf = _db.local().find_column_family(ks_name, table_name);
-        if (cf.schema()->is_view()) {
+        if (cf.schema()->is_view() && !av) {
             throw std::invalid_argument("Do not take a snapshot of a materialized view or a secondary index by itself. Run snapshot on the base table instead.");
         }
     }
     co_await _db.local().snapshot_on_all(ks_name, std::move(tables), std::move(tag), bool(sf));
 }
 
-future<> snapshot_ctl::take_column_family_snapshot(sstring ks_name, sstring cf_name, sstring tag, skip_flush sf) {
-    return take_column_family_snapshot(ks_name, std::vector<sstring>{cf_name}, tag, sf);
+future<> snapshot_ctl::take_column_family_snapshot(sstring ks_name, sstring cf_name, sstring tag, skip_flush sf, allow_view_snapshots av) {
+    return take_column_family_snapshot(ks_name, std::vector<sstring>{cf_name}, tag, sf, av);
 }
 
 future<> snapshot_ctl::clear_snapshot(sstring tag, std::vector<sstring> keyspace_names, sstring cf_name) {

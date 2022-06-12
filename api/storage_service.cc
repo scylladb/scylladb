@@ -1357,7 +1357,7 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         if (!req_param<bool>(*req, "disable_snapshot", false)) {
             auto tag = format("pre-scrub-{:d}", db_clock::now().time_since_epoch().count());
             f = parallel_for_each(column_families, [&snap_ctl, keyspace, tag](sstring cf) {
-                return snap_ctl.local().take_column_family_snapshot(keyspace, cf, tag);
+                return snap_ctl.local().take_column_family_snapshot(keyspace, cf, tag, db::snapshot_ctl::skip_flush::no, db::snapshot_ctl::allow_view_snapshots::yes);
             });
         }
 

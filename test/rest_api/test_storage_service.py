@@ -203,3 +203,19 @@ def test_storage_service_snapshot_mv_si(cql, this_dc, rest_api):
                         pytest.fail(f"Snapshot of secondary index {si} should have failed")
                 except requests.HTTPError:
                     pass
+
+# ...but not when the snapshot is automatic (pre-scrub).
+def test_materialized_view_pre_scrub_snapshot(cql, this_dc, rest_api):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
+        schema = 'p int, v text, primary key (p)'
+        with new_test_table(cql, keyspace, schema) as table:
+            stmt = cql.prepare(f"INSERT INTO {table} (p, v) VALUES (?, ?)")
+            cql.execute(stmt, [0, 'hello'])
+
+            with new_materialized_view(cql, table, '*', 'v, p', 'v is not null and p is not null') as mv:
+                resp = rest_api.send("GET", f"storage_service/keyspace_scrub/{keyspace}")
+                resp.raise_for_status()
+
+            with new_secondary_index(cql, table, 'v') as si:
+                resp = rest_api.send("GET", f"storage_service/keyspace_scrub/{keyspace}")
+                resp.raise_for_status()
