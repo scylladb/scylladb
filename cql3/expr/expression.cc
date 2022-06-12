@@ -165,9 +165,8 @@ const column_value& get_subscripted_column(const column_maybe_subscripted& cms) 
 }
 
 managed_bytes_opt
-get_value(const subscript& sref, const evaluation_inputs& inputs) {
-    auto s = &sref;
-    const column_definition* cdef = get_subscripted_column(*s).col;
+get_value(const subscript& s, const evaluation_inputs& inputs) {
+    const column_definition* cdef = get_subscripted_column(s).col;
 
     auto col_type = static_pointer_cast<const collection_type_impl>(cdef->type);
     int32_t index = inputs.selection->index_of(*cdef);
@@ -182,7 +181,7 @@ get_value(const subscript& sref, const evaluation_inputs& inputs) {
         return std::nullopt;
     }
     const auto deserialized = cdef->type->deserialize(managed_bytes_view(*serialized));
-    const auto key = evaluate(s->sub, inputs);
+    const auto key = evaluate(s.sub, inputs);
     auto&& key_type = col_type->is_map() ? col_type->name_comparator() : int32_type;
     if (key.is_null()) {
         // For m[null] return null.
