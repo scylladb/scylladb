@@ -1729,12 +1729,11 @@ constant evaluate(const expression& e, const evaluation_inputs& inputs) {
             on_internal_error(expr_logger, "Can't evaluate a field_selection");
         },
 
-        // TODO Should these be evaluable?
-        [](const column_value&) -> constant {
-            on_internal_error(expr_logger, "Can't evaluate a column_value");
+        [&](const column_value& cv) -> constant {
+            return constant(raw_value::make_value(get_value(cv, inputs)), cv.col->type);
         },
-        [](const subscript&) -> constant {
-            on_internal_error(expr_logger, "Can't evaluate a subscript");
+        [&](const subscript& s) -> constant {
+            return constant(raw_value::make_value(get_value(s, inputs)), s.type);
         },
         [](const untyped_constant&) -> constant {
             on_internal_error(expr_logger, "Can't evaluate a untyped_constant ");
