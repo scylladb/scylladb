@@ -84,6 +84,12 @@ binary_operator::binary_operator(expression lhs, oper_t op, expression rhs, comp
 // Since column_identifier_raw is forward-declared in expression.hh, delay destructor instantiation here
 unresolved_identifier::~unresolved_identifier() = default;
 
+static constant evaluate(const bind_variable&, const query_options&);
+static constant evaluate(const tuple_constructor&, const query_options&);
+static constant evaluate(const collection_constructor&, const query_options&);
+static constant evaluate(const usertype_constructor&, const query_options&);
+static constant evaluate(const function_call&, const query_options&);
+
 namespace {
 
 using children_t = std::vector<expression>; // conjunction's children.
@@ -1843,7 +1849,7 @@ static managed_bytes reserialize_value(View value_bytes,
         fmt::format("Reserializing type that shouldn't need reserialization: {}", type.name()));
 }
 
-constant evaluate(const bind_variable& bind_var, const query_options& options) {
+static constant evaluate(const bind_variable& bind_var, const query_options& options) {
     if (bind_var.receiver.get() == nullptr) {
         on_internal_error(expr_logger,
             "evaluate(bind_variable) called with nullptr receiver, should be prepared first");
@@ -1878,7 +1884,7 @@ constant evaluate(const bind_variable& bind_var, const query_options& options) {
     return constant(raw_value::make_value(value), bind_var.receiver->type);
 }
 
-constant evaluate(const tuple_constructor& tuple, const query_options& options) {
+static constant evaluate(const tuple_constructor& tuple, const query_options& options) {
     if (tuple.type.get() == nullptr) {
         on_internal_error(expr_logger,
             "evaluate(tuple_constructor) called with nullptr type, should be prepared first");
@@ -2031,7 +2037,7 @@ static constant evaluate_map(const collection_constructor& collection, const que
     return constant(raw_value::make_value(std::move(serialized_map)), collection.type);
 }
 
-constant evaluate(const collection_constructor& collection, const query_options& options) {
+static constant evaluate(const collection_constructor& collection, const query_options& options) {
     if (collection.type.get() == nullptr) {
         on_internal_error(expr_logger,
             "evaluate(collection_constructor) called with nullptr type, should be prepared first");
@@ -2050,7 +2056,7 @@ constant evaluate(const collection_constructor& collection, const query_options&
     std::abort();
 }
 
-constant evaluate(const usertype_constructor& user_val, const query_options& options) {
+static constant evaluate(const usertype_constructor& user_val, const query_options& options) {
     if (user_val.type.get() == nullptr) {
         on_internal_error(expr_logger,
             "evaluate(usertype_constructor) called with nullptr type, should be prepared first");
@@ -2088,7 +2094,7 @@ constant evaluate(const usertype_constructor& user_val, const query_options& opt
     return constant(std::move(val_bytes), std::move(user_val.type));
 }
 
-constant evaluate(const function_call& fun_call, const query_options& options) {
+static constant evaluate(const function_call& fun_call, const query_options& options) {
     const shared_ptr<functions::function>* fun = std::get_if<shared_ptr<functions::function>>(&fun_call.func);
     if (fun == nullptr) {
         throw std::runtime_error("Can't evaluate function call with name only, should be prepared earlier");
