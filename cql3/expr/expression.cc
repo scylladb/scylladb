@@ -354,9 +354,16 @@ bool limits(const tuple_constructor& columns_tuple, const oper_t op, const expre
     }
     for (size_t i = 0; i < rhs.size(); ++i) {
         column_maybe_subscripted cv = as_column_maybe_subscripted(columns_tuple.elements[i]);
+        auto lhs = get_value(cv, inputs);
+        if (!lhs || !rhs[i]) {
+            // CQL dictates that columns_tuple.elements[i] is a clustering column and non-null, but
+            // let's not rely on grammar constraints that can be later relaxed.
+            //
+            // NULL = always fails comparison
+            return false;
+        }
         const auto cmp = get_value_comparator(cv)->compare(
-                // CQL dictates that columns_tuple.elements[i] is a clustering column and non-null.
-                *get_value(cv, inputs),
+                *lhs,
                 *rhs[i]);
         // If the components aren't equal, then we just learned the LHS/RHS order.
         if (cmp < 0) {
