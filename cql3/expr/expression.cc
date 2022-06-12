@@ -456,6 +456,8 @@ managed_bytes_opt next_value(query::result_row_view::iterator_type& iter, const 
     return std::nullopt;
 }
 
+} // anonymous namespace
+
 /// Returns values of non-primary-key columns from selection.  The kth element of the result
 /// corresponds to the kth column in selection.
 std::vector<managed_bytes_opt> get_non_pk_values(const selection& selection, const query::result_row_view& static_row,
@@ -480,6 +482,8 @@ std::vector<managed_bytes_opt> get_non_pk_values(const selection& selection, con
     }
     return vals;
 }
+
+namespace {
 
 /// True iff cv matches the CQL LIKE pattern.
 bool like(const column_value& cv, const raw_value_view& pattern, const column_value_eval_bag& bag) {
@@ -796,9 +800,12 @@ expression make_conjunction(expression a, expression b) {
 }
 
 bool is_satisfied_by(const expression& restr, const evaluation_inputs& inputs) {
-    const auto regulars = get_non_pk_values(*inputs.selection, *inputs.static_row, inputs.row);
+    static const auto dummy_static_and_regular_columns = std::vector<managed_bytes_opt>();
+    auto& static_and_regular_columns = inputs.static_and_regular_columns
+            ? *inputs.static_and_regular_columns
+            : dummy_static_and_regular_columns;
     return is_satisfied_by(
-            restr, {*inputs.options, row_data_from_partition_slice{*inputs.partition_key, *inputs.clustering_key, regulars, *inputs.selection}});
+            restr, {*inputs.options, row_data_from_partition_slice{*inputs.partition_key, *inputs.clustering_key, static_and_regular_columns, *inputs.selection}});
 }
 
 template<typename T>

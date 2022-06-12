@@ -451,11 +451,14 @@ extern std::ostream& operator<<(std::ostream&, oper_t);
 struct evaluation_inputs {
     const std::vector<bytes>* partition_key = nullptr;
     const std::vector<bytes>* clustering_key = nullptr;
-    const query::result_row_view* static_row = nullptr;
-    const query::result_row_view* row = nullptr;
+    const std::vector<managed_bytes_opt>* static_and_regular_columns = nullptr; // indexes match `selection` member
     const cql3::selection::selection* selection = nullptr;
     const query_options* options = nullptr;
 };
+
+/// Helper for generating evaluation_inputs::static_and_regular_columns
+std::vector<managed_bytes_opt> get_non_pk_values(const cql3::selection::selection& selection, const query::result_row_view& static_row,
+                                         const query::result_row_view* row);
 
 /// True iff restr evaluates to true, given these inputs
 extern bool is_satisfied_by(
