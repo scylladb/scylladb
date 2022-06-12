@@ -836,7 +836,7 @@ nonwrapping_range<clustering_key_prefix> to_range(oper_t op, const clustering_ke
 }
 
 value_set possible_lhs_values(const column_definition* cdef, const expression& expr, const query_options& options) {
-    const auto type = cdef ? get_value_comparator(cdef) : long_type.get();
+    const auto type = cdef ? &cdef->type->without_reversed() : long_type.get();
     return expr::visit(overloaded_functor{
             [] (const constant& constant_val) {
                 std::optional<bool> bool_val = get_bool_value(constant_val);
