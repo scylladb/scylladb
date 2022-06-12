@@ -164,13 +164,9 @@ const column_value& get_subscripted_column(const column_maybe_subscripted& cms) 
     }, cms);
 }
 
-/// Returns col's value from queried data.
-static managed_bytes_opt get_value(const column_maybe_subscripted& col, const evaluation_inputs& inputs) {
-    return std::visit(overloaded_functor {
-        [&](const column_value* cval) -> managed_bytes_opt {
-            return get_value(*cval, inputs);
-        },
-        [&](const subscript* s) -> managed_bytes_opt {
+managed_bytes_opt
+get_value(const subscript& sref, const evaluation_inputs& inputs) {
+            auto s = &sref;
             const column_definition* cdef = get_subscripted_column(*s).col;
 
             auto col_type = static_pointer_cast<const collection_type_impl>(cdef->type);
@@ -239,6 +235,16 @@ static managed_bytes_opt get_value(const column_maybe_subscripted& col, const ev
             } else {
                 throw exceptions::invalid_request_exception(format("subscripting non-map, non-list column {}", cdef->name_as_text()));
             }
+}
+
+/// Returns col's value from queried data.
+static managed_bytes_opt get_value(const column_maybe_subscripted& col, const evaluation_inputs& inputs) {
+    return std::visit(overloaded_functor {
+        [&](const column_value* cval) -> managed_bytes_opt {
+            return get_value(*cval, inputs);
+        },
+        [&](const subscript* s) -> managed_bytes_opt {
+            return get_value(*s, inputs);
         }
     }, col);
 }
