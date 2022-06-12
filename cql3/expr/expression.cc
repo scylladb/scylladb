@@ -795,14 +795,10 @@ expression make_conjunction(expression a, expression b) {
     return conjunction{std::move(children)};
 }
 
-bool is_satisfied_by(
-        const expression& restr,
-        const std::vector<bytes>& partition_key, const std::vector<bytes>& clustering_key,
-        const query::result_row_view& static_row, const query::result_row_view* row,
-        const selection& selection, const query_options& options) {
-    const auto regulars = get_non_pk_values(selection, static_row, row);
+bool is_satisfied_by(const expression& restr, const evaluation_inputs& inputs) {
+    const auto regulars = get_non_pk_values(*inputs.selection, *inputs.static_row, inputs.row);
     return is_satisfied_by(
-            restr, {options, row_data_from_partition_slice{partition_key, clustering_key, regulars, selection}});
+            restr, {*inputs.options, row_data_from_partition_slice{*inputs.partition_key, *inputs.clustering_key, regulars, *inputs.selection}});
 }
 
 template<typename T>

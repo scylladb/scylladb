@@ -457,12 +457,10 @@ struct evaluation_inputs {
     const query_options* options = nullptr;
 };
 
-/// True iff restr is satisfied with respect to the row provided from a partition slice.
+/// True iff restr evaluates to true, given these inputs
 extern bool is_satisfied_by(
-        const expression& restr,
-        const std::vector<bytes>& partition_key, const std::vector<bytes>& clustering_key,
-        const query::result_row_view& static_row, const query::result_row_view* row,
-        const selection::selection&, const query_options&);
+        const expression& restr, const evaluation_inputs& inputs);
+
 
 /// A set of discrete values.
 using value_list = std::vector<managed_bytes>; // Sorted and deduped using value comparator.

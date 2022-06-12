@@ -242,8 +242,18 @@ bool partition_key_matches(const schema& base, const view_info& view, const dht:
     auto selection = cql3::selection::selection::for_columns(base.shared_from_this(), pk_columns);
     uint64_t zero = 0;
     auto dummy_row = query::result_row_view(ser::qr_row_view{simple_memory_input_stream(reinterpret_cast<const char*>(&zero), 8)});
+    auto dummy_options = cql3::query_options({ });
+    // FIXME: pass nullptrs for some of theses dummies
     return cql3::expr::is_satisfied_by(
-            r->expression, exploded_pk, exploded_ck, dummy_row, &dummy_row, *selection, cql3::query_options({ }));
+            r->expression,
+            cql3::expr::evaluation_inputs{
+                .partition_key = &exploded_pk,
+                .clustering_key = &exploded_ck,
+                .static_row = &dummy_row,
+                .row = &dummy_row,
+                .selection = selection.get(),
+                .options = &dummy_options,
+            });
 }
 
 bool clustering_prefix_matches(const schema& base, const view_info& view, const partition_key& key, const clustering_key_prefix& ck) {
@@ -258,8 +268,18 @@ bool clustering_prefix_matches(const schema& base, const view_info& view, const 
     auto selection = cql3::selection::selection::for_columns(base.shared_from_this(), ck_columns);
     uint64_t zero = 0;
     auto dummy_row = query::result_row_view(ser::qr_row_view{simple_memory_input_stream(reinterpret_cast<const char*>(&zero), 8)});
+    auto dummy_options = cql3::query_options({ });
+    // FIXME: pass nullptrs for some of theses dummies
     return cql3::expr::is_satisfied_by(
-            r->expression, exploded_pk, exploded_ck, dummy_row, &dummy_row, *selection, cql3::query_options({ }));
+            r->expression,
+            cql3::expr::evaluation_inputs{
+                .partition_key = &exploded_pk,
+                .clustering_key = &exploded_ck,
+                .static_row = &dummy_row,
+                .row = &dummy_row,
+                .selection = selection.get(),
+                .options = &dummy_options,
+            });
 }
 
 bool may_be_affected_by(const schema& base, const view_info& view, const dht::decorated_key& key, const rows_entry& update) {
@@ -320,8 +340,18 @@ public:
         return boost::algorithm::all_of(
             _view.select_statement().get_restrictions()->get_non_pk_restriction() | boost::adaptors::map_values,
             [&] (auto&& r) {
+                // FIXME: pass dummy_options as nullptr
+                auto dummy_options = cql3::query_options({});
                 return cql3::expr::is_satisfied_by(
-                        r->expression, _pk, ck, static_row, &row, *_selection, cql3::query_options({ }));
+                        r->expression,
+                        cql3::expr::evaluation_inputs{
+                            .partition_key = &_pk,
+                            .clustering_key = &ck,
+                            .static_row = &static_row,
+                            .row = &row,
+                            .selection = _selection.get(),
+                            .options = &dummy_options,
+                        });
             }
         );
     }

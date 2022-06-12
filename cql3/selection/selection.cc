@@ -428,7 +428,14 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
         clustering_key_prefix ckey = clustering_key_prefix::from_exploded(clustering_key);
         return expr::is_satisfied_by(
                 clustering_columns_restrictions->expression,
-                partition_key, clustering_key, static_row, row, selection, _options);
+                expr::evaluation_inputs{
+                    .partition_key = &partition_key,
+                    .clustering_key = &clustering_key,
+                    .static_row = &static_row,
+                    .row = row,
+                    .selection = &selection,
+                    .options = &_options,
+                });
     }
 
     auto static_row_iterator = static_row.iterator();
@@ -448,7 +455,15 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
             }
             restrictions::single_column_restriction& restriction = *restr_it->second;
             bool regular_restriction_matches = expr::is_satisfied_by(
-                    restriction.expression, partition_key, clustering_key, static_row, row, selection, _options);
+                    restriction.expression,
+                    expr::evaluation_inputs{
+                        .partition_key = &partition_key,
+                        .clustering_key = &clustering_key,
+                        .static_row = &static_row,
+                        .row = row,
+                        .selection = &selection,
+                        .options = &_options,
+                    });
             if (!regular_restriction_matches) {
                 _current_static_row_does_not_match = (cdef->kind == column_kind::static_column);
                 return false;
@@ -466,7 +481,15 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
             }
             restrictions::single_column_restriction& restriction = *restr_it->second;
             if (!expr::is_satisfied_by(
-                        restriction.expression, partition_key, clustering_key, static_row, row, selection, _options)) {
+                        restriction.expression,
+                        expr::evaluation_inputs{
+                            .partition_key = &partition_key,
+                            .clustering_key = &clustering_key,
+                            .static_row = &static_row,
+                            .row = row,
+                            .selection = &selection,
+                            .options = &_options,
+                        })) {
                 _current_partition_key_does_not_match = true;
                 return false;
             }
@@ -486,7 +509,15 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
             }
             restrictions::single_column_restriction& restriction = *restr_it->second;
             if (!expr::is_satisfied_by(
-                        restriction.expression, partition_key, clustering_key, static_row, row, selection, _options)) {
+                        restriction.expression,
+                        expr::evaluation_inputs{
+                            .partition_key = &partition_key,
+                            .clustering_key = &clustering_key,
+                            .static_row = &static_row,
+                            .row = row,
+                            .selection = &selection,
+                            .options = &_options,
+                        })) {
                 return false;
             }
             }
