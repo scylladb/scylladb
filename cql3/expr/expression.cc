@@ -112,31 +112,24 @@ struct row_data_from_partition_slice {
     const selection& sel;
 };
 
-/// Everything needed to compute column values during restriction evaluation.
-struct column_value_eval_bag {
-    const query_options& options; // For evaluating subscript expressions.
-    row_data_from_partition_slice row_data;
-};
-
 /// Returns col's value from queried data.
-managed_bytes_opt get_value(const column_value& col, const column_value_eval_bag& bag) {
+managed_bytes_opt get_value(const column_value& col, const evaluation_inputs& inputs) {
     auto cdef = col.col;
-    const row_data_from_partition_slice& data = bag.row_data;
     switch (cdef->kind) {
         case column_kind::partition_key:
-            return managed_bytes(data.partition_key[cdef->id]);
+            return managed_bytes((*inputs.partition_key)[cdef->id]);
         case column_kind::clustering_key:
-            return managed_bytes(data.clustering_key[cdef->id]);
+            return managed_bytes((*inputs.clustering_key)[cdef->id]);
         case column_kind::static_column:
             [[fallthrough]];
         case column_kind::regular_column: {
-            int32_t index = data.sel.index_of(*cdef);
+            int32_t index = inputs.selection->index_of(*cdef);
             if (index == -1) {
                 throw std::runtime_error(
                         format("Column definition {} does not match any column in the query selection",
                         cdef->name_as_text()));
             }
-            return managed_bytes_opt(data.other_columns[index]);
+            return managed_bytes_opt((*inputs.static_and_regular_columns)[index]);
         }
         default:
             throw exceptions::unsupported_operation_exception("Unknown column kind");
@@ -172,31 +165,28 @@ const column_value& get_subscripted_column(const column_maybe_subscripted& cms) 
 }
 
 /// Returns col's value from queried data.
-static managed_bytes_opt get_value(const column_maybe_subscripted& col, const column_value_eval_bag& bag) {
-    const row_data_from_partition_slice& data = bag.row_data;
-    const query_options& options = bag.options;
-
+static managed_bytes_opt get_value(const column_maybe_subscripted& col, const evaluation_inputs& inputs) {
     return std::visit(overloaded_functor {
         [&](const column_value* cval) -> managed_bytes_opt {
-            return get_value(*cval, bag);
+            return get_value(*cval, inputs);
         },
         [&](const subscript* s) -> managed_bytes_opt {
             const column_definition* cdef = get_subscripted_column(*s).col;
 
             auto col_type = static_pointer_cast<const collection_type_impl>(cdef->type);
-            int32_t index = data.sel.index_of(*cdef);
+            int32_t index = inputs.selection->index_of(*cdef);
             if (index == -1) {
                 throw std::runtime_error(
                         format("Column definition {} does not match any column in the query selection",
                         cdef->name_as_text()));
             }
-            const managed_bytes_opt& serialized = data.other_columns[index];
+            const managed_bytes_opt& serialized = (*inputs.static_and_regular_columns)[index];
             if (!serialized) {
                 // For null[i] we return null.
                 return std::nullopt;
             }
             const auto deserialized = cdef->type->deserialize(managed_bytes_view(*serialized));
-            const auto key = evaluate(s->sub, options);
+            const auto key = evaluate(s->sub, inputs);
             auto&& key_type = col_type->is_map() ? col_type->name_comparator() : int32_type;
             if (key.is_null()) {
                 // For m[null] return null.
@@ -272,11 +262,11 @@ const abstract_type* get_value_comparator(const column_maybe_subscripted& col) {
 }
 
 /// True iff lhs's value equals rhs.
-bool equal(const managed_bytes_opt& rhs, const column_maybe_subscripted& lhs, const column_value_eval_bag& bag) {
+bool equal(const managed_bytes_opt& rhs, const column_maybe_subscripted& lhs, const evaluation_inputs& inputs) {
     if (!rhs) {
         return false;
     }
-    const auto value = get_value(lhs, bag);
+    const auto value = get_value(lhs, inputs);
     if (!value) {
         return false;
     }
@@ -284,13 +274,13 @@ bool equal(const managed_bytes_opt& rhs, const column_maybe_subscripted& lhs, co
 }
 
 /// Convenience overload for expression.
-bool equal(const expression& rhs, const column_maybe_subscripted& lhs, const column_value_eval_bag& bag) {
-    return equal(evaluate(rhs, bag.options).value.to_managed_bytes_opt(), lhs, bag);
+bool equal(const expression& rhs, const column_maybe_subscripted& lhs, const evaluation_inputs& inputs) {
+    return equal(evaluate(rhs, inputs).value.to_managed_bytes_opt(), lhs, inputs);
 }
 
 /// True iff columns' values equal t.
-bool equal(const expression& t, const tuple_constructor& columns_tuple, const column_value_eval_bag& bag) {
-    const constant tup = evaluate(t, bag.options);
+bool equal(const expression& t, const tuple_constructor& columns_tuple, const evaluation_inputs& inputs) {
+    const constant tup = evaluate(t, inputs);
     if (!tup.type->is_tuple()) {
         throw exceptions::invalid_request_exception("multi-column equality has right-hand side that isn't a tuple");
     }
@@ -302,7 +292,7 @@ bool equal(const expression& t, const tuple_constructor& columns_tuple, const co
     }
     return boost::equal(rhs, columns_tuple.elements | boost::adaptors::transformed(as_column_maybe_subscripted),
     [&] (const managed_bytes_opt& b, const column_maybe_subscripted& lhs) {
-        return equal(b, lhs, bag);
+        return equal(b, lhs, inputs);
     });
 }
 
@@ -328,25 +318,25 @@ bool limits(managed_bytes_view lhs, oper_t op, managed_bytes_view rhs, const abs
 }
 
 /// True iff the column value is limited by rhs in the manner prescribed by op.
-bool limits(const column_maybe_subscripted& col, oper_t op, const expression& rhs, const column_value_eval_bag& bag) {
+bool limits(const column_maybe_subscripted& col, oper_t op, const expression& rhs, const evaluation_inputs& inputs) {
     if (!is_slice(op)) { // For EQ or NEQ, use equal().
         throw std::logic_error("limits() called on non-slice op");
     }
-    auto lhs = get_value(col, bag);
+    auto lhs = get_value(col, inputs);
     if (!lhs) {
         return false;
     }
-    const auto b = evaluate(rhs, bag.options).value.to_managed_bytes_opt();
+    const auto b = evaluate(rhs, inputs).value.to_managed_bytes_opt();
     return b ? limits(*lhs, op, *b, *get_value_comparator(col)) : false;
 }
 
 /// True iff the column values are limited by t in the manner prescribed by op.
 bool limits(const tuple_constructor& columns_tuple, const oper_t op, const expression& e,
-            const column_value_eval_bag& bag) {
+            const evaluation_inputs& inputs) {
     if (!is_slice(op)) { // For EQ or NEQ, use equal().
         throw std::logic_error("limits() called on non-slice op");
     }
-    const constant tup = evaluate(e, bag.options);
+    const constant tup = evaluate(e, inputs);
     if (!tup.type->is_tuple()) {
         throw exceptions::invalid_request_exception(
                 "multi-column comparison has right-hand side that isn't a tuple");
@@ -361,7 +351,7 @@ bool limits(const tuple_constructor& columns_tuple, const oper_t op, const expre
         column_maybe_subscripted cv = as_column_maybe_subscripted(columns_tuple.elements[i]);
         const auto cmp = get_value_comparator(cv)->compare(
                 // CQL dictates that columns_tuple.elements[i] is a clustering column and non-null.
-                *get_value(cv, bag),
+                *get_value(cv, inputs),
                 *rhs[i]);
         // If the components aren't equal, then we just learned the LHS/RHS order.
         if (cmp < 0) {
@@ -416,8 +406,8 @@ bool contains(const data_value& collection, const raw_value_view& value) {
 }
 
 /// True iff a column is a collection containing value.
-bool contains(const column_value& col, const raw_value_view& value, const column_value_eval_bag& bag) {
-    const auto collection = get_value(col, bag);
+bool contains(const column_value& col, const raw_value_view& value, const evaluation_inputs& inputs) {
+    const auto collection = get_value(col, inputs);
     if (collection) {
         return contains(col.col->type->deserialize(managed_bytes_view(*collection)), value);
     } else {
@@ -426,12 +416,12 @@ bool contains(const column_value& col, const raw_value_view& value, const column
 }
 
 /// True iff a column is a map containing \p key.
-bool contains_key(const column_value& col, cql3::raw_value_view key, const column_value_eval_bag& bag) {
+bool contains_key(const column_value& col, cql3::raw_value_view key, const evaluation_inputs& inputs) {
     if (!key) {
         return true; // Compatible with old code, which skips null terms in key comparisons.
     }
     auto type = col.col->type;
-    const auto collection = get_value(col, bag);
+    const auto collection = get_value(col, inputs);
     if (!collection) {
         return false;
     }
@@ -492,12 +482,12 @@ std::vector<managed_bytes_opt> get_non_pk_values(const selection& selection, con
 namespace {
 
 /// True iff cv matches the CQL LIKE pattern.
-bool like(const column_value& cv, const raw_value_view& pattern, const column_value_eval_bag& bag) {
+bool like(const column_value& cv, const raw_value_view& pattern, const evaluation_inputs& inputs) {
     if (!cv.col->type->is_string()) {
         throw exceptions::invalid_request_exception(
                 format("LIKE is allowed only on string types, which {} is not", cv.col->name_as_text()));
     }
-    auto value = get_value(cv, bag);
+    auto value = get_value(cv, inputs);
     // TODO: reuse matchers.
     if (pattern && value) {
         return value->with_linearized([&pattern] (bytes_view linearized_value) {
@@ -511,8 +501,8 @@ bool like(const column_value& cv, const raw_value_view& pattern, const column_va
 }
 
 /// True iff the column value is in the set defined by rhs.
-bool is_one_of(const column_maybe_subscripted& col, const expression& rhs, const column_value_eval_bag& bag) {
-    const constant in_list = evaluate(rhs, bag.options);
+bool is_one_of(const column_maybe_subscripted& col, const expression& rhs, const evaluation_inputs& inputs) {
+    const constant in_list = evaluate(rhs, inputs);
     const column_definition* cdef = get_subscripted_column(col).col;
     statements::request_validations::check_false(
             in_list.is_null(), "Invalid null value for column {}", cdef->name_as_text());
@@ -521,19 +511,19 @@ bool is_one_of(const column_maybe_subscripted& col, const expression& rhs, const
         throw std::logic_error("unexpected expression type in is_one_of(single column)");
     }
     return boost::algorithm::any_of(get_list_elements(in_list), [&] (const managed_bytes_opt& b) {
-        return equal(b, col, bag);
+        return equal(b, col, inputs);
     });
 }
 
 /// True iff the tuple of column values is in the set defined by rhs.
-bool is_one_of(const tuple_constructor& tuple, const expression& rhs, const column_value_eval_bag& bag) {
-    constant in_list = evaluate(rhs, bag.options);
+bool is_one_of(const tuple_constructor& tuple, const expression& rhs, const evaluation_inputs& inputs) {
+    constant in_list = evaluate(rhs, inputs);
     if (!in_list.type->without_reversed().is_list()) {
         throw std::logic_error("unexpected expression type in is_one_of(multi-column)");
     }
     return boost::algorithm::any_of(get_list_of_tuples_elements(in_list), [&] (const std::vector<managed_bytes_opt>& el) {
         return boost::equal(tuple.elements, el, [&] (const expression& c, const managed_bytes_opt& b) {
-            return equal(b, as_column_maybe_subscripted(c), bag);
+            return equal(b, as_column_maybe_subscripted(c), inputs);
         });
     });
 }
@@ -569,37 +559,37 @@ value_set intersection(value_set a, value_set b, const abstract_type* type) {
     return std::visit(intersection_visitor{type}, std::move(a), std::move(b));
 }
 
-bool is_satisfied_by(const binary_operator& opr, const column_value_eval_bag& bag) {
+bool is_satisfied_by(const binary_operator& opr, const evaluation_inputs& inputs) {
     return expr::visit(overloaded_functor{
             [&] (const column_value& col) {
                 if (opr.op == oper_t::EQ) {
-                    return equal(opr.rhs, &col, bag);
+                    return equal(opr.rhs, &col, inputs);
                 } else if (opr.op == oper_t::NEQ) {
-                    return !equal(opr.rhs, &col, bag);
+                    return !equal(opr.rhs, &col, inputs);
                 } else if (is_slice(opr.op)) {
-                    return limits(&col, opr.op, opr.rhs, bag);
+                    return limits(&col, opr.op, opr.rhs, inputs);
                 } else if (opr.op == oper_t::CONTAINS) {
-                    constant val = evaluate(opr.rhs, bag.options);
-                    return contains(col, val.view(), bag);
+                    constant val = evaluate(opr.rhs, inputs);
+                    return contains(col, val.view(), inputs);
                 } else if (opr.op == oper_t::CONTAINS_KEY) {
-                    constant val = evaluate(opr.rhs, bag.options);
-                    return contains_key(col, val.view(), bag);
+                    constant val = evaluate(opr.rhs, inputs);
+                    return contains_key(col, val.view(), inputs);
                 } else if (opr.op == oper_t::LIKE) {
-                    constant val = evaluate(opr.rhs, bag.options);
-                    return like(col, val.view(), bag);
+                    constant val = evaluate(opr.rhs, inputs);
+                    return like(col, val.view(), inputs);
                 } else if (opr.op == oper_t::IN) {
-                    return is_one_of(&col, opr.rhs, bag);
+                    return is_one_of(&col, opr.rhs, inputs);
                 } else {
                     throw exceptions::unsupported_operation_exception(format("Unhandled binary_operator: {}", opr));
                 }
             },
             [&] (const subscript& sub) {
                 if (opr.op == oper_t::EQ) {
-                    return equal(opr.rhs, &sub, bag);
+                    return equal(opr.rhs, &sub, inputs);
                 } else if (opr.op == oper_t::NEQ) {
-                    return !equal(opr.rhs, &sub, bag);
+                    return !equal(opr.rhs, &sub, inputs);
                 } else if (is_slice(opr.op)) {
-                    return limits(&sub, opr.op, opr.rhs, bag);
+                    return limits(&sub, opr.op, opr.rhs, inputs);
                 } else if (opr.op == oper_t::CONTAINS) {
                     throw exceptions::unsupported_operation_exception("CONTAINS lhs is subscripted");
                 } else if (opr.op == oper_t::CONTAINS_KEY) {
@@ -607,18 +597,18 @@ bool is_satisfied_by(const binary_operator& opr, const column_value_eval_bag& ba
                 } else if (opr.op == oper_t::LIKE) {
                     throw exceptions::unsupported_operation_exception("LIKE lhs is subscripted");
                 } else if (opr.op == oper_t::IN) {
-                    return is_one_of(&sub, opr.rhs, bag);
+                    return is_one_of(&sub, opr.rhs, inputs);
                 } else {
                     throw exceptions::unsupported_operation_exception(format("Unhandled binary_operator: {}", opr));
                 }
             },
             [&] (const tuple_constructor& cvs) {
                 if (opr.op == oper_t::EQ) {
-                    return equal(opr.rhs, cvs, bag);
+                    return equal(opr.rhs, cvs, inputs);
                 } else if (is_slice(opr.op)) {
-                    return limits(cvs, opr.op, opr.rhs, bag);
+                    return limits(cvs, opr.op, opr.rhs, inputs);
                 } else if (opr.op == oper_t::IN) {
-                    return is_one_of(cvs, opr.rhs, bag);
+                    return is_one_of(cvs, opr.rhs, inputs);
                 } else {
                     throw exceptions::unsupported_operation_exception(
                             format("Unhandled multi-column binary_operator: {}", opr));
@@ -671,7 +661,9 @@ bool is_satisfied_by(const binary_operator& opr, const column_value_eval_bag& ba
         }, opr.lhs);
 }
 
-bool is_satisfied_by(const expression& restr, const column_value_eval_bag& bag) {
+} // anonymous namespace
+
+bool is_satisfied_by(const expression& restr, const evaluation_inputs& inputs) {
     return expr::visit(overloaded_functor{
             [] (const constant& constant_val) {
                 std::optional<bool> bool_val = get_bool_value(constant_val);
@@ -684,10 +676,10 @@ bool is_satisfied_by(const expression& restr, const column_value_eval_bag& bag) 
             },
             [&] (const conjunction& conj) {
                 return boost::algorithm::all_of(conj.children, [&] (const expression& c) {
-                    return is_satisfied_by(c, bag);
+                    return is_satisfied_by(c, inputs);
                 });
             },
-            [&] (const binary_operator& opr) { return is_satisfied_by(opr, bag); },
+            [&] (const binary_operator& opr) { return is_satisfied_by(opr, inputs); },
             [] (const column_value&) -> bool {
                 on_internal_error(expr_logger, "is_satisfied_by: a column cannot serve as a restriction by itself");
             },
@@ -732,6 +724,8 @@ bool is_satisfied_by(const expression& restr, const column_value_eval_bag& bag) 
             },
         }, restr);
 }
+
+namespace {
 
 template<typename Range>
 value_list to_sorted_vector(Range r, const serialized_compare& comparator) {
@@ -803,15 +797,6 @@ expression make_conjunction(expression a, expression b) {
     auto children = explode_conjunction(std::move(a));
     boost::copy(explode_conjunction(std::move(b)), back_inserter(children));
     return conjunction{std::move(children)};
-}
-
-bool is_satisfied_by(const expression& restr, const evaluation_inputs& inputs) {
-    static const auto dummy_static_and_regular_columns = std::vector<managed_bytes_opt>();
-    auto& static_and_regular_columns = inputs.static_and_regular_columns
-            ? *inputs.static_and_regular_columns
-            : dummy_static_and_regular_columns;
-    return is_satisfied_by(
-            restr, {*inputs.options, row_data_from_partition_slice{*inputs.partition_key, *inputs.clustering_key, static_and_regular_columns, *inputs.selection}});
 }
 
 template<typename T>
