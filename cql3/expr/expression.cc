@@ -267,7 +267,7 @@ const abstract_type* get_value_comparator(const column_maybe_subscripted& col) {
 }
 
 /// True iff lhs's value equals rhs.
-bool equal(const managed_bytes_opt& rhs, const column_maybe_subscripted& lhs, const evaluation_inputs& inputs) {
+bool equal(const column_maybe_subscripted& lhs, const managed_bytes_opt& rhs, const evaluation_inputs& inputs) {
     if (!rhs) {
         return false;
     }
@@ -279,25 +279,25 @@ bool equal(const managed_bytes_opt& rhs, const column_maybe_subscripted& lhs, co
 }
 
 /// Convenience overload for expression.
-bool equal(const expression& rhs, const column_maybe_subscripted& lhs, const evaluation_inputs& inputs) {
-    return equal(evaluate(rhs, inputs).value.to_managed_bytes_opt(), lhs, inputs);
+bool equal(const column_maybe_subscripted& lhs, const expression& rhs, const evaluation_inputs& inputs) {
+    return equal(lhs, evaluate(rhs, inputs).value.to_managed_bytes_opt(), inputs);
 }
 
 /// True iff columns' values equal t.
-bool equal(const expression& t, const tuple_constructor& columns_tuple, const evaluation_inputs& inputs) {
-    const constant tup = evaluate(t, inputs);
+bool equal(const tuple_constructor& columns_tuple_lhs, const expression& t_rhs, const evaluation_inputs& inputs) {
+    const constant tup = evaluate(t_rhs, inputs);
     if (!tup.type->is_tuple()) {
         throw exceptions::invalid_request_exception("multi-column equality has right-hand side that isn't a tuple");
     }
     const auto& rhs = get_tuple_elements(tup);
-    if (rhs.size() != columns_tuple.elements.size()) {
+    if (rhs.size() != columns_tuple_lhs.elements.size()) {
         throw exceptions::invalid_request_exception(
                 format("tuple equality size mismatch: {} elements on left-hand side, {} on right",
-                       columns_tuple.elements.size(), rhs.size()));
+                       columns_tuple_lhs.elements.size(), rhs.size()));
     }
-    return boost::equal(rhs, columns_tuple.elements | boost::adaptors::transformed(as_column_maybe_subscripted),
-    [&] (const managed_bytes_opt& b, const column_maybe_subscripted& lhs) {
-        return equal(b, lhs, inputs);
+    return boost::equal(columns_tuple_lhs.elements | boost::adaptors::transformed(as_column_maybe_subscripted), rhs,
+    [&] (const column_maybe_subscripted& lhs, const managed_bytes_opt& b) {
+        return equal(lhs, b, inputs);
     });
 }
 
@@ -523,7 +523,7 @@ bool is_one_of(const column_maybe_subscripted& col, const expression& rhs, const
         throw std::logic_error("unexpected expression type in is_one_of(single column)");
     }
     return boost::algorithm::any_of(get_list_elements(in_list), [&] (const managed_bytes_opt& b) {
-        return equal(b, col, inputs);
+        return equal(col, b, inputs);
     });
 }
 
@@ -535,7 +535,7 @@ bool is_one_of(const tuple_constructor& tuple, const expression& rhs, const eval
     }
     return boost::algorithm::any_of(get_list_of_tuples_elements(in_list), [&] (const std::vector<managed_bytes_opt>& el) {
         return boost::equal(tuple.elements, el, [&] (const expression& c, const managed_bytes_opt& b) {
-            return equal(b, as_column_maybe_subscripted(c), inputs);
+            return equal(as_column_maybe_subscripted(c), b, inputs);
         });
     });
 }
@@ -575,9 +575,9 @@ bool is_satisfied_by(const binary_operator& opr, const evaluation_inputs& inputs
     return expr::visit(overloaded_functor{
             [&] (const column_value& col) {
                 if (opr.op == oper_t::EQ) {
-                    return equal(opr.rhs, &col, inputs);
+                    return equal(&col, opr.rhs, inputs);
                 } else if (opr.op == oper_t::NEQ) {
-                    return !equal(opr.rhs, &col, inputs);
+                    return !equal(&col, opr.rhs, inputs);
                 } else if (is_slice(opr.op)) {
                     return limits(&col, opr.op, opr.rhs, inputs);
                 } else if (opr.op == oper_t::CONTAINS) {
@@ -597,9 +597,9 @@ bool is_satisfied_by(const binary_operator& opr, const evaluation_inputs& inputs
             },
             [&] (const subscript& sub) {
                 if (opr.op == oper_t::EQ) {
-                    return equal(opr.rhs, &sub, inputs);
+                    return equal(&sub, opr.rhs, inputs);
                 } else if (opr.op == oper_t::NEQ) {
-                    return !equal(opr.rhs, &sub, inputs);
+                    return !equal(&sub, opr.rhs, inputs);
                 } else if (is_slice(opr.op)) {
                     return limits(&sub, opr.op, opr.rhs, inputs);
                 } else if (opr.op == oper_t::CONTAINS) {
@@ -616,7 +616,7 @@ bool is_satisfied_by(const binary_operator& opr, const evaluation_inputs& inputs
             },
             [&] (const tuple_constructor& cvs) {
                 if (opr.op == oper_t::EQ) {
-                    return equal(opr.rhs, cvs, inputs);
+                    return equal(cvs, opr.rhs, inputs);
                 } else if (is_slice(opr.op)) {
                     return limits(cvs, opr.op, opr.rhs, inputs);
                 } else if (opr.op == oper_t::IN) {
