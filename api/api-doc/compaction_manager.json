@@ -134,7 +134,7 @@
                   },
                   {
                      "name":"tables",
-                     "description":"Comma-seperated tables to stop compaction in",
+                     "description":"Comma-separated tables to stop compaction in",
                      "required":false,
                      "allowMultiple":false,
                      "type":"string",
