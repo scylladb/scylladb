@@ -673,6 +673,8 @@ data_type type_of(const expression& e);
 
 // Takes a prepared expression and calculates its value.
 // Evaluates bound values, calls functions and returns just the bytes and type.
+constant evaluate(const expression& e, const evaluation_inputs&);
+
 constant evaluate(const expression& e, const query_options&);
 
 utils::chunked_vector<managed_bytes> get_list_elements(const constant&);

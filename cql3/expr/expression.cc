@@ -84,11 +84,11 @@ binary_operator::binary_operator(expression lhs, oper_t op, expression rhs, comp
 // Since column_identifier_raw is forward-declared in expression.hh, delay destructor instantiation here
 unresolved_identifier::~unresolved_identifier() = default;
 
-static constant evaluate(const bind_variable&, const query_options&);
-static constant evaluate(const tuple_constructor&, const query_options&);
-static constant evaluate(const collection_constructor&, const query_options&);
-static constant evaluate(const usertype_constructor&, const query_options&);
-static constant evaluate(const function_call&, const query_options&);
+static constant evaluate(const bind_variable&, const evaluation_inputs&);
+static constant evaluate(const tuple_constructor&, const evaluation_inputs&);
+static constant evaluate(const collection_constructor&, const evaluation_inputs&);
+static constant evaluate(const usertype_constructor&, const evaluation_inputs&);
+static constant evaluate(const function_call&, const evaluation_inputs&);
 
 namespace {
 
@@ -1709,7 +1709,7 @@ std::optional<bool> get_bool_value(const constant& constant_val) {
     return constant_val.view().deserialize<bool>(*boolean_type);
 }
 
-constant evaluate(const expression& e, const query_options& options) {
+constant evaluate(const expression& e, const evaluation_inputs& inputs) {
     return expr::visit(overloaded_functor {
         [](const binary_operator&) -> constant {
             on_internal_error(expr_logger, "Can't evaluate a binary_operator");
@@ -1727,7 +1727,7 @@ constant evaluate(const expression& e, const query_options& options) {
             on_internal_error(expr_logger, "Can't evaluate a column_mutation_attribute");
         },
         [&](const cast& c) -> constant {
-            auto ret = evaluate(c.arg, options);
+            auto ret = evaluate(c.arg, inputs);
             auto type = std::get_if<data_type>(&c.type);
             if (!type) {
                 on_internal_error(expr_logger, "attempting to evaluate an unprepared cast");
@@ -1752,12 +1752,16 @@ constant evaluate(const expression& e, const query_options& options) {
 
         [](const null&) { return constant::make_null(); },
         [](const constant& c) { return c; },
-        [&](const bind_variable& bind_var) { return evaluate(bind_var, options); },
-        [&](const tuple_constructor& tup) { return evaluate(tup, options); },
-        [&](const collection_constructor& col) { return evaluate(col, options); },
-        [&](const usertype_constructor& user_val) { return evaluate(user_val, options); },
-        [&](const function_call& fun_call) { return evaluate(fun_call, options); }
+        [&](const bind_variable& bind_var) { return evaluate(bind_var, inputs); },
+        [&](const tuple_constructor& tup) { return evaluate(tup, inputs); },
+        [&](const collection_constructor& col) { return evaluate(col, inputs); },
+        [&](const usertype_constructor& user_val) { return evaluate(user_val, inputs); },
+        [&](const function_call& fun_call) { return evaluate(fun_call, inputs); }
     }, e);
+}
+
+constant evaluate(const expression& e, const query_options& options) {
+    return evaluate(e, evaluation_inputs{.options = &options});
 }
 
 // Takes a value and reserializes it where needs_to_be_reserialized() says it's needed
@@ -1849,13 +1853,13 @@ static managed_bytes reserialize_value(View value_bytes,
         fmt::format("Reserializing type that shouldn't need reserialization: {}", type.name()));
 }
 
-static constant evaluate(const bind_variable& bind_var, const query_options& options) {
+static constant evaluate(const bind_variable& bind_var, const evaluation_inputs& inputs) {
     if (bind_var.receiver.get() == nullptr) {
         on_internal_error(expr_logger,
             "evaluate(bind_variable) called with nullptr receiver, should be prepared first");
     }
 
-    cql3::raw_value_view value = options.get_value_at(bind_var.bind_index);
+    cql3::raw_value_view value = inputs.options->get_value_at(bind_var.bind_index);
 
     if (value.is_null()) {
         return constant::make_null(bind_var.receiver->type);
@@ -1867,15 +1871,15 @@ static constant evaluate(const bind_variable& bind_var, const query_options& opt
 
     const abstract_type& value_type = bind_var.receiver->type->without_reversed();
     try {
-        value.validate(value_type, options.get_cql_serialization_format());
+        value.validate(value_type, inputs.options->get_cql_serialization_format());
     } catch (const marshal_exception& e) {
         throw exceptions::invalid_request_exception(format("Exception while binding column {:s}: {:s}",
                                                            bind_var.receiver->name->to_cql_string(), e.what()));
     }
 
-    if (value_type.bound_value_needs_to_be_reserialized(options.get_cql_serialization_format())) {
+    if (value_type.bound_value_needs_to_be_reserialized(inputs.options->get_cql_serialization_format())) {
         managed_bytes new_value = value.with_value([&] (const FragmentedView auto& value_bytes) {
-            return reserialize_value(value_bytes, value_type, options.get_cql_serialization_format());
+            return reserialize_value(value_bytes, value_type, inputs.options->get_cql_serialization_format());
         });
 
         return constant(raw_value::make_value(std::move(new_value)), bind_var.receiver->type);
@@ -1884,7 +1888,7 @@ static constant evaluate(const bind_variable& bind_var, const query_options& opt
     return constant(raw_value::make_value(value), bind_var.receiver->type);
 }
 
-static constant evaluate(const tuple_constructor& tuple, const query_options& options) {
+static constant evaluate(const tuple_constructor& tuple, const evaluation_inputs& inputs) {
     if (tuple.type.get() == nullptr) {
         on_internal_error(expr_logger,
             "evaluate(tuple_constructor) called with nullptr type, should be prepared first");
@@ -1894,7 +1898,7 @@ static constant evaluate(const tuple_constructor& tuple, const query_options& op
     tuple_elements.reserve(tuple.elements.size());
 
     for (size_t i = 0; i < tuple.elements.size(); i++) {
-        constant elem_val = evaluate(tuple.elements[i], options);
+        constant elem_val = evaluate(tuple.elements[i], inputs);
         if (elem_val.is_unset_value()) {
             throw exceptions::invalid_request_exception(format("Invalid unset value for tuple field number {:d}", i));
         }
@@ -1933,13 +1937,13 @@ static managed_bytes serialize_listlike(const Range& elements, const char* colle
 }
 
 static constant evaluate_list(const collection_constructor& collection,
-                              const query_options& options,
+                              const evaluation_inputs& inputs,
                               bool skip_null = false) {
     std::vector<managed_bytes> evaluated_elements;
     evaluated_elements.reserve(collection.elements.size());
 
     for (const expression& element : collection.elements) {
-        constant evaluated_element = evaluate(element, options);
+        constant evaluated_element = evaluate(element, inputs);
 
         if (evaluated_element.is_unset_value()) {
             throw exceptions::invalid_request_exception("unset value is not supported inside collections");
@@ -1960,12 +1964,12 @@ static constant evaluate_list(const collection_constructor& collection,
     return constant(raw_value::make_value(std::move(collection_bytes)), collection.type);
 }
 
-static constant evaluate_set(const collection_constructor& collection, const query_options& options) {
+static constant evaluate_set(const collection_constructor& collection, const evaluation_inputs& inputs) {
     const set_type_impl& stype = dynamic_cast<const set_type_impl&>(collection.type->without_reversed());
     std::set<managed_bytes, serialized_compare> evaluated_elements(stype.get_elements_type()->as_less_comparator());
 
     for (const expression& element : collection.elements) {
-        constant evaluated_element = evaluate(element, options);
+        constant evaluated_element = evaluate(element, inputs);
 
         if (evaluated_element.is_null()) {
             throw exceptions::invalid_request_exception("null is not supported inside collections");
@@ -1992,14 +1996,14 @@ static constant evaluate_set(const collection_constructor& collection, const que
     return constant(raw_value::make_value(std::move(collection_bytes)), collection.type);
 }
 
-static constant evaluate_map(const collection_constructor& collection, const query_options& options) {
+static constant evaluate_map(const collection_constructor& collection, const evaluation_inputs& inputs) {
     const map_type_impl& mtype = dynamic_cast<const map_type_impl&>(collection.type->without_reversed());
     std::map<managed_bytes, managed_bytes, serialized_compare> evaluated_elements(mtype.get_keys_type()->as_less_comparator());
 
     for (const expression& element : collection.elements) {
         if (auto tuple = expr::as_if<tuple_constructor>(&element)) {
-            constant key = evaluate(tuple->elements.at(0), options);
-            constant value = evaluate(tuple->elements.at(1), options);
+            constant key = evaluate(tuple->elements.at(0), inputs);
+            constant value = evaluate(tuple->elements.at(1), inputs);
 
             if (key.is_null() || value.is_null()) {
                 throw exceptions::invalid_request_exception("null is not supported inside collections");
@@ -2022,7 +2026,7 @@ static constant evaluate_map(const collection_constructor& collection, const que
             evaluated_elements.emplace(std::move(key.value).to_managed_bytes(),
                                        std::move(value.value).to_managed_bytes());
         } else {
-            constant pair = evaluate(element, options);
+            constant pair = evaluate(element, inputs);
             std::vector<managed_bytes_opt> map_pair = get_tuple_elements(pair);
 
             if (!map_pair.at(0).has_value() || !map_pair.at(1).has_value()) {
@@ -2037,7 +2041,7 @@ static constant evaluate_map(const collection_constructor& collection, const que
     return constant(raw_value::make_value(std::move(serialized_map)), collection.type);
 }
 
-static constant evaluate(const collection_constructor& collection, const query_options& options) {
+static constant evaluate(const collection_constructor& collection, const evaluation_inputs& inputs) {
     if (collection.type.get() == nullptr) {
         on_internal_error(expr_logger,
             "evaluate(collection_constructor) called with nullptr type, should be prepared first");
@@ -2045,18 +2049,18 @@ static constant evaluate(const collection_constructor& collection, const query_o
 
     switch (collection.style) {
         case collection_constructor::style_type::list:
-            return evaluate_list(collection, options);
+            return evaluate_list(collection, inputs);
 
         case collection_constructor::style_type::set:
-            return evaluate_set(collection, options);
+            return evaluate_set(collection, inputs);
 
         case collection_constructor::style_type::map:
-            return evaluate_map(collection, options);
+            return evaluate_map(collection, inputs);
     }
     std::abort();
 }
 
-static constant evaluate(const usertype_constructor& user_val, const query_options& options) {
+static constant evaluate(const usertype_constructor& user_val, const evaluation_inputs& inputs) {
     if (user_val.type.get() == nullptr) {
         on_internal_error(expr_logger,
             "evaluate(usertype_constructor) called with nullptr type, should be prepared first");
@@ -2081,7 +2085,7 @@ static constant evaluate(const usertype_constructor& user_val, const query_optio
                 utype.field_name_as_string(i)));
         }
 
-        constant field_val = evaluate(cur_field->second, options);
+        constant field_val = evaluate(cur_field->second, inputs);
         if (field_val.is_unset_value()) {
             throw exceptions::invalid_request_exception(format(
                 "Invalid unset value for field '{}' of user defined type ", utype.field_name_as_string(i)));
@@ -2094,7 +2098,7 @@ static constant evaluate(const usertype_constructor& user_val, const query_optio
     return constant(std::move(val_bytes), std::move(user_val.type));
 }
 
-static constant evaluate(const function_call& fun_call, const query_options& options) {
+static constant evaluate(const function_call& fun_call, const evaluation_inputs& inputs) {
     const shared_ptr<functions::function>* fun = std::get_if<shared_ptr<functions::function>>(&fun_call.func);
     if (fun == nullptr) {
         throw std::runtime_error("Can't evaluate function call with name only, should be prepared earlier");
@@ -2110,7 +2114,7 @@ static constant evaluate(const function_call& fun_call, const query_options& opt
     arguments.reserve(fun_call.args.size());
 
     for (const expression& arg : fun_call.args) {
-        constant arg_val = evaluate(arg, options);
+        constant arg_val = evaluate(arg, inputs);
         if (arg_val.is_null_or_unset()) {
             throw exceptions::invalid_request_exception(format("Invalid null or unset value for argument to {}", *scalar_fun));
         }
@@ -2121,7 +2125,7 @@ static constant evaluate(const function_call& fun_call, const query_options& opt
     bool has_cache_id = fun_call.lwt_cache_id.get() != nullptr && fun_call.lwt_cache_id->has_value();
     if (has_cache_id) {
         computed_function_values::mapped_type* cached_value =
-            options.find_cached_pk_function_call(**fun_call.lwt_cache_id);
+            inputs.options->find_cached_pk_function_call(**fun_call.lwt_cache_id);
         if (cached_value != nullptr) {
             return constant(raw_value::make_value(*cached_value), scalar_fun->return_type());
         }
@@ -2130,7 +2134,7 @@ static constant evaluate(const function_call& fun_call, const query_options& opt
     bytes_opt result = scalar_fun->execute(cql_serialization_format::internal(), arguments);
 
     if (has_cache_id) {
-        options.cache_pk_function_call(**fun_call.lwt_cache_id, result);
+        inputs.options->cache_pk_function_call(**fun_call.lwt_cache_id, result);
     }
 
     if (!result.has_value()) {
