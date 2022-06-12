@@ -136,34 +136,6 @@ managed_bytes_opt get_value(const column_value& col, const evaluation_inputs& in
     }
 }
 
-/// column that might be subscripted - e.g col1, col2, col3[sub1]
-using column_maybe_subscripted = std::variant<const column_value*, const subscript*>;
-
-/// Converts an expression to column_maybe subscripted
-column_maybe_subscripted as_column_maybe_subscripted(const expression& e) {
-    if (auto cval = as_if<subscript>(&e)) {
-        return cval;
-    }
-
-    if (!is<column_value>(e)) {
-        on_internal_error(expr_logger, format("as_column_maybe_subscripted: bad expression: {}", e));
-    }
-    return &as<column_value>(e);
-}
-
-/// Gets the subscripted column_value out of the column_maybe_subscript.
-/// Only columns can be subscripted in CQL, so we can expect that the subscripted expression is a column_value.
-const column_value& get_subscripted_column(const column_maybe_subscripted& cms) {
-    return std::visit(overloaded_functor{
-        [&](const column_value* cv) -> const column_value& {
-            return *cv;
-        },
-        [&](const subscript* sub) -> const column_value& {
-            return get_subscripted_column(*sub);
-        }
-    }, cms);
-}
-
 managed_bytes_opt
 get_value(const subscript& s, const evaluation_inputs& inputs) {
     const column_definition* cdef = get_subscripted_column(s).col;
@@ -236,50 +208,20 @@ get_value(const subscript& s, const evaluation_inputs& inputs) {
     }
 }
 
-/// Returns col's value from queried data.
-static managed_bytes_opt get_value(const column_maybe_subscripted& col, const evaluation_inputs& inputs) {
-    return std::visit(overloaded_functor {
-        [&](const column_value* cval) -> managed_bytes_opt {
-            return get_value(*cval, inputs);
-        },
-        [&](const subscript* s) -> managed_bytes_opt {
-            return get_value(*s, inputs);
-        }
-    }, col);
-}
-
-/// Type for comparing results of get_value().
-const abstract_type* get_value_comparator(const column_definition* cdef) {
-    return &cdef->type->without_reversed();
-}
-
-/// Type for comparing results of get_value().
-const abstract_type* get_value_comparator(const column_maybe_subscripted& col) {
-    return std::visit(overloaded_functor {
-        [](const column_value* cv) {
-            return get_value_comparator(cv->col);
-        },
-        [](const subscript* s) {
-            const column_value& cv = get_subscripted_column(*s);
-            return static_pointer_cast<const collection_type_impl>(cv.col->type)->value_comparator().get();
-        }
-    }, col);
-}
-
 /// True iff lhs's value equals rhs.
-bool equal(const column_maybe_subscripted& lhs, const managed_bytes_opt& rhs, const evaluation_inputs& inputs) {
+bool equal(const expression& lhs, const managed_bytes_opt& rhs, const evaluation_inputs& inputs) {
     if (!rhs) {
         return false;
     }
-    const auto value = get_value(lhs, inputs);
+    const auto value = std::move(evaluate(lhs, inputs).value).to_managed_bytes_opt();
     if (!value) {
         return false;
     }
-    return get_value_comparator(lhs)->equal(managed_bytes_view(*value), managed_bytes_view(*rhs));
+    return type_of(lhs)->equal(managed_bytes_view(*value), managed_bytes_view(*rhs));
 }
 
 /// Convenience overload for expression.
-bool equal(const column_maybe_subscripted& lhs, const expression& rhs, const evaluation_inputs& inputs) {
+bool equal(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs) {
     return equal(lhs, evaluate(rhs, inputs).value.to_managed_bytes_opt(), inputs);
 }
 
@@ -295,8 +237,8 @@ bool equal(const tuple_constructor& columns_tuple_lhs, const expression& t_rhs, 
                 format("tuple equality size mismatch: {} elements on left-hand side, {} on right",
                        columns_tuple_lhs.elements.size(), rhs.size()));
     }
-    return boost::equal(columns_tuple_lhs.elements | boost::adaptors::transformed(as_column_maybe_subscripted), rhs,
-    [&] (const column_maybe_subscripted& lhs, const managed_bytes_opt& b) {
+    return boost::equal(columns_tuple_lhs.elements, rhs,
+    [&] (const expression& lhs, const managed_bytes_opt& b) {
         return equal(lhs, b, inputs);
     });
 }
@@ -323,16 +265,16 @@ bool limits(managed_bytes_view lhs, oper_t op, managed_bytes_view rhs, const abs
 }
 
 /// True iff the column value is limited by rhs in the manner prescribed by op.
-bool limits(const column_maybe_subscripted& col, oper_t op, const expression& rhs, const evaluation_inputs& inputs) {
+bool limits(const expression& col, oper_t op, const expression& rhs, const evaluation_inputs& inputs) {
     if (!is_slice(op)) { // For EQ or NEQ, use equal().
         throw std::logic_error("limits() called on non-slice op");
     }
-    auto lhs = get_value(col, inputs);
+    auto lhs = std::move(evaluate(col, inputs).value).to_managed_bytes_opt();
     if (!lhs) {
         return false;
     }
     const auto b = evaluate(rhs, inputs).value.to_managed_bytes_opt();
-    return b ? limits(*lhs, op, *b, *get_value_comparator(col)) : false;
+    return b ? limits(*lhs, op, *b, *type_of(col)) : false;
 }
 
 /// True iff the column values are limited by t in the manner prescribed by op.
@@ -353,8 +295,8 @@ bool limits(const tuple_constructor& columns_tuple, const oper_t op, const expre
                        columns_tuple.elements.size(), rhs.size()));
     }
     for (size_t i = 0; i < rhs.size(); ++i) {
-        column_maybe_subscripted cv = as_column_maybe_subscripted(columns_tuple.elements[i]);
-        auto lhs = get_value(cv, inputs);
+        auto& cv = columns_tuple.elements[i];
+        auto lhs = std::move(evaluate(cv, inputs).value).to_managed_bytes_opt();
         if (!lhs || !rhs[i]) {
             // CQL dictates that columns_tuple.elements[i] is a clustering column and non-null, but
             // let's not rely on grammar constraints that can be later relaxed.
@@ -362,7 +304,7 @@ bool limits(const tuple_constructor& columns_tuple, const oper_t op, const expre
             // NULL = always fails comparison
             return false;
         }
-        const auto cmp = get_value_comparator(cv)->compare(
+        const auto cmp = type_of(cv)->compare(
                 *lhs,
                 *rhs[i]);
         // If the components aren't equal, then we just learned the LHS/RHS order.
@@ -513,11 +455,10 @@ bool like(const column_value& cv, const raw_value_view& pattern, const evaluatio
 }
 
 /// True iff the column value is in the set defined by rhs.
-bool is_one_of(const column_maybe_subscripted& col, const expression& rhs, const evaluation_inputs& inputs) {
+bool is_one_of(const expression& col, const expression& rhs, const evaluation_inputs& inputs) {
     const constant in_list = evaluate(rhs, inputs);
-    const column_definition* cdef = get_subscripted_column(col).col;
     statements::request_validations::check_false(
-            in_list.is_null(), "Invalid null value for column {}", cdef->name_as_text());
+            in_list.is_null(), "Invalid null value for column {}", col);
 
     if (!in_list.type->without_reversed().is_list()) {
         throw std::logic_error("unexpected expression type in is_one_of(single column)");
@@ -535,7 +476,7 @@ bool is_one_of(const tuple_constructor& tuple, const expression& rhs, const eval
     }
     return boost::algorithm::any_of(get_list_of_tuples_elements(in_list), [&] (const std::vector<managed_bytes_opt>& el) {
         return boost::equal(tuple.elements, el, [&] (const expression& c, const managed_bytes_opt& b) {
-            return equal(as_column_maybe_subscripted(c), b, inputs);
+            return equal(c, b, inputs);
         });
     });
 }
@@ -575,11 +516,11 @@ bool is_satisfied_by(const binary_operator& opr, const evaluation_inputs& inputs
     return expr::visit(overloaded_functor{
             [&] (const column_value& col) {
                 if (opr.op == oper_t::EQ) {
-                    return equal(&col, opr.rhs, inputs);
+                    return equal(col, opr.rhs, inputs);
                 } else if (opr.op == oper_t::NEQ) {
-                    return !equal(&col, opr.rhs, inputs);
+                    return !equal(col, opr.rhs, inputs);
                 } else if (is_slice(opr.op)) {
-                    return limits(&col, opr.op, opr.rhs, inputs);
+                    return limits(col, opr.op, opr.rhs, inputs);
                 } else if (opr.op == oper_t::CONTAINS) {
                     constant val = evaluate(opr.rhs, inputs);
                     return contains(col, val.view(), inputs);
@@ -590,18 +531,18 @@ bool is_satisfied_by(const binary_operator& opr, const evaluation_inputs& inputs
                     constant val = evaluate(opr.rhs, inputs);
                     return like(col, val.view(), inputs);
                 } else if (opr.op == oper_t::IN) {
-                    return is_one_of(&col, opr.rhs, inputs);
+                    return is_one_of(col, opr.rhs, inputs);
                 } else {
                     throw exceptions::unsupported_operation_exception(format("Unhandled binary_operator: {}", opr));
                 }
             },
             [&] (const subscript& sub) {
                 if (opr.op == oper_t::EQ) {
-                    return equal(&sub, opr.rhs, inputs);
+                    return equal(sub, opr.rhs, inputs);
                 } else if (opr.op == oper_t::NEQ) {
-                    return !equal(&sub, opr.rhs, inputs);
+                    return !equal(sub, opr.rhs, inputs);
                 } else if (is_slice(opr.op)) {
-                    return limits(&sub, opr.op, opr.rhs, inputs);
+                    return limits(sub, opr.op, opr.rhs, inputs);
                 } else if (opr.op == oper_t::CONTAINS) {
                     throw exceptions::unsupported_operation_exception("CONTAINS lhs is subscripted");
                 } else if (opr.op == oper_t::CONTAINS_KEY) {
@@ -609,7 +550,7 @@ bool is_satisfied_by(const binary_operator& opr, const evaluation_inputs& inputs
                 } else if (opr.op == oper_t::LIKE) {
                     throw exceptions::unsupported_operation_exception("LIKE lhs is subscripted");
                 } else if (opr.op == oper_t::IN) {
-                    return is_one_of(&sub, opr.rhs, inputs);
+                    return is_one_of(sub, opr.rhs, inputs);
                 } else {
                     throw exceptions::unsupported_operation_exception(format("Unhandled binary_operator: {}", opr));
                 }
