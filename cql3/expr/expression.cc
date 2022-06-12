@@ -166,75 +166,75 @@ const column_value& get_subscripted_column(const column_maybe_subscripted& cms) 
 
 managed_bytes_opt
 get_value(const subscript& sref, const evaluation_inputs& inputs) {
-            auto s = &sref;
-            const column_definition* cdef = get_subscripted_column(*s).col;
+    auto s = &sref;
+    const column_definition* cdef = get_subscripted_column(*s).col;
 
-            auto col_type = static_pointer_cast<const collection_type_impl>(cdef->type);
-            int32_t index = inputs.selection->index_of(*cdef);
-            if (index == -1) {
-                throw std::runtime_error(
-                        format("Column definition {} does not match any column in the query selection",
-                        cdef->name_as_text()));
-            }
-            const managed_bytes_opt& serialized = (*inputs.static_and_regular_columns)[index];
-            if (!serialized) {
-                // For null[i] we return null.
-                return std::nullopt;
-            }
-            const auto deserialized = cdef->type->deserialize(managed_bytes_view(*serialized));
-            const auto key = evaluate(s->sub, inputs);
-            auto&& key_type = col_type->is_map() ? col_type->name_comparator() : int32_type;
-            if (key.is_null()) {
-                // For m[null] return null.
-                // This is different from Cassandra - which treats m[null]
-                // as an invalid request error. But m[null] -> null is more
-                // consistent with our usual null treatement (e.g., both
-                // null[2] and null < 2 return null). It will also allow us
-                // to support non-constant subscripts (e.g., m[a]) where "a"
-                // may be null in some rows and non-null in others, and it's
-                // not an error.
-                return std::nullopt;
-            }
-            if (key.is_unset_value()) {
-                // An m[?] with ? bound to UNSET_VALUE is a invalid query.
-                // We could have detected it earlier while binding, but since
-                // we currently don't, we must protect the following code
-                // which can't work with an UNSET_VALUE. Note that the
-                // placement of this check here means that in an empty table,
-                // where we never need to evaluate the filter expression, this
-                // error will not be detected.
-                throw exceptions::invalid_request_exception(
-                    format("Unsupported unset map key for column {}",
-                        cdef->name_as_text()));
-            }
-            if (key.type != key_type) {
-                // This can't happen, we always verify the index type earlier.
-                throw std::logic_error(
-                    format("Tried to evaluate expression with wrong type for subscript of {}",
-                        cdef->name_as_text()));
-            }
-            if (col_type->is_map()) {
-                const auto& data_map = value_cast<map_type_impl::native_type>(deserialized);
-                const auto found = key.view().with_linearized([&] (bytes_view key_bv) {
-                    using entry = std::pair<data_value, data_value>;
-                    return std::find_if(data_map.cbegin(), data_map.cend(), [&] (const entry& element) {
-                        return key_type->compare(element.first.serialize_nonnull(), key_bv) == 0;
-                    });
-                });
-                return found == data_map.cend() ? std::nullopt : managed_bytes_opt(found->second.serialize_nonnull());
-            } else if (col_type->is_list()) {
-                const auto& data_list = value_cast<list_type_impl::native_type>(deserialized);
-                auto key_deserialized = key.view().with_linearized([&] (bytes_view key_bv) {
-                    return key_type->deserialize(key_bv);
-                });
-                auto key_int = value_cast<int32_t>(key_deserialized);
-                if (key_int < 0 || size_t(key_int) >= data_list.size()) {
-                    return std::nullopt;
-                }
-                return managed_bytes_opt(data_list[key_int].serialize_nonnull());
-            } else {
-                throw exceptions::invalid_request_exception(format("subscripting non-map, non-list column {}", cdef->name_as_text()));
-            }
+    auto col_type = static_pointer_cast<const collection_type_impl>(cdef->type);
+    int32_t index = inputs.selection->index_of(*cdef);
+    if (index == -1) {
+        throw std::runtime_error(
+                format("Column definition {} does not match any column in the query selection",
+                cdef->name_as_text()));
+    }
+    const managed_bytes_opt& serialized = (*inputs.static_and_regular_columns)[index];
+    if (!serialized) {
+        // For null[i] we return null.
+        return std::nullopt;
+    }
+    const auto deserialized = cdef->type->deserialize(managed_bytes_view(*serialized));
+    const auto key = evaluate(s->sub, inputs);
+    auto&& key_type = col_type->is_map() ? col_type->name_comparator() : int32_type;
+    if (key.is_null()) {
+        // For m[null] return null.
+        // This is different from Cassandra - which treats m[null]
+        // as an invalid request error. But m[null] -> null is more
+        // consistent with our usual null treatement (e.g., both
+        // null[2] and null < 2 return null). It will also allow us
+        // to support non-constant subscripts (e.g., m[a]) where "a"
+        // may be null in some rows and non-null in others, and it's
+        // not an error.
+        return std::nullopt;
+    }
+    if (key.is_unset_value()) {
+        // An m[?] with ? bound to UNSET_VALUE is a invalid query.
+        // We could have detected it earlier while binding, but since
+        // we currently don't, we must protect the following code
+        // which can't work with an UNSET_VALUE. Note that the
+        // placement of this check here means that in an empty table,
+        // where we never need to evaluate the filter expression, this
+        // error will not be detected.
+        throw exceptions::invalid_request_exception(
+            format("Unsupported unset map key for column {}",
+                cdef->name_as_text()));
+    }
+    if (key.type != key_type) {
+        // This can't happen, we always verify the index type earlier.
+        throw std::logic_error(
+            format("Tried to evaluate expression with wrong type for subscript of {}",
+                cdef->name_as_text()));
+    }
+    if (col_type->is_map()) {
+        const auto& data_map = value_cast<map_type_impl::native_type>(deserialized);
+        const auto found = key.view().with_linearized([&] (bytes_view key_bv) {
+            using entry = std::pair<data_value, data_value>;
+            return std::find_if(data_map.cbegin(), data_map.cend(), [&] (const entry& element) {
+                return key_type->compare(element.first.serialize_nonnull(), key_bv) == 0;
+            });
+        });
+        return found == data_map.cend() ? std::nullopt : managed_bytes_opt(found->second.serialize_nonnull());
+    } else if (col_type->is_list()) {
+        const auto& data_list = value_cast<list_type_impl::native_type>(deserialized);
+        auto key_deserialized = key.view().with_linearized([&] (bytes_view key_bv) {
+            return key_type->deserialize(key_bv);
+        });
+        auto key_int = value_cast<int32_t>(key_deserialized);
+        if (key_int < 0 || size_t(key_int) >= data_list.size()) {
+            return std::nullopt;
+        }
+        return managed_bytes_opt(data_list[key_int].serialize_nonnull());
+    } else {
+        throw exceptions::invalid_request_exception(format("subscripting non-map, non-list column {}", cdef->name_as_text()));
+    }
 }
 
 /// Returns col's value from queried data.
