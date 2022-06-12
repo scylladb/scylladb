@@ -103,6 +103,9 @@ future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
         [&] (broadcast_table_query& query) -> future<> {
             auto result = co_await service::broadcast_tables::execute_broadcast_table_query(_sp, query.query, cmd.new_state_id);
             _client.set_query_result(cmd.new_state_id, std::move(result));
+        },
+        [&] (topology_change& chng) -> future<> {
+           return make_ready_future<>();
         }
         ), cmd.change);
 
