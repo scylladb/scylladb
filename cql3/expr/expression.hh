@@ -446,6 +446,17 @@ extern expression make_conjunction(expression a, expression b);
 
 extern std::ostream& operator<<(std::ostream&, oper_t);
 
+// Input data needed to evaluate an expression. Individual members can be
+// null if not applicable (e.g. evaluating outside a row context)
+struct evaluation_inputs {
+    const std::vector<bytes>* partition_key = nullptr;
+    const std::vector<bytes>* clustering_key = nullptr;
+    const query::result_row_view* static_row = nullptr;
+    const query::result_row_view* row = nullptr;
+    const cql3::selection::selection* selection = nullptr;
+    const query_options* options = nullptr;
+};
+
 /// True iff restr is satisfied with respect to the row provided from a partition slice.
 extern bool is_satisfied_by(
         const expression& restr,
