@@ -373,7 +373,7 @@ def test_index_in_restriction(cql, test_keyspace, cassandra_bug):
 # returned fewer than the requested number of rows.
 @pytest.mark.parametrize("use_index", [
         pytest.param(True, marks=pytest.mark.xfail(reason="#10649")), False])
-def test_filter_and_limit(cql, test_keyspace, use_index):
+def test_filter_and_limit(cql, test_keyspace, use_index, driver_bug_1):
     with new_test_table(cql, test_keyspace, 'pk int primary key, x int, y int') as table:
         if use_index:
             cql.execute(f'CREATE INDEX ON {table}(x)')

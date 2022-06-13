@@ -14,6 +14,7 @@ import pytest
 from cassandra.auth import PlainTextAuthProvider
 from cassandra.cluster import Cluster, ConsistencyLevel, ExecutionProfile, EXEC_PROFILE_DEFAULT
 from cassandra.policies import RoundRobinPolicy
+from cassandra.connection import DRIVER_NAME, DRIVER_VERSION
 import ssl
 
 from util import unique_name, new_test_table
@@ -141,6 +142,24 @@ def check_pre_raft(cql):
 def fails_without_raft(request, check_pre_raft):
     if check_pre_raft:
         request.node.add_marker(pytest.mark.xfail(reason='Test expected to fail without Raft experimental feature on'))
+
+# Older versions of the Cassandra driver had a bug where if Scylla returns
+# an empty page, the driver would immediately stop reading even if this was
+# not the last page. Some tests which filter out most of the results can end
+# up with some empty pages, and break on buggy versions of the driver. These
+# tests should be skipped when using a buggy version of the driver. This is
+# the purpose of the following fixture.
+# This driver bug was fixed in Scylla driver 3.24.5 and Datastax driver
+# 3.25.1, in the following commits:
+# https://github.com/scylladb/python-driver/commit/6ed53d9f7004177e18d9f2ea000a7d159ff9278e,
+# https://github.com/datastax/python-driver/commit/1d9077d3f4c937929acc14f45c7693e76dde39a9
+@pytest.fixture(scope="function")
+def driver_bug_1():
+    scylla_driver = 'Scylla' in DRIVER_NAME
+    driver_version = tuple(int(x) for x in DRIVER_VERSION.split('.'))
+    if (scylla_driver and driver_version < (3, 24, 5) or
+            not scylla_driver and driver_version <= (3, 25, 0)):
+        pytest.skip("Python driver too old to run this test")
 
 # TODO: use new_test_table and "yield from" to make shared test_table
 # fixtures with some common schemas.
