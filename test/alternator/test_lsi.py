@@ -240,8 +240,10 @@ def test_lsi_describe(test_table_lsi_4):
     assert 'LocalSecondaryIndexes' in desc['Table']
     lsis = desc['Table']['LocalSecondaryIndexes']
     assert(sorted([lsi['IndexName'] for lsi in lsis]) == ['hello_x1', 'hello_x2', 'hello_x3', 'hello_x4'])
+    for lsi in lsis:
+        assert lsi['IndexArn'] == desc['Table']['TableArn'] + '/index/' + lsi['IndexName']
     # TODO: check projection and key params
-    # TODO: check also ProvisionedThroughput, IndexArn
+    # TODO: check also ProvisionedThroughput
 
 # A table with selective projection - only keys are projected into the index
 @pytest.fixture(scope="module")

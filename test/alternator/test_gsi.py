@@ -168,7 +168,7 @@ def test_gsi_empty_value(test_table_gsi_2):
         test_table_gsi_2.put_item(Item={'p': random_string(), 'x': ''})
 
 # Verify that a GSI is correctly listed in describe_table
-@pytest.mark.xfail(reason="DescribeTable provides index names only, no size or item count")
+@pytest.mark.xfail(reason="DescribeTable for GSI misses IndexSizeBytes, ItemCount, Projection, IndexStatus")
 def test_gsi_describe(test_table_gsi_1):
     desc = test_table_gsi_1.meta.client.describe_table(TableName=test_table_gsi_1.name)
     assert 'Table' in desc
@@ -183,7 +183,9 @@ def test_gsi_describe(test_table_gsi_1):
     assert gsi['IndexStatus'] == 'ACTIVE'
     assert gsi['KeySchema'] == [{'KeyType': 'HASH', 'AttributeName': 'c'},
                                 {'KeyType': 'RANGE', 'AttributeName': 'p'}]
-    # TODO: check also ProvisionedThroughput, IndexArn
+    # The index's ARN should look like the table's ARN followed by /index/<indexname>.
+    assert gsi['IndexArn'] == desc['Table']['TableArn'] + '/index/hello'
+    # TODO: check also ProvisionedThroughput
 
 # When a GSI's key includes an attribute not in the base table's key, we
 # need to remember to add its type to AttributeDefinitions.

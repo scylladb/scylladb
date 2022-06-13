@@ -393,6 +393,12 @@ static rjson::value generate_arn_for_table(const schema& schema) {
     return rjson::from_string(format("arn:scylla:alternator:{}:scylla:table/{}", schema.ks_name(), schema.cf_name()));
 }
 
+static rjson::value generate_arn_for_index(const schema& schema, std::string_view index_name) {
+    return rjson::from_string(format(
+        "arn:scylla:alternator:{}:scylla:table/{}/index/{}",
+        schema.ks_name(), schema.cf_name(), index_name));
+}
+
 bool executor::is_alternator_keyspace(const sstring& ks_name) {
     return ks_name.find(KEYSPACE_NAME_PREFIX) == 0;
 }
@@ -449,6 +455,7 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
             }
             sstring index_name = cf_name.substr(delim_it + 1);
             rjson::add(view_entry, "IndexName", rjson::from_string(index_name));
+            rjson::add(view_entry, "IndexArn", generate_arn_for_index(*schema, index_name));
             // Add indexes's KeySchema and collect types for AttributeDefinitions:
             describe_key_schema(view_entry, *vptr, key_attribute_types);
             // Local secondary indexes are marked by an extra '!' sign occurring before the ':' delimiter
