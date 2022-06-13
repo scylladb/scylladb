@@ -621,8 +621,14 @@ static schema_ptr get_table_from_arn(service::storage_proxy& proxy, std::string_
     try {
         size_t keyspace_end = arn.find_first_of(':', prefix_size);
         std::string_view keyspace_name = arn.substr(prefix_size, keyspace_end - prefix_size);
-        size_t table_start = arn.find_last_of('/');
+        size_t table_start = arn.find_first_of('/');
         std::string_view table_name = arn.substr(table_start + 1);
+        if (table_name.find('/') != std::string_view::npos) {
+            // A table name cannot contain a '/' - if it does, it's not a
+            // table ARN, it may be an index. DynamoDB returns a
+            // ValidationException in that case - see #10786.
+            throw api_error::validation(format("ResourceArn '{}' is not a valid table ARN", table_name));
+        }
         // FIXME: remove sstring creation once find_schema gains a view-based interface
         return proxy.data_dictionary().find_schema(sstring(keyspace_name), sstring(table_name));
     } catch (const data_dictionary::no_such_column_family& e) {
