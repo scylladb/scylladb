@@ -446,12 +446,24 @@ extern expression make_conjunction(expression a, expression b);
 
 extern std::ostream& operator<<(std::ostream&, oper_t);
 
-/// True iff restr is satisfied with respect to the row provided from a partition slice.
+// Input data needed to evaluate an expression. Individual members can be
+// null if not applicable (e.g. evaluating outside a row context)
+struct evaluation_inputs {
+    const std::vector<bytes>* partition_key = nullptr;
+    const std::vector<bytes>* clustering_key = nullptr;
+    const std::vector<managed_bytes_opt>* static_and_regular_columns = nullptr; // indexes match `selection` member
+    const cql3::selection::selection* selection = nullptr;
+    const query_options* options = nullptr;
+};
+
+/// Helper for generating evaluation_inputs::static_and_regular_columns
+std::vector<managed_bytes_opt> get_non_pk_values(const cql3::selection::selection& selection, const query::result_row_view& static_row,
+                                         const query::result_row_view* row);
+
+/// True iff restr evaluates to true, given these inputs
 extern bool is_satisfied_by(
-        const expression& restr,
-        const std::vector<bytes>& partition_key, const std::vector<bytes>& clustering_key,
-        const query::result_row_view& static_row, const query::result_row_view* row,
-        const selection::selection&, const query_options&);
+        const expression& restr, const evaluation_inputs& inputs);
+
 
 /// A set of discrete values.
 using value_list = std::vector<managed_bytes>; // Sorted and deduped using value comparator.
@@ -661,12 +673,9 @@ data_type type_of(const expression& e);
 
 // Takes a prepared expression and calculates its value.
 // Evaluates bound values, calls functions and returns just the bytes and type.
+constant evaluate(const expression& e, const evaluation_inputs&);
+
 constant evaluate(const expression& e, const query_options&);
-constant evaluate(const bind_variable&, const query_options&);
-constant evaluate(const tuple_constructor&, const query_options&);
-constant evaluate(const collection_constructor&, const query_options&);
-constant evaluate(const usertype_constructor&, const query_options&);
-constant evaluate(const function_call&, const query_options&);
 
 utils::chunked_vector<managed_bytes> get_list_elements(const constant&);
 utils::chunked_vector<managed_bytes> get_set_elements(const constant&);

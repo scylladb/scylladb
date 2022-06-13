@@ -904,7 +904,8 @@ try_prepare_expression(const expression& expr, data_dictionary::database db, con
 
             return subscript {
                 .val = sub_col,
-                .sub = prepare_expression(sub.sub, db, schema.ks_name(), &schema, std::move(subscript_column_spec))
+                .sub = prepare_expression(sub.sub, db, schema.ks_name(), &schema, std::move(subscript_column_spec)),
+                .type = static_cast<const collection_type_impl&>(sub_col_type).value_comparator(),
             };
         },
         [&] (const token& tk) -> std::optional<expression> {

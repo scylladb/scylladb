@@ -198,6 +198,9 @@ public:
     static raw_value make_value(managed_bytes&& mb) {
         return raw_value{std::move(mb)};
     }
+    static raw_value make_value(managed_bytes_opt&& mbo) {
+        return mbo ? make_value(std::move(*mbo)) : make_null();
+    }
     static raw_value make_value(const managed_bytes& mb) {
         return raw_value{mb};
     }
