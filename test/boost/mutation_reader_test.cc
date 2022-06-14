@@ -2660,37 +2660,6 @@ SEASTAR_THREAD_TEST_CASE(test_compacting_reader_next_partition) {
     reader_assertions.produces_end_of_stream();
 }
 
-SEASTAR_THREAD_TEST_CASE(test_compacting_reader_is_consistent_with_compaction) {
-    simple_schema ss;
-    schema_ptr s = ss.schema();
-    tests::reader_concurrency_semaphore_wrapper semaphore;
-    auto permit = semaphore.make_permit();
-
-    auto m = ss.new_mutation("pk");
-
-    auto r = ss.make_ckey_range(1, 2);
-    auto rt = ss.new_tombstone();
-    ss.delete_range(m, r, rt);
-
-    auto p_tomb = ss.new_tombstone();
-    m.partition().apply(p_tomb);
-
-    auto read_m = [&] {
-        return make_flat_mutation_reader_from_mutations_v2(m.schema(), permit, m);
-    };
-
-    assert_that(read_m())
-        .produces_partition_start(m.decorated_key(), p_tomb)
-        .produces_range_tombstone_change({position_in_partition::for_range_start(r), rt})
-        .produces_range_tombstone_change({position_in_partition::for_range_end(r), {}})
-        .produces_partition_end();
-
-    assert_that(make_compacting_reader(read_m(), gc_clock::time_point::min(), [] (const dht::decorated_key&) { return api::min_timestamp; }))
-            .exact()
-            .produces_partition_start(m.decorated_key(), p_tomb)
-            .produces_partition_end();
-}
-
 SEASTAR_THREAD_TEST_CASE(test_auto_paused_evictable_reader_is_mutation_source) {
     auto make_populate = [] (schema_ptr s, const std::vector<mutation>& mutations, gc_clock::time_point query_time) {
         auto mt = make_lw_shared<replica::memtable>(s);

@@ -762,8 +762,8 @@ SEASTAR_TEST_CASE(test_reading_from_random_partial_partition) {
         auto rd2 = cache.make_reader(gen.schema(), semaphore.make_permit());
         rd2.fill_buffer().get();
 
-        assert_that(std::move(rd1)).next_mutation().is_equal_to_compacted(m1);
-        assert_that(std::move(rd2)).next_mutation().is_equal_to_compacted(m1 + m2);
+        assert_that(std::move(rd1)).next_mutation().is_equal_to(m1);
+        assert_that(std::move(rd2)).next_mutation().is_equal_to(m1 + m2);
     });
 }
 
@@ -1645,7 +1645,7 @@ SEASTAR_TEST_CASE(test_mvcc) {
                 assert(mt1_reader_opt);
                 auto mt1_reader_mutation = read_mutation_from_flat_mutation_reader(*mt1_reader_opt).get0();
                 BOOST_REQUIRE(mt1_reader_mutation);
-                assert_that(*mt1_reader_mutation).is_equal_to_compacted(m2);
+                assert_that(*mt1_reader_mutation).is_equal_to(m2);
             }
 
             assert_that(std::move(rd4)).produces(m12);
@@ -3405,7 +3405,6 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
 
                     auto&& ranges = native_slice.row_ranges(*rd.schema(), actual.key());
                     actual.partition().mutable_row_tombstones().trim(*rd.schema(), ranges);
-                    actual = std::move(actual).compacted();
 
                     auto n_to_consider = last_generation - oldest_generation + 1;
                     auto possible_versions = boost::make_iterator_range(versions.end() - n_to_consider, versions.end());
@@ -3414,7 +3413,6 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
                         if (reversed) {
                             m2 = reverse(std::move(m2));
                         }
-                        m2 = std::move(m2).compacted();
                         if (n_to_consider == 1) {
                             assert_that(actual).is_equal_to(m2);
                         }

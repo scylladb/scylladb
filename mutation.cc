@@ -172,12 +172,6 @@ mutation mutation::sliced(const query::clustering_row_ranges& ranges) const {
     return mutation(schema(), decorated_key(), partition().sliced(*schema(), ranges));
 }
 
-mutation mutation::compacted() const {
-    auto m = *this;
-    m.partition().compact_for_compaction(*schema(), always_gc, m.decorated_key(), gc_clock::time_point::min());
-    return m;
-}
-
 mutation reverse(mutation mut) {
     auto reverse_schema = mut.schema()->make_reversed();
     mutation_rebuilder_v2 reverse_rebuilder(reverse_schema);

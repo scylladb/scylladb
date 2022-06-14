@@ -37,7 +37,6 @@
 #include "readers/from_mutations_v2.hh"
 #include "readers/from_fragments_v2.hh"
 #include "readers/forwardable_v2.hh"
-#include "readers/compacting.hh"
 
 struct mock_consumer {
     struct result {
@@ -908,17 +907,9 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_reader_reads_in_native_reverse_order) {
         reverse_mt->apply(mut.build(reverse_schema));
     }
 
-    auto compacted = [] (flat_mutation_reader_v2 rd) {
-        return make_compacting_reader(std::move(rd),
-                                      gc_clock::time_point::max(),
-                                      [] (const dht::decorated_key&) { return api::max_timestamp; });
-    };
+    auto reversed_forward_reader = assert_that(make_reversing_reader(forward_mt->make_flat_reader(forward_schema, permit), query::max_result_size(1 << 20)));
 
-    auto reversed_forward_reader = assert_that(compacted(
-            make_reversing_reader(forward_mt->make_flat_reader(forward_schema, permit),
-                                  query::max_result_size(1 << 20))));
-
-    auto reverse_reader = compacted(reverse_mt->make_flat_reader(reverse_schema, permit));
+    auto reverse_reader = reverse_mt->make_flat_reader(reverse_schema, permit);
     auto deferred_reverse_close = deferred_close(reverse_reader);
 
     while (auto mf_opt = reverse_reader().get()) {

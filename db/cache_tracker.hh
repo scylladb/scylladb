@@ -78,7 +78,6 @@ private:
     lru _lru;
     mutation_cleaner _garbage;
     mutation_cleaner _memtable_cleaner;
-    mutation_application_stats& _app_stats;
 private:
     void setup_metrics();
 public:

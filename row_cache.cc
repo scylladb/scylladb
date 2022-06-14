@@ -60,7 +60,6 @@ static thread_local cache_tracker* current_tracker;
 cache_tracker::cache_tracker(mutation_application_stats& app_stats, register_metrics with_metrics)
     : _garbage(_region, this, app_stats)
     , _memtable_cleaner(_region, nullptr, app_stats)
-    , _app_stats(app_stats)
 {
     if (with_metrics) {
         setup_metrics();
@@ -115,8 +114,6 @@ cache_tracker::setup_metrics() {
         sm::make_counter("row_insertions", sm::description("total number of rows added to cache"), _stats.row_insertions),
         sm::make_counter("row_evictions", sm::description("total number of rows evicted from cache"), _stats.row_evictions),
         sm::make_counter("row_removals", sm::description("total number of invalidated rows"), _stats.row_removals),
-        sm::make_counter("rows_dropped_by_tombstones", _app_stats.rows_dropped_by_tombstones, sm::description("Number of rows dropped in cache by a tombstone write")),
-        sm::make_counter("rows_compacted_with_tombstones", _app_stats.rows_compacted_with_tombstones, sm::description("Number of rows scanned during write of a tombstone for the purpose of compaction in cache")),
         sm::make_counter("static_row_insertions", sm::description("total number of static rows added to cache"), _stats.static_row_insertions),
         sm::make_counter("concurrent_misses_same_key", sm::description("total number of operation with misses same key"), _stats.concurrent_misses_same_key),
         sm::make_counter("partition_merges", sm::description("total number of partitions merged"), _stats.partition_merges),

@@ -118,8 +118,7 @@ memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm, replica::table_
     memtable_list* memtable_list, seastar::scheduling_group compaction_scheduling_group)
         : logalloc::region(dmm.region_group())
         , _dirty_mgr(dmm)
-        , _cleaner(*this, no_cache_tracker, table_stats.memtable_app_stats, compaction_scheduling_group,
-                   [this] (size_t freed) { remove_flushed_memory(freed); })
+        , _cleaner(*this, no_cache_tracker, table_stats.memtable_app_stats, compaction_scheduling_group)
         , _memtable_list(memtable_list)
         , _schema(std::move(schema))
         , partitions(dht::raw_token_less_comparator{})
@@ -779,7 +778,7 @@ memtable::apply(const mutation& m, db::rp_handle&& h) {
         _allocating_section(*this, [&, this] {
             auto& p = find_or_create_partition(m.decorated_key());
             _stats_collector.update(*m.schema(), m.partition());
-            p.apply(region(), cleaner(), *_schema, m.partition(), *m.schema(), _table_stats.memtable_app_stats);
+            p.apply(*_schema, m.partition(), *m.schema(), _table_stats.memtable_app_stats);
         });
     });
     update(std::move(h));
@@ -794,7 +793,7 @@ memtable::apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_han
             partition_builder pb(*m_schema, mp);
             m.partition().accept(*m_schema, pb);
             _stats_collector.update(*m_schema, mp);
-            p.apply(region(), cleaner(), *_schema, std::move(mp), *m_schema, _table_stats.memtable_app_stats);
+            p.apply(*_schema, std::move(mp), *m_schema, _table_stats.memtable_app_stats);
         });
     });
     update(std::move(h));

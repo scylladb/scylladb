@@ -45,7 +45,6 @@ class flat_reader_assertions_v2 {
     flat_mutation_reader_v2 _reader;
     dht::partition_range _pr;
     bool _ignore_deletion_time = false;
-    bool _exact = false; // Don't ignore irrelevant fragments
     tombstone _rt;
 private:
     mutation_fragment_v2* peek_next() {
@@ -69,9 +68,7 @@ private:
         return nullptr;
     }
     mutation_fragment_v2_opt read_next() {
-        if (!_exact) {
-            peek_next();
-        }
+        peek_next();
         return _reader().get0();
     }
     range_tombstone_change maybe_drop_deletion_time(const range_tombstone_change& rt) const {
@@ -112,11 +109,6 @@ public:
 
     flat_reader_assertions_v2&& ignore_deletion_time(bool ignore = true) {
         _ignore_deletion_time = ignore;
-        return std::move(*this);
-    }
-
-    flat_reader_assertions_v2&& exact(bool exact = true) {
-        _exact = exact;
         return std::move(*this);
     }
 
@@ -395,7 +387,7 @@ public:
             BOOST_FAIL(format("Expected {}, but got end of stream, at: {}", m, seastar::current_backtrace()));
         }
         memory::scoped_critical_alloc_section dfg;
-        assert_that(*mo).is_equal_to_compacted(m, ck_ranges);
+        assert_that(*mo).is_equal_to(m, ck_ranges);
         return *this;
     }
 
