@@ -176,11 +176,10 @@ void view_update_generator::discover_staging_sstables() {
         const auto& sstables = t->get_staging_sstables();
         _sstables_with_tables[t].reserve(_sstables_with_tables[t].size() + sstables.size());
         for (auto& sst : sstables | boost::adaptors::map_values) {
-            // FIXME: indentation
-                _sstables_with_tables[t].push_back(sst);
-                // we're at early stage here, no need to kick _pending_sstables (the
-                // bulding fiber is not running), neither we can wait on the semaphore
-                _registration_sem.consume(1);
+            _sstables_with_tables[t].push_back(sst);
+            // we're at early stage here, no need to kick _pending_sstables (the
+            // bulding fiber is not running), neither we can wait on the semaphore
+            _registration_sem.consume(1);
         }
     }
 }
