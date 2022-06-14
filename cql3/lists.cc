@@ -36,7 +36,7 @@ lists::setter::execute(mutation& m, const clustering_key_prefix& prefix, const u
 }
 
 void
-lists::setter::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const column_definition& column, const expr::constant& value) {
+lists::setter::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const column_definition& column, const cql3::raw_value& value) {
     if (value.is_unset_value()) {
         return;
     }
@@ -132,10 +132,10 @@ lists::setter_by_uuid::execute(mutation& m, const clustering_key_prefix& prefix,
     mut.cells.reserve(1);
 
     if (value.is_null()) {
-        mut.cells.emplace_back(std::move(index.value).to_bytes(), params.make_dead_cell());
+        mut.cells.emplace_back(std::move(index).to_bytes(), params.make_dead_cell());
     } else {
         mut.cells.emplace_back(
-                    std::move(index.value).to_bytes(),
+                    std::move(index).to_bytes(),
                     params.make_cell(*ltype->value_comparator(), value.view(), atomic_cell::collection_member::yes));
     }
 
@@ -144,7 +144,7 @@ lists::setter_by_uuid::execute(mutation& m, const clustering_key_prefix& prefix,
 
 void
 lists::appender::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
-    const expr::constant value = expr::evaluate(*_e, params._options);
+    const cql3::raw_value value = expr::evaluate(*_e, params._options);
     if (value.is_unset_value()) {
         return;
     }
@@ -153,7 +153,7 @@ lists::appender::execute(mutation& m, const clustering_key_prefix& prefix, const
 }
 
 void
-lists::do_append(const expr::constant& list_value,
+lists::do_append(const cql3::raw_value& list_value,
         mutation& m,
         const clustering_key_prefix& prefix,
         const column_definition& column,
@@ -198,11 +198,10 @@ lists::do_append(const expr::constant& list_value,
 void
 lists::prepender::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     assert(column.type->is_multi_cell()); // "Attempted to prepend to a frozen list";
-    expr::constant lvalue = expr::evaluate(*_e, params._options);
+    cql3::raw_value lvalue = expr::evaluate(*_e, params._options);
     if (lvalue.is_null_or_unset()) {
         return;
     }
-    assert(lvalue.type->is_list());
 
     // For prepend we need to be able to generate a unique but decreasing
     // timeuuid. We achieve that by by using a time in the past which
@@ -254,7 +253,7 @@ lists::discarder::execute(mutation& m, const clustering_key_prefix& prefix, cons
 
     auto&& existing_list = params.get_prefetched_list(m.key(), prefix, column);
     // We want to call bind before possibly returning to reject queries where the value provided is not a list.
-    expr::constant lvalue = expr::evaluate(*_e, params._options);
+    cql3::raw_value lvalue = expr::evaluate(*_e, params._options);
 
     if (!existing_list) {
         return;
@@ -269,8 +268,6 @@ lists::discarder::execute(mutation& m, const clustering_key_prefix& prefix, cons
     if (lvalue.is_null_or_unset()) {
         return;
     }
-
-    assert(lvalue.type->is_list());
 
     auto ltype = static_cast<const list_type_impl*>(column.type.get());
 
@@ -303,7 +300,7 @@ lists::discarder_by_index::requires_read() const {
 void
 lists::discarder_by_index::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     assert(column.type->is_multi_cell()); // "Attempted to delete an item by index from a frozen list";
-    expr::constant index = expr::evaluate(*_e, params._options);
+    cql3::raw_value index = expr::evaluate(*_e, params._options);
     if (index.is_null()) {
         throw exceptions::invalid_request_exception("Invalid null value for list index");
     }

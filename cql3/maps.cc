@@ -20,12 +20,12 @@
 namespace cql3 {
 void
 maps::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {
-    expr::constant value = expr::evaluate(*_e, params._options);
+    cql3::raw_value value = expr::evaluate(*_e, params._options);
     execute(m, row_key, params, column, value);
 }
 
 void
-maps::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params, const column_definition& column, const expr::constant& value) {
+maps::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params, const column_definition& column, const cql3::raw_value& value) {
     if (value.is_unset_value()) {
         return;
     }
@@ -64,7 +64,7 @@ maps::setter_by_key::execute(mutation& m, const clustering_key_prefix& prefix, c
                      params.make_cell(*ctype->get_values_type(), value.view(), atomic_cell::collection_member::yes)
                     : params.make_dead_cell();
     collection_mutation_description update;
-    update.cells.emplace_back(std::move(key.value).to_bytes(), std::move(avalue));
+    update.cells.emplace_back(std::move(key).to_bytes(), std::move(avalue));
 
     m.set_cell(prefix, column, update.serialize(*ctype));
 }
@@ -72,7 +72,7 @@ maps::setter_by_key::execute(mutation& m, const clustering_key_prefix& prefix, c
 void
 maps::putter::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     assert(column.type->is_multi_cell()); // "Attempted to add items to a frozen map";
-    expr::constant value = expr::evaluate(*_e, params._options);
+    cql3::raw_value value = expr::evaluate(*_e, params._options);
     if (!value.is_unset_value()) {
         do_put(m, prefix, params, value, column);
     }
@@ -80,7 +80,7 @@ maps::putter::execute(mutation& m, const clustering_key_prefix& prefix, const up
 
 void
 maps::do_put(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params,
-        const expr::constant& map_value, const column_definition& column) {
+        const cql3::raw_value& map_value, const column_definition& column) {
     if (column.type->is_multi_cell()) {
         if (map_value.is_null()) {
             return;
@@ -107,7 +107,7 @@ maps::do_put(mutation& m, const clustering_key_prefix& prefix, const update_para
 void
 maps::discarder_by_key::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     assert(column.type->is_multi_cell()); // "Attempted to delete a single key in a frozen map";
-    expr::constant key = expr::evaluate(*_e, params._options);
+    cql3::raw_value key = expr::evaluate(*_e, params._options);
     if (key.is_null()) {
         throw exceptions::invalid_request_exception("Invalid null map key");
     }
@@ -115,7 +115,7 @@ maps::discarder_by_key::execute(mutation& m, const clustering_key_prefix& prefix
         throw exceptions::invalid_request_exception("Invalid unset map key");
     }
     collection_mutation_description mut;
-    mut.cells.emplace_back(std::move(key.value).to_bytes(), params.make_dead_cell());
+    mut.cells.emplace_back(std::move(key).to_bytes(), params.make_dead_cell());
 
     m.set_cell(prefix, column, mut.serialize(*column.type));
 }

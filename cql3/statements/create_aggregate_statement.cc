@@ -55,7 +55,7 @@ shared_ptr<functions::function> create_aggregate_statement::create(query_process
         auto dummy_ident = ::make_shared<column_identifier>("", true);
         auto column_spec = make_lw_shared<column_specification>("", "", dummy_ident, state_type);
         auto initcond_term = expr::evaluate(prepare_expression(_ival.value(), db, _name.keyspace, nullptr, {column_spec}), query_options::DEFAULT);
-        initcond = std::move(initcond_term.value).to_bytes();
+        initcond = std::move(initcond_term).to_bytes();
     }
 
     return ::make_shared<functions::user_aggregate>(_name, initcond, std::move(state_func), std::move(final_func));

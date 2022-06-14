@@ -34,7 +34,7 @@ public:
         }
 
         virtual void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) override;
-        static void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params, const column_definition& column, const expr::constant& value);
+        static void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params, const column_definition& column, const cql3::raw_value& value);
     };
 
     class setter_by_key : public operation {
@@ -56,7 +56,7 @@ public:
     };
 
     static void do_put(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params,
-            const expr::constant& value, const column_definition& column);
+            const cql3::raw_value& value, const column_definition& column);
 
     class discarder_by_key : public operation {
     public:

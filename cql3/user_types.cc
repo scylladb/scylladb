@@ -20,11 +20,11 @@
 
 namespace cql3 {
 void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {
-    const expr::constant value = expr::evaluate(*_e, params._options);
+    const cql3::raw_value value = expr::evaluate(*_e, params._options);
     execute(m, row_key, params, column, value);
 }
 
-void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params, const column_definition& column, const expr::constant& ut_value) {
+void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params, const column_definition& column, const cql3::raw_value& ut_value) {
     if (ut_value.is_unset_value()) {
         return;
     }
@@ -49,7 +49,7 @@ void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_k
         mut.tomb = params.make_tombstone_just_before();
 
         if (!ut_value.is_null()) {
-            const auto& elems = expr::get_user_type_elements(ut_value);
+            const auto& elems = expr::get_user_type_elements(ut_value, type);
             // There might be fewer elements given than fields in the type
             // (e.g. when the user uses a short tuple literal), but never more.
             assert(elems.size() <= type.size());

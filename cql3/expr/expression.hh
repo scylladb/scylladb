@@ -673,22 +673,23 @@ data_type type_of(const expression& e);
 
 // Takes a prepared expression and calculates its value.
 // Evaluates bound values, calls functions and returns just the bytes and type.
-constant evaluate(const expression& e, const evaluation_inputs&);
+cql3::raw_value evaluate(const expression& e, const evaluation_inputs&);
 
-constant evaluate(const expression& e, const query_options&);
+cql3::raw_value evaluate(const expression& e, const query_options&);
 
-utils::chunked_vector<managed_bytes> get_list_elements(const constant&);
-utils::chunked_vector<managed_bytes> get_set_elements(const constant&);
-std::vector<managed_bytes_opt> get_tuple_elements(const constant&);
-std::vector<managed_bytes_opt> get_user_type_elements(const constant&);
-std::vector<std::pair<managed_bytes, managed_bytes>> get_map_elements(const constant&);
+utils::chunked_vector<managed_bytes> get_list_elements(const cql3::raw_value&);
+utils::chunked_vector<managed_bytes> get_set_elements(const cql3::raw_value&);
+std::vector<managed_bytes_opt> get_tuple_elements(const cql3::raw_value&, const abstract_type& type);
+std::vector<managed_bytes_opt> get_user_type_elements(const cql3::raw_value&, const abstract_type& type);
+std::vector<std::pair<managed_bytes, managed_bytes>> get_map_elements(const cql3::raw_value&);
 
 // Gets the elements of a constant which can be a list, set, tuple or user type
-std::vector<managed_bytes_opt> get_elements(const constant&);
+std::vector<managed_bytes_opt> get_elements(const cql3::raw_value&, const abstract_type& type);
 
 // Get elements of list<tuple<>> as vector<vector<managed_bytes_opt>
 // It is useful with IN restrictions like (a, b) IN [(1, 2), (3, 4)].
-utils::chunked_vector<std::vector<managed_bytes_opt>> get_list_of_tuples_elements(const constant&);
+// `type` parameter refers to the list<tuple<>> type.
+utils::chunked_vector<std::vector<managed_bytes_opt>> get_list_of_tuples_elements(const cql3::raw_value&, const abstract_type& type);
 
 // Retrieves information needed in prepare_context.
 // Collects the column specification for the bind variables in this expression.

@@ -152,7 +152,7 @@ usertype_constructor_prepare_expression(const usertype_constructor& u, data_dict
     };
 
     if (all_terminal) {
-        return evaluate(value, query_options::DEFAULT);
+        return constant(evaluate(value, query_options::DEFAULT), value.type);
     } else {
         return value;
     }
@@ -274,7 +274,7 @@ map_prepare_expression(const collection_constructor& c, data_dictionary::databas
         .type = receiver->type
     };
     if (all_terminal) {
-        return evaluate(map_value, query_options::DEFAULT);
+        return constant(evaluate(map_value, query_options::DEFAULT), map_value.type);
     } else {
         return map_value;
     }
@@ -357,7 +357,7 @@ set_prepare_expression(const collection_constructor& c, data_dictionary::databas
                 .elements = {},
                 .type = receiver->type
             };
-            return expr::evaluate(map_value, query_options::DEFAULT);
+            return constant(expr::evaluate(map_value, query_options::DEFAULT), map_value.type);
         }
     }
 
@@ -383,7 +383,7 @@ set_prepare_expression(const collection_constructor& c, data_dictionary::databas
     };
     
     if (all_terminal) {
-        return evaluate(value, query_options::DEFAULT);
+        return constant(evaluate(value, query_options::DEFAULT), value.type);
     } else {
         return value;
     }
@@ -465,7 +465,7 @@ list_prepare_expression(const collection_constructor& c, data_dictionary::databa
         .type = receiver->type
     };
     if (all_terminal) {
-        return evaluate(value, query_options::DEFAULT);
+        return constant(evaluate(value, query_options::DEFAULT), value.type);
     } else {
         return value;
     }
@@ -549,7 +549,7 @@ tuple_constructor_prepare_nontuple(const tuple_constructor& tc, data_dictionary:
         .type = std::move(type),
     };
     if (all_terminal) {
-        return evaluate(value, query_options::DEFAULT);
+        return constant(evaluate(value, query_options::DEFAULT), value.type);
     } else {
         return value;
     }
@@ -830,7 +830,7 @@ prepare_function_call(const expr::function_call& fc, data_dictionary::database d
         .lwt_cache_id = fc.lwt_cache_id
     };
     if (all_terminal && scalar_fun->is_pure()) {
-        return expr::evaluate(fun_call, query_options::DEFAULT);
+        return constant(expr::evaluate(fun_call, query_options::DEFAULT), fun->return_type());
     } else {
         return fun_call;
     }

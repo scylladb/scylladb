@@ -1004,7 +1004,7 @@ struct multi_column_range_accumulator {
 
     void operator()(const binary_operator& binop) {
         if (is_compare(binop.op)) {
-            auto opt_values = expr::get_tuple_elements(expr::evaluate(binop.rhs, options));
+            auto opt_values = expr::get_tuple_elements(expr::evaluate(binop.rhs, options), *type_of(binop.rhs));
             auto& lhs = expr::as<tuple_constructor>(binop.lhs);
             std::vector<managed_bytes> values(lhs.elements.size());
             for (size_t i = 0; i < lhs.elements.size(); ++i) {
@@ -1015,9 +1015,9 @@ struct multi_column_range_accumulator {
             }
             intersect_all(to_range(binop.op, clustering_key_prefix(std::move(values))));
         } else if (binop.op == oper_t::IN) {
-            const expr::constant tup = expr::evaluate(binop.rhs, options);
+            const cql3::raw_value tup = expr::evaluate(binop.rhs, options);
             statements::request_validations::check_false(tup.is_null(), "Invalid null value for IN restriction");
-            process_in_values(expr::get_list_of_tuples_elements(tup));
+            process_in_values(expr::get_list_of_tuples_elements(tup, *type_of(binop.rhs)));
         } else {
             on_internal_error(rlogger, format("multi_column_range_accumulator: unexpected atom {}", binop));
         }
@@ -1433,13 +1433,13 @@ query::clustering_range range_from_raw_bounds(
     opt_bound lb, ub;
     for (const auto& e : exprs) {
         if (auto b = find_clustering_order(e)) {
-            expr::constant tup_val = expr::evaluate(b->rhs, options);
+            cql3::raw_value tup_val = expr::evaluate(b->rhs, options);
             if (tup_val.is_null()) {
                 on_internal_error(rlogger, format("range_from_raw_bounds: unexpected atom {}", *b));
             }
 
             const auto r = to_range(
-                    b->op, clustering_key_prefix::from_optional_exploded(schema, expr::get_tuple_elements(tup_val)));
+                    b->op, clustering_key_prefix::from_optional_exploded(schema, expr::get_tuple_elements(tup_val, *type_of(b->rhs))));
             if (r.start()) {
                 lb = r.start();
             }

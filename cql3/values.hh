@@ -228,6 +228,9 @@ public:
     bool is_unset_value() const {
         return std::holds_alternative<unset_value>(_data);
     }
+    bool is_null_or_unset() const {
+        return !is_value();
+    }
     bool is_value() const {
         return _data.index() <= 1;
     }
@@ -265,6 +268,9 @@ public:
         }, std::move(_data));
     }
     raw_value_view to_view() const;
+    raw_value_view view() const {
+        return to_view();
+    }
     friend class raw_value_view;
 };
 

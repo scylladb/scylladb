@@ -33,7 +33,7 @@ public:
                 : operation(column, std::move(e)) {
         }
         virtual void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) override;
-        static void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params, const column_definition& column, const expr::constant& value);
+        static void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params, const column_definition& column, const cql3::raw_value& value);
     };
 
     class adder : public operation {
@@ -43,7 +43,7 @@ public:
         }
         virtual void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) override;
         static void do_add(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params,
-                const expr::constant& value, const column_definition& column);
+                const cql3::raw_value& value, const column_definition& column);
     };
 
     // Note that this is reused for Map subtraction too (we subtract a set from a map)

@@ -198,8 +198,8 @@ public:
 #endif
 
     clustering_key_prefix composite_value(const query_options& options) const {
-        expr::constant t = expr::evaluate(_value, options);
-        auto values = expr::get_tuple_elements(t);
+        cql3::raw_value t = expr::evaluate(_value, options);
+        auto values = expr::get_tuple_elements(t, *type_of(_value));
         std::vector<managed_bytes> components;
         for (unsigned i = 0; i < values.size(); i++) {
             auto component = statements::request_validations::check_not_null(values[i],

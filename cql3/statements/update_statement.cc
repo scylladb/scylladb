@@ -149,7 +149,7 @@ void update_statement::add_update_for_key(mutation& m, const query::clustering_r
 }
 
 modification_statement::json_cache_opt insert_prepared_json_statement::maybe_prepare_json_cache(const query_options& options) const {
-    expr::constant c = expr::evaluate(_value, options);
+    cql3::raw_value c = expr::evaluate(_value, options);
     sstring json_string = utf8_type->to_string(to_bytes(c.view()));
     return json_helpers::parse(std::move(json_string), s->all_columns(), cql_serialization_format::internal());
 }
@@ -161,16 +161,16 @@ insert_prepared_json_statement::execute_set_value(mutation& m, const clustering_
     if (!value) {
         visit(*column.type, make_visitor(
         [&] (const list_type_impl&) {
-            lists::setter::execute(m, prefix, params, column, expr::constant::make_null());
+            lists::setter::execute(m, prefix, params, column, cql3::raw_value::make_null());
         },
         [&] (const set_type_impl&) {
-            sets::setter::execute(m, prefix, params, column, expr::constant::make_null());
+            sets::setter::execute(m, prefix, params, column, cql3::raw_value::make_null());
         },
         [&] (const map_type_impl&) {
-            maps::setter::execute(m, prefix, params, column, expr::constant::make_null());
+            maps::setter::execute(m, prefix, params, column, cql3::raw_value::make_null());
         },
         [&] (const user_type_impl&) {
-            user_types::setter::execute(m, prefix, params, column, expr::constant::make_null());
+            user_types::setter::execute(m, prefix, params, column, cql3::raw_value::make_null());
         },
         [&] (const abstract_type& type) {
             if (type.is_collection()) {
@@ -183,7 +183,7 @@ insert_prepared_json_statement::execute_set_value(mutation& m, const clustering_
     }
 
 
-    expr::constant val(raw_value::make_value(*value), column.type);
+    auto val = raw_value::make_value(*value);
     visit(*column.type, make_visitor(
     [&] (const list_type_impl& ltype) {
         lists::setter::execute(m, prefix, params, column, val);

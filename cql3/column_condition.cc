@@ -137,7 +137,7 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
         assert(cell_value->type()->is_collection());
         const collection_type_impl& cell_type = static_cast<const collection_type_impl&>(*cell_value->type());
 
-        expr::constant key_constant = expr::evaluate(*_collection_element, options);
+        cql3::raw_value key_constant = expr::evaluate(*_collection_element, options);
         cql3::raw_value_view key = key_constant.view();
         if (key.is_unset_value()) {
             throw exceptions::invalid_request_exception(
@@ -194,7 +194,7 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
 
     if (is_compare(_op)) {
         // <, >, >=, <=, !=
-        expr::constant param = expr::evaluate(*_value, options);
+        cql3::raw_value param = expr::evaluate(*_value, options);
 
         if (param.is_unset_value()) {
             throw exceptions::invalid_request_exception("Invalid 'unset' value in condition");
@@ -241,11 +241,11 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
     std::vector<bytes_opt> in_values;
 
     if (_value.has_value()) {
-        expr::constant lval = expr::evaluate(*_value, options);
+        cql3::raw_value lval = expr::evaluate(*_value, options);
         if (lval.is_null()) {
             throw exceptions::invalid_request_exception("Invalid null value for IN condition");
         }
-        for (const managed_bytes_opt& v : expr::get_elements(lval)) {
+        for (const managed_bytes_opt& v : expr::get_elements(lval, *type_of(*_value))) {
             if (v) {
                 in_values.push_back(to_bytes(*v));
             } else {
