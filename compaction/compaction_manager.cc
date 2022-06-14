@@ -899,8 +899,7 @@ protected:
                     // compaction, as a call issued on shard S1 can be
                     // handled on shard S2. If the other shard is under
                     // heavy load, we may unnecessarily block kicking off a
-                    // new compaction. Normally it isn't a problem, as
-                    // compactions aren't super frequent, but there were
+                    // new compaction. Normally it isn't a problem, but there were
                     // edge cases where the described behaviour caused
                     // compaction to fail to keep up with excessive
                     // flushing, leading to too many sstables on disk and
