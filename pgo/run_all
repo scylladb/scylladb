@@ -12,6 +12,11 @@ mkdir -p `dirname "$OUT"`
 mkdir "$OUT"
 
 case "$TYPE" in
+bolt)
+    NEWBIN="$OUT"/scylla-bolt-instrumented
+    llvm-bolt "$BIN" -o "$NEWBIN" -instrument -instrumentation-file=prof -instrumentation-file-append-pid | tee "$NEWBIN".boltlog
+    BIN="$NEWBIN"
+    ;;
 llvm)
     ;;
 *)
@@ -27,6 +32,9 @@ for W in workloads/*/; do
 done
 
 case "$TYPE" in
+bolt)
+    merge-fdata "$OUT"/*/*.fdata >"$OUT/prof.fdata"
+    ;;
 llvm)
     llvm-profdata merge "$OUT"/*/*.profdata -output "$OUT/prof.profdata"
     ;;

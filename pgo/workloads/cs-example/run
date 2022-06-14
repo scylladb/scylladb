@@ -15,6 +15,13 @@ function wait_for_port {
 SERVER_ADDRS=(127.42.42.1 127.42.42.2 127.42.42.3)
 SERVER_PIDS=()
 
+case "$TYPE" in
+bolt)
+    BOLT_OPTION=--bolt-instrumentation-dump-address=$(sed -n '/entry point is/s/^.*\(0x[[:xdigit:]]*\).*$/\1/p' "$BIN".boltlog)
+    ;;
+*)
+esac
+
 for ADDR in "${SERVER_ADDRS[@]}"; do
     cd "$OUT" # chdir to OUT so that bolt instrumentation leaves its output there
     env LLVM_PROFILE_FILE="$OUT/$ADDR-%m.profraw" "$BIN" --options-file="$DIR/scylla.yaml" --workdir="$OUT"/workdir-"$ADDR" --ring-delay-ms=1000 --overprovisioned --developer-mode=yes --smp=2 --memory=1G --seed-provider-parameters=seeds="${SERVER_ADDRS[0]}" --listen-address="$ADDR" --rpc-address="$ADDR" --api-address="$ADDR" 2>"$OUT/$ADDR.log" ${BOLT_OPTION:-} &
@@ -42,6 +49,8 @@ N_PARTITIONS=10000000
 kill "${SERVER_PIDS[@]}" && wait "${SERVER_PIDS[@]}"
 
 case "$TYPE" in
+bolt)
+    ;;
 llvm)
     llvm-profdata merge "$OUT"/*.profraw -output "$OUT/prof.profdata"
     ;;
