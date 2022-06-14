@@ -173,13 +173,14 @@ void view_update_generator::setup_metrics() {
 void view_update_generator::discover_staging_sstables() {
     for (auto& x : _db.get_column_families()) {
         auto t = x.second->shared_from_this();
-        for (auto sstables = t->get_sstables(); sstables::shared_sstable sst : *sstables) {
-            if (sst->requires_view_building()) {
-                _sstables_with_tables[t].push_back(std::move(sst));
+        const auto& sstables = t->get_staging_sstables();
+        _sstables_with_tables[t].reserve(_sstables_with_tables[t].size() + sstables.size());
+        for (auto& sst : sstables | boost::adaptors::map_values) {
+            // FIXME: indentation
+                _sstables_with_tables[t].push_back(sst);
                 // we're at early stage here, no need to kick _pending_sstables (the
                 // bulding fiber is not running), neither we can wait on the semaphore
                 _registration_sem.consume(1);
-            }
         }
     }
 }
