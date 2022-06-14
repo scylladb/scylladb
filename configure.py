@@ -9,6 +9,7 @@
 #
 
 import argparse
+import copy
 import os
 import platform
 import re
@@ -704,6 +705,14 @@ arg_parser.add_argument('--date-stamp', dest='date_stamp', type=str,
                         help='Set datestamp for SCYLLA-VERSION-GEN')
 add_tristate(arg_parser, name='lto', dest='lto', default=True,
                         help='link-time optimization.')
+arg_parser.add_argument('--use-profile', dest='use_profile', action='store',
+                        help='Path to the (optional) profile file to be used in the build. Meant to be used with the profile file (build/release/profiles/merged.profdata) generated during a previous build of build/release/scylla with --pgo (--cspgo).')
+arg_parser.add_argument('--pgo', dest='pgo', action='store_true', default=False,
+                        help='Generate and use fresh PGO profiles when building Scylla. Only supported with clang for now.')
+arg_parser.add_argument('--cspgo', dest='cspgo', action='store_true', default=False,
+                        help='Generate and use fresh CSPGO profiles when building Scylla. A clang-specific optional addition to --pgo.')
+arg_parser.add_argument('--experimental-pgo', dest='experimental_pgo', action='store_true', default=False,
+                        help='When building with PGO, enable nonconservative (potentially pessimizing) optimizations. Only supported with clang for now. Not recommended.')
 arg_parser.add_argument('--use-cmake', action=argparse.BooleanOptionalAction, default=False, help='Whether to use CMake as the build system')
 arg_parser.add_argument('--coverage', action = 'store_true', help = 'Compile scylla with coverage instrumentation')
 arg_parser.add_argument('--build-dir', action='store', default='build',
@@ -1691,17 +1700,89 @@ for mode in modes:
     modes[mode]['lib_cflags'] = user_cflags
     modes[mode]['lib_ldflags'] = user_ldflags + linker_flags
 
+
 def prepare_advanced_optimizations(*, modes, build_modes, args):
     for mode in modes:
         modes[mode]['has_lto'] = False
+        modes[mode]['is_profile'] = False
+
+    profile_modes = {}
 
     for mode in modes:
         if not modes[mode]['advanced_optimizations']:
             continue
 
+        # When building with PGO, -Wbackend-plugin generates a warning for every
+        # function which changed its control flow graph since the profile was
+        # taken.
+        # We allow stale profiles, so these warnings are just noise to us.
+        # Let's silence them.
+        modes[mode]['lib_cflags'] += ' -Wno-backend-plugin'
+
         if args.lto:
             modes[mode]['has_lto'] = True
             modes[mode]['lib_cflags'] += ' -flto=thin -ffat-lto-objects'
+
+        profile_path = None    # Absolute path to the profile, for use in compiler flags. Can't use $builddir because it's also passed to seastar.
+        profile_target = None  # Path with $builddir in front, for consistency with all other ninja targets.
+
+        if args.use_profile:
+            profile_path = os.path.abspath(args.use_profile)
+            profile_target = args.use_profile
+
+        # pgso (profile-guided size-optimization) adds optsize hints (-Os) to cold code.
+        # We don't want to optimize anything for size, because that's a potential source
+        # of performance regressions, and the benefits are dubious. Let's disable pgso
+        # by default. (Currently is enabled in Clang by default.)
+        #
+        # Value profiling allows the compiler to track not only the outcomes of branches
+        # but also the values of variables at interesting decision points.
+        # Currently Clang uses value profiling for two things: specializing for the most
+        # common sizes of memory ops (e.g. memcpy, memcmp) and specializing for the most
+        # common targets of indirect branches.
+        # It's valuable in general, but our training suite is not realistic and exhaustive
+        # enough to be confident about value profiling. Let's also keep it disabled by
+        # default, conservatively. (Currently it is enabled in Clang by default.)
+        conservative_opts = "" if args.experimental_pgo else "-mllvm -pgso=false -mllvm -enable-value-profiling=false"
+
+        llvm_instr_types = []
+        if args.pgo:
+            llvm_instr_types += [""]
+        if args.cspgo:
+            llvm_instr_types += ["cs-"]
+        for it in llvm_instr_types:
+            submode = copy.deepcopy(modes[mode])
+            submode_name = f'{mode}-{it}pgo'
+            submode['parent_mode'] = mode
+            if profile_path is not None:
+                submode['lib_cflags'] += f" -fprofile-use={profile_path}"
+                submode['cxx_ld_flags'] += f" -fprofile-use={profile_path}"
+                submode['profile_target'] = profile_target
+            submode['lib_cflags'] += f" -f{it}profile-generate={os.path.realpath(outdir)}/{submode_name} {conservative_opts}"
+            submode['cxx_ld_flags'] += f" -f{it}profile-generate={os.path.realpath(outdir)}/{submode_name} {conservative_opts}"
+            # Profile collection depends on java tools because we use cassandra-stress as the load.
+            submode['profile_recipe'] = textwrap.dedent(f"""\
+                build $builddir/{submode_name}/profiles/prof.profdata: train $builddir/{submode_name}/scylla | dist-tools-tar
+                build $builddir/{submode_name}/profiles/merged.profdata: merge_profdata $builddir/{submode_name}/profiles/prof.profdata {profile_target or str()}
+                """)
+            submode['is_profile'] = True
+            profile_path = f"{os.path.realpath(outdir)}/{submode_name}/profiles/merged.profdata"
+            profile_target = f"$builddir/{submode_name}/profiles/merged.profdata"
+
+            profile_modes[submode_name] = submode
+
+        if profile_path is not None:
+            modes[mode]['lib_cflags'] += f" -fprofile-use={profile_path} {conservative_opts}"
+            modes[mode]['cxx_ld_flags'] += f" -fprofile-use={profile_path} {conservative_opts}"
+            modes[mode]['profile_target'] = profile_target
+            modes[mode].setdefault('profile_recipe', "")
+            modes[mode]['profile_recipe'] += textwrap.dedent(f"""\
+                build $builddir/{mode}/profiles/merged.profdata: copy {profile_target or profile_path or str()}
+                """)
+
+    modes.update(profile_modes)
+    build_modes.update(profile_modes)
+
 
 # cmake likes to separate things with semicolons
 def semicolon_separated(*flags):
@@ -2004,6 +2085,13 @@ def write_build_file(f,
         rule wasm2wat
             command = wasm2wat $in > $out
             description = WASM2WAT $out
+        rule run_profile
+          command = rm -r `dirname $out` && pgo/run_all $in `dirname $out` $type
+        rule train
+          command = rm -r `dirname $out` && pgo/train `realpath $in` `realpath -m $out` `realpath -m $builddir/pgo_datasets`
+          pool = console
+        rule merge_profdata
+          command = llvm-profdata merge $in -output=$out
         ''').format(configure_args=configure_args,
                     outdir=outdir,
                     cxx=args.cxx,
@@ -2084,6 +2172,7 @@ def write_build_file(f,
               command = ./test.py --mode={mode} --repeat={test_repeat} --timeout={test_timeout}
               pool = console
               description = TEST {mode}
+            # This rule is unused for PGO stages. They use the rust lib from the parent mode.
             rule rust_lib.{mode}
               command = CARGO_BUILD_DEP_INFO_BASEDIR='.' cargo build --locked --manifest-path=rust/Cargo.toml --target-dir=$builddir/{mode} --profile=rust-{mode} $
                         && touch $out
@@ -2096,6 +2185,8 @@ def write_build_file(f,
                 wasms = str.join(' ', ['$builddir/' + x for x in sorted(build_artifacts & wasms)]),
             )
         )
+        if profile_recipe := modes[mode].get('profile_recipe'):
+            f.write(profile_recipe)
         include_cxx_target = f'{mode}-build' if not args.dist_only else ''
         include_dist_target = f'dist-{mode}' if args.enable_dist is None or args.enable_dist else ''
         f.write(f'build {mode}: phony {include_cxx_target} {include_dist_target}\n')
@@ -2116,6 +2207,11 @@ def write_build_file(f,
 
         seastar_lib_ext = 'so' if modeval['build_seastar_shared_libs'] else 'a'
         for binary in sorted(build_artifacts):
+            if modeval['is_profile'] and binary != "scylla":
+                # Just to avoid clutter in build.ninja
+                continue
+            profile_dep = modes[mode].get('profile_target', "")
+
             if binary in other or binary in wasms:
                 continue
             srcs = deps[binary]
@@ -2135,7 +2231,8 @@ def write_build_file(f,
                     obj = dep[:idx].replace('rust/','') + '.o'
                     objs.append(f'$builddir/{mode}/gen/rust/{obj}')
             if has_rust:
-                objs.append(f'$builddir/{mode}/rust-{mode}/librust_combined.a')
+                parent_mode = modes[mode].get('parent_mode', mode)
+                objs.append(f'$builddir/{parent_mode}/rust-{parent_mode}/librust_combined.a')
 
             do_lto = modes[mode]['has_lto'] and binary in lto_binaries
             seastar_dep = f'$builddir/{mode}/seastar/libseastar.{seastar_lib_ext}'
@@ -2256,7 +2353,7 @@ def write_build_file(f,
             src = compiles[obj]
             seastar_dep = f'$builddir/{mode}/seastar/libseastar.{seastar_lib_ext}'
             abseil_dep = ' '.join(f'$builddir/{mode}/abseil/{lib}' for lib in abseil_libs)
-            f.write(f'build {obj}: cxx.{mode} {src} || {seastar_dep} {abseil_dep} {gen_headers_dep}\n')
+            f.write(f'build {obj}: cxx.{mode} {src} | {profile_dep} || {seastar_dep} {abseil_dep} {gen_headers_dep}\n')
             if src in modeval['per_src_extra_cxxflags']:
                 f.write('    cxxflags = {seastar_cflags} $cxxflags $cxxflags_{mode} {extra_cxxflags}\n'.format(mode=mode, extra_cxxflags=modeval["per_src_extra_cxxflags"][src], **modeval))
         for swagger in swaggers:
@@ -2265,7 +2362,7 @@ def write_build_file(f,
             obj = swagger.objects(gen_dir)[0]
             src = swagger.source
             f.write('build {} | {} : swagger {} | {}/scripts/seastar-json2code.py\n'.format(hh, cc, src, args.seastar_path))
-            f.write(f'build {obj}: cxx.{mode} {cc}\n')
+            f.write(f'build {obj}: cxx.{mode} {cc} | {profile_dep}\n')
         for hh in serializers:
             src = serializers[hh]
             f.write('build {}: serializer {} | idl-compiler.py\n'.format(hh, src))
@@ -2273,15 +2370,16 @@ def write_build_file(f,
             src = ragels[hh]
             f.write('build {}: ragel {}\n'.format(hh, src))
         f.write('build {}: cxxbridge_header\n'.format('$builddir/{}/gen/rust/cxx.h'.format(mode)))
-        librust = '$builddir/{}/rust-{}/librust_combined'.format(mode, mode)
-        f.write('build {}.a: rust_lib.{} rust/Cargo.lock\n  depfile={}.d\n'.format(librust, mode, librust))
+        if 'parent_mode' not in modes[mode]:
+            librust = '$builddir/{}/rust-{}/librust_combined'.format(mode, mode)
+            f.write('build {}.a: rust_lib.{} rust/Cargo.lock\n  depfile={}.d\n'.format(librust, mode, librust))
         for grammar in antlr3_grammars:
             outs = ' '.join(grammar.generated('$builddir/{}/gen'.format(mode)))
             f.write('build {}: antlr3.{} {}\n  stem = {}\n'.format(outs, mode, grammar.source,
                                                                    grammar.source.rsplit('.', 1)[0]))
             for cc in grammar.sources('$builddir/{}/gen'.format(mode)):
                 obj = cc.replace('.cpp', '.o')
-                f.write(f'build {obj}: cxx.{mode} {cc} || {" ".join(serializers)}\n')
+                f.write(f'build {obj}: cxx.{mode} {cc} | {profile_dep} || {" ".join(serializers)}\n')
                 flags = '-Wno-parentheses-equality'
                 if cc.endswith('Parser.cpp'):
                     # Unoptimized parsers end up using huge amounts of stack space and overflowing their stack
@@ -2292,26 +2390,36 @@ def write_build_file(f,
                 f.write('  obj_cxxflags = %s\n' % flags)
         f.write(f'build $builddir/{mode}/gen/empty.cc: gen\n')
         for hh in headers:
-            f.write('build $builddir/{mode}/{hh}.o: checkhh.{mode} {hh} | $builddir/{mode}/gen/empty.cc || {gen_headers_dep}\n'.format(
-                    mode=mode, hh=hh, gen_headers_dep=gen_headers_dep))
+            f.write('build $builddir/{mode}/{hh}.o: checkhh.{mode} {hh} | $builddir/{mode}/gen/empty.cc {profile_dep} || {gen_headers_dep}\n'.format(
+                    mode=mode, hh=hh, gen_headers_dep=gen_headers_dep, profile_dep=profile_dep))
 
         seastar_dep = f'$builddir/{mode}/seastar/libseastar.{seastar_lib_ext}'
         seastar_testing_dep = f'$builddir/{mode}/seastar/libseastar_testing.{seastar_lib_ext}'
-        f.write('build {seastar_dep}: ninja $builddir/{mode}/seastar/build.ninja | always\n'
+        f.write('build {seastar_dep}: ninja $builddir/{mode}/seastar/build.ninja | always {profile_dep}\n'
                 .format(**locals()))
         f.write('  pool = submodule_pool\n')
         f.write('  subdir = $builddir/{mode}/seastar\n'.format(**locals()))
         f.write('  target = seastar\n'.format(**locals()))
-        f.write('build {seastar_testing_dep}: ninja $builddir/{mode}/seastar/build.ninja | always\n'
+        f.write('build {seastar_testing_dep}: ninja $builddir/{mode}/seastar/build.ninja | always {profile_dep}\n'
                 .format(**locals()))
         f.write('  pool = submodule_pool\n')
         f.write('  subdir = $builddir/{mode}/seastar\n'.format(**locals()))
         f.write('  target = seastar_testing\n'.format(**locals()))
-        f.write('build $builddir/{mode}/seastar/apps/iotune/iotune: ninja $builddir/{mode}/seastar/build.ninja\n'
+        f.write('  profile_dep = {profile_dep}\n'.format(**locals()))
+
+        for lib in abseil_libs:
+            f.write('build $builddir/{mode}/abseil/{lib}: ninja $builddir/{mode}/abseil/build.ninja | always {profile_dep}\n'.format(**locals()))
+            f.write('  pool = submodule_pool\n')
+            f.write('  subdir = $builddir/{mode}/abseil\n'.format(**locals()))
+            f.write('  target = {lib}\n'.format(**locals()))
+            f.write('  profile_dep = {profile_dep}\n'.format(**locals()))
+
+        f.write('build $builddir/{mode}/seastar/apps/iotune/iotune: ninja $builddir/{mode}/seastar/build.ninja | $builddir/{mode}/seastar/libseastar.{seastar_lib_ext}\n'
                 .format(**locals()))
         f.write('  pool = submodule_pool\n')
         f.write('  subdir = $builddir/{mode}/seastar\n'.format(**locals()))
         f.write('  target = iotune\n'.format(**locals()))
+        f.write('  profile_dep = {profile_dep}\n'.format(**locals()))
         f.write(textwrap.dedent('''\
             build $builddir/{mode}/iotune: copy $builddir/{mode}/seastar/apps/iotune/iotune
             build $builddir/{mode}/iotune.stripped: strip $builddir/{mode}/iotune
@@ -2350,12 +2458,6 @@ def write_build_file(f,
         f.write(f'  mode = {mode}\n')
         f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-unified-package-{scylla_version}-{scylla_release}.tar.gz: copy $builddir/{mode}/dist/tar/{scylla_product}-unified-{scylla_version}-{scylla_release}.{arch}.tar.gz\n')
         f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-unified-{arch}-package-{scylla_version}-{scylla_release}.tar.gz: copy $builddir/{mode}/dist/tar/{scylla_product}-unified-{scylla_version}-{scylla_release}.{arch}.tar.gz\n')
-
-        for lib in abseil_libs:
-            f.write('build $builddir/{mode}/abseil/{lib}: ninja $builddir/{mode}/abseil/build.ninja\n'.format(**locals()))
-            f.write('  pool = submodule_pool\n')
-            f.write('  subdir = $builddir/{mode}/abseil\n'.format(**locals()))
-            f.write('  target = {lib}\n'.format(**locals()))
 
     checkheaders_mode = 'dev' if 'dev' in modes else modes.keys()[0]
     f.write('build checkheaders: phony || {}\n'.format(' '.join(['$builddir/{}/{}.o'.format(checkheaders_mode, hh) for hh in headers])))

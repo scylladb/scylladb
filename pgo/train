@@ -1,0 +1,2 @@
+#!/bin/bash -xue
+exec python3 -u "$(dirname "$(realpath "$0")")"/pgo.py train_full "$@"
