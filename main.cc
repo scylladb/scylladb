@@ -555,6 +555,16 @@ static locator::host_id initialize_local_info_thread(sharded<db::system_keyspace
     return linfo.host_id;
 }
 
+extern "C" void __attribute__((weak)) __llvm_profile_dump();
+
+[[gnu::noinline]]
+void dump_performance_profiles() {
+    if (__llvm_profile_dump) {
+        startlog.info("Calling __llvm_profile_dump()");
+        __llvm_profile_dump();
+    }
+}
+
 static int scylla_main(int ac, char** av) {
     // Allow core dumps. The would be disabled by default if
     // CAP_SYS_NICE was added to the binary, as is suggested by the
@@ -1972,6 +1982,12 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             return 1;
           }
           startlog.info("Scylla version {} shutdown complete.", scylla_version());
+
+          // With -fprofile-generate, LLVM inserts an exit hook which saves the profile counters to disk.
+          // So does BOLT's instrumentation.
+          // But since we exit abruptly and skip those hooks, we have to trigger the dump manually.
+          dump_performance_profiles();
+
           // We should be returning 0 here, but the system is not yet prepared for orderly rollback of main() objects
           // and thread_local variables.
           _exit(0);
