@@ -220,7 +220,7 @@ void validate_multi_column_relation(const std::vector<const column_definition*>&
             const list_type_impl* list_type = dynamic_cast<const list_type_impl*>(&rhs_list->type->without_reversed());
             const data_type& elements_type = list_type->get_elements_type();
 
-            utils::chunked_vector<managed_bytes> raw_elems = get_list_elements(*rhs_list);
+            utils::chunked_vector<managed_bytes> raw_elems = get_list_elements(rhs_list->value);
             std::vector<expression> list_elems;
             list_elems.reserve(raw_elems.size());
 

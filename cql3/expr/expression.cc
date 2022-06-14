@@ -84,11 +84,11 @@ binary_operator::binary_operator(expression lhs, oper_t op, expression rhs, comp
 // Since column_identifier_raw is forward-declared in expression.hh, delay destructor instantiation here
 unresolved_identifier::~unresolved_identifier() = default;
 
-static constant evaluate(const bind_variable&, const evaluation_inputs&);
-static constant evaluate(const tuple_constructor&, const evaluation_inputs&);
-static constant evaluate(const collection_constructor&, const evaluation_inputs&);
-static constant evaluate(const usertype_constructor&, const evaluation_inputs&);
-static constant evaluate(const function_call&, const evaluation_inputs&);
+static cql3::raw_value evaluate(const bind_variable&, const evaluation_inputs&);
+static cql3::raw_value evaluate(const tuple_constructor&, const evaluation_inputs&);
+static cql3::raw_value evaluate(const collection_constructor&, const evaluation_inputs&);
+static cql3::raw_value evaluate(const usertype_constructor&, const evaluation_inputs&);
+static cql3::raw_value evaluate(const function_call&, const evaluation_inputs&);
 
 namespace {
 
@@ -178,12 +178,6 @@ get_value(const subscript& s, const evaluation_inputs& inputs) {
             format("Unsupported unset map key for column {}",
                 cdef->name_as_text()));
     }
-    if (key.type != key_type) {
-        // This can't happen, we always verify the index type earlier.
-        throw std::logic_error(
-            format("Tried to evaluate expression with wrong type for subscript of {}",
-                cdef->name_as_text()));
-    }
     if (col_type->is_map()) {
         const auto& data_map = value_cast<map_type_impl::native_type>(deserialized);
         const auto found = key.view().with_linearized([&] (bytes_view key_bv) {
@@ -213,7 +207,7 @@ bool equal(const expression& lhs, const managed_bytes_opt& rhs, const evaluation
     if (!rhs) {
         return false;
     }
-    const auto value = std::move(evaluate(lhs, inputs).value).to_managed_bytes_opt();
+    const auto value = evaluate(lhs, inputs).to_managed_bytes_opt();
     if (!value) {
         return false;
     }
@@ -222,16 +216,13 @@ bool equal(const expression& lhs, const managed_bytes_opt& rhs, const evaluation
 
 /// Convenience overload for expression.
 bool equal(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs) {
-    return equal(lhs, evaluate(rhs, inputs).value.to_managed_bytes_opt(), inputs);
+    return equal(lhs, evaluate(rhs, inputs).to_managed_bytes_opt(), inputs);
 }
 
 /// True iff columns' values equal t.
 bool equal(const tuple_constructor& columns_tuple_lhs, const expression& t_rhs, const evaluation_inputs& inputs) {
-    const constant tup = evaluate(t_rhs, inputs);
-    if (!tup.type->is_tuple()) {
-        throw exceptions::invalid_request_exception("multi-column equality has right-hand side that isn't a tuple");
-    }
-    const auto& rhs = get_tuple_elements(tup);
+    const cql3::raw_value tup = evaluate(t_rhs, inputs);
+    const auto& rhs = get_tuple_elements(tup, *type_of(t_rhs));
     if (rhs.size() != columns_tuple_lhs.elements.size()) {
         throw exceptions::invalid_request_exception(
                 format("tuple equality size mismatch: {} elements on left-hand side, {} on right",
@@ -269,11 +260,11 @@ bool limits(const expression& col, oper_t op, const expression& rhs, const evalu
     if (!is_slice(op)) { // For EQ or NEQ, use equal().
         throw std::logic_error("limits() called on non-slice op");
     }
-    auto lhs = std::move(evaluate(col, inputs).value).to_managed_bytes_opt();
+    auto lhs = evaluate(col, inputs).to_managed_bytes_opt();
     if (!lhs) {
         return false;
     }
-    const auto b = evaluate(rhs, inputs).value.to_managed_bytes_opt();
+    const auto b = evaluate(rhs, inputs).to_managed_bytes_opt();
     return b ? limits(*lhs, op, *b, *type_of(col)) : false;
 }
 
@@ -283,12 +274,8 @@ bool limits(const tuple_constructor& columns_tuple, const oper_t op, const expre
     if (!is_slice(op)) { // For EQ or NEQ, use equal().
         throw std::logic_error("limits() called on non-slice op");
     }
-    const constant tup = evaluate(e, inputs);
-    if (!tup.type->is_tuple()) {
-        throw exceptions::invalid_request_exception(
-                "multi-column comparison has right-hand side that isn't a tuple");
-    }
-    const auto& rhs = get_tuple_elements(tup);
+    const cql3::raw_value tup = evaluate(e, inputs);
+    const auto& rhs = get_tuple_elements(tup, *type_of(e));
     if (rhs.size() != columns_tuple.elements.size()) {
         throw exceptions::invalid_request_exception(
                 format("tuple comparison size mismatch: {} elements on left-hand side, {} on right",
@@ -296,7 +283,7 @@ bool limits(const tuple_constructor& columns_tuple, const oper_t op, const expre
     }
     for (size_t i = 0; i < rhs.size(); ++i) {
         auto& cv = columns_tuple.elements[i];
-        auto lhs = std::move(evaluate(cv, inputs).value).to_managed_bytes_opt();
+        auto lhs = evaluate(cv, inputs).to_managed_bytes_opt();
         if (!lhs || !rhs[i]) {
             // CQL dictates that columns_tuple.elements[i] is a clustering column and non-null, but
             // let's not rely on grammar constraints that can be later relaxed.
@@ -456,13 +443,10 @@ bool like(const column_value& cv, const raw_value_view& pattern, const evaluatio
 
 /// True iff the column value is in the set defined by rhs.
 bool is_one_of(const expression& col, const expression& rhs, const evaluation_inputs& inputs) {
-    const constant in_list = evaluate(rhs, inputs);
+    const cql3::raw_value in_list = evaluate(rhs, inputs);
     statements::request_validations::check_false(
             in_list.is_null(), "Invalid null value for column {}", col);
 
-    if (!in_list.type->without_reversed().is_list()) {
-        throw std::logic_error("unexpected expression type in is_one_of(single column)");
-    }
     return boost::algorithm::any_of(get_list_elements(in_list), [&] (const managed_bytes_opt& b) {
         return equal(col, b, inputs);
     });
@@ -470,11 +454,8 @@ bool is_one_of(const expression& col, const expression& rhs, const evaluation_in
 
 /// True iff the tuple of column values is in the set defined by rhs.
 bool is_one_of(const tuple_constructor& tuple, const expression& rhs, const evaluation_inputs& inputs) {
-    constant in_list = evaluate(rhs, inputs);
-    if (!in_list.type->without_reversed().is_list()) {
-        throw std::logic_error("unexpected expression type in is_one_of(multi-column)");
-    }
-    return boost::algorithm::any_of(get_list_of_tuples_elements(in_list), [&] (const std::vector<managed_bytes_opt>& el) {
+    cql3::raw_value in_list = evaluate(rhs, inputs);
+    return boost::algorithm::any_of(get_list_of_tuples_elements(in_list, *type_of(rhs)), [&] (const std::vector<managed_bytes_opt>& el) {
         return boost::equal(tuple.elements, el, [&] (const expression& c, const managed_bytes_opt& b) {
             return equal(c, b, inputs);
         });
@@ -522,13 +503,13 @@ bool is_satisfied_by(const binary_operator& opr, const evaluation_inputs& inputs
                 } else if (is_slice(opr.op)) {
                     return limits(col, opr.op, opr.rhs, inputs);
                 } else if (opr.op == oper_t::CONTAINS) {
-                    constant val = evaluate(opr.rhs, inputs);
+                    cql3::raw_value val = evaluate(opr.rhs, inputs);
                     return contains(col, val.view(), inputs);
                 } else if (opr.op == oper_t::CONTAINS_KEY) {
-                    constant val = evaluate(opr.rhs, inputs);
+                    cql3::raw_value val = evaluate(opr.rhs, inputs);
                     return contains_key(col, val.view(), inputs);
                 } else if (opr.op == oper_t::LIKE) {
-                    constant val = evaluate(opr.rhs, inputs);
+                    cql3::raw_value val = evaluate(opr.rhs, inputs);
                     return like(col, val.view(), inputs);
                 } else if (opr.op == oper_t::IN) {
                     return is_one_of(col, opr.rhs, inputs);
@@ -696,14 +677,11 @@ const auto deref = boost::adaptors::transformed([] (const managed_bytes_opt& b) 
 value_list get_IN_values(
         const expression& e, const query_options& options, const serialized_compare& comparator,
         sstring_view column_name) {
-    const constant in_list = evaluate(e, options);
+    const cql3::raw_value in_list = evaluate(e, options);
     if (in_list.is_unset_value()) {
         throw exceptions::invalid_request_exception(format("Invalid unset value for column {}", column_name));
     }
     statements::request_validations::check_false(in_list.is_null(), "Invalid null value for column {}", column_name);
-    if (!in_list.type->without_reversed().is_list()) {
-        throw std::logic_error(format("get_IN_values(single-column) on invalid expression {}", e));
-    }
     utils::chunked_vector<managed_bytes> list_elems = get_list_elements(in_list);
     return to_sorted_vector(std::move(list_elems) | non_null | deref, comparator);
 }
@@ -711,11 +689,8 @@ value_list get_IN_values(
 /// Returns possible values for k-th column from t, which must be RHS of IN.
 value_list get_IN_values(const expression& e, size_t k, const query_options& options,
                          const serialized_compare& comparator) {
-        const constant in_list = evaluate(e, options);
-    if (!in_list.type->without_reversed().is_list()) {
-        throw std::logic_error(format("get_IN_values(multi-column) on invalid expression {}", e));
-    }
-    const auto split_values = get_list_of_tuples_elements(in_list); // Need lvalue from which to make std::view.
+    const cql3::raw_value in_list = evaluate(e, options);
+    const auto split_values = get_list_of_tuples_elements(in_list, *type_of(e)); // Need lvalue from which to make std::view.
     const auto result_range = split_values
             | boost::adaptors::transformed([k] (const std::vector<managed_bytes_opt>& v) { return v[k]; }) | non_null | deref;
     return to_sorted_vector(std::move(result_range), comparator);
@@ -802,7 +777,7 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                                 return unbounded_value_set;
                             }
                             if (is_compare(oper.op)) {
-                                managed_bytes_opt val = evaluate(oper.rhs, options).value.to_managed_bytes_opt();
+                                managed_bytes_opt val = evaluate(oper.rhs, options).to_managed_bytes_opt();
                                 if (!val) {
                                     return empty_value_set; // All NULL comparisons fail; no column values match.
                                 }
@@ -828,7 +803,7 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                             const auto column_index_on_lhs = std::distance(tuple.elements.begin(), found);
                             if (is_compare(oper.op)) {
                                 // RHS must be a tuple due to upstream checks.
-                                managed_bytes_opt val = get_tuple_elements(evaluate(oper.rhs, options)).at(column_index_on_lhs);
+                                managed_bytes_opt val = get_tuple_elements(evaluate(oper.rhs, options), *type_of(oper.rhs)).at(column_index_on_lhs);
                                 if (!val) {
                                     return empty_value_set; // All NULL comparisons fail; no column values match.
                                 }
@@ -850,7 +825,7 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                             if (cdef) {
                                 return unbounded_value_set;
                             }
-                            const auto val = evaluate(oper.rhs, options).value.to_managed_bytes_opt();
+                            const auto val = evaluate(oper.rhs, options).to_managed_bytes_opt();
                             if (!val) {
                                 return empty_value_set; // All NULL comparisons fail; no token values match.
                             }
@@ -1108,7 +1083,7 @@ std::ostream& operator<<(std::ostream& os, const expression::printer& pr) {
                     } else if (opr.op == oper_t::IN && is<constant>(opr.rhs) && as<constant>(opr.rhs).type->without_reversed().is_list()) {
                         tuple_constructor rhs_tuple;
                         const list_type_impl* list_typ = dynamic_cast<const list_type_impl*>(&as<constant>(opr.rhs).type->without_reversed());
-                        for (const managed_bytes& elem : get_list_elements(as<constant>(opr.rhs))) {
+                        for (const managed_bytes& elem : get_list_elements(as<constant>(opr.rhs).value)) {
                             rhs_tuple.elements.push_back(constant(raw_value::make_value(elem), list_typ->get_elements_type()));
                         }
                         os << to_printer(opr.lhs) << ' ' << opr.op << ' ' << to_printer(rhs_tuple);
@@ -1647,48 +1622,47 @@ std::optional<bool> get_bool_value(const constant& constant_val) {
     return constant_val.view().deserialize<bool>(*boolean_type);
 }
 
-constant evaluate(const expression& e, const evaluation_inputs& inputs) {
+cql3::raw_value evaluate(const expression& e, const evaluation_inputs& inputs) {
     return expr::visit(overloaded_functor {
-        [](const binary_operator&) -> constant {
+        [](const binary_operator&) -> cql3::raw_value {
             on_internal_error(expr_logger, "Can't evaluate a binary_operator");
         },
-        [](const conjunction&) -> constant {
+        [](const conjunction&) -> cql3::raw_value {
             on_internal_error(expr_logger, "Can't evaluate a conjunction");
         },
-        [](const token&) -> constant {
+        [](const token&) -> cql3::raw_value {
             on_internal_error(expr_logger, "Can't evaluate token");
         },
-        [](const unresolved_identifier&) -> constant {
+        [](const unresolved_identifier&) -> cql3::raw_value {
             on_internal_error(expr_logger, "Can't evaluate unresolved_identifier");
         },
-        [](const column_mutation_attribute&) -> constant {
+        [](const column_mutation_attribute&) -> cql3::raw_value {
             on_internal_error(expr_logger, "Can't evaluate a column_mutation_attribute");
         },
-        [&](const cast& c) -> constant {
+        [&](const cast& c) -> cql3::raw_value {
             auto ret = evaluate(c.arg, inputs);
             auto type = std::get_if<data_type>(&c.type);
             if (!type) {
                 on_internal_error(expr_logger, "attempting to evaluate an unprepared cast");
             }
-            ret.type = *type;
             return ret;
         },
-        [](const field_selection&) -> constant {
+        [](const field_selection&) -> cql3::raw_value {
             on_internal_error(expr_logger, "Can't evaluate a field_selection");
         },
 
-        [&](const column_value& cv) -> constant {
-            return constant(raw_value::make_value(get_value(cv, inputs)), cv.col->type);
+        [&](const column_value& cv) -> cql3::raw_value {
+            return raw_value::make_value(get_value(cv, inputs));
         },
-        [&](const subscript& s) -> constant {
-            return constant(raw_value::make_value(get_value(s, inputs)), s.type);
+        [&](const subscript& s) -> cql3::raw_value {
+            return raw_value::make_value(get_value(s, inputs));
         },
-        [](const untyped_constant&) -> constant {
+        [](const untyped_constant&) -> cql3::raw_value {
             on_internal_error(expr_logger, "Can't evaluate a untyped_constant ");
         },
 
-        [](const null&) { return constant::make_null(); },
-        [](const constant& c) { return c; },
+        [](const null&) { return cql3::raw_value::make_null(); },
+        [](const constant& c) { return c.value; },
         [&](const bind_variable& bind_var) { return evaluate(bind_var, inputs); },
         [&](const tuple_constructor& tup) { return evaluate(tup, inputs); },
         [&](const collection_constructor& col) { return evaluate(col, inputs); },
@@ -1697,7 +1671,7 @@ constant evaluate(const expression& e, const evaluation_inputs& inputs) {
     }, e);
 }
 
-constant evaluate(const expression& e, const query_options& options) {
+cql3::raw_value evaluate(const expression& e, const query_options& options) {
     return evaluate(e, evaluation_inputs{.options = &options});
 }
 
@@ -1790,7 +1764,7 @@ static managed_bytes reserialize_value(View value_bytes,
         fmt::format("Reserializing type that shouldn't need reserialization: {}", type.name()));
 }
 
-static constant evaluate(const bind_variable& bind_var, const evaluation_inputs& inputs) {
+static cql3::raw_value evaluate(const bind_variable& bind_var, const evaluation_inputs& inputs) {
     if (bind_var.receiver.get() == nullptr) {
         on_internal_error(expr_logger,
             "evaluate(bind_variable) called with nullptr receiver, should be prepared first");
@@ -1799,11 +1773,11 @@ static constant evaluate(const bind_variable& bind_var, const evaluation_inputs&
     cql3::raw_value_view value = inputs.options->get_value_at(bind_var.bind_index);
 
     if (value.is_null()) {
-        return constant::make_null(bind_var.receiver->type);
+        return cql3::raw_value::make_null();
     }
 
     if (value.is_unset_value()) {
-        return constant::make_unset_value(bind_var.receiver->type);
+        return cql3::raw_value::make_unset_value();
     }
 
     const abstract_type& value_type = bind_var.receiver->type->without_reversed();
@@ -1819,13 +1793,13 @@ static constant evaluate(const bind_variable& bind_var, const evaluation_inputs&
             return reserialize_value(value_bytes, value_type, inputs.options->get_cql_serialization_format());
         });
 
-        return constant(raw_value::make_value(std::move(new_value)), bind_var.receiver->type);
+        return raw_value::make_value(std::move(new_value));
     }
 
-    return constant(raw_value::make_value(value), bind_var.receiver->type);
+    return raw_value::make_value(value);
 }
 
-static constant evaluate(const tuple_constructor& tuple, const evaluation_inputs& inputs) {
+static cql3::raw_value evaluate(const tuple_constructor& tuple, const evaluation_inputs& inputs) {
     if (tuple.type.get() == nullptr) {
         on_internal_error(expr_logger,
             "evaluate(tuple_constructor) called with nullptr type, should be prepared first");
@@ -1835,18 +1809,18 @@ static constant evaluate(const tuple_constructor& tuple, const evaluation_inputs
     tuple_elements.reserve(tuple.elements.size());
 
     for (size_t i = 0; i < tuple.elements.size(); i++) {
-        constant elem_val = evaluate(tuple.elements[i], inputs);
+        cql3::raw_value elem_val = evaluate(tuple.elements[i], inputs);
         if (elem_val.is_unset_value()) {
             throw exceptions::invalid_request_exception(format("Invalid unset value for tuple field number {:d}", i));
         }
 
-        tuple_elements.emplace_back(std::move(elem_val.value).to_managed_bytes_opt());
+        tuple_elements.emplace_back(std::move(elem_val).to_managed_bytes_opt());
     }
 
     cql3::raw_value raw_val =
         cql3::raw_value::make_value(tuple_type_impl::build_value_fragmented(std::move(tuple_elements)));
 
-    return constant(std::move(raw_val), tuple.type);
+    return raw_val;
 }
 
 // Range of managed_bytes
@@ -1873,14 +1847,14 @@ static managed_bytes serialize_listlike(const Range& elements, const char* colle
     );
 }
 
-static constant evaluate_list(const collection_constructor& collection,
+static cql3::raw_value evaluate_list(const collection_constructor& collection,
                               const evaluation_inputs& inputs,
                               bool skip_null = false) {
     std::vector<managed_bytes> evaluated_elements;
     evaluated_elements.reserve(collection.elements.size());
 
     for (const expression& element : collection.elements) {
-        constant evaluated_element = evaluate(element, inputs);
+        cql3::raw_value evaluated_element = evaluate(element, inputs);
 
         if (evaluated_element.is_unset_value()) {
             throw exceptions::invalid_request_exception("unset value is not supported inside collections");
@@ -1894,19 +1868,19 @@ static constant evaluate_list(const collection_constructor& collection,
             throw exceptions::invalid_request_exception("null is not supported inside collections");
         }
 
-        evaluated_elements.emplace_back(std::move(evaluated_element).value.to_managed_bytes());
+        evaluated_elements.emplace_back(std::move(evaluated_element).to_managed_bytes());
     }
 
     managed_bytes collection_bytes = serialize_listlike(evaluated_elements, "List");
-    return constant(raw_value::make_value(std::move(collection_bytes)), collection.type);
+    return raw_value::make_value(std::move(collection_bytes));
 }
 
-static constant evaluate_set(const collection_constructor& collection, const evaluation_inputs& inputs) {
+static cql3::raw_value evaluate_set(const collection_constructor& collection, const evaluation_inputs& inputs) {
     const set_type_impl& stype = dynamic_cast<const set_type_impl&>(collection.type->without_reversed());
     std::set<managed_bytes, serialized_compare> evaluated_elements(stype.get_elements_type()->as_less_comparator());
 
     for (const expression& element : collection.elements) {
-        constant evaluated_element = evaluate(element, inputs);
+        cql3::raw_value evaluated_element = evaluate(element, inputs);
 
         if (evaluated_element.is_null()) {
             throw exceptions::invalid_request_exception("null is not supported inside collections");
@@ -1926,21 +1900,21 @@ static constant evaluate_set(const collection_constructor& collection, const eva
                                                 evaluated_element.view().size_bytes()));
         }
 
-        evaluated_elements.emplace(std::move(evaluated_element).value.to_managed_bytes());
+        evaluated_elements.emplace(std::move(evaluated_element).to_managed_bytes());
     }
 
     managed_bytes collection_bytes = serialize_listlike(evaluated_elements, "Set");
-    return constant(raw_value::make_value(std::move(collection_bytes)), collection.type);
+    return raw_value::make_value(std::move(collection_bytes));
 }
 
-static constant evaluate_map(const collection_constructor& collection, const evaluation_inputs& inputs) {
+static cql3::raw_value evaluate_map(const collection_constructor& collection, const evaluation_inputs& inputs) {
     const map_type_impl& mtype = dynamic_cast<const map_type_impl&>(collection.type->without_reversed());
     std::map<managed_bytes, managed_bytes, serialized_compare> evaluated_elements(mtype.get_keys_type()->as_less_comparator());
 
     for (const expression& element : collection.elements) {
         if (auto tuple = expr::as_if<tuple_constructor>(&element)) {
-            constant key = evaluate(tuple->elements.at(0), inputs);
-            constant value = evaluate(tuple->elements.at(1), inputs);
+            cql3::raw_value key = evaluate(tuple->elements.at(0), inputs);
+            cql3::raw_value value = evaluate(tuple->elements.at(1), inputs);
 
             if (key.is_null() || value.is_null()) {
                 throw exceptions::invalid_request_exception("null is not supported inside collections");
@@ -1960,11 +1934,11 @@ static constant evaluate_map(const collection_constructor& collection, const eva
                                                    key.view().size_bytes()));
             }
 
-            evaluated_elements.emplace(std::move(key.value).to_managed_bytes(),
-                                       std::move(value.value).to_managed_bytes());
+            evaluated_elements.emplace(std::move(key).to_managed_bytes(),
+                                       std::move(value).to_managed_bytes());
         } else {
-            constant pair = evaluate(element, inputs);
-            std::vector<managed_bytes_opt> map_pair = get_tuple_elements(pair);
+            cql3::raw_value pair = evaluate(element, inputs);
+            std::vector<managed_bytes_opt> map_pair = get_tuple_elements(pair, *type_of(element));
 
             if (!map_pair.at(0).has_value() || !map_pair.at(1).has_value()) {
                 throw exceptions::invalid_request_exception("null is not supported inside collections");
@@ -1975,10 +1949,10 @@ static constant evaluate_map(const collection_constructor& collection, const eva
     }
 
     managed_bytes serialized_map = map_type_impl::serialize_to_managed_bytes(evaluated_elements);
-    return constant(raw_value::make_value(std::move(serialized_map)), collection.type);
+    return raw_value::make_value(std::move(serialized_map));
 }
 
-static constant evaluate(const collection_constructor& collection, const evaluation_inputs& inputs) {
+static cql3::raw_value evaluate(const collection_constructor& collection, const evaluation_inputs& inputs) {
     if (collection.type.get() == nullptr) {
         on_internal_error(expr_logger,
             "evaluate(collection_constructor) called with nullptr type, should be prepared first");
@@ -1997,7 +1971,7 @@ static constant evaluate(const collection_constructor& collection, const evaluat
     std::abort();
 }
 
-static constant evaluate(const usertype_constructor& user_val, const evaluation_inputs& inputs) {
+static cql3::raw_value evaluate(const usertype_constructor& user_val, const evaluation_inputs& inputs) {
     if (user_val.type.get() == nullptr) {
         on_internal_error(expr_logger,
             "evaluate(usertype_constructor) called with nullptr type, should be prepared first");
@@ -2022,20 +1996,20 @@ static constant evaluate(const usertype_constructor& user_val, const evaluation_
                 utype.field_name_as_string(i)));
         }
 
-        constant field_val = evaluate(cur_field->second, inputs);
+        cql3::raw_value field_val = evaluate(cur_field->second, inputs);
         if (field_val.is_unset_value()) {
             throw exceptions::invalid_request_exception(format(
                 "Invalid unset value for field '{}' of user defined type ", utype.field_name_as_string(i)));
         }
 
-        field_values.emplace_back(std::move(field_val.value).to_managed_bytes_opt());
+        field_values.emplace_back(std::move(field_val).to_managed_bytes_opt());
     }
 
     raw_value val_bytes = cql3::raw_value::make_value(tuple_type_impl::build_value_fragmented(field_values));
-    return constant(std::move(val_bytes), std::move(user_val.type));
+    return val_bytes;
 }
 
-static constant evaluate(const function_call& fun_call, const evaluation_inputs& inputs) {
+static cql3::raw_value evaluate(const function_call& fun_call, const evaluation_inputs& inputs) {
     const shared_ptr<functions::function>* fun = std::get_if<shared_ptr<functions::function>>(&fun_call.func);
     if (fun == nullptr) {
         throw std::runtime_error("Can't evaluate function call with name only, should be prepared earlier");
@@ -2051,12 +2025,12 @@ static constant evaluate(const function_call& fun_call, const evaluation_inputs&
     arguments.reserve(fun_call.args.size());
 
     for (const expression& arg : fun_call.args) {
-        constant arg_val = evaluate(arg, inputs);
+        cql3::raw_value arg_val = evaluate(arg, inputs);
         if (arg_val.is_null_or_unset()) {
             throw exceptions::invalid_request_exception(format("Invalid null or unset value for argument to {}", *scalar_fun));
         }
 
-        arguments.emplace_back(to_bytes_opt(std::move(arg_val.value)));
+        arguments.emplace_back(to_bytes_opt(std::move(arg_val)));
     }
 
     bool has_cache_id = fun_call.lwt_cache_id.get() != nullptr && fun_call.lwt_cache_id->has_value();
@@ -2064,7 +2038,7 @@ static constant evaluate(const function_call& fun_call, const evaluation_inputs&
         computed_function_values::mapped_type* cached_value =
             inputs.options->find_cached_pk_function_call(**fun_call.lwt_cache_id);
         if (cached_value != nullptr) {
-            return constant(raw_value::make_value(*cached_value), scalar_fun->return_type());
+            return raw_value::make_value(*cached_value);
         }
     }
 
@@ -2075,7 +2049,7 @@ static constant evaluate(const function_call& fun_call, const evaluation_inputs&
     }
 
     if (!result.has_value()) {
-        return constant::make_null(scalar_fun->return_type());
+        return cql3::raw_value::make_null();
     }
 
     try {
@@ -2087,18 +2061,11 @@ static constant evaluate(const function_call& fun_call, const evaluation_inputs&
                                        ));
     }
 
-    return constant(raw_value::make_value(std::move(*result)), scalar_fun->return_type());
+    return raw_value::make_value(std::move(*result));
 }
 
-static void ensure_can_get_value_elements(const constant& val,
-                                          abstract_type::kind expected_type_kind,
+static void ensure_can_get_value_elements(const cql3::raw_value& val,
                                           const char* caller_name) {
-    const abstract_type& val_type = val.type->without_reversed();
-
-    if (val_type.get_kind() != expected_type_kind) {
-        on_internal_error(expr_logger, fmt::format("{} called with wrong type: {}", caller_name, val_type.name()));
-    }
-
     if (val.is_null()) {
         on_internal_error(expr_logger, fmt::format("{} called with null value", caller_name));
     }
@@ -2108,44 +2075,44 @@ static void ensure_can_get_value_elements(const constant& val,
     }
 }
 
-utils::chunked_vector<managed_bytes> get_list_elements(const constant& val) {
-    ensure_can_get_value_elements(val, abstract_type::kind::list, "expr::get_list_elements");
+utils::chunked_vector<managed_bytes> get_list_elements(const cql3::raw_value& val) {
+    ensure_can_get_value_elements(val, "expr::get_list_elements");
 
     return val.view().with_value([](const FragmentedView auto& value_bytes) {
         return partially_deserialize_listlike(value_bytes, cql_serialization_format::internal());
     });
 }
 
-utils::chunked_vector<managed_bytes> get_set_elements(const constant& val) {
-    ensure_can_get_value_elements(val, abstract_type::kind::set, "expr::get_set_elements");
+utils::chunked_vector<managed_bytes> get_set_elements(const cql3::raw_value& val) {
+    ensure_can_get_value_elements(val, "expr::get_set_elements");
 
     return val.view().with_value([](const FragmentedView auto& value_bytes) {
         return partially_deserialize_listlike(value_bytes, cql_serialization_format::internal());
     });
 }
 
-std::vector<std::pair<managed_bytes, managed_bytes>> get_map_elements(const constant& val) {
-    ensure_can_get_value_elements(val, abstract_type::kind::map, "expr::get_map_elements");
+std::vector<std::pair<managed_bytes, managed_bytes>> get_map_elements(const cql3::raw_value& val) {
+    ensure_can_get_value_elements(val, "expr::get_map_elements");
 
     return val.view().with_value([](const FragmentedView auto& value_bytes) {
         return partially_deserialize_map(value_bytes, cql_serialization_format::internal());
     });
 }
 
-std::vector<managed_bytes_opt> get_tuple_elements(const constant& val) {
-    ensure_can_get_value_elements(val, abstract_type::kind::tuple, "expr::get_tuple_elements");
+std::vector<managed_bytes_opt> get_tuple_elements(const cql3::raw_value& val, const abstract_type& type) {
+    ensure_can_get_value_elements(val, "expr::get_tuple_elements");
 
     return val.view().with_value([&](const FragmentedView auto& value_bytes) {
-        const tuple_type_impl& ttype = static_cast<const tuple_type_impl&>(val.type->without_reversed());
+        const tuple_type_impl& ttype = static_cast<const tuple_type_impl&>(type.without_reversed());
         return ttype.split_fragmented(value_bytes);
     });
 }
 
-std::vector<managed_bytes_opt> get_user_type_elements(const constant& val) {
-    ensure_can_get_value_elements(val, abstract_type::kind::user, "expr::get_user_type_elements");
+std::vector<managed_bytes_opt> get_user_type_elements(const cql3::raw_value& val, const abstract_type& type) {
+    ensure_can_get_value_elements(val, "expr::get_user_type_elements");
 
     return val.view().with_value([&](const FragmentedView auto& value_bytes) {
-        const user_type_impl& utype = static_cast<const user_type_impl&>(val.type->without_reversed());
+        const user_type_impl& utype = static_cast<const user_type_impl&>(type.without_reversed());
         return utype.split_fragmented(value_bytes);
     });
 }
@@ -2155,8 +2122,8 @@ static std::vector<managed_bytes_opt> convert_listlike(utils::chunked_vector<man
                                           std::make_move_iterator(elements.end()));
 }
 
-std::vector<managed_bytes_opt> get_elements(const constant& val) {
-    const abstract_type& val_type = val.type->without_reversed();
+std::vector<managed_bytes_opt> get_elements(const cql3::raw_value& val, const abstract_type& type) {
+    const abstract_type& val_type = type.without_reversed();
 
     switch (val_type.get_kind()) {
         case abstract_type::kind::list:
@@ -2166,19 +2133,19 @@ std::vector<managed_bytes_opt> get_elements(const constant& val) {
             return convert_listlike(get_set_elements(val));
 
         case abstract_type::kind::tuple:
-            return get_tuple_elements(val);
+            return get_tuple_elements(val, type);
 
         case abstract_type::kind::user:
-            return get_user_type_elements(val);
+            return get_user_type_elements(val, type);
 
         default:
-            on_internal_error(expr_logger, fmt::format("expr::get_elements called on bad type: {}", val_type.name()));
+            on_internal_error(expr_logger, fmt::format("expr::get_elements called on bad type: {}", type.name()));
     }
 }
 
-utils::chunked_vector<std::vector<managed_bytes_opt>> get_list_of_tuples_elements(const constant& val) {
+utils::chunked_vector<std::vector<managed_bytes_opt>> get_list_of_tuples_elements(const cql3::raw_value& val, const abstract_type& type) {
     utils::chunked_vector<managed_bytes> elements = get_list_elements(val);
-    const list_type_impl& list_typ = dynamic_cast<const list_type_impl&>(val.type->without_reversed());
+    const list_type_impl& list_typ = dynamic_cast<const list_type_impl&>(type.without_reversed());
     const tuple_type_impl& tuple_typ = dynamic_cast<const tuple_type_impl&>(*list_typ.get_elements_type());
 
     utils::chunked_vector<std::vector<managed_bytes_opt>> tuples_list;

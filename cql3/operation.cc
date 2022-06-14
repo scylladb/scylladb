@@ -275,12 +275,8 @@ operation::set_counter_value_from_tuple_list::prepare(data_dictionary::database 
             return true;
         }
         void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override {
-            expr::constant list_value = expr::evaluate(*_e, params._options);
+            cql3::raw_value list_value = expr::evaluate(*_e, params._options);
             if (list_value.is_null()) {
-                throw std::invalid_argument("Invalid input data to counter set");
-            }
-
-            if (!list_value.type->is_list()) {
                 throw std::invalid_argument("Invalid input data to counter set");
             }
 

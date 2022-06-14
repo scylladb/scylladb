@@ -104,6 +104,10 @@ static sstring expr_print(const expression& e) {
     return format("{}", p);
 }
 
+static sstring value_print(const cql3::raw_value& v, const expression& e) {
+    return expr_print(constant(v, type_of(e)));
+}
+
 static constant make_int(int value) {
     return constant(raw_value::make_value(int32_type->decompose(value)), int32_type);
 }
@@ -194,11 +198,11 @@ BOOST_AUTO_TEST_CASE(expr_printer_list_test) {
     };
     BOOST_REQUIRE_EQUAL(expr_print(frozen_int_list), "[13, 45, 90]");
 
-    constant int_list_constant = evaluate(int_list, query_options::DEFAULT);
-    BOOST_REQUIRE_EQUAL(expr_print(int_list_constant), "[13, 45, 90]");
+    cql3::raw_value int_list_constant = evaluate(int_list, query_options::DEFAULT);
+    BOOST_REQUIRE_EQUAL(value_print(int_list_constant, int_list), "[13, 45, 90]");
 
-    constant frozen_int_list_constant = evaluate(frozen_int_list, query_options::DEFAULT);
-    BOOST_REQUIRE_EQUAL(expr_print(frozen_int_list_constant), "[13, 45, 90]");
+    cql3::raw_value frozen_int_list_constant = evaluate(frozen_int_list, query_options::DEFAULT);
+    BOOST_REQUIRE_EQUAL(value_print(frozen_int_list_constant, frozen_int_list), "[13, 45, 90]");
 }
 
 BOOST_AUTO_TEST_CASE(expr_printer_set_test) {
@@ -216,11 +220,11 @@ BOOST_AUTO_TEST_CASE(expr_printer_set_test) {
     };
     BOOST_REQUIRE_EQUAL(expr_print(frozen_int_set), "{13, 45, 90}");
 
-    constant int_set_constant = evaluate(int_set, query_options::DEFAULT);
-    BOOST_REQUIRE_EQUAL(expr_print(int_set_constant), "{13, 45, 90}");
+    cql3::raw_value int_set_constant = evaluate(int_set, query_options::DEFAULT);
+    BOOST_REQUIRE_EQUAL(value_print(int_set_constant, int_set), "{13, 45, 90}");
 
-    constant frozen_int_set_constant = evaluate(frozen_int_set, query_options::DEFAULT);
-    BOOST_REQUIRE_EQUAL(expr_print(frozen_int_set_constant), "{13, 45, 90}");
+    cql3::raw_value frozen_int_set_constant = evaluate(frozen_int_set, query_options::DEFAULT);
+    BOOST_REQUIRE_EQUAL(value_print(frozen_int_set_constant, frozen_int_set), "{13, 45, 90}");
 }
 
 BOOST_AUTO_TEST_CASE(expr_printer_map_test) {
@@ -245,11 +249,11 @@ BOOST_AUTO_TEST_CASE(expr_printer_map_test) {
     };
     BOOST_REQUIRE_EQUAL(expr_print(frozen_int_int_map), "{12:34, 56:78}");
 
-    constant int_int_map_const = evaluate(int_int_map, query_options::DEFAULT);
-    BOOST_REQUIRE_EQUAL(expr_print(int_int_map_const), "{12:34, 56:78}");
+    cql3::raw_value int_int_map_const = evaluate(int_int_map, query_options::DEFAULT);
+    BOOST_REQUIRE_EQUAL(value_print(int_int_map_const, int_int_map), "{12:34, 56:78}");
 
-    constant frozen_int_int_map_const = evaluate(frozen_int_int_map, query_options::DEFAULT);
-    BOOST_REQUIRE_EQUAL(expr_print(frozen_int_int_map_const), "{12:34, 56:78}");
+    cql3::raw_value frozen_int_int_map_const = evaluate(frozen_int_int_map, query_options::DEFAULT);
+    BOOST_REQUIRE_EQUAL(value_print(frozen_int_int_map_const, frozen_int_int_map), "{12:34, 56:78}");
 }
 
 BOOST_AUTO_TEST_CASE(expr_printer_tuple_test) {
@@ -259,8 +263,8 @@ BOOST_AUTO_TEST_CASE(expr_printer_tuple_test) {
     };
     BOOST_REQUIRE_EQUAL(expr_print(int_int_tuple), "(456, 789)");
 
-    constant int_int_tuple_const = evaluate(int_int_tuple, query_options::DEFAULT);
-    BOOST_REQUIRE_EQUAL(expr_print(int_int_tuple_const), "(456, 789)");
+    cql3::raw_value int_int_tuple_const = evaluate(int_int_tuple, query_options::DEFAULT);
+    BOOST_REQUIRE_EQUAL(value_print(int_int_tuple_const, int_int_tuple), "(456, 789)");
 }
 
 BOOST_AUTO_TEST_CASE(expr_printer_usertype_test) {
@@ -275,8 +279,8 @@ BOOST_AUTO_TEST_CASE(expr_printer_usertype_test) {
     };
     BOOST_REQUIRE_EQUAL(expr_print(user_typ), "{b:666, a:333}");
 
-    constant user_typ_const = evaluate(user_typ, query_options::DEFAULT);
-    BOOST_REQUIRE_EQUAL(expr_print(user_typ_const), "{a:333, b:666}");
+    cql3::raw_value user_typ_const = evaluate(user_typ, query_options::DEFAULT);
+    BOOST_REQUIRE_EQUAL(value_print(user_typ_const, user_typ), "{a:333, b:666}");
 }
 
 // When a list is printed as RHS of an IN binary_operator it should be printed as a tuple.
@@ -294,12 +298,12 @@ BOOST_AUTO_TEST_CASE(expr_printer_in_test) {
     };
     BOOST_REQUIRE_EQUAL(expr_print(a_in_int_list), "a IN (13, 45, 90)");
 
-    constant int_list_const = evaluate(int_list, query_options::DEFAULT);
+    cql3::raw_value int_list_const = evaluate(int_list, query_options::DEFAULT);
 
     binary_operator a_in_int_list_const {
         make_column("a"),
         oper_t::IN,
-        int_list_const
+        constant(int_list_const, type_of(int_list))
     };
     BOOST_REQUIRE_EQUAL(expr_print(a_in_int_list_const), "a IN (13, 45, 90)");
 }

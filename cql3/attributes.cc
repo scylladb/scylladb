@@ -42,7 +42,7 @@ int64_t attributes::get_timestamp(int64_t now, const query_options& options) {
         return now;
     }
 
-    expr::constant tval = expr::evaluate(*_timestamp, options);
+    cql3::raw_value tval = expr::evaluate(*_timestamp, options);
     if (tval.is_null()) {
         throw exceptions::invalid_request_exception("Invalid null value of timestamp");
     }
@@ -60,7 +60,7 @@ int32_t attributes::get_time_to_live(const query_options& options) {
     if (!_time_to_live.has_value())
         return 0;
 
-    expr::constant tval = expr::evaluate(*_time_to_live, options);
+    cql3::raw_value tval = expr::evaluate(*_time_to_live, options);
     if (tval.is_null()) {
         throw exceptions::invalid_request_exception("Invalid null value of TTL");
     }
@@ -90,7 +90,7 @@ int32_t attributes::get_time_to_live(const query_options& options) {
 
 
 db::timeout_clock::duration attributes::get_timeout(const query_options& options) const {
-    expr::constant timeout = expr::evaluate(*_timeout, options);
+    cql3::raw_value timeout = expr::evaluate(*_timeout, options);
     if (timeout.is_null() || timeout.is_unset_value()) {
         throw exceptions::invalid_request_exception("Timeout value cannot be unset/null");
     }
