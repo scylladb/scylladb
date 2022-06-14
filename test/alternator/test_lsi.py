@@ -240,8 +240,10 @@ def test_lsi_describe(test_table_lsi_4):
     assert 'LocalSecondaryIndexes' in desc['Table']
     lsis = desc['Table']['LocalSecondaryIndexes']
     assert(sorted([lsi['IndexName'] for lsi in lsis]) == ['hello_x1', 'hello_x2', 'hello_x3', 'hello_x4'])
+    for lsi in lsis:
+        assert lsi['IndexArn'] == desc['Table']['TableArn'] + '/index/' + lsi['IndexName']
     # TODO: check projection and key params
-    # TODO: check also ProvisionedThroughput, IndexArn
+    # TODO: check also ProvisionedThroughput
 
 # A table with selective projection - only keys are projected into the index
 @pytest.fixture(scope="module")
@@ -475,3 +477,40 @@ def test_lsi_filter_expression_and_projection_expression(test_table_lsi_1):
         ProjectionExpression='b',
         ExpressionAttributeValues={':p': p, ':y': 'cat'})
     assert(got_items == [{'b': 'dog'}])
+
+# We tested above that a table can have both an LSI and a GSI.
+# Although Alternator makes a distinction in how it stores the two types of
+# indexes, they cannot have the same name - because if they are created with
+# the same name, only one will be usable (the index is chosen via the
+# IndexName request attribute, which doesn't say if it's an LSI or GSI).
+# DynamoDB reports: "One or more parameter values were invalid:
+# Duplicate index name: samename"
+# Reproduces issue #10789.
+def test_lsi_and_gsi_same_name(dynamodb):
+    with pytest.raises(ClientError, match='ValidationException.*Duplicate'):
+        table = create_test_table(dynamodb,
+            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
+            AttributeDefinitions=[
+                    { 'AttributeName': 'p', 'AttributeType': 'S' },
+                    { 'AttributeName': 'c', 'AttributeType': 'S' },
+                    { 'AttributeName': 'x1', 'AttributeType': 'S' },
+            ],
+            GlobalSecondaryIndexes=[
+                {   'IndexName': 'samename',
+                    'KeySchema': [
+                        { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                        { 'AttributeName': 'x1', 'KeyType': 'RANGE' }
+                    ],
+                    'Projection': { 'ProjectionType': 'KEYS_ONLY' }
+                }
+            ],
+            LocalSecondaryIndexes=[
+                {   'IndexName': 'samename',
+                    'KeySchema': [
+                        { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                        { 'AttributeName': 'x1', 'KeyType': 'RANGE' }
+                    ],
+                    'Projection': { 'ProjectionType': 'KEYS_ONLY' }
+                }
+            ])
+        table.delete()

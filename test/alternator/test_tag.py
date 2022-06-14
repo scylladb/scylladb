@@ -12,7 +12,7 @@ import pytest
 from botocore.exceptions import ClientError
 import re
 import time
-from util import multiset, create_test_table, unique_table_name
+from util import multiset, create_test_table, unique_table_name, random_string
 
 def delete_tags(table, arn):
     got = table.meta.client.list_tags_of_resource(ResourceArn=arn)
@@ -231,3 +231,65 @@ def test_tag_resource_missing_tags(test_table):
     arn = client.describe_table(TableName=test_table.name)['Table']['TableArn']
     with pytest.raises(ClientError, match='ValidationException'):
         client.tag_resource(ResourceArn=arn)
+
+# A simple table with both gsi and lsi (which happen to be the same), which
+# we'll use for testing tagging of GSIs and LSIs
+# Use a function-scoped fixture to get a fresh untagged table in each test.
+@pytest.fixture(scope="function")
+def table_lsi_gsi(dynamodb):
+    table = create_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
+        AttributeDefinitions=[
+                    { 'AttributeName': 'p', 'AttributeType': 'S' },
+                    { 'AttributeName': 'c', 'AttributeType': 'S' },
+                    { 'AttributeName': 'x1', 'AttributeType': 'S' },
+        ],
+        GlobalSecondaryIndexes=[
+            {   'IndexName': 'gsi',
+                'KeySchema': [
+                    { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'x1', 'KeyType': 'RANGE' }
+                ],
+                'Projection': { 'ProjectionType': 'KEYS_ONLY' }
+            }
+        ],
+        LocalSecondaryIndexes=[
+            {   'IndexName': 'lsi',
+                'KeySchema': [
+                    { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'x1', 'KeyType': 'RANGE' }
+                ],
+                'Projection': { 'ProjectionType': 'KEYS_ONLY' }
+            }
+        ])
+    yield table
+    table.delete()
+
+# Although GSIs and LSIs have their own ARN (listed by DescribeTable), it
+# turns out that they cannot be used to retrieve or set tags on the GSI or
+# LSI. If this is attempted, DynamoDB complains that the given ARN is not
+# a *table* ARN:
+# "An error occurred (ValidationException) when calling the ListTagsOfResource
+# operation: Invalid TableArn: Invalid ResourceArn provided as input
+# arn:aws:dynamodb:us-east-1:797456418907:table/alternator_Test_1655117822792/index/gsi"
+#
+# See issue #10786 discussing maybe we want in Alternator not to follow
+# DynamoDB here, and to *allow* tagging GSIs and LSIs separately. But until
+# then, this test verifies that we don't allow it - just like DynamoDB.
+def test_tag_lsi_gsi(table_lsi_gsi):
+    table_desc = table_lsi_gsi.meta.client.describe_table(TableName=table_lsi_gsi.name)['Table']
+    table_arn =  table_desc['TableArn']
+    gsi_arn =  table_desc['GlobalSecondaryIndexes'][0]['IndexArn']
+    lsi_arn =  table_desc['LocalSecondaryIndexes'][0]['IndexArn']
+    assert [] == table_lsi_gsi.meta.client.list_tags_of_resource(ResourceArn=table_arn)['Tags']
+    with pytest.raises(ClientError, match='ValidationException.*ResourceArn'):
+        assert [] == table_lsi_gsi.meta.client.list_tags_of_resource(ResourceArn=gsi_arn)['Tags']
+    with pytest.raises(ClientError, match='ValidationException.*ResourceArn'):
+        assert [] == table_lsi_gsi.meta.client.list_tags_of_resource(ResourceArn=lsi_arn)['Tags']
+    tags = [ { 'Key': 'hi', 'Value': 'hello' } ]
+    table_lsi_gsi.meta.client.tag_resource(ResourceArn=table_arn, Tags=tags)
+    with pytest.raises(ClientError, match='ValidationException.*ResourceArn'):
+        table_lsi_gsi.meta.client.tag_resource(ResourceArn=gsi_arn, Tags=tags)
+    with pytest.raises(ClientError, match='ValidationException.*ResourceArn'):
+        table_lsi_gsi.meta.client.tag_resource(ResourceArn=lsi_arn, Tags=tags)

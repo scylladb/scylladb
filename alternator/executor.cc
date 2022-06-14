@@ -46,6 +46,7 @@
 #include <seastar/core/coroutine.hh>
 #include <boost/range/adaptors.hpp>
 #include <boost/range/algorithm/find_end.hpp>
+#include <unordered_set>
 #include "service/storage_proxy.hh"
 #include "gms/gossiper.hh"
 #include "schema_registry.hh"
@@ -150,16 +151,16 @@ static void validate_table_name(const std::string& name) {
 // instead of each component individually as DynamoDB does.
 // The view_name() function assumes the table_name has already been validated
 // but validates the legality of index_name and the combination of both.
-static std::string view_name(const std::string& table_name, const std::string& index_name, const std::string& delim = ":") {
+static std::string view_name(const std::string& table_name, std::string_view index_name, const std::string& delim = ":") {
     static const std::regex valid_index_name_chars ("[a-zA-Z0-9_.-]*");
     if (index_name.length() < 3) {
         throw api_error::validation("IndexName must be at least 3 characters long");
     }
-    if (!std::regex_match(index_name.c_str(), valid_index_name_chars)) {
+    if (!std::regex_match(index_name.data(), valid_index_name_chars)) {
         throw api_error::validation(
                 format("IndexName '{}' must satisfy regular expression pattern: [a-zA-Z0-9_.-]+", index_name));
     }
-    std::string ret = table_name + delim + index_name;
+    std::string ret = table_name + delim + std::string(index_name);
     if (ret.length() > max_table_name_length) {
         throw api_error::validation(
                 format("The total length of TableName ('{}') and IndexName ('{}') cannot exceed {} characters",
@@ -168,7 +169,7 @@ static std::string view_name(const std::string& table_name, const std::string& i
     return ret;
 }
 
-static std::string lsi_name(const std::string& table_name, const std::string& index_name) {
+static std::string lsi_name(const std::string& table_name, std::string_view index_name) {
     return view_name(table_name, index_name, "!:");
 }
 
@@ -275,16 +276,16 @@ get_table_or_view(service::storage_proxy& proxy, const rjson::value& request) {
     if (index_name) {
         if (index_name->IsString()) {
             orig_table_name = std::move(table_name);
-            table_name = view_name(orig_table_name, index_name->GetString());
+            table_name = view_name(orig_table_name, rjson::to_string_view(*index_name));
             type = table_or_view_type::gsi;
         } else {
             throw api_error::validation(
-                    format("Non-string IndexName '{}'", index_name->GetString()));
+                    format("Non-string IndexName '{}'", rjson::to_string_view(*index_name)));
         }
         // If no tables for global indexes were found, the index may be local
         if (!proxy.data_dictionary().has_schema(keyspace_name, table_name)) {
             type = table_or_view_type::lsi;
-            table_name = lsi_name(orig_table_name, index_name->GetString());
+            table_name = lsi_name(orig_table_name, rjson::to_string_view(*index_name));
         }
     }
 
@@ -393,6 +394,12 @@ static rjson::value generate_arn_for_table(const schema& schema) {
     return rjson::from_string(format("arn:scylla:alternator:{}:scylla:table/{}", schema.ks_name(), schema.cf_name()));
 }
 
+static rjson::value generate_arn_for_index(const schema& schema, std::string_view index_name) {
+    return rjson::from_string(format(
+        "arn:scylla:alternator:{}:scylla:table/{}/index/{}",
+        schema.ks_name(), schema.cf_name(), index_name));
+}
+
 bool executor::is_alternator_keyspace(const sstring& ks_name) {
     return ks_name.find(KEYSPACE_NAME_PREFIX) == 0;
 }
@@ -449,6 +456,7 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
             }
             sstring index_name = cf_name.substr(delim_it + 1);
             rjson::add(view_entry, "IndexName", rjson::from_string(index_name));
+            rjson::add(view_entry, "IndexArn", generate_arn_for_index(*schema, index_name));
             // Add indexes's KeySchema and collect types for AttributeDefinitions:
             describe_key_schema(view_entry, *vptr, key_attribute_types);
             // Local secondary indexes are marked by an extra '!' sign occurring before the ':' delimiter
@@ -613,8 +621,14 @@ static schema_ptr get_table_from_arn(service::storage_proxy& proxy, std::string_
     try {
         size_t keyspace_end = arn.find_first_of(':', prefix_size);
         std::string_view keyspace_name = arn.substr(prefix_size, keyspace_end - prefix_size);
-        size_t table_start = arn.find_last_of('/');
+        size_t table_start = arn.find_first_of('/');
         std::string_view table_name = arn.substr(table_start + 1);
+        if (table_name.find('/') != std::string_view::npos) {
+            // A table name cannot contain a '/' - if it does, it's not a
+            // table ARN, it may be an index. DynamoDB returns a
+            // ValidationException in that case - see #10786.
+            throw api_error::validation(format("ResourceArn '{}' is not a valid table ARN", table_name));
+        }
         // FIXME: remove sstring creation once find_schema gains a view-based interface
         return proxy.data_dictionary().find_schema(sstring(keyspace_name), sstring(table_name));
     } catch (const data_dictionary::no_such_column_family& e) {
@@ -890,17 +904,23 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
     const rjson::value* gsi = rjson::find(request, "GlobalSecondaryIndexes");
     std::vector<schema_builder> view_builders;
     std::vector<sstring> where_clauses;
+    std::unordered_set<std::string> index_names;
     if (gsi) {
         if (!gsi->IsArray()) {
             co_return api_error::validation("GlobalSecondaryIndexes must be an array.");
         }
         for (const rjson::value& g : gsi->GetArray()) {
-            const rjson::value* index_name = rjson::find(g, "IndexName");
-            if (!index_name || !index_name->IsString()) {
+            const rjson::value* index_name_v = rjson::find(g, "IndexName");
+            if (!index_name_v || !index_name_v->IsString()) {
                 co_return api_error::validation("GlobalSecondaryIndexes IndexName must be a string.");
             }
-            std::string vname(view_name(table_name, index_name->GetString()));
-            elogger.trace("Adding GSI {}", index_name->GetString());
+            std::string_view index_name = rjson::to_string_view(*index_name_v);
+            auto [it, added] = index_names.emplace(index_name);
+            if (!added) {
+                co_return api_error::validation(format("Duplicate IndexName '{}', ", index_name));
+            }
+            std::string vname(view_name(table_name, index_name));
+            elogger.trace("Adding GSI {}", index_name);
             // FIXME: read and handle "Projection" parameter. This will
             // require the MV code to copy just parts of the attrs map.
             schema_builder view_builder(keyspace_name, vname);
@@ -948,12 +968,17 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
             throw api_error::validation("LocalSecondaryIndexes must be an array.");
         }
         for (const rjson::value& l : lsi->GetArray()) {
-            const rjson::value* index_name = rjson::find(l, "IndexName");
-            if (!index_name || !index_name->IsString()) {
+            const rjson::value* index_name_v = rjson::find(l, "IndexName");
+            if (!index_name_v || !index_name_v->IsString()) {
                 throw api_error::validation("LocalSecondaryIndexes IndexName must be a string.");
             }
-            std::string vname(lsi_name(table_name, index_name->GetString()));
-            elogger.trace("Adding LSI {}", index_name->GetString());
+            std::string_view index_name = rjson::to_string_view(*index_name_v);
+            auto [it, added] = index_names.emplace(index_name);
+            if (!added) {
+                co_return api_error::validation(format("Duplicate IndexName '{}', ", index_name));
+            }
+            std::string vname(lsi_name(table_name, index_name));
+            elogger.trace("Adding LSI {}", index_name);
             if (range_key.empty()) {
                 co_return api_error::validation("LocalSecondaryIndex requires that the base table have a range key");
             }
