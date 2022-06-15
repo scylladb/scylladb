@@ -214,7 +214,7 @@ a required number of arguments. The supported actions are:
 
 For more information about individual actions, see their specific help:
 
-$ scylla types {action} --help
+$ scylla types {{action}} --help
 )";
 
     if (found_ah) {
