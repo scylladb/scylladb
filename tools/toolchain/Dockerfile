@@ -12,6 +12,7 @@ RUN dnf -y update \
     && echo 'ALL ALL=(ALL:ALL) NOPASSWD: ALL' >> /etc/sudoers \
     && cp system-auth /etc/pam.d \
     && echo 'Defaults !requiretty' >> /etc/sudoers
+RUN dnf -y install llvm
 RUN mkdir -p /root/.m2/repository
 ENV JAVA8_HOME=/usr/lib/jvm/java-1.8.0-openjdk
 CMD /bin/bash
