@@ -5321,3 +5321,24 @@ SEASTAR_TEST_CASE(test_null_and_unset_in_collections) {
                                 exceptions::invalid_request_exception, check_unset_msg());
     });
 }
+
+SEASTAR_TEST_CASE(test_bind_variable_type_checking) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("CREATE TABLE tab1 (p int primary key, a int, b text, c int)").get();
+
+        // The predicate that checks the message has to be a lambda to preserve source_location
+        auto check_type_conflict = [](std::experimental::source_location loc = std::experimental::source_location::current()) {
+            return exception_predicate::message_contains("variable :var has type", loc);
+        };
+
+        // Test :var needing to have two conflicting types
+        BOOST_REQUIRE_EXCEPTION(e.prepare("INSERT INTO tab1 (p, a, b) VALUES (0, :var, :var)").get(),
+                                exceptions::invalid_request_exception, check_type_conflict());
+        BOOST_REQUIRE_EXCEPTION(e.prepare("SELECT * FROM tab1 WHERE a = :var AND b = :var ALLOW FILTERING").get(),
+                                exceptions::invalid_request_exception, check_type_conflict());
+
+        // Test :var with a compatible type
+        e.prepare("INSERT INTO tab1 (p, a, c) VALUES (0, :var, :var)").get();
+        e.prepare("SELECT * FROM tab1 WHERE a = :var AND c = :var ALLOW FILTERING").get();
+    });
+}

@@ -47,8 +47,16 @@ std::vector<uint16_t> prepare_context::get_partition_key_bind_indexes(const sche
 }
 
 void prepare_context::add_variable_specification(int32_t bind_index, lw_shared_ptr<column_specification> spec) {
-    _target_columns[bind_index] = spec;
     auto name = _variable_names[bind_index];
+    if (_specs[bind_index]) {
+        // If the same variable is used in multiple places, check that the types are compatible
+        if (&spec->type->without_reversed() != &_specs[bind_index]->type->without_reversed()) {
+            throw exceptions::invalid_request_exception(
+                    fmt::format("variable :{} has type {} which doesn't match {}",
+                            *name, _specs[bind_index]->type->as_cql3_type(), spec->name));
+        }
+    }
+    _target_columns[bind_index] = spec;
     // Use the user name, if there is one
     if (name) {
         spec = make_lw_shared<column_specification>(spec->ks_name, spec->cf_name, name, spec->type);
