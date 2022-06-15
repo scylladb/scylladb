@@ -866,6 +866,19 @@ public:
     bool empty() const { return !_deleted_at && _marker.is_missing() && !_cells.size(); }
     deletable_row difference(const schema&, column_kind, const deletable_row& other) const;
 
+    // Expires cells and tombstones. Removes items covered by higher level
+    // tombstones.
+    // Returns true iff the row is still alive.
+    // When empty() after the call, the row can be removed without losing writes
+    // given that tomb will be still in effect for the row after it is removed,
+    // as a range tombstone, partition tombstone, etc.
+    bool compact_and_expire(const schema&,
+                            tombstone tomb,
+                            gc_clock::time_point query_time,
+                            can_gc_fn& can_gc,
+                            gc_clock::time_point gc_before,
+                            compaction_garbage_collector* collector = nullptr);
+
     class printer {
         const schema& _schema;
         const deletable_row& _deletable_row;
@@ -1020,13 +1033,73 @@ public:
 struct mutation_application_stats {
     uint64_t row_hits = 0;
     uint64_t row_writes = 0;
+    uint64_t rows_compacted_with_tombstones = 0;
+    uint64_t rows_dropped_by_tombstones = 0;
     bool has_any_tombstones = false;
 
     mutation_application_stats& operator+=(const mutation_application_stats& other) {
         row_hits += other.row_hits;
         row_writes += other.row_writes;
+        rows_compacted_with_tombstones += other.rows_compacted_with_tombstones;
+        rows_dropped_by_tombstones += other.rows_dropped_by_tombstones;
         has_any_tombstones |= other.has_any_tombstones;
         return *this;
+    }
+};
+
+struct apply_resume {
+    enum class stage {
+        start,
+        range_tombstone_compaction,
+        merging_range_tombstones,
+        partition_tombstone_compaction,
+        merging_rows,
+        done
+    };
+
+    position_in_partition _pos;
+    stage _stage;
+
+    apply_resume()
+        : _pos(position_in_partition::for_partition_start())
+        , _stage(stage::start)
+    { }
+
+    apply_resume(stage s, position_in_partition_view pos)
+        : _pos(with_allocator(standard_allocator(), [&] {
+                return position_in_partition(pos);
+            }))
+        , _stage(s)
+    { }
+
+    ~apply_resume() {
+        with_allocator(standard_allocator(), [&] {
+           auto pos = std::move(_pos);
+        });
+    }
+
+    apply_resume(apply_resume&&) noexcept = default;
+
+    apply_resume& operator=(apply_resume&& o) noexcept {
+        if (this != &o) {
+            this->~apply_resume();
+            new (this) apply_resume(std::move(o));
+        }
+        return *this;
+    }
+
+    operator bool() const { return _stage != stage::done; }
+
+    static apply_resume merging_rows() {
+        return {stage::merging_rows, position_in_partition::for_partition_start()};
+    }
+
+    static apply_resume merging_range_tombstones() {
+        return {stage::merging_range_tombstones, position_in_partition::for_partition_start()};
+    }
+
+    static apply_resume done() {
+        return {stage::done, position_in_partition::for_partition_start()};
     }
 };
 
@@ -1201,13 +1274,21 @@ public:
     //
     // The operation can be driven to completion like this:
     //
-    //   while (apply_monotonically(..., is_preemtable::yes) == stop_iteration::no) { }
+    //   apply_resume res;
+    //   while (apply_monotonically(..., is_preemtable::yes, &res) == stop_iteration::no) { }
     //
     // If is_preemptible::no is passed as argument then stop_iteration::no is never returned.
+    //
+    // If is_preemptible::yes is passed, apply_resume must also be passed,
+    // same instance each time until stop_iteration::yes is returned.
     stop_iteration apply_monotonically(const schema& s, mutation_partition&& p, cache_tracker*,
-            mutation_application_stats& app_stats, is_preemptible = is_preemptible::no);
+            mutation_application_stats& app_stats, is_preemptible, apply_resume&);
     stop_iteration apply_monotonically(const schema& s, mutation_partition&& p, const schema& p_schema,
-            mutation_application_stats& app_stats, is_preemptible = is_preemptible::no);
+            mutation_application_stats& app_stats, is_preemptible, apply_resume&);
+    stop_iteration apply_monotonically(const schema& s, mutation_partition&& p, cache_tracker* tracker,
+            mutation_application_stats& app_stats);
+    stop_iteration apply_monotonically(const schema& s, mutation_partition&& p, const schema& p_schema,
+            mutation_application_stats& app_stats);
 
     // Weak exception guarantees.
     // Assumes this and p are not owned by a cache_tracker.

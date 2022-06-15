@@ -176,20 +176,30 @@ stop_iteration partition_snapshot::merge_partition_versions(mutation_application
         // This is good for performance because in case we were at the latest version
         // we leave it for incoming writes and they don't have to create a new one.
         partition_version* current = &*v;
+        version_number_type version_no = 0;
         while (current->next() && !current->next()->is_referenced()) {
             current = current->next();
+            ++version_no;
             _version = partition_version_ref(*current);
         }
         while (auto prev = current->prev()) {
             region().allocator().invalidate_references();
             // Here we count writes that overwrote rows from a previous version. Total number of writes does not change.
             mutation_application_stats local_app_stats;
+            // Versions within a snapshot are only removed by this routine so if version
+            // number did not change then we're looking at the same version object.
+            // If the version number changed, it means we now work with a different "current"
+            // due to different conditions of is_referenced() within the version chain.
+            if (!_version_merging_state || version_no != _version_merging_state->first) {
+                _version_merging_state = std::make_pair(version_no, apply_resume());
+            }
             const auto do_stop_iteration = current->partition().apply_monotonically(*schema(),
-                    std::move(prev->partition()), _tracker, local_app_stats, is_preemptible::yes);
+                std::move(prev->partition()), _tracker, local_app_stats, is_preemptible::yes, _version_merging_state->second);
             app_stats.row_hits += local_app_stats.row_hits;
             if (do_stop_iteration == stop_iteration::no) {
                 return stop_iteration::no;
             }
+            _version_merging_state.reset();
             if (prev->is_referenced()) {
                 _version.release();
                 prev->back_reference() = partition_version_ref(*current, prev->back_reference().is_unique_owner());
@@ -197,6 +207,7 @@ stop_iteration partition_snapshot::merge_partition_versions(mutation_application
                 return stop_iteration::yes;
             }
             current_allocator().destroy(prev);
+            --version_no;
         }
     }
     return stop_iteration::yes;
@@ -326,12 +337,12 @@ partition_version& partition_entry::add_version(const schema& s, cache_tracker* 
     return *new_version;
 }
 
-void partition_entry::apply(const schema& s, const mutation_partition& mp, const schema& mp_schema,
+void partition_entry::apply(logalloc::region& r, mutation_cleaner& cleaner, const schema& s, const mutation_partition& mp, const schema& mp_schema,
         mutation_application_stats& app_stats) {
-    apply(s, mutation_partition(mp_schema, mp), mp_schema, app_stats);
+    apply(r, cleaner, s, mutation_partition(mp_schema, mp), mp_schema, app_stats);
 }
 
-void partition_entry::apply(const schema& s, mutation_partition&& mp, const schema& mp_schema,
+void partition_entry::apply(logalloc::region& r, mutation_cleaner& cleaner, const schema& s, mutation_partition&& mp, const schema& mp_schema,
         mutation_application_stats& app_stats) {
     // A note about app_stats: it may happen that mp has rows that overwrite other rows
     // in older partition_version. Those overwrites will be counted when their versions get merged.
@@ -339,11 +350,23 @@ void partition_entry::apply(const schema& s, mutation_partition&& mp, const sche
         mp.upgrade(mp_schema, s);
     }
     auto new_version = current_allocator().construct<partition_version>(std::move(mp));
+    partition_snapshot_ptr snp; // Should die after new_version is inserted
     if (!_snapshot) {
         try {
-            _version->partition().apply_monotonically(s, std::move(new_version->partition()), no_cache_tracker, app_stats);
-            current_allocator().destroy(new_version);
-            return;
+            apply_resume res;
+            if (_version->partition().apply_monotonically(s,
+                      std::move(new_version->partition()),
+                      no_cache_tracker,
+                      app_stats,
+                      is_preemptible::yes,
+                      res) == stop_iteration::yes) {
+                current_allocator().destroy(new_version);
+                return;
+            } else {
+                // Apply was preempted. Let the cleaner finish the job when snapshot dies
+                snp = read(r, cleaner, s.shared_from_this(), no_cache_tracker);
+                // FIXME: Store res in the snapshot as an optimization to resume from where we left off.
+            }
         } catch (...) {
             // fall through
         }
