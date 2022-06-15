@@ -495,6 +495,7 @@ private:
 
     class table_state;
     std::unique_ptr<table_state> _table_state;
+    condition_variable _sstables_changed;
 public:
     data_dictionary::table as_data_dictionary() const;
 
@@ -559,6 +560,7 @@ private:
     void backlog_tracker_adjust_charges(const std::vector<sstables::shared_sstable>& old_sstables, const std::vector<sstables::shared_sstable>& new_sstables);
     lw_shared_ptr<memtable> new_memtable();
     future<stop_iteration> try_flush_memtable_to_sstable(lw_shared_ptr<memtable> memt, sstable_write_permit&& permit);
+    future<> maybe_wait_for_sstable_count_reduction();
     // Caller must keep m alive.
     future<> update_cache(lw_shared_ptr<memtable> m, std::vector<sstables::shared_sstable> ssts);
     struct merge_comparator;
