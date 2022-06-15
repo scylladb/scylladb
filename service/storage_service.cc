@@ -2753,8 +2753,6 @@ future<> storage_service::unbootstrap() {
 
         auto stream_success = stream_ranges(ranges_to_stream);
 
-        slogger.info("streaming hints to other nodes");
-
         // wait for the transfer runnables to signal the latch.
         slogger.debug("waiting for stream acks.");
         try {
