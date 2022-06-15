@@ -38,8 +38,8 @@ def scylla_excepthook(etype, value, tb):
 sys.excepthook = scylla_excepthook
 
 
-def out(cmd, shell=True, timeout=None, encoding='utf-8', ignore_error=False):
-    res = subprocess.run(cmd, capture_output=True, shell=shell, timeout=timeout, check=False, encoding=encoding)
+def out(cmd, shell=True, timeout=None, encoding='utf-8', ignore_error=False, user=None, group=None):
+    res = subprocess.run(cmd, capture_output=True, shell=shell, timeout=timeout, check=False, encoding=encoding, user=user, group=group)
     if not ignore_error and res.returncode != 0:
         print(f'Command \'{cmd}\' returned non-zero exit status: {res.returncode}')
         print('----------  stdout  ----------')
