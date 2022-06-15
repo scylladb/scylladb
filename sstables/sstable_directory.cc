@@ -171,9 +171,21 @@ sstable_directory::process_sstable_dir(const ::io_priority_class& iop, bool sort
     scan_state state;
 
     directory_lister sstable_dir_lister(_sstable_dir, { directory_entry_type::regular }, &manifest_json_filter);
-    while (auto de = co_await sstable_dir_lister.get()) {
-        auto comps = sstables::entry_descriptor::make_descriptor(_sstable_dir.native(), de->name);
-        handle_component(state, std::move(comps), _sstable_dir / de->name);
+    std::exception_ptr ex;
+    try {
+        while (auto de = co_await sstable_dir_lister.get()) {
+            auto comps = sstables::entry_descriptor::make_descriptor(_sstable_dir.native(), de->name);
+            handle_component(state, std::move(comps), _sstable_dir / de->name);
+        }
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await sstable_dir_lister.close();
+    if (ex) {
+        dirlog.debug("Could not process sstable directory {}: {}", _sstable_dir, ex);
+        // FIXME: waiting for https://github.com/scylladb/seastar/pull/1090
+        // co_await coroutine::return_exception(std::move(ex));
+        std::rethrow_exception(std::move(ex));
     }
 
     // Always okay to delete files with a temporary TOC. We want to do it before we process
