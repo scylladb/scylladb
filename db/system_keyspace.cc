@@ -65,6 +65,7 @@
 #include "idl/frozen_mutation.dist.impl.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include "client_data.hh"
+#include "db/system_events.hh"
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
@@ -950,6 +951,34 @@ schema_ptr system_keyspace::discovery() {
             .set_wait_for_sync_to_commitlog(true)
             .with_null_sharder()
             .build();
+    }();
+    return schema;
+}
+
+schema_ptr system_keyspace::events() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, EVENTS);
+        auto b = schema_builder(NAME, EVENTS, std::make_optional(id))
+            .with_version(generate_schema_version(id))
+            .with_column("category", utf8_type, column_kind::partition_key)
+            .with_column("started_at", timeuuid_type, column_kind::clustering_key)
+            .with_column("type", utf8_type)
+            // FIXME: should be a map, format as string for now
+            .with_column("params", utf8_type)
+            .with_column("completed_at", timeuuid_type)
+            .with_column("completion_status", utf8_type)
+            .set_wait_for_sync_to_commitlog(false)
+            .with_null_sharder()
+            .set_comment("System events");
+
+        b.set_compaction_strategy(sstables::compaction_strategy_type::time_window);
+        b.set_compaction_strategy_options({
+            {"compaction_window_unit", "HOURS"},
+            {"compaction_window_size", format("{}", db::ONE_MONTH_TTL.count() / 3600)},
+            {"expired_sstable_check_frequency_seconds", format("{}", db::ONE_DAY_TTL.count())},
+        });
+
+        return b.build();
     }();
     return schema;
 }
@@ -2636,6 +2665,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
                     sstable_activity(), size_estimates(), large_partitions(), large_rows(), large_cells(),
                     scylla_local(), db::schema_tables::scylla_table_schema_history(),
                     repair_history(),
+                    events(),
                     v3::views_builds_in_progress(), v3::built_views(),
                     v3::scylla_views_builds_in_progress(),
                     v3::truncated(),

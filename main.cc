@@ -72,6 +72,7 @@
 #include "service/memory_limiter.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "db/schema_tables.hh"
+#include "db/system_events.hh"
 
 #include "redis/controller.hh"
 #include "cdc/log.hh"
@@ -563,6 +564,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service, &gossiper,
                 &token_metadata, &erm_factory, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
                 &repair, &sst_loader, &ss, &lifecycle_notifier, &stream_manager] {
+          db::system_event start_event;
+          std::exception_ptr start_error;
           try {
             // disable reactor stall detection during startup
             auto blocked_reactor_notify_ms = engine().get_blocked_reactor_notify_ms();
@@ -1095,6 +1098,18 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 }
             }
 
+            // TODO: lookup previous start event in system.events
+            // to determine ttl.  upgrades should be kept forever
+            // while repeated starts with the same version should be
+            // kept for a shorter time.
+            db::event_params start_event_params = {
+                {"version", scylla_version()},
+                {"build_id", get_build_id()},
+                {"smp", format("{}", smp::count)},
+                {"memory", format("{}", memory::stats().total_memory())},
+            };
+            start_event = db::start_system_event("system", "start", std::move(start_event_params)).get();
+
             db.invoke_on_all([] (replica::database& db) {
                 for (auto& x : db.get_column_families()) {
                     replica::table& t = *(x.second);
@@ -1513,12 +1528,21 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 }
             });
 
+            db::end_system_event(start_event).get();
+
             startlog.info("Scylla version {} initialization completed.", scylla_version());
             stop_signal.wait().get();
+
+            db::record_system_event("system", "stop", {}, "", 3 * db::ONE_MONTH_TTL).get();
+
             startlog.info("Signal received; shutting down");
 	    // At this point, all objects destructors and all shutdown hooks registered with defer() are executed
           } catch (...) {
-            startlog.error("Startup failed: {}", std::current_exception());
+            start_error = std::current_exception();
+          }
+          if (start_error) {
+            startlog.error("Startup failed: {}", start_error);
+            db::end_system_event(start_event, start_error).get();
             // We should be returning 1 here, but the system is not yet prepared for orderly rollback of main() objects
             // and thread_local variables.
             _exit(1);

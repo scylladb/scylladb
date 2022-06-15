@@ -126,6 +126,7 @@ public:
     static constexpr auto REPAIR_HISTORY = "repair_history";
     static constexpr auto GROUP0_HISTORY = "group0_history";
     static constexpr auto DISCOVERY = "discovery";
+    static constexpr auto EVENTS = "events";
 
     struct v3 {
         static constexpr auto BATCHES = "batches";
@@ -209,6 +210,7 @@ public:
     static schema_ptr repair_history();
     static schema_ptr group0_history();
     static schema_ptr discovery();
+    static schema_ptr events();
 
     static table_schema_version generate_schema_version(utils::UUID table_id, uint16_t offset = 0);
 
