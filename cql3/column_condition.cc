@@ -331,7 +331,7 @@ column_condition::raw::prepare(data_dictionary::database db, const sstring& keys
     if (_in_marker) {
         assert(_in_values.empty());
         auto in_name = ::make_shared<column_identifier>(format("in({})", value_spec->name->text()), true);
-        lw_shared_ptr<column_specification> in_list_receiver = make_lw_shared<column_specification>(value_spec->ks_name, value_spec->cf_name, in_name, list_type_impl::get_instance(receiver.type, false));
+        lw_shared_ptr<column_specification> in_list_receiver = make_lw_shared<column_specification>(value_spec->ks_name, value_spec->cf_name, in_name, list_type_impl::get_instance(value_spec->type, false));
         expr::expression multi_item_term = prepare_expression(*_in_marker, db, keyspace, nullptr, in_list_receiver);
         return column_condition::in_condition(receiver, collection_element_expression, std::move(multi_item_term), {});
     }
