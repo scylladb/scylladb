@@ -32,6 +32,12 @@
 
 class row;
 
+namespace db {
+namespace functions {
+    class function;
+}
+}
+
 namespace secondary_index {
 class index;
 class secondary_index_manager;
@@ -50,12 +56,6 @@ class query_options;
 namespace selection {
     class selection;
 } // namespace selection
-
-namespace functions {
-
-class function;
-
-}
 
 namespace restrictions {
     class restriction;
@@ -275,7 +275,7 @@ struct column_mutation_attribute {
 };
 
 struct function_call {
-    std::variant<functions::function_name, shared_ptr<functions::function>> func;
+    std::variant<functions::function_name, shared_ptr<db::functions::function>> func;
     std::vector<expression> args;
 
     // 0-based index of the function call within a CQL statement.
