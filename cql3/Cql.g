@@ -134,6 +134,8 @@ struct uninitialized {
     listener_type* listener;
 
     std::vector<::shared_ptr<cql3::column_identifier>> _bind_variables;
+    // index into _bind_variables
+    std::unordered_map<cql3::column_identifier, size_t> _named_bind_variables_indexes;
     std::vector<std::unique_ptr<TokenType>> _missing_tokens;
 
     // Can't use static variable, since it needs to be defined out-of-line
@@ -153,8 +155,14 @@ struct uninitialized {
 
     bind_variable new_bind_variables(shared_ptr<cql3::column_identifier> name)
     {
+        if (name && _named_bind_variables_indexes.contains(*name)) {
+            return bind_variable{_named_bind_variables_indexes[*name]};
+        }
         auto marker = bind_variable{_bind_variables.size()};
         _bind_variables.push_back(name);
+        if (name) {
+            _named_bind_variables_indexes[*name] = marker.bind_index;
+        }
         return marker;
     }
 
