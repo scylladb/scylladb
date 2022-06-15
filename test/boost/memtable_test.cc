@@ -997,13 +997,9 @@ SEASTAR_TEST_CASE(failed_flush_prevents_writes) {
         BOOST_ASSERT(t.min_memtable_timestamp() < api::max_timestamp);
         utils::get_local_injector().disable("table_seal_active_memtable_reacquire_write_permit");
 
-        // Release pressure, so that we can trigger flush again
-        dmm.notify_soft_relief();
-
         BOOST_ASSERT(eventually_true([&] {
-            // Trigger pressure, the error above is no longer being injected, so flush
-            // should be triggerred and succeed
-            dmm.notify_soft_pressure();
+            // The error above is no longer being injected, so
+            // seal_active_memtable retry loop should eventually succeed
             return t.min_memtable_timestamp() == api::max_timestamp;
         }));
     });
