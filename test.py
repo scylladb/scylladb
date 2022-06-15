@@ -538,6 +538,10 @@ class BoostTest(UnitTest):
         self.get_junit_etree()
         super().check_log(trim)
 
+    async def run(self, options):
+        if options.random_seed:
+            self.args += ['--random-seed', options.random_seed]
+        return await super().run(options)
 
 class CQLApprovalTest(Test):
     """Run a sequence of CQL commands against a standlone Scylla"""
@@ -922,6 +926,11 @@ def parse_cmd_line():
     parser.add_argument('--cpus', action="store",
                         help="Run the tests on those CPUs only (in taskset"
                         " acceptable format). Consider using --jobs too")
+
+    boost_group = parser.add_argument_group('boost suite options')
+    boost_group.add_argument('--random-seed', action="store",
+                        help="Random number generator seed to be used by boost tests")
+
     args = parser.parse_args()
 
     if not args.jobs:
