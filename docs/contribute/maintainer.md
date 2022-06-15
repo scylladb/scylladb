@@ -1,8 +1,8 @@
 # Maintainer's handbook
 
-This document describes the mechanics of maintaining
-Scylla - how to do things, rather than what do do
-(e.g. accept or reject a patch).
+This document describes the mechanics of maintaining Scylla,
+as well as a general guideline on what to check when
+considering a pull request for merging.
 
 ## General git tips
 
@@ -253,3 +253,59 @@ Alternatively
  2. Use the refreshing script specifying the `seastar:<branch>` as its
     first argument (`refresh-submodules.sh seastar:branch-3.2`)
  3. Publish with `git push`.
+
+## Guidelines for merging pull-requests
+
+This guideline is designed to be a quick checklist, rather
+than an exhaustive rulebook on what to accept/reject. One
+still has to rely on their judgemenet.
+
+0. Don't commit your own code.
+
+1. Verify that the author has signed the CLA. This is
+   automatically true for ScyllaDB employees.
+
+2. Have a subject matter expert review the code. If you are
+   not familiar with the modified code, ask one to do a
+   review. For more details on how to review patches, see
+   the [review checklist](https://github.com/scylladb/scylla/blob/master/docs/contribute/review-checklist.md).
+
+3. If the pull request fixes an issue, it should have a
+   Fixes or Refs depending on whether the fix is complete or
+   partial (or just something related).
+
+4. Verify that CI job has been run for the latest iteration
+   of the PR and it passed. CI jobs are automatically
+   started for pull request submitted through the Github
+   GUI and their result is posted as a comment to the Github
+   pull request. This has to be done manually by the
+   contributor for patches posted to the mailing-list.
+
+## Guidelines for evaluating backports
+
+0. In general backports are only acceptable if they fix an
+   issue that users of the target version suffer from (or
+   will suffer from). We don't backport features or
+   improvements.
+
+1. Backports should *always* have a reference to the issue
+   they are related to.
+
+2. Backports should be surgical and simple. Only fixing the
+   target issue, with minimal impact on other code. It is
+   sometimes preferable to backport a dumbed down, less
+   perfect fix if the original is very complicated.
+   If the fixed bug is very bad, more risk is tolerated in
+   fixing it.
+
+3. Backport should be backported to all live releases. There
+   can be exceptions to this, we may not want to backport to
+   an old, soon-to-be-EOL'd release, but backports should
+   never introduce regressions: if a fix is backported to
+   release X, all releases >X have to get the backport too.
+
+4. Riskier fixes should get some "soak-time" in OSS releases
+   before backported on older stable releases.
+
+5. Make sure the target branch is not under freeze, waiting
+   for an iminent release.
