@@ -895,19 +895,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 fd.stop().get();
             });
 
-            raft_gr.start(cfg->check_experimental(db::experimental_features_t::RAFT),
-                std::ref(messaging), std::ref(gossiper), std::ref(feature_service), std::ref(fd)).get();
-            // XXX: stop_raft has to happen before query_processor
-            // is stopped, since some groups keep using the query
-            // processor until are stopped inside stop_raft.
-            auto stop_raft = defer_verbose_shutdown("Raft", [&raft_gr] {
-                raft_gr.stop().get();
-            });
-            if (cfg->check_experimental(db::experimental_features_t::RAFT)) {
-                supervisor::notify("starting Raft Group Registry service");
-            }
-            raft_gr.invoke_on_all(&service::raft_group_registry::start).get();
-
             supervisor::notify("initializing storage service");
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
@@ -916,7 +903,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 std::ref(db), std::ref(gossiper), std::ref(sys_ks),
                 std::ref(feature_service), sscfg, std::ref(mm), std::ref(token_metadata), std::ref(erm_factory),
                 std::ref(messaging), std::ref(repair),
-                std::ref(stream_manager), std::ref(raft_gr), std::ref(lifecycle_notifier), std::ref(bm)).get();
+                std::ref(stream_manager), std::ref(lifecycle_notifier), std::ref(bm)).get();
 
             auto stop_storage_service = defer_verbose_shutdown("storage_service", [&] {
                 ss.stop().get();
@@ -1009,17 +996,35 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 forward_service.stop().get();
             });
 
-            // gropu0 client exists only on shard 0
-            service::raft_group0_client group0_client(raft_gr.local());
-
             // #293 - do not stop anything
             // engine().at_exit([&proxy] { return proxy.stop(); });
+
+            raft_gr.start(cfg->check_experimental(db::experimental_features_t::RAFT),
+                std::ref(messaging), std::ref(gossiper), std::ref(feature_service), std::ref(fd)).get();
+
+            // gropu0 client exists only on shard 0
+            // The client has to be created before `stop_raft` since during
+            // desctructiun is has to exists untill raft_gr.stop() completes
+            service::raft_group0_client group0_client(raft_gr.local());
+
             supervisor::notify("starting migration manager");
             debug::the_migration_manager = &mm;
             mm.start(std::ref(mm_notifier), std::ref(feature_service), std::ref(messaging), std::ref(proxy), std::ref(gossiper), std::ref(group0_client), std::ref(sys_ks)).get();
             auto stop_migration_manager = defer_verbose_shutdown("migration manager", [&mm] {
                 mm.stop().get();
             });
+
+            // XXX: stop_raft has to happen before query_processor and migration_manager
+            // is stopped, since some groups keep using the query
+            // processor until are stopped inside stop_raft.
+            auto stop_raft = defer_verbose_shutdown("Raft", [&raft_gr] {
+                raft_gr.stop().get();
+            });
+            if (cfg->check_experimental(db::experimental_features_t::RAFT)) {
+                supervisor::notify("starting Raft Group Registry service");
+            }
+            raft_gr.invoke_on_all(&service::raft_group_registry::start).get();
+
             supervisor::notify("starting query processor");
             cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
             debug::the_query_processor = &qp;
@@ -1214,7 +1219,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             supervisor::notify("starting storage service", true);
-            ss.local().init_messaging_service_part().get();
+            ss.local().init_messaging_service_part(raft_gr).get();
             auto stop_ss_msg = defer_verbose_shutdown("storage service messaging", [&ss] {
                 ss.local().uninit_messaging_service_part().get();
             });
@@ -1275,7 +1280,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }).get();
 
             with_scheduling_group(maintenance_scheduling_group, [&] {
-                return ss.local().join_cluster(qp.local(), group0_client, cdc_generation_service.local(), sys_dist_ks, proxy);
+                return ss.local().join_cluster(qp.local(), group0_client, cdc_generation_service.local(), sys_dist_ks, proxy, raft_gr.local());
             }).get();
 
             sl_controller.invoke_on_all([&lifecycle_notifier] (qos::service_level_controller& controller) {

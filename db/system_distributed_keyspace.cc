@@ -315,8 +315,10 @@ future<> system_distributed_keyspace::start() {
             std::move(m2.begin(), m2.end(), std::back_inserter(m1));
             return m1;
         });
-        co_await _mm.announce(std::move(m), std::move(group0_guard),
-                "Create system_distributed(_everywhere) tables");
+        if (m.size()) {
+            co_await _mm.announce(std::move(m), std::move(group0_guard),
+                    "Create system_distributed(_everywhere) tables");
+        }
     } else {
         dlogger.info("All tables are present on start");
     }

@@ -922,9 +922,6 @@ future<> migration_manager::announce_without_raft(std::vector<mutation> schema) 
 // Returns a future on the local application of the schema
 future<> migration_manager::announce(std::vector<mutation> schema, group0_guard guard, std::string_view description) {
     if (is_raft_enabled()) {
-        auto schema_features = _feat.cluster_schema_features();
-        auto adjusted_schema = db::schema_tables::adjust_schema_for_schema_features(schema, schema_features);
-
         co_await announce_with_raft(std::move(schema), std::move(guard), std::move(description));
     } else {
         co_await announce_without_raft(std::move(schema));
