@@ -34,6 +34,18 @@ intent of each change and aids in resolution.
 Avoid using `git submodule sync` as it sets internal state
 that is easy to forget, and which can wreak havoc if you do
 forget it.
+Note that this is only dangerous if you are used to pushing
+without a remote, e.g.:
+
+    git push $BRANCH
+
+`git submodule sync` changes the origin remote on submodules
+and so you might push to a remote you didn't mean to.
+If you always specify the remote explicitly when pushing, e.g.:
+
+    git push $REMOTE $BRANCH
+
+then using `git submodule sync` is safe.
 
 ## Applying patches and patch series
 
