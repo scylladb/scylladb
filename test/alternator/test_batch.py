@@ -234,9 +234,27 @@ def test_batch_get_item(test_table):
     # We use the low-level batch_get_item API for lack of a more convenient
     # API. At least it spares us the need to encode the key's types...
     reply = test_table.meta.client.batch_get_item(RequestItems = {test_table.name: {'Keys': keys, 'ConsistentRead': True}})
-    print(reply)
     got_items = reply['Responses'][test_table.name]
     assert multiset(got_items) == multiset(items)
+
+# Like the previous test, schema has both hash and sort keys, this time
+# we ask to fetch several sort keys in the same partition key.
+def test_batch_get_item_same_partition_key(test_table):
+    p = random_string()
+    items = [{'p': p, 'c': random_string(), 'val': random_string()} for i in range(10)]
+    with test_table.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    keys = [{k: x[k] for k in ('p', 'c')} for x in items]
+    reply = test_table.meta.client.batch_get_item(RequestItems = {test_table.name: {'Keys': keys, 'ConsistentRead': True}})
+    got_items = reply['Responses'][test_table.name]
+    assert multiset(got_items) == multiset(items)
+    # Above we fetched all the keys, let's try now only half of them
+    keys_half = keys[::2]
+    items_half = items[::2]
+    reply = test_table.meta.client.batch_get_item(RequestItems = {test_table.name: {'Keys': keys_half, 'ConsistentRead': True}})
+    got_items = reply['Responses'][test_table.name]
+    assert multiset(got_items) == multiset(items_half)
 
 # Same, with schema has just hash key.
 def test_batch_get_item_hash(test_table_s):
