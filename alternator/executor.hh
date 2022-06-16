@@ -216,12 +216,18 @@ private:
     static void describe_key_schema(rjson::value& parent, const schema&, std::unordered_map<std::string,std::string> * = nullptr);
     static void describe_key_schema(rjson::value& parent, const schema& schema, std::unordered_map<std::string,std::string>&);
     
-public:    
+public:
     static std::optional<rjson::value> describe_single_item(schema_ptr,
         const query::partition_slice&,
         const cql3::selection::selection&,
         const query::result&,
         const std::optional<attrs_to_get>&);
+
+    static std::vector<rjson::value> describe_multi_item(schema_ptr schema,
+        const query::partition_slice& slice,
+        const cql3::selection::selection& selection,
+        const query::result& query_result,
+        const std::optional<attrs_to_get>& attrs_to_get);
 
     static void describe_single_item(const cql3::selection::selection&,
         const std::vector<bytes_opt>&,
