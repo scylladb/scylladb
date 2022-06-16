@@ -667,7 +667,7 @@
                   },
                   {
                      "name":"kn",
-                     "description":"Comma seperated keyspaces name that their snapshot will be deleted",
+                     "description":"Comma-separated keyspaces name that their snapshot will be deleted",
                      "required":false,
                      "allowMultiple":false,
                      "type":"string",
@@ -723,7 +723,7 @@
                   },
                   {
                      "name":"cf",
-                     "description":"Comma seperated column family names",
+                     "description":"Comma-separated column family names",
                      "required":false,
                      "allowMultiple":false,
                      "type":"string",
@@ -755,7 +755,7 @@
                   },
                   {
                      "name":"cf",
-                     "description":"Comma seperated column family names",
+                     "description":"Comma-separated column family names",
                      "required":false,
                      "allowMultiple":false,
                      "type":"string",
@@ -787,7 +787,7 @@
                   },
                   {
                      "name":"cf",
-                     "description":"Comma-seperated table names",
+                     "description":"Comma-separated table names",
                      "required":false,
                      "allowMultiple":false,
                      "type":"string",
@@ -862,7 +862,7 @@
                   },
                   {
                      "name":"cf",
-                     "description":"Comma seperated column family names",
+                     "description":"Comma-separated column family names",
                      "required":false,
                      "allowMultiple":false,
                      "type":"string",
@@ -902,7 +902,7 @@
                   },
                   {
                      "name":"cf",
-                     "description":"Comma seperated column family names",
+                     "description":"Comma-separated column family names",
                      "required":false,
                      "allowMultiple":false,
                      "type":"string",
@@ -934,7 +934,7 @@
                   },
                   {
                      "name":"cf",
-                     "description":"Comma seperated column family names",
+                     "description":"Comma-separated column family names",
                      "required":false,
                      "allowMultiple":false,
                      "type":"string",
@@ -2073,7 +2073,7 @@
                   },
                   {
                      "name":"cf",
-                     "description":"Comma seperated column family names",
+                     "description":"Comma-separated column family names",
                      "required":false,
                      "allowMultiple":false,
                      "type":"string",
@@ -2100,7 +2100,7 @@
                   },
                   {
                      "name":"cf",
-                     "description":"Comma seperated column family names",
+                     "description":"Comma-separated column family names",
                      "required":false,
                      "allowMultiple":false,
                      "type":"string",
