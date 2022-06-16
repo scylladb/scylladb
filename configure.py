@@ -1128,6 +1128,7 @@ idls = ['idl/gossip_digest.idl.hh',
         'idl/storage_proxy.idl.hh',
         'idl/group0_state_machine.idl.hh',
         'idl/forward_request.idl.hh',
+        'idl/position_in_partition.idl.hh',
         ]
 
 rusts = [

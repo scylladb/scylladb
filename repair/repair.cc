@@ -45,6 +45,7 @@
 #include <cfloat>
 #include <algorithm>
 
+#include "idl/position_in_partition.dist.hh"
 #include "idl/partition_checksum.dist.hh"
 
 logging::logger rlogger("repair");
