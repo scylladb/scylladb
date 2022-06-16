@@ -162,31 +162,42 @@ bytes get_key_column_value(const rjson::value& item, const column_definition& co
 }
 
 // Parses the JSON encoding for a key value, which is a map with a single
-// entry, whose key is the type (expected to match the key column's type)
-// and the value is the encoded value.
-bytes get_key_from_typed_value(const rjson::value& key_typed_value, const column_definition& column) {
+// entry whose key is the type and the value is the encoded value.
+// If this type does not match the desired "type_str", an api_error::validation
+// error is thrown (the "name" parameter is the name of the column which will
+// mentioned in the exception message).
+// If the type does match, a reference to the encoded value is returned.
+static const rjson::value& get_typed_value(const rjson::value& key_typed_value, std::string_view type_str, std::string_view name, std::string_view value_name) {
     if (!key_typed_value.IsObject() || key_typed_value.MemberCount() != 1 ||
             !key_typed_value.MemberBegin()->value.IsString()) {
         throw api_error::validation(
-                format("Malformed value object for key column {}: {}",
-                        column.name_as_text(), key_typed_value));
+                format("Malformed value object for {} {}: {}",
+                        value_name, name, key_typed_value));
     }
 
     auto it = key_typed_value.MemberBegin();
-    if (it->name != type_to_string(column.type)) {
+    if (rjson::to_string_view(it->name) != type_str) {
         throw api_error::validation(
-                format("Type mismatch: expected type {} for key column {}, got type {}",
-                        type_to_string(column.type), column.name_as_text(), it->name));
+                format("Type mismatch: expected type {} for {} {}, got type {}",
+                        type_str, value_name, name, it->name));
     }
-    std::string_view value_view = rjson::to_string_view(it->value);
+    return it->value;
+}
+
+// Parses the JSON encoding for a key value, which is a map with a single
+// entry, whose key is the type (expected to match the key column's type)
+// and the value is the encoded value.
+bytes get_key_from_typed_value(const rjson::value& key_typed_value, const column_definition& column) {
+    auto& value = get_typed_value(key_typed_value, type_to_string(column.type), column.name_as_text(), "key column");
+    std::string_view value_view = rjson::to_string_view(value);
     if (value_view.empty()) {
         throw api_error::validation(
                 format("The AttributeValue for a key attribute cannot contain an empty string value. Key: {}", column.name_as_text()));
     }
     if (column.type == bytes_type) {
-        return rjson::base64_decode(it->value);
+        return rjson::base64_decode(value);
     } else {
-        return column.type->from_string(rjson::to_string_view(it->value));
+        return column.type->from_string(value_view);
     }
 
 }
