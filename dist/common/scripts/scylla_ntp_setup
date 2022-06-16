@@ -90,7 +90,7 @@ if __name__ == '__main__':
             conf = f.read()
         if args.subdomain:
             conf2 = re.sub(r'pool\s+([0-9]+)\.(\S+)\.pool\.ntp\.org', 'pool \\1.{}.pool.ntp.org'.format(args.subdomain), conf, flags=re.MULTILINE)
-            with confp.open(confpath, 'w') as f:
+            with confp.open('w') as f:
                 f.write(conf2)
             conf = conf2
         chronyd = get_chrony_unit()
@@ -107,12 +107,12 @@ if __name__ == '__main__':
             conf = f.read()
         if args.subdomain:
             conf2 = re.sub(r'(server|pool)\s+([0-9]+)\.(\S+)\.pool\.ntp\.org', '\\1 \\2.{}.pool.ntp.org'.format(args.subdomain), conf, flags=re.MULTILINE)
-            with confp.open(confpath, 'w') as f:
+            with confp.open('w') as f:
                 f.write(conf2)
             conf = conf2
         match = re.search(r'^(server|pool)\s+(\S*)(\s+\S+)?', conf, flags=re.MULTILINE)
         server = match.group(2)
-        ntpd = get_ntpd_unit()
+        ntpd = get_ntp_unit()
         ntpd.stop()
         run(f'ntpdate {server}', shell=True, check=True)
         ntpd.enable()
