@@ -944,14 +944,14 @@ future<> database::add_column_family_and_make_directory(schema_ptr schema) {
         event = co_await db::start_system_event("database", "create_table", std::move(params));
     }
     std::exception_ptr ex;
-  try {
-    auto& ks = find_keyspace(schema->ks_name());
-    add_column_family(ks, schema, ks.make_column_family_config(*schema, *this));
-    find_column_family(schema).get_index_manager().reload();
-    co_await ks.make_directory_for_column_family(schema->cf_name(), schema->id());
-  } catch (...) {
-    ex = std::current_exception();
-  }
+    try {
+        auto& ks = find_keyspace(schema->ks_name());
+        add_column_family(ks, schema, ks.make_column_family_config(*schema, *this));
+        find_column_family(schema).get_index_manager().reload();
+        co_await ks.make_directory_for_column_family(schema->cf_name(), schema->id());
+    } catch (...) {
+        ex = std::current_exception();
+    }
     co_await db::end_system_event(event, ex);
     if (ex) {
         co_await coroutine::return_exception(std::move(ex));
@@ -1006,29 +1006,29 @@ future<> database::drop_column_family(const sstring& ks_name_, const sstring& cf
         event = co_await db::start_system_event("database", "drop_table", std::move(params));
     }
     std::exception_ptr ex;
-  try {
-    auto& ks = find_keyspace(ks_name);
-    auto uuid = find_uuid(ks_name, cf_name);
-    lw_shared_ptr<table> cf;
     try {
-        cf = _column_families.at(uuid);
-        drop_repair_history_map_for_table(uuid);
-    } catch (std::out_of_range&) {
-        on_internal_error(dblog, fmt::format("drop_column_family {}.{}: UUID={} not found", ks_name, cf_name, uuid));
+        auto& ks = find_keyspace(ks_name);
+        auto uuid = find_uuid(ks_name, cf_name);
+        lw_shared_ptr<table> cf;
+        try {
+            cf = _column_families.at(uuid);
+            drop_repair_history_map_for_table(uuid);
+        } catch (std::out_of_range&) {
+            on_internal_error(dblog, fmt::format("drop_column_family {}.{}: UUID={} not found", ks_name, cf_name, uuid));
+        }
+        dblog.debug("Dropping {}.{}", ks_name, cf_name);
+        remove(*cf);
+        cf->clear_views();
+        co_await cf->await_pending_ops();
+        co_await _querier_cache.evict_all_for_table(cf->schema()->id());
+        auto f = co_await coroutine::as_future(truncate(ks, *cf, std::move(tsf), snapshot));
+        co_await cf->stop();
+        if (f.failed()) {
+            ex = f.get_exception(); // return exception from truncate() if any
+        }
+    } catch (...) {
+        ex = std::current_exception();
     }
-    dblog.debug("Dropping {}.{}", ks_name, cf_name);
-    remove(*cf);
-    cf->clear_views();
-    co_await cf->await_pending_ops();
-    co_await _querier_cache.evict_all_for_table(cf->schema()->id());
-    auto f = co_await coroutine::as_future(truncate(ks, *cf, std::move(tsf), snapshot));
-    co_await cf->stop();
-    if (f.failed()) {
-        ex = f.get_exception(); // return exception from truncate() if any
-    }
-  } catch (...) {
-    ex = std::current_exception();
-  }
     co_await end_system_event(event, ex);
     if (ex) {
         co_await coroutine::return_exception(std::move(ex));
