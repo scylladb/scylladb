@@ -356,6 +356,17 @@ update_statement::prepare_internal(data_dictionary::database db, schema_ptr sche
 {
     auto stmt = ::make_shared<cql3::statements::update_statement>(statement_type::UPDATE, ctx.bound_variables_size(), schema, std::move(attrs), stats);
 
+    // FIXME: quadratic
+    for (size_t i = 0; i < _updates.size(); ++i) {
+        auto& ui = _updates[i];
+        for (size_t j = i + 1; j < _updates.size(); ++j) {
+            auto& uj = _updates[j];
+            if (*ui.first == *uj.first && !uj.second->is_compatible_with(ui.second)) {
+                throw exceptions::invalid_request_exception(format("Multiple incompatible setting of column {}", *ui.first));
+            }
+        }
+    }
+
     for (auto&& entry : _updates) {
         auto id = entry.first->prepare_column_identifier(*schema);
         auto def = get_column_definition(*schema, *id);
