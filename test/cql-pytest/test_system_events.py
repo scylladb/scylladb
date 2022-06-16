@@ -20,6 +20,22 @@ def get_system_events(cql):
 
 # Check reading the system.events table, which should list major system events
 # like start/stop.
-def test_system_events(scylla_only, cql):
+def test_system_events(scylla_only, cql, this_dc):
     events = get_system_events(cql)
     assert len(events['system']['start']) > 0
+
+    test_keyspace = ""
+    with util.new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as test_keyspace:
+        events = get_system_events(cql)
+        keyspace_found = False
+        search_str = f"keyspace_name={test_keyspace}"
+        for e in events['database']['create_keyspace'].values():
+            keyspace_found = search_str in e
+        assert keyspace_found, f"'{test_keyspace}' not found in: {events['database']['create_keyspace']}"
+
+    events = get_system_events(cql)
+    keyspace_found = False
+    search_str = f"keyspace_name={test_keyspace}"
+    for e in events['database']['drop_keyspace'].values():
+        keyspace_found = search_str in e
+    assert keyspace_found, f"'{test_keyspace}' not found in: {events['database']['drop_keyspace']}"

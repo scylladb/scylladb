@@ -20,6 +20,7 @@
 #include <seastar/core/seastar.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include <seastar/coroutine/exception.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/metrics.hh>
 #include <boost/algorithm/string/erase.hpp>
@@ -51,6 +52,7 @@
 #include "db/timeout_clock.hh"
 #include "db/large_data_handler.hh"
 #include "db/data_listeners.hh"
+#include "db/system_events.hh"
 
 #include "data_dictionary/user_types_metadata.hh"
 #include <seastar/core/shared_ptr_incomplete.hh>
@@ -880,8 +882,18 @@ future<> database::update_keyspace(sharded<service::storage_proxy>& proxy, const
     co_await get_notifier().update_keyspace(ks.metadata());
 }
 
-void database::drop_keyspace(const sstring& name) {
+future<> database::drop_keyspace(const sstring& name) {
     _keyspaces.erase(name);
+
+    // FIXME: move to schema_tables layer
+    // since this is a global event
+    system_event event;
+    if (this_shard_id() == 0 && !is_system_keyspace(name)) {
+        db::event_params params = {
+            {"keyspace_name", name},
+        };
+        co_await db::record_system_event("database", "drop_keyspace", std::move(params), "OK");
+    }
 }
 
 static bool is_system_table(const schema& s) {
@@ -1251,6 +1263,20 @@ database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::
         co_return;
     }
 
+    // FIXME: move to schema_tables layer
+    // since this is a global event
+    system_event event;
+    if (this_shard_id() == 0 && !is_system_keyspace(ksm->name())) {
+        db::event_params params = {
+            {"keyspace_name", ksm->name()},
+            {"populated", is_bootstrap ? "false" : "true"},
+            {"replication_strategy", format("{}", ksm->strategy_name())},
+            {"replication_strategy_options", format("{}", ksm->strategy_options())},
+        };
+        event = co_await db::start_system_event("database", "create_keyspace", std::move(params));
+    }
+    std::exception_ptr ex;
+  try {
     co_await create_in_memory_keyspace(ksm, erm_factory, system);
     auto& ks = _keyspaces.at(ksm->name());
     auto& datadir = ks.datadir();
@@ -1263,6 +1289,14 @@ database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::
 
     if (datadir != "") {
         co_await io_check([&datadir] { return touch_directory(datadir); });
+    }
+  } catch (...) {
+    ex = std::current_exception();
+  }
+
+    co_await db::end_system_event(event, ex);
+    if (ex) {
+        co_await coroutine::return_exception(std::move(ex));
     }
 }
 

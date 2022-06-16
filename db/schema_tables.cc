@@ -1097,7 +1097,7 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std:
     co_await proxy.local().get_db().invoke_on_all([&] (replica::database& db) -> future<> {
         // it is safe to drop a keyspace only when all nested ColumnFamilies where deleted
         for (auto keyspace_to_drop : keyspaces_to_drop) {
-            db.drop_keyspace(keyspace_to_drop);
+            co_await db.drop_keyspace(keyspace_to_drop);
             co_await db.get_notifier().drop_keyspace(keyspace_to_drop);
         }
     });
