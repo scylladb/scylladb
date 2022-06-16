@@ -243,17 +243,6 @@ struct uninitialized {
         return to_lower(s) == "true";
     }
 
-    void add_raw_update(std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>, std::unique_ptr<cql3::operation::raw_update>>>& operations,
-        ::shared_ptr<cql3::column_identifier::raw> key, std::unique_ptr<cql3::operation::raw_update> update)
-    {
-        for (auto&& p : operations) {
-            if (*p.first == *key && !p.second->is_compatible_with(update)) {
-                add_recognition_error(format("Multiple incompatible setting of column {}", *key));
-            }
-        }
-        operations.emplace_back(std::move(key), std::move(update));
-    }
-
     TokenType* getMissingSymbol(IntStreamType* istream, ExceptionBaseType* e,
                                 ANTLR_UINT32 expectedTokenType, BitsetListType* follow) {
         auto token = BaseType::getMissingSymbol(istream, e, expectedTokenType, follow);
@@ -1547,12 +1536,12 @@ normalColumnOperation[operations_type& operations, ::shared_ptr<cql3::column_ide
     : t=term ('+' c=cident )?
       {
           if (!c) {
-              add_raw_update(operations, key, std::make_unique<cql3::operation::set_value>(t));
+              operations.emplace_back(std::move(key), std::make_unique<cql3::operation::set_value>(t));
           } else {
               if (*key != *c) {
                 add_recognition_error("Only expressions of the form X = <value> + X are supported.");
               }
-              add_raw_update(operations, key, std::make_unique<cql3::operation::prepend>(t));
+              operations.emplace_back(std::move(key), std::make_unique<cql3::operation::prepend>(t));
           }
       }
     | c=cident sig=('+' | '-') t=term
@@ -1566,7 +1555,7 @@ normalColumnOperation[operations_type& operations, ::shared_ptr<cql3::column_ide
           } else {
               op = std::make_unique<cql3::operation::subtraction>(t);
           }
-          add_raw_update(operations, key, std::move(op));
+          operations.emplace_back(std::move(key), std::move(op));
       }
     | c=cident i=INTEGER
       {
@@ -1575,11 +1564,11 @@ normalColumnOperation[operations_type& operations, ::shared_ptr<cql3::column_ide
               // We don't yet allow a '+' in front of an integer, but we could in the future really, so let's be future-proof in our error message
               add_recognition_error("Only expressions of the form X = X " + sstring($i.text[0] == '-' ? "-" : "+") + " <value> are supported.");
           }
-          add_raw_update(operations, key, std::make_unique<cql3::operation::addition>(untyped_constant{untyped_constant::integer, $i.text}));
+          operations.emplace_back(std::move(key), std::make_unique<cql3::operation::addition>(untyped_constant{untyped_constant::integer, $i.text}));
       }
     | K_SCYLLA_COUNTER_SHARD_LIST '(' t=term ')'
       {
-          add_raw_update(operations, key, std::make_unique<cql3::operation::set_counter_value_from_tuple_list>(t));
+          operations.emplace_back(std::move(key), std::make_unique<cql3::operation::set_counter_value_from_tuple_list>(t));
       }
     ;
 
@@ -1589,7 +1578,7 @@ collectionColumnOperation[operations_type& operations,
                           bool by_uuid]
     : '=' t=term
       {
-          add_raw_update(operations, key, std::make_unique<cql3::operation::set_element>(std::move(k), std::move(t), by_uuid));
+          operations.emplace_back(std::move(key), std::make_unique<cql3::operation::set_element>(std::move(k), std::move(t), by_uuid));
       }
     ;
 
@@ -1598,7 +1587,7 @@ udtColumnOperation[operations_type& operations,
                    shared_ptr<cql3::column_identifier> field]
     : '=' t=term
       {
-          add_raw_update(operations, std::move(key), std::make_unique<cql3::operation::set_field>(std::move(field), std::move(t)));
+          operations.emplace_back(std::move(key), std::make_unique<cql3::operation::set_field>(std::move(field), std::move(t)));
       }
     ;
 
