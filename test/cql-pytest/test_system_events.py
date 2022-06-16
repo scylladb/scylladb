@@ -33,6 +33,24 @@ def test_system_events(scylla_only, cql, this_dc):
             keyspace_found = search_str in e
         assert keyspace_found, f"'{test_keyspace}' not found in: {events['database']['create_keyspace']}"
 
+        test_table = ""
+        with util.new_test_table(cql, test_keyspace, "k int PRIMARY KEY") as test_table:
+            events = get_system_events(cql)
+            table_found = False
+            keyspace_search_str = f"keyspace_name={test_keyspace}"
+            table_search_str = f"table_name={test_table.split('.')[1]}"
+            for e in events['database']['create_table'].values():
+                table_found = keyspace_search_str in e and table_search_str in e
+            assert table_found, f"'{test_table}' not found in: {events['database']['create_table']}"
+
+        events = get_system_events(cql)
+        table_found = False
+        keyspace_search_str = f"keyspace_name={test_keyspace}"
+        table_search_str = f"table_name={test_table.split('.')[1]}"
+        for e in events['database']['drop_table'].values():
+            table_found = keyspace_search_str in e and table_search_str in e
+        assert table_found, f"'{test_table}' not found in: {events['database']['drop_table']}"
+
     events = get_system_events(cql)
     keyspace_found = False
     search_str = f"keyspace_name={test_keyspace}"

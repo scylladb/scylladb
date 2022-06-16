@@ -57,6 +57,7 @@
 #include "data_dictionary/user_types_metadata.hh"
 #include <seastar/core/shared_ptr_incomplete.hh>
 #include <seastar/coroutine/as_future.hh>
+#include <seastar/coroutine/exception.hh>
 #include <seastar/util/memory_diagnostics.hh>
 
 #include "locator/abstract_replication_strategy.hh"
@@ -931,10 +932,30 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
 }
 
 future<> database::add_column_family_and_make_directory(schema_ptr schema) {
+    // FIXME: move to schema_tables layer
+    // since this is a global event
+    system_event event;
+    if (this_shard_id() == 0 && !is_system_table(*schema)) {
+        db::event_params params = {
+            {"keyspace_name", schema->ks_name()},
+            {"table_name", schema->cf_name()},
+            {"is_view", schema->is_view() ? "true" : "false"}
+        };
+        event = co_await db::start_system_event("database", "create_table", std::move(params));
+    }
+    std::exception_ptr ex;
+  try {
     auto& ks = find_keyspace(schema->ks_name());
     add_column_family(ks, schema, ks.make_column_family_config(*schema, *this));
     find_column_family(schema).get_index_manager().reload();
-    return ks.make_directory_for_column_family(schema->cf_name(), schema->id());
+    co_await ks.make_directory_for_column_family(schema->cf_name(), schema->id());
+  } catch (...) {
+    ex = std::current_exception();
+  }
+    co_await db::end_system_event(event, ex);
+    if (ex) {
+        co_await coroutine::return_exception(std::move(ex));
+    }
 }
 
 bool database::update_column_family(schema_ptr new_schema) {
@@ -970,7 +991,22 @@ void database::remove(const table& cf) noexcept {
     }
 }
 
-future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_name, timestamp_func tsf, bool snapshot) {
+future<> database::drop_column_family(const sstring& ks_name_, const sstring& cf_name_, timestamp_func tsf, bool snapshot) {
+    // copy referenced names as they might go away when we yield
+    auto ks_name = ks_name_;
+    auto cf_name = cf_name_;
+    // FIXME: move to schema_tables layer
+    // since this is a global event
+    system_event event;
+    if (this_shard_id() == 0 && !is_system_keyspace(ks_name)) {
+        db::event_params params = {
+            {"keyspace_name", ks_name},
+            {"table_name", cf_name}
+        };
+        event = co_await db::start_system_event("database", "drop_table", std::move(params));
+    }
+    std::exception_ptr ex;
+  try {
     auto& ks = find_keyspace(ks_name);
     auto uuid = find_uuid(ks_name, cf_name);
     lw_shared_ptr<table> cf;
@@ -987,7 +1023,16 @@ future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_
     co_await _querier_cache.evict_all_for_table(cf->schema()->id());
     auto f = co_await coroutine::as_future(truncate(ks, *cf, std::move(tsf), snapshot));
     co_await cf->stop();
-    f.get(); // re-throw exception from truncate() if any
+    if (f.failed()) {
+        ex = f.get_exception(); // return exception from truncate() if any
+    }
+  } catch (...) {
+    ex = std::current_exception();
+  }
+    co_await end_system_event(event, ex);
+    if (ex) {
+        co_await coroutine::return_exception(std::move(ex));
+    }
 }
 
 const utils::UUID& database::find_uuid(std::string_view ks, std::string_view cf) const {
