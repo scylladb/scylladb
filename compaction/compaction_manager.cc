@@ -16,6 +16,8 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/switch_to.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include <seastar/coroutine/as_future.hh>
+#include <seastar/coroutine/exception.hh>
 #include "sstables/exceptions.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "utils/fb_utilities.hh"
@@ -23,6 +25,7 @@
 #include <cmath>
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/algorithm/remove_if.hpp>
+#include "db/system_events.hh"
 
 static logging::logger cmlog("compaction_manager");
 using namespace std::chrono_literals;
@@ -369,9 +372,26 @@ protected:
 
 future<> compaction_manager::perform_major_compaction(replica::table* t) {
     if (_state != state::enabled) {
-        return make_ready_future<>();
+        co_return;
     }
-    return perform_task(make_shared<major_compaction_task>(*this, t));
+
+    // Note that this is a sharded event since major compaction
+    // may be invoked on different shards in different order,
+    // sorted by the table size on that shard, so each invokation
+    // is independent.
+    db::system_event event;
+    db::event_params params = {
+        {"keyspace_name", t->schema()->ks_name()},
+        {"table_name", t->schema()->cf_name()},
+        {"shard", format("{}", this_shard_id())}
+    };
+    event = co_await db::start_system_event("compaction", "major", std::move(params));
+    auto res = co_await coroutine::as_future(perform_task(make_shared<major_compaction_task>(*this, t)));
+    auto ex = res.failed() ? res.get_exception() : std::exception_ptr();
+    co_await db::end_system_event(event, ex);
+    if (ex) {
+        co_await coroutine::return_exception(std::move(ex));
+    }
 }
 
 class compaction_manager::custom_compaction_task : public compaction_manager::task {
