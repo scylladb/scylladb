@@ -786,6 +786,9 @@ void token_metadata_impl::calculate_pending_ranges_for_leaving(
         const abstract_replication_strategy& strategy,
         std::unordered_multimap<range<token>, inet_address>& new_pending_ranges,
         mutable_token_metadata_ptr all_left_metadata) const {
+    if (_leaving_endpoints.empty()) {
+        return;
+    }
     std::unordered_multimap<inet_address, dht::token_range> address_ranges = strategy.get_address_ranges(unpimplified_this).get0();
     // get all ranges that will be affected by leaving nodes
     std::unordered_set<range<token>> affected_ranges;
