@@ -234,7 +234,7 @@ future<> raft_sys_table_storage::do_store_log_entries(const std::vector<raft::lo
         std::vector<cql3::raw_value_view> value_views;
         value_views.reserve(4); // 4 is the number of required values for the insertion query 
         for (const cql3::raw_value& raw : stmt_values.back()) {
-            value_views.push_back(raw.to_view());
+            value_views.push_back(raw.view());
         }
         value_views.emplace_back(
             cql3::raw_value_view::make_value(

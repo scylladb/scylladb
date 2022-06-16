@@ -25,7 +25,7 @@ std::ostream& operator<<(std::ostream& os, const raw_value_view& value) {
     return os;
 }
 
-raw_value_view raw_value::to_view() const {
+raw_value_view raw_value::view() const {
     switch (_data.index()) {
     case 0:  return raw_value_view::make_value(managed_bytes_view(bytes_view(std::get<bytes>(_data))));
     case 1:  return raw_value_view::make_value(managed_bytes_view(std::get<managed_bytes>(_data)));

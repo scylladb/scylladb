@@ -1061,7 +1061,7 @@ std::ostream& operator<<(std::ostream& os, const expression::printer& pr) {
                     } else if (v.value.is_unset_value()) {
                         os << "unset";
                     } else {
-                        v.value.to_view().with_value([&](const FragmentedView auto& bytes_view) {
+                        v.value.view().with_value([&](const FragmentedView auto& bytes_view) {
                             data_value deser_val = v.type->deserialize(bytes_view);
                             os << deser_val.to_parsable_string();
                         });
@@ -1595,7 +1595,7 @@ bool constant::has_empty_value_bytes() const {
         return false;
     }
 
-    return value.to_view().size_bytes() == 0;
+    return value.view().size_bytes() == 0;
 }
 
 bool constant::is_null_or_unset() const {
@@ -1603,7 +1603,7 @@ bool constant::is_null_or_unset() const {
 }
 
 cql3::raw_value_view constant::view() const {
-    return value.to_view();
+    return value.view();
 }
 
 std::optional<bool> get_bool_value(const constant& constant_val) {
