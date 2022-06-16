@@ -5094,7 +5094,7 @@ cql3::raw_value make_collection_raw_value(size_t size_to_write, const std::vecto
     for (const cql3::raw_value& val : elements_to_write) {
         serialized_len += collection_value_len(sf);
         if (val.is_value()) {
-            serialized_len += val.to_view().with_value([](const FragmentedView auto& view) {
+            serialized_len += val.view().with_value([](const FragmentedView auto& view) {
                 return view.size_bytes();
             });
         }
@@ -5110,7 +5110,7 @@ cql3::raw_value make_collection_raw_value(size_t size_to_write, const std::vecto
         } else if (val.is_unset_value()) {
                 write_int32(out, -2);
         } else {
-            val.to_view().with_value([&](const FragmentedView auto& val_view) {
+            val.view().with_value([&](const FragmentedView auto& val_view) {
                 write_collection_value(out, sf, linearized(val_view));
             });
         }

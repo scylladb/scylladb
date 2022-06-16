@@ -148,7 +148,7 @@ void query_options::prepare(const std::vector<lw_shared_ptr<column_specification
 void query_options::fill_value_views()
 {
     for (auto&& value : _values) {
-        _value_views.emplace_back(value.to_view());
+        _value_views.emplace_back(value.view());
     }
 }
 

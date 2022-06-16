@@ -267,10 +267,7 @@ public:
             }
         }, std::move(_data));
     }
-    raw_value_view to_view() const;
-    raw_value_view view() const {
-        return to_view();
-    }
+    raw_value_view view() const;
     friend class raw_value_view;
 };
 
@@ -291,5 +288,5 @@ inline bytes_opt to_bytes_opt(const cql3::raw_value_view& view) {
 }
 
 inline bytes_opt to_bytes_opt(const cql3::raw_value& value) {
-    return to_bytes_opt(value.to_view());
+    return to_bytes_opt(value.view());
 }
