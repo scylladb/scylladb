@@ -1276,23 +1276,23 @@ database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::
         event = co_await db::start_system_event("database", "create_keyspace", std::move(params));
     }
     std::exception_ptr ex;
-  try {
-    co_await create_in_memory_keyspace(ksm, erm_factory, system);
-    auto& ks = _keyspaces.at(ksm->name());
-    auto& datadir = ks.datadir();
+    try {
+        co_await create_in_memory_keyspace(ksm, erm_factory, system);
+        auto& ks = _keyspaces.at(ksm->name());
+        auto& datadir = ks.datadir();
 
-    // keyspace created by either cql or migration 
-    // is by definition populated
-    if (!is_bootstrap) {
-        ks.mark_as_populated();
-    }
+        // keyspace created by either cql or migration 
+        // is by definition populated
+        if (!is_bootstrap) {
+            ks.mark_as_populated();
+        }
 
-    if (datadir != "") {
-        co_await io_check([&datadir] { return touch_directory(datadir); });
+        if (datadir != "") {
+            co_await io_check([&datadir] { return touch_directory(datadir); });
+        }
+    } catch (...) {
+        ex = std::current_exception();
     }
-  } catch (...) {
-    ex = std::current_exception();
-  }
 
     co_await db::end_system_event(event, ex);
     if (ex) {
