@@ -853,6 +853,11 @@ database::init_commitlog() {
     });
 }
 
+static bool is_system_keyspace(const sstring& ks_name) {
+    return ks_name == db::system_keyspace::NAME || ks_name == db::system_distributed_keyspace::NAME
+        || ks_name == db::system_distributed_keyspace::NAME_EVERYWHERE;
+}
+
 future<> database::update_keyspace(sharded<service::storage_proxy>& proxy, const sstring& name) {
     auto v = co_await db::schema_tables::read_schema_partition_for_keyspace(proxy, db::schema_tables::KEYSPACES, name);
     auto& ks = find_keyspace(name);
@@ -880,8 +885,7 @@ void database::drop_keyspace(const sstring& name) {
 }
 
 static bool is_system_table(const schema& s) {
-    return s.ks_name() == db::system_keyspace::NAME || s.ks_name() == db::system_distributed_keyspace::NAME
-        || s.ks_name() == db::system_distributed_keyspace::NAME_EVERYWHERE;
+    return is_system_keyspace(s.ks_name());
 }
 
 void database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg) {
