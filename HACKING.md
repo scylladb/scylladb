@@ -51,6 +51,8 @@ required.
 
 Scylla is built with [Ninja](https://ninja-build.org/), a low-level rule-based system. A Python script, `configure.py`, generates a Ninja file (`build.ninja`) based on configuration options.
 
+**Note**: On ubuntu it is possible that the installation directory will be under `/usr/bin/ninja` and CMake search this under `/usr/bin/ninja-build` so a possible sulotion can be using symlink. `ln -s /usr/bin/ninja /usr/bin/ninja-build`
+
 To build for the first time:
 
 ```bash
