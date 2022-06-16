@@ -131,7 +131,7 @@ public:
     future<> cleanup_history(utils::UUID repair_id);
     future<> load_history();
 
-    int do_repair_start(sstring keyspace, std::unordered_map<sstring, sstring> options_map);
+    future<int> do_repair_start(sstring keyspace, std::unordered_map<sstring, sstring> options_map);
 
     // The tokens are the tokens assigned to the bootstrap node.
     future<> bootstrap_with_repair(locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> bootstrap_tokens);

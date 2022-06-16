@@ -95,6 +95,15 @@ def take_snapshot(cql, table, tag, skip_flush):
         args.append(ks)
         run_nodetool(cql, "snapshot", *args)
 
+def repair(cql, ks):
+    if has_rest_api(cql):
+        res = requests.post(f'{rest_api_url(cql)}/storage_service/repair_async/{ks}')
+        res.raise_for_status()
+        id = res.text
+        requests.get(f'{rest_api_url(cql)}/storage_service/repair_async/{ks}', params={'id': id})
+    else:
+        run_nodetool(cql, "repair", ks)
+
 def refreshsizeestimates(cql):
     if has_rest_api(cql):
         # The "nodetool refreshsizeestimates" is not available, or needed, in Scylla

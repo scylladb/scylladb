@@ -26,6 +26,7 @@
 #include "service/migration_manager.hh"
 #include "partition_range_compat.hh"
 #include "gms/feature_service.hh"
+#include "db/system_events.hh"
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/algorithm/string/split.hpp>
@@ -998,7 +999,7 @@ static future<> repair_ranges(lw_shared_ptr<repair_info> ri) {
 // CPU is that it allows us to keep some state (like a list of ongoing
 // repairs). It is fine to always do this on one CPU, because the function
 // itself does very little (mainly tell other nodes and CPUs what to do).
-int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring, sstring> options_map) {
+future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring, sstring> options_map) {
     seastar::sharded<replica::database>& db = get_db();
     repair_tracker().check_in_shutdown();
 
@@ -1092,8 +1093,16 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
         options.column_families.size() ? options.column_families : list_column_families(db.local(), keyspace);
     if (cfs.empty()) {
         rlogger.info("repair[{}]: completed successfully: no tables to repair", id.uuid);
-        return id.id;
+        co_return id.id;
     }
+
+    db::event_params params = {
+        {"keyspace_name", keyspace},
+        {"options", format("{}", options_map)},
+        {"id", format("{}", id.id)},
+        {"uuid", format("{}", id.uuid)},
+    };
+    auto event = make_lw_shared(co_await db::start_system_event("repair", "async", std::move(params)));
 
     // Do it in the background.
     (void)repair_tracker().run(id, [this, &db, id, keyspace = std::move(keyspace),
@@ -1211,11 +1220,17 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
             }
             return make_ready_future<>();
         }).get();
-    }).handle_exception([id] (std::exception_ptr ep) {
-        rlogger.warn("repair[{}]: repair_tracker run failed: {}", id.uuid, ep);
+    }).then_wrapped([id, event = std::move(event)] (future<> f) mutable {
+        auto ep = f.failed() ? f.get_exception() : std::exception_ptr();
+
+        if (ep) {
+            rlogger.warn("repair[{}]: repair_tracker run failed: {}", id.uuid, ep);
+        }
+
+        return db::end_system_event(*event, ep).then([event] {});
     });
 
-    return id.id;
+    co_return id.id;
 }
 
 future<int> repair_start(seastar::sharded<repair_service>& repair,
