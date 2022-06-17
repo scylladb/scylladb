@@ -163,7 +163,7 @@ class TestSuite(ABC):
         return suite
 
     @staticmethod
-    def tests():
+    def all_tests():
         return itertools.chain(*[suite.tests for suite in
                                  TestSuite.suites.values()])
 
@@ -1034,7 +1034,7 @@ async def run_all_tests(signaled, options):
     console.print_start_blurb()
     try:
         TestSuite.artifacts.add_exit_artifact(None, TestSuite.hosts.cleanup)
-        for test in TestSuite.tests():
+        for test in TestSuite.all_tests():
             # +1 for 'signaled' event
             if len(pending) > options.jobs:
                 # Wait for some task to finish
@@ -1165,7 +1165,7 @@ async def main():
 
     await find_tests(options)
     if options.list_tests:
-        print('\n'.join([t.name for t in TestSuite.tests()]))
+        print('\n'.join([t.name for t in TestSuite.all_tests()]))
         return 0
 
     signaled = asyncio.Event()
@@ -1181,7 +1181,7 @@ async def main():
     if signaled.is_set():
         return -signaled.signo
 
-    failed_tests = [t for t in TestSuite.tests() if t.success is not True]
+    failed_tests = [t for t in TestSuite.all_tests() if t.success is not True]
 
     print_summary(failed_tests, options)
 
