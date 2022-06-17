@@ -697,7 +697,7 @@ future<page_consume_result<ResultBuilder>> read_page(
         const query::read_command& cmd,
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
-        noncopyable_function<ResultBuilder()> result_builder_factory) {
+        noncopyable_function<ResultBuilder(const compact_for_result_state<ResultBuilder>&)> result_builder_factory) {
     auto compaction_state = make_lw_shared<compact_for_result_state<ResultBuilder>>(*s, cmd.timestamp, cmd.slice, cmd.get_row_limit(),
             cmd.partition_limit);
 
@@ -708,7 +708,7 @@ future<page_consume_result<ResultBuilder>> read_page(
     }
 
     // Use coroutine::as_future to prevent exception on timesout.
-    auto f = co_await coroutine::as_future(query::consume_page(reader, compaction_state, cmd.slice, result_builder_factory(), cmd.get_row_limit(),
+    auto f = co_await coroutine::as_future(query::consume_page(reader, compaction_state, cmd.slice, result_builder_factory(*compaction_state), cmd.get_row_limit(),
                 cmd.partition_limit, cmd.timestamp));
     if (!f.failed()) {
         // no exceptions are thrown in this block
@@ -741,7 +741,7 @@ future<typename ResultBuilder::result_type> do_query(
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
         db::timeout_clock::time_point timeout,
-        noncopyable_function<ResultBuilder()> result_builder_factory) {
+        noncopyable_function<ResultBuilder(const compact_for_result_state<ResultBuilder>&)> result_builder_factory) {
     auto ctx = seastar::make_shared<read_context>(db, s, cmd, ranges, trace_state, timeout);
 
     // Use coroutine::as_future to prevent exception on timesout.
@@ -769,7 +769,7 @@ static future<std::tuple<foreign_ptr<lw_shared_ptr<typename ResultBuilder::resul
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
         db::timeout_clock::time_point timeout,
-        std::function<ResultBuilder(query::result_memory_accounter&&)> result_builder_factory) {
+        std::function<ResultBuilder(query::result_memory_accounter&&, const compact_for_result_state<ResultBuilder>&)> result_builder_factory) {
     if (cmd.get_row_limit() == 0 || cmd.slice.partition_row_limit() == 0 || cmd.partition_limit == 0) {
         co_return std::tuple(
                 make_foreign(make_lw_shared<typename ResultBuilder::result_type>()),
@@ -783,8 +783,9 @@ static future<std::tuple<foreign_ptr<lw_shared_ptr<typename ResultBuilder::resul
     try {
         auto accounter = co_await local_db.get_result_memory_limiter().new_mutation_read(*cmd.max_result_size, short_read_allowed);
 
-        auto result = co_await do_query<ResultBuilder>(db, s, cmd, ranges, std::move(trace_state), timeout, [result_builder_factory, accounter = std::move(accounter)] () mutable {
-			return result_builder_factory(std::move(accounter));
+        auto result = co_await do_query<ResultBuilder>(db, s, cmd, ranges, std::move(trace_state), timeout,
+                [result_builder_factory, accounter = std::move(accounter)] (const compact_for_result_state<ResultBuilder>& compaction_state) mutable {
+			return result_builder_factory(std::move(accounter), compaction_state);
 		});
 
         ++stats.total_reads;
@@ -858,7 +859,7 @@ future<std::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_tempera
     schema_ptr query_schema = cmd.slice.is_reversed() ? table_schema->make_reversed() : table_schema;
 
     return do_query_on_all_shards<mutation_query_result_builder>(db, query_schema, cmd, ranges, std::move(trace_state), timeout,
-            [table_schema, &cmd] (query::result_memory_accounter&& accounter) {
+            [table_schema, &cmd] (query::result_memory_accounter&& accounter, const compact_for_result_state<mutation_query_result_builder>& compaction_state) {
         return mutation_query_result_builder(*table_schema, cmd.slice, std::move(accounter));
     });
 }
@@ -874,7 +875,7 @@ future<std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>
     schema_ptr query_schema = cmd.slice.is_reversed() ? table_schema->make_reversed() : table_schema;
 
     return do_query_on_all_shards<data_query_result_builder>(db, query_schema, cmd, ranges, std::move(trace_state), timeout,
-            [table_schema, &cmd, opts] (query::result_memory_accounter&& accounter) {
+            [table_schema, &cmd, opts] (query::result_memory_accounter&& accounter, const compact_for_result_state<data_query_result_builder>& compaction_state) {
         return data_query_result_builder(*table_schema, cmd.slice, opts, std::move(accounter));
     });
 }
