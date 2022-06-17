@@ -564,6 +564,7 @@ class CQLApprovalTest(Test):
         self.tmpfile = os.path.join(suite.options.tmpdir, self.mode, self.uname + ".reject")
         self.reject = os.path.join(suite.path, self.shortname + ".reject")
         self.args = [
+            "-s",  # don't capture print() inside pytest
             "test/pylib/cql_repl/cql_repl.py",
             "--input={}".format(self.cql),
             "--output={}".format(self.tmpfile),
@@ -695,9 +696,12 @@ class PythonTest(Test):
         super().__init__(test_no, shortname, suite)
         self.path = "pytest"
         self.xmlout = os.path.join(self.suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
-        self.args = ["-o", "junit_family=xunit2",
-                     "--junit-xml={}".format(self.xmlout),
-                     os.path.join(suite.path, shortname + ".py")]
+        self.args = [
+            "-s",  # don't capture print() output inside pytest
+            "-o",
+            "junit_family=xunit2",
+            "--junit-xml={}".format(self.xmlout),
+            os.path.join(suite.path, shortname + ".py")]
         PythonTest._reset(self)
 
     def _reset(self) -> None:
