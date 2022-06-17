@@ -13,6 +13,7 @@
 #include "mutation_compactor.hh"
 #include "reader_concurrency_semaphore.hh"
 #include "readers/mutation_source.hh"
+#include "full_position.hh"
 
 #include <boost/intrusive/set.hpp>
 
@@ -46,11 +47,6 @@ auto consume_page(flat_mutation_reader_v2& reader,
         return reader.consume(std::move(reader_consumer));
     });
 }
-
-struct position_view {
-    const dht::decorated_key* partition_key;
-    const clustering_key_prefix* clustering_key;
-};
 
 class querier_base {
     friend class querier_utils;
@@ -101,7 +97,7 @@ public:
         return _slice->options.contains(query::partition_slice::option::reversed);
     }
 
-    virtual position_view current_position() const = 0;
+    virtual std::optional<full_position_view> current_position() const = 0;
 
     dht::partition_ranges_view ranges() const {
         return _query_ranges;
@@ -178,11 +174,12 @@ public:
         });
     }
 
-    virtual position_view current_position() const override {
+    virtual std::optional<full_position_view> current_position() const override {
         const dht::decorated_key* dk = _compaction_state->current_partition();
-        auto pos = _compaction_state->current_position();
-        const clustering_key_prefix* clustering_key = pos.has_key() ? &pos.key() : nullptr;
-        return {dk, clustering_key};
+        if (!dk) {
+            return {};
+        }
+        return full_position_view(dk->key(), _compaction_state->current_position());
     }
 };
 
@@ -232,8 +229,8 @@ public:
                 std::move(reader_slice), std::move(reader), std::move(permit), std::move(nominal_pkey), std::move(nominal_pos)) {
     }
 
-    virtual position_view current_position() const override {
-        return {&_nominal_pkey, _nominal_pos.has_key() ? &_nominal_pos.key() : nullptr};
+    virtual std::optional<full_position_view> current_position() const override {
+        return full_position_view(_nominal_pkey.key(), _nominal_pos);
     }
 
     lw_shared_ptr<const dht::partition_range> reader_range() && {

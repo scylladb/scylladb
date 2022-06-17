@@ -43,10 +43,10 @@ static sstring cannot_use_reason(can_use cu)
 }
 
 static bool ring_position_matches(const schema& s, const dht::partition_range& range, const query::partition_slice& slice,
-        const position_view& pos) {
+        full_position_view pos) {
     const auto is_reversed = slice.is_reversed();
 
-    const auto expected_start = dht::ring_position_view(*pos.partition_key);
+    const auto expected_start = dht::ring_position(dht::decorate_key(s, pos.partition));
     // If there are no clustering columns or the select is distinct we don't
     // have clustering rows at all. In this case we can be sure we won't have
     // anything more in the last page's partition and thus the start bound is
@@ -54,7 +54,7 @@ static bool ring_position_matches(const schema& s, const dht::partition_range& r
     // inclusive.
     const auto expected_inclusiveness = s.clustering_key_size() > 0 &&
         !slice.options.contains<query::partition_slice::option::distinct>() &&
-        pos.clustering_key;
+        pos.position.region() == partition_region::clustered;
     const auto comparator = dht::ring_position_comparator(s);
 
     if (is_reversed && !range.is_singular()) {
@@ -66,8 +66,8 @@ static bool ring_position_matches(const schema& s, const dht::partition_range& r
     return start && comparator(start->value(), expected_start) == 0 && start->is_inclusive() == expected_inclusiveness;
 }
 
-static bool clustering_position_matches(const schema& s, const query::partition_slice& slice, const position_view& pos) {
-    const auto& row_ranges = slice.row_ranges(s, pos.partition_key->key());
+static bool clustering_position_matches(const schema& s, const query::partition_slice& slice, full_position_view pos) {
+    const auto& row_ranges = slice.row_ranges(s, pos.partition);
 
     if (row_ranges.empty()) {
         // This is a valid slice on the last page of a query with
@@ -77,7 +77,7 @@ static bool clustering_position_matches(const schema& s, const query::partition_
         return true;
     }
 
-    if (!pos.clustering_key) {
+    if (pos.position.region() != partition_region::clustered) {
         // We stopped at a non-clustering position so the partition's clustering
         // row ranges should be the default row ranges.
         return &row_ranges == &slice.default_row_ranges();
@@ -94,7 +94,7 @@ static bool clustering_position_matches(const schema& s, const query::partition_
     if (!start) {
         return false;
     }
-    return !start->is_inclusive() && eq(start->value(), *pos.clustering_key);
+    return !start->is_inclusive() && eq(start->value(), pos.position.key());
 }
 
 static bool ranges_match(const schema& s, const dht::partition_range& original_range, const dht::partition_range& new_range) {
@@ -156,17 +156,16 @@ static can_use can_be_used_for_page(const Querier& q, const schema& s, const dht
         return can_use::no_schema_version_mismatch;
     }
 
-    const auto pos = q.current_position();
-
-    if (!pos.partition_key) {
+    const auto pos_opt = q.current_position();
+    if (!pos_opt) {
         // There was nothing read so far so we assume we are ok.
         return can_use::yes;
     }
 
-    if (!ring_position_matches(s, range, slice, pos)) {
+    if (!ring_position_matches(s, range, slice, *pos_opt)) {
         return can_use::no_ring_pos_mismatch;
     }
-    if (!clustering_position_matches(s, slice, pos)) {
+    if (!clustering_position_matches(s, slice, *pos_opt)) {
         return can_use::no_clustering_pos_mismatch;
     }
     return can_use::yes;
