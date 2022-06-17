@@ -20,7 +20,6 @@
 #include "auth.hh"
 #include <cctype>
 #include "service/storage_proxy.hh"
-#include "locator/snitch_base.hh"
 #include "gms/gossiper.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/fb_utilities.hh"
@@ -201,10 +200,9 @@ protected:
         // It's very easy to get a list of all live nodes on the cluster,
         // using _gossiper().get_live_members(). But getting
         // just the list of live nodes in this DC needs more elaborate code:
-        sstring local_dc = locator::i_endpoint_snitch::get_local_snitch_ptr()->get_datacenter(
-                utils::fb_utilities::get_broadcast_address());
-        std::unordered_set<gms::inet_address> local_dc_nodes =
-                _proxy.get_token_metadata_ptr()->get_topology().get_datacenter_endpoints().at(local_dc);
+        auto& topology = _proxy.get_token_metadata_ptr()->get_topology();
+        sstring local_dc = topology.get_datacenter();
+        std::unordered_set<gms::inet_address> local_dc_nodes = topology.get_datacenter_endpoints().at(local_dc);
         for (auto& ip : local_dc_nodes) {
             if (_gossiper.is_alive(ip)) {
                 rjson::push_back(results, rjson::from_string(ip.to_sstring()));
