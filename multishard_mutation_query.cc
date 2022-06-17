@@ -205,7 +205,7 @@ class read_context : public reader_lifecycle_policy_v2 {
 
     dismantle_buffer_stats dismantle_combined_buffer(flat_mutation_reader_v2::tracked_buffer combined_buffer, const dht::decorated_key& pkey);
     dismantle_buffer_stats dismantle_compaction_state(detached_compaction_state compaction_state);
-    future<> save_reader(shard_id shard, const dht::decorated_key& last_pkey, const std::optional<clustering_key_prefix>& last_ckey);
+    future<> save_reader(shard_id shard, const dht::decorated_key& last_pkey, position_in_partition_view last_pos);
 
 public:
     read_context(distributed<replica::database>& db, schema_ptr s, const query::read_command& cmd, const dht::partition_range_vector& ranges,
@@ -275,7 +275,7 @@ public:
     future<> lookup_readers(db::timeout_clock::time_point timeout) noexcept;
 
     future<> save_readers(flat_mutation_reader_v2::tracked_buffer unconsumed_buffer, detached_compaction_state compaction_state,
-            std::optional<clustering_key_prefix> last_ckey) noexcept;
+            position_in_partition last_pos) noexcept;
 
     future<> stop();
 };
@@ -474,10 +474,10 @@ read_context::dismantle_buffer_stats read_context::dismantle_compaction_state(de
     return stats;
 }
 
-future<> read_context::save_reader(shard_id shard, const dht::decorated_key& last_pkey, const std::optional<clustering_key_prefix>& last_ckey) {
-  return do_with(std::exchange(_readers[shard], {}), [this, shard, &last_pkey, &last_ckey] (reader_meta& rm) mutable {
+future<> read_context::save_reader(shard_id shard, const dht::decorated_key& last_pkey, position_in_partition_view last_pos) {
+  return do_with(std::exchange(_readers[shard], {}), [this, shard, &last_pkey, last_pos] (reader_meta& rm) mutable {
     return _db.invoke_on(shard, [this, query_uuid = _cmd.query_uuid, query_ranges = _ranges, &rm,
-            &last_pkey, &last_ckey, gts = tracing::global_trace_state_ptr(_trace_state)] (replica::database& db) mutable {
+            &last_pkey, last_pos, gts = tracing::global_trace_state_ptr(_trace_state)] (replica::database& db) mutable {
         try {
             auto rparts = rm.rparts.release(); // avoid another round-trip when destroying rparts
             auto reader_opt = rparts->permit.semaphore().unregister_inactive_read(std::move(*rparts->handle));
@@ -518,7 +518,7 @@ future<> read_context::save_reader(shard_id shard, const dht::decorated_key& las
                     std::move(*reader),
                     std::move(rparts->permit),
                     last_pkey,
-                    last_ckey);
+                    position_in_partition(last_pos));
 
             db.get_querier_cache().insert(query_uuid, std::move(querier), gts.get());
 
@@ -584,7 +584,7 @@ future<> read_context::lookup_readers(db::timeout_clock::time_point timeout) noe
 }
 
 future<> read_context::save_readers(flat_mutation_reader_v2::tracked_buffer unconsumed_buffer, detached_compaction_state compaction_state,
-            std::optional<clustering_key_prefix> last_ckey) noexcept {
+            position_in_partition last_pos) noexcept {
     if (_cmd.query_uuid == utils::UUID{}) {
         co_return;
     }
@@ -597,10 +597,10 @@ future<> read_context::save_readers(flat_mutation_reader_v2::tracked_buffer unco
     const auto cs_stats = dismantle_compaction_state(std::move(compaction_state));
     tracing::trace(_trace_state, "Dismantled compaction state: {}", cs_stats);
 
-    co_await parallel_for_each(boost::irange(0u, smp::count), [this, &last_pkey, &last_ckey] (shard_id shard) {
+    co_await parallel_for_each(boost::irange(0u, smp::count), [this, &last_pkey, &last_pos] (shard_id shard) {
         auto& rm = _readers[shard];
         if (rm.state == reader_state::successful_lookup || rm.state == reader_state::saving) {
-            return save_reader(shard, last_pkey, last_ckey);
+            return save_reader(shard, last_pkey, last_pos);
         }
 
         return make_ready_future<>();
@@ -615,15 +615,13 @@ using compact_for_result_state = compact_for_query_state_v2<ResultType::only_liv
 template <typename ResultBuilder>
 requires std::is_nothrow_move_constructible_v<typename ResultBuilder::result_type>
 struct page_consume_result {
-    std::optional<clustering_key_prefix> last_ckey;
     typename ResultBuilder::result_type result;
     flat_mutation_reader_v2::tracked_buffer unconsumed_fragments;
     lw_shared_ptr<compact_for_result_state<ResultBuilder>> compaction_state;
 
-    page_consume_result(std::optional<clustering_key_prefix>&& ckey, typename ResultBuilder::result_type&& result, flat_mutation_reader_v2::tracked_buffer&& unconsumed_fragments,
+    page_consume_result(typename ResultBuilder::result_type&& result, flat_mutation_reader_v2::tracked_buffer&& unconsumed_fragments,
             lw_shared_ptr<compact_for_result_state<ResultBuilder>>&& compaction_state) noexcept
-        : last_ckey(std::move(ckey))
-        , result(std::move(result))
+        : result(std::move(result))
         , unconsumed_fragments(std::move(unconsumed_fragments))
         , compaction_state(std::move(compaction_state)) {
     }
@@ -714,7 +712,7 @@ future<page_consume_result<ResultBuilder>> read_page(
                 cmd.partition_limit, cmd.timestamp));
     if (!f.failed()) {
         // no exceptions are thrown in this block
-        auto [ckey, result] = std::move(f).get0();
+        auto result = std::move(f).get0();
         const auto& cstats = compaction_state->stats();
         tracing::trace(trace_state, "Page stats: {} partition(s), {} static row(s) ({} live, {} dead), {} clustering row(s) ({} live, {} dead) and {} range tombstone(s)",
                 cstats.partitions,
@@ -728,7 +726,7 @@ future<page_consume_result<ResultBuilder>> read_page(
         auto buffer = reader.detach_buffer();
         co_await reader.close();
         // page_consume_result cannot fail so there's no risk of double-closing reader.
-        co_return page_consume_result<ResultBuilder>(std::move(ckey), std::move(result), std::move(buffer), std::move(compaction_state));
+        co_return page_consume_result<ResultBuilder>(std::move(result), std::move(buffer), std::move(compaction_state));
     }
 
     co_await reader.close();
@@ -753,7 +751,8 @@ future<typename ResultBuilder::result_type> do_query(
         return read_page<ResultBuilder>(ctx, s, cmd, ranges, trace_state, std::move(result_builder));
     }).then([&] (page_consume_result<ResultBuilder> r) -> future<typename ResultBuilder::result_type> {
         if (r.compaction_state->are_limits_reached() || r.result.is_short_read()) {
-            co_await ctx->save_readers(std::move(r.unconsumed_fragments), std::move(*r.compaction_state).detach_state(), std::move(r.last_ckey));
+            co_await ctx->save_readers(std::move(r.unconsumed_fragments), std::move(*r.compaction_state).detach_state(),
+                    position_in_partition(r.compaction_state->current_position()));
         }
         co_return std::move(r.result);
     }));
