@@ -697,7 +697,7 @@ future<page_consume_result<ResultBuilder>> read_page(
         const query::read_command& cmd,
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
-        ResultBuilder&& result_builder) {
+        noncopyable_function<ResultBuilder()> result_builder_factory) {
     auto compaction_state = make_lw_shared<compact_for_result_state<ResultBuilder>>(*s, cmd.timestamp, cmd.slice, cmd.get_row_limit(),
             cmd.partition_limit);
 
@@ -708,7 +708,7 @@ future<page_consume_result<ResultBuilder>> read_page(
     }
 
     // Use coroutine::as_future to prevent exception on timesout.
-    auto f = co_await coroutine::as_future(query::consume_page(reader, compaction_state, cmd.slice, std::move(result_builder), cmd.get_row_limit(),
+    auto f = co_await coroutine::as_future(query::consume_page(reader, compaction_state, cmd.slice, result_builder_factory(), cmd.get_row_limit(),
                 cmd.partition_limit, cmd.timestamp));
     if (!f.failed()) {
         // no exceptions are thrown in this block
@@ -741,14 +741,12 @@ future<typename ResultBuilder::result_type> do_query(
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
         db::timeout_clock::time_point timeout,
-        ResultBuilder&& result_builder_) {
+        noncopyable_function<ResultBuilder()> result_builder_factory) {
     auto ctx = seastar::make_shared<read_context>(db, s, cmd, ranges, trace_state, timeout);
 
-    // "capture" result_builder so it won't be released if we yield.
-    auto result_builder = std::move(result_builder_);
     // Use coroutine::as_future to prevent exception on timesout.
-    auto f = co_await coroutine::as_future(ctx->lookup_readers(timeout).then([&] {
-        return read_page<ResultBuilder>(ctx, s, cmd, ranges, trace_state, std::move(result_builder));
+    auto f = co_await coroutine::as_future(ctx->lookup_readers(timeout).then([&, result_builder_factory = std::move(result_builder_factory)] () mutable {
+        return read_page<ResultBuilder>(ctx, s, cmd, ranges, trace_state, std::move(result_builder_factory));
     }).then([&] (page_consume_result<ResultBuilder> r) -> future<typename ResultBuilder::result_type> {
         if (r.compaction_state->are_limits_reached() || r.result.is_short_read()) {
             co_await ctx->save_readers(std::move(r.unconsumed_fragments), std::move(*r.compaction_state).detach_state(),
@@ -785,9 +783,9 @@ static future<std::tuple<foreign_ptr<lw_shared_ptr<typename ResultBuilder::resul
     try {
         auto accounter = co_await local_db.get_result_memory_limiter().new_mutation_read(*cmd.max_result_size, short_read_allowed);
 
-        auto result_builder = result_builder_factory(std::move(accounter));
-
-        auto result = co_await do_query<ResultBuilder>(db, s, cmd, ranges, std::move(trace_state), timeout, std::move(result_builder));
+        auto result = co_await do_query<ResultBuilder>(db, s, cmd, ranges, std::move(trace_state), timeout, [result_builder_factory, accounter = std::move(accounter)] () mutable {
+			return result_builder_factory(std::move(accounter));
+		});
 
         ++stats.total_reads;
         stats.short_mutation_queries += bool(result.is_short_read());
