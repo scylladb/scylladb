@@ -354,8 +354,11 @@ foreign_ptr<lw_shared_ptr<query::result>> result_merger::get() {
     short_read is_short_read;
     uint32_t partition_count = 0;
 
+    std::optional<full_position> last_position;
+
     for (auto&& r : _partial) {
         result_view::do_with(*r, [&] (result_view rv) {
+            last_position.reset();
             for (auto&& pv : rv._v.partitions()) {
                 auto rows = pv.rows();
                 // If rows.empty(), then there's a static row, or there wouldn't be a partition
@@ -375,17 +378,25 @@ foreign_ptr<lw_shared_ptr<query::result>> result_merger::get() {
                     return;
                 }
             }
+            last_position = rv._v.last_position();
         });
         if (r->is_short_read()) {
             is_short_read = short_read::yes;
+            last_position.reset();
             break;
         }
         if (row_count >= _max_rows || partition_count >= _max_partitions) {
+            last_position.reset();
             break;
         }
     }
 
-    std::move(partitions).end_partitions().skip_last_position().end_query_result();
+    auto after_partitions = std::move(partitions).end_partitions();
+    if (last_position) {
+        std::move(after_partitions).write_last_position(*last_position).end_query_result();
+    } else {
+        std::move(after_partitions).skip_last_position().end_query_result();
+    }
 
     return make_foreign(make_lw_shared<query::result>(std::move(w), is_short_read, row_count, partition_count));
 }

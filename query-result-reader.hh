@@ -193,8 +193,10 @@ public:
         return std::make_tuple(ps.size(), rows);
     }
 
-    std::tuple<partition_key, std::optional<clustering_key>>
-    get_last_partition_and_clustering_key() const {
+    full_position get_last_position() const {
+        if (_v.last_position()) {
+            return *_v.last_position();
+        }
         auto ps = _v.partitions();
         assert(!ps.empty());
         auto pit = ps.begin();
@@ -204,16 +206,19 @@ public:
         }
         auto p = *pit;
         auto rs = p.rows();
-        std::optional<clustering_key> last_row;
+        auto pos = position_in_partition(position_in_partition::partition_start_tag_t());
         if (!rs.empty()) {
             auto rit = rs.begin();
             auto rnext = rit;
             while (++rnext != rs.end()) {
                 rit = rnext;
             }
-            last_row = (*rit).key();
+            const auto& key_opt = (*rit).key();
+            if (key_opt) {
+                pos = position_in_partition::for_key(*key_opt);
+            }
         }
-        return { p.key().value(), std::move(last_row) };
+        return { p.key().value(), std::move(pos) };
     }
 };
 

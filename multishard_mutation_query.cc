@@ -827,12 +827,15 @@ public:
     static constexpr emit_only_live_rows only_live = emit_only_live_rows::yes;
 
 private:
+    const compact_for_result_state<data_query_result_builder>& _compaction_state;
     std::unique_ptr<query::result::builder> _res_builder;
     query_result_builder _builder;
 
 public:
-    data_query_result_builder(const schema& s, const query::partition_slice& slice, query::result_options opts, query::result_memory_accounter&& accounter)
-        : _res_builder(std::make_unique<query::result::builder>(slice, opts, std::move(accounter)))
+    data_query_result_builder(const schema& s, const query::partition_slice& slice, query::result_options opts,
+            query::result_memory_accounter&& accounter, const compact_for_result_state<data_query_result_builder>& compaction_state)
+        : _compaction_state(compaction_state)
+        , _res_builder(std::make_unique<query::result::builder>(slice, opts, std::move(accounter)))
         , _builder(s, *_res_builder) { }
 
     void consume_new_partition(const dht::decorated_key& dk) { _builder.consume_new_partition(dk); }
@@ -843,6 +846,9 @@ public:
     stop_iteration consume_end_of_partition()  { return _builder.consume_end_of_partition(); }
     result_type consume_end_of_stream() {
         _builder.consume_end_of_stream();
+        if (_compaction_state.are_limits_reached() || _res_builder->is_short_read()) {
+            return _res_builder->build(_compaction_state.current_full_position());
+        }
         return _res_builder->build();
     }
 };
@@ -876,6 +882,6 @@ future<std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>
 
     return do_query_on_all_shards<data_query_result_builder>(db, query_schema, cmd, ranges, std::move(trace_state), timeout,
             [table_schema, &cmd, opts] (query::result_memory_accounter&& accounter, const compact_for_result_state<data_query_result_builder>& compaction_state) {
-        return data_query_result_builder(*table_schema, cmd.slice, opts, std::move(accounter));
+        return data_query_result_builder(*table_schema, cmd.slice, opts, std::move(accounter), compaction_state);
     });
 }

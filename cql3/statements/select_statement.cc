@@ -987,9 +987,9 @@ lw_shared_ptr<const service::pager::paging_state> indexed_table_select_statement
         return paging_state;
     }
 
-    auto&& last_partition_and_clustering_key = result_view.get_last_partition_and_clustering_key();
-    auto& last_base_pk = std::get<0>(last_partition_and_clustering_key);
-    auto& last_base_ck = std::get<1>(last_partition_and_clustering_key);
+    auto&& last_pos = result_view.get_last_position();
+    auto& last_base_pk = last_pos.partition;
+    auto* last_base_ck = last_pos.position.has_key() ? &last_pos.position.key() : nullptr;
 
     bytes_opt indexed_column_value = _used_index_restrictions->value_for(*cdef, options);
 

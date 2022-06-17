@@ -2116,6 +2116,11 @@ table::query(schema_ptr s,
         }
     }
 
+    std::optional<full_position> last_pos;
+    if (querier_opt && querier_opt->current_position()) {
+        last_pos.emplace(*querier_opt->current_position());
+    }
+
     if (!saved_querier || (querier_opt && !querier_opt->are_limits_reached() && !qs.builder.is_short_read())) {
         co_await querier_opt->close();
         querier_opt = {};
@@ -2124,7 +2129,7 @@ table::query(schema_ptr s,
         *saved_querier = std::move(querier_opt);
     }
 
-    co_return make_lw_shared<query::result>(qs.builder.build());
+    co_return make_lw_shared<query::result>(qs.builder.build(std::move(last_pos)));
 }
 
 future<reconcilable_result>
