@@ -30,11 +30,12 @@ import yaml
 
 from abc import ABC, abstractmethod
 from io import StringIO
-from scripts import coverage
+from scripts import coverage    # type: ignore
 from test.pylib.artifact_registry import ArtifactRegistry
-from test.pylib.pool import Pool
 from test.pylib.host_registry import HostRegistry
+from test.pylib.pool import Pool
 from test.pylib.scylla_server import ScyllaServer, ScyllaCluster
+from typing import Dict, List
 
 output_is_a_tty = sys.stdout.isatty()
 
@@ -76,7 +77,7 @@ class TestSuite(ABC):
     E.g. it can be unit tests, boost tests, or CQL tests."""
 
     # All existing test suites, one suite per path/mode.
-    suites = dict()
+    suites: Dict[str, ABC] = dict()
     artifacts = ArtifactRegistry()
     hosts = HostRegistry()
     FLAKY_RETRIES = 5
@@ -269,7 +270,7 @@ class BoostTestSuite(UnitTestSuite):
 
     # A cache of individual test cases, for which we have called
     # --list_content. Static to share across all modes.
-    _case_cache = dict()
+    _case_cache: Dict[str, List[str]] = dict()
 
     def __init__(self, path, cfg, options, mode):
         super().__init__(path, cfg, options, mode)
@@ -812,7 +813,7 @@ async def run_test(test, options, gentle_kill=False, env=dict()):
             log.write("export ASAN_OPTIONS='{}'\n".format(
                 ":".join(filter(None, ASAN_OPTIONS))).encode(encoding="UTF-8"))
             log.write("{} {}\n".format(test.path, " ".join(test.args)).encode(encoding="UTF-8"))
-            log.write("=== TEST.PY TEST OUTPUT ===\n".format(test.id).encode(encoding="UTF-8"))
+            log.write("=== TEST.PY TEST #{} OUTPUT ===\n".format(test.id).encode(encoding="UTF-8"))
             log.flush()
             test.time_start = time.time()
             test.time_end = 0
