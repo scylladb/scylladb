@@ -137,12 +137,6 @@ const dht::token& end_token(const dht::partition_range& r) {
     return r.end() ? r.end()->value().token() : max_token;
 }
 
-static inline
-sstring get_dc(gms::inet_address ep) {
-    auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
-    return snitch_ptr->get_datacenter(ep);
-}
-
 unsigned storage_proxy::cas_shard(const schema& s, dht::token token) {
     return dht::shard_of(s, token);
 }
@@ -1726,9 +1720,9 @@ inline uint64_t& storage_proxy_stats::split_stats::get_ep_stat(const locator::to
     }
 
     try {
-        sstring dc = get_dc(ep);
+        sstring dc = topo.get_datacenter(ep);
         if (_auto_register_metrics) {
-            register_metrics_for(ep);
+            register_metrics_for(dc, ep);
         }
         return _dc_stats[dc].val;
     } catch (...) {
@@ -1747,10 +1741,9 @@ void storage_proxy_stats::split_stats::register_metrics_local() {
     });
 }
 
-void storage_proxy_stats::split_stats::register_metrics_for(gms::inet_address ep) {
+void storage_proxy_stats::split_stats::register_metrics_for(sstring dc, gms::inet_address ep) {
     namespace sm = seastar::metrics;
 
-    sstring dc = get_dc(ep);
     // if this is the first time we see an endpoint from this DC - add a
     // corresponding collectd metric
     if (auto [ignored, added] = _dc_stats.try_emplace(dc); added) {
