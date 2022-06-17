@@ -40,6 +40,7 @@
 #include <boost/algorithm/string/classification.hpp>
 #include "utils/generation-number.hh"
 #include "locator/token_metadata.hh"
+#include "locator/snitch_base.hh"
 #include "utils/exceptions.hh"
 
 namespace gms {

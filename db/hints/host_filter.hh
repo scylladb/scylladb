@@ -14,7 +14,6 @@
 #include <string_view>
 
 #include <seastar/core/sstring.hh>
-#include "locator/snitch_base.hh"
 #include "seastarx.hh"
 
 namespace gms {

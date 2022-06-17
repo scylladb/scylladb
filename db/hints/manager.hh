@@ -21,7 +21,6 @@
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/core/shared_mutex.hh>
 #include <seastar/core/abort_source.hh>
-#include "locator/snitch_base.hh"
 #include "inet_address_vectors.hh"
 #include "db/commitlog/commitlog.hh"
 #include "utils/loading_shared_values.hh"
@@ -515,7 +514,6 @@ private:
     host_filter _host_filter;
     shared_ptr<service::storage_proxy> _proxy_anchor;
     shared_ptr<gms::gossiper> _gossiper_anchor;
-    locator::snitch_ptr& _local_snitch_ptr;
     int64_t _max_hint_window_us = 0;
     replica::database& _local_db;
 
@@ -530,7 +528,7 @@ private:
     seastar::named_semaphore _drain_lock = {1, named_semaphore_exception_factory{"drain lock"}};
 
 public:
-    manager(sstring hints_directory, host_filter filter, int64_t max_hint_window_ms, resource_manager&res_manager, distributed<replica::database>& db);
+    manager(sstring hints_directory, host_filter filter, int64_t max_hint_window_ms, resource_manager&res_manager, sharded<replica::database>& db);
     virtual ~manager();
     manager(manager&&) = delete;
     manager& operator=(manager&&) = delete;
