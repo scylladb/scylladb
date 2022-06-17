@@ -97,7 +97,7 @@ lw_shared_ptr<sstables::sstable_set> table::make_maintenance_sstable_set() const
     // Level metadata is not used because (level 0) maintenance sstables are disjoint and must be stored for efficient retrieval in the partitioned set
     bool use_level_metadata = false;
     return make_lw_shared<sstables::sstable_set>(
-            sstables::make_partitioned_sstable_set(_schema, make_lw_shared<sstable_list>(sstable_list{}), use_level_metadata));
+            sstables::make_partitioned_sstable_set(_schema, use_level_metadata));
 }
 
 void table::refresh_compound_sstable_set() {

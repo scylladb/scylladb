@@ -79,7 +79,7 @@ public:
     static dht::partition_range to_partition_range(const dht::ring_position_view& pos, const interval_type& i);
 
     partitioned_sstable_set(const partitioned_sstable_set&) = delete;
-    explicit partitioned_sstable_set(schema_ptr schema, lw_shared_ptr<sstable_list> all, bool use_level_metadata = true);
+    explicit partitioned_sstable_set(schema_ptr schema, bool use_level_metadata = true);
     // For cloning the partitioned_sstable_set (makes a deep copy, including *_all)
     explicit partitioned_sstable_set(
         schema_ptr schema,

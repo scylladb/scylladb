@@ -897,7 +897,7 @@ public:
     }
 
     virtual sstables::sstable_set make_sstable_set_for_input() const override {
-        return sstables::make_partitioned_sstable_set(_schema, make_lw_shared<sstable_list>(sstable_list{}), false);
+        return sstables::make_partitioned_sstable_set(_schema, false);
     }
 
     flat_mutation_reader_v2 make_sstable_reader() const override {
@@ -1692,7 +1692,7 @@ static future<compaction_result> scrub_sstables_validate_mode(sstables::compacti
     auto schema = table_s.schema();
 
     formatted_sstables_list sstables_list_msg;
-    auto sstables = make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(schema, make_lw_shared<sstable_list>(sstable_list{}), false));
+    auto sstables = make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(schema, false));
     for (const auto& sst : descriptor.sstables) {
         sstables_list_msg += sst;
         sstables->insert(sst);

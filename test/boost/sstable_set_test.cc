@@ -16,7 +16,11 @@
 #include "readers/from_mutations_v2.hh"
 
 static sstables::sstable_set make_sstable_set(schema_ptr schema, lw_shared_ptr<sstable_list> all = {}, bool use_level_metadata = true) {
-    return sstables::sstable_set(std::make_unique<partitioned_sstable_set>(schema, std::move(all), use_level_metadata), schema);
+    auto ret = sstables::sstable_set(std::make_unique<partitioned_sstable_set>(schema, use_level_metadata), schema);
+    for (auto& sst : *all) {
+        ret.insert(sst);
+    }
+    return ret;
 }
 
 SEASTAR_TEST_CASE(test_sstables_sstable_set_read_modify_write) {
