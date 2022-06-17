@@ -160,7 +160,7 @@ class compact_mutation_state {
     bool _return_static_content_on_partition_with_no_rows{};
 
     std::optional<static_row> _last_static_row;
-    position_in_partition _last_clustering_pos;
+    position_in_partition _last_pos;
     // Currently active tombstone, can be different than the tombstone emitted to
     // the regular consumer (_current_emitted_tombstone) because even purged
     // tombstone that are not emitted are still applied to data when compacting.
@@ -285,7 +285,7 @@ public:
         , _partition_limit(partition_limit)
         , _partition_row_limit(_slice.options.contains(query::partition_slice::option::distinct) ? 1 : slice.partition_row_limit())
         , _last_dk({dht::token(), partition_key::make_empty()})
-        , _last_clustering_pos(position_in_partition::before_all_clustered_rows())
+        , _last_pos(position_in_partition::end_of_partition_tag_t())
     {
         static_assert(!sstable_compaction(), "This constructor cannot be used for sstable compaction.");
     }
@@ -298,7 +298,7 @@ public:
         , _can_gc([this] (tombstone t) { return can_gc(t); })
         , _slice(s.full_slice())
         , _last_dk({dht::token(), partition_key::make_empty()})
-        , _last_clustering_pos(position_in_partition::before_all_clustered_rows())
+        , _last_pos(position_in_partition::end_of_partition_tag_t())
         , _collector(std::make_unique<mutation_compactor_garbage_collector>(_schema))
     {
         static_assert(sstable_compaction(), "This constructor can only be used for sstable compaction.");
@@ -320,7 +320,7 @@ public:
         _max_purgeable = api::missing_timestamp;
         _gc_before = std::nullopt;
         _last_static_row.reset();
-        _last_clustering_pos = position_in_partition::before_all_clustered_rows();
+        _last_pos = position_in_partition(position_in_partition::partition_start_tag_t());
         _effective_tombstone = {};
         _current_emitted_tombstone = {};
         _current_emitted_gc_tombstone = {};
@@ -349,6 +349,7 @@ public:
     requires CompactedFragmentsConsumerV2<Consumer> && CompactedFragmentsConsumerV2<GCConsumer>
     stop_iteration consume(static_row&& sr, Consumer& consumer, GCConsumer& gc_consumer) {
         _last_static_row = static_row(_schema, sr);
+        _last_pos = position_in_partition(position_in_partition::static_row_tag_t());
         auto current_tombstone = _partition_tombstone;
         if constexpr (sstable_compaction()) {
             _collector->start_collecting_static_row();
@@ -380,7 +381,7 @@ public:
     requires CompactedFragmentsConsumerV2<Consumer> && CompactedFragmentsConsumerV2<GCConsumer>
     stop_iteration consume(clustering_row&& cr, Consumer& consumer, GCConsumer& gc_consumer) {
         if (!sstable_compaction()) {
-            _last_clustering_pos = cr.position();
+            _last_pos = cr.position();
         }
         auto current_tombstone = std::max(_partition_tombstone, _effective_tombstone);
         auto t = cr.tomb();
@@ -447,7 +448,7 @@ public:
     requires CompactedFragmentsConsumerV2<Consumer> && CompactedFragmentsConsumerV2<GCConsumer>
     stop_iteration consume(range_tombstone_change&& rtc, Consumer& consumer, GCConsumer& gc_consumer) {
         if (!sstable_compaction()) {
-            _last_clustering_pos = rtc.position();
+            _last_pos = rtc.position();
         }
         ++_stats.range_tombstones;
         do_consume(std::move(rtc), consumer, gc_consumer);
@@ -458,7 +459,7 @@ public:
     requires CompactedFragmentsConsumerV2<Consumer> && CompactedFragmentsConsumerV2<GCConsumer>
     stop_iteration consume_end_of_partition(Consumer& consumer, GCConsumer& gc_consumer) {
         if (_effective_tombstone) {
-            auto rtc = range_tombstone_change(position_in_partition::after_key(_last_clustering_pos), tombstone{});
+            auto rtc = range_tombstone_change(position_in_partition::after_key(_last_pos), tombstone{});
             // do_consume() overwrites _effective_tombstone with {}, so save and restore it.
             auto prev_tombstone = _effective_tombstone;
             do_consume(std::move(rtc), consumer, gc_consumer);
@@ -507,6 +508,12 @@ public:
         return _dk;
     }
 
+    // Only updated when SSTableCompaction == compact_for_sstables::no.
+    // Only meaningful if compaction has started already (current_partition() != nullptr).
+    position_in_partition_view current_position() const {
+        return _last_pos;
+    }
+
     /// Reset limits and query-time to the new page's ones and re-emit the
     /// partition-header and static row if there are clustering rows or range
     /// tombstones left in the partition.
@@ -533,7 +540,7 @@ public:
             consume(*std::exchange(_last_static_row, {}), consumer, nc);
         }
         if (_effective_tombstone) {
-            auto rtc = range_tombstone_change(position_in_partition_view::after_key(_last_clustering_pos), _effective_tombstone);
+            auto rtc = range_tombstone_change(position_in_partition_view::after_key(_last_pos), _effective_tombstone);
             do_consume(std::move(rtc), consumer, nc);
         }
     }
@@ -552,7 +559,7 @@ public:
     detached_compaction_state detach_state() && {
         partition_start ps(std::move(_last_dk), _partition_tombstone);
         if (_effective_tombstone) {
-            return {std::move(ps), std::move(_last_static_row), range_tombstone_change(position_in_partition_view::after_key(_last_clustering_pos), _effective_tombstone)};
+            return {std::move(ps), std::move(_last_static_row), range_tombstone_change(position_in_partition_view::after_key(_last_pos), _effective_tombstone)};
         } else {
             return {std::move(ps), std::move(_last_static_row), std::optional<range_tombstone_change>{}};
         }
