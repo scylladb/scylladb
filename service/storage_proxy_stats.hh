@@ -13,6 +13,8 @@
 #include "utils/histogram.hh"
 #include <seastar/core/metrics.hh>
 
+namespace locator { class topology; }
+
 namespace service {
 
 namespace storage_proxy_stats {
@@ -61,7 +63,7 @@ public:
      *
      * @return a reference to the requested counter
      */
-    uint64_t& get_ep_stat(gms::inet_address ep) noexcept;
+    uint64_t& get_ep_stat(const locator::topology& topo, gms::inet_address ep) noexcept;
 };
 
 struct write_stats {

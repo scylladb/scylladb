@@ -528,7 +528,7 @@ public:
             }
             if (_cl_achieved) { // For CL=ANY this can still be false
                 for (auto&& ep : get_targets()) {
-                    ++stats().background_replica_writes_failed.get_ep_stat(ep);
+                    ++stats().background_replica_writes_failed.get_ep_stat(_proxy->get_token_metadata_ptr()->get_topology(), ep);
                 }
                 stats().background_writes_failed += int(!_targets.empty());
             }
@@ -1720,7 +1720,7 @@ void storage_proxy_stats::stats::register_stats() {
     });
 }
 
-inline uint64_t& storage_proxy_stats::split_stats::get_ep_stat(gms::inet_address ep) noexcept {
+inline uint64_t& storage_proxy_stats::split_stats::get_ep_stat(const locator::topology& topo, gms::inet_address ep) noexcept {
     if (fbu::is_me(ep)) {
         return _local.val;
     }
@@ -2773,9 +2773,9 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
             got_response(response_id, coordinator, std::nullopt);
         } else {
             if (!handler.read_repair_write()) {
-                ++stats.writes_attempts.get_ep_stat(coordinator);
+                ++stats.writes_attempts.get_ep_stat(get_token_metadata_ptr()->get_topology(), coordinator);
             } else {
-                ++stats.read_repair_write_attempts.get_ep_stat(coordinator);
+                ++stats.read_repair_write_attempts.get_ep_stat(get_token_metadata_ptr()->get_topology(), coordinator);
             }
 
             if (coordinator == my_address) {
@@ -2787,7 +2787,7 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
 
         // Waited on indirectly.
         (void)f.handle_exception([response_id, forward_size, coordinator, handler_ptr, p = shared_from_this(), &stats] (std::exception_ptr eptr) {
-            ++stats.writes_errors.get_ep_stat(coordinator);
+            ++stats.writes_errors.get_ep_stat(p->get_token_metadata_ptr()->get_topology(), coordinator);
             error err = error::FAILURE;
             std::optional<sstring> msg;
             try {
@@ -3526,6 +3526,11 @@ private:
         _proxy->get_stats().foreground_reads -= int(_foreground);
         _foreground = false;
     }
+
+    const locator::topology& get_topology() const noexcept {
+        return _proxy->get_token_metadata_ptr()->get_topology();
+    }
+
 public:
     abstract_read_executor(schema_ptr s, lw_shared_ptr<replica::column_family> cf, shared_ptr<storage_proxy> proxy, lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, size_t block_for,
             inet_address_vector_replica_set targets, tracing::trace_state_ptr trace_state, service_permit permit) :
@@ -3549,7 +3554,7 @@ public:
 
 protected:
     future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> make_mutation_data_request(lw_shared_ptr<query::read_command> cmd, gms::inet_address ep, clock_type::time_point timeout) {
-        ++_proxy->get_stats().mutation_data_read_attempts.get_ep_stat(ep);
+        ++_proxy->get_stats().mutation_data_read_attempts.get_ep_stat(get_topology(), ep);
         if (fbu::is_me(ep)) {
             tracing::trace(_trace_state, "read_mutation_data: querying locally");
             return _proxy->query_mutations_locally(_schema, cmd, _partition_range, timeout, _trace_state);
@@ -3563,7 +3568,7 @@ protected:
         }
     }
     future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> make_data_request(gms::inet_address ep, clock_type::time_point timeout, bool want_digest) {
-        ++_proxy->get_stats().data_read_attempts.get_ep_stat(ep);
+        ++_proxy->get_stats().data_read_attempts.get_ep_stat(get_topology(), ep);
         auto opts = want_digest
                   ? query::result_options{query::result_request::result_and_digest, digest_algorithm(*_proxy)}
                   : query::result_options{query::result_request::only_result, query::digest_algorithm::none};
@@ -3580,7 +3585,7 @@ protected:
         }
     }
     future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>> make_digest_request(gms::inet_address ep, clock_type::time_point timeout) {
-        ++_proxy->get_stats().digest_read_attempts.get_ep_stat(ep);
+        ++_proxy->get_stats().digest_read_attempts.get_ep_stat(get_topology(), ep);
         if (fbu::is_me(ep)) {
             tracing::trace(_trace_state, "read_digest: querying locally");
             return _proxy->query_result_local_digest(_schema, _cmd, _partition_range, _trace_state,
@@ -3605,10 +3610,10 @@ protected:
                     auto v = f.get0();
                     _cf->set_hit_rate(ep, std::get<1>(v));
                     resolver->add_mutate_data(ep, std::get<0>(std::move(v)));
-                    ++_proxy->get_stats().mutation_data_read_completed.get_ep_stat(ep);
+                    ++_proxy->get_stats().mutation_data_read_completed.get_ep_stat(get_topology(), ep);
                     register_request_latency(latency_clock::now() - start);
                 } catch(...) {
-                    ++_proxy->get_stats().mutation_data_read_errors.get_ep_stat(ep);
+                    ++_proxy->get_stats().mutation_data_read_errors.get_ep_stat(get_topology(), ep);
                     resolver->error(ep, std::current_exception());
                 }
             });
@@ -3623,11 +3628,11 @@ protected:
                     auto v = f.get0();
                     _cf->set_hit_rate(ep, std::get<1>(v));
                     resolver->add_data(ep, std::get<0>(std::move(v)));
-                    ++_proxy->get_stats().data_read_completed.get_ep_stat(ep);
+                    ++_proxy->get_stats().data_read_completed.get_ep_stat(get_topology(), ep);
                     _used_targets.push_back(ep);
                     register_request_latency(latency_clock::now() - start);
                 } catch(...) {
-                    ++_proxy->get_stats().data_read_errors.get_ep_stat(ep);
+                    ++_proxy->get_stats().data_read_errors.get_ep_stat(get_topology(), ep);
                     resolver->error(ep, std::current_exception());
                 }
             });
@@ -3642,11 +3647,11 @@ protected:
                     auto v = f.get0();
                     _cf->set_hit_rate(ep, std::get<2>(v));
                     resolver->add_digest(ep, std::get<0>(v), std::get<1>(v));
-                    ++_proxy->get_stats().digest_read_completed.get_ep_stat(ep);
+                    ++_proxy->get_stats().digest_read_completed.get_ep_stat(get_topology(), ep);
                     _used_targets.push_back(ep);
                     register_request_latency(latency_clock::now() - start);
                 } catch(...) {
-                    ++_proxy->get_stats().digest_read_errors.get_ep_stat(ep);
+                    ++_proxy->get_stats().digest_read_errors.get_ep_stat(get_topology(), ep);
                     resolver->error(ep, std::current_exception());
                 }
             });
