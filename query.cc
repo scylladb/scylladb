@@ -317,7 +317,7 @@ void result::ensure_counts() {
 result::result()
     : result([] {
         bytes_ostream out;
-        ser::writer_of_query_result<bytes_ostream>(out).skip_partitions().end_query_result();
+        ser::writer_of_query_result<bytes_ostream>(out).skip_partitions().skip_last_position().end_query_result();
         return out;
     }(), short_read::no, 0, 0)
 { }
@@ -385,7 +385,7 @@ foreign_ptr<lw_shared_ptr<query::result>> result_merger::get() {
         }
     }
 
-    std::move(partitions).end_partitions().end_query_result();
+    std::move(partitions).end_partitions().skip_last_position().end_query_result();
 
     return make_foreign(make_lw_shared<query::result>(std::move(w), is_short_read, row_count, partition_count));
 }
