@@ -12,6 +12,7 @@
 #include "mutation_fragment.hh"
 #include "range_tombstone_assembler.hh"
 #include "tombstone_gc.hh"
+#include "full_position.hh"
 
 static inline bool has_ck_selector(const query::clustering_row_ranges& ranges) {
     // Like PK range, an empty row range, should be considered an "exclude all" restriction
@@ -512,6 +513,13 @@ public:
     // Only meaningful if compaction has started already (current_partition() != nullptr).
     position_in_partition_view current_position() const {
         return _last_pos;
+    }
+
+    std::optional<full_position> current_full_position() const {
+        if (!_dk) {
+            return {};
+        }
+        return full_position(_dk->key(), _last_pos);
     }
 
     /// Reset limits and query-time to the new page's ones and re-emit the
