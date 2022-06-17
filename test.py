@@ -420,7 +420,7 @@ class Test:
         self.suite = suite
         # Unique file name, which is also readable by human, as filename prefix
         self.uname = "{}.{}".format(self.shortname, self.id)
-        self.log_filename = os.path.join(suite.options.tmpdir, self.mode, self.uname + ".log")
+        self.log_filename = pathlib.Path(suite.options.tmpdir) / self.mode / (self.uname + ".log")
         self.is_flaky = self.shortname in suite.flaky_tests
         # True if the test was retried after it failed
         self.is_flaky_failure = False
@@ -453,7 +453,7 @@ class Test:
     def check_log(self, trim):
         """Check and trim logs and xml output for tests which have it"""
         if trim:
-            pathlib.Path(self.log_filename).unlink()
+            self.log_filename.unlink()
         pass
 
 
@@ -784,7 +784,7 @@ class TabularConsoleOutput:
 async def run_test(test, options, gentle_kill=False, env=dict()):
     """Run test program, return True if success else False"""
 
-    with open(test.log_filename, "wb") as log:
+    with test.log_filename.open("wb") as log:
 
         def report_error(error):
             msg = "=== TEST.PY SUMMARY START ===\n"
@@ -1055,10 +1055,10 @@ async def run_all_tests(signaled, options):
     console.print_end_blurb()
 
 
-def read_log(log_filename):
+def read_log(log_filename: pathlib.Path):
     """Intelligently read test log output"""
     try:
-        with open(log_filename, "r") as log:
+        with log_filename.open("r") as log:
             msg = log.read()
             return msg if len(msg) else "===Empty log output==="
     except FileNotFoundError:
