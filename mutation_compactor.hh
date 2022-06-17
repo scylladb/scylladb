@@ -619,6 +619,10 @@ public:
     auto consume_end_of_stream() {
         return _state->consume_end_of_stream(_consumer, _gc_consumer);
     }
+
+    lw_shared_ptr<compact_mutation_state<OnlyLive, SSTableCompaction>> get_state() {
+        return _state;
+    }
 };
 
 template<emit_only_live_rows only_live, typename Consumer>
