@@ -527,6 +527,7 @@ void memtable::remove_flushed_memory(uint64_t delta) {
 }
 
 void memtable::on_detach_from_region_group() noexcept {
+    _merged_into_cache = true;
     revert_flushed_memory();
 }
 
@@ -742,7 +743,7 @@ memtable::make_flat_reader_opt(schema_ptr s,
 
 flat_mutation_reader_v2
 memtable::make_flush_reader(schema_ptr s, reader_permit permit, const io_priority_class& pc) {
-    if (group()) {
+    if (!_merged_into_cache) {
         return make_flat_mutation_reader_v2<flush_reader>(std::move(s), std::move(permit), shared_from_this());
     } else {
         auto& full_slice = s->full_slice();

@@ -127,6 +127,7 @@ private:
     // monotonic. That combined source in this case is cache + memtable.
     mutation_source_opt _underlying;
     uint64_t _flushed_memory = 0;
+    bool _merged_into_cache = false;
     replica::table_stats& _table_stats;
 
     class memtable_encoding_stats_collector : public encoding_stats_collector {
