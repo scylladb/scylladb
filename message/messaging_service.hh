@@ -177,7 +177,8 @@ enum class messaging_verb : int32_t {
     REPAIR_UPDATE_SYSTEM_TABLE = 59,
     REPAIR_FLUSH_HINTS_BATCHLOG = 60,
     FORWARD_REQUEST = 61,
-    LAST = 62,
+    GET_GROUP0_UPGRADE_STATE = 62,
+    LAST = 63,
 };
 
 } // namespace netw
