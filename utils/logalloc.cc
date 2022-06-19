@@ -1336,6 +1336,8 @@ void reclaim_timer::report() const noexcept {
     log_if_any_mem(info_level, "allocated memory", pool_diff.memory_allocated);
 }
 
+region_listener::~region_listener() = default;
+
 //
 // For interface documentation see logalloc::region and allocation_strategy.
 //
@@ -1453,13 +1455,13 @@ private: // lsa_buffer allocator
     std::vector<entangled> _buf_ptrs_for_compact_segment;
 private:
     region* _region = nullptr;
-    region_group* _group = nullptr;
+    region_listener* _listener = nullptr;
     segment* _active = nullptr;
     size_t _active_offset;
     segment_descriptor_hist _segment_descs; // Contains only closed segments
     occupancy_stats _closed_occupancy;
     occupancy_stats _non_lsa_occupancy;
-    // This helps us keeping track of the region_group* heap. That's because we call update before
+    // This helps us updating out region_listener*. That's because we call update before
     // we have a chance to update the occupancy stats - mainly because at this point we don't know
     // what will we do with the new segment. Also, because we are not ever interested in the
     // fraction used, we'll keep it as a scalar and convert when we need to present it as an
@@ -1573,17 +1575,17 @@ private:
 
     void free_segment(segment* seg, segment_descriptor& desc) noexcept {
         shard_segment_pool.free_segment(seg, desc);
-        if (_group) {
+        if (_listener) {
             _evictable_space -= segment_size;
-            _group->decrease_usage(_heap_handle, -segment::size);
+            _listener->decrease_usage(_heap_handle, -segment::size);
         }
     }
 
     segment* new_segment() {
         segment* seg = shard_segment_pool.new_segment(this);
-        if (_group) {
+        if (_listener) {
             _evictable_space += segment_size;
-            _group->increase_usage(_heap_handle, segment::size);
+            _listener->increase_usage(_heap_handle, segment::size);
         }
         return seg;
     }
@@ -1716,37 +1718,29 @@ private:
         static std::atomic<uint64_t> id{0};
         return id.fetch_add(1);
     }
-    struct degroup_temporarily {
+    struct unlisten_temporarily {
         region_impl* impl;
-        region_group* group;
-        explicit degroup_temporarily(region_impl* impl)
-                : impl(impl), group(impl->_group) {
-            if (group) {
-                group->del(impl);
+        region_listener* listener;
+        explicit unlisten_temporarily(region_impl* impl)
+                : impl(impl), listener(impl->_listener) {
+            if (listener) {
+                listener->del(impl->_region);
             }
         }
-        ~degroup_temporarily() {
-            if (group) {
-                group->add(impl);
+        ~unlisten_temporarily() {
+            if (listener) {
+                listener->add(impl->_region);
             }
         }
     };
 
 public:
-    explicit region_impl(region* region, region_group* group = nullptr)
-        : _region(region), _group(group), _id(next_id())
+    explicit region_impl(region* region, region_listener* listener = nullptr)
+        : _region(region), _listener(listener), _id(next_id())
     {
         _buf_ptrs_for_compact_segment.reserve(segment::size / buf_align);
         _preferred_max_contiguous_allocation = max_managed_object_size;
         tracker_instance._impl->register_region(this);
-        try {
-            if (group) {
-                group->add(this);
-            }
-        } catch (...) {
-            tracker_instance._impl->unregister_region(this);
-            throw;
-        }
     }
 
     virtual ~region_impl() {
@@ -1771,9 +1765,6 @@ public:
             free_segment(_buf_active);
             _buf_active = nullptr;
         }
-        if (_group) {
-            _group->del(this);
-        }
     }
 
     region_impl(region_impl&&) = delete;
@@ -1795,10 +1786,6 @@ public:
         return total;
     }
 
-    region_group* group() {
-        return _group;
-    }
-
     occupancy_stats compactible_occupancy() const {
         return _closed_occupancy;
     }
@@ -1809,8 +1796,8 @@ public:
 
     void ground_evictable_occupancy() {
         _evictable_space_mask = 0;
-        if (_group) {
-            _group->decrease_evictable_usage(_heap_handle);
+        if (_listener) {
+            _listener->decrease_evictable_usage(_heap_handle);
         }
     }
 
@@ -1844,9 +1831,9 @@ public:
             auto allocated_size = malloc_usable_size(ptr);
             new ((char*)ptr + allocated_size - sizeof(non_lsa_object_cookie)) non_lsa_object_cookie();
             _non_lsa_occupancy += occupancy_stats(0, allocated_size);
-            if (_group) {
+            if (_listener) {
                  _evictable_space += allocated_size;
-                _group->increase_usage(_heap_handle, allocated_size);
+                _listener->increase_usage(_heap_handle, allocated_size);
             }
             shard_segment_pool.add_non_lsa_memory_in_use(allocated_size);
             return ptr;
@@ -1863,9 +1850,9 @@ private:
         auto cookie = (non_lsa_object_cookie*)((char*)obj + allocated_size) - 1;
         assert(cookie->value == non_lsa_object_cookie().value);
         _non_lsa_occupancy -= occupancy_stats(0, allocated_size);
-        if (_group) {
+        if (_listener) {
             _evictable_space -= allocated_size;
-            _group->decrease_usage(_heap_handle, allocated_size);
+            _listener->decrease_usage(_heap_handle, allocated_size);
         }
         shard_segment_pool.subtract_non_lsa_memory_in_use(allocated_size);
     }
@@ -1941,15 +1928,15 @@ public:
     // to refer to this region.
     // Doesn't invalidate references to allocated objects.
     void merge(region_impl& other) noexcept {
-        // degroup_temporarily allocates via binomial_heap::push(), which should not
+        // unlisten_temporarily allocates via binomial_heap::push(), which should not
         // fail, because we have a matching deallocation before that and we don't
         // allocate between them.
         memory::scoped_critical_alloc_section dfg;
 
         compaction_lock dct1(*this);
         compaction_lock dct2(other);
-        degroup_temporarily dgt1(this);
-        degroup_temporarily dgt2(&other);
+        unlisten_temporarily ult1(this);
+        unlisten_temporarily ult2(&other);
 
         if (_active && _active->is_empty()) {
             shard_segment_pool.free_segment(_active);
@@ -2071,7 +2058,7 @@ public:
     friend class region;
     friend class lsa_buffer;
     friend class region_group;
-    friend class region_group::region_evictable_occupancy_ascending_less_comparator;
+    friend class region_evictable_occupancy_ascending_less_comparator;
 };
 
 lsa_buffer::~lsa_buffer() {
@@ -2137,7 +2124,7 @@ memory::reclaiming_result tracker::reclaim(seastar::memory::reclaimer::request r
 }
 
 bool
-region_group::region_evictable_occupancy_ascending_less_comparator::operator()(region_impl* r1, region_impl* r2) const {
+region_evictable_occupancy_ascending_less_comparator::operator()(region_impl* r1, region_impl* r2) const {
     return r1->evictable_occupancy().total_space() < r2->evictable_occupancy().total_space();
 }
 
@@ -2145,8 +2132,9 @@ region::region()
     : _impl(make_shared<impl>(this))
 { }
 
-region::region(region_group& group)
-        : _impl(make_shared<impl>(this, &group)) {
+region::region(region_listener& listener)
+        : _impl(make_shared<impl>(this, &listener)) {
+    listener.add(this);
 }
 
 region_impl& region::get_impl() {
@@ -2159,23 +2147,50 @@ const region_impl& region::get_impl() const {
 region::region(region&& other) {
     this->_impl = std::move(other._impl);
     get_impl()._region = this;
+    if (_impl) {
+        auto r_impl = static_cast<region_impl*>(_impl.get());
+        if (r_impl->_listener) {
+            r_impl->_listener->moved(&other, this);
+        }
+    }
 }
 
 region& region::operator=(region&& other) {
+    if (this == &other || _impl == other._impl) {
+        return *this;
+    }
+    if (_impl) {
+        auto r_impl = static_cast<region_impl*>(_impl.get());
+        if (r_impl->_listener) {
+            r_impl->_listener->del(this);
+            // Clear before region_impl destructor tries to access removed region
+            r_impl->_listener = nullptr;
+        }
+    }
     this->_impl = std::move(other._impl);
+    if (_impl) {
+        auto r_impl = static_cast<region_impl*>(_impl.get());
+        if (r_impl->_listener) {
+            r_impl->_listener->moved(&other, this);
+        }
+    }
     get_impl()._region = this;
     return *this;
 }
 
 region::~region() {
+    if (_impl) {
+        auto impl = static_cast<region_impl*>(_impl.get());
+        if (impl->_listener) {
+            impl->_listener->del(this);
+            // Clear before region_impl destructor tries to access removed region
+            impl->_listener = nullptr;
+        }
+    }
 }
 
 occupancy_stats region::occupancy() const {
     return get_impl().occupancy();
-}
-
-region_group* region::group() {
-    return get_impl().group();
 }
 
 lsa_buffer region::alloc_buf(size_t buffer_size) {
@@ -2184,6 +2199,14 @@ lsa_buffer region::alloc_buf(size_t buffer_size) {
 
 void region::merge(region& other) noexcept {
     if (_impl != other._impl) {
+        auto other_impl = static_cast<region_impl*>(other._impl.get());
+        if (other_impl->_listener) {
+            // Not very generic, but we know that post-merge the caller
+            // (row_cache) isn't interested in listening, and one region
+            // can't have many listeners.
+            other_impl->_listener->del(&other);
+            other_impl->_listener = nullptr;
+        }
         get_impl().merge(other.get_impl());
         other._impl = _impl;
     }
@@ -2644,17 +2667,23 @@ region_group::del(region_group* child) {
 }
 
 void
-region_group::add(region_impl* child) {
+region_group::add(region* child_r) {
+    auto child = static_cast<region_impl*>(child_r->_impl.get());
     child->_heap_handle = _regions.push(child);
     region_group_binomial_group_sanity_check(_regions);
     update(child->occupancy().total_space());
 }
 
 void
-region_group::del(region_impl* child) {
+region_group::del(region* child_r) {
+    auto child = static_cast<region_impl*>(child_r->_impl.get());
     _regions.erase(child->_heap_handle);
     region_group_binomial_group_sanity_check(_regions);
     update(-child->occupancy().total_space());
+}
+
+void
+region_group::moved(region* old_address, region* new_address) {
 }
 
 bool

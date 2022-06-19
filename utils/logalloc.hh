@@ -117,13 +117,35 @@ public:
     }
 };
 
+struct region_evictable_occupancy_ascending_less_comparator {
+    bool operator()(region_impl* r1, region_impl* r2) const;
+};
+
+using region_heap = boost::heap::binomial_heap<region_impl*,
+        boost::heap::compare<region_evictable_occupancy_ascending_less_comparator>,
+        boost::heap::allocator<std::allocator<region_impl*>>,
+        //constant_time_size<true> causes corruption with boost < 1.60
+        boost::heap::constant_time_size<false>>;
+
+
+// Listens for events from a region
+class region_listener {
+public:
+    virtual ~region_listener();
+    virtual void add(region* r) = 0;
+    virtual void del(region* r) = 0;
+    virtual void moved(region* old_address, region* new_address) = 0;
+    virtual void increase_usage(region_heap::handle_type& r_handle, ssize_t delta) = 0;
+    virtual void decrease_evictable_usage(region_heap::handle_type& r_handle) = 0;
+    virtual void decrease_usage(region_heap::handle_type& r_handle, ssize_t delta) = 0;
+};
+
 // Groups regions for the purpose of statistics.  Can be nested.
-class region_group {
+// Interfaces to regions via region_listener
+class region_group : public region_listener {
     static region_group_reclaimer no_reclaimer;
 
-    struct region_evictable_occupancy_ascending_less_comparator {
-        bool operator()(region_impl* r1, region_impl* r2) const;
-    };
+    using region_evictable_occupancy_ascending_less_comparator = logalloc::region_evictable_occupancy_ascending_less_comparator;
 
     // We want to sort the subgroups so that we can easily find the one that holds the biggest
     // region for freeing purposes. Please note that this is not the biggest of the region groups,
@@ -146,11 +168,7 @@ class region_group {
     };
     friend struct subgroup_maximal_region_ascending_less_comparator;
 
-    using region_heap = boost::heap::binomial_heap<region_impl*,
-          boost::heap::compare<region_evictable_occupancy_ascending_less_comparator>,
-          boost::heap::allocator<std::allocator<region_impl*>>,
-          //constant_time_size<true> causes corruption with boost < 1.60
-          boost::heap::constant_time_size<false>>;
+    using region_heap = logalloc::region_heap;
 
     using subgroup_heap = boost::heap::binomial_heap<region_group*,
           boost::heap::compare<subgroup_maximal_region_ascending_less_comparator>,
@@ -233,6 +251,8 @@ class region_group {
     future<> start_releaser(scheduling_group deferered_work_sg);
     void notify_relief();
     friend void region_group_binomial_group_sanity_check(const region_group::region_heap& bh);
+private: // from region_listener
+    virtual void moved(region* old_address, region* new_address) override;
 public:
     // When creating a region_group, one can specify an optional throttle_threshold parameter. This
     // parameter won't affect normal allocations, but an API is provided, through the region_group's
@@ -278,16 +298,16 @@ public:
     // 2) some callers would like to pass delta = 0. For instance, when we are making a region
     //    evictable / non-evictable. Because the evictable occupancy changes, we would like to call
     //    the full update cycle even then.
-    void increase_usage(region_heap::handle_type& r_handle, ssize_t delta) {
+    virtual void increase_usage(region_heap::handle_type& r_handle, ssize_t delta) override { // From region_listener
         _regions.increase(r_handle);
         update(delta);
     }
 
-    void decrease_evictable_usage(region_heap::handle_type& r_handle) {
+    virtual void decrease_evictable_usage(region_heap::handle_type& r_handle) override { // From region_listener
         _regions.decrease(r_handle);
     }
 
-    void decrease_usage(region_heap::handle_type& r_handle, ssize_t delta) {
+    virtual void decrease_usage(region_heap::handle_type& r_handle, ssize_t delta) override { // From region_listener
         decrease_evictable_usage(r_handle);
         update(delta);
     }
@@ -406,8 +426,8 @@ private:
 
     void add(region_group* child);
     void del(region_group* child);
-    void add(region_impl* child);
-    void del(region_impl* child);
+    virtual void add(region* child) override; // from region_listener
+    virtual void del(region* child) override; // from region_listener
     friend class region_impl;
 };
 
@@ -639,7 +659,7 @@ private:
     const region_impl& get_impl() const;
 public:
     region();
-    explicit region(region_group& group);
+    explicit region(region_listener& listener);
     ~region();
     region(region&& other);
     region& operator=(region&& other);
@@ -653,8 +673,6 @@ public:
     const allocation_strategy& allocator() const noexcept {
         return *_impl;
     }
-
-    region_group* group();
 
     // Allocates a buffer of a given size.
     // The buffer's pointer will be aligned to 4KB.
@@ -701,8 +719,8 @@ public:
 
     const eviction_fn& evictor() const;
 
-    friend class region_group;
     friend class allocating_section;
+    friend class region_group;
 };
 
 // Forces references into the region to remain valid as long as this guard is

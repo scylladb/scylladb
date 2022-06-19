@@ -203,10 +203,6 @@ public:
         return *this;
     }
 
-    logalloc::region_group* region_group() {
-        return group();
-    }
-
     encoding_stats get_encoding_stats() const {
         return _stats_collector.get();
     }
