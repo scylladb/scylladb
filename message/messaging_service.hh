@@ -487,6 +487,7 @@ public:
     void register_schema_check(std::function<future<table_schema_version>()>&& func);
     future<> unregister_schema_check();
     future<table_schema_version> send_schema_check(msg_addr);
+    future<table_schema_version> send_schema_check(msg_addr, abort_source&);
 
     // Wrapper for REPLICATION_FINISHED verb
     void register_replication_finished(std::function<future<> (inet_address from)>&& func);
