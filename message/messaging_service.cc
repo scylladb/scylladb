@@ -41,6 +41,7 @@
 #include "cache_temperature.hh"
 #include "raft/raft.hh"
 #include "service/raft/messaging.hh"
+#include "service/raft/group0_upgrade.hh"
 #include "replica/exceptions.hh"
 #include "serializer.hh"
 #include "full_position.hh"

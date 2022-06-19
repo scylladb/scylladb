@@ -570,5 +570,24 @@ persistent_discovery::persistent_discovery(raft::server_address self, const peer
     }
 }
 
+std::ostream& operator<<(std::ostream& os, group0_upgrade_state state) {
+    switch (state) {
+        case group0_upgrade_state::recovery:
+            os << "recovery";
+            break;
+        case group0_upgrade_state::use_post_raft_procedures:
+            os << "use_post_raft_procedures";
+            break;
+        case group0_upgrade_state::synchronize:
+            os << "synchronize";
+            break;
+        case group0_upgrade_state::use_pre_raft_procedures:
+            os << "use_pre_raft_procedures";
+            break;
+    }
+
+    return os;
+}
+
 } // end of namespace service
 
