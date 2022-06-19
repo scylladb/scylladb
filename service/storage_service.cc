@@ -1321,9 +1321,9 @@ future<> storage_service::drain_on_shutdown() {
         _drain_finished.get_future() : do_drain();
 }
 
-future<> storage_service::init_messaging_service_part(sharded<raft_group_registry>& raft_gr) {
-    return container().invoke_on_all([&] (storage_service& local) {
-        return local.init_messaging_service(raft_gr.local());
+future<> storage_service::init_messaging_service_part() {
+    return container().invoke_on_all([] (storage_service& local) {
+        return local.init_messaging_service();
     });
 }
 
@@ -3203,7 +3203,7 @@ future<> storage_service::update_topology(inet_address endpoint) {
     });
 }
 
-void storage_service::init_messaging_service(raft_group_registry& raft_gr) {
+void storage_service::init_messaging_service() {
     _messaging.local().register_replication_finished([this] (gms::inet_address from) {
         return confirm_replication(from);
     });
@@ -3214,41 +3214,12 @@ void storage_service::init_messaging_service(raft_group_registry& raft_gr) {
             return ss.node_ops_cmd_handler(coordinator, std::move(req));
         });
     });
-
-    auto group0_peer_exchange_impl = [this](const rpc::client_info& cinfo, rpc::opt_time_point timeout,
-            discovery::peer_list peers) -> future<group0_peer_exchange> {
-
-        return container().invoke_on(0 /* group 0 is on shard 0 */, [peers = std::move(peers)] (
-                storage_service& self) -> future<group0_peer_exchange> {
-
-            if (self._group0) {
-                return self._group0->peer_exchange(std::move(peers));
-            } else {
-                return make_ready_future<group0_peer_exchange>(group0_peer_exchange{std::monostate{}});
-            }
-        });
-    };
-
-    _messaging.local().register_group0_peer_exchange(group0_peer_exchange_impl);
-
-    auto group0_modify_config_impl = [this, &raft_gr](const rpc::client_info& cinfo, rpc::opt_time_point timeout,
-            raft::group_id gid, std::vector<raft::server_address> add, std::vector<raft::server_id> del) -> future<> {
-
-        return container().invoke_on(0, [&raft_gr, gid, add = std::move(add), del = std::move(del)] (
-                storage_service& self) -> future<> {
-
-            return raft_gr.get_server(gid).modify_config(std::move(add), std::move(del));
-        });
-    };
-    _messaging.local().register_group0_modify_config(group0_modify_config_impl);
 }
 
 future<> storage_service::uninit_messaging_service() {
     return when_all_succeed(
         _messaging.local().unregister_replication_finished(),
-        _messaging.local().unregister_node_ops_cmd(),
-        _messaging.local().unregister_group0_peer_exchange(),
-        _messaging.local().unregister_group0_modify_config()
+        _messaging.local().unregister_node_ops_cmd()
     ).discard_result();
 }
 

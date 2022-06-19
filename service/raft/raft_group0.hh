@@ -110,6 +110,9 @@ public:
     // it can't do it by itself (it's dead).
     future<> leave_group0(std::optional<gms::inet_address> host = {});
 
+    void init_rpc_verbs();
+    future<> uninit_rpc_verbs();
+
     // Handle peer_exchange RPC
     future<group0_peer_exchange> peer_exchange(discovery::peer_list peers);
 };

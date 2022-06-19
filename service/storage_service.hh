@@ -47,9 +47,6 @@ class node_ops_cmd_response;
 class node_ops_info;
 enum class node_ops_cmd : uint32_t;
 class repair_service;
-namespace service {
-class raft_group_registry;
-}
 
 namespace cql3 { class query_processor; }
 
@@ -187,7 +184,7 @@ public:
 
     // Needed by distributed<>
     future<> stop();
-    void init_messaging_service(raft_group_registry& raft_gr);
+    void init_messaging_service();
     future<> uninit_messaging_service();
 
 private:
@@ -327,7 +324,7 @@ public:
      * API.
      * \see init_server_without_the_messaging_service_part
      */
-    future<> init_messaging_service_part(sharded<raft_group_registry>& raft_gr);
+    future<> init_messaging_service_part();
     /*!
      * \brief Uninit the messaging service part of the service.
      */
