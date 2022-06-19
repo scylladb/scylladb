@@ -1099,6 +1099,9 @@ future<> messaging_service::unregister_schema_check() {
 future<table_schema_version> messaging_service::send_schema_check(msg_addr dst) {
     return send_message<table_schema_version>(this, netw::messaging_verb::SCHEMA_CHECK, dst);
 }
+future<table_schema_version> messaging_service::send_schema_check(msg_addr dst, abort_source& as) {
+    return send_message_cancellable<table_schema_version>(this, netw::messaging_verb::SCHEMA_CHECK, dst, as);
+}
 
 // Wrapper for REPLICATION_FINISHED
 void messaging_service::register_replication_finished(std::function<future<> (inet_address)>&& func) {
