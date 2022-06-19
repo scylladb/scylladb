@@ -1002,7 +1002,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // engine().at_exit([&proxy] { return proxy.stop(); });
 
             raft_gr.start(cfg->check_experimental(db::experimental_features_t::RAFT),
-                std::ref(messaging), std::ref(gossiper), std::ref(feature_service), std::ref(fd)).get();
+                std::ref(messaging), std::ref(gossiper), std::ref(fd)).get();
 
             // gropu0 client exists only on shard 0
             // The client has to be created before `stop_raft` since during

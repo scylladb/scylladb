@@ -11,7 +11,6 @@
 #include "gms/gossiper.hh"
 #include "serializer_impl.hh"
 #include "idl/raft.dist.hh"
-#include "gms/feature_service.hh"
 #include "gms/gossiper.hh"
 
 #include <seastar/core/coroutine.hh>
@@ -66,14 +65,11 @@ public:
 };
 
 raft_group_registry::raft_group_registry(bool is_enabled, netw::messaging_service& ms,
-        gms::gossiper& gossiper, gms::feature_service& feat, direct_failure_detector::failure_detector& fd)
+        gms::gossiper& gossiper, direct_failure_detector::failure_detector& fd)
     : _is_enabled(is_enabled)
     , _ms(ms)
     , _direct_fd(fd)
     , _direct_fd_proxy(make_shared<direct_fd_proxy>(gossiper.get_direct_fd_pinger(), _srv_address_mappings))
-    , _raft_support_listener(feat.uses_raft_cluster_mgmt.when_enabled([] {
-        // TODO: join group 0 on upgrade
-    }))
 {
 }
 
