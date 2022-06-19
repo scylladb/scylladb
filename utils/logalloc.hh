@@ -127,6 +127,8 @@ using region_heap = boost::heap::binomial_heap<region_impl*,
         //constant_time_size<true> causes corruption with boost < 1.60
         boost::heap::constant_time_size<false>>;
 
+region* region_impl_to_region(region_impl* ri);
+region_impl* region_to_region_impl(region* r);
 
 // Listens for events from a region
 class region_listener {
@@ -428,7 +430,6 @@ private:
     void del(region_group* child);
     virtual void add(region* child) override; // from region_listener
     virtual void del(region* child) override; // from region_listener
-    friend class region_impl;
 };
 
 // Controller for all LSA regions. There's one per shard.
@@ -719,8 +720,12 @@ public:
 
     const eviction_fn& evictor() const;
 
+    uint64_t id() const;
+
+    region_heap::handle_type& region_heap_handle();
+
     friend class allocating_section;
-    friend class region_group;
+    friend region_impl* region_to_region_impl(region* r);
 };
 
 // Forces references into the region to remain valid as long as this guard is
