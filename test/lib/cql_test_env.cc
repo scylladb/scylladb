@@ -469,6 +469,7 @@ public:
 
             sharded<abort_source> abort_sources;
             abort_sources.start().get();
+            // FIXME: handle signals (SIGINT, SIGTERM) - request aborts
             auto stop_abort_sources = defer([&] { abort_sources.stop().get(); });
             sharded<compaction_manager> cm;
             sharded<replica::database> db;
@@ -809,7 +810,7 @@ public:
 
             service::raft_group0 group0_service{
                     abort_sources.local(), raft_gr.local(), ms.local(),
-                    gossiper.local(), qp.local(), mm.local(), group0_client};
+                    gossiper.local(), qp.local(), mm.local(), feature_service.local(), group0_client};
             auto stop_group0_service = defer([&group0_service] {
                 group0_service.abort().get();
             });
