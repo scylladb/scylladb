@@ -51,13 +51,30 @@ void raft_group0::init_rpc_verbs() {
             raft::group_id gid, std::vector<raft::config_member> add, std::vector<raft::server_id> del) {
         return _raft_gr.get_server(gid).modify_config(std::move(add), std::move(del));
     });
+
+    ser::group0_rpc_verbs::register_get_group0_upgrade_state(&_ms,
+        std::bind_front([] (raft_group0& self, const rpc::client_info&) -> future<group0_upgrade_state> {
+            co_return (co_await self._client.get_group0_upgrade_state()).second;
+        }, std::ref(*this)));
 }
 
 future<> raft_group0::uninit_rpc_verbs() {
     return when_all_succeed(
         ser::group0_rpc_verbs::unregister_group0_peer_exchange(&_ms),
-        ser::group0_rpc_verbs::unregister_group0_modify_config(&_ms)
+        ser::group0_rpc_verbs::unregister_group0_modify_config(&_ms),
+        ser::group0_rpc_verbs::unregister_get_group0_upgrade_state(&_ms)
     ).discard_result();
+}
+
+/* static */ future<group0_upgrade_state> send_get_group0_upgrade_state(netw::messaging_service& ms, const gms::inet_address& addr, abort_source& as) {
+    auto state = co_await ser::group0_rpc_verbs::send_get_group0_upgrade_state(&ms, netw::msg_addr(addr), as);
+    auto state_int = static_cast<int8_t>(state);
+    if (state_int > 3) {
+        on_internal_error(rslog, format(
+            "send_get_group0_upgrade_state: unknown value for `group0_upgrade_state` received from node {}: {}",
+            addr, state_int));
+    }
+    co_return state;
 }
 
 future<raft::server_address> raft_group0::load_my_addr() {

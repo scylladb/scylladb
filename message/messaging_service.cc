@@ -42,6 +42,7 @@
 #include "cache_temperature.hh"
 #include "raft/raft.hh"
 #include "service/raft/messaging.hh"
+#include "service/raft/group0_upgrade.hh"
 #include "replica/exceptions.hh"
 #include "serializer.hh"
 #include "full_position.hh"
@@ -467,6 +468,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     // should not be blocked by any data requests.
     case messaging_verb::GROUP0_PEER_EXCHANGE:
     case messaging_verb::GROUP0_MODIFY_CONFIG:
+    case messaging_verb::GET_GROUP0_UPGRADE_STATE:
         return 0;
     case messaging_verb::PREPARE_MESSAGE:
     case messaging_verb::PREPARE_DONE_MESSAGE:
