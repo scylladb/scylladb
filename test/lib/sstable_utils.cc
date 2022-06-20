@@ -180,7 +180,7 @@ std::vector<std::pair<sstring, dht::token>> token_generation_for_current_shard(u
 }
 
 static sstring toc_filename(const sstring& dir, schema_ptr schema, unsigned int generation, sstable_version_types v) {
-    return sstable::filename(dir, schema->ks_name(), schema->cf_name(), v, generation,
+    return sstable::filename(dir, schema->ks_name(), schema->cf_name(), v, generation_from_value(generation),
                              sstable_format_types::big, component_type::TOC);
 }
 

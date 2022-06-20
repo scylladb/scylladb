@@ -85,7 +85,7 @@ private:
     // How to create an SSTable object from an existing SSTable file (respecting generation, etc)
     sstable_object_from_existing_fn _sstable_object_from_existing_sstable;
 
-    int64_t _max_generation_seen = 0;
+    generation_type _max_generation_seen = generation_from_value(0);
     sstables::sstable_version_types _max_version_seen = sstables::sstable_version_types::ka;
 
     // SSTables that are unshared and belong to this shard. They are already stored as an
@@ -137,7 +137,7 @@ public:
     future<> move_foreign_sstables(sharded<sstable_directory>& source_directory);
 
     // returns what is the highest generation seen in this directory.
-    int64_t highest_generation_seen() const;
+    generation_type highest_generation_seen() const;
 
     // returns what is the highest version seen in this directory.
     sstables::sstable_version_types highest_version_seen() const;

@@ -106,14 +106,14 @@ void run_sstable_resharding_test() {
     uint64_t bloom_filter_size_after = 0;
 
     for (auto& sstable : new_sstables) {
-        auto new_sst = env.reusable_sst(s, tmp.path().string(), sstable->generation(),
+        auto new_sst = env.reusable_sst(s, tmp.path().string(), generation_value(sstable->generation()),
             version, sstables::sstable::format_types::big).get0();
         filter_fname = sstables::test(new_sst).filename(component_type::Filter);
         bloom_filter_size_after += file_size(filter_fname).get0();
         auto shards = new_sst->get_shards_for_this_sstable();
         BOOST_REQUIRE(shards.size() == 1); // check sstable is unshared.
         auto shard = shards.front();
-        BOOST_REQUIRE(column_family_test::calculate_shard_from_sstable_generation(new_sst->generation()) == shard);
+        BOOST_REQUIRE(column_family_test::calculate_shard_from_sstable_generation(generation_value(new_sst->generation())) == shard);
 
         auto rd = assert_that(new_sst->as_mutation_source().make_reader_v2(s, env.make_reader_permit()));
         BOOST_REQUIRE(muts[shard].size() == keys_per_shard);
@@ -186,7 +186,7 @@ SEASTAR_TEST_CASE(sstable_is_shared_correctness) {
             BOOST_REQUIRE(!sst->is_shared());
 
             auto all_shards_s = get_schema(smp::count, cfg->murmur3_partitioner_ignore_msb_bits());
-            sst = env.reusable_sst(all_shards_s, tmp.path().string(), sst->generation(), version).get0();
+            sst = env.reusable_sst(all_shards_s, tmp.path().string(), generation_value(sst->generation()), version).get0();
             BOOST_REQUIRE(smp::count == 1 || sst->is_shared());
             BOOST_REQUIRE(sst->get_shards_for_this_sstable().size() == smp::count);
         }

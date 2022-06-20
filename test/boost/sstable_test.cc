@@ -211,9 +211,9 @@ struct sstdesc {
 };
 
 static future<> compare_files(sstdesc file1, sstdesc file2, component_type component) {
-    auto file_path = sstable::filename(file1.dir, "ks", "cf", la, file1.gen, big, component);
+    auto file_path = sstable::filename(file1.dir, "ks", "cf", la, generation_from_value(file1.gen), big, component);
     return read_file(file_path).then([component, file2] (auto ret) {
-        auto file_path = sstable::filename(file2.dir, "ks", "cf", la, file2.gen, big, component);
+        auto file_path = sstable::filename(file2.dir, "ks", "cf", la, generation_from_value(file2.gen), big, component);
         return read_file(file_path).then([ret = std::move(ret)] (auto ret2) {
             // assert that both files have the same size.
             BOOST_REQUIRE(ret.second == ret2.second);
@@ -469,7 +469,7 @@ SEASTAR_TEST_CASE(wrong_range) {
 
 static future<>
 test_sstable_exists(sstring dir, unsigned long generation, bool exists) {
-    auto file_path = sstable::filename(dir, "ks", "cf", la, generation, big, component_type::Data);
+    auto file_path = sstable::filename(dir, "ks", "cf", la, generation_from_value(generation), big, component_type::Data);
     return open_file_dma(file_path, open_flags::ro).then_wrapped([exists] (future<file> f) {
         if (exists) {
             BOOST_CHECK_NO_THROW(f.get0());
@@ -489,7 +489,7 @@ SEASTAR_TEST_CASE(set_generation) {
             return sstp->create_links(generation_dir).then([sstp] {});
         }).then([&env, generation_dir] {
             return env.reusable_sst(uncompressed_schema(), generation_dir, 1).then([] (auto sstp) {
-                return sstp->set_generation(2).then([sstp] {});
+                return sstp->set_generation(generation_from_value(2)).then([sstp] {});
             });
         }).then([generation_dir] {
             return test_sstable_exists(generation_dir, 1, false);

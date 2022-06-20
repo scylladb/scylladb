@@ -164,7 +164,7 @@ public:
     }
 
     void change_generation_number(int64_t generation) {
-        _sst->_generation = generation;
+        _sst->_generation = generation_from_value(generation);
     }
 
     void change_dir(sstring dir) {

@@ -47,15 +47,15 @@ public:
     }
 
     static void update_sstables_known_generation(replica::column_family& cf, unsigned generation) {
-        cf.update_sstables_known_generation(generation);
+        cf.update_sstables_known_generation(generation_from_value(generation));
     }
 
     static uint64_t calculate_generation_for_new_table(replica::column_family& cf) {
-        return cf.calculate_generation_for_new_table();
+        return generation_value(cf.calculate_generation_for_new_table());
     }
 
     static int64_t calculate_shard_from_sstable_generation(int64_t generation) {
-        return replica::column_family::calculate_shard_from_sstable_generation(generation);
+        return replica::column_family::calculate_shard_from_sstable_generation(generation_from_value(generation));
     }
 
     future<stop_iteration> try_flush_memtable_to_sstable(lw_shared_ptr<replica::memtable> mt) {
