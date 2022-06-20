@@ -615,9 +615,17 @@ compaction_manager::compaction_manager(config cfg, abort_source& as)
     , _early_abort_subscription(as.subscribe([this] () noexcept {
         do_stop();
     }))
+    , _throughput_mbs(std::move(cfg.throughput_mb_per_sec))
     , _strategy_control(std::make_unique<strategy_control>(*this))
 {
     register_metrics();
+    // Bandwidth throttling is node-wide, updater is needed on single shard
+    if (this_shard_id() == 0) {
+        _throughput_option_observer.emplace(_throughput_mbs.observe(_throughput_updater.make_observer()));
+        // Start throttling (if configured) right at once. Any boot-time compaction
+        // jobs (reshape/reshard) run in unlimited streaming group
+        (void)_throughput_updater.trigger_later();
+    }
 }
 
 compaction_manager::compaction_manager()
@@ -636,6 +644,19 @@ compaction_manager::~compaction_manager() {
     // Assert that compaction manager was explicitly stopped, if started.
     // Otherwise, fiber(s) will be alive after the object is stopped.
     assert(_state == state::none || _state == state::stopped);
+}
+
+future<> compaction_manager::update_throughput(uint32_t value_mbs) {
+    uint64_t bps = ((uint64_t)(value_mbs != 0 ? value_mbs : std::numeric_limits<uint32_t>::max())) << 20;
+    return _compaction_sg.io.update_bandwidth(bps).then_wrapped([value_mbs] (auto f) {
+        if (f.failed()) {
+            cmlog.warn("Couldn't update compaction bandwidth: {}", f.get_exception());
+        } else if (value_mbs != 0) {
+            cmlog.info("Set compaction bandwidth to {}MB/s", value_mbs);
+        } else {
+            cmlog.info("Set unlimited compaction bandwidth");
+        }
+    });
 }
 
 void compaction_manager::register_metrics() {
@@ -773,6 +794,7 @@ future<> compaction_manager::really_do_stop() {
     _weight_tracker.clear();
     _compaction_submission_timer.cancel();
     co_await _compaction_controller.shutdown();
+    co_await _throughput_updater.join();
     cmlog.info("Stopped");
 }
 
