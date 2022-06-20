@@ -422,7 +422,7 @@ class sysconfig_parser:
         f = io.StringIO('[global]\n{}'.format(self._data))
         self._cfg = configparser.ConfigParser()
         self._cfg.optionxform = str
-        self._cfg.readfp(f)
+        self._cfg.read_file(f)
 
     def __escape(self, val):
         return re.sub(r'"', r'\"', val)
