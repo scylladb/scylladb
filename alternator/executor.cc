@@ -2354,12 +2354,30 @@ std::optional<rjson::value> executor::describe_single_item(schema_ptr schema,
         // object without an Item member - not one with an empty Item member
         return {};
     }
-    // FIXME: I think this can't really be a loop, there should be exactly
-    // one result after above we handled the 0 result case
-    for (auto& result_row : result_set->rows()) {
-        describe_single_item(selection, result_row, attrs_to_get, item);
+    if (result_set->size() > 1) {
+        // If the result set contains multiple rows, the code should have
+        // called describe_multi_item(), not this function.
+        throw std::logic_error("describe_single_item() asked to describe multiple items");
     }
+    describe_single_item(selection, *result_set->rows().begin(), attrs_to_get, item);
     return item;
+}
+
+std::vector<rjson::value> executor::describe_multi_item(schema_ptr schema,
+        const query::partition_slice& slice,
+        const cql3::selection::selection& selection,
+        const query::result& query_result,
+        const std::optional<attrs_to_get>& attrs_to_get) {
+    cql3::selection::result_set_builder builder(selection, gc_clock::now(), cql_serialization_format::latest());
+    query::result_view::consume(query_result, slice, cql3::selection::result_set_builder::visitor(builder, *schema, selection));
+    auto result_set = builder.build();
+    std::vector<rjson::value> ret;
+    for (auto& result_row : result_set->rows()) {
+        rjson::value item = rjson::empty_object();
+        describe_single_item(selection, result_row, attrs_to_get, item);
+        ret.push_back(std::move(item));
+    }
+    return ret;
 }
 
 static bool check_needs_read_before_write(const parsed::value& v) {
@@ -3167,123 +3185,145 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
 
     // We need to validate all the parameters before starting any asynchronous
     // query, and fail the entire request on any parse error. So we parse all
-    // the input into our own vector "requests".
+    // the input into our own vector "requests", each element a table_requests
+    // listing all the request aimed at a single table. For efficiency, inside
+    // each table_requests we further group together all reads going to the
+    // same partition, so we can later send them together.
     struct table_requests {
         schema_ptr schema;
         db::consistency_level cl;
         ::shared_ptr<const std::optional<alternator::attrs_to_get>> attrs_to_get;
-        struct single_request {
-            partition_key pk;
-            clustering_key ck;
-        };
-        std::vector<single_request> requests;
+        // clustering_keys keeps a sorted set of clustering keys. It must
+        // be sorted for the read below (see #10827). Additionally each
+        // clustering key is mapped to the original rjson::value "Key".
+        using clustering_keys = std::map<clustering_key, rjson::value*, clustering_key::less_compare>;
+        std::unordered_map<partition_key, clustering_keys, partition_key::hashing, partition_key::equality> requests;
+        table_requests(schema_ptr s)
+            : schema(std::move(s))
+            , requests(8, partition_key::hashing(*schema), partition_key::equality(*schema))
+        {}
+        void add(rjson::value& key) {
+            auto pk = pk_from_json(key, schema);
+            auto it = requests.find(pk);
+            if (it == requests.end()) {
+                it = requests.emplace(pk, clustering_key::less_compare(*schema)).first;
+            }
+            auto ck = ck_from_json(key, schema);
+            if (auto [_, inserted] = it->second.emplace(ck, &key); !inserted) {
+                throw api_error::validation("Provided list of item keys contains duplicates");
+            }
+        }
     };
     std::vector<table_requests> requests;
 
     for (auto it = request_items.MemberBegin(); it != request_items.MemberEnd(); ++it) {
-        table_requests rs;
-        rs.schema = get_table_from_batch_request(_proxy, it);
+        table_requests rs(get_table_from_batch_request(_proxy, it));
         tracing::add_table_name(trace_state, sstring(executor::KEYSPACE_NAME_PREFIX) + rs.schema->cf_name(), rs.schema->cf_name());
         rs.cl = get_read_consistency(it->value);
         std::unordered_set<std::string> used_attribute_names;
         rs.attrs_to_get = ::make_shared<const std::optional<attrs_to_get>>(calculate_attrs_to_get(it->value, used_attribute_names));
         verify_all_are_used(request, "ExpressionAttributeNames", used_attribute_names, "GetItem");
         auto& keys = (it->value)["Keys"];
-        for (const rjson::value& key : keys.GetArray()) {
-            rs.requests.push_back({pk_from_json(key, rs.schema), ck_from_json(key, rs.schema)});
+        for (rjson::value& key : keys.GetArray()) {
+            rs.add(key);
             check_key(key, rs.schema);
         }
         requests.emplace_back(std::move(rs));
     }
 
-    // If got here, all "requests" are valid, so let's start them all
-    // in parallel. The requests object are then immediately destroyed.
-    std::vector<future<std::tuple<std::string, std::optional<rjson::value>>>> response_futures;
+    // If we got here, all "requests" are valid, so let's start the
+    // requests for the different partitions all in parallel.
+    std::vector<future<std::vector<rjson::value>>> response_futures;
     for (const auto& rs : requests) {
         for (const auto &r : rs.requests) {
-            dht::partition_range_vector partition_ranges{dht::partition_range(dht::decorate_key(*rs.schema, std::move(r.pk)))};
+            auto& pk = r.first;
+            auto& cks = r.second;
+            dht::partition_range_vector partition_ranges{dht::partition_range(dht::decorate_key(*rs.schema, pk))};
             std::vector<query::clustering_range> bounds;
             if (rs.schema->clustering_key_size() == 0) {
                 bounds.push_back(query::clustering_range::make_open_ended_both_sides());
             } else {
-                bounds.push_back(query::clustering_range::make_singular(std::move(r.ck)));
+                for (auto& ck : cks) {
+                    bounds.push_back(query::clustering_range::make_singular(ck.first));
+                }
             }
             auto regular_columns = boost::copy_range<query::column_id_vector>(
                     rs.schema->regular_columns() | boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.id; }));
             auto selection = cql3::selection::selection::wildcard(rs.schema);
             auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
             auto command = ::make_lw_shared<query::read_command>(rs.schema->id(), rs.schema->version(), partition_slice, _proxy.get_max_result_size(partition_slice));
-            future<std::tuple<std::string, std::optional<rjson::value>>> f = _proxy.query(rs.schema, std::move(command), std::move(partition_ranges), rs.cl,
+            future<std::vector<rjson::value>> f = _proxy.query(rs.schema, std::move(command), std::move(partition_ranges), rs.cl,
                     service::storage_proxy::coordinator_query_options(executor::default_timeout(), permit, client_state, trace_state)).then(
                     [schema = rs.schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = rs.attrs_to_get] (service::storage_proxy::coordinator_query_result qr) mutable {
                 utils::get_local_injector().inject("alternator_batch_get_item", [] { throw std::runtime_error("batch_get_item injection"); });
-                std::optional<rjson::value> json = describe_single_item(schema, partition_slice, *selection, *qr.query_result, *attrs_to_get);
-                return make_ready_future<std::tuple<std::string, std::optional<rjson::value>>>(
-                        std::make_tuple(schema->cf_name(), std::move(json)));
+                std::vector<rjson::value> jsons = describe_multi_item(schema, partition_slice, *selection, *qr.query_result, *attrs_to_get);
+                return make_ready_future<std::vector<rjson::value>>(std::move(jsons));
             });
             response_futures.push_back(std::move(f));
         }
     }
 
     // Wait for all requests to complete, and then return the response.
-    return when_all(response_futures.begin(), response_futures.end()).then(
-            [request_items = std::move(request_items)] (std::vector<future<std::tuple<std::string, std::optional<rjson::value>>>> responses) mutable {
-        rjson::value response = rjson::empty_object();
-        rjson::add(response, "Responses", rjson::empty_object());
-        rjson::add(response, "UnprocessedKeys", rjson::empty_object());
-        // In case of full failure (no reads succeeded), an arbitrary error
-        // from one of the operations will be returned.
-        bool some_succeeded = false;
-        std::exception_ptr eptr;
-        // These iterators are used to match keys from the requests with their corresponding responses.
-        // If any of the responses failed, the key iterator will be used to insert
-        // an entry into the UnprocessedKeys object, which will ultimately be returned
-        // to the user in case of partial success of BatchGetItem operation.
-        rjson::value::MemberIterator table_items_it = request_items.MemberBegin();
-        rjson::value::ValueIterator key_it = table_items_it->value["Keys"].Begin();
+    // In case of full failure (no reads succeeded), an arbitrary error
+    // from one of the operations will be returned.
+    bool some_succeeded = false;
+    std::exception_ptr eptr;
 
-        for (auto& fut : responses) {
-            if (fut.failed()) {
-                eptr = fut.get_exception();
-                if (!response["UnprocessedKeys"].HasMember(table_items_it->name)) {
-                    rjson::add_with_string_name(response["UnprocessedKeys"], rjson::to_string_view(table_items_it->name), rjson::empty_object());
-                    rjson::value& unprocessed_item = response["UnprocessedKeys"][table_items_it->name];
-                    for (auto it = table_items_it->value.MemberBegin(); it != table_items_it->value.MemberEnd(); ++it) {
+    rjson::value response = rjson::empty_object();
+    rjson::add(response, "Responses", rjson::empty_object());
+    rjson::add(response, "UnprocessedKeys", rjson::empty_object());
+
+    auto fut_it = response_futures.begin();
+    for (const auto& rs : requests) {
+        auto table = table_name(*rs.schema);
+        for (const auto &r : rs.requests) {
+            auto& pk = r.first;
+            auto& cks = r.second;
+            auto& fut = *fut_it;
+            ++fut_it;
+            try {
+                std::vector<rjson::value> results = co_await std::move(fut);
+                some_succeeded = true;
+                if (!response["Responses"].HasMember(table)) {
+                    rjson::add_with_string_name(response["Responses"], table, rjson::empty_array());
+                }
+                for (rjson::value& json : results) {
+                    rjson::push_back(response["Responses"][table], std::move(json));
+                }
+            } catch(...) {
+                eptr = std::current_exception();
+                // This read of potentially several rows in one partition,
+                // failed. We need to add the row key(s) to UnprocessedKeys.
+                if (!response["UnprocessedKeys"].HasMember(table)) {
+                    // Add the table's entry in UnprocessedKeys. Need to copy
+                    // all the table's parameters from the request except the
+                    // Keys field, which we start empty and then build below.
+                    rjson::add_with_string_name(response["UnprocessedKeys"], table, rjson::empty_object());
+                    rjson::value& unprocessed_item = response["UnprocessedKeys"][table];
+                    rjson::value& request_item = request_items[table];
+                    for (auto it = request_item.MemberBegin(); it != request_item.MemberEnd(); ++it) {
                         if (it->name != "Keys") {
-                            rjson::add_with_string_name(unprocessed_item, rjson::to_string_view(it->name), rjson::copy(it->value));
+                            rjson::add_with_string_name(unprocessed_item,
+                                rjson::to_string_view(it->name), rjson::copy(it->value));
                         }
                     }
                     rjson::add_with_string_name(unprocessed_item, "Keys", rjson::empty_array());
                 }
-                rjson::push_back(response["UnprocessedKeys"][table_items_it->name]["Keys"], std::move(*key_it));
-            } else {
-                auto t = fut.get();
-                some_succeeded = true;
-                if (!response["Responses"].HasMember(std::get<0>(t).c_str())) {
-                    rjson::add_with_string_name(response["Responses"], std::get<0>(t), rjson::empty_array());
-                }
-                if (std::get<1>(t)) {
-                    rjson::push_back(response["Responses"][std::get<0>(t)], std::move(*std::get<1>(t)));
-                }
-            }
-            key_it++;
-            if (key_it == table_items_it->value["Keys"].End()) {
-                table_items_it++;
-                if (table_items_it != request_items.MemberEnd()) {
-                    key_it = table_items_it->value["Keys"].Begin();
+                for (auto& ck : cks) {
+                    rjson::push_back(response["UnprocessedKeys"][table]["Keys"], std::move(*ck.second));
                 }
             }
         }
-        elogger.trace("Unprocessed keys: {}", response["UnprocessedKeys"]);
-        if (!some_succeeded && eptr) {
-            return make_exception_future<executor::request_return_type>(eptr);
-        }
-        if (is_big(response)) {
-            return make_ready_future<executor::request_return_type>(make_streamed(std::move(response)));
-        } else {
-            return make_ready_future<executor::request_return_type>(make_jsonable(std::move(response)));
-        }
-    });
+    }
+    elogger.trace("Unprocessed keys: {}", response["UnprocessedKeys"]);
+    if (!some_succeeded && eptr) {
+        co_return coroutine::make_exception(std::move(eptr));
+    }
+    if (is_big(response)) {
+        co_return make_streamed(std::move(response));
+    } else {
+        co_return make_jsonable(std::move(response));
+    }
 }
 
 // "filter" represents a condition that can be applied to individual items
