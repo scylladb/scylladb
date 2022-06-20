@@ -751,7 +751,6 @@ def test_index_map_multiple(cql, test_keyspace):
 
 # Test that indexing keys(x), values(x) or entries(x) is only allowed for
 # specific column types (namely, specific kinds of collections).
-@pytest.mark.xfail(reason="collection indexing not implemented yet: issue #2962")
 def test_index_collection_wrong_type(cql, test_keyspace):
     schema = 'pk int primary key, x int, l list<int>, s set<int>, m map<int,int>, t tuple<int,int>'
     with new_test_table(cql, test_keyspace, schema) as table:

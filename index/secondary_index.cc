@@ -21,10 +21,6 @@
 #include "log.hh"
 
 const sstring db::index::secondary_index::custom_index_option_name = "class_name";
-const sstring db::index::secondary_index::index_keys_option_name = "index_keys";
-const sstring db::index::secondary_index::index_collection_values_option_name = "index_collection_values";
-const sstring db::index::secondary_index::index_regular_values_option_name = "index_regular_values";
-const sstring db::index::secondary_index::index_entries_option_name = "index_keys_and_values";
 
 namespace secondary_index {
 

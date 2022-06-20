@@ -74,16 +74,6 @@ sstring index_target::column_name_from_target_string(const sstring& target) {
     return target;
 }
 
-sstring index_target::index_option(target_type type) {
-    switch (type) {
-        case target_type::keys: return secondary_index::index_keys_option_name;
-        case target_type::keys_and_values: return secondary_index::index_entries_option_name;
-        case target_type::collection_values: return secondary_index::index_collection_values_option_name;
-        case target_type::regular_values: return secondary_index::index_regular_values_option_name;
-        default: throw std::invalid_argument("should not reach");
-    }
-}
-
 ::shared_ptr<index_target::raw>
 index_target::raw::regular_values_of(::shared_ptr<column_identifier::raw> c) {
     return ::make_shared<raw>(c, target_type::regular_values);

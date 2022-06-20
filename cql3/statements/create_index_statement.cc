@@ -53,6 +53,16 @@ create_index_statement::check_access(query_processor& qp, const service::client_
     return state.has_column_family_access(qp.db(), keyspace(), column_family(), auth::permission::ALTER);
 }
 
+static sstring target_type_name(index_target::target_type type) {
+    switch (type) {
+        case index_target::target_type::keys: return "keys()";
+        case index_target::target_type::keys_and_values: return "entries()";
+        case index_target::target_type::collection_values: return "values()";
+        case index_target::target_type::regular_values: return "value";
+        default: throw std::invalid_argument("should not reach");
+    }
+}
+
 void
 create_index_statement::validate(query_processor& qp, const service::client_state& state) const
 {
@@ -204,7 +214,7 @@ void create_index_statement::validate_for_frozen_collection(const index_target& 
     if (target.type != index_target::target_type::full) {
         throw exceptions::invalid_request_exception(
                 format("Cannot create index on {} of frozen collection column {}",
-                        index_target::index_option(target.type),
+                        target_type_name(target.type),
                         target.column_name()));
     }
 }
@@ -277,9 +287,9 @@ void create_index_statement::validate_is_values_index_if_target_column_not_colle
             && target.type != index_target::target_type::regular_values) {
         throw exceptions::invalid_request_exception(
                 format("Cannot create index on {} of column {}; only non-frozen collections support {} indexes",
-                       index_target::index_option(target.type),
+                       target_type_name(target.type),
                        target.column_name(),
-                       index_target::index_option(target.type)));
+                       target_type_name(target.type)));
     }
 }
 
@@ -290,7 +300,7 @@ void create_index_statement::validate_target_column_is_map_if_index_involves_key
         if (!is_map) {
             throw exceptions::invalid_request_exception(
                     format("Cannot create index on {} of column {} with non-map type",
-                           index_target::index_option(target.type), target.column_name()));
+                           target_type_name(target.type), target.column_name()));
         }
     }
 }

@@ -40,7 +40,6 @@ struct index_target {
 
     sstring column_name() const;
 
-    static sstring index_option(target_type type);
     static target_type from_column_definition(const column_definition& cd);
     // Parses index_target::target_type from it's textual form.
     // e.g. from_sstring("keys") == index_target::target_type::keys
