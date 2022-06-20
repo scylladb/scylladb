@@ -797,8 +797,6 @@ SEASTAR_TEST_CASE(test_commitlog_deadlock_in_recycle) {
         }
     });
 
-    bool release = true;
-
     try {
         while (n < 10 || !num_active_allocations || !num_blocked_on_new_segment) {
             auto now = timeout_clock::now();            
@@ -808,14 +806,12 @@ SEASTAR_TEST_CASE(test_commitlog_deadlock_in_recycle) {
             rps.put(std::move(h));
         }
     } catch (timed_out_error&) {
-        BOOST_FAIL("log write timed out. maybe it is deadlocked... Will not free log. ASAN errors and leaks will follow...");
-        release = false;
+        BOOST_ERROR("log write timed out. maybe it is deadlocked... Will not free log. ASAN errors and leaks will follow...");
+        abort();
     }
 
-    if (release) {  
-        co_await log.shutdown();
-        co_await log.clear();
-    }
+    co_await log.shutdown();
+    co_await log.clear();
 
     BOOST_REQUIRE_GT(num_active_allocations, 0);
     BOOST_REQUIRE_GT(num_blocked_on_new_segment, 0);
@@ -886,7 +882,8 @@ SEASTAR_TEST_CASE(test_commitlog_shutdown_during_wait) {
         co_await with_timeout(now + 30s, log.shutdown());
         co_await log.clear();
     } catch (timed_out_error&) {
-        BOOST_FAIL("log shutdown timed out. maybe it is deadlocked... Will not free log. ASAN errors and leaks will follow...");
+        BOOST_ERROR("log shutdown timed out. maybe it is deadlocked... Will not free log. ASAN errors and leaks will follow...");
+        abort();
     }
 }
 
@@ -922,8 +919,6 @@ SEASTAR_TEST_CASE(test_commitlog_deadlock_with_flush_threshold) {
         done = true;
     });
 
-    bool release = true;
-
     try {
         while (!done) {
             auto now = timeout_clock::now();
@@ -933,14 +928,12 @@ SEASTAR_TEST_CASE(test_commitlog_deadlock_with_flush_threshold) {
             rps.put(std::move(h));
         }
     } catch (timed_out_error&) {
-        BOOST_FAIL("log write timed out. maybe it is deadlocked... Will not free log. ASAN errors and leaks will follow...");
-        release = false;
+        BOOST_ERROR("log write timed out. maybe it is deadlocked... Will not free log. ASAN errors and leaks will follow...");
+        abort();
     }
 
-    if (release) {
-        co_await log.shutdown();
-        co_await log.clear();
-    }
+    co_await log.shutdown();
+    co_await log.clear();
 }
 
 static future<> do_test_exception_in_allocate_ex(bool do_file_delete) {
@@ -1021,7 +1014,8 @@ static future<> do_test_exception_in_allocate_ex(bool do_file_delete) {
             rps.put(std::move(h));
         }
     } catch (...) {
-        BOOST_FAIL("log write timed out. maybe it is deadlocked... Will not free log. ASAN errors and leaks will follow...");
+        BOOST_ERROR("log write timed out. maybe it is deadlocked... Will not free log. ASAN errors and leaks will follow...");
+        abort();
     }
 
     co_await log.shutdown();
