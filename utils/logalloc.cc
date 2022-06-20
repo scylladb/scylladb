@@ -436,7 +436,7 @@ class tracker::impl {
     std::optional<background_reclaimer> _background_reclaimer;
     std::vector<region::impl*> _regions;
     seastar::metrics::metric_groups _metrics;
-    bool _reclaiming_enabled = true;
+    unsigned _reclaiming_disabled_depth = 0;
     size_t _reclamation_step = 1;
     bool _abort_on_bad_alloc = false;
 private:
@@ -445,15 +445,13 @@ private:
     // object is not re-entered while inside one of the tracker's methods.
     struct reclaiming_lock {
         impl& _ref;
-        bool _prev;
         reclaiming_lock(impl& ref)
             : _ref(ref)
-            , _prev(ref._reclaiming_enabled)
         {
-            _ref._reclaiming_enabled = false;
+            _ref.disable_reclaim();
         }
         ~reclaiming_lock() {
-            _ref._reclaiming_enabled = _prev;
+            _ref.enable_reclaim();
         }
     };
     friend class tracker_reclaimer_lock;
@@ -466,6 +464,12 @@ public:
         } else {
             return make_ready_future<>();
         }
+    }
+    void disable_reclaim() {
+        ++_reclaiming_disabled_depth;
+    }
+    void enable_reclaim() {
+        --_reclaiming_disabled_depth;
     }
     void register_region(region::impl*);
     void unregister_region(region::impl*) noexcept;
@@ -503,9 +507,14 @@ private:
 };
 
 class tracker_reclaimer_lock {
-    tracker::impl::reclaiming_lock _lock;
+    tracker::impl& _tracker_impl;
 public:
-    tracker_reclaimer_lock() : _lock(shard_tracker().get_impl()) { }
+    tracker_reclaimer_lock() : _tracker_impl(shard_tracker().get_impl()) {
+        _tracker_impl.disable_reclaim();
+    }
+    ~tracker_reclaimer_lock() {
+        _tracker_impl.enable_reclaim();
+    }
 };
 
 tracker::tracker()
@@ -2356,7 +2365,7 @@ static void reclaim_from_evictable(region::impl& r, size_t target_mem_in_use, is
 }
 
 idle_cpu_handler_result tracker::impl::compact_on_idle(work_waiting_on_reactor check_for_work) {
-    if (!_reclaiming_enabled) {
+    if (_reclaiming_disabled_depth) {
         return idle_cpu_handler_result::no_more_work;
     }
     reclaiming_lock rl(*this);
@@ -2390,7 +2399,7 @@ idle_cpu_handler_result tracker::impl::compact_on_idle(work_waiting_on_reactor c
 }
 
 size_t tracker::impl::reclaim(size_t memory_to_release, is_preemptible preempt) {
-    if (!_reclaiming_enabled) {
+    if (_reclaiming_disabled_depth) {
         return 0;
     }
     reclaiming_lock rl(*this);
@@ -2433,7 +2442,7 @@ size_t tracker::impl::reclaim_locked(size_t memory_to_release, is_preemptible pr
 }
 
 size_t tracker::impl::compact_and_evict(size_t reserve_segments, size_t memory_to_release, is_preemptible preempt) {
-    if (!_reclaiming_enabled) {
+    if (_reclaiming_disabled_depth) {
         return 0;
     }
     reclaiming_lock rl(*this);
