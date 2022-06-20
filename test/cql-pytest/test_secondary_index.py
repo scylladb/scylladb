@@ -818,6 +818,36 @@ def test_index_collection_wrong_type(cql, test_keyspace):
         with pytest.raises(InvalidRequest, match="full()"):
             cql.execute(f'CREATE INDEX ON {table}(full(t))')
 
+# Check the default name of collection indexes. This "default name" is
+# needed to drop an index which was created without explicitly specifying
+# a name for it. We want the default name to be identical to Cassandra,
+# because an application may assume it is so.
+def test_index_collection_default_name(cql, test_keyspace):
+    schema = 'pk int primary key, m map<int,int>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f'CREATE INDEX ON {table}(m)')
+        cql.execute(f"DROP INDEX {table}_m_idx")
+        # values(m) and m refer to the same thing so must have the same
+        # default name.
+        cql.execute(f'CREATE INDEX ON {table}(values(m))')
+        cql.execute(f"DROP INDEX {table}_m_idx")
+        # key(m) and entries(m) are different indexes than just m, but
+        # their default index name turns out to be exactly the same one:
+        cql.execute(f'CREATE INDEX ON {table}(keys(m))')
+        cql.execute(f"DROP INDEX {table}_m_idx")
+        cql.execute(f'CREATE INDEX ON {table}(entries(m))')
+        cql.execute(f"DROP INDEX {table}_m_idx")
+        # We can create multiple types of the above indexes at the same
+        # time (see also test_index_map_multiple() above), so they will
+        # get different default names using the standard default index
+        # name mechanism (adding _1, etc.)
+        cql.execute(f'CREATE INDEX ON {table}(m)')
+        cql.execute(f'CREATE INDEX ON {table}(keys(m))')
+        cql.execute(f'CREATE INDEX ON {table}(entries(m))')
+        cql.execute(f"DROP INDEX {table}_m_idx")
+        cql.execute(f"DROP INDEX {table}_m_idx_1")
+        cql.execute(f"DROP INDEX {table}_m_idx_2")
+
 # Reproducer for issue #10707 - indexing a column whose name is a quoted
 # string should work fine. Even if the quoted string happens to look like
 # an instruction to index a collection, e.g., "keys(m)".

@@ -24,7 +24,7 @@ const sstring index_target::target_option_name = "target";
 const sstring index_target::custom_index_option_name = "class_name";
 const std::regex index_target::target_regex("^(keys|entries|values|full)\\((.+)\\)$");
 
-sstring index_target::as_string() const {
+sstring index_target::column_name() const {
     struct as_string_visitor {
         const index_target* target;
         sstring operator()(const std::vector<::shared_ptr<column_identifier>>& columns) const {
@@ -35,19 +35,7 @@ sstring index_target::as_string() const {
         }
 
         sstring operator()(const ::shared_ptr<column_identifier>& column) const {
-            sstring postfix;
-            switch (target->type) {
-                case index_target::target_type::keys:
-                    [[fallthrough]];
-                case index_target::target_type::collection_values:
-                    [[fallthrough]];
-                case index_target::target_type::keys_and_values:
-                    postfix = "_" + to_sstring(target->type);
-                    break;
-                default:
-                    break;
-            }
-            return column->to_string() + postfix;
+            return column->to_string();
         }
     };
 

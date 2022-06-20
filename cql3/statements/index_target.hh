@@ -38,7 +38,7 @@ struct index_target {
     index_target(::shared_ptr<column_identifier> c, target_type t) : value(c) , type(t) {}
     index_target(std::vector<::shared_ptr<column_identifier>> c, target_type t) : value(std::move(c)), type(t) {}
 
-    sstring as_string() const;
+    sstring column_name() const;
 
     static sstring index_option(target_type type);
     static target_type from_column_definition(const column_definition& cd);

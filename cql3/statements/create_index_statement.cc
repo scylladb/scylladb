@@ -101,7 +101,7 @@ std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_e
 
         if (cd == nullptr) {
             throw exceptions::invalid_request_exception(
-                    format("No column definition found for column {}", target->as_string()));
+                    format("No column definition found for column {}", target->column_name()));
         }
 
         //NOTICE(sarna): Should be lifted after resolving issue #2963
@@ -130,14 +130,14 @@ std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_e
         if (cd->kind == column_kind::partition_key && cd->is_on_all_components()) {
             throw exceptions::invalid_request_exception(
                     format("Cannot create secondary index on partition key column {}",
-                            target->as_string()));
+                            target->column_name()));
         }
 
         if (cd->type->is_multi_cell()) {
             if (cd->type->is_collection()) {
                 if (is_local_index) {
                     throw exceptions::invalid_request_exception(
-                            format("Local secondary index on collection column {} is not implemented yet.", target->as_string()));
+                            format("Local secondary index on collection column {} is not implemented yet.", target->column_name()));
                 }
                 validate_not_full_index(*target);
                 validate_for_collection(*target, *cd);
@@ -205,7 +205,7 @@ void create_index_statement::validate_for_frozen_collection(const index_target& 
         throw exceptions::invalid_request_exception(
                 format("Cannot create index on {} of frozen collection column {}",
                         index_target::index_option(target.type),
-                        target.as_string()));
+                        target.column_name()));
     }
 }
 
@@ -278,7 +278,7 @@ void create_index_statement::validate_is_values_index_if_target_column_not_colle
         throw exceptions::invalid_request_exception(
                 format("Cannot create index on {} of column {}; only non-frozen collections support {} indexes",
                        index_target::index_option(target.type),
-                       target.as_string(),
+                       target.column_name(),
                        index_target::index_option(target.type)));
     }
 }
@@ -290,7 +290,7 @@ void create_index_statement::validate_target_column_is_map_if_index_involves_key
         if (!is_map) {
             throw exceptions::invalid_request_exception(
                     format("Cannot create index on {} of column {} with non-map type",
-                           index_target::index_option(target.type), target.as_string()));
+                           index_target::index_option(target.type), target.column_name()));
         }
     }
 }
@@ -304,10 +304,10 @@ void create_index_statement::validate_targets_for_multi_column_index(std::vector
     }
     std::unordered_set<sstring> columns;
     for (auto& target : targets) {
-        if (columns.contains(target->as_string())) {
-            throw exceptions::invalid_request_exception(format("Duplicate column {} in index target list", target->as_string()));
+        if (columns.contains(target->column_name())) {
+            throw exceptions::invalid_request_exception(format("Duplicate column {} in index target list", target->column_name()));
         }
-        columns.emplace(target->as_string());
+        columns.emplace(target->column_name());
     }
 }
 
@@ -321,9 +321,9 @@ schema_ptr create_index_statement::build_index_schema(query_processor& qp) const
     if (accepted_name.empty()) {
         std::optional<sstring> index_name_root;
         if (targets.size() == 1) {
-           index_name_root = targets[0]->as_string();
+           index_name_root = targets[0]->column_name();
         } else if ((targets.size() == 2 && std::holds_alternative<index_target::multiple_columns>(targets.front()->value))) {
-            index_name_root = targets[1]->as_string();
+            index_name_root = targets[1]->column_name();
         }
         accepted_name = db.get_available_index_name(keyspace(), column_family(), index_name_root);
     }
