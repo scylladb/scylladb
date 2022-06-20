@@ -493,6 +493,13 @@ public:
     bool should_abort_on_bad_alloc();
 };
 
+class tracker_reclaimer_lock {
+    tracker::impl& _tracker_impl;
+public:
+    tracker_reclaimer_lock();
+    ~tracker_reclaimer_lock();
+};
+
 tracker& shard_tracker();
 
 class segment_descriptor;

@@ -506,16 +506,13 @@ private:
     size_t reclaim_locked(size_t bytes, is_preemptible p);
 };
 
-class tracker_reclaimer_lock {
-    tracker::impl& _tracker_impl;
-public:
-    tracker_reclaimer_lock() : _tracker_impl(shard_tracker().get_impl()) {
-        _tracker_impl.disable_reclaim();
-    }
-    ~tracker_reclaimer_lock() {
-        _tracker_impl.enable_reclaim();
-    }
-};
+tracker_reclaimer_lock::tracker_reclaimer_lock() : _tracker_impl(shard_tracker().get_impl()) {
+    _tracker_impl.disable_reclaim();
+}
+
+tracker_reclaimer_lock::~tracker_reclaimer_lock() {
+    _tracker_impl.enable_reclaim();
+}
 
 tracker::tracker()
     : _impl(std::make_unique<impl>())
