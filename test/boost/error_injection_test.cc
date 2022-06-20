@@ -40,11 +40,9 @@ SEASTAR_TEST_CASE(test_inject_noop) {
     BOOST_ASSERT(errinj.enter("error") == false);
 
     auto start_time = steady_clock::now();
-    return errinj.inject("noop2", sleep_msec).then([start_time] {
-        auto wait_time = std::chrono::duration_cast<milliseconds>(steady_clock::now() - start_time);
-        BOOST_REQUIRE_LT(wait_time.count(), sleep_msec.count());
-        return make_ready_future<>();
-    });
+    auto f = errinj.inject("noop2", sleep_msec);
+    BOOST_REQUIRE(f.available() && !f.failed());
+    return make_ready_future<>();
 }
 
 SEASTAR_TEST_CASE(test_is_enabled) {
