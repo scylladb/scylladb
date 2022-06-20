@@ -81,4 +81,25 @@ public:
     future<> join() {
         return get_units(_sem, 1).discard_result();
     }
+
+    // The adaptor is to be used as an argument to utils::observable.observe()
+    // When the notification happens the adaptor just triggers the action
+    // Note, that all arguments provided by the notification callback are lost,
+    // its up to the action to get the needed values
+    // Also, the future<> returned from .trigger() is ignored, the action code
+    // runs in the background. The user should .join() the action if it needs
+    // to wait for it to finish on stop/drain/shutdown
+    class observing_adaptor {
+        friend class serialized_action;
+        serialized_action& _action;
+        observing_adaptor(serialized_action& act) noexcept : _action(act) {}
+
+    public:
+        template <typename... Args>
+        void operator()(Args&&...) { (void)_action.trigger(); };
+    };
+
+    observing_adaptor make_observer() noexcept {
+        return observing_adaptor(*this);
+    }
 };
