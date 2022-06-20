@@ -13,6 +13,40 @@ seeking an exception.
 Code should conform to the project's coding style, see
 [Seastar coding style](https://github.com/scylladb/seastar/blob/master/coding-style.md).
 
+
+## Patch organization
+
+Changes should be organized into one or more patches, depending on
+how big the change is, according to the following
+guidelines:
+- Patches should be small.
+- Patches should all individually compile and be correct
+  (all tests should pass). You are not required to verify
+  this but do look for any signs in the code that
+  suggest this might be violated. For example a patch
+  introducing a regression test being ordered before the
+  fix. Or a method being used before the patch that
+  introduces it.
+- Patches should be self-contained and do one thing.
+- Each patch should have a descriptive commit log.
+- The patch description should not assume the reviewer is an
+  expert in the matter. It should include enough context
+  that a non-expert can understand, on their way to becoming
+  an expert.
+- The patch description should be self-contained and not
+  refer to out-of-band discussions ("as agreed on the daily
+  call").
+- Each patch should have a motivation for the change.
+  Patch descriptions that simply say "make X do Y" without
+  explaining why that's a good thing are considered bad.
+  A good litmus test is whether the inverse patch ("make X
+  not do Y") is just as compelling as the original patch. If it
+  is, why prefer one over the other?
+- Each pull request should include a motivation for the
+  change(s). For multi-patch series, this should be in
+  the cover-letter, for single patch ones in the patch
+  description.
+
 ## Naming
 
 Names should avoid abbreviations (industry-standard abbreviations
