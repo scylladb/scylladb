@@ -141,4 +141,9 @@ public:
 template <typename... Args>
 using observer = typename observable<Args...>::observer;
 
+template <typename... Args>
+inline observer<Args...> dummy_observer() {
+    return observer<Args...>(nullptr, noncopyable_function<void(Args...)>());
+}
+
 }
