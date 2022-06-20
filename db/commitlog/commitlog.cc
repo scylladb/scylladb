@@ -97,6 +97,10 @@ public:
     virtual void release_cf_count(const cf_id_type&) = 0;
 };
 
+static size_t adjusted_segment_size_in_mb(size_t s) {
+    return std::min<size_t>(std::numeric_limits<db::position_type>::max() / (1024 * 1024), std::max<size_t>(s, 1));
+}
+
 db::commitlog::config db::commitlog::config::from_db_config(const db::config& cfg, seastar::scheduling_group sg, size_t shard_available_memory) {
     config c;
 
@@ -104,7 +108,7 @@ db::commitlog::config db::commitlog::config::from_db_config(const db::config& cf
     c.commit_log_location = cfg.commitlog_directory();
     c.metrics_category_name = "commitlog";
     c.commitlog_total_space_in_mb = cfg.commitlog_total_space_in_mb() >= 0 ? cfg.commitlog_total_space_in_mb() : (shard_available_memory * smp::count) >> 20;
-    c.commitlog_segment_size_in_mb = cfg.commitlog_segment_size_in_mb();
+    c.commitlog_segment_size_in_mb = adjusted_segment_size_in_mb(cfg.commitlog_segment_size_in_mb());
     c.commitlog_sync_period_in_ms = cfg.commitlog_sync_period_in_ms();
     c.mode = cfg.commitlog_sync() == "batch" ? sync_mode::BATCH : sync_mode::PERIODIC;
     c.extensions = &cfg.extensions();
@@ -116,6 +120,14 @@ db::commitlog::config db::commitlog::config::from_db_config(const db::config& cf
     }
     if (cfg.commitlog_max_data_lifetime_in_seconds() > 0) {
         c.commitlog_data_max_lifetime_in_seconds = cfg.commitlog_max_data_lifetime_in_seconds();
+    }
+
+    if (c.commitlog_segment_size_in_mb < cfg.commitlog_segment_size_in_mb()) {
+        clogger.warn("Segment size {} MB too high, adjusted to {} MB", cfg.commitlog_segment_size_in_mb(), c.commitlog_segment_size_in_mb);
+    }
+    auto min_size = 2 * smp::count * c.commitlog_segment_size_in_mb;
+    if (cfg.commitlog_total_space_in_mb() >= 0 && c.commitlog_total_space_in_mb < min_size) {
+        clogger.warn("Commitlog total size {} MB lower than minimum {} MB, will adjust up...", cfg.commitlog_total_space_in_mb(), min_size);
     }
 
     return c;
@@ -1497,7 +1509,7 @@ db::commitlog::segment_manager::segment_manager(config c)
 
         return cfg;
     }())
-    , max_size(std::min<size_t>(std::numeric_limits<position_type>::max() / (1024 * 1024), std::max<size_t>(cfg.commitlog_segment_size_in_mb, 1)) * 1024 * 1024)
+    , max_size(adjusted_segment_size_in_mb(cfg.commitlog_segment_size_in_mb) * 1024 * 1024)
     , max_mutation_size(max_size >> 1)
     , max_disk_size(std::max(2 * max_size, size_t(std::ceil(cfg.commitlog_total_space_in_mb / double(smp::count))) * 1024 * 1024))
     // our threshold for trying to force a flush. needs heristics, for now max - segment_size/2.
