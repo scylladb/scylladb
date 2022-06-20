@@ -506,6 +506,7 @@ scylla_tests = set([
     'test/boost/exception_container_test',
     'test/boost/result_utils_test',
     'test/boost/rate_limiter_test',
+    'test/boost/per_partition_rate_limit_test',
     'test/boost/expr_test',
     'test/manual/ec2_snitch_test',
     'test/manual/enormous_table_scan_test',
