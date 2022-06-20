@@ -475,7 +475,6 @@ def test_filter_and_limit_2(cql, test_keyspace):
 # (and therefore index) updates are synchronous, so none of these tests need
 # loops to wait for a change to be indexed.
 
-@pytest.mark.xfail(reason="collection indexing not implemented yet: issue #2962")
 def test_index_list(cql, test_keyspace):
     schema = 'pk int, ck int, l list<int>, PRIMARY KEY (pk, ck)'
     with new_test_table(cql, test_keyspace, schema) as table:
@@ -532,7 +531,6 @@ def test_index_list(cql, test_keyspace):
         cql.execute(f'UPDATE {table} SET l = [] WHERE pk=1 AND ck=2')
         assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE l CONTAINS 2'))
 
-@pytest.mark.xfail(reason="collection indexing not implemented yet: issue #2962")
 def test_index_set(cql, test_keyspace):
     schema = 'pk int, ck int, s set<int>, PRIMARY KEY (pk, ck)'
     with new_test_table(cql, test_keyspace, schema) as table:
@@ -585,7 +583,6 @@ def test_index_set(cql, test_keyspace):
         assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE s CONTAINS 17'))
         assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE s CONTAINS 18'))
 
-@pytest.mark.xfail(reason="collection indexing not implemented yet: issue #2962")
 def test_index_map_values(cql, test_keyspace):
     schema = 'pk int, ck int, m map<int,int>, PRIMARY KEY (pk, ck)'
     with new_test_table(cql, test_keyspace, schema) as table:
@@ -643,7 +640,6 @@ def test_index_map_values(cql, test_keyspace):
         cql.execute(f'UPDATE {table} set m = m - {{4}} WHERE pk=1 AND ck=2')
         assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 6'))
 
-@pytest.mark.xfail(reason="collection indexing not implemented yet: issue #2962")
 def test_index_map_keys(cql, test_keyspace):
     schema = 'pk int, ck int, m map<int,int>, PRIMARY KEY (pk, ck)'
     with new_test_table(cql, test_keyspace, schema) as table:
@@ -691,7 +687,6 @@ def test_index_map_keys(cql, test_keyspace):
         assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS KEY 3'))
         assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS KEY 4'))
 
-@pytest.mark.xfail(reason="collection indexing not implemented yet: issue #2962")
 def test_index_map_entries(cql, test_keyspace):
     schema = 'pk int, ck int, m map<int,int>, PRIMARY KEY (pk, ck)'
     with new_test_table(cql, test_keyspace, schema) as table:
@@ -740,7 +735,6 @@ def test_index_map_entries(cql, test_keyspace):
 
 # Check that it is possible to index the same map column in different ways
 # (values, keys and entries) at the same time:
-@pytest.mark.xfail(reason="collection indexing not implemented yet: issue #2962")
 def test_index_map_multiple(cql, test_keyspace):
     schema = 'pk int, ck int, m map<int,int>, PRIMARY KEY (pk, ck)'
     with new_test_table(cql, test_keyspace, schema) as table:
@@ -827,7 +821,7 @@ def test_index_collection_wrong_type(cql, test_keyspace):
 # Reproducer for issue #10707 - indexing a column whose name is a quoted
 # string should work fine. Even if the quoted string happens to look like
 # an instruction to index a collection, e.g., "keys(m)".
-@pytest.mark.xfail(reason="collection indexing not implemented yet: issue #2962, #10707")
+@pytest.mark.xfail(reason="#10707")
 def test_index_quoted_names(cql, test_keyspace):
     quoted_names = ['"hEllo"', '"x y"', '"keys(m)"', '"values(m)"', '"entries(m)"']
     schema = 'pk int, ck int, m int, ' + ','.join([name + " int" for name in quoted_names]) + ', PRIMARY KEY (pk, ck)'
