@@ -23,6 +23,7 @@
 
 #include "cdc/cdc_extension.hh"
 #include "tombstone_gc_extension.hh"
+#include "db/per_partition_rate_limit_extension.hh"
 #include "config.hh"
 #include "extensions.hh"
 #include "log.hh"
@@ -908,6 +909,10 @@ db::config::~config()
 
 void db::config::add_cdc_extension() {
     _extensions->add_schema_extension<cdc::cdc_extension>(cdc::cdc_extension::NAME);
+}
+
+void db::config::add_per_partition_rate_limit_extension() {
+    _extensions->add_schema_extension<db::per_partition_rate_limit_extension>(db::per_partition_rate_limit_extension::NAME);
 }
 
 void db::config::setup_directories() {
