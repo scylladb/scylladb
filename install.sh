@@ -143,7 +143,7 @@ export LD_LIBRARY_PATH="$prefix/libreloc"
 export UBSAN_OPTIONS="${UBSAN_OPTIONS:+$UBSAN_OPTIONS:}suppressions=$prefix/libexec/ubsan-suppressions.supp"
 exec -a "\$0" "$prefix/libexec/$bin" "\$@"
 EOF
-    chmod +x "$root/$prefix/bin/$bin"
+    chmod 755 "$root/$prefix/bin/$bin"
 }
 
 relocate_python3() {
@@ -156,11 +156,11 @@ relocate_python3() {
     local pythonpath="$(dirname "$pythoncmd")"
 
     if [ ! -x "$script" ]; then
-        cp "$script" "$install"
+        install -m755 "$script" "$install"
         return
     fi
-    mkdir -p "$relocateddir"
-    cp "$script" "$relocateddir"
+    install -d -m755 "$relocateddir"
+    install -m755 "$script" "$relocateddir"
     cat > "$install"<<EOF
 #!/usr/bin/env bash
 [[ -z "\$LD_PRELOAD" ]] || { echo "\$0: not compatible with LD_PRELOAD" >&2; exit 110; }
@@ -178,7 +178,7 @@ if [ -f "\${DEBIAN_SSL_CERT_FILE}" ]; then
 fi
 PYTHONPATH="\${d}:\${d}/libexec:\$PYTHONPATH" PATH="\${d}/../bin:\${d}/$pythonpath:\${PATH}" SSL_CERT_FILE="\${c}" exec -a "\$0" "\${d}/libexec/\${b}" "\$@"
 EOF
-    chmod +x "$install"
+    chmod 755 "$install"
 }
 
 install() {
@@ -392,6 +392,7 @@ install -d -m755 -d "$rprefix"/scyllatop
 cp -r tools/scyllatop/* "$rprefix"/scyllatop
 install -d -m755 -d "$rprefix"/scripts
 cp -r dist/common/scripts/* "$rprefix"/scripts
+chmod 755 "$rprefix"/scripts/*
 ln -srf "$rprefix/scyllatop/scyllatop.py" "$rprefix/bin/scyllatop"
 if $supervisor; then
     install -d -m755 "$rprefix"/supervisor
