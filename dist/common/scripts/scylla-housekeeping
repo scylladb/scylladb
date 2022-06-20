@@ -107,7 +107,7 @@ def get_repo_file(dir):
     for name in files:
         with open(name, 'r') as myfile:
             for line in myfile:
-                match = re.search(".*http.?://repositories.*/scylladb/([^/\s]+)/.*/([^/\s]+)/scylladb-.*", line)
+                match = re.search(r".*http.?://repositories.*/scylladb/([^/\s]+)/.*/([^/\s]+)/scylladb-.*", line)
                 if match:
                     return match.group(2), match.group(1)
     return None, None
