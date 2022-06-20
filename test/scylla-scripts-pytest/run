@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
 
 cd $(dirname $0)
-pytest -o junit_family=xunit2 --confcutdir . $*
+
+python3 -m pytest $*
