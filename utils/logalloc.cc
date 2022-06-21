@@ -2073,33 +2073,6 @@ lsa_buffer::~lsa_buffer() {
     }
 }
 
-inline void
-region_group_binomial_group_sanity_check(const region_group::region_heap& bh) {
-#ifdef SEASTAR_DEBUG
-    bool failed = false;
-    size_t last =  std::numeric_limits<size_t>::max();
-    for (auto b = bh.ordered_begin(); b != bh.ordered_end(); b++) {
-        auto t = region_impl_to_region(*b)->evictable_occupancy().total_space();
-        if (!(t <= last)) {
-            failed = true;
-            break;
-        }
-        last = t;
-    }
-    if (!failed) {
-        return;
-    }
-
-    fmt::print("Sanity checking FAILED, size {}\n", bh.size());
-    for (auto b = bh.ordered_begin(); b != bh.ordered_end(); b++) {
-        auto r = region_impl_to_region(*b);
-        auto t = r->evictable_occupancy().total_space();
-        fmt::print(" r = {} (id={}), occupancy = {}\n", fmt::ptr(r), r->id(), t);
-    }
-    assert(0);
-#endif
-}
-
 size_t tracker::reclamation_step() const {
     return _impl->reclamation_step();
 }
@@ -2656,136 +2629,6 @@ bool segment_pool::compact_segment(segment* seg) {
     return true;
 }
 
-region_group_reclaimer region_group::no_reclaimer;
-
-uint64_t region_group::top_region_evictable_space() const {
-    return _regions.empty() ? 0 : region_impl_to_region(_regions.top())->evictable_occupancy().total_space();
-}
-
-region* region_group::get_largest_region() {
-    if (!_maximal_rg || _maximal_rg->_regions.empty()) {
-        return nullptr;
-    }
-    return region_impl_to_region(_maximal_rg->_regions.top());
-}
-
-void
-region_group::add(region_group* child) {
-    child->_subgroup_heap_handle = _subgroups.push(child);
-    update(child->_total_memory);
-}
-
-void
-region_group::del(region_group* child) {
-    _subgroups.erase(child->_subgroup_heap_handle);
-    update(-child->_total_memory);
-}
-
-void
-region_group::add(region* child_r) {
-    auto child = region_to_region_impl(child_r);
-    child_r->region_heap_handle() = _regions.push(child);
-    region_group_binomial_group_sanity_check(_regions);
-    update(child_r->occupancy().total_space());
-}
-
-void
-region_group::del(region* child_r) {
-    _regions.erase(child_r->region_heap_handle());
-    region_group_binomial_group_sanity_check(_regions);
-    update(-child_r->occupancy().total_space());
-}
-
-void
-region_group::moved(region* old_address, region* new_address) {
-}
-
-bool
-region_group::execution_permitted() noexcept {
-    return do_for_each_parent(this, [] (auto rg) {
-        return rg->under_pressure() ? stop_iteration::yes : stop_iteration::no;
-    }) == nullptr;
-}
-
-future<>
-region_group::start_releaser(scheduling_group deferred_work_sg) {
-    return with_scheduling_group(deferred_work_sg, [this] {
-        return yield().then([this] {
-            return repeat([this] () noexcept {
-                if (_shutdown_requested) {
-                    return make_ready_future<stop_iteration>(stop_iteration::yes);
-                }
-
-                if (!_blocked_requests.empty() && execution_permitted()) {
-                    auto req = std::move(_blocked_requests.front());
-                    _blocked_requests.pop_front();
-                    req->allocate();
-                    return make_ready_future<stop_iteration>(stop_iteration::no);
-                } else {
-                    // Block reclaiming to prevent signal() from being called by reclaimer inside wait()
-                    // FIXME: handle allocation failures (not very likely) like allocating_section does
-                    tracker_reclaimer_lock rl;
-                    return _relief.wait().then([] {
-                        return stop_iteration::no;
-                    });
-                }
-            });
-        });
-    });
-}
-
-region_group::region_group(sstring name, region_group *parent,
-        region_group_reclaimer& reclaimer, scheduling_group deferred_work_sg)
-    : _parent(parent)
-    , _reclaimer(reclaimer)
-    , _blocked_requests(on_request_expiry{std::move(name)})
-    , _releaser(reclaimer_can_block() ? start_releaser(deferred_work_sg) : make_ready_future<>())
-{
-    if (_parent) {
-        _parent->add(this);
-    }
-}
-
-bool region_group::reclaimer_can_block() const {
-    return _reclaimer.throttle_threshold() != std::numeric_limits<size_t>::max();
-}
-
-void region_group::notify_relief() {
-    _relief.signal();
-    for (region_group* child : _subgroups) {
-        child->notify_relief();
-    }
-}
-
-void region_group::update(ssize_t delta) {
-    // Most-enclosing group which was relieved.
-    region_group* top_relief = nullptr;
-
-    do_for_each_parent(this, [&top_relief, delta] (region_group* rg) mutable {
-        rg->update_maximal_rg();
-        rg->_total_memory += delta;
-
-        if (rg->_total_memory >= rg->_reclaimer.soft_limit_threshold()) {
-            rg->_reclaimer.notify_soft_pressure();
-        } else {
-            rg->_reclaimer.notify_soft_relief();
-        }
-
-        if (rg->_total_memory > rg->_reclaimer.throttle_threshold()) {
-            rg->_reclaimer.notify_pressure();
-        } else if (rg->_reclaimer.under_pressure()) {
-            rg->_reclaimer.notify_relief();
-            top_relief = rg;
-        }
-
-        return stop_iteration::no;
-    });
-
-    if (top_relief) {
-        top_relief->notify_relief();
-    }
-}
-
 region* region_impl_to_region(region_impl* ri) {
     return ri->_region;
 }
@@ -2873,10 +2716,6 @@ void allocating_section::set_lsa_reserve(size_t reserve) {
 
 void allocating_section::set_std_reserve(size_t reserve) {
     _std_reserve = reserve;
-}
-
-void region_group::on_request_expiry::operator()(std::unique_ptr<allocating_function>& func) noexcept {
-    func->fail(std::make_exception_ptr(blocked_requests_timed_out_error{_name}));
 }
 
 future<> prime_segment_pool(size_t available_memory, size_t min_free_memory) {

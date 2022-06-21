@@ -262,7 +262,7 @@ public:
         _memtables.emplace_back(new_memtable());
     }
 
-    logalloc::region_group& region_group() {
+    dirty_memory_manager_logalloc::region_group& region_group() {
         return _dirty_memory_manager->region_group();
     }
     // This is used for explicit flushes. Will queue the memtable for flushing and proceed when the
@@ -634,7 +634,7 @@ private:
     std::chrono::steady_clock::time_point _sstable_writes_disabled_at;
     void do_trigger_compaction();
 
-    logalloc::region_group& dirty_memory_region_group() const {
+    dirty_memory_manager_logalloc::region_group& dirty_memory_region_group() const {
         return _config.dirty_memory_manager->region_group();
     }
 
@@ -1653,7 +1653,7 @@ public:
     // drops the table on all shards and removes the table directory if there are no snapshots
     static future<> drop_table_on_all_shards(sharded<database>& db, sstring ks_name, sstring cf_name, timestamp_func, bool with_snapshot = true);
 
-    const logalloc::region_group& dirty_memory_region_group() const {
+    const dirty_memory_manager_logalloc::region_group& dirty_memory_region_group() const {
         return _dirty_memory_manager.region_group();
     }
 
