@@ -193,6 +193,19 @@ future<shared_sstable> test_env::reusable_sst(schema_ptr schema, sstring dir, un
     throw sst_not_found(dir, generation);
 }
 
+compaction_manager_for_testing::wrapped_compaction_manager::wrapped_compaction_manager(bool enabled)
+        : cm(compaction_manager::for_testing_tag{})
+{
+    if (enabled) {
+        cm.enable();
+    }
+}
+
+// Must run in a seastar thread
+compaction_manager_for_testing::wrapped_compaction_manager::~wrapped_compaction_manager() {
+    cm.stop().get();
+}
+
 class compaction_manager::compaction_manager_test_task : public compaction_manager::task {
     utils::UUID _run_id;
     noncopyable_function<future<> (sstables::compaction_data&)> _job;

@@ -190,11 +190,7 @@ SEASTAR_TEST_CASE(compaction_manager_basic_test) {
     auto s = make_shared_schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}}, {}, utf8_type);
 
-    auto cm = make_lw_shared<compaction_manager>(compaction_manager::for_testing_tag{});
-    cm->enable();
-    auto stop_cm = defer([&cm] {
-        cm->stop().get();
-    });
+    auto cm = compaction_manager_for_testing();
 
     auto tmp = tmpdir();
     replica::column_family::config cfg = column_family_test_config(env.semaphore());
@@ -252,7 +248,7 @@ SEASTAR_TEST_CASE(compaction_manager_basic_test) {
 }
 
 SEASTAR_TEST_CASE(compact) {
-  return sstables::test_env::do_with([] (sstables::test_env& env) {
+  return sstables::test_env::do_with_async([] (sstables::test_env& env) {
     BOOST_REQUIRE(smp::count == 1);
     constexpr int generation = 17;
     // The "compaction" sstable was created with the following schema:
@@ -269,14 +265,14 @@ SEASTAR_TEST_CASE(compact) {
     builder.set_comment("Example table for compaction");
     builder.set_gc_grace_seconds(std::numeric_limits<int32_t>::max());
     auto s = builder.build();
-    auto cm = make_lw_shared<compaction_manager>(compaction_manager::for_testing_tag{});
+    auto cm = compaction_manager_for_testing();
     auto cl_stats = make_lw_shared<cell_locker_stats>();
     auto tracker = make_lw_shared<cache_tracker>();
     auto cf = make_lw_shared<replica::column_family>(s, column_family_test_config(env.semaphore()), replica::column_family::no_commitlog(), *cm, env.manager(), *cl_stats, *tracker);
     cf->mark_ready_for_writes();
 
-    return test_setup::do_with_tmp_directory([s, generation, cf, cm] (test_env& env, sstring tmpdir_path) {
-        return open_sstables(env, s, "test/resource/sstables/compaction", {1,2,3}).then([&env, tmpdir_path, s, cf, cm, generation] (auto sstables) {
+    test_setup::do_with_tmp_directory([s, generation, cf, cm] (test_env& env, sstring tmpdir_path) {
+        return open_sstables(env, s, "test/resource/sstables/compaction", {1,2,3}).then([&env, tmpdir_path, s, cf, cm, generation] (auto sstables) mutable {
             auto new_sstable = [&env, gen = make_lw_shared<unsigned>(generation), s, tmpdir_path] {
                 return env.make_sstable(s, tmpdir_path,
                         (*gen)++, sstables::get_highest_sstable_version(), sstables::sstable::format_types::big);
@@ -348,7 +344,7 @@ SEASTAR_TEST_CASE(compact) {
                 });
             });
         });
-    }).finally([cl_stats, tracker] { });
+    }).finally([cl_stats, tracker] { }).get();
   });
 
     // verify that the compacted sstable look like
@@ -3248,11 +3244,7 @@ SEASTAR_TEST_CASE(partial_sstable_run_filtered_out_test) {
 
         auto tmp = tmpdir();
 
-        auto cm = make_lw_shared<compaction_manager>(compaction_manager::for_testing_tag{});
-        auto stop_cm = defer([cm] {
-            cm->stop().get();
-        });
-        cm->enable();
+        auto cm = compaction_manager_for_testing();
 
         replica::column_family::config cfg = column_family_test_config(env.semaphore());
         cfg.datadir = tmp.path().string();
@@ -3518,7 +3510,7 @@ SEASTAR_TEST_CASE(incremental_compaction_data_resurrection_test) {
         // make mut1_deletion gc'able.
         forward_jump_clocks(std::chrono::seconds(ttl));
 
-        auto cm = make_lw_shared<compaction_manager>(compaction_manager::for_testing_tag{});
+        auto cm = compaction_manager_for_testing();
         replica::column_family::config cfg = column_family_test_config(env.semaphore());
         cfg.datadir = tmp.path().string();
         cfg.enable_disk_writes = false;
@@ -3626,7 +3618,7 @@ SEASTAR_TEST_CASE(twcs_major_compaction_test) {
         auto mut3 = make_insert(0ms);
         auto mut4 = make_insert(1ms);
 
-        auto cm = make_lw_shared<compaction_manager>(compaction_manager::for_testing_tag{});
+        auto cm = compaction_manager_for_testing();
         replica::column_family::config cfg = column_family_test_config(env.semaphore());
         cfg.datadir = tmp.path().string();
         cfg.enable_disk_writes = true;
@@ -3655,9 +3647,8 @@ SEASTAR_TEST_CASE(autocompaction_control_test) {
         cell_locker_stats cl_stats;
         cache_tracker tracker;
 
-        compaction_manager cm(compaction_manager::for_testing_tag{});
-        auto stop_compaction_manager = deferred_stop(cm);
-        cm.enable();
+        auto cmft = compaction_manager_for_testing();
+        auto& cm = *cmft;
 
         auto s = schema_builder(some_keyspace, some_column_family)
                 .with_column("id", utf8_type, column_kind::partition_key)
@@ -3765,7 +3756,7 @@ SEASTAR_TEST_CASE(test_bug_6472) {
             return m;
         };
 
-        auto cm = make_lw_shared<compaction_manager>(compaction_manager::for_testing_tag{});
+        auto cm = compaction_manager_for_testing();
         replica::column_family::config cfg = column_family_test_config(env.semaphore());
         cfg.datadir = tmpdir_path;
         cfg.enable_disk_writes = true;
@@ -3897,7 +3888,7 @@ SEASTAR_TEST_CASE(test_twcs_partition_estimate) {
             return make_sstable_containing(sst_gen, {m});
         };
 
-        auto cm = make_lw_shared<compaction_manager>(compaction_manager::for_testing_tag{});
+        auto cm = compaction_manager_for_testing();
         replica::column_family::config cfg = column_family_test_config(env.semaphore());
         cfg.datadir = tmpdir_path;
         cfg.enable_disk_writes = true;
@@ -4026,7 +4017,7 @@ SEASTAR_TEST_CASE(test_twcs_interposer_on_memtable_flush) {
         };
 
         auto tmp = tmpdir();
-        auto cm = make_lw_shared<compaction_manager>(compaction_manager::for_testing_tag{});
+        auto cm = compaction_manager_for_testing();
         replica::column_family::config cfg = column_family_test_config(env.semaphore());
         cfg.datadir = tmp.path().string();
         cfg.enable_disk_writes = true;
@@ -4133,10 +4124,7 @@ SEASTAR_TEST_CASE(test_offstrategy_sstable_compaction) {
             auto mut = mutation(s, pk);
             ss.add_row(mut, ss.make_ckey(0), "val");
 
-            auto cm = make_lw_shared<compaction_manager>(compaction_manager::for_testing_tag{});
-            auto stop_cm = defer([cm] {
-                cm->stop().get();
-            });
+            auto cm = compaction_manager_for_testing();
 
             replica::column_family::config cfg = column_family_test_config(env.semaphore());
             cfg.datadir = tmp.path().string();
@@ -4420,7 +4408,7 @@ SEASTAR_TEST_CASE(test_twcs_single_key_reader_filtering) {
         auto sst2 = make_sstable_containing(sst_gen, {make_row(0, 1)});
         auto dkey = sst1->get_first_decorated_key();
 
-        auto cm = make_lw_shared<compaction_manager>(compaction_manager::for_testing_tag{});
+        auto cm = compaction_manager_for_testing();
         replica::column_family::config cfg = column_family_test_config(env.semaphore());
         replica::cf_stats cf_stats{0};
         cfg.cf_stats = &cf_stats;
@@ -4488,11 +4476,7 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
             return builder.build();
         };
 
-        auto cm = make_lw_shared<compaction_manager>(compaction_manager::for_testing_tag{});
-        cm->enable();
-        auto stop_cm = defer([&cm] {
-            cm->stop().get();
-        });
+        auto cm = compaction_manager_for_testing();
 
         auto tmp = tmpdir();
         auto cl_stats = make_lw_shared<cell_locker_stats>();
@@ -4717,7 +4701,7 @@ SEASTAR_TEST_CASE(twcs_single_key_reader_through_compound_set_test) {
         };
 
         auto tmp = tmpdir();
-        auto cm = make_lw_shared<compaction_manager>(compaction_manager::for_testing_tag{});
+        auto cm = compaction_manager_for_testing();
         replica::column_family::config cfg = column_family_test_config(env.semaphore());
         replica::cf_stats cf_stats{0};
         cfg.cf_stats = &cf_stats;
