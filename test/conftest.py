@@ -135,12 +135,12 @@ def cql_test_connection(cql, request):
 def this_dc(cql):
     yield cql.execute("SELECT data_center FROM system.local").one()[0]
 
-# "test_keyspace" fixture: Creates and returns a temporary keyspace to be
+# "keyspace" fixture: Creates and returns a temporary keyspace to be
 # used in tests that need a keyspace. The keyspace is created with RF=1,
 # and automatically deleted at the end. We use scope="session" so that all
 # tests will reuse the same keyspace.
 @pytest.fixture(scope="session")
-def test_keyspace(cql, this_dc):
+def keyspace(cql, this_dc):
     name = unique_name()
     cql.execute("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" +
                 this_dc + "' : 1 }")
