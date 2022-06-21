@@ -373,6 +373,8 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _sst_dir_semaphore(sst_dir_sem)
     , _wasm_engine(std::make_unique<wasm::engine>())
     , _stop_barrier(std::move(barrier))
+    , _update_memtable_flush_static_shares_action([this, &cfg] { return _memtable_controller.update_static_shares(cfg.memtable_flush_static_shares()); })
+    , _memtable_flush_static_shares_observer(cfg.memtable_flush_static_shares.observe(_update_memtable_flush_static_shares_action.make_observer()))
 {
     assert(dbcfg.available_memory != 0); // Detect misconfigured unit tests, see #7544
 
@@ -2290,6 +2292,7 @@ future<> database::stop() {
     co_await _streaming_concurrency_sem.stop();
     co_await _compaction_concurrency_sem.stop();
     co_await _system_read_concurrency_sem.stop();
+    co_await _update_memtable_flush_static_shares_action.join();
 }
 
 future<> database::flush_all_memtables() {
