@@ -851,7 +851,9 @@ public:
 
     // Weak exception guarantees. After exception, both src and this will commute to the same value as
     // they would should the exception not happen.
+    void apply(const schema& s, const deletable_row& src);
     void apply(const schema& s, deletable_row&& src);
+    void apply_monotonically(const schema& s, const deletable_row& src);
     void apply_monotonically(const schema& s, deletable_row&& src);
 public:
     row_tombstone deleted_at() const { return _deleted_at; }

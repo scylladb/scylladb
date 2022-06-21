@@ -1176,8 +1176,18 @@ deletable_row::equal(column_kind kind, const schema& s, const deletable_row& oth
     return _cells.equal(kind, s, other._cells, other_schema);
 }
 
+void deletable_row::apply(const schema& s, const deletable_row& src) {
+    apply_monotonically(s, src);
+}
+
 void deletable_row::apply(const schema& s, deletable_row&& src) {
     apply_monotonically(s, std::move(src));
+}
+
+void deletable_row::apply_monotonically(const schema& s, const deletable_row& src) {
+    _cells.apply(s, column_kind::regular_column, src._cells);
+    _marker.apply(src._marker);
+    _deleted_at.apply(src._deleted_at, _marker);
 }
 
 void deletable_row::apply_monotonically(const schema& s, deletable_row&& src) {

@@ -39,6 +39,8 @@ public:
             : _ck(std::move(ck)), _row(std::move(t), std::move(marker), std::move(cells)) {
         _row.maybe_shadow();
     }
+    clustering_row(clustering_key_prefix ck, deletable_row&& row)
+        : _ck(std::move(ck)), _row(std::move(row)) { }
     clustering_row(const schema& s, const clustering_row& other)
         : _ck(other._ck), _row(s, other._row) { }
     clustering_row(const schema& s, const rows_entry& re)
@@ -86,7 +88,7 @@ public:
         _row.apply(s, deletable_row(s, r.row()));
     }
     void apply(const schema& s, const deletable_row& r) {
-        _row.apply(s, deletable_row(s, r));
+        _row.apply(s, r);
     }
 
     position_in_partition_view position() const;
