@@ -1063,11 +1063,7 @@ future<bool> table::perform_offstrategy_compaction() {
     // If the user calls trigger_offstrategy_compaction() to trigger
     // off-strategy explicitly, cancel the timeout based automatic trigger.
     _off_strategy_trigger.cancel();
-    if (_maintenance_sstables->all()->empty()) {
-        co_return false;
-    }
-    co_await _compaction_manager.perform_offstrategy(this);
-    co_return true;
+    return _compaction_manager.perform_offstrategy(this);
 }
 
 void table::set_compaction_strategy(sstables::compaction_strategy_type strategy) {

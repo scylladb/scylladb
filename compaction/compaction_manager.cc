@@ -926,10 +926,15 @@ void compaction_manager::submit(replica::table* t) {
 }
 
 class compaction_manager::offstrategy_compaction_task : public compaction_manager::task {
+    bool _performed = false;
 public:
     offstrategy_compaction_task(compaction_manager& mgr, replica::table* t)
         : task(mgr, t, sstables::compaction_type::Reshape, "Offstrategy compaction")
     {}
+
+    bool performed() const noexcept {
+        return _performed;
+    }
 
     future<> run_offstrategy_compaction(sstables::compaction_data& cdata) {
         // This procedure will reshape sstables in maintenance set until it's ready for
@@ -974,6 +979,7 @@ public:
             auto input = boost::copy_range<std::unordered_set<sstables::shared_sstable>>(desc.sstables);
 
             auto ret = co_await sstables::compact_sstables(std::move(desc), cdata, t.as_table_state());
+            _performed = true;
 
             // update list of reshape candidates without input but with output added to it
             auto it = boost::remove_if(reshape_candidates, [&] (auto& s) { return input.contains(s); });
@@ -1040,11 +1046,13 @@ protected:
     }
 };
 
-future<> compaction_manager::perform_offstrategy(replica::table* t) {
+future<bool> compaction_manager::perform_offstrategy(replica::table* t) {
     if (_state != state::enabled) {
-        return make_ready_future<>();
+        co_return false;
     }
-    return perform_task(make_shared<offstrategy_compaction_task>(*this, t));
+    auto task = make_shared<offstrategy_compaction_task>(*this, t);
+    co_await perform_task(task);
+    co_return task->performed();
 }
 
 class compaction_manager::rewrite_sstables_compaction_task : public compaction_manager::sstables_task {
