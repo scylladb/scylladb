@@ -37,6 +37,10 @@
 // The constants q1 and q2 are used to determine the proportional factor at each stage.
 class backlog_controller {
 public:
+    struct scheduling_group {
+        seastar::scheduling_group cpu;
+        const ::io_priority_class& io;
+    };
     future<> shutdown() {
         _update_timer.cancel();
         return std::move(_inflight_update);
@@ -47,8 +51,7 @@ protected:
         float output;
     };
 
-    seastar::scheduling_group _scheduling_group;
-    const ::io_priority_class& _io_priority;
+    scheduling_group& _scheduling_group;
     std::chrono::milliseconds _interval;
     timer<> _update_timer;
 
@@ -62,10 +65,9 @@ protected:
 
     void adjust();
 
-    backlog_controller(seastar::scheduling_group sg, const ::io_priority_class& iop, std::chrono::milliseconds interval,
+    backlog_controller(scheduling_group& sg, std::chrono::milliseconds interval,
                        std::vector<control_point> control_points, std::function<float()> backlog)
         : _scheduling_group(sg)
-        , _io_priority(iop)
         , _interval(interval)
         , _update_timer([this] { adjust(); })
         , _control_points()
@@ -78,9 +80,8 @@ protected:
 
     // Used when the controllers are disabled and a static share is used
     // When that option is deprecated we should remove this.
-    backlog_controller(seastar::scheduling_group sg, const ::io_priority_class& iop, float static_shares) 
+    backlog_controller(scheduling_group& sg, float static_shares)
         : _scheduling_group(sg)
-        , _io_priority(iop)
         , _inflight_update(make_ready_future<>())
     {
         update_controller(static_shares);
@@ -90,9 +91,6 @@ protected:
 public:
     backlog_controller(backlog_controller&&) = default;
     float backlog_of_shares(float shares) const;
-    seastar::scheduling_group sg() {
-        return _scheduling_group;
-    }
 };
 
 // memtable flush CPU controller.
@@ -113,9 +111,9 @@ public:
 class flush_controller : public backlog_controller {
     static constexpr float hard_dirty_limit = 1.0f;
 public:
-    flush_controller(seastar::scheduling_group sg, const ::io_priority_class& iop, float static_shares) : backlog_controller(sg, iop, static_shares) {}
-    flush_controller(seastar::scheduling_group sg, const ::io_priority_class& iop, std::chrono::milliseconds interval, float soft_limit, std::function<float()> current_dirty)
-        : backlog_controller(sg, iop, std::move(interval),
+    flush_controller(backlog_controller::scheduling_group& sg, float static_shares) : backlog_controller(sg, static_shares) {}
+    flush_controller(backlog_controller::scheduling_group& sg, std::chrono::milliseconds interval, float soft_limit, std::function<float()> current_dirty)
+        : backlog_controller(sg, std::move(interval),
           std::vector<backlog_controller::control_point>({{0.0, 0.0}, {soft_limit, 10}, {soft_limit + (hard_dirty_limit - soft_limit) / 2, 200} , {hard_dirty_limit, 1000}}),
           std::move(current_dirty)
         )
@@ -127,9 +125,9 @@ public:
     static constexpr unsigned normalization_factor = 30;
     static constexpr float disable_backlog = std::numeric_limits<double>::infinity();
     static constexpr float backlog_disabled(float backlog) { return std::isinf(backlog); }
-    compaction_controller(seastar::scheduling_group sg, const ::io_priority_class& iop, float static_shares) : backlog_controller(sg, iop, static_shares) {}
-    compaction_controller(seastar::scheduling_group sg, const ::io_priority_class& iop, std::chrono::milliseconds interval, std::function<float()> current_backlog)
-        : backlog_controller(sg, iop, std::move(interval),
+    compaction_controller(backlog_controller::scheduling_group& sg, float static_shares) : backlog_controller(sg, static_shares) {}
+    compaction_controller(backlog_controller::scheduling_group& sg, std::chrono::milliseconds interval, std::function<float()> current_backlog)
+        : backlog_controller(sg, std::move(interval),
           std::vector<backlog_controller::control_point>({{0.0, 50}, {1.5, 100} , {normalization_factor, 1000}}),
           std::move(current_backlog)
         )

@@ -80,29 +80,20 @@ namespace replica {
 
 inline
 flush_controller
-make_flush_controller(const db::config& cfg, seastar::scheduling_group sg, const ::io_priority_class& iop, std::function<double()> fn) {
+make_flush_controller(const db::config& cfg, backlog_controller::scheduling_group& sg, std::function<double()> fn) {
     if (cfg.memtable_flush_static_shares() > 0) {
-        return flush_controller(sg, iop, cfg.memtable_flush_static_shares());
+        return flush_controller(sg, cfg.memtable_flush_static_shares());
     }
-    return flush_controller(sg, iop, 50ms, cfg.virtual_dirty_soft_limit(), std::move(fn));
+    return flush_controller(sg, 50ms, cfg.virtual_dirty_soft_limit(), std::move(fn));
 }
 
-inline
-std::unique_ptr<compaction_manager>
-make_compaction_manager(const db::config& cfg, database_config& dbcfg, abort_source& as) {
-    if (cfg.compaction_static_shares() > 0) {
-        return std::make_unique<compaction_manager>(
-                compaction_manager::compaction_scheduling_group{dbcfg.compaction_scheduling_group, service::get_local_compaction_priority()},
-                compaction_manager::maintenance_scheduling_group{dbcfg.streaming_scheduling_group, service::get_local_streaming_priority()},
-                dbcfg.available_memory,
-                cfg.compaction_static_shares(),
-                as);
-    }
-    return std::make_unique<compaction_manager>(
-            compaction_manager::compaction_scheduling_group{dbcfg.compaction_scheduling_group, service::get_local_compaction_priority()},
-            compaction_manager::maintenance_scheduling_group{dbcfg.streaming_scheduling_group, service::get_local_streaming_priority()},
-            dbcfg.available_memory,
-            as);
+inline compaction_manager::config make_compaction_manager_config(const db::config& cfg, database_config& dbcfg) {
+    return compaction_manager::config {
+        .compaction_sched_group = compaction_manager::scheduling_group{dbcfg.compaction_scheduling_group, service::get_local_compaction_priority()},
+        .maintenance_sched_group = compaction_manager::scheduling_group{dbcfg.streaming_scheduling_group, service::get_local_streaming_priority()},
+        .available_memory = dbcfg.available_memory,
+        .static_shares = cfg.compaction_static_shares(),
+    };
 }
 
 keyspace::keyspace(lw_shared_ptr<keyspace_metadata> metadata, config cfg, locator::effective_replication_map_factory& erm_factory)
@@ -332,7 +323,8 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _system_dirty_memory_manager(*this, 10 << 20, cfg.virtual_dirty_soft_limit(), default_scheduling_group())
     , _dirty_memory_manager(*this, dbcfg.available_memory * 0.50, cfg.virtual_dirty_soft_limit(), dbcfg.statement_scheduling_group)
     , _dbcfg(dbcfg)
-    , _memtable_controller(make_flush_controller(_cfg, dbcfg.memtable_scheduling_group, service::get_local_memtable_flush_priority(), [this, limit = float(_dirty_memory_manager.throttle_threshold())] {
+    , _flush_sg(backlog_controller::scheduling_group{dbcfg.memtable_scheduling_group, service::get_local_memtable_flush_priority()})
+    , _memtable_controller(make_flush_controller(_cfg, _flush_sg, [this, limit = float(_dirty_memory_manager.throttle_threshold())] {
         auto backlog = (_dirty_memory_manager.virtual_dirty_memory()) / limit;
         if (_dirty_memory_manager.has_extraneous_flushes_requested()) {
             backlog = std::max(backlog, _memtable_controller.backlog_of_shares(200));
@@ -361,7 +353,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _row_cache_tracker(cache_tracker::register_metrics::yes)
     , _apply_stage("db_apply", &database::do_apply)
     , _version(empty_version)
-    , _compaction_manager(make_compaction_manager(_cfg, dbcfg, as))
+    , _compaction_manager(std::make_unique<compaction_manager>(make_compaction_manager_config(_cfg, dbcfg), as))
     , _enable_incremental_backups(cfg.incremental_backups())
     , _large_data_handler(std::make_unique<db::cql_table_large_data_handler>(_cfg.compaction_large_partition_warning_threshold_mb()*1024*1024,
               _cfg.compaction_large_row_warning_threshold_mb()*1024*1024,
@@ -448,11 +440,11 @@ float backlog_controller::backlog_of_shares(float shares) const {
 }
 
 void backlog_controller::update_controller(float shares) {
-    _scheduling_group.set_shares(shares);
+    _scheduling_group.cpu.set_shares(shares);
     if (!_inflight_update.available()) {
         return; // next timer will fix it
     }
-    _inflight_update = _io_priority.update_shares(uint32_t(shares));
+    _inflight_update = _scheduling_group.io.update_shares(uint32_t(shares));
 }
 
 void

@@ -48,13 +48,12 @@ public:
         uint64_t active_tasks = 0; // Number of compaction going on.
         int64_t errors = 0;
     };
-    struct compaction_scheduling_group {
-        seastar::scheduling_group cpu;
-        const ::io_priority_class& io;
-    };
-    struct maintenance_scheduling_group {
-        seastar::scheduling_group cpu;
-        const ::io_priority_class& io;
+    using scheduling_group = backlog_controller::scheduling_group;
+    struct config {
+        scheduling_group compaction_sched_group;
+        scheduling_group maintenance_sched_group;
+        size_t available_memory;
+        uint64_t static_shares = 0;
     };
 private:
     struct compaction_state {
@@ -284,9 +283,10 @@ private:
     timer<lowres_clock> _compaction_submission_timer = timer<lowres_clock>(compaction_submission_callback());
     static constexpr std::chrono::seconds periodic_compaction_submission_interval() { return std::chrono::seconds(3600); }
 
+    scheduling_group _compaction_sg;
+    scheduling_group _maintenance_sg;
     compaction_controller _compaction_controller;
     compaction_backlog_manager _backlog_manager;
-    maintenance_scheduling_group _maintenance_sg;
     size_t _available_memory;
     optimized_optional<abort_source::subscription> _early_abort_subscription;
 
@@ -347,7 +347,7 @@ private:
 
     // Stop all fibers, without waiting. Safe to be called multiple times.
     void do_stop() noexcept;
-    void really_do_stop();
+    future<> really_do_stop();
 
     // Propagate replacement of sstables to all ongoing compaction of a given table
     void propagate_replacement(replica::table* t, const std::vector<sstables::shared_sstable>& removed, const std::vector<sstables::shared_sstable>& added);
@@ -356,8 +356,7 @@ private:
     // about invoking it. Ref #10146
     compaction_manager();
 public:
-    compaction_manager(compaction_scheduling_group csg, maintenance_scheduling_group msg, size_t available_memory, abort_source& as);
-    compaction_manager(compaction_scheduling_group csg, maintenance_scheduling_group msg, size_t available_memory, uint64_t shares, abort_source& as);
+    compaction_manager(config cfg, abort_source& as);
     ~compaction_manager();
     class for_testing_tag{};
     // An inline constructor for testing
