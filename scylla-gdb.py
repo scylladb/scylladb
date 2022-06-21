@@ -4488,13 +4488,23 @@ class scylla_compaction_tasks(gdb.Command):
 
         task_list = list(std_list(cm['_tasks']))
         for task in task_list:
-            task = seastar_lw_shared_ptr(task).get().dereference()
             try:
-                schema = schema_ptr(task['compacting_table'].dereference()['_schema'])
+                task = seastar_shared_ptr(task).get().dereference()
             except:
-                schema = schema_ptr(task['compacting_cf'].dereference()['_schema'])
+                task = seastar_lw_shared_ptr(task).get().dereference() # Scylla 5.0 compatibility
 
-            key = 'type={}, running={:5}, {}'.format(task['type'], str(task['compaction_running']), schema.table_name())
+            try:
+                schema = schema_ptr(task['_compacting_table'].dereference()['_schema'])
+            except:
+                try:
+                    schema = schema_ptr(task['compacting_table'].dereference()['_schema']) # Scylla 5.0 compatibility
+                except:
+                    schema = schema_ptr(task['compacting_cf'].dereference()['_schema']) # Scylla 4.6 compatibility
+
+            try:
+                key = 'type={}, state={:5}, {}'.format(task['_type'], str(task['_state']), schema.table_name())
+            except:
+                key = 'type={}, running={:5}, {}'.format(task['type'], str(task['compaction_running']), schema.table_name()) # Scylla 5.0 compatibility
             task_hist.add(key)
 
         task_hist.print_to_console()
