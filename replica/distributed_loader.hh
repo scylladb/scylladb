@@ -79,7 +79,6 @@ class distributed_loader {
 public:
     static future<> init_system_keyspace(distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, db::config& cfg);
     static future<> init_non_system_keyspaces(distributed<replica::database>& db, distributed<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks);
-    static future<> ensure_system_table_directories(distributed<replica::database>& db);
 
     // Scan sstables under upload directory. Return a vector with smp::count entries.
     // Each entry with index of idx should be accessed on shard idx only.

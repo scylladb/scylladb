@@ -960,6 +960,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // Iteration through column family directory for sstable loading is
             // done only by shard 0, so we'll no longer face race conditions as
             // described here: https://github.com/scylladb/scylla/issues/1014
+            supervisor::notify("loading system sstables");
             replica::distributed_loader::init_system_keyspace(db, ss, gossiper, *cfg).get();
 
             smp::invoke_on_all([blocked_reactor_notify_ms] {
@@ -1056,10 +1057,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             // schema migration, if needed, is also done on shard 0
             db::legacy_schema_migrator::migrate(proxy, db, qp.local()).get();
-
-            supervisor::notify("loading system sstables");
-
-            replica::distributed_loader::ensure_system_table_directories(db).get();
 
             // making compaction manager api available, after system keyspace has already been established.
             api::set_server_compaction_manager(ctx).get();

@@ -599,16 +599,6 @@ future<> distributed_loader::init_system_keyspace(distributed<replica::database>
     });
 }
 
-future<> distributed_loader::ensure_system_table_directories(distributed<replica::database>& db) {
-    return parallel_for_each(system_keyspaces, [&db](std::string_view ksname) {
-        auto& ks = db.local().find_keyspace(ksname);
-        return parallel_for_each(ks.metadata()->cf_meta_data(), [&ks] (auto& pair) {
-            auto cfm = pair.second;
-            return ks.make_directory_for_column_family(cfm->cf_name(), cfm->id());
-        });
-    });
-}
-
 future<> distributed_loader::init_non_system_keyspaces(distributed<replica::database>& db,
         distributed<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks) {
     return seastar::async([&db, &proxy, &sys_ks] {
