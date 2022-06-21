@@ -438,6 +438,11 @@ future<> compaction_manager::run_custom_job(compaction::table_state& t, sstables
     return perform_task(make_shared<custom_compaction_task>(*this, &t, type, desc, std::move(job)));
 }
 
+future<> compaction_manager::update_static_shares(float static_shares) {
+    cmlog.info("Updating static shares to {}", static_shares);
+    return _compaction_controller.update_static_shares(static_shares);
+}
+
 compaction_manager::compaction_reenabler::compaction_reenabler(compaction_manager& cm, compaction::table_state& t)
     : _cm(cm)
     , _table(&t)
@@ -638,6 +643,9 @@ compaction_manager::compaction_manager(config cfg, abort_source& as)
         do_stop();
     }))
     , _throughput_mbs(std::move(cfg.throughput_mb_per_sec))
+    , _static_shares(std::move(cfg.static_shares))
+    , _update_compaction_static_shares_action([this] { return update_static_shares(_static_shares); })
+    , _compaction_static_shares_observer(_static_shares.observe(_update_compaction_static_shares_action.make_observer()))
     , _strategy_control(std::make_unique<strategy_control>(*this))
 {
     register_metrics();
@@ -656,6 +664,9 @@ compaction_manager::compaction_manager()
     , _compaction_controller(make_compaction_controller(_compaction_sg, 1, [] () -> float { return 1.0; }))
     , _backlog_manager(_compaction_controller)
     , _available_memory(1)
+    , _static_shares(utils::updateable_value<float>(0))
+    , _update_compaction_static_shares_action([] { return make_ready_future<>(); })
+    , _compaction_static_shares_observer(_static_shares.observe(_update_compaction_static_shares_action.make_observer()))
     , _strategy_control(std::make_unique<strategy_control>(*this))
 {
     // No metric registration because this constructor is supposed to be used only by the testing
@@ -817,6 +828,7 @@ future<> compaction_manager::really_do_stop() {
     _compaction_submission_timer.cancel();
     co_await _compaction_controller.shutdown();
     co_await _throughput_updater.join();
+    co_await _update_compaction_static_shares_action.join();
     cmlog.info("Stopped");
 }
 

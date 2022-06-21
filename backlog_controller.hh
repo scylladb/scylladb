@@ -45,6 +45,12 @@ public:
         _update_timer.cancel();
         return std::move(_inflight_update);
     }
+
+    future<> update_static_shares(float static_shares) {
+        _static_shares = static_shares;
+        return make_ready_future<>();
+    }
+
 protected:
     struct control_point {
         float input;

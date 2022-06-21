@@ -51,7 +51,7 @@ public:
         scheduling_group compaction_sched_group;
         scheduling_group maintenance_sched_group;
         size_t available_memory;
-        uint64_t static_shares = 0;
+        utils::updateable_value<float> static_shares = utils::updateable_value<float>(0);
         utils::updateable_value<uint32_t> throughput_mb_per_sec = utils::updateable_value<uint32_t>(0);
     };
 private:
@@ -284,6 +284,9 @@ private:
     utils::updateable_value<uint32_t> _throughput_mbs;
     serialized_action _throughput_updater = serialized_action([this] { return update_throughput(_throughput_mbs()); });
     std::optional<utils::observer<uint32_t>> _throughput_option_observer;
+    utils::updateable_value<float> _static_shares;
+    serialized_action _update_compaction_static_shares_action;
+    utils::observer<float> _compaction_static_shares_observer;
 
     class strategy_control;
     std::unique_ptr<strategy_control> _strategy_control;
@@ -330,6 +333,7 @@ private:
     void postpone_compaction_for_table(compaction::table_state* t);
 
     future<> perform_sstable_scrub_validate_mode(compaction::table_state& t);
+    future<> update_static_shares(float shares);
 
     using get_candidates_func = std::function<future<std::vector<sstables::shared_sstable>>()>;
 
