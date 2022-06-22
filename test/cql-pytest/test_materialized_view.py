@@ -98,3 +98,17 @@ def test_mv_empty_string_partition_key(cql, test_keyspace):
             # because Cassandra forbids an empty partition key on select
             with pytest.raises(InvalidRequest, match='Key may not be empty'):
                 cql.execute(f"SELECT * FROM {mv} WHERE v=''")
+
+# Refs #10851. The code used to create a wildcard selection for all columns,
+# which erroneously also includes static columns if such are present in the
+# base table. Currently views only operate on regular columns and the filtering
+# code assumes that. TODO: once we implement static column support for materialized
+# views, this test case will be a nice regression test to ensure that everything still
+# works if the static columns are *not* used in the view.
+def test_filter_with_unused_static_column(cql, test_keyspace):
+    schema = 'p int, c int, v int, s int static, primary key (p,c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        with new_materialized_view(cql, table, select='p,c,v', pk='p,c,v', where='p IS NOT NULL and c IS NOT NULL and v = 44') as mv:
+            cql.execute(f"INSERT INTO {table} (p,c,v) VALUES (42,43,44)")
+            cql.execute(f"INSERT INTO {table} (p,c,v) VALUES (1,2,3)")
+            assert list(cql.execute(f"SELECT * FROM {mv}")) == [(42, 43, 44)]
