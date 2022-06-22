@@ -313,7 +313,11 @@ public:
     view_filter_checking_visitor(const schema& base, const view_info& view)
         : _base(base)
         , _view(view)
-        , _selection(cql3::selection::selection::wildcard(_base.shared_from_this()))
+        , _selection(cql3::selection::selection::for_columns(_base.shared_from_this(),
+            boost::copy_range<std::vector<const column_definition*>>(
+                _base.regular_columns() | boost::adaptors::transformed([] (const column_definition& cdef) { return &cdef; }))
+            )
+        )
     {}
 
     void accept_new_partition(const partition_key& key, uint64_t row_count) {
