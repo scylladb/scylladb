@@ -33,6 +33,7 @@
 #include "test/lib/simple_schema.hh"
 #include "utils/error_injection.hh"
 #include "db/commitlog/commitlog.hh"
+#include "test/lib/make_random_string.hh"
 
 static api::timestamp_type next_timestamp() {
     static thread_local api::timestamp_type next_timestamp = 1;
@@ -571,6 +572,74 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_compaction_during_flush) {
     { auto rd = std::move(rd1); }
 
     mt->cleaner().drain().get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_tombstone_merging_with_multiple_versions) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    simple_schema ss;
+    auto s = ss.schema();
+    auto mt = make_lw_shared<replica::memtable>(ss.schema());
+
+    auto pk = ss.make_pkey(0);
+    auto pr = dht::partition_range::make_singular(pk);
+
+    auto t0 = ss.new_tombstone();
+    auto t1 = ss.new_tombstone();
+    auto t2 = ss.new_tombstone();
+    auto t3 = ss.new_tombstone();
+
+    mutation m1(s, pk);
+    ss.delete_range(m1, *position_range_to_clustering_range(position_range(
+                position_in_partition::before_key(ss.make_ckey(0)),
+                position_in_partition::for_key(ss.make_ckey(3))), *s), t1);
+    ss.add_row(m1, ss.make_ckey(0), "v");
+    ss.add_row(m1, ss.make_ckey(1), "v");
+
+    // Fill so that rd1 stays in the partition snapshot
+    int n_rows = 1000;
+    auto v = make_random_string(512);
+    for (int i = 0; i < n_rows; ++i) {
+        ss.add_row(m1, ss.make_ckey(i), v);
+    }
+
+    mutation m2(s, pk);
+    ss.delete_range(m2, *position_range_to_clustering_range(position_range(
+            position_in_partition::before_key(ss.make_ckey(0)),
+            position_in_partition::before_key(ss.make_ckey(1))), *s), t2);
+    ss.delete_range(m2, *position_range_to_clustering_range(position_range(
+            position_in_partition::before_key(ss.make_ckey(1)),
+            position_in_partition::for_key(ss.make_ckey(3))), *s), t3);
+
+    mutation m3(s, pk);
+    ss.delete_range(m3, *position_range_to_clustering_range(position_range(
+            position_in_partition::before_key(ss.make_ckey(0)),
+            position_in_partition::for_key(ss.make_ckey(4))), *s), t0);
+
+    mt->apply(m1);
+
+    auto rd1 = mt->make_flat_reader(s, semaphore.make_permit(), pr, s->full_slice(), default_priority_class(),
+                                    nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
+    auto close_rd1 = defer([&] { rd1.close().get(); });
+
+    rd1.fill_buffer().get();
+    BOOST_REQUIRE(!rd1.is_end_of_stream()); // rd1 must keep the m1 version alive
+
+    mt->apply(m2);
+
+    auto rd2 = mt->make_flat_reader(s, semaphore.make_permit(), pr, s->full_slice(), default_priority_class(),
+                                    nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
+    auto close_r2 = defer([&] { rd2.close().get(); });
+
+    rd2.fill_buffer().get();
+    BOOST_REQUIRE(!rd2.is_end_of_stream()); // rd2 must keep the m1 version alive
+
+    mt->apply(m3);
+
+    assert_that(mt->make_flat_reader(s, semaphore.make_permit(), pr))
+        .has_monotonic_positions();
+
+    assert_that(mt->make_flat_reader(s, semaphore.make_permit(), pr))
+        .produces(m1 + m2 + m3);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_range_tombstones_are_compacted_with_data) {
