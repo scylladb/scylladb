@@ -235,7 +235,7 @@ view_ptr create_view_statement::prepare_view(data_dictionary::database db) const
     for (auto& def : schema->all_columns()) {
         bool included_def = included.empty() || included.contains(&def);
         if (included_def && def.is_static()) {
-            throw exceptions::invalid_request_exception(format("Unable to include static column '{}' which would be included by Materialized View SELECT * statement", def));
+            throw exceptions::invalid_request_exception(format("Unable to include static column '{}' which would be included by Materialized View SELECT * statement", def.name_as_text()));
         }
 
         bool def_in_target_pk = target_primary_keys.contains(&def);
