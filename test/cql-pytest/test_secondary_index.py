@@ -850,9 +850,8 @@ def test_index_collection_default_name(cql, test_keyspace):
 # Reproducer for issue #10707 - indexing a column whose name is a quoted
 # string should work fine. Even if the quoted string happens to look like
 # an instruction to index a collection, e.g., "keys(m)".
-@pytest.mark.xfail(reason="#10707")
 def test_index_quoted_names(cql, test_keyspace):
-    quoted_names = ['"hEllo"', '"x y"', '"keys(m)"', '"values(m)"', '"entries(m)"']
+    quoted_names = ['"hEllo"', '"x y"', '"hi""hello""yo"', '"""hi"""', '"keys(m)"', '"values(m)"', '"entries(m)"']
     schema = 'pk int, ck int, m int, ' + ','.join([name + " int" for name in quoted_names]) + ', PRIMARY KEY (pk, ck)'
     with new_test_table(cql, test_keyspace, schema) as table:
         for name in quoted_names:

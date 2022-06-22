@@ -66,12 +66,38 @@ index_target::target_type index_target::from_target_string(const sstring& target
     return target_type::regular_values;
 }
 
+// A CQL column's name may contain any characters. If we use this string as-is
+// inside a target string, it may confuse us when we later try to parse the
+// resulting string (e.g., see issue #10707). We should therefore use the
+// function escape_target_column() to "escape" the target column name, and use
+// the reverse function unescape_target_column() to undo this.
+// Cassandra uses for this escaping the CQL syntax of this column name
+// (basically, column_identifier::as_cql_name()). This is an overkill,
+// but since we already have such code, we might as well use it.
+sstring index_target::escape_target_column(const cql3::column_identifier& col) {
+    return col.to_cql_string();
+}
+sstring index_target::unescape_target_column(std::string_view str) {
+    // We don't have a reverse version of util::maybe_quote(), so
+    // we need to open-code it here. Cassandra has this too - in
+    // index/TargetParser.java
+    if (str.size() >= 2 && str.starts_with('"') && str.ends_with('"')) {
+        str.remove_prefix(1);
+        str.remove_suffix(1);
+        // remove doubled quotes in the middle of the string, which to_cql_string()
+        // adds. This code is inefficient but rarely called so it's fine.
+        static const std::regex double_quote_re("\"\"");
+        return std::regex_replace(std::string(str), double_quote_re, "\"");
+    }
+    return sstring(str);
+}
+
 sstring index_target::column_name_from_target_string(const sstring& target) {
     std::cmatch match;
     if (std::regex_match(target.data(), match, target_regex)) {
-        return match[2].str();
+        return unescape_target_column(match[2].str());
     }
-    return target;
+    return unescape_target_column(target);
 }
 
 ::shared_ptr<index_target::raw>

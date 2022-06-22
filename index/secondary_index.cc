@@ -53,7 +53,7 @@ target_parser::target_info target_parser::parse(schema_ptr schema, const sstring
     std::cmatch match;
     if (std::regex_match(target.data(), match, target_regex)) {
         info.type = index_target::from_sstring(match[1].str());
-        info.pk_columns.push_back(get_column(sstring(match[2].str())));
+        info.pk_columns.push_back(get_column(index_target::unescape_target_column(match[2].str())));
         return info;
     }
 
@@ -75,12 +75,12 @@ target_parser::target_info target_parser::parse(schema_ptr schema, const sstring
     }
 
     // Fallback and treat the whole string as a single target
-    return target_info{{get_column(target)}, {}, index_target::target_type::regular_values};
+    return target_info{{get_column(index_target::unescape_target_column(target))}, {}, index_target::target_type::regular_values};
 }
 
 bool target_parser::is_local(sstring target_string) {
     std::optional<rjson::value> json_value = rjson::try_parse(target_string);
-    if (!json_value) {
+    if (!json_value || !json_value->IsObject()) {
         return false;
     }
     rjson::value* pk = rjson::find(*json_value, PK_TARGET_KEY);
@@ -90,7 +90,7 @@ bool target_parser::is_local(sstring target_string) {
 
 sstring target_parser::get_target_column_name_from_string(const sstring& targets) {
     std::optional<rjson::value> json_value = rjson::try_parse(targets);
-    if (!json_value) {
+    if (!json_value || !json_value->IsObject()) {
         return targets;
     }
 
@@ -108,6 +108,23 @@ sstring target_parser::get_target_column_name_from_string(const sstring& targets
 sstring target_parser::serialize_targets(const std::vector<::shared_ptr<cql3::statements::index_target>>& targets) {
     using cql3::statements::index_target;
 
+    if (targets.size() == 1 && std::holds_alternative<index_target::single_column>(targets.front()->value)) {
+        auto& target = targets.front();
+        auto single_target = std::get<index_target::single_column>(target->value);
+        switch (target->type) {
+            case index_target::target_type::regular_values:     [[fallthrough]];
+            case index_target::target_type::full:
+                return index_target::escape_target_column(*single_target);
+            case index_target::target_type::collection_values:  [[fallthrough]];
+            case index_target::target_type::keys:               [[fallthrough]];
+            case index_target::target_type::keys_and_values:
+                return cql3::statements::to_sstring(target->type) + "(" + index_target::escape_target_column(*single_target) + ")";
+        }
+    }
+
+    // In more complex cases, serialize the targets as JSON. In this case we
+    // don't need to use the escape_target_column() function, as JSON can
+    // already escape whatever characters may confuse it.
     struct as_json_visitor {
         rjson::value operator()(const index_target::multiple_columns& columns) const {
             rjson::value json_array = rjson::empty_array();
@@ -121,20 +138,6 @@ sstring target_parser::serialize_targets(const std::vector<::shared_ptr<cql3::st
             return rjson::from_string(column->to_string());
         }
     };
-
-    if (targets.size() == 1 && std::holds_alternative<index_target::single_column>(targets.front()->value)) {
-        auto& target = targets.front();
-        auto single_target = std::get<index_target::single_column>(target->value);
-        switch (target->type) {
-            case index_target::target_type::regular_values:     [[fallthrough]];
-            case index_target::target_type::full:
-                return single_target->to_string();
-            case index_target::target_type::collection_values:  [[fallthrough]];
-            case index_target::target_type::keys:               [[fallthrough]];
-            case index_target::target_type::keys_and_values:
-                return cql3::statements::to_sstring(target->type) + "(" + single_target->to_string() + ")";
-        }
-    }
 
     rjson::value json_map = rjson::empty_object();
     rjson::value pk_json = std::visit(as_json_visitor(), targets.front()->value);

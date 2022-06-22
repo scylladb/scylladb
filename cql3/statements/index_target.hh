@@ -51,6 +51,14 @@ struct index_target {
     // e.g. column_name_from_target_string("keys(some_column)") == "some_column"
     static sstring column_name_from_target_string(const sstring& s);
 
+    // A CQL column's name may contain any characters. If we use this string
+    // as-is inside a target string, it may confuse us when we later try to
+    // parse the resulting string (e.g., see issue #10707). We should
+    // therefore use the function escape_target_column() to "escape" the
+    // target column name, and the reverse function unescape_target_column().
+    static sstring escape_target_column(const cql3::column_identifier& col);
+    static sstring unescape_target_column(std::string_view str);
+
     class raw {
     public:
         using single_column = ::shared_ptr<column_identifier::raw>;
