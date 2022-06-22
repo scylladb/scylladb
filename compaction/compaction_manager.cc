@@ -946,9 +946,6 @@ public:
         replica::table& t = *_compacting_table;
         const auto& maintenance_sstables = t.maintenance_sstable_set();
 
-        cmlog.info("Starting off-strategy compaction for {}.{}, {} candidates were found",
-                     t.schema()->ks_name(), t.schema()->cf_name(), maintenance_sstables.all()->size());
-
         const auto old_sstables = boost::copy_range<std::vector<sstables::shared_sstable>>(*maintenance_sstables.all());
         std::vector<sstables::shared_sstable> reshape_candidates = old_sstables;
         std::vector<sstables::shared_sstable> sstables_to_remove;
@@ -1005,8 +1002,6 @@ public:
         for (auto& sst : sstables_to_remove) {
             sst->mark_for_deletion();
         }
-
-        cmlog.info("Done with off-strategy compaction for {}.{}", t.schema()->ks_name(), t.schema()->cf_name());
     }
 protected:
     virtual future<> do_run() override {
@@ -1025,8 +1020,13 @@ protected:
 
             std::exception_ptr ex;
             try {
+                replica::table& t = *_compacting_table;
+                auto maintenance_sstables = t.maintenance_sstable_set().all();
+                cmlog.info("Starting off-strategy compaction for {}.{}, {} candidates were found",
+                        t.schema()->ks_name(), t.schema()->cf_name(), maintenance_sstables->size());
                 co_await run_offstrategy_compaction(_compaction_data);
                 finish_compaction();
+                cmlog.info("Done with off-strategy compaction for {}.{}", t.schema()->ks_name(), t.schema()->cf_name());
                 co_return;
             } catch (...) {
                 ex = std::current_exception();
