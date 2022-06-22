@@ -113,6 +113,7 @@ static const sstring COORDINATOR_STATS_CATEGORY("storage_proxy_coordinator");
 static const sstring REPLICA_STATS_CATEGORY("storage_proxy_replica");
 static const seastar::metrics::label op_type_label("op_type");
 static const seastar::metrics::label scheduling_group_label("scheduling_group_name");
+static const seastar::metrics::label rejected_by_coordinator_label("rejected_by_coordinator");
 
 seastar::metrics::label_instance current_scheduling_group_label() {
     return scheduling_group_label(current_scheduling_group().name());
@@ -1579,6 +1580,14 @@ void storage_proxy_stats::write_stats::register_stats() {
                            sm::description("number write requests failed due to an \"unavailable\" error"),
                            {storage_proxy_stats::current_scheduling_group_label()}),
 
+            sm::make_total_operations("write_rate_limited", write_rate_limited_by_replicas._count,
+                           sm::description("number of write requests which were rejected by replicas because rate limit for the partition was reached."),
+                           {storage_proxy_stats::current_scheduling_group_label(), storage_proxy_stats::rejected_by_coordinator_label(false)}),
+
+            sm::make_total_operations("write_rate_limited", write_rate_limited_by_coordinator._count,
+                           sm::description("number of write requests which were rejected directly on the coordinator because rate limit for the partition was reached."),
+                           {storage_proxy_stats::current_scheduling_group_label(),storage_proxy_stats::rejected_by_coordinator_label(true)}),
+
             sm::make_total_operations("background_writes_failed", background_writes_failed,
                            sm::description("number of write requests that failed after CL was reached"),
                            {storage_proxy_stats::current_scheduling_group_label()}),
@@ -2243,6 +2252,15 @@ future<result<>> storage_proxy::mutate_end(future<result<>> mutate_result, utils
         tracing::trace(trace_state, "Mutation failed: unavailable");
         stats.write_unavailables.mark();
         slogger.trace("Unavailable");
+        return handle.into_future();
+    }), utils::result_catch<exceptions::rate_limit_exception>([&] (const auto& ex, auto&& handle) {
+        tracing::trace(trace_state, "Mutation failed: rate limit exceeded");
+        if (ex.rejected_by_coordinator) {
+            stats.write_rate_limited_by_coordinator.mark();
+        } else {
+            stats.write_rate_limited_by_replicas.mark();
+        }
+        slogger.trace("Rate limit exceeded");
         return handle.into_future();
     }), utils::result_catch<overloaded_exception>([&] (const auto& ex, auto&& handle) {
         tracing::trace(trace_state, "Mutation failed: overloaded");

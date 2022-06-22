@@ -75,6 +75,8 @@ struct write_stats {
 
     utils::timed_rate_moving_average write_unavailables;
     utils::timed_rate_moving_average write_timeouts;
+    utils::timed_rate_moving_average write_rate_limited_by_replicas;
+    utils::timed_rate_moving_average write_rate_limited_by_coordinator;
 
     utils::timed_rate_moving_average_and_histogram write;
     utils::time_estimated_histogram estimated_write;
