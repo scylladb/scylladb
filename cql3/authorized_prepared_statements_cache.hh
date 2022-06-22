@@ -128,8 +128,8 @@ private:
 
 public:
     // Choose the memory budget such that would allow us ~4K entries when a shard gets 1GB of RAM
-    authorized_prepared_statements_cache(std::chrono::milliseconds entry_expiration, std::chrono::milliseconds entry_refresh, size_t cache_size, logging::logger& logger)
-        : _cache(cache_size, entry_expiration, entry_refresh, logger, [this] (const key_type& k) {
+    authorized_prepared_statements_cache(utils::loading_cache_config c, logging::logger& logger)
+        : _cache(std::move(c), logger, [this] (const key_type& k) {
             _cache.remove(k);
             return make_ready_future<value_type>();
         })

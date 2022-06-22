@@ -790,10 +790,10 @@ public:
                 throw;
             }
 
-            auth::permissions_cache_config perm_cache_config;
-            perm_cache_config.max_entries = cfg->permissions_cache_max_entries();
-            perm_cache_config.validity_period = std::chrono::milliseconds(cfg->permissions_validity_in_ms());
-            perm_cache_config.update_period = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
+            utils::loading_cache_config perm_cache_config;
+            perm_cache_config.max_size = cfg->permissions_cache_max_entries();
+            perm_cache_config.expiry = std::chrono::milliseconds(cfg->permissions_validity_in_ms());
+            perm_cache_config.refresh = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
 
             const qualified_name qualified_authorizer_name(auth::meta::AUTH_PACKAGE_NAME, cfg->authorizer());
             const qualified_name qualified_authenticator_name(auth::meta::AUTH_PACKAGE_NAME, cfg->authenticator());

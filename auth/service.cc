@@ -100,13 +100,13 @@ static future<> validate_role_exists(const service& ser, std::string_view role_n
 }
 
 service::service(
-        permissions_cache_config c,
+        utils::loading_cache_config c,
         cql3::query_processor& qp,
         ::service::migration_notifier& mn,
         std::unique_ptr<authorizer> z,
         std::unique_ptr<authenticator> a,
         std::unique_ptr<role_manager> r)
-            : _permissions_cache_config(std::move(c))
+            : _loading_cache_config(std::move(c))
             , _permissions_cache(nullptr)
             , _qp(qp)
             , _mnotifier(mn)
@@ -116,7 +116,7 @@ service::service(
             , _migration_listener(std::make_unique<auth_migration_listener>(*_authorizer)) {}
 
 service::service(
-        permissions_cache_config c,
+        utils::loading_cache_config c,
         cql3::query_processor& qp,
         ::service::migration_notifier& mn,
         ::service::migration_manager& mm,
@@ -160,7 +160,7 @@ future<> service::start(::service::migration_manager& mm) {
             return when_all_succeed(_authorizer->start(), _authenticator->start()).discard_result();
         });
     }).then([this] {
-        _permissions_cache = std::make_unique<permissions_cache>(_permissions_cache_config, *this, log);
+        _permissions_cache = std::make_unique<permissions_cache>(_loading_cache_config, *this, log);
     }).then([this] {
         return once_among_shards([this] {
             _mnotifier.register_listener(_migration_listener.get());

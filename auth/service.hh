@@ -68,7 +68,7 @@ public:
 /// peering_sharded_service inheritance is needed to be able to access shard local authentication service
 /// given an object from another shard. Used for bouncing lwt requests to correct shard.
 class service final : public seastar::peering_sharded_service<service> {
-    permissions_cache_config _permissions_cache_config;
+    utils::loading_cache_config _loading_cache_config;
     std::unique_ptr<permissions_cache> _permissions_cache;
 
     cql3::query_processor& _qp;
@@ -86,7 +86,7 @@ class service final : public seastar::peering_sharded_service<service> {
 
 public:
     service(
-            permissions_cache_config,
+            utils::loading_cache_config,
             cql3::query_processor&,
             ::service::migration_notifier&,
             std::unique_ptr<authorizer>,
@@ -99,7 +99,7 @@ public:
     /// of the instances themselves.
     ///
     service(
-            permissions_cache_config,
+            utils::loading_cache_config,
             cql3::query_processor&,
             ::service::migration_notifier&,
             ::service::migration_manager&,

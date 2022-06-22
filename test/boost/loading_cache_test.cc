@@ -338,7 +338,7 @@ SEASTAR_TEST_CASE(test_loading_cache_loading_reloading_privileged_gen) {
     return seastar::async([] {
         using namespace std::chrono;
         load_count = 0;
-        utils::loading_cache<int, sstring, 1, utils::loading_cache_reload_enabled::yes> loading_cache(num_loaders, 100ms, 20ms, testlog, loader);
+        utils::loading_cache<int, sstring, 1, utils::loading_cache_reload_enabled::yes> loading_cache({num_loaders, 100ms, 20ms}, testlog, loader);
         auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
         prepare().get();
         // Push the entry into the privileged section. Make sure it's being reloaded.
@@ -353,7 +353,7 @@ SEASTAR_TEST_CASE(test_loading_cache_loading_reloading_unprivileged) {
     return seastar::async([] {
         using namespace std::chrono;
         load_count = 0;
-        utils::loading_cache<int, sstring, 1, utils::loading_cache_reload_enabled::yes> loading_cache(num_loaders, 100ms, 20ms, testlog, loader);
+        utils::loading_cache<int, sstring, 1, utils::loading_cache_reload_enabled::yes> loading_cache({num_loaders, 100ms, 20ms}, testlog, loader);
         auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
         prepare().get();
         // Load one entry into the unprivileged section.
@@ -590,7 +590,7 @@ SEASTAR_TEST_CASE(test_loading_cache_reload_during_eviction) {
     return seastar::async([] {
         using namespace std::chrono;
         load_count = 0;
-        utils::loading_cache<int, sstring, 0, utils::loading_cache_reload_enabled::yes> loading_cache(1, 100ms, 10ms, testlog, loader);
+        utils::loading_cache<int, sstring, 0, utils::loading_cache_reload_enabled::yes> loading_cache({1, 100ms, 10ms}, testlog, loader);
         auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
 
         prepare().get();
