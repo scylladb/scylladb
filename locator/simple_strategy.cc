@@ -45,7 +45,11 @@ future<inet_address_vector_replica_set> simple_strategy::calculate_natural_endpo
     endpoints.reserve(replicas);
 
     for (auto& token : tm.ring_range(t)) {
-        if (endpoints.size() == replicas) {
+        // If the number of nodes in the cluster is smaller than the desired
+        // replication factor we should return the loop when endpoints already
+        // contains all the nodes in the cluster because no more nodes could be
+        // added to endpoints lists.
+        if (endpoints.size() == replicas || endpoints.size() == tm.count_normal_token_owners()) {
            break;
         }
 
