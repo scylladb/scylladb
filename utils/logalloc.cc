@@ -1741,8 +1741,8 @@ private:
     };
 
 public:
-    explicit region_impl(region* region, region_listener* listener = nullptr)
-        : _region(region), _listener(listener), _id(next_id())
+    explicit region_impl(region* region)
+        : _region(region), _id(next_id())
     {
         _buf_ptrs_for_compact_segment.reserve(segment::size / buf_align);
         _preferred_max_contiguous_allocation = max_managed_object_size;
@@ -1778,6 +1778,21 @@ public:
 
     bool empty() const {
         return occupancy().used_space() == 0;
+    }
+
+    void listen(region_listener* listener) {
+        _listener = listener;
+        _listener->add(_region);
+    }
+
+    void unlisten() {
+        // _listener may have been removed be merge(), so check for that.
+        // Yes, it's awkward, we should have the caller unlisten before merge
+        // to remove implicit behavior.
+        if (_listener) {
+            _listener->del(_region);
+            _listener = nullptr;
+        }
     }
 
     occupancy_stats occupancy() const {
@@ -2111,9 +2126,14 @@ region::region()
     : _impl(make_shared<impl>(this))
 { }
 
-region::region(region_listener& listener)
-        : _impl(make_shared<impl>(this, &listener)) {
-    listener.add(this);
+void
+region::listen(region_listener* listener) {
+    get_impl().listen(listener);
+}
+
+void
+region::unlisten() {
+    get_impl().unlisten();
 }
 
 region_impl& region::get_impl() {

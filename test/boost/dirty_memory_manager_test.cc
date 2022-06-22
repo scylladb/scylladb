@@ -53,10 +53,14 @@ SEASTAR_TEST_CASE(test_region_groups) {
         region_group all;
         region_group one_and_two("one_and_two", &all);
 
-        auto one = std::make_unique<logalloc::region>(one_and_two);
-        auto two = std::make_unique<logalloc::region>(one_and_two);
-        auto three = std::make_unique<logalloc::region>(all);
-        auto four = std::make_unique<logalloc::region>(just_four);
+        auto one = std::make_unique<logalloc::region>();
+        one->listen(&one_and_two);
+        auto two = std::make_unique<logalloc::region>();
+        two->listen(&one_and_two);
+        auto three = std::make_unique<logalloc::region>();
+        three->listen(&all);
+        auto four = std::make_unique<logalloc::region>();
+        four->listen(&just_four);
         auto five = std::make_unique<logalloc::region>();
 
         constexpr size_t base_count = 16 * 1024;
@@ -176,7 +180,7 @@ struct test_region_group: public region_group {
 };
 
 struct test_region: public logalloc::region  {
-    test_region(test_region_group& rg) : logalloc::region(rg) {}
+    test_region() : logalloc::region() {}
     ~test_region() {
         clear();
     }
@@ -212,7 +216,8 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling) {
 
         // singleton hierarchy, only one segment allowed
         test_region_group simple(simple_reclaimer);
-        auto simple_region = std::make_unique<test_region>(simple);
+        auto simple_region = std::make_unique<test_region>();
+        simple_region->listen(&simple);
 
         // Expectation: after first allocation region will have one segment,
         // memory_used() == throttle_threshold and we are good to go, future
@@ -228,7 +233,8 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling) {
         BOOST_REQUIRE_EQUAL(fut.available(), true);
         BOOST_REQUIRE_EQUAL(simple.memory_used(), logalloc::segment_size);
 
-        auto big_region = std::make_unique<test_region>(simple);
+        auto big_region = std::make_unique<test_region>();
+        big_region->listen(&simple);
         // Allocate a big chunk, that will certainly get us over the threshold
         big_region->alloc();
 
@@ -270,8 +276,10 @@ SEASTAR_TEST_CASE(test_region_groups_linear_hierarchy_throttling_child_alloc) {
         test_region_group parent(parent_reclaimer);
         test_region_group child(&parent, child_reclaimer);
 
-        auto child_region = std::make_unique<test_region>(child);
-        auto parent_region = std::make_unique<test_region>(parent);
+        auto child_region = std::make_unique<test_region>();
+        child_region->listen(&child);
+        auto parent_region = std::make_unique<test_region>();
+        parent_region->listen(&parent);
 
         child_region->alloc();
         BOOST_REQUIRE_GE(parent.memory_used(), logalloc::segment_size);
@@ -301,7 +309,8 @@ SEASTAR_TEST_CASE(test_region_groups_linear_hierarchy_throttling_parent_alloc) {
         test_region_group parent(simple_reclaimer);
         test_region_group child(&parent, simple_reclaimer);
 
-        auto parent_region = std::make_unique<test_region>(parent);
+        auto parent_region = std::make_unique<test_region>();
+        parent_region->listen(&parent);
 
         parent_region->alloc();
         BOOST_REQUIRE_GE(parent.memory_used(), logalloc::segment_size);
@@ -321,7 +330,8 @@ SEASTAR_TEST_CASE(test_region_groups_fifo_order) {
 
         test_region_group rg(simple_reclaimer);
 
-        auto region = std::make_unique<test_region>(rg);
+        auto region = std::make_unique<test_region>();
+        region->listen(&rg);
 
         // fill the parent. Try allocating at child level. Should not be allowed.
         region->alloc();
@@ -355,8 +365,10 @@ SEASTAR_TEST_CASE(test_region_groups_linear_hierarchy_throttling_moving_restrict
         test_region_group inner(&root, simple_reclaimer);
         test_region_group child(&inner, simple_reclaimer);
 
-        auto inner_region = std::make_unique<test_region>(inner);
-        auto root_region = std::make_unique<test_region>(root);
+        auto inner_region = std::make_unique<test_region>();
+        inner_region->listen(&inner);
+        auto root_region = std::make_unique<test_region>();
+        root_region->listen(&root);
 
         // fill the inner node. Try allocating at child level. Should not be allowed.
         circular_buffer<managed_bytes> big_alloc;
@@ -407,8 +419,10 @@ SEASTAR_TEST_CASE(test_region_groups_tree_hierarchy_throttling_leaf_alloc) {
             leaf(test_region_group& parent)
                 : _leaf_reclaimer(logalloc::segment_size)
                 , _rg(&parent, _leaf_reclaimer)
-                , _region(std::make_unique<test_region>(_rg))
-                {}
+                , _region(std::make_unique<test_region>())
+                {
+                _region->listen(&_rg);
+            }
 
             void alloc(size_t size) {
                 _region->alloc(size);
@@ -420,7 +434,8 @@ SEASTAR_TEST_CASE(test_region_groups_tree_hierarchy_throttling_leaf_alloc) {
                 }, db::no_timeout);
             }
             void reset() {
-                _region.reset(new test_region(_rg));
+                _region.reset(new test_region());
+                _region->listen(&_rg);
             }
         };
 
@@ -467,10 +482,11 @@ class test_async_reclaim_region {
     region_group& _rg;
 public:
     test_async_reclaim_region(region_group& rg, size_t alloc_size)
-            : _region(rg)
+            : _region()
             , _alloc_size(alloc_size)
             , _rg(rg)
     {
+        _region.listen(&rg);
         with_allocator(_region.allocator(), [this] {
             _alloc.push_back(managed_bytes(bytes(bytes::initialized_later(), this->_alloc_size)));
         });
@@ -488,7 +504,8 @@ public:
         with_allocator(_region.allocator(), [this] {
             std::vector<managed_bytes>().swap(_alloc);
         });
-        _region = logalloc::region(_rg);
+        _region = logalloc::region();
+        _region.listen(&_rg);
         return this->_alloc_size;
     }
     static test_async_reclaim_region& from_region(region* region_ptr) {
@@ -724,7 +741,8 @@ SEASTAR_TEST_CASE(test_no_crash_when_a_lot_of_requests_released_which_change_reg
         region_group_reclaimer recl(threshold, threshold);
         region_group gr(test_name, recl);
         auto close_gr = defer([&gr] () noexcept { gr.shutdown().get(); });
-        region r(gr);
+        region r;
+        r.listen(&gr);
 
         with_allocator(r.allocator(), [&] {
             std::vector<managed_bytes> objs;
@@ -792,7 +810,8 @@ SEASTAR_TEST_CASE(test_reclaiming_runs_as_long_as_there_is_soft_pressure) {
         reclaimer recl(hard_threshold, soft_threshold);
         region_group gr(test_name, recl);
         auto close_gr = defer([&gr] () noexcept { gr.shutdown().get(); });
-        region r(gr);
+        region r;
+        r.listen(&gr);
 
         with_allocator(r.allocator(), [&] {
             std::vector<managed_bytes> objs;

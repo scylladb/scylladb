@@ -116,7 +116,7 @@ void memtable::memtable_encoding_stats_collector::update(const ::schema& s, cons
 
 memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm, replica::table_stats& table_stats,
     memtable_list* memtable_list, seastar::scheduling_group compaction_scheduling_group)
-        : logalloc::region(dmm.region_group())
+        : logalloc::region()
         , _dirty_mgr(dmm)
         , _cleaner(*this, no_cache_tracker, table_stats.memtable_app_stats, compaction_scheduling_group,
                    [this] (size_t freed) { remove_flushed_memory(freed); })
@@ -124,6 +124,7 @@ memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm, replica::table_
         , _schema(std::move(schema))
         , partitions(dht::raw_token_less_comparator{})
         , _table_stats(table_stats) {
+    logalloc::region::listen(&dmm.region_group());
 }
 
 static thread_local dirty_memory_manager mgr_for_tests;
@@ -136,6 +137,7 @@ memtable::memtable(schema_ptr schema)
 memtable::~memtable() {
     revert_flushed_memory();
     clear();
+    logalloc::region::unlisten();
 }
 
 uint64_t memtable::dirty_size() const {

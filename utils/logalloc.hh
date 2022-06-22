@@ -301,11 +301,13 @@ private:
     const region_impl& get_impl() const;
 public:
     region();
-    explicit region(region_listener& listener);
     ~region();
     region(region&& other);
     region& operator=(region&& other);
     region(const region& other) = delete;
+
+    void listen(region_listener* listener);
+    void unlisten();
 
     occupancy_stats occupancy() const;
 
