@@ -214,7 +214,6 @@ def test_filter_with_unused_static_column(cql, test_keyspace, scylla_only):
                         expected = [(42,43,44)] if '4' in where else [(42,43,44),(1,2,3)]
                         assert list(cql.execute(f"SELECT * FROM {mv}")) == expected
 
-
 # IS_NOT operator can only be used in the context of materialized view creation and it must be of the form IS NOT NULL.
 # Trying to do something like IS NOT 42 should fail.
 # The error is a SyntaxException because Scylla and Cassandra check this during parsing.
@@ -227,3 +226,31 @@ def test_is_not_operator_must_be_null(cql, test_keyspace):
                 cql.execute(f"CREATE MATERIALIZED VIEW {test_keyspace}.{mv} AS SELECT * FROM {table} WHERE p IS NOT 42 PRIMARY KEY (p)")
         finally:
             cql.execute(f"DROP MATERIALIZED VIEW IF EXISTS {test_keyspace}.{mv}")
+
+# Test that a view can be altered with synchronous_updates property and that
+# the synchronous updates code path is then reached for such view.
+def test_mv_synchronous_updates(cql, test_keyspace):
+    schema = 'p int, v text, primary key (p)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        def new_view():
+            return new_materialized_view(
+                cql, table, '*', 'v, p', 'v is not null and p is not null'
+            )
+
+        with new_view() as sync_mv, new_view() as async_mv:
+            # Make one view synchronous
+            cql.execute(f"ALTER MATERIALIZED VIEW {sync_mv} WITH synchronous_updates = true")
+
+            # Execute a query and inspect its tracing info
+            res = cql.execute(f"INSERT INTO {table} (p,v) VALUES (123, 'dog')", trace=True)
+            trace = res.get_query_trace()
+
+            wanted_trace = f"Forcing {sync_mv} view update to be synchronous"
+            unwanted_trace = f"Forcing {async_mv} view update to be synchronous"
+
+            wanted_trace_was_found = False
+            for event in trace.events:
+                assert unwanted_trace not in event.description
+                if wanted_trace in event.description:
+                    wanted_trace_was_found = True
+            assert wanted_trace_was_found
