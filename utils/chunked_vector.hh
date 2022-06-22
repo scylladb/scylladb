@@ -8,10 +8,37 @@
 
 #pragma once
 
-// A vector-like container that uses discontiguous storage. Provides fast random access,
-// the ability to append at the end, and limited contiguous allocations.
+// chunked_vector is a vector-like container that uses discontiguous storage.
+// It provides fast random access, the ability to append at the end, and aims
+// to avoid large contiguous allocations - unlike std::vector which allocates
+// all the data in one contiguous allocation.
 //
-// std::deque would be a good fit, except the backing array can grow quite large.
+// std::deque aims to achieve the same goals, but its implementation in
+// libstdc++ still results in large contiguous allocations: std::deque
+// keeps the items in small (512-byte) chunks, and then keeps a contiguous
+// vector listing these chunks. This chunk vector can grow pretty big if the
+// std::deque grows big: When an std::deque contains just 8 MB of data, it
+// needs 16384 chunks, and the vector listing those needs 128 KB.
+//
+// Therefore, in chunked_vector we use much larger 128 KB chunks (this is
+// configurable, with the max_contiguous_allocation template parameter).
+// With 128 KB chunks, the contiguous vector listing them is 256 times
+// smaller than it would be in std::dequeue with its 512-byte chunks.
+//
+// In particular, when a chunked_vector stores up to 2 GB of data, the
+// largest contiguous allocation is guaranteed to be 128 KB: 2 GB of data
+// fits in 16384 chunks of 128 KB each, and the vector of 16384 8-byte
+// pointers requires another 128 KB allocation.
+//
+// Remember, however, that when the chunked_vector grows beyond 2 GB, its
+// largest contiguous allocation (used to store the chunk list) continues to
+// grow as O(N). This is not a problem for current real-world uses of
+// chunked_vector which never reach 2 GB.
+//
+// Always allocating large 128 KB chunks can be wasteful for small vectors;
+// This is why std::deque chose small 512-byte chunks. chunked_vector solves
+// this problem differently: It makes the last chunk variable in size,
+// possibly smaller than a full 128 KB.
 
 #include "utils/small_vector.hh"
 
