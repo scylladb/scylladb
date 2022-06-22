@@ -543,6 +543,9 @@ database::setup_metrics() {
         sm::make_counter("total_writes_timedout", _stats->total_writes_timedout,
                        sm::description("Counts write operations failed due to a timeout. A positive value is a sign of storage being overloaded.")),
 
+        sm::make_counter("total_writes_rate_limited", _stats->total_writes_rate_limited,
+                       sm::description("Counts write operations which were rejected on the replica side because the per-partition limit was reached.")),
+
         sm::make_counter("total_reads", _read_concurrency_sem.get_stats().total_successful_reads,
                        sm::description("Counts the total number of successful user reads on this shard."),
                        {user_label_instance}),
@@ -560,6 +563,9 @@ database::setup_metrics() {
                        sm::description("Counts the total number of failed system read operations. "
                                        "Add the total_reads to this value to get the total amount of reads issued on this shard."),
                        {system_label_instance}),
+
+        sm::make_counter("total_reads_rate_limited", _stats->total_reads_rate_limited,
+                       sm::description("Counts read operations which were rejected on the replica side because the per-partition limit was reached.")),
 
         sm::make_current_bytes("view_update_backlog", [this] { return get_view_update_backlog().current; },
                        sm::description("Holds the current size in bytes of the pending view updates for all tables")),
@@ -1379,6 +1385,7 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_opti
     column_family& cf = find_column_family(cmd.cf_id);
 
     if (account_singular_ranges_to_rate_limit(_rate_limiter, cf, ranges, _dbcfg, rate_limit_info) == db::rate_limiter::can_proceed::no) {
+        ++_stats->total_reads_rate_limited;
         co_await coroutine::return_exception(replica::rate_limit_exception());
     }
 
@@ -1883,6 +1890,12 @@ Future database::update_write_metrics(Future&& f) {
             auto ep = f.get_exception();
             if (is_timeout_exception(ep)) {
                 ++s->total_writes_timedout;
+            }
+            try {
+                std::rethrow_exception(ep);
+            } catch (replica::rate_limit_exception&) {
+                ++s->total_writes_rate_limited;
+            } catch (...) {
             }
             return futurize<Future>::make_exception_future(std::move(ep));
         }
