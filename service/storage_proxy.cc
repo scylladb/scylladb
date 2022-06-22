@@ -1672,6 +1672,14 @@ void storage_proxy_stats::stats::register_stats() {
                        sm::description("number read requests failed due to an \"unavailable\" error"),
                        {storage_proxy_stats::current_scheduling_group_label()}),
 
+        sm::make_total_operations("read_rate_limited", read_rate_limited_by_replicas._count,
+                       sm::description("number of read requests which were rejected by replicas because rate limit for the partition was reached."),
+                       {storage_proxy_stats::current_scheduling_group_label(), storage_proxy_stats::rejected_by_coordinator_label(false)}),
+
+        sm::make_total_operations("read_rate_limited", read_rate_limited_by_coordinator._count,
+                       sm::description("number of read requests which were rejected directly on the coordinator because rate limit for the partition was reached."),
+                       {storage_proxy_stats::current_scheduling_group_label(), storage_proxy_stats::rejected_by_coordinator_label(true)}),
+
         sm::make_total_operations("range_timeouts", range_slice_timeouts._count,
                        sm::description("number of range read operations failed due to a timeout"),
                        {storage_proxy_stats::current_scheduling_group_label()}),
@@ -4249,6 +4257,14 @@ void storage_proxy::handle_read_error(std::variant<exceptions::coordinator_excep
             get_stats().range_slice_timeouts.mark();
         } else {
             get_stats().read_timeouts.mark();
+        }
+        return bo::success();
+    }), utils::result_catch<exceptions::rate_limit_exception>([&] (const auto& ex) {
+        slogger.debug("Read was rate limited");
+        if (ex.rejected_by_coordinator) {
+            get_stats().read_rate_limited_by_coordinator.mark();
+        } else {
+            get_stats().read_rate_limited_by_replicas.mark();
         }
         return bo::success();
     }), utils::result_catch_dots([&] (auto&& handle) {
