@@ -6,6 +6,7 @@ edition = "2021"
 
 [dependencies]
 inc = { path = "inc", version = "0.1.0" }
+wasmtime_bindings = { path = "wasmtime_bindings", version = "0.1.0" }
 
 [lib]
 crate-type = ["staticlib"]
