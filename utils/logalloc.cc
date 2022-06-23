@@ -2076,7 +2076,6 @@ public:
     friend class region;
     friend class lsa_buffer;
     friend class region_evictable_occupancy_ascending_less_comparator;
-    friend region* region_impl_to_region(region_impl* ri);
 };
 
 lsa_buffer::~lsa_buffer() {
@@ -2634,14 +2633,6 @@ bool segment_pool::compact_segment(segment* seg) {
 
     desc._region->compact_segment(seg, desc);
     return true;
-}
-
-region* region_impl_to_region(region_impl* ri) {
-    return ri->_region;
-}
-
-region_impl* region_to_region_impl(region* r) {
-    return static_cast<region_impl*>(r->_impl.get());
 }
 
 allocating_section::guard::guard()

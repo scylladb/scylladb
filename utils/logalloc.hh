@@ -40,9 +40,6 @@ constexpr size_t max_zone_segments = 256;
 //
 using eviction_fn = std::function<memory::reclaiming_result()>;
 
-region* region_impl_to_region(region_impl* ri);
-region_impl* region_to_region_impl(region* r);
-
 // Listens for events from a region
 class region_listener {
 public:
@@ -355,7 +352,6 @@ public:
     uint64_t id() const;
 
     friend class allocating_section;
-    friend region_impl* region_to_region_impl(region* r);
 };
 
 // Forces references into the region to remain valid as long as this guard is
