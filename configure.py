@@ -1031,6 +1031,7 @@ scylla_core = (['message/messaging_service.cc',
                 'service/raft/raft_group0_client.cc',
                 'service/broadcast_tables/experimental/lang.cc',
                 'tasks/task_manager.cc',
+                'rust/wasmtime_bindings/src/lib.rs',
                 ] + [Antlr3Grammar('cql3/Cql.g')] + [Thrift('interface/cassandra.thrift', 'Cassandra')] \
                   + scylla_raft_core
                )
@@ -1401,14 +1402,6 @@ if flag_supported(flag='-Wstack-usage=4096', compiler=args.cxx):
     for mode in modes:
         modes[mode]['cxxflags'] += f' -Wstack-usage={modes[mode]["stack-usage-threshold"]} -Wno-error=stack-usage='
 
-has_wasmtime = False
-
-if has_wasmtime:
-    for mode in modes:
-        modes[mode]['cxxflags'] += ' -DSCYLLA_ENABLE_WASMTIME'
-else:
-    print("wasmtime not found - WASM support will not be enabled in this build")
-
 linker_flags = linker_flags(compiler=args.cxx)
 
 dbgflag = '-g -gz' if args.debuginfo else ''
@@ -1680,10 +1673,6 @@ libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-l
                  '-lxxhash',
                  '-ldeflate',
                 ])
-if has_wasmtime:
-    print("Found wasmtime dependency, linking with libwasmtime")
-    if use_wasmtime_as_library:
-        libs += " -lwasmtime"
 
 if not args.staticboost:
     args.user_cflags += ' -DBOOST_TEST_DYN_LINK'
@@ -1870,8 +1859,6 @@ with open(buildfile, 'w') as f:
                     for src in srcs
                     if src.endswith('.cc')]
             objs.append('$builddir/../utils/arch/powerpc/crc32-vpmsum/crc32.S')
-            if has_wasmtime and not use_wasmtime_as_library:
-                objs.append('/usr/lib64/libwasmtime.a')
             has_thrift = False
             has_rust = False
             for dep in deps[binary]:

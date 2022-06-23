@@ -8,30 +8,6 @@
 
 #pragma once
 
-#ifndef SCYLLA_ENABLE_WASMTIME
-
-#include <cstddef>
-#include <seastar/core/lowres_clock.hh>
-#include "lang/wasm.hh"
-
-namespace wasm {
-
-struct instance_cache {
-    explicit instance_cache(size_t size, seastar::lowres_clock::duration timer_period) {}
-
-    void remove(const db::functions::function_name& name, const std::vector<data_type>& arg_types) {
-        throw wasm::exception("WASM support was not enabled during compilation!");
-    }
-
-    future<> stop() {
-        return seastar::make_ready_future<>();
-    }
-};
-
-}
-
-#else
-
 #include "db/functions/function_name.hh"
 #include <list>
 #include <seastar/core/metrics_registration.hh>
@@ -41,15 +17,16 @@ struct instance_cache {
 #include <seastar/core/timer.hh>
 #include <unordered_map>
 #include "lang/wasm.hh"
-#include "wasmtime.hh"
+#include "rust/cxx.h"
+#include "rust/wasmtime_bindings.hh"
 
 namespace wasm {
 
 struct wasm_instance {
-    wasmtime::Store store;
-    wasmtime::Instance instance;
-    wasmtime::Func func;
-    wasmtime::Memory memory;
+    rust::Box<wasmtime::Store> store;
+    rust::Box<wasmtime::Instance> instance;
+    rust::Box<wasmtime::Func> func;
+    rust::Box<wasmtime::Memory> memory;
 };
 
 // For each UDF full name and a scheduling group, we store a wasmtime instance
@@ -145,5 +122,3 @@ public:
 };
 
 }
-
-#endif

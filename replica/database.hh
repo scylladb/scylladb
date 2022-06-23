@@ -65,6 +65,7 @@
 #include "utils/serialized_action.hh"
 #include "compaction/compaction_manager.hh"
 #include "utils/disk-error-handler.hh"
+#include "rust/wasmtime_bindings.hh"
 
 class cell_locker;
 class cell_locker_stats;
@@ -121,10 +122,6 @@ class table_selector;
 
 future<> system_keyspace_make(db::system_keyspace& sys_ks, distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, db::config& cfg, db::table_selector&);
 
-}
-
-namespace wasm {
-class engine;
 }
 
 class mutation_reordered_with_truncate_exception : public std::exception {};
@@ -1372,7 +1369,7 @@ private:
 
     sharded<sstables::directory_semaphore>& _sst_dir_semaphore;
 
-    std::unique_ptr<wasm::engine> _wasm_engine;
+    rust::Box<wasmtime::Engine> _wasm_engine;
     utils::cross_shard_barrier _stop_barrier;
 
     db::rate_limiter _rate_limiter;
@@ -1389,8 +1386,8 @@ public:
     future<> apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&&, db::timeout_clock::time_point timeout);
     future<> apply_in_memory(const mutation& m, column_family& cf, db::rp_handle&&, db::timeout_clock::time_point timeout);
 
-    wasm::engine* wasm_engine() {
-        return _wasm_engine.get();
+    wasmtime::Engine& wasm_engine() {
+        return *_wasm_engine;
     }
 
     drain_progress get_drain_progress() const noexcept {

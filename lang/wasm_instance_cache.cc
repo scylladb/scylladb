@@ -6,8 +6,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#ifdef SCYLLA_ENABLE_WASMTIME
-
 #include "lang/wasm_instance_cache.hh"
 #include "seastar/core/metrics.hh"
 #include "seastar/core/scheduling.hh"
@@ -49,37 +47,11 @@ instance_cache::instance_cache(size_t size, seastar::lowres_clock::duration time
 }
 
 wasm_instance instance_cache::load(wasm::context& ctx) {
-    auto store = wasmtime::Store(ctx.engine_ptr->get());
-    auto linker = wasmtime::Linker(ctx.engine_ptr->get());
-    auto wasi_def = linker.define_wasi();
-    if (!wasi_def) {
-        throw wasm::exception(format("Setting up wasi failed: {}", wasi_def.err().message()));
-    }
-    auto cfg = wasmtime::WasiConfig();
-    auto set_cfg = store.context().set_wasi(std::move(cfg));
-    if (!set_cfg) {
-        throw wasm::exception(format("Setting up wasi failed: {}", set_cfg.err().message()));
-    }
-    auto instance_res = linker.instantiate(store, *ctx.module);
-    if (!instance_res) {
-        throw wasm::exception(format("Creating a wasm runtime instance failed: {}", instance_res.err().message()));
-    }
-    auto instance = instance_res.unwrap();
-    auto function_obj = instance.get(store, ctx.function_name);
-    if (!function_obj) {
-        throw wasm::exception(format("Function {} was not found in given wasm source code", ctx.function_name));
-    }
-    wasmtime::Func* func = std::get_if<wasmtime::Func>(&*function_obj);
-    if (!func) {
-        throw wasm::exception(format("Exported object {} is not a function", ctx.function_name));
-    }
-    auto memory_export = instance.get(store, "memory");
-    if (!memory_export) {
-        throw wasm::exception("memory export not found - please export `memory` in the wasm module");
-    }
-    auto memory = std::get<wasmtime::Memory>(*memory_export);
-
-    return wasm::wasm_instance{.store=std::move(store), .instance=std::move(instance), .func=std::move(*func), .memory=std::move(memory)};
+    auto store = wasmtime::create_store(ctx.engine_ptr);
+    auto instance = wasmtime::create_instance(ctx.engine_ptr, **ctx.module, *store);
+    auto func = wasmtime::create_func(*instance, *store, ctx.function_name);
+    auto memory = wasmtime::get_memory(*instance, *store);
+    return wasm_instance{.store=std::move(store), .instance=std::move(instance), .func=std::move(func), .memory=std::move(memory)};
 }
 
 // lru must not be empty, and its elements must refer to entries in _cache
@@ -100,7 +72,7 @@ void instance_cache::on_timer() noexcept {
 
 static uint32_t get_instance_size(wasm_instance& instance) {
     // reserve 1 wasm page for instance data other than the wasm memory
-    return WASM_PAGE_SIZE * (1 + instance.memory.size(instance.store));
+    return WASM_PAGE_SIZE * (1 + instance.memory->size(*instance.store));
 }
 
 seastar::future<instance_cache::value_type> instance_cache::get(const db::functions::function_name& name, const std::vector<data_type>& arg_types, wasm::context& ctx) {
@@ -225,5 +197,3 @@ struct equal_to<seastar::scheduling_group> {
 };
 
 }
-
-#endif
