@@ -177,9 +177,11 @@ auto send_message_timeout(messaging_service* ms, messaging_verb verb, msg_addr i
     });
 }
 
+// Requesting abort on the provided abort_source drops the message from the outgoing queue (if it's still there)
+// and causes the returned future to resolve exceptionally with `abort_requested_exception`.
 // TODO: Remove duplicated code in send_message
 template <typename MsgIn, typename... MsgOut>
-auto send_message_abortable(messaging_service* ms, messaging_verb verb, msg_addr id, abort_source& as, MsgOut&&... msg) {
+auto send_message_cancellable(messaging_service* ms, messaging_verb verb, msg_addr id, abort_source& as, MsgOut&&... msg) {
     auto rpc_handler = ms->rpc()->make_client<MsgIn(MsgOut...)>(verb);
     if (ms->is_shutting_down()) {
         using futurator = futurize<std::result_of_t<decltype(rpc_handler)(rpc_protocol::client&, MsgOut...)>>;
