@@ -7,6 +7,7 @@
  */
 
 #include "log.hh"
+#include "replica/database_fwd.hh"
 #include "utils/lister.hh"
 #include "replica/database.hh"
 #include <seastar/core/future-util.hh>
@@ -42,6 +43,7 @@
 #include "gms/feature_service.hh"
 #include "timeout_config.hh"
 #include "service/storage_proxy.hh"
+#include "db/operation_type.hh"
 
 #include "utils/human_readable.hh"
 #include "utils/fb_utilities.hh"
@@ -62,6 +64,7 @@
 #include "tombstone_gc.hh"
 
 #include "replica/data_dictionary_impl.hh"
+#include "replica/exceptions.hh"
 #include "readers/multi_range.hh"
 #include "readers/multishard.hh"
 
@@ -540,6 +543,9 @@ database::setup_metrics() {
         sm::make_counter("total_writes_timedout", _stats->total_writes_timedout,
                        sm::description("Counts write operations failed due to a timeout. A positive value is a sign of storage being overloaded.")),
 
+        sm::make_counter("total_writes_rate_limited", _stats->total_writes_rate_limited,
+                       sm::description("Counts write operations which were rejected on the replica side because the per-partition limit was reached.")),
+
         sm::make_counter("total_reads", _read_concurrency_sem.get_stats().total_successful_reads,
                        sm::description("Counts the total number of successful user reads on this shard."),
                        {user_label_instance}),
@@ -557,6 +563,9 @@ database::setup_metrics() {
                        sm::description("Counts the total number of failed system read operations. "
                                        "Add the total_reads to this value to get the total amount of reads issued on this shard."),
                        {system_label_instance}),
+
+        sm::make_counter("total_reads_rate_limited", _stats->total_reads_rate_limited,
+                       sm::description("Counts read operations which were rejected on the replica side because the per-partition limit was reached.")),
 
         sm::make_current_bytes("view_update_backlog", [this] { return get_view_update_backlog().current; },
                        sm::description("Holds the current size in bytes of the pending view updates for all tables")),
@@ -1283,15 +1292,103 @@ database::existing_index_names(const sstring& ks_name, const sstring& cf_to_excl
     return names;
 }
 
+namespace {
+
+enum class request_class {
+    user,
+    system,
+    maintenance,
+};
+
+request_class classify_request(const database_config& _dbcfg) {
+    const auto current_group = current_scheduling_group();
+
+    // Everything running in the statement group is considered a user request
+    if (current_group == _dbcfg.statement_scheduling_group) {
+        return request_class::user;
+    // System requests run in the default (main) scheduling group
+    // All requests executed on behalf of internal work also uses the system semaphore
+    } else if (current_group == default_scheduling_group()
+            || current_group == _dbcfg.compaction_scheduling_group
+            || current_group == _dbcfg.gossip_scheduling_group
+            || current_group == _dbcfg.memory_compaction_scheduling_group
+            || current_group == _dbcfg.memtable_scheduling_group
+            || current_group == _dbcfg.memtable_to_cache_scheduling_group) {
+        return request_class::system;
+    // Requests done on behalf of view update generation run in the streaming group
+    } else if (current_scheduling_group() == _dbcfg.streaming_scheduling_group) {
+        return request_class::maintenance;
+    // Everything else is considered a user request
+    } else {
+        return request_class::user;
+    }
+}
+
+} // anonymous namespace
+
+static bool can_apply_per_partition_rate_limit(const schema& s, const database_config& dbcfg, db::operation_type op_type) {
+    return s.per_partition_rate_limit_options().get_max_ops_per_second(op_type).has_value()
+            && classify_request(dbcfg) == request_class::user;
+}
+
+bool database::can_apply_per_partition_rate_limit(const schema& s, db::operation_type op_type) const {
+    return replica::can_apply_per_partition_rate_limit(s, _dbcfg, op_type);
+}
+
+std::optional<db::rate_limiter::can_proceed> database::account_coordinator_operation_to_rate_limit(table& tbl, const dht::token& token,
+        db::per_partition_rate_limit::account_and_enforce account_and_enforce_info,
+        db::operation_type op_type) {
+
+    std::optional<uint32_t> table_limit = tbl.schema()->per_partition_rate_limit_options().get_max_ops_per_second(op_type);
+    db::rate_limiter::label& lbl = tbl.get_rate_limiter_label_for_op_type(op_type);
+    return _rate_limiter.account_operation(lbl, dht::token::to_int64(token), *table_limit, account_and_enforce_info);
+}
+
+static db::rate_limiter::can_proceed account_singular_ranges_to_rate_limit(
+        db::rate_limiter& limiter, column_family& cf,
+        const dht::partition_range_vector& ranges,
+        const database_config& dbcfg,
+        db::per_partition_rate_limit::info rate_limit_info) {
+    using can_proceed = db::rate_limiter::can_proceed;
+
+    if (std::holds_alternative<std::monostate>(rate_limit_info) || !can_apply_per_partition_rate_limit(*cf.schema(), dbcfg, db::operation_type::read)) {
+        // Rate limiting is disabled for this query
+        return can_proceed::yes;
+    }
+
+    auto table_limit = *cf.schema()->per_partition_rate_limit_options().get_max_reads_per_second();
+    can_proceed ret = can_proceed::yes;
+
+    auto& read_label = cf.get_rate_limiter_label_for_reads();
+    for (const auto& range : ranges) {
+        if (!range.is_singular()) {
+            continue;
+        }
+        auto token = dht::token::to_int64(ranges.front().start()->value().token());
+        if (limiter.account_operation(read_label, token, table_limit, rate_limit_info) == db::rate_limiter::can_proceed::no) {
+            // Don't return immediately - account all ranges first
+            ret = can_proceed::no;
+        }
+    }
+
+    return ret;
+}
+
 future<std::tuple<lw_shared_ptr<query::result>, cache_temperature>>
 database::query(schema_ptr s, const query::read_command& cmd, query::result_options opts, const dht::partition_range_vector& ranges,
-                tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout) {
+                tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
     const auto reversed = cmd.slice.is_reversed();
     if (reversed) {
         s = s->make_reversed();
     }
 
     column_family& cf = find_column_family(cmd.cf_id);
+
+    if (account_singular_ranges_to_rate_limit(_rate_limiter, cf, ranges, _dbcfg, rate_limit_info) == db::rate_limiter::can_proceed::no) {
+        ++_stats->total_reads_rate_limited;
+        co_await coroutine::return_exception(replica::rate_limit_exception());
+    }
+
     auto& semaphore = get_reader_concurrency_semaphore();
     auto max_result_size = cmd.max_result_size ? *cmd.max_result_size : get_unlimited_query_max_result_size();
 
@@ -1404,56 +1501,22 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
     co_return std::tuple(std::move(result), hit_rate);
 }
 
-namespace {
-
-enum class query_class {
-    user,
-    system,
-    maintenance,
-};
-
-query_class classify_query(const database_config& _dbcfg) {
-    const auto current_group = current_scheduling_group();
-
-    // Everything running in the statement group is considered a user query
-    if (current_group == _dbcfg.statement_scheduling_group) {
-        return query_class::user;
-    // System queries run in the default (main) scheduling group
-    // All queries executed on behalf of internal work also uses the system semaphore
-    } else if (current_group == default_scheduling_group()
-            || current_group == _dbcfg.compaction_scheduling_group
-            || current_group == _dbcfg.gossip_scheduling_group
-            || current_group == _dbcfg.memory_compaction_scheduling_group
-            || current_group == _dbcfg.memtable_scheduling_group
-            || current_group == _dbcfg.memtable_to_cache_scheduling_group) {
-        return query_class::system;
-    // Reads done on behalf of view update generation run in the streaming group
-    } else if (current_scheduling_group() == _dbcfg.streaming_scheduling_group) {
-        return query_class::maintenance;
-    // Everything else is considered a user query
-    } else {
-        return query_class::user;
-    }
-}
-
-} // anonymous namespace
-
 query::max_result_size database::get_unlimited_query_max_result_size() const {
-    switch (classify_query(_dbcfg)) {
-        case query_class::user:
+    switch (classify_request(_dbcfg)) {
+        case request_class::user:
             return query::max_result_size(_cfg.max_memory_for_unlimited_query_soft_limit(), _cfg.max_memory_for_unlimited_query_hard_limit());
-        case query_class::system: [[fallthrough]];
-        case query_class::maintenance:
+        case request_class::system: [[fallthrough]];
+        case request_class::maintenance:
             return query::max_result_size(query::result_memory_limiter::unlimited_result_size);
     }
     std::abort();
 }
 
 reader_concurrency_semaphore& database::get_reader_concurrency_semaphore() {
-    switch (classify_query(_dbcfg)) {
-        case query_class::user: return _read_concurrency_sem;
-        case query_class::system: return _system_read_concurrency_sem;
-        case query_class::maintenance: return _streaming_concurrency_sem;
+    switch (classify_request(_dbcfg)) {
+        case request_class::user: return _read_concurrency_sem;
+        case request_class::system: return _system_read_concurrency_sem;
+        case request_class::maintenance: return _streaming_concurrency_sem;
     }
     std::abort();
 }
@@ -1769,12 +1832,21 @@ future<> database::apply_with_commitlog(column_family& cf, const mutation& m, db
     }
 }
 
-future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout, db::commitlog::force_sync sync) {
+future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout, db::commitlog::force_sync sync, db::per_partition_rate_limit::info rate_limit_info) {
     // I'm doing a nullcheck here since the init code path for db etc
     // is a little in flux and commitlog is created only when db is
     // initied from datadir.
     auto uuid = m.column_family_id();
     auto& cf = find_column_family(uuid);
+
+    if (!std::holds_alternative<std::monostate>(rate_limit_info) && can_apply_per_partition_rate_limit(*s, db::operation_type::write)) {
+        auto table_limit = *s->per_partition_rate_limit_options().get_max_writes_per_second();
+        auto& write_label = cf.get_rate_limiter_label_for_writes();
+        auto token = dht::token::to_int64(dht::get_token(*s, m.key()));
+        if (_rate_limiter.account_operation(write_label, token, table_limit, rate_limit_info) == db::rate_limiter::can_proceed::no) {
+            co_await coroutine::return_exception(replica::rate_limit_exception());
+        }
+    }
 
     sync = sync || db::commitlog::force_sync(s->wait_for_sync_to_commitlog());
 
@@ -1819,6 +1891,12 @@ Future database::update_write_metrics(Future&& f) {
             if (is_timeout_exception(ep)) {
                 ++s->total_writes_timedout;
             }
+            try {
+                std::rethrow_exception(ep);
+            } catch (replica::rate_limit_exception&) {
+                ++s->total_writes_rate_limited;
+            } catch (...) {
+            }
             return futurize<Future>::make_exception_future(std::move(ep));
         }
         ++s->total_writes;
@@ -1832,7 +1910,7 @@ void database::update_write_metrics_for_timed_out_write() {
     ++_stats->total_writes_timedout;
 }
 
-future<> database::apply(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, db::timeout_clock::time_point timeout) {
+future<> database::apply(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, db::timeout_clock::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
     if (dblog.is_enabled(logging::log_level::trace)) {
         dblog.trace("apply {}", m.pretty_printer(s));
     }
@@ -1843,7 +1921,7 @@ future<> database::apply(schema_ptr s, const frozen_mutation& m, tracing::trace_
     if (!s->is_synced()) {
         on_internal_error(dblog, format("attempted to apply mutation using not synced schema of {}.{}, version={}", s->ks_name(), s->cf_name(), s->version()));
     }
-    return update_write_metrics(_apply_stage(this, std::move(s), seastar::cref(m), std::move(tr_state), timeout, sync));
+    return update_write_metrics(_apply_stage(this, std::move(s), seastar::cref(m), std::move(tr_state), timeout, sync, rate_limit_info));
 }
 
 future<> database::apply_hint(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout) {
@@ -1854,7 +1932,7 @@ future<> database::apply_hint(schema_ptr s, const frozen_mutation& m, tracing::t
         on_internal_error(dblog, format("attempted to apply hint using not synced schema of {}.{}, version={}", s->ks_name(), s->cf_name(), s->version()));
     }
     return with_scheduling_group(_dbcfg.streaming_scheduling_group, [this, s = std::move(s), &m, tr_state = std::move(tr_state), timeout] () mutable {
-        return update_write_metrics(_apply_stage(this, std::move(s), seastar::cref(m), std::move(tr_state), timeout, db::commitlog::force_sync::no));
+        return update_write_metrics(_apply_stage(this, std::move(s), seastar::cref(m), std::move(tr_state), timeout, db::commitlog::force_sync::no, std::monostate{}));
     });
 }
 
@@ -1931,6 +2009,14 @@ std::ostream& operator<<(std::ostream& os, db::consistency_level cl) {
     case db::consistency_level::LOCAL_ONE: return os << "LOCAL_ONE";
     default: abort();
     }
+}
+
+std::ostream& operator<<(std::ostream& os, operation_type op_type) {
+    switch (op_type) {
+    case operation_type::read: return os << "read";
+    case operation_type::write: return os << "write";
+    }
+    abort();
 }
 
 }

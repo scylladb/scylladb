@@ -360,6 +360,7 @@ select_statement::do_execute(query_processor& qp,
             utils::UUID(),
             query::is_first_page::no,
             options.get_timestamp(state));
+    command->allow_limit = db::allow_per_partition_rate_limit::yes;
 
     int32_t page_size = options.get_page_size();
 
@@ -530,6 +531,7 @@ indexed_table_select_statement::prepare_command_for_base_query(query_processor& 
             utils::UUID(),
             query::is_first_page::no,
             options.get_timestamp(state));
+    cmd->allow_limit = db::allow_per_partition_rate_limit::yes;
     return cmd;
 }
 

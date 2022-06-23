@@ -42,7 +42,9 @@
 #include "cache_temperature.hh"
 #include "raft/raft.hh"
 #include "service/raft/messaging.hh"
+#include "replica/exceptions.hh"
 #include "serializer.hh"
+#include "db/per_partition_rate_limit_info.hh"
 #include "idl/consistency_level.dist.hh"
 #include "idl/tracing.dist.hh"
 #include "idl/result.dist.hh"
@@ -67,6 +69,8 @@
 #include "idl/raft_storage.dist.hh"
 #include "idl/raft.dist.hh"
 #include "idl/group0.dist.hh"
+#include "idl/replica_exception.dist.hh"
+#include "idl/per_partition_rate_limit_info.dist.hh"
 #include "idl/storage_proxy.dist.hh"
 #include "serializer_impl.hh"
 #include "serialization_visitors.hh"
@@ -94,6 +98,8 @@
 #include "idl/raft.dist.impl.hh"
 #include "idl/group0.dist.impl.hh"
 #include "idl/view.dist.impl.hh"
+#include "idl/replica_exception.dist.impl.hh"
+#include "idl/per_partition_rate_limit_info.dist.impl.hh"
 #include "idl/storage_proxy.dist.impl.hh"
 #include <seastar/rpc/lz4_compressor.hh>
 #include <seastar/rpc/lz4_fragmented_compressor.hh>

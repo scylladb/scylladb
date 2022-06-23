@@ -317,7 +317,7 @@ future<coordinator_result<>> batch_statement::execute_without_conditions(
             mutate_atomic = false;
         }
     }
-    return qp.proxy().mutate_with_triggers(std::move(mutations), cl, timeout, mutate_atomic, std::move(tr_state), std::move(permit));
+    return qp.proxy().mutate_with_triggers(std::move(mutations), cl, timeout, mutate_atomic, std::move(tr_state), std::move(permit), db::allow_per_partition_rate_limit::yes);
 }
 
 future<shared_ptr<cql_transport::messages::result_message>> batch_statement::execute_with_conditions(

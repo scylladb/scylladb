@@ -18,6 +18,7 @@
 #include "tracing/tracing.hh"
 #include "utils/small_vector.hh"
 #include "query_class_config.hh"
+#include "db/per_partition_rate_limit_info.hh"
 
 #include "bytes.hh"
 
@@ -298,6 +299,7 @@ public:
     std::optional<query::max_result_size> max_result_size;
     uint32_t row_limit_high_bits;
     api::timestamp_type read_timestamp; // not serialized
+    db::allow_per_partition_rate_limit allow_limit; // not serialized
 public:
     // IDL constructor
     read_command(utils::UUID cf_id,
@@ -323,6 +325,7 @@ public:
         , max_result_size(max_result_size)
         , row_limit_high_bits(row_limit_high_bits)
         , read_timestamp(api::new_timestamp())
+        , allow_limit(db::allow_per_partition_rate_limit::no)
     { }
 
     read_command(utils::UUID cf_id,
@@ -335,7 +338,8 @@ public:
             std::optional<tracing::trace_info> ti = std::nullopt,
             utils::UUID query_uuid = utils::UUID(),
             query::is_first_page is_first_page = query::is_first_page::no,
-            api::timestamp_type rt = api::new_timestamp())
+            api::timestamp_type rt = api::new_timestamp(),
+            db::allow_per_partition_rate_limit allow_limit = db::allow_per_partition_rate_limit::no)
         : cf_id(std::move(cf_id))
         , schema_version(std::move(schema_version))
         , slice(std::move(slice))
@@ -348,6 +352,7 @@ public:
         , max_result_size(max_result_size)
         , row_limit_high_bits(static_cast<uint32_t>(static_cast<uint64_t>(row_limit) >> 32))
         , read_timestamp(rt)
+        , allow_limit(allow_limit)
     { }
 
 

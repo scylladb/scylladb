@@ -14,6 +14,10 @@
 #include "dht/i_partitioner.hh"
 #include "tombstone_gc_options.hh"
 
+namespace db {
+class per_partition_rate_limit_options;
+}
+
 struct schema_builder {
 public:
     enum class compact_storage { no, yes };
@@ -280,6 +284,7 @@ public:
 
     schema_builder& with_cdc_options(const cdc::options&);
     schema_builder& with_tombstone_gc_options(const tombstone_gc_options& opts);
+    schema_builder& with_per_partition_rate_limit_options(const db::per_partition_rate_limit_options&);
     
     default_names get_default_names() const {
         return default_names(_raw);

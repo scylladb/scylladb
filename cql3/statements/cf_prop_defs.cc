@@ -17,6 +17,8 @@
 #include "gms/feature_service.hh"
 #include "tombstone_gc_extension.hh"
 #include "tombstone_gc.hh"
+#include "db/per_partition_rate_limit_extension.hh"
+#include "db/per_partition_rate_limit_options.hh"
 
 #include <boost/algorithm/string/predicate.hpp>
 
@@ -127,6 +129,11 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
         throw exceptions::configuration_exception("CDC not supported by the cluster");
     }
 
+    auto per_partition_rate_limit_options = get_per_partition_rate_limit_options(schema_extensions);
+    if (per_partition_rate_limit_options && !db.features().typed_errors_in_read_rpc) {
+        throw exceptions::configuration_exception("Per-partition rate limit is not supported yet by the whole cluster");
+    }
+
     auto tombstone_gc_options = get_tombstone_gc_options(schema_extensions);
     validate_tombstone_gc_options(tombstone_gc_options, db, ks_name);
 
@@ -216,6 +223,16 @@ const tombstone_gc_options* cf_prop_defs::get_tombstone_gc_options(const schema:
     }
 
     auto ext = dynamic_pointer_cast<tombstone_gc_extension>(it->second);
+    return &ext->get_options();
+}
+
+const db::per_partition_rate_limit_options* cf_prop_defs::get_per_partition_rate_limit_options(const schema::extensions_map& schema_exts) const {
+    auto it = schema_exts.find(db::per_partition_rate_limit_extension::NAME);
+    if (it == schema_exts.end()) {
+        return nullptr;
+    }
+
+    auto ext = dynamic_pointer_cast<db::per_partition_rate_limit_extension>(it->second);
     return &ext->get_options();
 }
 

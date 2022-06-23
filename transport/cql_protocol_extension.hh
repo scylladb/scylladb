@@ -28,11 +28,13 @@ namespace cql_transport {
  * `docs/protocol-extensions.md`. 
  */
 enum class cql_protocol_extension {
-    LWT_ADD_METADATA_MARK
+    LWT_ADD_METADATA_MARK,
+    RATE_LIMIT_ERROR
 };
 
 using cql_protocol_extension_enum = super_enum<cql_protocol_extension,
-    cql_protocol_extension::LWT_ADD_METADATA_MARK>;
+    cql_protocol_extension::LWT_ADD_METADATA_MARK,
+    cql_protocol_extension::RATE_LIMIT_ERROR>;
 
 using cql_protocol_extension_enum_set = enum_set<cql_protocol_extension_enum>;
 

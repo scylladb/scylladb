@@ -146,3 +146,37 @@ parameters:
     the bit mask that should be used by the client to test against when checking
     prepared statement metadata flags to see if the current query is conditional
     or not.
+
+## Rate limit error
+
+This extension allows the driver to send a new type of error in case the operation
+goes over the allowed per-partition rate limit. This kind of error does not fit
+other existing error codes well, hence the need for the protocol extension.
+
+On receiving this error, the driver should not retry the request; instead,
+the error should be propagated to the user so that they can decide what to do
+with it - sometimes it might make sense to propagate the error, in other cases
+it might make sense to retry with backoff.
+
+The body of the error consists of the usual error code, error message and then
+the following fields: `<op_type><rejected_by_coordinator>`, where:
+
+- `op_type` is a byte which identifies the operation which is the origin
+  of the rate limit.
+  - 0: read
+  - 1: write
+- `rejected_by_coordinator` is a byte which is 1 if the operation was rejected
+  on the coordinator and 0 if it was rejected by replicas.
+
+If the driver does not understand this extension and does not enable it,
+the Config_error will be used instead of the new error code.
+
+In order to be forward compatible with error codes added in the future protocol
+versions, this extension doesn't reserve a fixed error code - instead, it
+advertises the integer value used as the error code in the SUPPORTED response.
+
+This extension is identified by the `SCYLLA_RATE_LIMIT_ERROR` key.
+The string map in the SUPPORTED response will contain the following parameters:
+
+  - `ERROR_CODE`: a 32-bit signed decimal integer which Scylla
+    will use as the error code for the rate limit exception.

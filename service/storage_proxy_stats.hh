@@ -77,6 +77,8 @@ struct write_stats {
 
     utils::timed_rate_moving_average write_unavailables;
     utils::timed_rate_moving_average write_timeouts;
+    utils::timed_rate_moving_average write_rate_limited_by_replicas;
+    utils::timed_rate_moving_average write_rate_limited_by_coordinator;
 
     utils::timed_rate_moving_average_and_histogram write;
     utils::time_estimated_histogram estimated_write;
@@ -127,6 +129,8 @@ struct stats : public write_stats {
     seastar::metrics::metric_groups _metrics;
     utils::timed_rate_moving_average read_timeouts;
     utils::timed_rate_moving_average read_unavailables;
+    utils::timed_rate_moving_average read_rate_limited_by_replicas;
+    utils::timed_rate_moving_average read_rate_limited_by_coordinator;
     utils::timed_rate_moving_average range_slice_timeouts;
     utils::timed_rate_moving_average range_slice_unavailables;
 
