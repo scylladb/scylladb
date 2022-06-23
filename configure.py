@@ -322,7 +322,7 @@ modes = {
     },
     'dev': {
         'cxxflags': '-DDEVEL -DSEASTAR_ENABLE_ALLOC_FAILURE_INJECTION -DSCYLLA_ENABLE_ERROR_INJECTION',
-        'cxx_ld_flags': '',
+        'cxx_ld_flags': '-Wl,--strip-debug',
         'stack-usage-threshold': 1024*21,
         'optimization-level': '2',
         'per_src_extra_cxxflags': {},
