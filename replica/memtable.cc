@@ -116,7 +116,7 @@ void memtable::memtable_encoding_stats_collector::update(const ::schema& s, cons
 
 memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm, replica::table_stats& table_stats,
     memtable_list* memtable_list, seastar::scheduling_group compaction_scheduling_group)
-        : logalloc::region()
+        : dirty_memory_manager_logalloc::size_tracked_region()
         , _dirty_mgr(dmm)
         , _cleaner(*this, no_cache_tracker, table_stats.memtable_app_stats, compaction_scheduling_group,
                    [this] (size_t freed) { remove_flushed_memory(freed); })

@@ -9,7 +9,6 @@
 #include <boost/range/algorithm/heap_algorithm.hpp>
 #include <boost/range/algorithm/remove.hpp>
 #include <boost/range/algorithm.hpp>
-#include <boost/heap/binomial_heap.hpp>
 #include <boost/intrusive/list.hpp>
 #include <boost/intrusive/set.hpp>
 #include <boost/intrusive/slist.hpp>
@@ -1481,8 +1480,6 @@ private:
     region_sanitizer _sanitizer;
     uint64_t _id;
     eviction_fn _eviction_fn;
-
-    region_heap::handle_type _heap_handle;
 private:
     struct compaction_lock {
         region_impl& _region;
@@ -1583,7 +1580,7 @@ private:
         shard_segment_pool.free_segment(seg, desc);
         if (_listener) {
             _evictable_space -= segment_size;
-            _listener->decrease_usage(_heap_handle, -segment::size);
+            _listener->decrease_usage(_region, -segment::size);
         }
     }
 
@@ -1591,7 +1588,7 @@ private:
         segment* seg = shard_segment_pool.new_segment(this);
         if (_listener) {
             _evictable_space += segment_size;
-            _listener->increase_usage(_heap_handle, segment::size);
+            _listener->increase_usage(_region, segment::size);
         }
         return seg;
     }
@@ -1818,7 +1815,7 @@ public:
     void ground_evictable_occupancy() {
         _evictable_space_mask = 0;
         if (_listener) {
-            _listener->decrease_evictable_usage(_heap_handle);
+            _listener->decrease_evictable_usage(_region);
         }
     }
 
@@ -1854,7 +1851,7 @@ public:
             _non_lsa_occupancy += occupancy_stats(0, allocated_size);
             if (_listener) {
                  _evictable_space += allocated_size;
-                _listener->increase_usage(_heap_handle, allocated_size);
+                _listener->increase_usage(_region, allocated_size);
             }
             shard_segment_pool.add_non_lsa_memory_in_use(allocated_size);
             return ptr;
@@ -1873,7 +1870,7 @@ private:
         _non_lsa_occupancy -= occupancy_stats(0, allocated_size);
         if (_listener) {
             _evictable_space -= allocated_size;
-            _listener->decrease_usage(_heap_handle, allocated_size);
+            _listener->decrease_usage(_region, allocated_size);
         }
         shard_segment_pool.subtract_non_lsa_memory_in_use(allocated_size);
     }
@@ -1949,7 +1946,7 @@ public:
     // to refer to this region.
     // Doesn't invalidate references to allocated objects.
     void merge(region_impl& other) noexcept {
-        // unlisten_temporarily allocates via binomial_heap::push(), which should not
+        // unlisten_temporarily may allocate via region_listener callbacks, which should not
         // fail, because we have a matching deallocation before that and we don't
         // allocate between them.
         memory::scoped_critical_alloc_section dfg;
@@ -2117,11 +2114,6 @@ memory::reclaiming_result tracker::reclaim(seastar::memory::reclaimer::request r
            : memory::reclaiming_result::reclaimed_nothing;
 }
 
-bool
-region_evictable_occupancy_ascending_less_comparator::operator()(region_impl* r1, region_impl* r2) const {
-    return r1->evictable_occupancy().total_space() < r2->evictable_occupancy().total_space();
-}
-
 region::region()
     : _impl(make_shared<impl>(this))
 { }
@@ -2228,11 +2220,6 @@ void region::make_evictable(eviction_fn fn) {
 
 void region::ground_evictable_occupancy() {
     get_impl().ground_evictable_occupancy();
-}
-
-region_heap::handle_type&
-region::region_heap_handle() {
-    return get_impl()._heap_handle;
 }
 
 occupancy_stats region::evictable_occupancy() {

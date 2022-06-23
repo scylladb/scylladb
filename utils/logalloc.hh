@@ -16,7 +16,6 @@
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/expiring_fifo.hh>
 #include "allocation_strategy.hh"
-#include <boost/heap/binomial_heap.hpp>
 #include "seastarx.hh"
 #include "db/timeout_clock.hh"
 #include "utils/entangled.hh"
@@ -41,16 +40,6 @@ constexpr size_t max_zone_segments = 256;
 //
 using eviction_fn = std::function<memory::reclaiming_result()>;
 
-struct region_evictable_occupancy_ascending_less_comparator {
-    bool operator()(region_impl* r1, region_impl* r2) const;
-};
-
-using region_heap = boost::heap::binomial_heap<region_impl*,
-        boost::heap::compare<region_evictable_occupancy_ascending_less_comparator>,
-        boost::heap::allocator<std::allocator<region_impl*>>,
-        //constant_time_size<true> causes corruption with boost < 1.60
-        boost::heap::constant_time_size<false>>;
-
 region* region_impl_to_region(region_impl* ri);
 region_impl* region_to_region_impl(region* r);
 
@@ -61,9 +50,9 @@ public:
     virtual void add(region* r) = 0;
     virtual void del(region* r) = 0;
     virtual void moved(region* old_address, region* new_address) = 0;
-    virtual void increase_usage(region_heap::handle_type& r_handle, ssize_t delta) = 0;
-    virtual void decrease_evictable_usage(region_heap::handle_type& r_handle) = 0;
-    virtual void decrease_usage(region_heap::handle_type& r_handle, ssize_t delta) = 0;
+    virtual void increase_usage(region* r, ssize_t delta) = 0;
+    virtual void decrease_evictable_usage(region* r) = 0;
+    virtual void decrease_usage(region* r, ssize_t delta) = 0;
 };
 
 // Controller for all LSA regions. There's one per shard.
@@ -364,8 +353,6 @@ public:
     const eviction_fn& evictor() const;
 
     uint64_t id() const;
-
-    region_heap::handle_type& region_heap_handle();
 
     friend class allocating_section;
     friend region_impl* region_to_region_impl(region* r);

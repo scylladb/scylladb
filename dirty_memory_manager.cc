@@ -18,7 +18,7 @@ region_group_binomial_group_sanity_check(const region_group::region_heap& bh) {
     bool failed = false;
     size_t last =  std::numeric_limits<size_t>::max();
     for (auto b = bh.ordered_begin(); b != bh.ordered_end(); b++) {
-        auto t = region_impl_to_region(*b)->evictable_occupancy().total_space();
+        auto t = (*b)->evictable_occupancy().total_space();
         if (!(t <= last)) {
             failed = true;
             break;
@@ -31,7 +31,7 @@ region_group_binomial_group_sanity_check(const region_group::region_heap& bh) {
 
     fmt::print("Sanity checking FAILED, size {}\n", bh.size());
     for (auto b = bh.ordered_begin(); b != bh.ordered_end(); b++) {
-        auto r = region_impl_to_region(*b);
+        auto r = (*b);
         auto t = r->evictable_occupancy().total_space();
         fmt::print(" r = {} (id={}), occupancy = {}\n", fmt::ptr(r), r->id(), t);
     }
@@ -39,17 +39,22 @@ region_group_binomial_group_sanity_check(const region_group::region_heap& bh) {
 #endif
 }
 
+bool
+region_evictable_occupancy_ascending_less_comparator::operator()(size_tracked_region* r1, size_tracked_region* r2) const {
+    return r1->evictable_occupancy().total_space() < r2->evictable_occupancy().total_space();
+}
+
 region_group_reclaimer region_group::no_reclaimer;
 
 uint64_t region_group::top_region_evictable_space() const {
-    return _regions.empty() ? 0 : region_impl_to_region(_regions.top())->evictable_occupancy().total_space();
+    return _regions.empty() ? 0 : _regions.top()->evictable_occupancy().total_space();
 }
 
-region* region_group::get_largest_region() {
+dirty_memory_manager_logalloc::size_tracked_region* region_group::get_largest_region() {
     if (!_maximal_rg || _maximal_rg->_regions.empty()) {
         return nullptr;
     }
-    return region_impl_to_region(_maximal_rg->_regions.top());
+    return _maximal_rg->_regions.top();
 }
 
 void
@@ -66,15 +71,16 @@ region_group::del(region_group* child) {
 
 void
 region_group::add(region* child_r) {
-    auto child = region_to_region_impl(child_r);
-    child_r->region_heap_handle() = _regions.push(child);
+    auto child = static_cast<size_tracked_region*>(child_r);
+    child->_heap_handle = _regions.push(child);
     region_group_binomial_group_sanity_check(_regions);
     update(child_r->occupancy().total_space());
 }
 
 void
 region_group::del(region* child_r) {
-    _regions.erase(child_r->region_heap_handle());
+    auto child = static_cast<size_tracked_region*>(child_r);
+    _regions.erase(child->_heap_handle);
     region_group_binomial_group_sanity_check(_regions);
     update(-child_r->occupancy().total_space());
 }

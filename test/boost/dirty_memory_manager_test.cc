@@ -53,15 +53,15 @@ SEASTAR_TEST_CASE(test_region_groups) {
         region_group all;
         region_group one_and_two("one_and_two", &all);
 
-        auto one = std::make_unique<logalloc::region>();
+        auto one = std::make_unique<size_tracked_region>();
         one->listen(&one_and_two);
-        auto two = std::make_unique<logalloc::region>();
+        auto two = std::make_unique<size_tracked_region>();
         two->listen(&one_and_two);
-        auto three = std::make_unique<logalloc::region>();
+        auto three = std::make_unique<size_tracked_region>();
         three->listen(&all);
-        auto four = std::make_unique<logalloc::region>();
+        auto four = std::make_unique<size_tracked_region>();
         four->listen(&just_four);
-        auto five = std::make_unique<logalloc::region>();
+        auto five = std::make_unique<size_tracked_region>();
 
         constexpr size_t base_count = 16 * 1024;
 
@@ -179,8 +179,8 @@ struct test_region_group: public region_group {
     }
 };
 
-struct test_region: public logalloc::region  {
-    test_region() : logalloc::region() {}
+struct test_region: public dirty_memory_manager_logalloc::size_tracked_region  {
+    test_region() : dirty_memory_manager_logalloc::size_tracked_region() {}
     ~test_region() {
         clear();
     }
@@ -473,7 +473,7 @@ SEASTAR_TEST_CASE(test_region_groups_tree_hierarchy_throttling_leaf_alloc) {
 
 // Helper for all async reclaim tests.
 class test_async_reclaim_region {
-    logalloc::region _region;
+    dirty_memory_manager_logalloc::size_tracked_region _region;
     std::vector<managed_bytes> _alloc;
     size_t _alloc_size;
     // Make sure we don't reclaim the same region more than once. It is supposed to be empty
@@ -504,11 +504,11 @@ public:
         with_allocator(_region.allocator(), [this] {
             std::vector<managed_bytes>().swap(_alloc);
         });
-        _region = logalloc::region();
+        _region = dirty_memory_manager_logalloc::size_tracked_region();
         _region.listen(&_rg);
         return this->_alloc_size;
     }
-    static test_async_reclaim_region& from_region(region* region_ptr) {
+    static test_async_reclaim_region& from_region(dirty_memory_manager_logalloc::size_tracked_region* region_ptr) {
         auto aptr = boost::intrusive::get_parent_from_member(region_ptr, &test_async_reclaim_region::_region);
         return *aptr;
     }
@@ -741,7 +741,7 @@ SEASTAR_TEST_CASE(test_no_crash_when_a_lot_of_requests_released_which_change_reg
         region_group_reclaimer recl(threshold, threshold);
         region_group gr(test_name, recl);
         auto close_gr = defer([&gr] () noexcept { gr.shutdown().get(); });
-        region r;
+        size_tracked_region r;
         r.listen(&gr);
 
         with_allocator(r.allocator(), [&] {
@@ -810,7 +810,7 @@ SEASTAR_TEST_CASE(test_reclaiming_runs_as_long_as_there_is_soft_pressure) {
         reclaimer recl(hard_threshold, soft_threshold);
         region_group gr(test_name, recl);
         auto close_gr = defer([&gr] () noexcept { gr.shutdown().get(); });
-        region r;
+        size_tracked_region r;
         r.listen(&gr);
 
         with_allocator(r.allocator(), [&] {

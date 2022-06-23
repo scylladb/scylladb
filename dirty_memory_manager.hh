@@ -9,6 +9,7 @@
 #pragma once
 
 #include <boost/intrusive/parent_from_member.hpp>
+#include <boost/heap/binomial_heap.hpp>
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/metrics_registration.hh>
@@ -20,6 +21,23 @@
 namespace dirty_memory_manager_logalloc {
 
 using namespace logalloc;
+
+class size_tracked_region;
+
+struct region_evictable_occupancy_ascending_less_comparator {
+    bool operator()(size_tracked_region* r1, size_tracked_region* r2) const;
+};
+
+using region_heap = boost::heap::binomial_heap<size_tracked_region*,
+        boost::heap::compare<region_evictable_occupancy_ascending_less_comparator>,
+        boost::heap::allocator<std::allocator<size_tracked_region*>>,
+        //constant_time_size<true> causes corruption with boost < 1.60
+        boost::heap::constant_time_size<false>>;
+
+class size_tracked_region : public logalloc::region {
+public:
+    region_heap::handle_type _heap_handle;
+};
 
 //
 // Users of a region_group can pass an instance of the class region_group_reclaimer, and specialize
@@ -102,8 +120,6 @@ public:
 class region_group : public region_listener {
     static region_group_reclaimer no_reclaimer;
 
-    using region_evictable_occupancy_ascending_less_comparator = logalloc::region_evictable_occupancy_ascending_less_comparator;
-
     // We want to sort the subgroups so that we can easily find the one that holds the biggest
     // region for freeing purposes. Please note that this is not the biggest of the region groups,
     // since a big region group can have a big collection of very small regions, and freeing them
@@ -125,7 +141,7 @@ class region_group : public region_listener {
     };
     friend struct subgroup_maximal_region_ascending_less_comparator;
 
-    using region_heap = logalloc::region_heap;
+    using region_heap = dirty_memory_manager_logalloc::region_heap;
 
     using subgroup_heap = boost::heap::binomial_heap<region_group*,
           boost::heap::compare<subgroup_maximal_region_ascending_less_comparator>,
@@ -255,17 +271,17 @@ public:
     // 2) some callers would like to pass delta = 0. For instance, when we are making a region
     //    evictable / non-evictable. Because the evictable occupancy changes, we would like to call
     //    the full update cycle even then.
-    virtual void increase_usage(region_heap::handle_type& r_handle, ssize_t delta) override { // From region_listener
-        _regions.increase(r_handle);
+    virtual void increase_usage(region* r, ssize_t delta) override { // From region_listener
+        _regions.increase(static_cast<size_tracked_region*>(r)->_heap_handle);
         update(delta);
     }
 
-    virtual void decrease_evictable_usage(region_heap::handle_type& r_handle) override { // From region_listener
-        _regions.decrease(r_handle);
+    virtual void decrease_evictable_usage(region* r) override { // From region_listener
+        _regions.decrease(static_cast<size_tracked_region*>(r)->_heap_handle);
     }
 
-    virtual void decrease_usage(region_heap::handle_type& r_handle, ssize_t delta) override { // From region_listener
-        decrease_evictable_usage(r_handle);
+    virtual void decrease_usage(region* r, ssize_t delta) override { // From region_listener
+        decrease_evictable_usage(r);
         update(delta);
     }
 
@@ -309,7 +325,7 @@ public:
     // returns a pointer to the largest region (in terms of memory usage) that sits below this
     // region group. This includes the regions owned by this region group as well as all of its
     // children.
-    region* get_largest_region();
+    size_tracked_region* get_largest_region();
 
     // Shutdown is mandatory for every user who has set a threshold
     // Can be called at most once.

@@ -15,6 +15,7 @@
 #include "dht/i_partitioner.hh"
 #include "schema_fwd.hh"
 #include "encoding_stats.hh"
+#include "dirty_memory_manager.hh"
 #include "db/commitlog/replay_position.hh"
 #include "db/commitlog/rp_set.hh"
 #include "utils/extremum_tracking.hh"
@@ -103,7 +104,7 @@ namespace replica {
 struct table_stats;
 
 // Managed by lw_shared_ptr<>.
-class memtable final : public enable_lw_shared_from_this<memtable>, private logalloc::region {
+class memtable final : public enable_lw_shared_from_this<memtable>, private dirty_memory_manager_logalloc::size_tracked_region {
 public:
     using partitions_type = double_decker<int64_t, memtable_entry,
                             dht::raw_token_less_comparator, dht::ring_position_comparator,
