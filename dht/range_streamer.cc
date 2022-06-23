@@ -47,7 +47,7 @@ range_streamer::get_range_fetch_map(const std::unordered_map<dht::token_range, s
 
             auto filtered = false;
             for (const auto& filter : source_filters) {
-                if (!filter->should_include(address)) {
+                if (!filter->should_include(get_token_metadata().get_topology(), address)) {
                     filtered = true;
                     break;
                 }

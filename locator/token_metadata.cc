@@ -21,6 +21,7 @@
 #include <seastar/coroutine/maybe_yield.hh>
 #include <boost/range/adaptors.hpp>
 #include "utils/stall_free.hh"
+#include "utils/fb_utilities.hh"
 
 namespace locator {
 
@@ -1311,6 +1312,27 @@ bool topology::has_endpoint(inet_address ep) const
 
 const endpoint_dc_rack& topology::get_location(const inet_address& ep) const {
     return _current_locations.at(ep);
+}
+
+// FIXME -- both methods below should rather return data from the
+// get_location() result, but to make it work two things are to be fixed:
+// - topology should be aware of internal-ip conversions
+// - topology should be pre-populated with data loaded from system ks
+
+sstring topology::get_rack() const {
+    return get_rack(utils::fb_utilities::get_broadcast_address());
+}
+
+sstring topology::get_rack(inet_address ep) const {
+    return i_endpoint_snitch::get_local_snitch_ptr()->get_rack(ep);
+}
+
+sstring topology::get_datacenter() const {
+    return get_datacenter(utils::fb_utilities::get_broadcast_address());
+}
+
+sstring topology::get_datacenter(inet_address ep) const {
+    return i_endpoint_snitch::get_local_snitch_ptr()->get_datacenter(ep);
 }
 
 /////////////////// class topology end /////////////////////////////////////////

@@ -98,6 +98,11 @@ public:
     }
 
     const endpoint_dc_rack& get_location(const inet_address& ep) const;
+    sstring get_rack() const;
+    sstring get_rack(inet_address ep) const;
+    sstring get_datacenter() const;
+    sstring get_datacenter(inet_address ep) const;
+
 private:
     /** multi-map: DC -> endpoints in that DC */
     std::unordered_map<sstring,

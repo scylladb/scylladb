@@ -8,6 +8,7 @@
 
 #include <string_view>
 #include <boost/algorithm/string.hpp>
+#include "locator/token_metadata.hh"
 #include "to_string.hh"
 #include "host_filter.hh"
 
@@ -27,12 +28,12 @@ host_filter::host_filter(std::unordered_set<sstring> allowed_dcs)
         , _dcs(std::move(allowed_dcs)) {
 }
 
-bool host_filter::can_hint_for(locator::snitch_ptr& snitch, gms::inet_address ep) const {
+bool host_filter::can_hint_for(const locator::topology& topo, gms::inet_address ep) const {
     switch (_enabled_kind) {
     case enabled_kind::enabled_for_all:
         return true;
     case enabled_kind::enabled_selectively:
-        return _dcs.contains(snitch->get_datacenter(ep));
+        return _dcs.contains(topo.get_datacenter(ep));
     case enabled_kind::disabled_for_all:
         return false;
     }

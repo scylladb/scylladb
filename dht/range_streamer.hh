@@ -11,7 +11,6 @@
 #pragma once
 
 #include "locator/token_metadata.hh"
-#include "locator/snitch_base.hh"
 #include "streaming/stream_plan.hh"
 #include "streaming/stream_state.hh"
 #include "streaming/stream_reason.hh"
@@ -27,6 +26,7 @@ class database;
 }
 
 namespace gms { class gossiper; }
+namespace locator { class topology; }
 
 namespace dht {
 /**
@@ -45,7 +45,7 @@ public:
      */
     class i_source_filter {
     public:
-        virtual bool should_include(inet_address endpoint) = 0;
+        virtual bool should_include(const locator::topology&, inet_address endpoint) = 0;
         virtual ~i_source_filter() {}
     };
 
@@ -58,7 +58,7 @@ public:
         std::set<gms::inet_address> _down_nodes;
     public:
         failure_detector_source_filter(std::set<gms::inet_address> down_nodes) : _down_nodes(std::move(down_nodes)) { }
-        virtual bool should_include(inet_address endpoint) override { return !_down_nodes.contains(endpoint); }
+        virtual bool should_include(const locator::topology&, inet_address endpoint) override { return !_down_nodes.contains(endpoint); }
     };
 
     /**
@@ -71,9 +71,8 @@ public:
         single_datacenter_filter(const sstring& source_dc)
             : _source_dc(source_dc) {
         }
-        virtual bool should_include(inet_address endpoint) override {
-            auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
-            return snitch_ptr->get_datacenter(endpoint) == _source_dc;
+        virtual bool should_include(const locator::topology& topo, inet_address endpoint) override {
+            return topo.get_datacenter(endpoint) == _source_dc;
         }
     };
 

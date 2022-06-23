@@ -20,6 +20,8 @@
 #include "seastarx.hh"
 #include "utils/config_file.hh"
 #include "utils/enum_option.hh"
+#include "utils/UUID.hh"
+#include "gms/inet_address.hh"
 #include "db/hints/host_filter.hh"
 
 namespace seastar {

@@ -49,7 +49,6 @@ const std::chrono::seconds manager::hints_flush_period = std::chrono::seconds(10
 manager::manager(sstring hints_directory, host_filter filter, int64_t max_hint_window_ms, resource_manager& res_manager, distributed<replica::database>& db)
     : _hints_dir(fs::path(hints_directory) / format("{:d}", this_shard_id()))
     , _host_filter(std::move(filter))
-    , _local_snitch_ptr(locator::i_endpoint_snitch::get_local_snitch_ptr())
     , _max_hint_window_us(max_hint_window_ms * 1000)
     , _local_db(db.local())
     , _resource_manager(res_manager)
@@ -659,7 +658,7 @@ future<> manager::change_host_filter(host_filter filter) {
             // for some of them
             return lister::scan_dir(_hints_dir, { directory_entry_type::directory }, [this] (fs::path datadir, directory_entry de) {
                 const ep_key_type ep = ep_key_type(de.name);
-                if (_ep_managers.contains(ep) || !_host_filter.can_hint_for(_local_snitch_ptr, ep)) {
+                if (_ep_managers.contains(ep) || !_host_filter.can_hint_for(_proxy_anchor->get_token_metadata_ptr()->get_topology(), ep)) {
                     return make_ready_future<>();
                 }
                 return get_ep_manager(ep).populate_segments_to_replay();
@@ -670,7 +669,7 @@ future<> manager::change_host_filter(host_filter filter) {
             }).finally([this] {
                 // Remove endpoint managers which are rejected by the filter
                 return parallel_for_each(_ep_managers, [this] (auto& pair) {
-                    if (_host_filter.can_hint_for(_local_snitch_ptr, pair.first)) {
+                    if (_host_filter.can_hint_for(_proxy_anchor->get_token_metadata_ptr()->get_topology(), pair.first)) {
                         return make_ready_future<>();
                     }
                     return pair.second.stop(drain::no).finally([this, ep = pair.first] {
@@ -687,7 +686,7 @@ bool manager::check_dc_for(ep_key_type ep) const noexcept {
         // If target's DC is not a "hintable" DCs - don't hint.
         // If there is an end point manager then DC has already been checked and found to be ok.
         return _host_filter.is_enabled_for_all() || have_ep_manager(ep) ||
-               _host_filter.can_hint_for(_local_snitch_ptr, ep);
+               _host_filter.can_hint_for(_proxy_anchor->get_token_metadata_ptr()->get_topology(), ep);
     } catch (...) {
         // if we failed to check the DC - block this hint
         return false;
