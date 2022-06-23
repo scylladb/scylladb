@@ -48,9 +48,16 @@ future<> boot_strapper::bootstrap(streaming::stream_reason reason, gms::gossiper
         streamer->add_source_filter(std::make_unique<range_streamer::failure_detector_source_filter>(nodes_to_filter));
         auto keyspaces = _db.local().get_non_system_keyspaces();
         for (auto& keyspace_name : keyspaces) {
+            if (!_db.local().has_keyspace(keyspace_name)) {
+                // The keyspace was dropped while we were looping.
+                continue;
+            }
+
             auto& ks = _db.local().find_keyspace(keyspace_name);
-            auto& strategy = ks.get_replication_strategy();
-            dht::token_range_vector ranges = co_await strategy.get_pending_address_ranges(_token_metadata_ptr, _tokens, _address);
+            auto strategy = ks.get_replication_strategy_ptr();
+            // We took a strategy ptr to keep it alive during the `co_await`.
+            // The keyspace may be dropped in the meantime.
+            dht::token_range_vector ranges = co_await strategy->get_pending_address_ranges(_token_metadata_ptr, _tokens, _address);
             blogger.debug("Will stream keyspace={}, ranges={}", keyspace_name, ranges);
             co_await streamer->add_ranges(keyspace_name, ranges, gossiper, reason == streaming::stream_reason::replace);
         }
