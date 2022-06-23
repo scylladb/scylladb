@@ -1331,15 +1331,13 @@ future<> storage_service::uninit_messaging_service_part() {
     return container().invoke_on_all(&service::storage_service::uninit_messaging_service);
 }
 
-future<> storage_service::join_cluster(cql3::query_processor& qp, raft_group0_client& client, cdc::generation_service& cdc_gen_service,
-        sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy, raft_group_registry& raft_gr) {
+future<> storage_service::join_cluster(cdc::generation_service& cdc_gen_service,
+        sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy, raft_group0& group0) {
     assert(this_shard_id() == 0);
 
-    return seastar::async([this, &qp, &client, &cdc_gen_service, &sys_dist_ks, &proxy, &raft_gr] {
+    _group0 = &group0;
+    return seastar::async([this, &cdc_gen_service, &sys_dist_ks, &proxy] {
         set_mode(mode::STARTING);
-
-        _group0 = std::make_unique<raft_group0>(_abort_source, raft_gr, _messaging.local(),
-            _gossiper, qp, _migration_manager.local(), client);
 
         std::unordered_set<inet_address> loaded_endpoints;
         if (_db.local().get_config().load_ring_state()) {
@@ -1481,11 +1479,6 @@ future<> storage_service::stop() {
     // make sure nobody uses the semaphore
     node_ops_singal_abort(std::nullopt);
     _listeners.clear();
-    try {
-        co_await (_group0 ?  _group0->abort() : make_ready_future<>());
-    } catch (...) {
-        slogger.error("failed to stop Raft Group 0: {}", std::current_exception());
-    }
     co_await std::move(_node_ops_abort_thread);
 }
 

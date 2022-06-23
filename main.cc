@@ -89,6 +89,7 @@
 
 #include "service/raft/raft_group_registry.hh"
 #include "service/raft/raft_group0_client.hh"
+#include "service/raft/raft_group0.hh"
 
 #include <boost/algorithm/string/join.hpp>
 
@@ -1272,12 +1273,19 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
              */
             db.local().enable_autocompaction_toggle();
 
+            service::raft_group0 group0_service{
+                    stop_signal.as_local_abort_source(), raft_gr.local(), messaging.local(),
+                    gossiper.local(), qp.local(), mm.local(), group0_client};
+            auto stop_group0_service = defer_verbose_shutdown("group 0 service", [&group0_service] {
+                group0_service.abort().get();
+            });
+
             with_scheduling_group(maintenance_scheduling_group, [&] {
                 return messaging.invoke_on_all(&netw::messaging_service::start_listen);
             }).get();
 
             with_scheduling_group(maintenance_scheduling_group, [&] {
-                return ss.local().join_cluster(qp.local(), group0_client, cdc_generation_service.local(), sys_dist_ks, proxy, raft_gr.local());
+                return ss.local().join_cluster(cdc_generation_service.local(), sys_dist_ks, proxy, group0_service);
             }).get();
 
             sl_controller.invoke_on_all([&lifecycle_notifier] (qos::service_level_controller& controller) {
