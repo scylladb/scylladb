@@ -5,7 +5,4 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-cxx = "1.0"
-
-[lib]
-crate-type = ["staticlib"]
+cxx = "1.0.69"
