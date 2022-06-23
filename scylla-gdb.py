@@ -2731,6 +2731,15 @@ class scylla_apply(gdb.Command):
 
 
 class scylla_shard(gdb.Command):
+    """Retrieves information on the current shard and allows switching shards.
+
+    Run without any parameters to print the current thread's shard number.
+    Run with a numeric parameter <N> to switch to the thread which runs shard <N>.
+
+    Example:
+      scylla shard 0
+    """
+
     def __init__(self):
         gdb.Command.__init__(self, 'scylla shard', gdb.COMMAND_USER, gdb.COMPLETE_NONE)
 
@@ -2738,7 +2747,12 @@ class scylla_shard(gdb.Command):
         if arg is None or arg == '':
             gdb.write('Current shard is %d\n' % current_shard())
             return
-        id = int(arg)
+        id = 0
+        try:
+            id = int(arg)
+        except:
+            gdb.write('Error: %s is not a valid shard number\n' % arg)
+            return
         orig = gdb.selected_thread()
         for t in gdb.selected_inferior().threads():
             t.switch()
