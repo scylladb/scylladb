@@ -1902,7 +1902,7 @@ with open(buildfile, 'w') as f:
               pool = console
               description = TEST {mode}
             rule rust_lib.{mode}
-              command = CARGO_HOME=build/{mode}/rust/.cargo cargo build --release --manifest-path=rust/Cargo.toml --target-dir=build/{mode}/rust
+              command = CARGO_HOME=build/{mode}/.cargo cargo build --manifest-path=rust/Cargo.toml --target-dir=build/{mode} --profile=rust-{mode}
               description = RUST_LIB $out
             ''').format(mode=mode, antlr3_exec=antlr3_exec, fmt_lib=fmt_lib, test_repeat=test_repeat, test_timeout=test_timeout, **modeval))
         f.write(
@@ -1957,7 +1957,7 @@ with open(buildfile, 'w') as f:
                 ]])
                 objs.append('$builddir/' + mode + '/gen/utils/gz/crc_combine_table.o')
                 if has_rust:
-                    objs.append('$builddir/' + mode +'/rust/release/librust_combined.a')
+                    objs.append('$builddir/' + mode +'/rust-' + mode + '/librust_combined.a')
                 if binary in tests:
                     local_libs = '$seastar_libs_{} $libs'.format(mode)
                     if binary in pure_boost_tests:
@@ -2074,7 +2074,7 @@ with open(buildfile, 'w') as f:
             obj = cc.replace('.cc', '.o')
             f.write('build {}: cxx.{} {}\n'.format(obj, mode, cc))
         f.write('build {}: cxxbridge_header\n'.format('$builddir/{}/gen/rust/cxx.h'.format(mode)))
-        librust = '$builddir/{}/rust/release/librust_combined.a'.format(mode)
+        librust = '$builddir/{}/rust-{}/librust_combined.a'.format(mode, mode)
         f.write('build {}: rust_lib.{} {}\n'.format(librust, mode, str.join(' ', rusts)))
         for thrift in thrifts:
             outs = ' '.join(thrift.generated('$builddir/{}/gen'.format(mode)))

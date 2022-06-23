@@ -9,3 +9,32 @@ inc = { path = "inc", version = "0.1.0" }
 
 [lib]
 crate-type = ["staticlib"]
+
+# The profiles below are Scylla specific. The cargo profile "rust-xyz" should
+# be used together with the ninja "xyz" mode.
+[profile.rust-dev]
+inherits = "dev"
+opt-level = 2
+debug = false
+overflow-checks = false
+debug-assertions = false
+strip = "symbols"
+
+[profile.rust-debug]
+inherits = "dev"
+opt-level = 1
+incremental = false
+
+[profile.rust-sanitize]
+inherits = "dev"
+opt-level = "s"
+incremental = false
+
+[profile.rust-release]
+inherits = "release"
+debug = true
+
+[profile.rust-coverage]
+inherits = "dev"
+opt-level = 1
+incremental = false
