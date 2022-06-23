@@ -7,32 +7,44 @@ shows how to use them in Scylla.
 
 To create a Rust package `new_pkg` and use it in a C++ source file:
 1. Create a new package in the `rust` directory using `cargo new new_pkg --lib`
-2. Modify crate type to a static library by adding
+2. Add `new_pkg = { path = "new_pkg", version = "0.1.0" }` to the dependencies list in `rust/Cargo.toml`
+3. Add `extern crate new_pkg;` to `rust/src/lib.rs`
+4. Configure your package in `new_pkg/Cargo.toml` and write your Rust code in `new_pkg/src/lib.rs` (and other `new_pkg/src/*.rs` files)
+5. To export a function `fn foo(x: i32) -> i32` in the namespace `xyz`, add its declaration to `new_pkg/src/lib.rs` as follows:
 ```
-[lib]
-crate-type = ["staticlib"]
-```
-to `new_pkg/Cargo.toml`
-3. Add `"new_pkg",` to the workspace members list in `Cargo.toml`
-4. Write your Rust code in `new_pkg/src/lib.rs`
-5. To export a function `fn foo(x: i32) -> i32`, add its declaration as follows to the same file
-```
-#[cxx::bridge(namespace = "rust")]
+#[cxx::bridge(namespace = "xyz")]
 mod ffi {
     extern "Rust" {
         fn inc(x: i32) -> i32;
     }
 }
 ```
-6. Add `"rust/new_pkg/src/lib.rs"` to the `rusts` list in `configure.py`
-7. Include the `rust/new_pkg.hh` header and use `rust::foo()` in the selected c++ file.
+6. Add source files of the new package to the `rusts` list in `configure.py`
+7. Add `new_pkg/src/lib.rs` to the `configure.py` dependencies where you'll need the Rust exports
+8. Include the `rust/new_pkg.hh` header and use `xyz::foo()` in the selected c++ file.
+
+## Submitting changes
+
+Additionally to the source code, Scylla tracks the Cargo.lock file that contains precise information about dependency
+versions used in the last successful build. Dependency modification may include:
+ * adding a new local package (it is used in Scylla as a dependency)
+ * updating a dependency version in an existing package
+ * adding a new dependency to a package
+
+After each such modification, a new Cargo.lock file should be submitted. Cargo.lock can be generated
+by the `cargo update` command. It will also update after each build that modifies the dependencies.
 
 ## Rust interoperability implementation
 
 Using Rust alongside C++ in scylla is made possible by the Rust crate CXX. The `cxx::bridge` macro,
-together with `mod ffi` and `extern "Rust"` mark items to be exported to C++. During compilation,
-a compatible version is generated with temporary names. It can be later linked with a header file, generated from the source code using `cxxbridge` command. The header exposed all items with original names and can be included like any other c++ header.
+together with `mod ffi` and `extern "Rust"` mark items to be exported to C++. During compilation
+of Rust files, a static library using C++ ABI is generated. The library exports Rust methods under
+special names. These names are used in the implementations of C++ methods with the original names.
+The C++ methods are listed in *.hh files, and their implementations in *.cc files, both generated
+from the Rust source code using `cxxbridge` command.
+The header exposes all items with original names and can be included like any other C++ header.
 
 Compilation is managed by `cargo`. Like in any Rust project, modules added to Scylla can be fully
-customized using corresponding `Cargo.toml` files. Currently, all modules are compiled to static
-libraries (TODO: dynamic or flexible)
+customized using corresponding `Cargo.toml` files. All modules are compiled to single static
+library, as this is the only officially supported way of linking Rust against C++.
+In the future, more linking methods may become supported, possibly using `rlib` ("Rust library") files.

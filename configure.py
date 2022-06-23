@@ -675,6 +675,14 @@ scylla_raft_core = [
     'raft/log.cc',
 ]
 
+rusts = [
+    'rust/src/lib.rs',
+    'rust/Cargo.toml',
+    'rust/Cargo.lock',
+    'rust/inc/src/lib.rs',
+    'rust/inc/Cargo.toml',
+]
+
 scylla_core = (['message/messaging_service.cc',
                 'replica/database.cc',
                 'replica/table.cc',
@@ -1153,10 +1161,6 @@ idls = ['idl/gossip_digest.idl.hh',
         'idl/position_in_partition.idl.hh',
         ]
 
-rusts = [
-    'rust/inc/src/lib.rs',
-]
-
 headers = find_headers('.', excluded_dirs=['idl', 'build', 'seastar', '.git'])
 
 scylla_tests_generic_dependencies = [
@@ -1309,7 +1313,7 @@ deps['test/boost/exceptions_fallback_test'] = ['test/boost/exceptions_fallback_t
 
 deps['test/boost/duration_test'] += ['test/lib/exception_utils.cc']
 deps['test/boost/schema_loader_test'] += ['tools/schema_loader.cc']
-deps['test/boost/rust_test'] += rusts
+deps['test/boost/rust_test'] += ['rust/inc/src/lib.rs']
 
 deps['test/raft/replication_test'] = ['test/raft/replication_test.cc', 'test/raft/replication.cc', 'test/raft/helpers.cc'] + scylla_raft_dependencies
 deps['test/raft/randomized_nemesis_test'] = ['test/raft/randomized_nemesis_test.cc', 'direct_failure_detector/failure_detector.cc', 'test/raft/helpers.cc'] + scylla_raft_dependencies
@@ -1411,7 +1415,7 @@ if flag_supported(flag='-Wstack-usage=4096', compiler=args.cxx):
     for mode in modes:
         modes[mode]['cxxflags'] += f' -Wstack-usage={modes[mode]["stack-usage-threshold"]} -Wno-error=stack-usage='
 
-has_wasmtime = os.path.isfile('/usr/lib64/libwasmtime.a') and os.path.isdir('/usr/local/include/wasmtime')
+has_wasmtime = False
 
 if has_wasmtime:
     if platform.machine() == 'aarch64':
@@ -1832,8 +1836,13 @@ with open(buildfile, 'w') as f:
         rule unified
             command = unified/build_unified.sh --mode $mode --unified-pkg $out
         rule rust_header
-            command = cxxbridge $in > $out
+            command = cxxbridge --include rust/cxx.h --header $in > $out
             description = RUST_HEADER $out
+        rule rust_source
+            command = cxxbridge --include rust/cxx.h $in > $out
+            description = RUST_SOURCE $out
+        rule cxxbridge_header
+            command = cxxbridge --header > $out
         ''').format(**globals()))
     for mode in build_modes:
         modeval = modes[mode]
@@ -1893,7 +1902,7 @@ with open(buildfile, 'w') as f:
               pool = console
               description = TEST {mode}
             rule rust_lib.{mode}
-              command = CARGO_HOME=build/{mode}/rust/.cargo cargo build --release --manifest-path=rust/Cargo.toml --target-dir=build/{mode}/rust -p ${{pkg}}
+              command = CARGO_HOME=build/{mode}/rust/.cargo cargo build --release --manifest-path=rust/Cargo.toml --target-dir=build/{mode}/rust
               description = RUST_LIB $out
             ''').format(mode=mode, antlr3_exec=antlr3_exec, fmt_lib=fmt_lib, test_repeat=test_repeat, test_timeout=test_timeout, **modeval))
         f.write(
@@ -1912,7 +1921,6 @@ with open(buildfile, 'w') as f:
         ragels = {}
         antlr3_grammars = set()
         rust_headers = {}
-        rust_libs = {}
         seastar_dep = '$builddir/{}/seastar/libseastar.a'.format(mode)
         seastar_testing_dep = '$builddir/{}/seastar/libseastar_testing.a'.format(mode)
         for binary in sorted(build_artifacts):
@@ -1926,6 +1934,7 @@ with open(buildfile, 'w') as f:
             if has_wasmtime:
                 objs.append('/usr/lib64/libwasmtime.a')
             has_thrift = False
+            has_rust = False
             for dep in deps[binary]:
                 if isinstance(dep, Thrift):
                     has_thrift = True
@@ -1935,8 +1944,9 @@ with open(buildfile, 'w') as f:
                 if isinstance(dep, Json2Code):
                     objs += dep.objects('$builddir/' + mode + '/gen')
                 if dep.endswith('/src/lib.rs'):
-                    lib = dep.replace('/src/lib.rs', '.a').replace('rust/','lib')
-                    objs.append('$builddir/' + mode + '/rust/release/' + lib)
+                    has_rust = True
+                    obj = dep.replace('/src/lib.rs', '.o').replace('rust/','')
+                    objs.append('$builddir/' + mode + '/gen/rust/' + obj)
             if binary.endswith('.a'):
                 f.write('build $builddir/{}/{}: ar.{} {}\n'.format(mode, binary, mode, str.join(' ', objs)))
             else:
@@ -1946,6 +1956,8 @@ with open(buildfile, 'w') as f:
                     'abseil/' + x for x in abseil_libs
                 ]])
                 objs.append('$builddir/' + mode + '/gen/utils/gz/crc_combine_table.o')
+                if has_rust:
+                    objs.append('$builddir/' + mode +'/rust/release/librust_combined.a')
                 if binary in tests:
                     local_libs = '$seastar_libs_{} $libs'.format(mode)
                     if binary in pure_boost_tests:
@@ -1988,8 +2000,6 @@ with open(buildfile, 'w') as f:
                 elif src.endswith('/src/lib.rs'):
                     hh = '$builddir/' + mode + '/gen/' + src.replace('/src/lib.rs', '.hh')
                     rust_headers[hh] = src
-                    staticlib = src.replace('rust/', '$builddir/' + mode + '/rust/release/lib').replace('/src/lib.rs', '.a')
-                    rust_libs[staticlib] = src
                 else:
                     raise Exception('No rule for ' + src)
         compiles['$builddir/' + mode + '/gen/utils/gz/crc_combine_table.o'] = '$builddir/' + mode + '/gen/utils/gz/crc_combine_table.cc'
@@ -2035,6 +2045,7 @@ with open(buildfile, 'w') as f:
         gen_headers += list(serializers.keys())
         gen_headers += list(ragels.keys())
         gen_headers += list(rust_headers.keys())
+        gen_headers.append('$builddir/{}/gen/rust/cxx.h'.format(mode))
         gen_headers_dep = ' '.join(gen_headers)
 
         for obj in compiles:
@@ -2058,10 +2069,13 @@ with open(buildfile, 'w') as f:
         for hh in rust_headers:
             src = rust_headers[hh]
             f.write('build {}: rust_header {}\n'.format(hh, src))
-        for lib in rust_libs:
-            src = rust_libs[lib]
-            package = src.replace('/src/lib.rs', '').replace('rust/','')
-            f.write('build {}: rust_lib.{} {}\n  pkg = {}\n'.format(lib, mode, src, package))
+            cc = hh.replace('.hh', '.cc')
+            f.write('build {}: rust_source {}\n'.format(cc, src))
+            obj = cc.replace('.cc', '.o')
+            f.write('build {}: cxx.{} {}\n'.format(obj, mode, cc))
+        f.write('build {}: cxxbridge_header\n'.format('$builddir/{}/gen/rust/cxx.h'.format(mode)))
+        librust = '$builddir/{}/rust/release/librust_combined.a'.format(mode)
+        f.write('build {}: rust_lib.{} {}\n'.format(librust, mode, str.join(' ', rusts)))
         for thrift in thrifts:
             outs = ' '.join(thrift.generated('$builddir/{}/gen'.format(mode)))
             f.write('build {}: thrift.{} {}\n'.format(outs, mode, thrift.source))
