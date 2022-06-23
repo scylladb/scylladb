@@ -2813,6 +2813,9 @@ class seastar_thread_context(object):
     def get_fs_base(self):
         return gdb.parse_and_eval('$fs_base')
 
+    def regs(self):
+        return self.regs_from_jmpbuf(self.thread_ctx['_context']['jmpbuf'])
+
     def regs_from_jmpbuf(self, jmpbuf):
         canary = gdb.Value(self.get_fs_base()).reinterpret_cast(self.ulong_type.pointer())[6]
         result = {}
@@ -2876,9 +2879,10 @@ def seastar_threads_on_current_shard():
 class scylla_thread(gdb.Command):
     """Operations with seastar::threads.
 
-    There are two operations supported:
+    The following operations are supported:
     * Switch to seastar thread (see also `scylla unthread`);
     * Execute command in the context of all existing seastar::threads.
+    * Print saved registers for given thread
 
     Run `scylla thread --help` for more information on usage.
 
@@ -2908,6 +2912,8 @@ class scylla_thread(gdb.Command):
         parser.add_argument("-a", "--apply-all", action="store_true", default=False,
                 help="Execute the command in the context of each seastar::thread."
                 " The command (and its arguments) to execute is expected to be provided as the positional argument.")
+        parser.add_argument("-p", "--print-regs", action="store_true", default=False,
+                help="Print unmangled registers saved in the jump buffer")
         parser.add_argument("arg", nargs='+')
 
         try:
@@ -2915,17 +2921,17 @@ class scylla_thread(gdb.Command):
         except SystemExit:
             return
 
-        if not args.iamsure:
+        if not args.print_regs and not args.iamsure:
             gdb.write("DISCLAIMER: This is a dangerous command with the potential to crash the process if anything goes wrong!"
                     " Please pass the `--iamsure` flag to acknowledge being fine with this risk.\n")
             return
 
-        if args.apply_all and args.switch:
-            gdb.write("Only one of `--apply-all` and `--switch` can be used.\n")
+        if sum([arg for arg in [args.apply_all, args.switch, args.print_regs]]) > 1:
+            gdb.write("Only one of `--apply-all`, `--switch` or `--print-regs` can be used.\n")
             return
 
-        if not args.apply_all and not args.switch:
-            gdb.write("No command specified, need either `--apply-all` or `--switch`.\n")
+        if not args.apply_all and not args.switch and not args.print_regs:
+            gdb.write("No command specified, need one of `--apply-all`, `--switch` or `--print_regs`.\n")
             return
 
         if args.apply_all:
@@ -2938,6 +2944,10 @@ class scylla_thread(gdb.Command):
 
         addr = gdb.parse_and_eval(args.arg[0])
         ctx = addr.reinterpret_cast(gdb.lookup_type('seastar::thread_context').pointer()).dereference()
+        if args.print_regs:
+            for reg, val in seastar_thread_context(ctx).regs().items():
+                gdb.write("%s: 0x%x\n" % (reg, val))
+            return
         exit_thread_context()
         global active_thread_context
         active_thread_context = seastar_thread_context(ctx)
