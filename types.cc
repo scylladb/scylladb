@@ -77,9 +77,17 @@ time_point_to_string(const T& tp)
     if (!gmtime_r(&seconds, &tm)) {
         return fmt::format("{} milliseconds (out of range)", count);
     }
+
+    auto to_string = [] (const std::tm& tm) {
+        auto year_digits = tm.tm_year >= -1900 ? 4 : 5;
+        return fmt::format("{:-0{}d}-{:02d}-{:02d}T{:02d}:{:02d}:{:02d}",
+                tm.tm_year + 1900, year_digits, tm.tm_mon + 1, tm.tm_mday,
+                tm.tm_hour, tm.tm_min, tm.tm_sec);
+    };
+
     auto millis = d.rem;
     if (!millis) {
-        return fmt::format("{:%Y-%m-%dT%H:%M:%S}", tm);
+        return fmt::format("{}", to_string(tm));
     }
     // adjust seconds for time points earlier than posix epoch
     // to keep the fractional millis positive
@@ -89,7 +97,7 @@ time_point_to_string(const T& tp)
         gmtime_r(&seconds, &tm);
     }
     auto micros = millis * 1000;
-    return fmt::format("{:%Y-%m-%dT%H:%M:%S}.{:06d}", tm, micros);
+    return fmt::format("{}.{:06d}", to_string(tm), micros);
 }
 
 sstring simple_date_to_string(const uint32_t days_count) {
