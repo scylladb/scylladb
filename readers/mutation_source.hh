@@ -38,7 +38,7 @@ partition_presence_checker make_default_partition_presence_checker() {
 //
 // When reading in reverse, a reverse schema has to be passed (compared to the
 // table's schema), and a half-reverse (legacy) slice.
-// See docs/design-notes/reverse-reads.md for more details.
+// See docs/dev/reverse-reads.md for more details.
 // Partition-range forwarding is not yet supported in reverse mode.
 class mutation_source {
     using partition_range = const dht::partition_range&;

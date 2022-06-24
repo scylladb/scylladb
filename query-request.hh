@@ -139,7 +139,7 @@ constexpr auto max_rows_if_set = std::numeric_limits<uint32_t>::max();
 // format:
 // * legacy format
 // * native format
-// The wire format uses the legacy format. See docs/design-notes/reverse-reads.md
+// The wire format uses the legacy format. See docs/dev/reverse-reads.md
 // for more details on the formats.
 class partition_slice {
     friend class ::partition_slice_builder;
@@ -249,7 +249,7 @@ public:
     friend std::ostream& operator<<(std::ostream& out, const specific_ranges& ps);
 };
 
-// See docs/design-notes/reverse-reads.md
+// See docs/dev/reverse-reads.md
 // In the following functions, `schema` may be reversed or not (both work).
 partition_slice legacy_reverse_slice_to_native_reverse_slice(const schema& schema, partition_slice slice);
 partition_slice native_reverse_slice_to_legacy_reverse_slice(const schema& schema, partition_slice slice);

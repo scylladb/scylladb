@@ -153,7 +153,7 @@ legacy records. When the feature is agreed upon the legacy map is removed.
 Virtual tables behave just like a regular table from the user's point of view.
 The difference between them and regular tables comes down to how they are implemented.
 While regular tables have memtables/commitlog/sstables and all you would expect from CQL tables, virtual tables translate some in-memory structure to CQL result format.
-For more details see the [docs/guides/virtual-tables.md](../guides/virtual-tables.md).
+For more details see the [virtual-tables.md](virtual-tables.md).
 
 Below you can find a list of virtual tables. Sorted in alphabetical order (please keep it so when modifying!).
 

@@ -21,7 +21,7 @@ class specific_ranges {
 // format:
 // * legacy format
 // * native format
-// The wire format uses the legacy format. See docs/design-notes/reverse-reads.md
+// The wire format uses the legacy format. See docs/dev/reverse-reads.md
 // for more details on the formats.
 class partition_slice {
     std::vector<nonwrapping_range<clustering_key_prefix>> default_row_ranges();
