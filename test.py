@@ -939,6 +939,13 @@ def parse_cmd_line() -> argparse.Namespace:
     parser.add_argument('--cpus', action="store",
                         help="Run the tests on those CPUs only (in taskset"
                         " acceptable format). Consider using --jobs too")
+    parser.add_argument('--log-level', action="store",
+                        help="Log level for Python logging module. The log "
+                        "is in {tmpdir}/test.py.log. Default: INFO",
+                        default="INFO",
+                        choices=["CRITICAL", "ERROR", "WARNING", "INFO",
+                                 "DEBUG"],
+                        dest="log_level")
 
     boost_group = parser.add_argument_group('boost suite options')
     boost_group.add_argument('--random-seed', action="store",
@@ -1157,12 +1164,12 @@ def write_consolidated_boost_junit_xml(tmpdir: str, mode: str) -> None:
     et.write(f'{tmpdir}/{mode}/xml/boost.xunit.xml', encoding='unicode')
 
 
-def open_log(tmpdir: str) -> None:
+def open_log(tmpdir: str, log_level: str) -> None:
     pathlib.Path(tmpdir).mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
         filename=os.path.join(tmpdir, "test.py.log"),
         filemode="w",
-        level=logging.INFO,
+        level=log_level,
         format="%(asctime)s.%(msecs)03d %(levelname)s> %(message)s",
         datefmt="%H:%M:%S",
     )
@@ -1173,7 +1180,7 @@ async def main() -> int:
 
     options = parse_cmd_line()
 
-    open_log(options.tmpdir)
+    open_log(options.tmpdir, options.log_level)
 
     await find_tests(options)
     if options.list_tests:
