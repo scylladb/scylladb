@@ -201,6 +201,12 @@ public:
     // will move it into a quarantine_dir subdirectory of its current directory.
     future<> move_to_quarantine(bool do_sync_dirs = true);
 
+    // Clone the sstable at a new directory.
+    // hardlink all sstable components in the new dir
+    // with the same generation and return a new, shared
+    // sstable object for the clone.
+    future<shared_sstable> clone_at(const sstring& new_dir, std::optional<generation_type> opt_gen);
+
     generation_type generation() const {
         return _generation;
     }

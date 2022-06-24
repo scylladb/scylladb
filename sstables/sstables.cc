@@ -2113,7 +2113,7 @@ future<> sstable::set_generation(generation_type new_generation) {
 future<> sstable::move_to_new_dir(sstring new_dir, generation_type new_generation, bool do_sync_dirs) {
     sstring old_dir = get_dir();
     sstlog.debug("Moving {} old_generation={} to {} new_generation={} do_sync_dirs={}",
-            get_filename(), old_dir, _generation, new_dir, new_generation, do_sync_dirs);
+            get_filename(), _generation, new_dir, new_generation, do_sync_dirs);
     co_await create_links_and_mark_for_removal(new_dir, new_generation);
     _dir = new_dir;
     generation_type old_generation = std::exchange(_generation, new_generation);
@@ -2141,6 +2141,17 @@ future<> sstable::move_to_quarantine(bool do_sync_dirs) {
     sstlog.info("Moving SSTable {} to quarantine in {}", get_filename(), new_dir);
     co_await touch_directory(new_dir);
     co_await move_to_new_dir(std::move(new_dir), generation(), do_sync_dirs);
+}
+
+future<shared_sstable> sstable::clone_at(const sstring& new_dir, std::optional<generation_type> opt_gen) {
+    if (fs::canonical(fs::path(new_dir)) == fs::canonical(fs::path(_dir))) {
+        on_internal_error(sstlog, format("Cannot clone sstable {} into same dir", get_filename()));
+    }
+    auto gen = opt_gen.value_or(_generation);
+    co_await create_links(new_dir, gen);
+    auto cloned_sst = _manager.make_sstable(_schema, new_dir, gen, _version, _format);
+    co_await cloned_sst->load(co_await get_open_info());
+    co_return cloned_sst;
 }
 
 flat_mutation_reader_v2
