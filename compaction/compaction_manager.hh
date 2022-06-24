@@ -380,7 +380,8 @@ public:
     void submit(replica::table* t);
 
     // Submit a table to be off-strategy compacted.
-    future<> perform_offstrategy(replica::table* t);
+    // Returns true iff off-strategy compaction was required and performed.
+    future<bool> perform_offstrategy(replica::table* t);
 
     // Submit a table to be cleaned up and wait for its termination.
     //
