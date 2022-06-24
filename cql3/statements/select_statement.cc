@@ -151,7 +151,7 @@ select_statement::select_statement(schema_ptr schema,
                                    uint32_t bound_terms,
                                    lw_shared_ptr<const parameters> parameters,
                                    ::shared_ptr<selection::selection> selection,
-                                   ::shared_ptr<restrictions::statement_restrictions> restrictions,
+                                   ::shared_ptr<const restrictions::statement_restrictions> restrictions,
                                    ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
                                    bool is_reversed,
                                    ordering_comparator_type ordering_comparator,
@@ -839,14 +839,14 @@ select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> resu
     });
 }
 
-::shared_ptr<restrictions::statement_restrictions> select_statement::get_restrictions() const {
+const ::shared_ptr<const restrictions::statement_restrictions> select_statement::get_restrictions() const {
     return _restrictions;
 }
 
 primary_key_select_statement::primary_key_select_statement(schema_ptr schema, uint32_t bound_terms,
                                                            lw_shared_ptr<const parameters> parameters,
                                                            ::shared_ptr<selection::selection> selection,
-                                                           ::shared_ptr<restrictions::statement_restrictions> restrictions,
+                                                           ::shared_ptr<const restrictions::statement_restrictions> restrictions,
                                                            ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
                                                            bool is_reversed,
                                                            ordering_comparator_type ordering_comparator,
@@ -921,7 +921,7 @@ indexed_table_select_statement::prepare(data_dictionary::database db,
 indexed_table_select_statement::indexed_table_select_statement(schema_ptr schema, uint32_t bound_terms,
                                                            lw_shared_ptr<const parameters> parameters,
                                                            ::shared_ptr<selection::selection> selection,
-                                                           ::shared_ptr<restrictions::statement_restrictions> restrictions,
+                                                           ::shared_ptr<const restrictions::statement_restrictions> restrictions,
                                                            ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
                                                            bool is_reversed,
                                                            ordering_comparator_type ordering_comparator,
@@ -1376,7 +1376,7 @@ public:
         uint32_t bound_terms,
         lw_shared_ptr<const parameters> parameters,
         ::shared_ptr<selection::selection> selection,
-        ::shared_ptr<restrictions::statement_restrictions> restrictions,
+        ::shared_ptr<const restrictions::statement_restrictions> restrictions,
         ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
         bool is_reversed,
         ordering_comparator_type ordering_comparator,
@@ -1429,7 +1429,7 @@ parallelized_select_statement::parallelized_select_statement(
     uint32_t bound_terms,
     lw_shared_ptr<const parallelized_select_statement::parameters> parameters,
     ::shared_ptr<selection::selection> selection,
-    ::shared_ptr<restrictions::statement_restrictions> restrictions,
+    ::shared_ptr<const restrictions::statement_restrictions> restrictions,
     ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
     bool is_reversed,
     parallelized_select_statement::ordering_comparator_type ordering_comparator,
