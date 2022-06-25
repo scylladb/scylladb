@@ -999,12 +999,14 @@ private:
 size_t segment_pool::reclaim_segments(size_t target, is_preemptible preempt) {
     // Reclaimer tries to release segments occupying lower parts of the address
     // space.
-    reclaim_timer timing_guard("reclaim_segments", preempt, target * segment::size, target);
-
     llogger.debug("Trying to reclaim {} segments", target);
 
     // Reclamation. Migrate segments to higher addresses and shrink segment pool.
     size_t reclaimed_segments = 0;
+
+    reclaim_timer timing_guard("reclaim_segments", preempt, target * segment::size, target, [&] (log_level level) {
+        timing_logger.log(level, "- reclaimed {} out of requested {} segments", reclaimed_segments, target);
+    });
 
     // We may fail to reclaim because a region has reclaim disabled (usually because
     // it is in an allocating_section. Failed reclaims can cause high CPU usage
