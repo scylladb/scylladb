@@ -2458,38 +2458,38 @@ size_t tracker::impl::compact_and_evict_locked(size_t reserve_segments, size_t m
     }
 
     {
-    int regions = 0, evictable_regions = 0;
-    reclaim_timer timing_guard("compact", preempt, memory_to_release, reserve_segments, this, [&] (log_level level) {
-        timing_logger.log(level, "- processed {} regions: reclaimed from {}, compacted {}",
-                          regions, evictable_regions, regions - evictable_regions);
-    });
-    while (shard_segment_pool.total_memory_in_use() > target_mem) {
-        boost::range::pop_heap(_regions, cmp);
-        region::impl* r = _regions.back();
+        int regions = 0, evictable_regions = 0;
+        reclaim_timer timing_guard("compact", preempt, memory_to_release, reserve_segments, this, [&] (log_level level) {
+            timing_logger.log(level, "- processed {} regions: reclaimed from {}, compacted {}",
+                              regions, evictable_regions, regions - evictable_regions);
+        });
+        while (shard_segment_pool.total_memory_in_use() > target_mem) {
+            boost::range::pop_heap(_regions, cmp);
+            region::impl* r = _regions.back();
 
-        if (!r->is_compactible()) {
-            llogger.trace("Unable to release segments, no compactible pools.");
-            break;
+            if (!r->is_compactible()) {
+                llogger.trace("Unable to release segments, no compactible pools.");
+                break;
+            }
+            ++regions;
+
+            // Prefer evicting if average occupancy ratio is above the compaction threshold to avoid
+            // overhead of compaction in workloads where allocation order matches eviction order, where
+            // we can reclaim memory by eviction only. In some cases the cost of compaction on allocation
+            // would be higher than the cost of repopulating the region with evicted items.
+            if (r->is_evictable() && r->occupancy().used_space() >= max_used_space_ratio_for_compaction * r->occupancy().total_space()) {
+                reclaim_from_evictable(*r, target_mem, preempt);
+                ++evictable_regions;
+            } else {
+                r->compact();
+            }
+
+            boost::range::push_heap(_regions, cmp);
+
+            if (preempt && need_preempt()) {
+                break;
+            }
         }
-        ++regions;
-
-        // Prefer evicting if average occupancy ratio is above the compaction threshold to avoid
-        // overhead of compaction in workloads where allocation order matches eviction order, where
-        // we can reclaim memory by eviction only. In some cases the cost of compaction on allocation
-        // would be higher than the cost of repopulating the region with evicted items.
-        if (r->is_evictable() && r->occupancy().used_space() >= max_used_space_ratio_for_compaction * r->occupancy().total_space()) {
-            reclaim_from_evictable(*r, target_mem, preempt);
-            ++evictable_regions;
-        } else {
-            r->compact();
-        }
-
-        boost::range::push_heap(_regions, cmp);
-
-        if (preempt && need_preempt()) {
-            break;
-        }
-    }
     }
 
     auto released_during_compaction = mem_in_use - shard_segment_pool.total_memory_in_use();
