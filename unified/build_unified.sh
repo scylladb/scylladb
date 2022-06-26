@@ -10,6 +10,7 @@
 print_usage() {
     echo "build_unified.sh --mode <mode>"
     echo "  --mode specify mode (default: release)"
+    echo "  --pkgs specify source packages"
     echo "  --unified-pkg specify package path (default: build/release/scylla-unified-package.tar.gz)"
     exit 1
 }
@@ -20,13 +21,22 @@ if [ ! -f build/SCYLLA-PRODUCT-FILE ]; then
     ./SCYLLA-VERSION-GEN
 fi
 PRODUCT=`cat build/SCYLLA-PRODUCT-FILE`
+VERSION=`cat build/SCYLLA-VERSION-FILE`
+VERSION_ESC=${VERSION//./\.}
+RELEASE=`cat build/SCYLLA-RELEASE-FILE`
+RELEASE_ESC=${RELEASE//./\.}
 
+PKGS=
 MODE="release"
-UNIFIED_PKG="build/release/$PRODUCT-unified-$(arch)-package.tar.gz"
+UNIFIED_PKG="build/release/$PRODUCT-unified-$VERSION-$RELEASE.$(arch).tar.gz"
 while [ $# -gt 0 ]; do
     case "$1" in
         "--mode")
             MODE="$2"
+            shift 2
+            ;;
+        "--pkgs")
+            PKGS="$2"
             shift 2
             ;;
         "--unified-pkg")
@@ -40,7 +50,7 @@ while [ $# -gt 0 ]; do
 done
 
 UNIFIED_PKG="$(realpath -s $UNIFIED_PKG)"
-PKGS="build/$MODE/dist/tar/$PRODUCT-$(arch)-package.tar.gz build/$MODE/dist/tar/$PRODUCT-python3-$(arch)-package.tar.gz build/$MODE/dist/tar/$PRODUCT-jmx-package.tar.gz build/$MODE/dist/tar/$PRODUCT-tools-package.tar.gz"
+PKGS="build/$MODE/dist/tar/$PRODUCT-$VERSION-$RELEASE.$(arch).tar.gz build/$MODE/dist/tar/$PRODUCT-python3-$VERSION-$RELEASE.$(arch).tar.gz build/$MODE/dist/tar/$PRODUCT-jmx-$VERSION-$RELEASE.noarch.tar.gz build/$MODE/dist/tar/$PRODUCT-tools-$VERSION-$RELEASE.noarch.tar.gz"
 
 rm -rf build/"$MODE"/unified/
 mkdir -p build/"$MODE"/unified/
@@ -52,7 +62,7 @@ for pkg in $PKGS; do
     fi
     pkg="$(readlink -f $pkg)"
     tar -C build/"$MODE"/unified/ -xpf "$pkg"
-    dirname=$(basename "$pkg"| sed -e "s/-$(arch)-package.tar.gz//" -e "s/-package.tar.gz//")
+    dirname=$(basename "$pkg"| sed -e "s/-$VERSION_ESC-$RELEASE_ESC\.[^.]*\.tar\.gz//")
     dirname=${dirname/#$PRODUCT/scylla}
     if [ ! -d build/"$MODE"/unified/"$dirname" ]; then
         echo "Directory $dirname not found in $pkg, the pacakge may corrupted."
