@@ -44,6 +44,7 @@
 #include "db/system_keyspace.hh"
 #include "service/storage_proxy.hh"
 #include "db/batchlog_manager.hh"
+#include "idl/position_in_partition.dist.hh"
 #include "idl/partition_checksum.dist.hh"
 #include "readers/empty_v2.hh"
 #include "readers/evictable.hh"

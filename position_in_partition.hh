@@ -80,6 +80,10 @@ enum class partition_region : uint8_t {
     partition_end,
 };
 
+std::ostream& operator<<(std::ostream&, partition_region);
+std::string_view to_string(partition_region);
+partition_region parse_partition_region(std::string_view);
+
 class position_in_partition_view {
     friend class position_in_partition;
 

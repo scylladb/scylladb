@@ -13,48 +13,13 @@
 #include "mutation_compactor.hh"
 #include "reader_concurrency_semaphore.hh"
 #include "readers/mutation_source.hh"
+#include "full_position.hh"
 
 #include <boost/intrusive/set.hpp>
 
 #include <variant>
 
 namespace query {
-
-template <typename Consumer>
-class clustering_position_tracker {
-    Consumer _consumer;
-    lw_shared_ptr<std::optional<clustering_key_prefix>> _last_ckey;
-
-public:
-    clustering_position_tracker(Consumer&& consumer, lw_shared_ptr<std::optional<clustering_key_prefix>> last_ckey)
-        : _consumer(std::forward<Consumer>(consumer))
-        , _last_ckey(std::move(last_ckey)) {
-    }
-
-    void consume_new_partition(const dht::decorated_key& dk) {
-        _last_ckey->reset();
-        _consumer.consume_new_partition(dk);
-    }
-    void consume(tombstone t) {
-        _consumer.consume(t);
-    }
-    stop_iteration consume(static_row&& sr, tombstone t, bool is_live) {
-        return _consumer.consume(std::move(sr), std::move(t), is_live);
-    }
-    stop_iteration consume(clustering_row&& cr, row_tombstone t, bool is_live) {
-        *_last_ckey = cr.key();
-        return _consumer.consume(std::move(cr), std::move(t), is_live);
-    }
-    stop_iteration consume(range_tombstone_change&& rtc) {
-        return _consumer.consume(std::move(rtc));
-    }
-    stop_iteration consume_end_of_partition() {
-        return _consumer.consume_end_of_partition();
-    }
-    auto consume_end_of_stream() {
-        return _consumer.consume_end_of_stream();
-    }
-};
 
 /// Consume a page worth of data from the reader.
 ///
@@ -77,22 +42,11 @@ auto consume_page(flat_mutation_reader_v2& reader,
         const auto next_fragment_region = next_fragment ? next_fragment->position().region() : partition_region::partition_end;
         compaction_state->start_new_page(row_limit, partition_limit, query_time, next_fragment_region, consumer);
 
-        auto last_ckey = make_lw_shared<std::optional<clustering_key_prefix>>();
-        auto reader_consumer = compact_for_query_v2<OnlyLive, clustering_position_tracker<Consumer>>(
-                compaction_state,
-                clustering_position_tracker(std::move(consumer), last_ckey));
+        auto reader_consumer = compact_for_query_v2<OnlyLive, Consumer>(compaction_state, std::move(consumer));
 
-        return reader.consume(std::move(reader_consumer)).then([last_ckey] (auto&&... results) mutable {
-            static_assert(sizeof...(results) <= 1);
-            return make_ready_future<std::tuple<std::optional<clustering_key_prefix>, std::decay_t<decltype(results)>...>>(std::tuple(std::move(*last_ckey), std::move(results)...));
-        });
+        return reader.consume(std::move(reader_consumer));
     });
 }
-
-struct position_view {
-    const dht::decorated_key* partition_key;
-    const clustering_key_prefix* clustering_key;
-};
 
 class querier_base {
     friend class querier_utils;
@@ -143,7 +97,7 @@ public:
         return _slice->options.contains(query::partition_slice::option::reversed);
     }
 
-    virtual position_view current_position() const = 0;
+    virtual std::optional<full_position_view> current_position() const = 0;
 
     dht::partition_ranges_view ranges() const {
         return _query_ranges;
@@ -180,7 +134,6 @@ public:
 template <emit_only_live_rows OnlyLive>
 class querier : public querier_base {
     lw_shared_ptr<compact_for_query_state_v2<OnlyLive>> _compaction_state;
-    std::optional<clustering_key_prefix> _last_ckey;
 
 public:
     querier(const mutation_source& ms,
@@ -206,8 +159,7 @@ public:
             gc_clock::time_point query_time,
             tracing::trace_state_ptr trace_ptr = {}) {
         return ::query::consume_page(std::get<flat_mutation_reader_v2>(_reader), _compaction_state, *_slice, std::move(consumer), row_limit,
-                partition_limit, query_time).then([this, trace_ptr = std::move(trace_ptr)] (auto&& results) {
-            _last_ckey = std::get<std::optional<clustering_key>>(std::move(results));
+                partition_limit, query_time).then_wrapped([this, trace_ptr = std::move(trace_ptr)] (auto&& fut) {
             const auto& cstats = _compaction_state->stats();
             tracing::trace(trace_ptr, "Page stats: {} partition(s), {} static row(s) ({} live, {} dead), {} clustering row(s) ({} live, {} dead) and {} range tombstone(s)",
                     cstats.partitions,
@@ -218,21 +170,16 @@ public:
                     cstats.clustering_rows.live,
                     cstats.clustering_rows.dead,
                     cstats.range_tombstones);
-            constexpr auto size = std::tuple_size<std::decay_t<decltype(results)>>::value;
-            static_assert(size <= 2);
-            if constexpr (size == 1) {
-                return make_ready_future<>();
-            } else {
-                auto result = std::get<1>(std::move(results));
-                return make_ready_future<std::decay_t<decltype(result)>>(std::move(result));
-            }
+            return std::move(fut);
         });
     }
 
-    virtual position_view current_position() const override {
+    virtual std::optional<full_position_view> current_position() const override {
         const dht::decorated_key* dk = _compaction_state->current_partition();
-        const clustering_key_prefix* clustering_key = _last_ckey ? &*_last_ckey : nullptr;
-        return {dk, clustering_key};
+        if (!dk) {
+            return {};
+        }
+        return full_position_view(dk->key(), _compaction_state->current_position());
     }
 };
 
@@ -251,7 +198,7 @@ using mutation_querier = querier<emit_only_live_rows::no>;
 class shard_mutation_querier : public querier_base {
     std::unique_ptr<const dht::partition_range_vector> _query_ranges;
     dht::decorated_key _nominal_pkey;
-    std::optional<clustering_key_prefix> _nominal_ckey;
+    position_in_partition _nominal_pos;
 
 private:
     shard_mutation_querier(
@@ -261,11 +208,11 @@ private:
             flat_mutation_reader_v2 reader,
             reader_permit permit,
             dht::decorated_key nominal_pkey,
-            std::optional<clustering_key_prefix> nominal_ckey)
+            position_in_partition nominal_pos)
         : querier_base(permit, std::move(reader_range), std::move(reader_slice), std::move(reader), *query_ranges)
         , _query_ranges(std::move(query_ranges))
         , _nominal_pkey(std::move(nominal_pkey))
-        , _nominal_ckey(std::move(nominal_ckey)) {
+        , _nominal_pos(std::move(nominal_pos)) {
     }
 
 
@@ -277,13 +224,13 @@ public:
             flat_mutation_reader_v2 reader,
             reader_permit permit,
             dht::decorated_key nominal_pkey,
-            std::optional<clustering_key_prefix> nominal_ckey)
+            position_in_partition nominal_pos)
         : shard_mutation_querier(std::make_unique<const dht::partition_range_vector>(std::move(query_ranges)), std::move(reader_range),
-                std::move(reader_slice), std::move(reader), std::move(permit), std::move(nominal_pkey), std::move(nominal_ckey)) {
+                std::move(reader_slice), std::move(reader), std::move(permit), std::move(nominal_pkey), std::move(nominal_pos)) {
     }
 
-    virtual position_view current_position() const override {
-        return {&_nominal_pkey, _nominal_ckey ? &*_nominal_ckey : nullptr};
+    virtual std::optional<full_position_view> current_position() const override {
+        return full_position_view(_nominal_pkey.key(), _nominal_pos);
     }
 
     lw_shared_ptr<const dht::partition_range> reader_range() && {
