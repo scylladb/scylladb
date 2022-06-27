@@ -180,12 +180,13 @@ class TestSuite(ABC):
     async def run(self, test: 'Test', options: argparse.Namespace):
         try:
             for i in range(1, self.FLAKY_RETRIES):
+                if i > 1:
+                    test.is_flaky_failure = True
+                    logging.info("Retrying test %s after a flaky fail, retry %d", test.uname, i)
+                    test.reset()
                 await test.run(options)
                 if test.success or not test.is_flaky or test.is_cancelled:
                     break
-                logging.info("Retrying test %s after a flaky fail, retry %d", test.uname, i)
-                test.is_flaky_failure = True
-                test.reset()
         finally:
             self.pending_test_count -= 1
             self.n_failed += int(not test.success)
@@ -462,6 +463,17 @@ class Test:
             self.log_filename.unlink()
         pass
 
+    def write_junit_failure_report(self, xml_res: ET.Element) -> None:
+        assert not self.success
+        xml_fail = ET.SubElement(xml_res, 'failure')
+        xml_fail.text = "Test {} {} failed, check the log at {}".format(
+            self.path,
+            " ".join(self.args),
+            self.log_filename)
+        if self.log_filename.exists():
+            system_out = ET.SubElement(xml_res, 'system-out')
+            system_out.text = read_log(self.log_filename)
+
 
 class UnitTest(Test):
     standard_args = shlex.split("--overprovisioned --unsafe-bypass-fsync 1 "
@@ -552,6 +564,11 @@ class BoostTest(UnitTest):
             self.args += ['--random-seed', options.random_seed]
         return await super().run(options)
 
+    def write_junit_failure_report(self, xml_res: ET.Element) -> None:
+        """Does not write junit report for Jenkins legacy reasons"""
+        assert False
+
+
 class CQLApprovalTest(Test):
     """Run a sequence of CQL commands against a standlone Scylla"""
 
@@ -563,12 +580,6 @@ class CQLApprovalTest(Test):
         self.result = os.path.join(suite.path, self.shortname + ".result")
         self.tmpfile = os.path.join(suite.options.tmpdir, self.mode, self.uname + ".reject")
         self.reject = os.path.join(suite.path, self.shortname + ".reject")
-        self.args = [
-            "-s",  # don't capture print() inside pytest
-            "test/pylib/cql_repl/cql_repl.py",
-            "--input={}".format(self.cql),
-            "--output={}".format(self.tmpfile),
-        ]
         CQLApprovalTest._reset(self)
 
     def _reset(self) -> None:
@@ -585,6 +596,12 @@ class CQLApprovalTest(Test):
         old_tmpfile = pathlib.Path(self.tmpfile)
         if old_tmpfile.exists():
             old_tmpfile.unlink()
+        self.args = [
+            "-s",  # don't capture print() inside pytest
+            "test/pylib/cql_repl/cql_repl.py",
+            "--input={}".format(self.cql),
+            "--output={}".format(self.tmpfile),
+        ]
 
     async def run(self, options: argparse.Namespace) -> Test:
         self.success = False
@@ -664,6 +681,21 @@ Check test log at {}.""".format(self.log_filename))
         elif self.is_equal_result is False and self.unidiff:
             print(self.unidiff)
 
+    def write_junit_failure_report(self, xml_res: ET.Element) -> None:
+        assert not self.success
+        xml_fail = ET.SubElement(xml_res, 'failure')
+        xml_fail.text = self.summary
+        if self.is_executed_ok is False:
+            if self.log_filename.exists():
+                system_out = ET.SubElement(xml_res, 'system-out')
+                system_out.text = read_log(self.log_filename)
+            if self.server_log:
+                system_err = ET.SubElement(xml_res, 'system-err')
+                system_err.text = read_log(self.server_log)
+        elif self.unidiff:
+            system_out = ET.SubElement(xml_res, 'system-out')
+            system_out.text = palette.nocolor(self.unidiff)
+
 
 class RunTest(Test):
     """Run tests in a directory started by a run script"""
@@ -697,12 +729,6 @@ class PythonTest(Test):
         super().__init__(test_no, shortname, suite)
         self.path = "pytest"
         self.xmlout = os.path.join(self.suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
-        self.args = [
-            "-s",  # don't capture print() output inside pytest
-            "-o",
-            "junit_family=xunit2",
-            "--junit-xml={}".format(self.xmlout),
-            os.path.join(suite.path, shortname + ".py")]
         PythonTest._reset(self)
 
     def _reset(self) -> None:
@@ -710,6 +736,12 @@ class PythonTest(Test):
         self.server_log = None
         self.is_before_test_ok = False
         self.is_after_test_ok = False
+        self.args = [
+            "-s",  # don't capture print() output inside pytest
+            "-o",
+            "junit_family=xunit2",
+            "--junit-xml={}".format(self.xmlout),
+            os.path.join(self.suite.path, self.shortname + ".py")]
 
     def print_summary(self) -> None:
         print("Output of {} {}:".format(self.path, " ".join(self.args)))
@@ -719,6 +751,7 @@ class PythonTest(Test):
             print(self.server_log)
 
     async def run(self, options: argparse.Namespace) -> Test:
+
         async with self.suite.clusters.instance() as cluster:
             logging.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
             self.args.insert(0, "--host={}".format(cluster[0].host))
@@ -726,19 +759,25 @@ class PythonTest(Test):
                 cluster.before_test(self.uname)
                 self.is_before_test_ok = True
                 cluster[0].take_log_savepoint()
-                code = await run_test(self, options)
+                status = await run_test(self, options)
                 cluster.after_test(self.uname)
                 self.is_after_test_ok = True
-                self.success = code
+                self.success = status
             except Exception as e:
                 self.server_log = cluster[0].read_log()
                 if self.is_before_test_ok is False:
                     print("Test {} pre-check failed: {}".format(self.name, str(e)))
-                    print("Server log  of the first server:\n{}".format(self.server_log))
+                    print("Server log of the first server:\n{}".format(self.server_log))
                     # Don't try to continue if the cluster is broken
                     raise
             logging.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
         return self
+
+    def write_junit_failure_report(self, xml_res: ET.Element) -> None:
+        super().write_junit_failure_report(xml_res)
+        if self.server_log:
+            system_err = ET.SubElement(xml_res, 'system-err')
+            system_err.text = read_log(self.server_log)
 
 
 class TabularConsoleOutput:
@@ -951,7 +990,7 @@ def parse_cmd_line() -> argparse.Namespace:
 
     boost_group = parser.add_argument_group('boost suite options')
     boost_group.add_argument('--random-seed', action="store",
-                        help="Random number generator seed to be used by boost tests")
+                             help="Random number generator seed to be used by boost tests")
 
     args = parser.parse_args()
 
@@ -1140,11 +1179,7 @@ def write_junit_report(tmpdir: str, mode: str) -> None:
             if test.success is True:
                 continue
             failed += 1
-            xml_fail = ET.SubElement(xml_res, 'failure')
-            xml_fail.text = "Test {} {} failed, check the log at {}".format(
-                test.path,
-                " ".join(test.args),
-                test.log_filename)
+            test.write_junit_failure_report(xml_res)
     if total == 0:
         return
     xml_results.set("tests", str(total))
