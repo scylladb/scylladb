@@ -71,6 +71,7 @@ struct test_config {
     bool counters;
     bool flush_memtables;
     unsigned operations_per_shard = 0;
+    bool stop_on_error;
 };
 
 std::ostream& operator<<(std::ostream& os, const test_config::run_mode& m) {
@@ -130,7 +131,7 @@ static std::vector<perf_result> test_read(cql_test_env& env, test_config& cfg) {
     return time_parallel([&env, &cfg, id] {
             bytes key = make_random_key(cfg);
             return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
-        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard);
+        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error);
 }
 
 static std::vector<perf_result> test_write(cql_test_env& env, test_config& cfg) {
@@ -144,7 +145,7 @@ static std::vector<perf_result> test_write(cql_test_env& env, test_config& cfg) 
     return time_parallel([&env, &cfg, id] {
             bytes key = make_random_key(cfg);
             return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
-        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard);
+        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error);
 }
 
 static std::vector<perf_result> test_delete(cql_test_env& env, test_config& cfg) {
@@ -153,7 +154,7 @@ static std::vector<perf_result> test_delete(cql_test_env& env, test_config& cfg)
     return time_parallel([&env, &cfg, id] {
             bytes key = make_random_key(cfg);
             return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
-        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard);
+        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error);
 }
 
 static std::vector<perf_result> test_counter_update(cql_test_env& env, test_config& cfg) {
@@ -167,7 +168,7 @@ static std::vector<perf_result> test_counter_update(cql_test_env& env, test_conf
     return time_parallel([&env, &cfg, id] {
             bytes key = make_random_key(cfg);
             return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
-        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard);
+        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error);
 }
 
 static schema_ptr make_counter_schema(std::string_view ks_name) {
@@ -280,7 +281,7 @@ static std::vector<perf_result> test_alternator_read(service::client_state& stat
         content.emplace_back(key.data(), key.size(), deleter{});
         content.emplace_back(postfix.data(), postfix.size(), deleter{});
         return executor.get_item(state, tracing::trace_state_ptr(), empty_service_permit(), rjson::parse(std::move(content))).discard_result();
-    }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard);
+    }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error);
 }
 
 static std::vector<perf_result> test_alternator_write(service::client_state& state, alternator::executor& executor, test_config& cfg) {
@@ -323,7 +324,7 @@ static std::vector<perf_result> test_alternator_write(service::client_state& sta
         content.emplace_back(key.data(), key.size(), deleter{});
         content.emplace_back(postfix.data(), postfix.size(), deleter{});
         return executor.update_item(state, tracing::trace_state_ptr(), empty_service_permit(), rjson::parse(std::move(content))).discard_result();
-    }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard);
+    }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error);
 }
 
 static std::vector<perf_result> test_alternator_delete(service::client_state& state, noncopyable_function<void()> flush_memtables,
@@ -342,7 +343,7 @@ static std::vector<perf_result> test_alternator_delete(service::client_state& st
             }
         )";
         return executor.delete_item(state, tracing::trace_state_ptr(), empty_service_permit(), rjson::parse(json)).discard_result();
-    }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard);
+    }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error);
 }
 
 static std::vector<perf_result> do_alternator_test(std::string isolation_level,
@@ -491,6 +492,7 @@ int main(int argc, char** argv) {
         ("json-result", bpo::value<std::string>(), "name of the json result file")
         ("enable-cache", bpo::value<bool>()->default_value(true), "enable row cache")
         ("alternator", bpo::value<std::string>(), "use alternator frontend instead of CQL with given write isolation")
+        ("stop-on-error", bpo::value<bool>()->default_value(true), "stop after encountering the first error")
         ;
 
     set_abort_on_internal_error(true);
@@ -534,6 +536,7 @@ int main(int argc, char** argv) {
             if (app.configuration().contains("operations-per-shard")) {
                 cfg.operations_per_shard = app.configuration()["operations-per-shard"].as<unsigned>();
             }
+            cfg.stop_on_error = app.configuration()["stop-on-error"].as<bool>();
             auto results = cfg.frontend == test_config::frontend_type::cql
                     ? do_cql_test(env, cfg)
                     : do_alternator_test(app.configuration()["alternator"].as<std::string>(),

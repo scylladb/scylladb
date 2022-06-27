@@ -146,7 +146,7 @@ static std::vector<clperf_result> do_commitlog_test(distributed<commitlog_servic
         }).then([](db::rp_handle h) {
             h.release();
         });
-    }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, &clperf_result::update);
+    }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, true, &clperf_result::update);
 }
 
 int main(int argc, char** argv) {
