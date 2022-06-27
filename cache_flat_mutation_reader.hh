@@ -851,8 +851,9 @@ inline
 void cache_flat_mutation_reader::do_add_to_buffer(range_tombstone_change&& rtc) {
     clogger.trace("csm {}: push({})", fmt::ptr(this), rtc);
     position_in_partition::less_compare less(*_schema);
+    auto lower_bound_changed = less(_lower_bound, rtc.position());
     _lower_bound = position_in_partition(rtc.position());
-    _lower_bound_changed = less(_lower_bound, rtc.position());
+    _lower_bound_changed = lower_bound_changed;
     push_mutation_fragment(*_schema, _permit, std::move(rtc));
     _read_context.cache()._tracker.on_range_tombstone_read();
 }
