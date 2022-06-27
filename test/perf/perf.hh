@@ -52,6 +52,7 @@ struct executor_shard_stats {
     uint64_t allocations = 0;
     uint64_t tasks_executed = 0;
     uint64_t instructions_retired = 0;
+    uint64_t errors = 0;
 };
 
 inline
@@ -61,6 +62,7 @@ operator+(executor_shard_stats a, executor_shard_stats b) {
     a.allocations += b.allocations;
     a.tasks_executed += b.tasks_executed;
     a.instructions_retired += b.instructions_retired;
+    a.errors += b.errors;
     return a;
 }
 
@@ -71,6 +73,7 @@ operator-(executor_shard_stats a, executor_shard_stats b) {
     a.allocations -= b.allocations;
     a.tasks_executed -= b.tasks_executed;
     a.instructions_retired -= b.instructions_retired;
+    a.errors -= b.errors;
     return a;
 }
 
@@ -87,6 +90,7 @@ class executor {
     const unsigned _n_workers;
     const bool _stop_on_error;
     uint64_t _count;
+    uint64_t _errors;
     linux_perf_event _instructions_retired_counter = linux_perf_event::user_instructions_retired();
 private:
     executor_shard_stats executor_shard_stats_snapshot();
@@ -95,6 +99,7 @@ private:
             ++_count;
             future<> f = co_await coroutine::as_future(_func());
             if (f.failed()) {
+                ++_errors;
                 if (_stop_on_error) [[unlikely]] {
                     co_return co_await std::move(f);
                 }
@@ -110,6 +115,7 @@ public:
             , _n_workers(n_workers)
             , _stop_on_error(stop_on_error)
             , _count(0)
+            , _errors(0)
     { }
 
     // Returns the number of invocations of @func
@@ -139,6 +145,7 @@ executor<Func>::executor_shard_stats_snapshot() {
         .allocations = perf_mallocs(),
         .tasks_executed = perf_tasks_processed(),
         .instructions_retired = _instructions_retired_counter.read(),
+        .errors = _errors,
     };
 }
 
@@ -147,6 +154,7 @@ struct perf_result {
     double mallocs_per_op;
     double tasks_per_op;
     double instructions_per_op;
+    uint64_t errors;
 };
 
 std::ostream& operator<<(std::ostream& os, const perf_result& result);
@@ -201,6 +209,7 @@ std::vector<Res> time_parallel_ex(Func func, unsigned concurrency_per_core, int 
         result.mallocs_per_op = double(stats.allocations) / stats.invocations;
         result.tasks_per_op = double(stats.tasks_executed) / stats.invocations;
         result.instructions_per_op = double(stats.instructions_retired) / stats.invocations;
+        result.errors = stats.errors;
 
         uf(result, stats);
 

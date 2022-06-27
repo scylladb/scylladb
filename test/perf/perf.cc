@@ -49,8 +49,8 @@ std::ostream& operator<<(std::ostream& out, const scheduling_latency_measurer& s
 
 std::ostream&
 operator<<(std::ostream& os, const perf_result& result) {
-    fmt::print(os, "{:.2f} tps ({:5.1f} allocs/op, {:5.1f} tasks/op, {:7.0f} insns/op)",
-            result.throughput, result.mallocs_per_op, result.tasks_per_op, result.instructions_per_op);
+    fmt::print(os, "{:.2f} tps ({:5.1f} allocs/op, {:5.1f} tasks/op, {:7.0f} insns/op, {:8} errors)",
+            result.throughput, result.mallocs_per_op, result.tasks_per_op, result.instructions_per_op, result.errors);
     return os;
 }
 
@@ -65,8 +65,8 @@ void aio_writes_result_mixin::update(aio_writes_result_mixin& result, const exec
 }
 
 std::ostream& operator<<(std::ostream& os, const perf_result_with_aio_writes& result) {
-    fmt::print(os, "{:.2f} tps ({:5.1f} allocs/op, {:5.1f} tasks/op, {:7.0f} insns/op, {:7.2f} bytes/op, {:5.1f} writes/op)",
-            result.throughput, result.mallocs_per_op, result.tasks_per_op, result.instructions_per_op, result.aio_write_bytes, result.aio_writes);
+    fmt::print(os, "{:.2f} tps ({:5.1f} allocs/op, {:5.1f} tasks/op, {:7.0f} insns/op, {:8} errors, {:7.2f} bytes/op, {:5.1f} writes/op)",
+            result.throughput, result.mallocs_per_op, result.tasks_per_op, result.instructions_per_op, result.errors, result.aio_write_bytes, result.aio_writes);
     return os;
 }
 
