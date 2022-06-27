@@ -89,12 +89,10 @@ class executor {
 private:
     executor_shard_stats executor_shard_stats_snapshot();
     future<> run_worker() {
-        return do_until([this] {
-            return _end_at_count ? _count == _end_at_count : lowres_clock::now() >= _end_at;
-        }, [this] () mutable {
+        while (_end_at_count ? _count < _end_at_count : lowres_clock::now() < _end_at) {
             ++_count;
-            return _func();
-        });
+            co_await _func();
+        }
     }
 public:
     executor(unsigned n_workers, Func func, lowres_clock::time_point end_at, uint64_t end_at_count = 0)
