@@ -379,6 +379,9 @@ Check the log files:
         self.log_file.write(msg.encode())
         self.log_file.flush()
 
+    def __str__(self):
+        return self.hostname
+
 
 class ScyllaCluster:
     def __init__(self, replicas: int,
@@ -407,9 +410,13 @@ class ScyllaCluster:
             # If start fails, swallow the error to throw later,
             # at test time.
             self.start_exception = e
+        logging.info("Created cluster %s", self)
 
     def __getitem__(self, i: int) -> ScyllaServer:
         return self.cluster[i]
+
+    def __str__(self):
+        return "{" + ", ".join(str(c) for c in self.cluster) + "}"
 
     def _get_keyspace_count(self) -> int:
         """Get the current keyspace count"""
