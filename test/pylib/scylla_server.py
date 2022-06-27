@@ -128,12 +128,14 @@ class ScyllaServer:
     async def install_and_start(self) -> None:
         await self.install()
 
-        logging.info("starting server at host %s...", self.hostname)
+        logging.info("starting server at host %s in %s...", self.hostname,
+                     self.workdir.name)
 
         await self.start()
 
         if self.cmd:
-            logging.info("started server at host %s, pid %d", self.hostname, self.cmd.pid)
+            logging.info("started server at host %s in %s, pid %d", self.hostname,
+                         self.workdir.name, self.cmd.pid)
 
     @property
     def is_running(self) -> bool:
@@ -247,7 +249,7 @@ class ScyllaServer:
                     self.control_connection = self.control_cluster.connect()
                     return True
         except (NoHostAvailable, InvalidRequest, OperationTimedOut) as e:
-            logging.info("Exception when checking if CQL is up: {}".format(e))
+            logging.debug("Exception when checking if CQL is up: {}".format(e))
             return False
         finally:
             caslog.setLevel(oldlevel)
@@ -288,7 +290,8 @@ class ScyllaServer:
         while time.time() < self.start_time + self.START_TIMEOUT:
             if self.cmd.returncode:
                 with self.log_filename.open('r') as log_file:
-                    logging.error("failed to start server at host %s", self.hostname)
+                    logging.error("failed to start server at host %s in %s",
+                                  self.hostname, self.workdir.name)
                     logging.error("last line of {}:".format(self.log_filename))
                     log_file.seek(0, 0)
                     logging.error(log_file.readlines()[-1].rstrip())
@@ -333,7 +336,8 @@ Check the log files:
         stop, so is not graceful. Waits for the process to exit before return."""
         # Preserve for logging
         hostname = self.hostname
-        logging.info("stopping server at host %s", hostname)
+        logging.info("stopping server at host %s in %s", hostname,
+                     self.workdir.name)
         if not self.cmd:
             return
 
@@ -350,7 +354,8 @@ Check the log files:
             await self.cmd.wait()
         finally:
             if self.cmd:
-                logging.info("stopped server at host %s", hostname)
+                logging.info("stopped server at host %s in %s", hostname,
+                             self.workdir.name)
             self.cmd = None
             self.control_connection = None
             self.control_cluster = None
@@ -391,7 +396,12 @@ class ScyllaCluster:
                 seed = self.cluster[-1].host if self.cluster else None
                 server = self.create_server(self.name, seed)
                 self.cluster.append(server)
-                await server.install_and_start()
+                try:
+                    await server.install_and_start()
+                except Exception as e:
+                    logging.error("Failed to start Scylla server at host %s in %s: %s",
+                                  server.hostname, server.workdir.name, str(e))
+                    raise
             self.keyspace_count = self._get_keyspace_count()
         except (RuntimeError, NoHostAvailable, InvalidRequest, OperationTimedOut) as e:
             # If start fails, swallow the error to throw later,
