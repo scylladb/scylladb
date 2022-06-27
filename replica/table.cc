@@ -2264,10 +2264,11 @@ table::make_reader_v2_excluding_sstables(schema_ptr s,
         }
     }
 
-    auto excluded_ssts = boost::copy_range<std::unordered_set<sstables::shared_sstable>>(excluded);
+    auto excluded_ssts = boost::copy_range<std::unordered_set<utils::UUID>>(excluded | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::run_identifier)));
     auto effective_sstables = make_lw_shared(_compaction_strategy.make_sstable_set(_schema));
     _sstables->for_each_sstable([&excluded_ssts, &effective_sstables] (const sstables::shared_sstable& sst) mutable {
-        if (excluded_ssts.contains(sst)) {
+        // we're filtering out by run id, such that all links to the same sstable are filtered out (e.g. a link in staging and main dir)
+        if (excluded_ssts.contains(sst->run_identifier())) {
             return;
         }
         effective_sstables->insert(sst);
