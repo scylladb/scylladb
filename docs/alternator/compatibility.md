@@ -90,6 +90,55 @@ This monitoring stack is different from DynamoDB's offering - but Scylla's
 is significantly more powerful and gives the user better insights on
 the internals of the database and its performance.
 
+## Experimental API features
+
+Some DynamoDB API features are supported by Alternator, but considered
+**experimental** in this release. An experimental feature in Scylla is a
+feature whose functionality is complete, or mostly complete, but it is not
+as thoroughly tested or optimized as regular features. Also, an experimental
+feature's implementation is still subject to change and upgrades may not be
+possible if such a feature is used. For these reasons, experimental features
+are not recommended for mission-critical uses, and they need to be
+individually enabled with the "--experimental-features" configuration option.
+
+In this release, the following DynamoDB API features are considered
+experimental:
+
+* DynamoDB's TTL (item expiration) feature is supported, but in this release
+  still considered experimental and needs to be enabled explicitly with the
+  `--experimental-features=alternator-ttl` configuration option.
+  The experimental implementation is mostly complete, but not throughly
+  tested or optimized.
+
+  Like in DynamoDB, Alternator items which are set to expire at a certain
+  time will not disappear exactly at that time, but only after some delay.
+  DynamoDB guarantees that the expiration delay will be less than 48 hours
+  (though for small tables the delay is often much shorter). In Alternator,
+  the expiration delay is configurable - it defaults to 24 hours but can
+  be set with the `--alternator-ttl-period-in-seconds` configuration option.
+
+  One thing that this implementation is still missing is that expiration
+  events appear in the Streams API as normal deletions - without the
+  distinctive marker on deletions which are really expirations.
+  https://github.com/scylladb/scylla/issues/5060
+
+* The DynamoDB Streams API for capturing change is supported, but still
+  considered experimental so needs to be enabled explicitly with the
+  `--experimental-features=alternator-streams` configuration option.
+
+  Alternator streams also differ in some respects from DynamoDB Streams:
+  * The number of separate "shards" in Alternator's streams is significantly
+    larger than is typical on DynamoDB.
+  * While in DynamoDB data usually appears in the stream less than a second
+    after it was written, in Alternator Streams there is currently a 10
+    second delay by default.
+    https://github.com/scylladb/scylla/issues/6929
+  * Some events are represented differently in Alternator Streams. For
+    example, a single PutItem is represented by a REMOVE + MODIFY event,
+    instead of just a single MODIFY or INSERT.
+    https://github.com/scylladb/scylla/issues/6930
+    https://github.com/scylladb/scylla/issues/6918
+
 ## Unimplemented API features
 
 In general, every DynamoDB API feature available in Amazon DynamoDB should
@@ -108,23 +157,6 @@ they should be easy to detect. Here is a list of these unimplemented features:
   are projected. This wastes some disk space when it is not needed.
   https://github.com/scylladb/scylla/issues/5036
 
-* DynamoDB's TTL (item expiration) feature is supported, but in this release
-  still considered experimental and needs to be enabled explicitly with the
-  `--experimental-features=alternator-ttl` configuration option.
-  The experimental implementation is mostly complete, but not throughly
-  tested or optimized.
-  Like in DynamoDB, Alternator items which are set to expire at a certain
-  time will not disappear exactly at that time, but only after some delay.
-  DynamoDB guarantees that the expiration delay will be less than 48 hours
-  (though for small tables the delay is often much shorter). In Alternator,
-  the expiration delay is configurable - it defaults to 24 hours but can
-  be set with the `--alternator-ttl-period-in-seconds` configuration option.
-
-  One thing that this implementation is still missing is that expiration
-  events appear in the Streams API as normal deletions - without the
-  distinctive marker on deletions which are really expirations.
-  https://github.com/scylladb/scylla/issues/5060
-
 * DynamoDB's new multi-item transaction feature (TransactWriteItems,
   TransactGetItems) is not supported. Note that the older single-item
   conditional updates feature are fully supported.
@@ -140,22 +172,6 @@ they should be easy to detect. Here is a list of these unimplemented features:
   the new DC and changing that requires a CQL "ALTER TABLE" statement to
   modify the table's replication strategy.
   https://github.com/scylladb/scylla/issues/5062
-
-* The DynamoDB Streams API for capturing change is supported, but still
-  considered experimental so needs to be enabled explicitly with the
-  `--experimental-features=alternator-streams` configuration option.
-  Alternator streams also differ in some respects from DynamoDB Streams:
-  * The number of separate "shards" in Alternator's streams is significantly
-    larger than is typical on DynamoDB.
-  * While in DynamoDB data usually appears in the stream less than a second
-    after it was written, in Alternator Streams there is currently a 10
-    second delay by default.
-    https://github.com/scylladb/scylla/issues/6929
-  * Some events are represented differently in Alternator Streams. For
-    example, a single PutItem is represented by a REMOVE + MODIFY event,
-    instead of just a single MODIFY or INSERT.
-    https://github.com/scylladb/scylla/issues/6930
-    https://github.com/scylladb/scylla/issues/6918
 
 * Recently DynamoDB added support, in addition to the DynamoDB Streams API,
   also for the similar Kinesis Streams. Alternator doesn't support this yet,
