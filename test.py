@@ -489,7 +489,7 @@ class UnitTest(Test):
 
     async def run(self, options) -> Test:
         self.success = await run_test(self, options, env=self.env)
-        logging.info("Test #%d %s", self.id, "succeeded" if self.success else "failed ")
+        logging.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
         return self
 
 
@@ -592,7 +592,7 @@ class CQLApprovalTest(Test):
 
         def set_summary(summary):
             self.summary = summary
-            logging.info("Test %d %s", self.id, summary)
+            logging.info("Test %s %s", self.uname, summary)
             if self.server_log:
                 logging.info("Server log:\n%s", self.server_log)
 
@@ -685,7 +685,7 @@ class RunTest(Test):
     async def run(self, options: argparse.Namespace) -> Test:
         # This test can and should be killed gently, with SIGTERM, not with SIGKILL
         self.success = await run_test(self, options, gentle_kill=True, env=self.suite.scylla_env)
-        logging.info("Test #%d %s", self.id, "succeeded" if self.success else "failed ")
+        logging.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
         return self
 
 
@@ -735,7 +735,7 @@ class PythonTest(Test):
                     print("Server log  of the first server:\n{}".format(self.server_log))
                     # Don't try to continue if the cluster is broken
                     raise
-            logging.info("Test #%d %s", self.id, "succeeded" if self.success else "failed ")
+            logging.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
         return self
 
 
@@ -763,8 +763,8 @@ class TabularConsoleOutput:
         self.last_test_no += 1
         status = ""
         if test.success:
-            logging.info("Test {} is flaky {}".format(test.uname,
-                                                      test.is_flaky_failure))
+            logging.debug("Test {} is flaky {}".format(test.uname,
+                                                       test.is_flaky_failure))
             if test.is_flaky_failure:
                 status = palette.warn("[ FLKY ]")
             else:
@@ -805,7 +805,7 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
             log.write(msg.encode(encoding="UTF-8"))
         process = None
         stdout = None
-        logging.info("Starting test #%d: %s %s", test.id, test.path, " ".join(test.args))
+        logging.info("Starting test %s: %s %s", test.uname, test.path, " ".join(test.args))
         UBSAN_OPTIONS = [
             "halt_on_error=1",
             "abort_on_error=1",
@@ -819,13 +819,13 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
             os.getenv("ASAN_OPTIONS"),
         ]
         try:
-            log.write("=== TEST.PY STARTING TEST #{} ===\n".format(test.id).encode(encoding="UTF-8"))
+            log.write("=== TEST.PY STARTING TEST {} ===\n".format(test.uname).encode(encoding="UTF-8"))
             log.write("export UBSAN_OPTIONS='{}'\n".format(
                 ":".join(filter(None, UBSAN_OPTIONS))).encode(encoding="UTF-8"))
             log.write("export ASAN_OPTIONS='{}'\n".format(
                 ":".join(filter(None, ASAN_OPTIONS))).encode(encoding="UTF-8"))
             log.write("{} {}\n".format(test.path, " ".join(test.args)).encode(encoding="UTF-8"))
-            log.write("=== TEST.PY TEST #{} OUTPUT ===\n".format(test.id).encode(encoding="UTF-8"))
+            log.write("=== TEST.PY TEST {} OUTPUT ===\n".format(test.uname).encode(encoding="UTF-8"))
             log.flush()
             test.time_start = time.time()
             test.time_end = 0
@@ -873,7 +873,7 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
                 report_error("Test timed out")
             elif isinstance(e, asyncio.CancelledError):
                 print(test.shortname, end=" ")
-                report_error("Test was cancelled")
+                report_error("Test was cancelled: the parent process is exiting")
         except Exception as e:
             report_error("Failed to run the test:\n{e}".format(e=e))
     return False
