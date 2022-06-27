@@ -728,6 +728,76 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 mm_notifier.stop().get();
             });
 
+            supervisor::notify("starting per-shard database core");
+
+            sst_dir_semaphore.start(cfg->initial_sstable_loading_concurrency()).get();
+            auto stop_sst_dir_sem = defer_verbose_shutdown("sst_dir_semaphore", [&sst_dir_semaphore] {
+                sst_dir_semaphore.stop().get();
+            });
+
+            service_memory_limiter.start(memory::stats().total_memory()).get();
+            auto stop_mem_limiter = defer_verbose_shutdown("service_memory_limiter", [&service_memory_limiter] {
+                // Uncomment this once services release all the memory on stop
+                // service_memory_limiter.stop().get();
+            });
+
+            supervisor::notify("creating and verifying directories");
+            utils::directories::set dir_set;
+            dir_set.add(cfg->data_file_directories());
+            dir_set.add(cfg->commitlog_directory());
+            dirs.emplace(cfg->developer_mode());
+            dirs->create_and_verify(std::move(dir_set)).get();
+
+            auto hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->hints_directory()).get();
+            auto view_hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->view_hints_directory()).get();
+            if (!hinted_handoff_enabled.is_disabled_for_all()) {
+                hints_dir_initializer.ensure_created_and_verified().get();
+            }
+            view_hints_dir_initializer.ensure_created_and_verified().get();
+
+            // Note: changed from using a move here, because we want the config object intact.
+            replica::database_config dbcfg;
+            dbcfg.compaction_scheduling_group = make_sched_group("compaction", 1000);
+            dbcfg.memory_compaction_scheduling_group = make_sched_group("mem_compaction", 1000);
+            dbcfg.streaming_scheduling_group = maintenance_scheduling_group;
+            dbcfg.statement_scheduling_group = make_sched_group("statement", 1000);
+            dbcfg.memtable_scheduling_group = make_sched_group("memtable", 1000);
+            dbcfg.memtable_to_cache_scheduling_group = make_sched_group("memtable_to_cache", 200);
+            dbcfg.gossip_scheduling_group = make_sched_group("gossip", 1000);
+            dbcfg.available_memory = memory::stats().total_memory();
+
+            supervisor::notify("starting compaction_manager");
+            // get_cm_cfg is called on each shard when starting a sharded<compaction_manager>
+            // we need the getter since updateable_value is not shard-safe (#7316)
+            auto get_cm_cfg = sharded_parameter([&] {
+                return compaction_manager::config {
+                    .compaction_sched_group = compaction_manager::scheduling_group{dbcfg.compaction_scheduling_group, service::get_local_compaction_priority()},
+                    .maintenance_sched_group = compaction_manager::scheduling_group{dbcfg.streaming_scheduling_group, service::get_local_streaming_priority()},
+                    .available_memory = dbcfg.available_memory,
+                    .static_shares = cfg->compaction_static_shares,
+                    .throughput_mb_per_sec = cfg->compaction_throughput_mb_per_sec,
+                };
+            });
+            cm.start(std::move(get_cm_cfg), std::ref(stop_signal.as_sharded_abort_source())).get();
+            auto stop_cm = deferred_stop(cm);
+
+            supervisor::notify("starting database");
+            debug::the_database = &db;
+            db.start(std::ref(*cfg), dbcfg, std::ref(mm_notifier), std::ref(feature_service), std::ref(token_metadata),
+                    std::ref(cm), std::ref(sst_dir_semaphore), utils::cross_shard_barrier()).get();
+            auto stop_database_and_sstables = defer_verbose_shutdown("database", [&db] {
+                // #293 - do not stop anything - not even db (for real)
+                //return db.stop();
+                // call stop on each db instance, but leave the shareded<database> pointers alive.
+                db.invoke_on_all(&replica::database::stop).get();
+            });
+
+            // We need to init commitlog on shard0 before it is inited on other shards
+            // because it obtains the list of pre-existing segments for replay, which must
+            // not include reserve segments created by active commitlogs.
+            db.local().init_commitlog().get();
+            db.invoke_on_all(&replica::database::start).get();
+
             supervisor::notify("starting lifecycle notifier");
             lifecycle_notifier.start().get();
             // storage_service references this notifier and is not stopped yet
@@ -756,17 +826,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             startlog.info("Scylla API server listening on {}:{} ...", api_addr, cfg->api_port());
 
             api::set_server_config(ctx, *cfg).get();
-
-            // Note: changed from using a move here, because we want the config object intact.
-            replica::database_config dbcfg;
-            dbcfg.compaction_scheduling_group = make_sched_group("compaction", 1000);
-            dbcfg.memory_compaction_scheduling_group = make_sched_group("mem_compaction", 1000);
-            dbcfg.streaming_scheduling_group = maintenance_scheduling_group;
-            dbcfg.statement_scheduling_group = make_sched_group("statement", 1000);
-            dbcfg.memtable_scheduling_group = make_sched_group("memtable", 1000);
-            dbcfg.memtable_to_cache_scheduling_group = make_sched_group("memtable_to_cache", 200);
-            dbcfg.gossip_scheduling_group = make_sched_group("gossip", 1000);
-            dbcfg.available_memory = memory::stats().total_memory();
 
             netw::messaging_service::config mscfg;
 
@@ -902,33 +961,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 ss.stop().get();
             });
 
-            supervisor::notify("starting per-shard database core");
-
-            sst_dir_semaphore.start(cfg->initial_sstable_loading_concurrency()).get();
-            auto stop_sst_dir_sem = defer_verbose_shutdown("sst_dir_semaphore", [&sst_dir_semaphore] {
-                sst_dir_semaphore.stop().get();
-            });
-
-            service_memory_limiter.start(memory::stats().total_memory()).get();
-            auto stop_mem_limiter = defer_verbose_shutdown("service_memory_limiter", [&service_memory_limiter] {
-                // Uncomment this once services release all the memory on stop
-                // service_memory_limiter.stop().get();
-            });
-
-            supervisor::notify("creating and verifying directories");
-            utils::directories::set dir_set;
-            dir_set.add(cfg->data_file_directories());
-            dir_set.add(cfg->commitlog_directory());
-            dirs.emplace(cfg->developer_mode());
-            dirs->create_and_verify(std::move(dir_set)).get();
-
-            auto hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->hints_directory()).get();
-            auto view_hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->view_hints_directory()).get();
-            if (!hinted_handoff_enabled.is_disabled_for_all()) {
-                hints_dir_initializer.ensure_created_and_verified().get();
-            }
-            view_hints_dir_initializer.ensure_created_and_verified().get();
-
             static sharded<wasm::instance_cache> wasm_instance_cache;
             auto udf_enabled = cfg->enable_user_defined_functions() && cfg->check_experimental(db::experimental_features_t::feature::UDF);
             std::any stop_udf_cache_handlers;
@@ -939,38 +971,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     wasm_instance_cache.stop().get();
                 });
             }
-
-            supervisor::notify("starting compaction_manager");
-            // get_cm_cfg is called on each shard when starting a sharded<compaction_manager>
-            // we need the getter since updateable_value is not shard-safe (#7316)
-            auto get_cm_cfg = sharded_parameter([&] {
-                return compaction_manager::config {
-                    .compaction_sched_group = compaction_manager::scheduling_group{dbcfg.compaction_scheduling_group, service::get_local_compaction_priority()},
-                    .maintenance_sched_group = compaction_manager::scheduling_group{dbcfg.streaming_scheduling_group, service::get_local_streaming_priority()},
-                    .available_memory = dbcfg.available_memory,
-                    .static_shares = cfg->compaction_static_shares,
-                    .throughput_mb_per_sec = cfg->compaction_throughput_mb_per_sec,
-                };
-            });
-            cm.start(std::move(get_cm_cfg), std::ref(stop_signal.as_sharded_abort_source())).get();
-            auto stop_cm = deferred_stop(cm);
-
-            supervisor::notify("starting database");
-            debug::the_database = &db;
-            db.start(std::ref(*cfg), dbcfg, std::ref(mm_notifier), std::ref(feature_service), std::ref(token_metadata),
-                    std::ref(cm), std::ref(sst_dir_semaphore), utils::cross_shard_barrier()).get();
-            auto stop_database_and_sstables = defer_verbose_shutdown("database", [&db] {
-                // #293 - do not stop anything - not even db (for real)
-                //return db.stop();
-                // call stop on each db instance, but leave the shareded<database> pointers alive.
-                db.invoke_on_all(&replica::database::stop).get();
-            });
-
-            // We need to init commitlog on shard0 before it is inited on other shards
-            // because it obtains the list of pre-existing segments for replay, which must
-            // not include reserve segments created by active commitlogs.
-            db.local().init_commitlog().get();
-            db.invoke_on_all(&replica::database::start).get();
 
             // Initialization of a keyspace is done by shard 0 only. For system
             // keyspace, the procedure  will go through the hardcoded column

@@ -510,6 +510,11 @@ public:
                 cfg->max_memory_for_unlimited_query_hard_limit.set(uint64_t(query::result_memory_limiter::unlimited_result_size));
             }
 
+            gms::feature_config fcfg = gms::feature_config_from_db_config(*cfg, cfg_in.disabled_features);
+            sharded<gms::feature_service> feature_service;
+            feature_service.start(fcfg).get();
+            auto stop_feature_service = defer([&] { feature_service.stop().get(); });
+
             sharded<locator::shared_token_metadata> token_metadata;
             token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }).get();
             auto stop_token_metadata = defer([&token_metadata] { token_metadata.stop().get(); });
@@ -521,6 +526,50 @@ public:
             sharded<service::migration_notifier> mm_notif;
             mm_notif.start().get();
             auto stop_mm_notify = defer([&mm_notif] { mm_notif.stop().get(); });
+
+            sharded<semaphore> sst_dir_semaphore;
+            sst_dir_semaphore.start(cfg->initial_sstable_loading_concurrency()).get();
+            auto stop_sst_dir_sem = defer([&sst_dir_semaphore] {
+                sst_dir_semaphore.stop().get();
+            });
+
+            replica::database_config dbcfg;
+            if (cfg_in.dbcfg) {
+                dbcfg = std::move(*cfg_in.dbcfg);
+            } else {
+                dbcfg.available_memory = memory::stats().total_memory();
+            }
+
+            auto scheduling_groups = get_scheduling_groups().get();
+            dbcfg.compaction_scheduling_group = scheduling_groups.compaction_scheduling_group;
+            dbcfg.memory_compaction_scheduling_group = scheduling_groups.memory_compaction_scheduling_group;
+            dbcfg.streaming_scheduling_group = scheduling_groups.streaming_scheduling_group;
+            dbcfg.statement_scheduling_group = scheduling_groups.statement_scheduling_group;
+            dbcfg.memtable_scheduling_group = scheduling_groups.memtable_scheduling_group;
+            dbcfg.memtable_to_cache_scheduling_group = scheduling_groups.memtable_to_cache_scheduling_group;
+            dbcfg.gossip_scheduling_group = scheduling_groups.gossip_scheduling_group;
+            dbcfg.sstables_format = sstables::from_string(cfg->sstable_format());
+
+            // get_cm_cfg is called on each shard when starting a sharded<compaction_manager>
+            // we need the getter since updateable_value is not shard-safe (#7316)
+            auto get_cm_cfg = sharded_parameter([&] {
+                return compaction_manager::config {
+                    .compaction_sched_group = compaction_manager::scheduling_group{dbcfg.compaction_scheduling_group, service::get_local_compaction_priority()},
+                    .maintenance_sched_group = compaction_manager::scheduling_group{dbcfg.streaming_scheduling_group, service::get_local_streaming_priority()},
+                    .available_memory = dbcfg.available_memory,
+                    .static_shares = cfg->compaction_static_shares,
+                    .throughput_mb_per_sec = cfg->compaction_throughput_mb_per_sec,
+                };
+            });
+            cm.start(std::move(get_cm_cfg), std::ref(abort_sources)).get();
+            auto stop_cm = deferred_stop(cm);
+
+            db.start(std::ref(*cfg), dbcfg, std::ref(mm_notif), std::ref(feature_service), std::ref(token_metadata), std::ref(cm), std::ref(sst_dir_semaphore), utils::cross_shard_barrier()).get();
+            auto stop_db = defer([&db] {
+                db.stop().get();
+            });
+
+            db.invoke_on_all(&replica::database::start).get();
 
             sharded<service::endpoint_lifecycle_notifier> elc_notif;
             elc_notif.start().get();
@@ -554,11 +603,6 @@ public:
             });
 
             auto stop_sys_dist_ks = defer([&sys_dist_ks] { sys_dist_ks.stop().get(); });
-
-            gms::feature_config fcfg = gms::feature_config_from_db_config(*cfg, cfg_in.disabled_features);
-            sharded<gms::feature_service> feature_service;
-            feature_service.start(fcfg).get();
-            auto stop_feature_service = defer([&] { feature_service.stop().get(); });
 
             sharded<gms::gossiper> gossiper;
 
@@ -624,50 +668,6 @@ public:
 
             stream_manager.start(std::ref(*cfg), std::ref(db), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(ms), std::ref(mm), std::ref(gossiper)).get();
             auto stop_streaming = defer([&stream_manager] { stream_manager.stop().get(); });
-
-            sharded<semaphore> sst_dir_semaphore;
-            sst_dir_semaphore.start(cfg->initial_sstable_loading_concurrency()).get();
-            auto stop_sst_dir_sem = defer([&sst_dir_semaphore] {
-                sst_dir_semaphore.stop().get();
-            });
-
-            replica::database_config dbcfg;
-            if (cfg_in.dbcfg) {
-                dbcfg = std::move(*cfg_in.dbcfg);
-            } else {
-                dbcfg.available_memory = memory::stats().total_memory();
-            }
-
-            auto scheduling_groups = get_scheduling_groups().get();
-            dbcfg.compaction_scheduling_group = scheduling_groups.compaction_scheduling_group;
-            dbcfg.memory_compaction_scheduling_group = scheduling_groups.memory_compaction_scheduling_group;
-            dbcfg.streaming_scheduling_group = scheduling_groups.streaming_scheduling_group;
-            dbcfg.statement_scheduling_group = scheduling_groups.statement_scheduling_group;
-            dbcfg.memtable_scheduling_group = scheduling_groups.memtable_scheduling_group;
-            dbcfg.memtable_to_cache_scheduling_group = scheduling_groups.memtable_to_cache_scheduling_group;
-            dbcfg.gossip_scheduling_group = scheduling_groups.gossip_scheduling_group;
-            dbcfg.sstables_format = sstables::from_string(cfg->sstable_format());
-
-            // get_cm_cfg is called on each shard when starting a sharded<compaction_manager>
-            // we need the getter since updateable_value is not shard-safe (#7316)
-            auto get_cm_cfg = sharded_parameter([&] {
-                return compaction_manager::config {
-                    .compaction_sched_group = compaction_manager::scheduling_group{dbcfg.compaction_scheduling_group, service::get_local_compaction_priority()},
-                    .maintenance_sched_group = compaction_manager::scheduling_group{dbcfg.streaming_scheduling_group, service::get_local_streaming_priority()},
-                    .available_memory = dbcfg.available_memory,
-                    .static_shares = cfg->compaction_static_shares,
-                    .throughput_mb_per_sec = cfg->compaction_throughput_mb_per_sec,
-                };
-            });
-            cm.start(std::move(get_cm_cfg), std::ref(abort_sources)).get();
-            auto stop_cm = deferred_stop(cm);
-
-            db.start(std::ref(*cfg), dbcfg, std::ref(mm_notif), std::ref(feature_service), std::ref(token_metadata), std::ref(cm), std::ref(sst_dir_semaphore), utils::cross_shard_barrier()).get();
-            auto stop_db = defer([&db] {
-                db.stop().get();
-            });
-
-            db.invoke_on_all(&replica::database::start).get();
 
             feature_service.invoke_on_all([] (auto& fs) {
                 return seastar::async([&fs] {
