@@ -16,6 +16,7 @@
 #include "utils/extremum_tracking.hh"
 #include "utils/estimated_histogram.hh"
 #include <seastar/testing/linux_perf_event.hh>
+#include <seastar/util/defer.hh>
 #include "reader_permit.hh"
 
 #include <chrono>
@@ -181,6 +182,9 @@ std::vector<Res> time_parallel_ex(Func func, unsigned concurrency_per_core, int 
         distributed<executor<Func>> exec;
         Res result;
         exec.start(concurrency_per_core, func, std::move(end_at), operations_per_shard).get();
+        auto stop_exec = defer([&exec] {
+            exec.stop().get();
+        });
         auto stats = exec.map_reduce0(std::mem_fn(&executor<Func>::run),
                 executor_shard_stats(), std::plus<executor_shard_stats>()).get0();
         auto end = clk::now();
@@ -195,7 +199,6 @@ std::vector<Res> time_parallel_ex(Func func, unsigned concurrency_per_core, int 
 
         std::cout << result << std::endl;
         results.emplace_back(result);
-        exec.stop().get();
     }
     return results;
 }
