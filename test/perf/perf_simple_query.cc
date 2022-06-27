@@ -73,6 +73,7 @@ struct test_config {
     unsigned operations_per_shard = 0;
     bool stop_on_error;
     sstring timeout;
+    bool bypass_cache;
 };
 
 std::ostream& operator<<(std::ostream& os, const test_config::run_mode& m) {
@@ -129,6 +130,9 @@ static bytes make_random_key(test_config& cfg) {
 static std::vector<perf_result> test_read(cql_test_env& env, test_config& cfg) {
     create_partitions(env, cfg);
     sstring query = "select \"C0\", \"C1\", \"C2\", \"C3\", \"C4\" from cf where \"KEY\" = ?";
+    if (cfg.bypass_cache) {
+        query += " bypass cache";
+    }
     if (!cfg.timeout.empty()) {
         query += " using timeout " + cfg.timeout;
     }
@@ -514,6 +518,7 @@ int main(int argc, char** argv) {
         ("alternator", bpo::value<std::string>(), "use alternator frontend instead of CQL with given write isolation")
         ("stop-on-error", bpo::value<bool>()->default_value(true), "stop after encountering the first error")
         ("timeout", bpo::value<std::string>()->default_value(""), "use timeout")
+        ("bypass-cache", "use bypass cache when querying")
         ;
 
     set_abort_on_internal_error(true);
@@ -559,6 +564,7 @@ int main(int argc, char** argv) {
             }
             cfg.stop_on_error = app.configuration()["stop-on-error"].as<bool>();
             cfg.timeout = app.configuration()["timeout"].as<std::string>();
+            cfg.bypass_cache = app.configuration().contains("bypass-cache");
             auto results = cfg.frontend == test_config::frontend_type::cql
                     ? do_cql_test(env, cfg)
                     : do_alternator_test(app.configuration()["alternator"].as<std::string>(),
