@@ -481,9 +481,9 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
             if (restr_it == partition_key_restrictions_map.end()) {
                 continue;
             }
-            restrictions::restriction& single_col_restriction = *restr_it->second;
+            const expr::expression& single_col_restriction = restr_it->second;
             if (!expr::is_satisfied_by(
-                        single_col_restriction.expression,
+                        single_col_restriction,
                         expr::evaluation_inputs{
                             .partition_key = &partition_key,
                             .clustering_key = &clustering_key,

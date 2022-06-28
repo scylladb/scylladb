@@ -1816,16 +1816,8 @@ void statement_restrictions::validate_secondary_index_selections(bool selects_on
     }
 }
 
-const single_column_restrictions::restrictions_map& statement_restrictions::get_single_column_partition_key_restrictions() const {
-    static single_column_restrictions::restrictions_map empty;
-    auto single_restrictions = dynamic_pointer_cast<single_column_partition_key_restrictions>(_partition_key_restrictions);
-    if (!single_restrictions) {
-        if (dynamic_pointer_cast<initial_key_restrictions<partition_key>>(_partition_key_restrictions)) {
-            return empty;
-        }
-        throw std::runtime_error("statement restrictions for multi-column partition key restrictions are not implemented yet");
-    }
-    return single_restrictions->restrictions();
+const expr::single_column_restrictions_map& statement_restrictions::get_single_column_partition_key_restrictions() const {
+    return _single_column_partition_key_restrictions;
 }
 
 /**

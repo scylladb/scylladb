@@ -491,7 +491,7 @@ public:
     /**
      * @return partition key restrictions split into single column restrictions (e.g. for filtering support).
      */
-    const single_column_restrictions::restrictions_map& get_single_column_partition_key_restrictions() const;
+    const expr::single_column_restrictions_map& get_single_column_partition_key_restrictions() const;
 
     /**
      * @return clustering key restrictions split into single column restrictions (e.g. for filtering support).
