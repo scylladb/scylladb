@@ -12,10 +12,12 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/core/distributed.hh>
 #include <seastar/core/weak_ptr.hh>
+#include <seastar/coroutine/as_future.hh>
 #include "seastarx.hh"
 #include "utils/extremum_tracking.hh"
 #include "utils/estimated_histogram.hh"
 #include <seastar/testing/linux_perf_event.hh>
+#include <seastar/util/defer.hh>
 #include "reader_permit.hh"
 
 #include <chrono>
@@ -50,6 +52,7 @@ struct executor_shard_stats {
     uint64_t allocations = 0;
     uint64_t tasks_executed = 0;
     uint64_t instructions_retired = 0;
+    uint64_t errors = 0;
 };
 
 inline
@@ -59,6 +62,7 @@ operator+(executor_shard_stats a, executor_shard_stats b) {
     a.allocations += b.allocations;
     a.tasks_executed += b.tasks_executed;
     a.instructions_retired += b.instructions_retired;
+    a.errors += b.errors;
     return a;
 }
 
@@ -69,6 +73,7 @@ operator-(executor_shard_stats a, executor_shard_stats b) {
     a.allocations -= b.allocations;
     a.tasks_executed -= b.tasks_executed;
     a.instructions_retired -= b.instructions_retired;
+    a.errors -= b.errors;
     return a;
 }
 
@@ -83,25 +88,34 @@ class executor {
     const lowres_clock::time_point _end_at;
     const uint64_t _end_at_count;
     const unsigned _n_workers;
+    const bool _stop_on_error;
     uint64_t _count;
+    uint64_t _errors;
     linux_perf_event _instructions_retired_counter = linux_perf_event::user_instructions_retired();
 private:
     executor_shard_stats executor_shard_stats_snapshot();
     future<> run_worker() {
-        return do_until([this] {
-            return _end_at_count ? _count == _end_at_count : lowres_clock::now() >= _end_at;
-        }, [this] () mutable {
+        while (_end_at_count ? _count < _end_at_count : lowres_clock::now() < _end_at) {
             ++_count;
-            return _func();
-        });
+            future<> f = co_await coroutine::as_future(_func());
+            if (f.failed()) {
+                ++_errors;
+                if (_stop_on_error) [[unlikely]] {
+                    co_return co_await std::move(f);
+                }
+                f.ignore_ready_future();
+            }
+        }
     }
 public:
-    executor(unsigned n_workers, Func func, lowres_clock::time_point end_at, uint64_t end_at_count = 0)
+    executor(unsigned n_workers, Func func, lowres_clock::time_point end_at, uint64_t end_at_count = 0, bool stop_on_error = true)
             : _func(std::move(func))
             , _end_at(end_at)
             , _end_at_count(end_at_count)
             , _n_workers(n_workers)
+            , _stop_on_error(stop_on_error)
             , _count(0)
+            , _errors(0)
     { }
 
     // Returns the number of invocations of @func
@@ -131,6 +145,7 @@ executor<Func>::executor_shard_stats_snapshot() {
         .allocations = perf_mallocs(),
         .tasks_executed = perf_tasks_processed(),
         .instructions_retired = _instructions_retired_counter.read(),
+        .errors = _errors,
     };
 }
 
@@ -139,6 +154,7 @@ struct perf_result {
     double mallocs_per_op;
     double tasks_per_op;
     double instructions_per_op;
+    uint64_t errors;
 };
 
 std::ostream& operator<<(std::ostream& os, const perf_result& result);
@@ -169,7 +185,7 @@ std::ostream& operator<<(std::ostream& os, const perf_result_with_aio_writes& re
 template <typename Res, typename Func, typename UpdateFunc = void(*)(const Res&, const executor_shard_stats&)>
 requires (std::is_base_of_v<perf_result, Res> && std::is_invocable_v<UpdateFunc, Res&, const executor_shard_stats&>)
 static
-std::vector<Res> time_parallel_ex(Func func, unsigned concurrency_per_core, int iterations = 5, unsigned operations_per_shard = 0, UpdateFunc uf = [](const auto&, const auto&) {}) {
+std::vector<Res> time_parallel_ex(Func func, unsigned concurrency_per_core, int iterations = 5, unsigned operations_per_shard = 0, bool stop_on_error = true, UpdateFunc uf = [](const auto&, const auto&) {}) {
     using clk = std::chrono::steady_clock;
     if (operations_per_shard) {
         iterations = 1;
@@ -180,7 +196,10 @@ std::vector<Res> time_parallel_ex(Func func, unsigned concurrency_per_core, int 
         auto end_at = lowres_clock::now() + std::chrono::seconds(1);
         distributed<executor<Func>> exec;
         Res result;
-        exec.start(concurrency_per_core, func, std::move(end_at), operations_per_shard).get();
+        exec.start(concurrency_per_core, func, std::move(end_at), operations_per_shard, stop_on_error).get();
+        auto stop_exec = defer([&exec] {
+            exec.stop().get();
+        });
         auto stats = exec.map_reduce0(std::mem_fn(&executor<Func>::run),
                 executor_shard_stats(), std::plus<executor_shard_stats>()).get0();
         auto end = clk::now();
@@ -190,20 +209,20 @@ std::vector<Res> time_parallel_ex(Func func, unsigned concurrency_per_core, int 
         result.mallocs_per_op = double(stats.allocations) / stats.invocations;
         result.tasks_per_op = double(stats.tasks_executed) / stats.invocations;
         result.instructions_per_op = double(stats.instructions_retired) / stats.invocations;
+        result.errors = stats.errors;
 
         uf(result, stats);
 
         std::cout << result << std::endl;
         results.emplace_back(result);
-        exec.stop().get();
     }
     return results;
 }
 
 template <typename Func>
 static
-std::vector<perf_result> time_parallel(Func func, unsigned concurrency_per_core, int iterations = 5, unsigned operations_per_shard = 0) {
-    return time_parallel_ex<perf_result>(std::move(func), concurrency_per_core, iterations, operations_per_shard);
+std::vector<perf_result> time_parallel(Func func, unsigned concurrency_per_core, int iterations = 5, unsigned operations_per_shard = 0, bool stop_on_error = true) {
+    return time_parallel_ex<perf_result>(std::move(func), concurrency_per_core, iterations, operations_per_shard, stop_on_error);
 }
 
 template<typename Func>

@@ -71,6 +71,9 @@ struct test_config {
     bool counters;
     bool flush_memtables;
     unsigned operations_per_shard = 0;
+    bool stop_on_error;
+    sstring timeout;
+    bool bypass_cache;
 };
 
 std::ostream& operator<<(std::ostream& os, const test_config::run_mode& m) {
@@ -126,48 +129,70 @@ static bytes make_random_key(test_config& cfg) {
 
 static std::vector<perf_result> test_read(cql_test_env& env, test_config& cfg) {
     create_partitions(env, cfg);
-    auto id = env.prepare("select \"C0\", \"C1\", \"C2\", \"C3\", \"C4\" from cf where \"KEY\" = ?").get0();
+    sstring query = "select \"C0\", \"C1\", \"C2\", \"C3\", \"C4\" from cf where \"KEY\" = ?";
+    if (cfg.bypass_cache) {
+        query += " bypass cache";
+    }
+    if (!cfg.timeout.empty()) {
+        query += " using timeout " + cfg.timeout;
+    }
+    auto id = env.prepare(query).get0();
     return time_parallel([&env, &cfg, id] {
             bytes key = make_random_key(cfg);
             return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
-        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard);
+        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error);
 }
 
 static std::vector<perf_result> test_write(cql_test_env& env, test_config& cfg) {
-    auto id = env.prepare("UPDATE cf SET "
-                           "\"C0\" = 0x8f75da6b3dcec90c8a404fb9a5f6b0621e62d39c69ba5758e5f41b78311fbb26cc7a,"
-                           "\"C1\" = 0xa8761a2127160003033a8f4f3d1069b7833ebe24ef56b3beee728c2b686ca516fa51,"
-                           "\"C2\" = 0x583449ce81bfebc2e1a695eb59aad5fcc74d6d7311fc6197b10693e1a161ca2e1c64,"
-                           "\"C3\" = 0x62bcb1dbc0ff953abc703bcb63ea954f437064c0c45366799658bd6b91d0f92908d7,"
-                           "\"C4\" = 0x222fcbe31ffa1e689540e1499b87fa3f9c781065fccd10e4772b4c7039c2efd0fb27 "
-                           "WHERE \"KEY\" = ?;").get0();
+    sstring usings;
+    if (!cfg.timeout.empty()) {
+        usings += "USING TIMEOUT " + cfg.timeout;
+    }
+    sstring query = format("UPDATE cf {}SET "
+            "\"C0\" = 0x8f75da6b3dcec90c8a404fb9a5f6b0621e62d39c69ba5758e5f41b78311fbb26cc7a,"
+            "\"C1\" = 0xa8761a2127160003033a8f4f3d1069b7833ebe24ef56b3beee728c2b686ca516fa51,"
+            "\"C2\" = 0x583449ce81bfebc2e1a695eb59aad5fcc74d6d7311fc6197b10693e1a161ca2e1c64,"
+            "\"C3\" = 0x62bcb1dbc0ff953abc703bcb63ea954f437064c0c45366799658bd6b91d0f92908d7,"
+            "\"C4\" = 0x222fcbe31ffa1e689540e1499b87fa3f9c781065fccd10e4772b4c7039c2efd0fb27 "
+            "WHERE \"KEY\" = ?", usings);
+    auto id = env.prepare(query).get0();
     return time_parallel([&env, &cfg, id] {
             bytes key = make_random_key(cfg);
             return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
-        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard);
+        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error);
 }
 
 static std::vector<perf_result> test_delete(cql_test_env& env, test_config& cfg) {
     create_partitions(env, cfg);
-    auto id = env.prepare("DELETE \"C0\", \"C1\", \"C2\", \"C3\", \"C4\" FROM cf WHERE \"KEY\" = ?").get0();
+    sstring usings;
+    if (!cfg.timeout.empty()) {
+        usings += "USING TIMEOUT " + cfg.timeout;
+    }
+    sstring query = format("DELETE \"C0\", \"C1\", \"C2\", \"C3\", \"C4\" FROM cf {}WHERE \"KEY\" = ?", usings);
+    auto id = env.prepare(query).get0();
     return time_parallel([&env, &cfg, id] {
             bytes key = make_random_key(cfg);
             return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
-        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard);
+        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error);
 }
 
 static std::vector<perf_result> test_counter_update(cql_test_env& env, test_config& cfg) {
-    auto id = env.prepare("UPDATE cf SET "
-                           "\"C0\" = \"C0\" + 1,"
-                           "\"C1\" = \"C1\" + 2,"
-                           "\"C2\" = \"C2\" + 3,"
-                           "\"C3\" = \"C3\" + 4,"
-                           "\"C4\" = \"C4\" + 5 "
-                           "WHERE \"KEY\" = ?;").get0();
+    sstring usings;
+    if (!cfg.timeout.empty()) {
+        usings += "USING TIMEOUT " + cfg.timeout;
+    }
+    sstring query = format("UPDATE cf {}SET "
+            "\"C0\" = \"C0\" + 1,"
+            "\"C1\" = \"C1\" + 2,"
+            "\"C2\" = \"C2\" + 3,"
+            "\"C3\" = \"C3\" + 4,"
+            "\"C4\" = \"C4\" + 5 "
+            "WHERE \"KEY\" = ?", usings);
+    auto id = env.prepare(query).get0();
     return time_parallel([&env, &cfg, id] {
             bytes key = make_random_key(cfg);
             return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
-        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard);
+        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error);
 }
 
 static schema_ptr make_counter_schema(std::string_view ks_name) {
@@ -280,7 +305,7 @@ static std::vector<perf_result> test_alternator_read(service::client_state& stat
         content.emplace_back(key.data(), key.size(), deleter{});
         content.emplace_back(postfix.data(), postfix.size(), deleter{});
         return executor.get_item(state, tracing::trace_state_ptr(), empty_service_permit(), rjson::parse(std::move(content))).discard_result();
-    }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard);
+    }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error);
 }
 
 static std::vector<perf_result> test_alternator_write(service::client_state& state, alternator::executor& executor, test_config& cfg) {
@@ -323,7 +348,7 @@ static std::vector<perf_result> test_alternator_write(service::client_state& sta
         content.emplace_back(key.data(), key.size(), deleter{});
         content.emplace_back(postfix.data(), postfix.size(), deleter{});
         return executor.update_item(state, tracing::trace_state_ptr(), empty_service_permit(), rjson::parse(std::move(content))).discard_result();
-    }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard);
+    }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error);
 }
 
 static std::vector<perf_result> test_alternator_delete(service::client_state& state, noncopyable_function<void()> flush_memtables,
@@ -342,7 +367,7 @@ static std::vector<perf_result> test_alternator_delete(service::client_state& st
             }
         )";
         return executor.delete_item(state, tracing::trace_state_ptr(), empty_service_permit(), rjson::parse(json)).discard_result();
-    }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard);
+    }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error);
 }
 
 static std::vector<perf_result> do_alternator_test(std::string isolation_level,
@@ -491,6 +516,9 @@ int main(int argc, char** argv) {
         ("json-result", bpo::value<std::string>(), "name of the json result file")
         ("enable-cache", bpo::value<bool>()->default_value(true), "enable row cache")
         ("alternator", bpo::value<std::string>(), "use alternator frontend instead of CQL with given write isolation")
+        ("stop-on-error", bpo::value<bool>()->default_value(true), "stop after encountering the first error")
+        ("timeout", bpo::value<std::string>()->default_value(""), "use timeout")
+        ("bypass-cache", "use bypass cache when querying")
         ;
 
     set_abort_on_internal_error(true);
@@ -534,6 +562,9 @@ int main(int argc, char** argv) {
             if (app.configuration().contains("operations-per-shard")) {
                 cfg.operations_per_shard = app.configuration()["operations-per-shard"].as<unsigned>();
             }
+            cfg.stop_on_error = app.configuration()["stop-on-error"].as<bool>();
+            cfg.timeout = app.configuration()["timeout"].as<std::string>();
+            cfg.bypass_cache = app.configuration().contains("bypass-cache");
             auto results = cfg.frontend == test_config::frontend_type::cql
                     ? do_cql_test(env, cfg)
                     : do_alternator_test(app.configuration()["alternator"].as<std::string>(),
