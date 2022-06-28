@@ -431,7 +431,7 @@ modification_statement::process_where_clause(data_dictionary::database db, std::
         }
     }
     if (_restrictions->has_partition_key_unrestricted_components()) {
-        auto& col = s->column_at(column_kind::partition_key, _restrictions->get_partition_key_restrictions()->size());
+        auto& col = s->column_at(column_kind::partition_key, _restrictions->partition_key_restrictions_size());
         throw exceptions::invalid_request_exception(format("Missing mandatory PRIMARY KEY part {}", col.name_as_text()));
     }
     if (has_conditions()) {

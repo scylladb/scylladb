@@ -227,6 +227,8 @@ public:
 
     bool partition_key_restrictions_is_all_eq() const;
 
+    size_t partition_key_restrictions_size() const;
+
     /**
      * Checks if the clustering key has some unrestricted components.
      * @return <code>true</code> if the clustering key has some unrestricted components, <code>false</code> otherwise.

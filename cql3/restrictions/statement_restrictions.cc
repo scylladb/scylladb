@@ -900,6 +900,10 @@ bool statement_restrictions::partition_key_restrictions_is_all_eq() const {
     return non_eq_binop == nullptr;
 }
 
+size_t statement_restrictions::partition_key_restrictions_size() const {
+    return expr::get_sorted_column_defs(_new_partition_key_restrictions).size();
+}
+
 bool statement_restrictions::has_unrestricted_clustering_columns() const {
     return _clustering_columns_restrictions->has_unrestricted_components(*_schema);
 }
@@ -1714,7 +1718,7 @@ bool statement_restrictions::need_filtering() const {
         return non_pk_restrictions_count > 1;
     }
 
-    const auto npart = _partition_key_restrictions->size();
+    const auto npart = partition_key_restrictions_size();
     if (npart > 0 && npart < _schema->partition_key_size()) {
         // Can't calculate the token value, so a naive base-table query must be filtered.  Same for any index tables,
         // except if there's only one restriction supported by an index.
