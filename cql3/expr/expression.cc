@@ -2454,5 +2454,12 @@ bytes_opt value_for(const column_definition& cdef, const expression& e, const qu
         }
     }, possible_vals);
 }
+
+bool contains_multi_column_restriction(const expression& e) {
+    const binary_operator* find_res = find_binop(e, [](const binary_operator& binop) {
+        return is<tuple_constructor>(binop.lhs);
+    });
+    return find_res != nullptr;
+}
 } // namespace expr
 } // namespace cql3
