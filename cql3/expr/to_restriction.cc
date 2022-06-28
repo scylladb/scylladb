@@ -8,7 +8,6 @@
 
 #include "cql3/column_specification.hh"
 #include "expression.hh"
-#include "cql3/restrictions/single_column_restriction.hh"
 #include "cql3/restrictions/multi_column_restriction.hh"
 #include "cql3/restrictions/token_restriction.hh"
 #include "cql3/prepare_context.hh"

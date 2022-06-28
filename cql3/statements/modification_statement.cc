@@ -12,7 +12,6 @@
 #include "cql3/statements/modification_statement.hh"
 #include "cql3/statements/raw/modification_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
-#include "cql3/restrictions/single_column_restriction.hh"
 #include "cql3/util.hh"
 #include "validation.hh"
 #include "db/consistency_level_validations.hh"

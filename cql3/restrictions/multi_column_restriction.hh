@@ -14,6 +14,7 @@
 #include "cql3/restrictions/primary_key_restrictions.hh"
 #include "cql3/statements/request_validations.hh"
 #include "cql3/restrictions/single_column_primary_key_restrictions.hh"
+#include "cql3/restrictions/bounds_slice.hh"
 #include "cql3/constants.hh"
 #include "cql3/lists.hh"
 #include "cql3/expr/expression.hh"

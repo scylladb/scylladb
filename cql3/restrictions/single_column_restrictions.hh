@@ -11,7 +11,6 @@
 #pragma once
 
 #include "cql3/restrictions/restrictions.hh"
-#include "cql3/restrictions/single_column_restriction.hh"
 #include "schema_fwd.hh"
 #include "types.hh"
 
