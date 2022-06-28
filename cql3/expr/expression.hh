@@ -759,6 +759,9 @@ using single_column_restrictions_map = std::map<const column_definition*, expres
 // Extracts map of single column restrictions for each column from expression
 single_column_restrictions_map get_single_column_restrictions_map(const expression&);
 
+// Checks whether this expression is empty - doesn't restrict anything
+bool is_empty_restriction(const expression&);
+
 } // namespace expr
 
 } // namespace cql3

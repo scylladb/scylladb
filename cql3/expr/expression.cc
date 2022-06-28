@@ -2407,5 +2407,14 @@ single_column_restrictions_map get_single_column_restrictions_map(const expressi
 
     return result;
 }
+
+bool is_empty_restriction(const expression& e) {
+    bool contains_non_conjunction = recurse_until(e, [&](const expression& e) -> bool {
+        return !is<conjunction>(e);
+    });
+
+    return !contains_non_conjunction;
+}
+
 } // namespace expr
 } // namespace cql3
