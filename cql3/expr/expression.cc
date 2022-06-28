@@ -2435,5 +2435,24 @@ sstring get_columns_in_commons(const expression& a, const expression& b) {
     return str;
 }
 
+bytes_opt value_for(const column_definition& cdef, const expression& e, const query_options& options) {
+    value_set possible_vals = possible_lhs_values(&cdef, e, options);
+    return std::visit(overloaded_functor {
+        [&](const value_list& val_list) -> bytes_opt {
+            if (val_list.empty()) {
+                return std::nullopt;
+            }
+
+            if (val_list.size() != 1) {
+                on_internal_error(expr_logger, format("expr::value_for - multiple possible values for column: {}", e));
+            }
+
+            return to_bytes(val_list.front());
+        },
+        [&](const nonwrapping_range<managed_bytes>&) -> bytes_opt {
+            on_internal_error(expr_logger, format("expr::value_for - possible values are a range: {}", e));
+        }
+    }, possible_vals);
+}
 } // namespace expr
 } // namespace cql3

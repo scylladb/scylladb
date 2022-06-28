@@ -766,6 +766,10 @@ bool is_empty_restriction(const expression&);
 // Uses schema_pos_column_definition_comparator for comparison.
 sstring get_columns_in_commons(const expression& a, const expression& b);
 
+// Finds the value of the given column in the expression
+// In case of multpiple possible values calls on_internal_error
+bytes_opt value_for(const column_definition&, const expression&, const query_options&);
+
 } // namespace expr
 
 } // namespace cql3
