@@ -2416,5 +2416,24 @@ bool is_empty_restriction(const expression& e) {
     return !contains_non_conjunction;
 }
 
+sstring get_columns_in_commons(const expression& a, const expression& b) {
+    std::vector<const column_definition*> ours = get_sorted_column_defs(a);
+    std::vector<const column_definition*> theirs = get_sorted_column_defs(b);
+
+    std::sort(ours.begin(), ours.end());
+    std::sort(theirs.begin(), theirs.end());
+    std::vector<const column_definition*> common;
+    std::set_intersection(ours.begin(), ours.end(), theirs.begin(), theirs.end(), std::back_inserter(common));
+
+    sstring str;
+    for (auto&& c : common) {
+        if (!str.empty()) {
+            str += " ,";
+        }
+        str += c->name_as_text();
+    }
+    return str;
+}
+
 } // namespace expr
 } // namespace cql3

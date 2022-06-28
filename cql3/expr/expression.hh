@@ -762,6 +762,10 @@ single_column_restrictions_map get_single_column_restrictions_map(const expressi
 // Checks whether this expression is empty - doesn't restrict anything
 bool is_empty_restriction(const expression&);
 
+// Finds common columns between both expressions and prints them to a string.
+// Uses schema_pos_column_definition_comparator for comparison.
+sstring get_columns_in_commons(const expression& a, const expression& b);
+
 } // namespace expr
 
 } // namespace cql3
