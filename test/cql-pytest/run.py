@@ -188,6 +188,12 @@ def run_scylla_cmd(pid, dir):
     # link is good enough.
     scylla_link = os.path.join(dir, 'test_scylla')
     os.symlink(scylla, scylla_link)
+    # When running a Scylla build with sanitizers enabled, we should
+    # configure them to fail on real errors, and ignore spurious errors.
+    env = {
+        'UBSAN_OPTIONS': f'halt_on_error=1:abort_on_error=1:suppressions={source_path}/ubsan-suppressions.supp',
+        'ASAN_OPTIONS': 'disable_coredump=0:abort_on_error=1:detect_stack_use_after_returns=1'
+    }
     return ([scylla_link,
         '--options-file',  source_path + '/conf/scylla.yaml',
         '--developer-mode', '1',
@@ -234,7 +240,7 @@ def run_scylla_cmd(pid, dir):
         # and other modules dependent on it: e.g. service levels
         '--authenticator', 'PasswordAuthenticator',
         '--strict-allow-filtering', 'true',
-        ], {})
+        ], env)
 
 # Same as run_scylla_cmd, just use SSL encryption for the CQL port (same
 # port number as default - replacing the unencrypted server)
