@@ -2347,5 +2347,65 @@ const column_value& get_the_only_column(const expression& e) {
 
     return *result;
 }
+
+
+bool schema_pos_column_definition_comparator::operator()(const column_definition *def1, const column_definition *def2) const {
+    auto column_pos = [](const column_definition* cdef) -> uint32_t {
+        if (cdef->is_primary_key()) {
+            return cdef->id;
+        }
+
+        return std::numeric_limits<uint32_t>::max();
+    };
+
+    uint32_t pos1 = column_pos(def1);
+    uint32_t pos2 = column_pos(def2);
+    if (pos1 != pos2) {
+        return pos1 < pos2;
+    }
+    // FIXME: shouldn't we use regular column name comparator here? Origin does not...
+    return less_unsigned(def1->name(), def2->name());
+}
+
+std::vector<const column_definition*> get_sorted_column_defs(const expression& e) {
+    std::set<const column_definition*, schema_pos_column_definition_comparator> cols;
+
+    for_each_expression<column_value>(e,
+        [&](const column_value& cval) {
+            cols.insert(cval.col);
+        }
+    );
+
+    std::vector<const column_definition*> result;
+    result.reserve(cols.size());
+    for (const column_definition* col : cols) {
+        result.push_back(col);
+    }
+    return result;
+}
+
+const column_definition* get_last_column_def(const expression& e) {
+    std::vector<const column_definition*> sorted_defs = get_sorted_column_defs(e);
+
+    if (sorted_defs.empty()) {
+        return nullptr;
+    }
+
+    return sorted_defs.back();
+}
+
+single_column_restrictions_map get_single_column_restrictions_map(const expression& e) {
+    single_column_restrictions_map result;
+
+    std::vector<const column_definition*> sorted_defs = get_sorted_column_defs(e);
+    for (const column_definition* cdef : sorted_defs) {
+        expression col_restrictions = conjunction {
+            .children = extract_single_column_restrictions_for_column(e, *cdef)
+        };
+        result.emplace(cdef, std::move(col_restrictions));
+    }
+
+    return result;
+}
 } // namespace expr
 } // namespace cql3
