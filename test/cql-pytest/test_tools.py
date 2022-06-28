@@ -102,7 +102,7 @@ def clustering_table_with_collection(cql, keyspace):
 
 def clustering_table_with_udt(cql, keyspace):
     table = util.unique_name()
-    create_type_schema = f"CREATE TYPE {keyspace}.type1 (f1 int, f2 text)"
+    create_type_schema = f"CREATE TYPE IF NOT EXISTS {keyspace}.type1 (f1 int, f2 text)"
     create_table_schema = f" CREATE TABLE {keyspace}.{table} (pk int, ck int, v type1, PRIMARY KEY (pk, ck))"
 
     cql.execute(create_type_schema)
