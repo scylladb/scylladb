@@ -67,7 +67,7 @@ private:
     /**
      * The restrictions used to build the index expressions
      */
-    std::vector<::shared_ptr<restrictions>> _index_restrictions;
+    std::vector<expr::expression> _index_restrictions;
 
     /**
      * <code>true</code> if the secondary index need to be queried, <code>false</code> otherwise
@@ -136,7 +136,7 @@ public:
         bool for_view = false,
         bool allow_filtering = false);
 
-    const std::vector<::shared_ptr<restrictions>>& index_restrictions() const;
+    const std::vector<expr::expression>& index_restrictions() const;
 
     /**
      * Checks if the restrictions on the partition key is an IN restriction.
@@ -217,7 +217,7 @@ public:
      * @return If an index can be used, an optional containing this index, otherwise an empty optional.
      * In case the index is returned, second parameter returns the index restriction it uses.
      */
-    std::pair<std::optional<secondary_index::index>, ::shared_ptr<cql3::restrictions::restrictions>> find_idx(const secondary_index::secondary_index_manager& sim) const;
+    std::pair<std::optional<secondary_index::index>, expr::expression> find_idx(const secondary_index::secondary_index_manager& sim) const;
 
     /**
      * Checks if the partition key has some unrestricted components.

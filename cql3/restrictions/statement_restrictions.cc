@@ -495,7 +495,7 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
     // Some but not all of the partition key columns have been specified;
     // hence we need turn these restrictions into index expressions.
     if (_uses_secondary_indexing || pk_restrictions_need_filtering()) {
-        _index_restrictions.push_back(_partition_key_restrictions);
+        _index_restrictions.push_back(_new_partition_key_restrictions);
     }
 
     // If the only updated/deleted columns are static, then we don't need clustering columns.
@@ -527,7 +527,7 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
     }
 
     if (_uses_secondary_indexing || _clustering_columns_restrictions->needs_filtering(*_schema)) {
-        _index_restrictions.push_back(_clustering_columns_restrictions);
+        _index_restrictions.push_back(_new_clustering_columns_restrictions);
     } else if (find_binop(_clustering_columns_restrictions->expression, expr::is_on_collection)) {
         fail(unimplemented::cause::INDEXES);
 #if 0
@@ -564,7 +564,7 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
                 "thus may have unpredictable performance. If you want to execute "
                 "this query despite the performance unpredictability, use ALLOW FILTERING");
         }
-        _index_restrictions.push_back(_nonprimary_key_restrictions);
+        _index_restrictions.push_back(_new_nonprimary_key_restrictions);
     }
 
     if (_uses_secondary_indexing && !(for_view || allow_filtering)) {
@@ -572,7 +572,7 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
     }
 }
 
-const std::vector<::shared_ptr<restrictions>>& statement_restrictions::index_restrictions() const {
+const std::vector<expr::expression>& statement_restrictions::index_restrictions() const {
     return _index_restrictions;
 }
 
@@ -588,40 +588,25 @@ int statement_restrictions::score(const secondary_index::index& index) const {
     return 1;
 }
 
-namespace {
-
-using namespace cql3::restrictions;
-
-/// If rs contains a restrictions_map of individual columns to their restrictions, returns it.  Otherwise, returns null.
-const single_column_restrictions::restrictions_map* get_individual_restrictions_map(const restrictions* rs) {
-    if (auto regular = dynamic_cast<const single_column_restrictions*>(rs)) {
-        return &regular->restrictions();
-    } else if (auto partition = dynamic_cast<const single_column_partition_key_restrictions*>(rs)) {
-        return &partition->restrictions();
-    } else if (auto clustering = dynamic_cast<const single_column_clustering_key_restrictions*>(rs)) {
-        return &clustering->restrictions();
-    }
-    return nullptr;
-}
-
-} // anonymous namespace
-
-std::pair<std::optional<secondary_index::index>, ::shared_ptr<cql3::restrictions::restrictions>> statement_restrictions::find_idx(const secondary_index::secondary_index_manager& sim) const {
+std::pair<std::optional<secondary_index::index>, expr::expression> statement_restrictions::find_idx(const secondary_index::secondary_index_manager& sim) const {
     std::optional<secondary_index::index> chosen_index;
     int chosen_index_score = 0;
-    ::shared_ptr<cql3::restrictions::restrictions> chosen_index_restrictions;
+    expr::expression chosen_index_restrictions;
 
     for (const auto& index : sim.list_indexes()) {
         auto cdef = _schema->get_column_definition(to_bytes(index.target_column()));
-        for (::shared_ptr<cql3::restrictions::restrictions> restriction : index_restrictions()) {
-            if (auto rmap = get_individual_restrictions_map(restriction.get())) {
-                const auto found = rmap->find(cdef);
-                if (found != rmap->end() && is_supported_by(found->second->expression, index)
-                    && score(index) > chosen_index_score) {
-                    chosen_index = index;
-                    chosen_index_score = score(index);
-                    chosen_index_restrictions = restriction;
-                }
+        for (const expr::expression& restriction : index_restrictions()) {
+            if (has_token(restriction) || contains_multi_column_restriction(restriction)) {
+                continue;
+            }
+
+            expr::single_column_restrictions_map rmap = expr::get_single_column_restrictions_map(restriction);
+            const auto found = rmap.find(cdef);
+            if (found != rmap.end() && is_supported_by(found->second, index)
+                && score(index) > chosen_index_score) {
+                chosen_index = index;
+                chosen_index_score = score(index);
+                chosen_index_restrictions = restriction;
             }
         }
     }

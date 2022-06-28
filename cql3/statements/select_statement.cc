@@ -929,12 +929,12 @@ indexed_table_select_statement::indexed_table_select_statement(schema_ptr schema
                                                            std::optional<expr::expression> per_partition_limit,
                                                            cql_stats &stats,
                                                            const secondary_index::index& index,
-                                                           ::shared_ptr<restrictions::restrictions> used_index_restrictions,
+                                                           expr::expression used_index_restrictions,
                                                            schema_ptr view_schema,
                                                            std::unique_ptr<attributes> attrs)
     : select_statement{schema, bound_terms, parameters, selection, restrictions, group_by_cell_indices, is_reversed, ordering_comparator, limit, per_partition_limit, stats, std::move(attrs)}
     , _index{index}
-    , _used_index_restrictions(used_index_restrictions)
+    , _used_index_restrictions(std::move(used_index_restrictions))
     , _view_schema(view_schema)
 {
     if (_index.metadata().local()) {
@@ -993,7 +993,7 @@ lw_shared_ptr<const service::pager::paging_state> indexed_table_select_statement
     auto& last_base_pk = last_pos.partition;
     auto* last_base_ck = last_pos.position.has_key() ? &last_pos.position.key() : nullptr;
 
-    bytes_opt indexed_column_value = _used_index_restrictions->value_for(*cdef, options);
+    bytes_opt indexed_column_value = expr::value_for(*cdef, _used_index_restrictions, options);
 
     auto index_pk = [&]() {
         if (_index.metadata().local()) {
@@ -1178,7 +1178,7 @@ dht::partition_range_vector indexed_table_select_statement::get_partition_ranges
         throw exceptions::invalid_request_exception("Indexed column not found in schema");
     }
 
-    bytes_opt value = _used_index_restrictions->value_for(*cdef, options);
+    bytes_opt value = expr::value_for(*cdef, _used_index_restrictions, options);
     if (value) {
         auto pk = partition_key::from_single_value(*_view_schema, *value);
         auto dk = dht::decorate_key(*_view_schema, pk);
