@@ -9,14 +9,14 @@ import re
 from tabulate import tabulate                           # type: ignore
 
 
-def test_cql(request, cql, test_keyspace):
+def test_cql(request, cql, keyspace):
     # Comments allowed by CQL - -- and //
     comment_re = re.compile(r"^\s*((--|//).*)?$")
     # A comment is not a delimiter even if ends with one
     delimiter_re = re.compile(r"^(?!\s*(--|//)).*;\s*$")
     with open(request.config.getoption("--input"), "r") as ifile, \
             open(request.config.getoption("--output"), "a") as ofile:
-        cql.set_keyspace(test_keyspace)
+        cql.set_keyspace(keyspace)
 
         while True:
             line = ifile.readline()
