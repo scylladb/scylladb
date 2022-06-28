@@ -644,16 +644,13 @@ std::vector<const column_definition*> statement_restrictions::get_column_defs_fo
         auto column_uses_indexing = [&opt_idx] (const column_definition* cdef, const expr::expression* single_col_restr) {
             return opt_idx && single_col_restr && is_supported_by(*single_col_restr, *opt_idx);
         };
-        auto single_pk_restrs = dynamic_pointer_cast<single_column_partition_key_restrictions>(_partition_key_restrictions);
         if (pk_restrictions_need_filtering()) {
             for (auto&& cdef : expr::get_sorted_column_defs(_new_partition_key_restrictions)) {
                 const expr::expression* single_col_restr = nullptr;
-                if (single_pk_restrs) {
-                    auto it = single_pk_restrs->restrictions().find(cdef);
-                    if (it != single_pk_restrs->restrictions().end()) {
-                        if (is_single_column_restriction(it->second->expression)) {
-                            single_col_restr = &it->second->expression;
-                        }
+                auto it = _single_column_partition_key_restrictions.find(cdef);
+                if (it != _single_column_partition_key_restrictions.end()) {
+                    if (is_single_column_restriction(it->second)) {
+                        single_col_restr = &it->second;
                     }
                 }
                 if (!column_uses_indexing(cdef, single_col_restr)) {
