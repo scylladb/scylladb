@@ -19,7 +19,7 @@ using column_computation_ptr = std::unique_ptr<column_computation>;
 
 /*
  * Column computation represents a computation performed in order to obtain a value for a computed column.
- * Computed columns description is also available at docs/system_schema_keyspace.md. They hold values
+ * Computed columns description is also available at docs/dev/system_schema_keyspace.md. They hold values
  * not provided directly by the user, but rather computed: from other column values and possibly other sources.
  * This class is able to serialize/deserialize column computations and perform the computation itself,
  * based on given schema, partition key and clustering row. Responsibility for providing enough data

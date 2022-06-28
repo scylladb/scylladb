@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 ##############################################################################
-# Tests for Scylla's "tracing" feature (see docs/tracing.md) for Alternator
+# Tests for Scylla's "tracing" feature (see docs/dev/tracing.md) for Alternator
 # queries. Reproduces issue #6891, where although tracing was implemented in
 # Alternator, it only worked correctly for some operations but not others.
 # In the tests here we attempt to ensure that the tracing feature continues

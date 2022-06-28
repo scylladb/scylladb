@@ -206,7 +206,7 @@ Note that the `--alternator-https-port` option also requires that files `/etc/sc
 
 #### `--alternator-write-isolation policy`
 
-The `--alternator-write-isolation` command line option chooses between four allowed write isolation policies described in docs/source/alternator/alternator.md. This option must be specified if Alternator is enabled - it does not have a default.
+The `--alternator-write-isolation` command line option chooses between four allowed write isolation policies described in docs/alternator/alternator.md. This option must be specified if Alternator is enabled - it does not have a default.
 
 **Since: 4.1**
 

@@ -73,8 +73,8 @@ Thrift. There is also support for the API of Amazon DynamoDB™,
 which needs to be enabled and configured in order to be used. For more
 information on how to enable the DynamoDB™ API in Scylla,
 and the current compatibility of this feature as well as Scylla-specific extensions, see
-[Alternator](docs/source/alternator/alternator.md) and
-[Getting started with Alternator](docs/source/alternator/getting-started.md).
+[Alternator](docs/alternator/alternator.md) and
+[Getting started with Alternator](docs/alternator/getting-started.md).
 
 ## Documentation
 
