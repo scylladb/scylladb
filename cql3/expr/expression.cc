@@ -2300,33 +2300,52 @@ type_of(const expression& e) {
     }, e);
 }
 
-bool is_single_column_restriction(const expression& e) {
+static std::optional<std::reference_wrapper<const column_value>> get_single_column_restriction_column(const expression& e) {
     if (find_in_expression<unresolved_identifier>(e, [](const auto&) {return true;})) {
         on_internal_error(expr_logger,
-                  format("is_single_column_restriction expects a prepared expression, but it's not: {}}", e));
+            format("get_single_column_restriction_column expects a prepared expression, but it's not: {}}", e));
     }
 
     const column_value* the_only_column = nullptr;
-    bool result = false;
+    bool expression_is_single_column = false;
 
     for_each_expression<column_value>(e,
         [&](const column_value& cval) {
             if (the_only_column == nullptr) {
                 // It's the first column_value we've encountered - set it as the only column
                 the_only_column = &cval;
-                result = true;
+                expression_is_single_column = true;
                 return;
             }
 
             if (cval.col != the_only_column->col) {
                 // In case any other column is encountered the restriction
                 // restricts more than one column.
-                result = false;
+                expression_is_single_column = false;
             }
         }
     );
 
-    return result;
+    if (expression_is_single_column) {
+        return std::cref(*the_only_column);
+    } else {
+        return std::nullopt;
+    }
+}
+
+bool is_single_column_restriction(const expression& e) {
+    return get_single_column_restriction_column(e).has_value();
+}
+
+const column_value& get_the_only_column(const expression& e) {
+    std::optional<std::reference_wrapper<const column_value>> result = get_single_column_restriction_column(e);
+
+    if (!result.has_value()) {
+        on_internal_error(expr_logger,
+            format("get_the_only_column - bad expression: {}", e));
+    }
+
+    return *result;
 }
 } // namespace expr
 } // namespace cql3

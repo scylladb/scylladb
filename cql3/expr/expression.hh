@@ -729,6 +729,9 @@ bool contains_bind_marker(const expression& e);
 // There might be more than one restriction, but exactly one column.
 // The expression must be prepared.
 bool is_single_column_restriction(const expression&);
+
+// Gets the only column from a single_column_restriction expression.
+const column_value& get_the_only_column(const expression&);
 } // namespace expr
 
 } // namespace cql3
