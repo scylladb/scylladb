@@ -1,17 +1,17 @@
 # Global variables
 # You can set these variables from the command line.
-POETRY        = poetry
-SPHINXOPTS    =
-SPHINXBUILD   = $(POETRY) run sphinx-build
-PAPER         =
-BUILDDIR      = _build
-SOURCEDIR     = source
+POETRY        := poetry
+SPHINXOPTS    :=
+SPHINXBUILD   := $(POETRY) run sphinx-build
+PAPER         :=
+BUILDDIR      := _build
+SOURCEDIR     := .
 
 # Internal variables
-PAPEROPT_a4     = -D latex_paper_size=a4
-PAPEROPT_letter = -D latex_paper_size=letter
-ALLSPHINXOPTS   = -d $(BUILDDIR)/doctrees $(PAPEROPT_$(PAPER)) $(SPHINXOPTS) $(SOURCEDIR)
-TESTSPHINXOPTS  = $(ALLSPHINXOPTS) -W --keep-going
+PAPEROPT_a4     := -D latex_paper_size=a4
+PAPEROPT_letter := -D latex_paper_size=letter
+ALLSPHINXOPTS   := -d $(BUILDDIR)/doctrees $(PAPEROPT_$(PAPER)) $(SPHINXOPTS) $(SOURCEDIR)
+TESTSPHINXOPTS  := $(ALLSPHINXOPTS) -W --keep-going
 
 # Windows variables
 ifeq ($(OS),Windows_NT)
@@ -67,7 +67,7 @@ epub3: setup
 
 .PHONY: multiversion
 multiversion: setup
-	$(POETRY) run sphinx-multiversion source $(BUILDDIR)/dirhtml
+	$(POETRY) run sphinx-multiversion $(SOURCEDIR) $(BUILDDIR)/dirhtml
 	@echo
 	@echo "Build finished. The HTML pages are in $(BUILDDIR)/dirhtml."
 

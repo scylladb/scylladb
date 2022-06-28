@@ -13,9 +13,9 @@ sys.path.insert(0, os.path.abspath(".."))
 
 # Build documentation for the following tags and branches
 TAGS = []
-BRANCHES = []
+BRANCHES = ["master"]
 # Set the latest version.
-LATEST_VERSION = "branch-1.2"
+LATEST_VERSION = "master"
 # Set which versions are not released yet.
 UNSTABLE_VERSIONS = ["master"]
 # Set which versions are deprecated
@@ -49,7 +49,7 @@ author = u"Scylla Project Contributors"
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "dev"]
 
 # The name of the Pygments (syntax highlighting) style to use.
 pygments_style = "sphinx"
@@ -69,11 +69,6 @@ notfound_urls_prefix = ""
 # -- Options for sitemap extension ---------------------------------------
 
 sitemap_url_scheme = "stable/{link}"
-
-# -- Options for redirect extension --------------------------------------
-
-# Read a YAML dictionary of redirections and generate an HTML file for each
-redirects_file = "_utils/redirections.yaml"
 
 # -- Options for multiversion extension ----------------------------------
 
@@ -96,15 +91,13 @@ smv_outputdir_format = "{ref.name}"
 
 # The theme to use for pages.
 html_theme = "sphinx_scylladb_theme"
-html_theme_path = ["../.."]
 
 # Theme options are theme-specific and customize the look and feel of a theme
 # further.  For a list of options available for the theme, see the
 # documentation.
 html_theme_options = {
-    "conf_py_path": "docs/source/",
+    "conf_py_path": "docs/",
     "hide_edit_this_page_button": "false",
-    "hide_banner": "false",
     "github_issues_repository": "scylladb/scylla",
     "github_repository": "scylladb/scylla",
     "hide_version_dropdown": ["master"],
@@ -122,7 +115,7 @@ html_sidebars = {"**": ["side-nav.html"]}
 htmlhelp_basename = "ScyllaDocumentationdoc"
 
 # URL which points to the root of the HTML documentation.
-html_baseurl = "https://sphinx-theme.scylladb.com"
+html_baseurl = 'https://scylla.docs.scylladb.com'
 
 # Dictionary of values to pass into the template engine’s context for all pages
 html_context = {"html_baseurl": html_baseurl}
