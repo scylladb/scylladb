@@ -12,6 +12,7 @@
 
 #include <vector>
 #include <list>
+#include "cql3/expr/expression.hh"
 #include "to_string.hh"
 #include "schema_fwd.hh"
 #include "cql3/restrictions/restrictions.hh"
@@ -43,15 +44,21 @@ private:
      */
     ::shared_ptr<partition_key_restrictions> _partition_key_restrictions;
 
+    expr::expression _new_partition_key_restrictions;
+
     /**
      * Restrictions on clustering columns
      */
     ::shared_ptr<clustering_key_restrictions> _clustering_columns_restrictions;
 
+    expr::expression _new_clustering_columns_restrictions;
+
     /**
      * Restriction on non-primary key columns (i.e. secondary index restrictions)
      */
     ::shared_ptr<single_column_restrictions> _nonprimary_key_restrictions;
+
+    expr::expression _new_nonprimary_key_restrictions;
 
     std::unordered_set<const column_definition*> _not_null_columns;
 
@@ -222,6 +229,14 @@ public:
      */
     bool has_unrestricted_clustering_columns() const;
 private:
+    void add_restriction(const expr::binary_operator& restr, schema_ptr schema, bool allow_filtering, bool for_view);
+    void add_is_not_restriction(const expr::binary_operator& restr, schema_ptr schema, bool for_view);
+    void add_single_column_parition_key_restriction(const expr::binary_operator& restr, schema_ptr schema, bool allow_filtering, bool for_view);
+    void add_token_partition_key_restriction(const expr::binary_operator& restr);
+    void add_single_column_clustering_key_restriction(const expr::binary_operator& restr, schema_ptr schema, bool allow_filtering);
+    void add_multi_column_clustering_key_restriction(const expr::binary_operator& restr);
+    void add_single_column_nonprimary_key_restriction(const expr::binary_operator& restr);
+
     void process_partition_key_restrictions(bool for_view, bool allow_filtering);
 
     /**

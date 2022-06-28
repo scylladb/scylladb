@@ -409,6 +409,12 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
 {
     if (!where_clause.empty()) {
         for (auto&& relation_expr : where_clause) {
+            const expr::binary_operator* relation_binop = expr::as_if<expr::binary_operator>(&relation_expr);
+
+            if (relation_binop == nullptr) {
+                on_internal_error(rlogger, format("statement_restrictions: where clause has non-binop element: {}", relation_expr));
+            }
+
             if (is<expr::binary_operator>(relation_expr) && as<expr::binary_operator>(relation_expr).op == expr::oper_t::IS_NOT) {
                 const expr::binary_operator& relation = as<expr::binary_operator>(relation_expr);
                 const expr::unresolved_identifier* lhs_col_ident =
@@ -458,6 +464,9 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
                 }
                 _where = _where.has_value() ? make_conjunction(std::move(*_where), restriction->expression) : restriction->expression;
             }
+
+            expr::binary_operator prepared_restriction = expr::prepare_binary_operator(*relation_binop, db, schema);
+            add_restriction(prepared_restriction, schema, allow_filtering, for_view);
         }
     }
     if (_where.has_value()) {
@@ -681,6 +690,168 @@ std::vector<const column_definition*> statement_restrictions::get_column_defs_fo
         }
     }
     return column_defs_for_filtering;
+}
+
+void statement_restrictions::add_restriction(const expr::binary_operator& restr, schema_ptr schema, bool allow_filtering, bool for_view) {
+    if (restr.op == expr::oper_t::IS_NOT) {
+        // Handle IS NOT NULL restrictions seperately
+        add_is_not_restriction(restr, schema, for_view);
+    } else if (expr::is_multi_column(restr)) {
+        // Multi column restrictions are only allowed on clustering columns
+        add_multi_column_clustering_key_restriction(restr);
+    } else if (has_token(restr)) {
+        // Token always restricts the partition key
+        add_token_partition_key_restriction(restr);
+    } else if (expr::is_single_column_restriction(restr)) {
+        const column_definition* def = get_the_only_column(restr).col;
+        if (def->is_partition_key()) {
+            add_single_column_parition_key_restriction(restr, schema, allow_filtering, for_view);
+        } else if (def->is_clustering_key()) {
+            add_single_column_clustering_key_restriction(restr, schema, allow_filtering);
+        } else {
+            add_single_column_nonprimary_key_restriction(restr);
+        }
+    } else {
+        throw exceptions::invalid_request_exception(format("Unhandled restriction: {}", restr));
+    }
+}
+
+void statement_restrictions::add_is_not_restriction(const expr::binary_operator& restr, schema_ptr schema, bool for_view) {
+    const expr::column_value* lhs_col_def = expr::as_if<expr::column_value>(&restr.lhs);
+    // The "IS NOT NULL" restriction is only supported (and
+    // mandatory) for materialized view creation:
+    if (lhs_col_def == nullptr) {
+        throw exceptions::invalid_request_exception("IS NOT only supports single column");
+    }
+    // currently, the grammar only allows the NULL argument to be
+    // "IS NOT", so this assertion should not be able to fail
+    if (!expr::is<expr::constant>(restr.rhs) || !expr::as<expr::constant>(restr.rhs).is_null()) {
+        throw exceptions::invalid_request_exception("Only IS NOT NULL is supported");
+    }
+
+    _not_null_columns.insert(lhs_col_def->col);
+
+    if (!for_view) {
+        throw exceptions::invalid_request_exception(format("restriction '{}' is only supported in materialized view creation", restr));
+    }
+}
+
+void statement_restrictions::add_single_column_parition_key_restriction(const expr::binary_operator& restr, schema_ptr schema, bool allow_filtering, bool for_view) {
+    // View definition allows PK slices, because it's not a performance problem.
+    if (restr.op != expr::oper_t::EQ && restr.op != expr::oper_t::IN && !allow_filtering && !for_view) {
+        throw exceptions::invalid_request_exception(
+                "Only EQ and IN relation are supported on the partition key "
+                "(unless you use the token() function or allow filtering)");
+    }
+    if (has_token(_new_partition_key_restrictions)) {
+        throw exceptions::invalid_request_exception(
+                format("Columns \"{}\" cannot be restricted by both a normal relation and a token relation",
+                        join(", ", expr::get_sorted_column_defs(_new_partition_key_restrictions))));
+    }
+
+    _new_partition_key_restrictions = expr::make_conjunction(_new_partition_key_restrictions, restr);
+    _partition_range_is_simple &= !find(restr, expr::oper_t::IN);
+}
+
+void statement_restrictions::add_token_partition_key_restriction(const expr::binary_operator& restr) {
+    if (!expr::is_empty_restriction(_new_partition_key_restrictions) && !has_token(_new_partition_key_restrictions)) {
+        throw exceptions::invalid_request_exception(
+                format("Columns \"{}\" cannot be restricted by both a normal relation and a token relation",
+                        join(", ", expr::get_sorted_column_defs(_new_partition_key_restrictions))));
+    }
+
+    _new_partition_key_restrictions = expr::make_conjunction(_new_partition_key_restrictions, restr);
+}
+
+void statement_restrictions::add_single_column_clustering_key_restriction(const expr::binary_operator& restr, schema_ptr schema, bool allow_filtering) {
+    if (find_binop(_new_clustering_columns_restrictions, [] (const expr::binary_operator& b) {
+                return expr::is<expr::tuple_constructor>(b.lhs);
+            })) {
+        throw exceptions::invalid_request_exception(
+            "Mixing single column relations and multi column relations on clustering columns is not allowed");
+    }
+
+    const column_definition* new_column = expr::get_the_only_column(restr).col;
+    const column_definition* last_column = expr::get_last_column_def(_new_clustering_columns_restrictions);
+
+    if (last_column != nullptr && !allow_filtering) {
+        if (has_slice(_new_clustering_columns_restrictions) && schema->position(*new_column) > schema->position(*last_column)) {
+            throw exceptions::invalid_request_exception(format("Clustering column \"{}\" cannot be restricted (preceding column \"{}\" is restricted by a non-EQ relation)",
+                new_column->name_as_text(), last_column->name_as_text()));
+        }
+
+        if (schema->position(*new_column) < schema->position(*last_column)) {
+            if (has_slice(restr)) {
+                throw exceptions::invalid_request_exception(format("PRIMARY KEY column \"{}\" cannot be restricted (preceding column \"{}\" is restricted by a non-EQ relation)",
+                    last_column->name_as_text(), new_column->name_as_text()));
+            }
+        }
+    }
+
+    _new_clustering_columns_restrictions = expr::make_conjunction(_new_clustering_columns_restrictions, restr);
+}
+
+void statement_restrictions::add_multi_column_clustering_key_restriction(const expr::binary_operator& restr) {
+    if (expr::is_empty_restriction(_new_clustering_columns_restrictions)) {
+        _new_clustering_columns_restrictions = expr::make_conjunction(_new_clustering_columns_restrictions, restr);
+        return;
+    }
+
+    if (!find_binop(_new_clustering_columns_restrictions, [] (const expr::binary_operator& b) {
+                return expr::is<expr::tuple_constructor>(b.lhs);
+    })) {
+        throw exceptions::invalid_request_exception("Mixing single column relations and multi column relations on clustering columns is not allowed");
+    }
+
+    if (restr.op == expr::oper_t::EQ) {
+        throw exceptions::invalid_request_exception(format("{} cannot be restricted by more than one relation if it includes an Equal",
+            expr::get_columns_in_commons(_new_clustering_columns_restrictions, restr)));
+    } else if (restr.op == expr::oper_t::IN) {
+        throw exceptions::invalid_request_exception(format("{} cannot be restricted by more than one relation if it includes a IN",
+                                                           expr::get_columns_in_commons(_new_clustering_columns_restrictions, restr)));
+    } else if (is_slice(restr.op)) {
+        if (!expr::has_slice(_new_clustering_columns_restrictions)) {
+            throw exceptions::invalid_request_exception(format("Column \"{}\" cannot be restricted by both an equality and an inequality relation",
+                                                           expr::get_columns_in_commons(_new_clustering_columns_restrictions, restr)));
+        }
+
+        const expr::binary_operator* other_slice = expr::find_in_expression<expr::binary_operator>(_new_clustering_columns_restrictions, [](const expr::binary_operator){return true;});
+        if (other_slice == nullptr) {
+            on_internal_error(rlogger, "add_multi_column_clustering_key_restriction: _new_clustering_columns_restrictions is empty!");
+        }
+
+        // Don't allow to mix plain and SCYLLA_CLUSTERING_BOUND bounds
+        if (other_slice->order != restr.order) {
+            static auto order2str = [](auto o) { return o == expr::comparison_order::cql ? "plain" : "SCYLLA_CLUSTERING_BOUND"; };
+            throw exceptions::invalid_request_exception(
+                    format("Invalid combination of restrictions ({} / {})",
+                    order2str(restr.order), order2str(other_slice->order)));
+        }
+
+        // Here check that there aren't two < <= or two > and >=
+        auto is_greater = [](expr::oper_t op) {return op == expr::oper_t::GT || op == expr::oper_t::GTE; };
+        auto is_less = [](expr::oper_t op) {return op == expr::oper_t::LT || op == expr::oper_t::LTE; };
+
+        if (is_greater(restr.op) && is_greater(other_slice->op)) {
+            throw exceptions::invalid_request_exception(format(
+            "More than one restriction was found for the start bound on {}",
+                expr::get_columns_in_commons(restr, *other_slice)));
+        }
+
+        if (is_less(restr.op) && is_less(other_slice->op)) {
+            throw exceptions::invalid_request_exception(format(
+                "More than one restriction was found for the end bound on {}",
+                expr::get_columns_in_commons(restr, *other_slice)));
+        }
+
+        _new_clustering_columns_restrictions = expr::make_conjunction(_new_clustering_columns_restrictions, restr);
+    } else {
+        throw exceptions::invalid_request_exception(format("Unsupported multi-column relation: ", restr));
+    }
+}
+
+void statement_restrictions::add_single_column_nonprimary_key_restriction(const expr::binary_operator& restr) {
+    _new_nonprimary_key_restrictions = expr::make_conjunction(_new_nonprimary_key_restrictions, restr);
 }
 
 void statement_restrictions::process_partition_key_restrictions(bool for_view, bool allow_filtering) {
