@@ -10,41 +10,33 @@
 
 #include <functional>
 #include <limits>
+#include <optional>
 
 namespace detail {
 
 template<typename T, typename Comparator>
 class extremum_tracker {
     T _default_value;
-    bool _is_set = false;
-    T _value;
+    std::optional<T> _value;
 public:
-    explicit extremum_tracker(T default_value) {
-        _default_value = default_value;
-    }
+    explicit extremum_tracker(const T& default_value)
+        : _default_value(default_value)
+    {}
 
-    void update(T value) {
-        if (!_is_set) {
+    void update(const T& value) {
+        if (!_value || Comparator{}(value, *_value)) {
             _value = value;
-            _is_set = true;
-        } else {
-            if (Comparator{}(value,_value)) {
-                _value = value;
-            }
         }
     }
 
     void update(const extremum_tracker& other) {
-        if (other._is_set) {
-            update(other._value);
+        if (other._value) {
+            update(*other._value);
         }
     }
 
-    T get() const {
-        if (_is_set) {
-            return _value;
-        }
-        return _default_value;
+    const T& get() const {
+        return _value ? *_value : _default_value;
     }
 };
 
@@ -66,12 +58,12 @@ public:
         , _max_tracker(std::numeric_limits<T>::max())
     {}
 
-    min_max_tracker(T default_min, T default_max)
+    min_max_tracker(const T& default_min, const T& default_max)
         : _min_tracker(default_min)
         , _max_tracker(default_max)
     {}
 
-    void update(T value) {
+    void update(const T& value) {
         _min_tracker.update(value);
         _max_tracker.update(value);
     }
@@ -81,11 +73,11 @@ public:
         _max_tracker.update(other._max_tracker);
     }
 
-    T min() const {
+    const T& min() const {
         return _min_tracker.get();
     }
 
-    T max() const {
+    const T& max() const {
         return _max_tracker.get();
     }
 };

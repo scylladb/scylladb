@@ -504,7 +504,7 @@ private:
     schema_ptr _schema;
     sstring _dir;
     std::optional<sstring> _temp_dir; // Valid while the sstable is being created, until sealed
-    generation_type _generation = 0;
+    generation_type _generation{0};
 
     version_types _version;
     format_types _format;

@@ -43,7 +43,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_move) {
         auto cur_dir = sst->get_dir();
         auto new_dir = format("{}/gen-{}", fs::path(cur_dir).parent_path().native(), gen);
         touch_directory(new_dir).get();
-        sst->move_to_new_dir(new_dir, gen, true).get();
+        sst->move_to_new_dir(new_dir, generation_from_value(gen), true).get();
         // the source directory must be empty now
         remove_file(cur_dir).get();
     }
@@ -64,20 +64,20 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_move) {
 // Must be called from a seastar thread
 static bool partial_create_links(sstable_ptr sst, fs::path dst_path, int64_t gen, int count) {
     auto schema = sst->get_schema();
-    auto tmp_toc = sstable::filename(dst_path.native(), schema->ks_name(), schema->cf_name(), sst->get_version(), gen, sstable_format_types::big, component_type::TemporaryTOC);
+    auto tmp_toc = sstable::filename(dst_path.native(), schema->ks_name(), schema->cf_name(), sst->get_version(), generation_from_value(gen), sstable_format_types::big, component_type::TemporaryTOC);
     link_file(sst->filename(component_type::TOC), tmp_toc).get();
     for (auto& [c, s] : sst->all_components()) {
         if (count-- <= 0) {
             return false;
         }
         auto src = sst->filename(c);
-        auto dst = sstable::filename(dst_path.native(), schema->ks_name(), schema->cf_name(), sst->get_version(), gen, sstable_format_types::big, c);
+        auto dst = sstable::filename(dst_path.native(), schema->ks_name(), schema->cf_name(), sst->get_version(), generation_from_value(gen), sstable_format_types::big, c);
         link_file(src, dst).get();
     }
     if (count-- <= 0) {
         return false;
     }
-    auto dst = sstable::filename(dst_path.native(), schema->ks_name(), schema->cf_name(), sst->get_version(), gen, sstable_format_types::big, component_type::TOC);
+    auto dst = sstable::filename(dst_path.native(), schema->ks_name(), schema->cf_name(), sst->get_version(), generation_from_value(gen), sstable_format_types::big, component_type::TOC);
     remove_file(tmp_toc).get();
     return true;
 }
@@ -98,7 +98,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_move_replay) {
         auto new_dir = format("{}/gen-{}", fs::path(cur_dir).parent_path().native(), gen);
         touch_directory(new_dir).get();
         done = partial_create_links(sst, fs::path(new_dir), gen, count++);
-        sst->move_to_new_dir(new_dir, gen, true).get();
+        sst->move_to_new_dir(new_dir, generation_from_value(gen), true).get();
         remove_file(cur_dir).get();
     } while (!done);
 }
@@ -115,5 +115,5 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_move_exists_failure) {
     auto cur_dir = src_sst->get_dir();
     auto new_dir = dst_sst->get_dir();
     dst_sst->close_files().get();
-    BOOST_REQUIRE_THROW(src_sst->move_to_new_dir(new_dir, gen, true).get(), malformed_sstable_exception);
+    BOOST_REQUIRE_THROW(src_sst->move_to_new_dir(new_dir, generation_from_value(gen), true).get(), malformed_sstable_exception);
 }

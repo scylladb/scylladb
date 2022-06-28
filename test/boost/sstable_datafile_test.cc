@@ -2098,7 +2098,7 @@ SEASTAR_TEST_CASE(test_unknown_component) {
         BOOST_REQUIRE(file_exists(tmp.path().string() + "/la-1-big-UNKNOWN.txt").get0());
 
         sstp = env.reusable_sst(uncompressed_schema(), tmp.path().string(), 1).get0();
-        sstp->set_generation(2).get();
+        sstp->set_generation(generation_from_value(2)).get();
         BOOST_REQUIRE(!file_exists(tmp.path().string() +  "/la-1-big-UNKNOWN.txt").get0());
         BOOST_REQUIRE(file_exists(tmp.path().string() + "/la-2-big-UNKNOWN.txt").get0());
 
@@ -2125,7 +2125,7 @@ SEASTAR_TEST_CASE(sstable_set_incremental_selector) {
         auto sstables = selector.select(key).sstables;
         BOOST_REQUIRE_EQUAL(sstables.size(), expected_gens.size());
         for (auto& sst : sstables) {
-            BOOST_REQUIRE(expected_gens.contains(sst->generation()));
+            BOOST_REQUIRE(expected_gens.contains(generation_value(sst->generation())));
         }
     };
 
@@ -2264,7 +2264,7 @@ SEASTAR_TEST_CASE(sstable_tombstone_histogram_test) {
             }
             auto sst = make_sstable_containing(sst_gen, mutations);
             auto histogram = sst->get_stats_metadata().estimated_tombstone_drop_time;
-            sst = env.reusable_sst(s, tmp.path().string(), sst->generation(), version).get0();
+            sst = env.reusable_sst(s, tmp.path().string(), generation_value(sst->generation()), version).get0();
             auto histogram2 = sst->get_stats_metadata().estimated_tombstone_drop_time;
 
             // check that histogram respected limit
@@ -2321,7 +2321,7 @@ SEASTAR_TEST_CASE(sstable_owner_shards) {
             };
             auto sst = make_sstable_containing(sst_gen, std::move(muts));
             auto schema = schema_builder(s).with_sharder(smp_count, ignore_msb).build();
-            sst = env.reusable_sst(std::move(schema), tmp.path().string(), sst->generation()).get0();
+            sst = env.reusable_sst(std::move(schema), tmp.path().string(), generation_value(sst->generation())).get0();
             return sst;
         };
 
@@ -2378,7 +2378,7 @@ SEASTAR_TEST_CASE(test_summary_entry_spanning_more_keys_than_min_interval) {
             return env.make_sstable(s, tmp.path().string(), (*gen)++, sstables::get_highest_sstable_version(), big);
         };
         auto sst = make_sstable_containing(sst_gen, mutations);
-        sst = env.reusable_sst(s, tmp.path().string(), sst->generation()).get0();
+        sst = env.reusable_sst(s, tmp.path().string(), generation_value(sst->generation())).get0();
 
         summary& sum = sstables::test(sst).get_summary();
         BOOST_REQUIRE(sum.entries.size() == 1);
@@ -2939,7 +2939,7 @@ SEASTAR_TEST_CASE(compound_sstable_set_basic_test) {
         set2->insert(sstable_for_overlapping_test(env, s, 2, key_and_token_pair[0].first, key_and_token_pair[1].first, 0));
         set2->insert(sstable_for_overlapping_test(env, s, 3, key_and_token_pair[0].first, key_and_token_pair[1].first, 0));
 
-        BOOST_REQUIRE(boost::accumulate(*compound->all() | boost::adaptors::transformed([] (const sstables::shared_sstable& sst) { return sst->generation(); }), unsigned(0)) == 6);
+        BOOST_REQUIRE(boost::accumulate(*compound->all() | boost::adaptors::transformed([] (const sstables::shared_sstable& sst) { return generation_value(sst->generation()); }), unsigned(0)) == 6);
         {
             unsigned found = 0;
             for (auto sstables = compound->all(); auto& sst : *sstables) {

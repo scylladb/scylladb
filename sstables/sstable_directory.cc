@@ -50,7 +50,7 @@ sstable_directory::sstable_directory(fs::path sstable_dir,
 
 void
 sstable_directory::handle_component(scan_state& state, sstables::entry_descriptor desc, fs::path filename) {
-    if ((desc.generation % smp::count) != this_shard_id()) {
+    if ((generation_value(desc.generation) % smp::count) != this_shard_id()) {
         return;
     }
 
@@ -142,7 +142,7 @@ sstable_directory::sort_sstable(sstables::shared_sstable sst) {
     });
 }
 
-int64_t
+generation_type
 sstable_directory::highest_generation_seen() const {
     return _max_generation_seen;
 }
@@ -202,8 +202,8 @@ sstable_directory::process_sstable_dir(const ::io_priority_class& iop, bool sort
         state.descriptors.erase(desc.generation);
     }
 
-    _max_generation_seen =  boost::accumulate(state.generations_found | boost::adaptors::map_keys, int64_t(0), [] (int64_t a, int64_t b) {
-        return std::max<int64_t>(a, b);
+    _max_generation_seen =  boost::accumulate(state.generations_found | boost::adaptors::map_keys, generation_from_value(0), [] (generation_type a, generation_type b) {
+        return std::max<generation_type>(a, b);
     });
 
     dirlog.debug("After {} scanned, seen generation {}. {} descriptors found, {} different files found ",
@@ -211,7 +211,7 @@ sstable_directory::process_sstable_dir(const ::io_priority_class& iop, bool sort
 
     // _descriptors is everything with a TOC. So after we remove this, what's left is
     // SSTables for which a TOC was not found.
-    co_await parallel_for_each_restricted(state.descriptors, [this, sort_sstables_according_to_owner, &state, &iop] (std::tuple<int64_t, sstables::entry_descriptor>&& t) {
+    co_await parallel_for_each_restricted(state.descriptors, [this, sort_sstables_according_to_owner, &state, &iop] (std::tuple<generation_type, sstables::entry_descriptor>&& t) {
         auto& desc = std::get<1>(t);
         state.generations_found.erase(desc.generation);
         // This will try to pre-load this file and throw an exception if it is invalid

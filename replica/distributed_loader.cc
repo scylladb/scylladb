@@ -219,9 +219,9 @@ distributed_loader::reshard(sharded<sstables::sstable_directory>& dir, sharded<r
     co_await run_resharding_jobs(dir, std::move(destinations), db, ks_name, table_name, std::move(creator));
 }
 
-future<int64_t>
+future<sstables::generation_type>
 highest_generation_seen(sharded<sstables::sstable_directory>& directory) {
-    return directory.map_reduce0(std::mem_fn(&sstables::sstable_directory::highest_generation_seen), int64_t(0), [] (int64_t a, int64_t b) {
+    return directory.map_reduce0(std::mem_fn(&sstables::sstable_directory::highest_generation_seen), sstables::generation_from_value(0), [] (sstables::generation_type a, sstables::generation_type b) {
         return std::max(a, b);
     });
 }
@@ -316,7 +316,7 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
         process_sstable_dir(directory).get();
 
         auto generation = highest_generation_seen(directory).get0();
-        auto shard_generation_base = generation / smp::count + 1;
+        auto shard_generation_base = sstables::generation_value(generation) / smp::count + 1;
 
         // We still want to do our best to keep the generation numbers shard-friendly.
         // Each destination shard will manage its own generation counter.
@@ -329,14 +329,14 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
             // we need generation calculated by instance of cf at requested shard
             auto gen = shard_gen[shard].fetch_add(smp::count, std::memory_order_relaxed);
 
-            return global_table->make_sstable(upload.native(), gen,
+            return global_table->make_sstable(upload.native(), sstables::generation_from_value(gen),
                     global_table->get_sstables_manager().get_highest_supported_format(),
                     sstables::sstable::format_types::big, &error_handler_gen_for_upload_dir);
         }).get();
 
         reshape(directory, db, sstables::reshape_mode::strict, ks, cf, [global_table, upload, &shard_gen] (shard_id shard) {
             auto gen = shard_gen[shard].fetch_add(smp::count, std::memory_order_relaxed);
-            return global_table->make_sstable(upload.native(), gen,
+            return global_table->make_sstable(upload.native(), sstables::generation_from_value(gen),
                   global_table->get_sstables_manager().get_highest_supported_format(),
                   sstables::sstable::format_types::big,
                   &error_handler_gen_for_upload_dir);
