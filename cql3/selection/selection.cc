@@ -454,11 +454,11 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
             if (restr_it == non_pk_restrictions_map.end()) {
                 continue;
             }
-            restrictions::single_column_restriction& restriction = *restr_it->second;
+            restrictions::restriction& single_col_restriction = *restr_it->second;
             // FIXME: push to upper layer so it happens once per row
             auto static_and_regular_columns = expr::get_non_pk_values(selection, static_row, row);
             bool regular_restriction_matches = expr::is_satisfied_by(
-                    restriction.expression,
+                    single_col_restriction.expression,
                     expr::evaluation_inputs{
                         .partition_key = &partition_key,
                         .clustering_key = &clustering_key,
@@ -481,9 +481,9 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
             if (restr_it == partition_key_restrictions_map.end()) {
                 continue;
             }
-            restrictions::single_column_restriction& restriction = *restr_it->second;
+            restrictions::restriction& single_col_restriction = *restr_it->second;
             if (!expr::is_satisfied_by(
-                        restriction.expression,
+                        single_col_restriction.expression,
                         expr::evaluation_inputs{
                             .partition_key = &partition_key,
                             .clustering_key = &clustering_key,
@@ -508,9 +508,9 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
             if (clustering_key.empty()) {
                 return false;
             }
-            restrictions::single_column_restriction& restriction = *restr_it->second;
+            restrictions::restriction& single_col_restriction = *restr_it->second;
             if (!expr::is_satisfied_by(
-                        restriction.expression,
+                        single_col_restriction.expression,
                         expr::evaluation_inputs{
                             .partition_key = &partition_key,
                             .clustering_key = &clustering_key,

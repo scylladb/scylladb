@@ -95,7 +95,7 @@ void validate_single_column_relation(const column_value& lhs, oper_t oper, const
                                                                       const schema& schema) {
     validate_single_column_relation(lhs_col, oper, schema, false);
 
-    ::shared_ptr<restrictions::restriction> r = ::make_shared<restrictions::single_column_restriction>(*lhs_col.col);
+    ::shared_ptr<restrictions::restriction> r = ::make_shared<restrictions::restriction>();
     r->expression = binary_operator(std::move(lhs_col), oper, std::move(prepared_rhs), order);
     return r;
 }
@@ -108,7 +108,7 @@ void validate_single_column_relation(const column_value& lhs, oper_t oper, const
     const column_value& sub_col = get_subscripted_column(lhs_sub);
     validate_single_column_relation(sub_col, oper, schema, true);
 
-    ::shared_ptr<restrictions::restriction> r = ::make_shared<restrictions::single_column_restriction>(*sub_col.col);
+    ::shared_ptr<restrictions::restriction> r = ::make_shared<restrictions::restriction>();
     r->expression = binary_operator(std::move(lhs_sub), oper, std::move(prepared_rhs));
     return r;
 }

@@ -439,8 +439,8 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
                 } else if (has_token(restriction->expression)) {
                     _partition_key_restrictions = _partition_key_restrictions->merge_to(_schema, restriction);
                 } else {
-                    auto single = ::static_pointer_cast<single_column_restriction>(restriction);
-                    auto& def = single->get_column_def();
+                    auto single = restriction;
+                    auto& def = *get_the_only_column(single->expression).col;
                     if (def.is_partition_key()) {
                         // View definition allows PK slices, because it's not a performance problem.
                         if (has_slice(restriction->expression) && !allow_filtering && !for_view) {
@@ -629,20 +629,22 @@ std::vector<const column_definition*> statement_restrictions::get_column_defs_fo
     if (need_filtering()) {
         auto& sim = db.find_column_family(_schema).get_index_manager();
         auto opt_idx = std::get<0>(find_idx(sim));
-        auto column_uses_indexing = [&opt_idx] (const column_definition* cdef, ::shared_ptr<single_column_restriction> restr) {
-            return opt_idx && restr && is_supported_by(restr->expression, *opt_idx);
+        auto column_uses_indexing = [&opt_idx] (const column_definition* cdef, const expr::expression* single_col_restr) {
+            return opt_idx && single_col_restr && is_supported_by(*single_col_restr, *opt_idx);
         };
         auto single_pk_restrs = dynamic_pointer_cast<single_column_partition_key_restrictions>(_partition_key_restrictions);
         if (_partition_key_restrictions->needs_filtering(*_schema)) {
             for (auto&& cdef : _partition_key_restrictions->get_column_defs()) {
-                ::shared_ptr<single_column_restriction> restr;
+                const expr::expression* single_col_restr = nullptr;
                 if (single_pk_restrs) {
                     auto it = single_pk_restrs->restrictions().find(cdef);
                     if (it != single_pk_restrs->restrictions().end()) {
-                        restr = dynamic_pointer_cast<single_column_restriction>(it->second);
+                        if (is_single_column_restriction(it->second->expression)) {
+                            single_col_restr = &it->second->expression;
+                        }
                     }
                 }
-                if (!column_uses_indexing(cdef, restr)) {
+                if (!column_uses_indexing(cdef, single_col_restr)) {
                     column_defs_for_filtering.emplace_back(cdef);
                 }
             }
@@ -653,21 +655,27 @@ std::vector<const column_definition*> statement_restrictions::get_column_defs_fo
             column_id first_filtering_id = pk_has_unrestricted_components ? 0 : _schema->clustering_key_columns().begin()->id +
                     _clustering_columns_restrictions->num_prefix_columns_that_need_not_be_filtered();
             for (auto&& cdef : _clustering_columns_restrictions->get_column_defs()) {
-                ::shared_ptr<single_column_restriction> restr;
+                const expr::expression* single_col_restr = nullptr;
                 if (single_ck_restrs) {
                     auto it = single_ck_restrs->restrictions().find(cdef);
                     if (it != single_ck_restrs->restrictions().end()) {
-                        restr = dynamic_pointer_cast<single_column_restriction>(it->second);
+                        if (is_single_column_restriction(it->second->expression)) {
+                            single_col_restr = &it->second->expression;
+                        }
                     }
                 }
-                if (cdef->id >= first_filtering_id && !column_uses_indexing(cdef, restr)) {
+                if (cdef->id >= first_filtering_id && !column_uses_indexing(cdef, single_col_restr)) {
                     column_defs_for_filtering.emplace_back(cdef);
                 }
             }
         }
         for (auto&& cdef : _nonprimary_key_restrictions->get_column_defs()) {
-            auto restr = dynamic_pointer_cast<single_column_restriction>(_nonprimary_key_restrictions->get_restriction(*cdef));
-            if (!column_uses_indexing(cdef, restr)) {
+            ::shared_ptr<restriction> cur_restr = _nonprimary_key_restrictions->get_restriction(*cdef);
+            const expr::expression* single_col_restr = nullptr;
+            if (is_single_column_restriction(cur_restr->expression)) {
+                single_col_restr = &cur_restr->expression;
+            }
+            if (!column_uses_indexing(cdef, single_col_restr)) {
                 column_defs_for_filtering.emplace_back(cdef);
             }
         }

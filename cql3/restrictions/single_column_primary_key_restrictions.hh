@@ -86,7 +86,7 @@ public:
             if (!this_cdef) {
                 throw exceptions::invalid_request_exception(format("Base column {} not found in view index schema", other_cdef->name_as_text()));
             }
-            auto r = ::make_shared<single_column_restriction>(*this_cdef);
+            auto r = ::make_shared<restriction>(*this_cdef);
             r->expression = replace_column_def(entry.second->expression, this_cdef);
             _restrictions->add_restriction(r);
         }
@@ -96,10 +96,10 @@ public:
         return _restrictions->is_all_eq();
     }
 
-    void do_merge_with(::shared_ptr<single_column_restriction> restriction) {
+    void do_merge_with(const ::shared_ptr<restriction>& single_column_restriction) {
         if (!_restrictions->empty() && !_allow_filtering) {
             auto last_column = *_restrictions->last_column();
-            auto new_column = restriction->get_column_def();
+            auto new_column = *get_the_only_column(single_column_restriction->expression).col;
 
             if (has_slice(this->expression) && _schema->position(new_column) > _schema->position(last_column)) {
                 throw exceptions::invalid_request_exception(format("Clustering column \"{}\" cannot be restricted (preceding column \"{}\" is restricted by a non-EQ relation)",
@@ -107,14 +107,14 @@ public:
             }
 
             if (_schema->position(new_column) < _schema->position(last_column)) {
-                if (has_slice(restriction->expression)) {
+                if (has_slice(single_column_restriction->expression)) {
                     throw exceptions::invalid_request_exception(format("PRIMARY KEY column \"{}\" cannot be restricted (preceding column \"{}\" is restricted by a non-EQ relation)",
                         last_column.name_as_text(), new_column.name_as_text()));
                 }
             }
         }
-        _restrictions->add_restriction(restriction);
-        this->expression = make_conjunction(std::move(this->expression), restriction->expression);
+        _restrictions->add_restriction(single_column_restriction);
+        this->expression = make_conjunction(std::move(this->expression), single_column_restriction->expression);
     }
 
     virtual void merge_with(::shared_ptr<restriction> restriction) override {
@@ -129,7 +129,7 @@ public:
                     format("Columns \"{}\" cannot be restricted by both a normal relation and a token relation",
                             join(", ", get_column_defs())));
         }
-        do_merge_with(::static_pointer_cast<single_column_restriction>(restriction));
+        do_merge_with(restriction);
     }
 
     std::vector<ValueType> values_as_keys(const query_options& options) const {
@@ -223,11 +223,11 @@ inline unsigned single_column_primary_key_restrictions<clustering_key>::num_pref
     unsigned int count = 0;
     for (const auto& restriction : restrictions() | boost::adaptors::map_values) {
         if (find_needs_filtering(restriction->expression)
-            || position != restriction->get_column_def().id) {
+            || position != get_the_only_column(restriction->expression).col->id) {
             return count;
         }
         if (!has_slice(restriction->expression)) {
-            position = restriction->get_column_def().id + 1;
+            position = get_the_only_column(restriction->expression).col->id + 1;
         }
         count++;
     }

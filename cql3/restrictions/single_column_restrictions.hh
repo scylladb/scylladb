@@ -44,7 +44,7 @@ private:
      * The _restrictions per column.
      */
 public:
-    using restrictions_map = std::map<const column_definition*, ::shared_ptr<single_column_restriction>, column_definition_comparator>;
+    using restrictions_map = std::map<const column_definition*, ::shared_ptr<restriction>, column_definition_comparator>;
 private:
     restrictions_map _restrictions;
     bool _is_all_eq = true;
@@ -91,7 +91,7 @@ public:
      * @param column_def the column definition
      * @return the restriction associated to the specified column
      */
-    ::shared_ptr<single_column_restriction> get_restriction(const column_definition& column_def) const {
+    ::shared_ptr<restriction> get_restriction(const column_definition& column_def) const {
         auto i = _restrictions.find(&column_def);
         if (i == _restrictions.end()) {
             return {};
@@ -113,14 +113,14 @@ public:
      * @param restriction the restriction to add
      * @throws InvalidRequestException if the new restriction cannot be added
      */
-    void add_restriction(::shared_ptr<single_column_restriction> restriction) {
+    void add_restriction(::shared_ptr<restriction> restriction) {
         if (!find(restriction->expression, expr::oper_t::EQ)) {
             _is_all_eq = false;
         }
 
-        auto i = _restrictions.find(&restriction->get_column_def());
+        auto i = _restrictions.find(get_the_only_column(restriction->expression).col);
         if (i == _restrictions.end()) {
-            _restrictions.emplace_hint(i, &restriction->get_column_def(), std::move(restriction));
+            _restrictions.emplace_hint(i, get_the_only_column(restriction->expression).col, std::move(restriction));
         } else {
             auto& e = i->second->expression;
             e = make_conjunction(std::move(e), restriction->expression);
