@@ -754,7 +754,7 @@ void statement_restrictions::add_single_column_parition_key_restriction(const ex
 }
 
 void statement_restrictions::add_token_partition_key_restriction(const expr::binary_operator& restr) {
-    if (!expr::is_empty_restriction(_new_partition_key_restrictions) && !has_token(_new_partition_key_restrictions)) {
+    if (!partition_key_restrictions_is_empty() && !has_token(_new_partition_key_restrictions)) {
         throw exceptions::invalid_request_exception(
                 format("Columns \"{}\" cannot be restricted by both a normal relation and a token relation",
                         join(", ", expr::get_sorted_column_defs(_new_partition_key_restrictions))));
@@ -863,7 +863,7 @@ void statement_restrictions::process_partition_key_restrictions(bool for_view, b
     // components must have a EQ. Only the last partition key component can be in IN relation.
     if (has_token(_partition_key_restrictions->expression)) {
         _is_key_range = true;
-    } else if (_partition_key_restrictions->empty()) {
+    } else if (expr::is_empty_restriction(_new_partition_key_restrictions)) {
         _is_key_range = true;
         _uses_secondary_indexing = _has_queriable_pk_index;
     }
@@ -882,6 +882,10 @@ void statement_restrictions::process_partition_key_restrictions(bool for_view, b
 
 bool statement_restrictions::has_partition_key_unrestricted_components() const {
     return _partition_key_restrictions->has_unrestricted_components(*_schema);
+}
+
+bool statement_restrictions::partition_key_restrictions_is_empty() const {
+    return expr::is_empty_restriction(_new_partition_key_restrictions);
 }
 
 bool statement_restrictions::has_unrestricted_clustering_columns() const {
