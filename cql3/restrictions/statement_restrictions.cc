@@ -643,7 +643,7 @@ std::vector<const column_definition*> statement_restrictions::get_column_defs_fo
         };
         auto single_pk_restrs = dynamic_pointer_cast<single_column_partition_key_restrictions>(_partition_key_restrictions);
         if (pk_restrictions_need_filtering()) {
-            for (auto&& cdef : _partition_key_restrictions->get_column_defs()) {
+            for (auto&& cdef : expr::get_sorted_column_defs(_new_partition_key_restrictions)) {
                 const expr::expression* single_col_restr = nullptr;
                 if (single_pk_restrs) {
                     auto it = single_pk_restrs->restrictions().find(cdef);
