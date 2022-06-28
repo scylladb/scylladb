@@ -470,6 +470,9 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
         }
     }
     if (_where.has_value()) {
+        if (!has_token(_new_partition_key_restrictions)) {
+            _single_column_partition_key_restrictions = expr::get_single_column_restrictions_map(_new_partition_key_restrictions);
+        }
         _clustering_prefix_restrictions = extract_clustering_prefix_restrictions(*_where, _schema);
         _partition_range_restrictions = extract_partition_range(*_where, _schema);
     }
