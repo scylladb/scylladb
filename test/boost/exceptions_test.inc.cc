@@ -135,3 +135,44 @@ SEASTAR_TEST_CASE(test_try_catch) {
     return make_ready_future<>();
 }
 
+SEASTAR_TEST_CASE(test_make_nested_exception_ptr) {
+    auto inner = std::make_exception_ptr(std::runtime_error("inner"));
+    auto outer = make_nested_exception_ptr(std::runtime_error("outer"), inner);
+
+    try {
+        std::rethrow_exception(outer);
+    } catch (const std::runtime_error& ex) {
+        BOOST_REQUIRE_EQUAL(std::string(ex.what()), "outer");
+        auto* nested = dynamic_cast<const std::nested_exception*>(&ex);
+        BOOST_REQUIRE_NE(nested, nullptr);
+        BOOST_REQUIRE_EQUAL(nested->nested_ptr(), inner);
+    }
+
+    try {
+        std::rethrow_exception(outer);
+    } catch (const std::nested_exception& ex) {
+        BOOST_REQUIRE_EQUAL(ex.nested_ptr(), inner);
+    }
+
+    // Not a class
+    BOOST_REQUIRE_THROW(std::rethrow_exception(make_nested_exception_ptr(int(123), inner)), int);
+
+    // Final, so cannot add the std::nested_exception mixin to it
+    struct ultimate_exception final : public std::exception {};
+    BOOST_REQUIRE_THROW(std::rethrow_exception(make_nested_exception_ptr(ultimate_exception(), inner)), ultimate_exception);
+
+    // Already derived from nested exception, so cannot put more to it
+    struct already_nested_exception : public std::exception, public std::nested_exception {};
+    auto inner2 = std::make_exception_ptr(std::runtime_error("inner2"));
+    try {
+        std::rethrow_exception(inner2);
+    } catch (const std::runtime_error&) {
+        try {
+            std::rethrow_exception(make_nested_exception_ptr(already_nested_exception(), inner));
+        } catch (const already_nested_exception& ex) {
+            BOOST_REQUIRE_EQUAL(ex.nested_ptr(), inner2);
+        }
+    }
+
+    return make_ready_future<>();
+}

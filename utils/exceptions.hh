@@ -24,6 +24,7 @@
 
 #include <seastar/core/sstring.hh>
 #include <seastar/core/on_internal_error.hh>
+#include <seastar/core/align.hh>
 
 #include <functional>
 #include <system_error>
@@ -80,6 +81,38 @@ namespace utils::internal {
 
 #if defined(OPTIMIZED_EXCEPTION_HANDLING_AVAILABLE)
 void* try_catch_dynamic(std::exception_ptr& eptr, const std::type_info* catch_type) noexcept;
+
+template<typename Ex>
+class nested_exception : public Ex, public std::nested_exception {
+private:
+    void set_nested_exception(std::exception_ptr nested_eptr) {
+        // Hack: libstdc++'s std::nested_exception has just one field
+        // which is a std::exception_ptr. It is initialized
+        // to std::current_exception on its construction, but we override
+        // it here.
+        auto* nex = dynamic_cast<std::nested_exception*>(this);
+
+        // std::nested_exception is virtual without any base classes,
+        // so according to the ABI we just need to skip the vtable pointer
+        // and align
+        auto* nptr = reinterpret_cast<std::exception_ptr*>(
+                seastar::align_up(
+                        reinterpret_cast<char*>(nex) + sizeof(void*),
+                        alignof(std::nested_exception)));
+        *nptr = std::move(nested_eptr);
+    }
+
+public:
+    explicit nested_exception(const Ex& ex, std::exception_ptr&& nested_eptr)
+            : Ex(ex) {
+        set_nested_exception(std::move(nested_eptr));
+    }
+
+    explicit nested_exception(Ex&& ex, std::exception&& nested_eptr)
+            : Ex(std::move(ex)) {
+        set_nested_exception(std::move(nested_eptr));
+    }
+};
 #endif
 
 } // utils::internal
@@ -106,5 +139,43 @@ inline T* try_catch(std::exception_ptr& eptr) noexcept {
     } catch (...) {
     }
     return nullptr;
+#endif
+}
+
+/// Analogous to std::throw_with_nested, but instead of capturing the currently
+/// thrown exception, takes the exception to be nested inside as an argument,
+/// and does not throw the new exception but rather returns it.
+template<typename Ex>
+inline std::exception_ptr make_nested_exception_ptr(Ex&& ex, std::exception_ptr nested) {
+    using ExDecayed = std::decay_t<Ex>;
+
+    static_assert(std::is_copy_constructible_v<ExDecayed> && std::is_move_constructible_v<ExDecayed>,
+            "make_nested_exception_ptr argument must be CopyConstructible");
+
+#if defined(USE_OPTIMIZED_EXCEPTION_HANDLING)
+    // std::rethrow_with_nested wraps the exception type if and only if
+    // it is a non-final non-union class type
+    // and is neither std::nested_exception nor derived from it.
+    // Ref: https://en.cppreference.com/w/cpp/error/throw_with_nested
+    constexpr bool wrap = std::is_class_v<ExDecayed>
+            && !std::is_final_v<ExDecayed>
+            && !std::is_base_of_v<std::nested_exception, ExDecayed>;
+
+    if constexpr (wrap) {
+        return std::make_exception_ptr(utils::internal::nested_exception<ExDecayed>(
+                std::forward<Ex>(ex), std::move(nested)));
+    } else {
+        return std::make_exception_ptr<Ex>(std::forward<Ex>(ex));
+    }
+#else
+    try {
+        std::rethrow_exception(std::move(nested));
+    } catch (...) {
+        try {
+            std::throw_with_nested(std::forward<Ex>(ex));
+        } catch (...) {
+            return std::current_exception();
+        }
+    }
 #endif
 }
