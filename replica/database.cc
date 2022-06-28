@@ -1822,13 +1822,13 @@ public:
 
 // see above (#9919)
 template<typename T = std::runtime_error>
-static void throw_commitlog_add_error(schema_ptr s, const frozen_mutation& m) {
+static std::exception_ptr wrap_commitlog_add_error(schema_ptr s, const frozen_mutation& m, std::exception_ptr eptr) {
     // it is tempting to do a full pretty print here, but the mutation is likely
     // humungous if we got an error, so just tell us where and pk...
-    std::throw_with_nested(T(format("Could not write mutation {}:{} ({}) to commitlog"
+    return make_nested_exception_ptr(T(format("Could not write mutation {}:{} ({}) to commitlog"
         , s->ks_name(), s->cf_name()
         , m.key()
-    )));
+    )), std::move(eptr));
 }
 
 future<> database::apply_with_commitlog(column_family& cf, const mutation& m, db::timeout_clock::time_point timeout) {
@@ -1840,9 +1840,9 @@ future<> database::apply_with_commitlog(column_family& cf, const mutation& m, db
             h = co_await cf.commitlog()->add_entry(m.schema()->id(), cew, timeout);
         } catch (timed_out_error&) {
             // see above (#9919)
-            throw_commitlog_add_error<wrapped_timed_out_error>(cf.schema(), fm);
+            std::rethrow_exception(wrap_commitlog_add_error<wrapped_timed_out_error>(cf.schema(), fm, std::current_exception()));
         } catch (...) {
-            throw_commitlog_add_error<>(cf.schema(), fm);
+            std::rethrow_exception(wrap_commitlog_add_error<>(cf.schema(), fm, std::current_exception()));
         }
     }
     try {
@@ -1890,9 +1890,9 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::tra
             h = co_await cf.commitlog()->add_entry(uuid, cew, timeout);
         } catch (timed_out_error&) {
             // see above (#9919)
-            throw_commitlog_add_error<wrapped_timed_out_error>(cf.schema(), m);
+            std::rethrow_exception(wrap_commitlog_add_error<wrapped_timed_out_error>(cf.schema(), m, std::current_exception()));
         } catch (...) {
-            throw_commitlog_add_error<>(s, m);
+            std::rethrow_exception(wrap_commitlog_add_error<>(s, m, std::current_exception()));
         }
     }
     try {
