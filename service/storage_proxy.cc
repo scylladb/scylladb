@@ -2897,24 +2897,22 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
             ++stats.writes_errors.get_ep_stat(p->get_token_metadata_ptr()->get_topology(), coordinator);
             error err = error::FAILURE;
             std::optional<sstring> msg;
-            try {
-                std::rethrow_exception(eptr);
-            } catch (replica::rate_limit_exception&) {
+            if (try_catch<replica::rate_limit_exception>(eptr)) {
                 // There might be a lot of those, so ignore
                 err = error::RATE_LIMIT;
-            } catch(rpc::closed_error&) {
+            } else if (try_catch<rpc::closed_error>(eptr)) {
                 // ignore, disconnect will be logged by gossiper
-            } catch(seastar::gate_closed_exception&) {
+            } else if (try_catch<seastar::gate_closed_exception>(eptr)) {
                 // may happen during shutdown, ignore it
-            } catch(timed_out_error&) {
+            } else if (try_catch<timed_out_error>(eptr)) {
                 // from lmutate(). Ignore so that logs are not flooded
                 // database total_writes_timedout counter was incremented.
                 // It needs to be recorded that the timeout occurred locally though.
                 err = error::TIMEOUT;
-            } catch(db::virtual_table_update_exception& e) {
-                msg = e.grab_cause();
-            } catch(...) {
-                slogger.error("exception during mutation write to {}: {}", coordinator, std::current_exception());
+            } else if (auto* e = try_catch<db::virtual_table_update_exception>(eptr)) {
+                msg = e->grab_cause();
+            } else {
+                slogger.error("exception during mutation write to {}: {}", coordinator, eptr);
             }
             p->got_failure_response(response_id, coordinator, forward_size + 1, std::nullopt, err, std::move(msg));
         });
