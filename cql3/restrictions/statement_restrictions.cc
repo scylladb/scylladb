@@ -476,7 +476,7 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
     auto cf = db.find_column_family(schema);
     auto& sim = cf.get_index_manager();
     const expr::allow_local_index allow_local(
-            !_partition_key_restrictions->has_unrestricted_components(*_schema)
+            !has_partition_key_unrestricted_components()
             && _partition_key_restrictions->is_all_eq());
     _has_multi_column = find_binop(_clustering_columns_restrictions->expression, expr::is_multi_column);
     _has_queriable_ck_index = _clustering_columns_restrictions->has_supporting_index(sim, allow_local)
@@ -579,7 +579,7 @@ const std::vector<::shared_ptr<restrictions>>& statement_restrictions::index_res
 // local and restrictions does not include full partition key: 0 (do not pick)
 int statement_restrictions::score(const secondary_index::index& index) const {
     if (index.metadata().local()) {
-        const bool allow_local = !_partition_key_restrictions->has_unrestricted_components(*_schema) && _partition_key_restrictions->is_all_eq();
+        const bool allow_local = !has_partition_key_unrestricted_components() && _partition_key_restrictions->is_all_eq();
         return  allow_local ? 2 : 0;
     }
     return 1;
@@ -659,7 +659,7 @@ std::vector<const column_definition*> statement_restrictions::get_column_defs_fo
             }
         }
         auto single_ck_restrs = dynamic_pointer_cast<single_column_clustering_key_restrictions>(_clustering_columns_restrictions);
-        const bool pk_has_unrestricted_components = _partition_key_restrictions->has_unrestricted_components(*_schema);
+        const bool pk_has_unrestricted_components = has_partition_key_unrestricted_components();
         if (pk_has_unrestricted_components || _clustering_columns_restrictions->needs_filtering(*_schema)) {
             column_id first_filtering_id = pk_has_unrestricted_components ? 0 : _schema->clustering_key_columns().begin()->id +
                     _clustering_columns_restrictions->num_prefix_columns_that_need_not_be_filtered();
@@ -881,7 +881,9 @@ void statement_restrictions::process_partition_key_restrictions(bool for_view, b
 }
 
 bool statement_restrictions::has_partition_key_unrestricted_components() const {
-    return _partition_key_restrictions->has_unrestricted_components(*_schema);
+    std::vector<const column_definition*> pk_columns = expr::get_sorted_column_defs(_new_partition_key_restrictions);
+    bool all_restricted = pk_columns.size() == _schema->partition_key_size();
+    return !all_restricted;
 }
 
 bool statement_restrictions::partition_key_restrictions_is_empty() const {

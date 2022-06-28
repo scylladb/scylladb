@@ -455,7 +455,7 @@ public:
             return false;
         }
 
-        return _partition_key_restrictions->has_unrestricted_components(*_schema)
+        return has_partition_key_unrestricted_components()
         || _clustering_columns_restrictions->needs_filtering(*_schema)
         // If token restrictions are present in an indexed query, then all other restrictions need to be filtered.
         // A single token restriction can have multiple matching partition key values.
