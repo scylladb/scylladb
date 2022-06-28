@@ -491,7 +491,7 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
 
     // Some but not all of the partition key columns have been specified;
     // hence we need turn these restrictions into index expressions.
-    if (_uses_secondary_indexing || _partition_key_restrictions->needs_filtering(*_schema)) {
+    if (_uses_secondary_indexing || pk_restrictions_need_filtering()) {
         _index_restrictions.push_back(_partition_key_restrictions);
     }
 
@@ -642,7 +642,7 @@ std::vector<const column_definition*> statement_restrictions::get_column_defs_fo
             return opt_idx && single_col_restr && is_supported_by(*single_col_restr, *opt_idx);
         };
         auto single_pk_restrs = dynamic_pointer_cast<single_column_partition_key_restrictions>(_partition_key_restrictions);
-        if (_partition_key_restrictions->needs_filtering(*_schema)) {
+        if (pk_restrictions_need_filtering()) {
             for (auto&& cdef : _partition_key_restrictions->get_column_defs()) {
                 const expr::expression* single_col_restr = nullptr;
                 if (single_pk_restrs) {
@@ -868,7 +868,7 @@ void statement_restrictions::process_partition_key_restrictions(bool for_view, b
         _uses_secondary_indexing = _has_queriable_pk_index;
     }
 
-    if (_partition_key_restrictions->needs_filtering(*_schema)) {
+    if (pk_restrictions_need_filtering()) {
         if (!allow_filtering && !for_view && !_has_queriable_pk_index) {
             throw exceptions::invalid_request_exception("Cannot execute this query as it might involve data filtering and "
                 "thus may have unpredictable performance. If you want to execute "
@@ -902,6 +902,12 @@ bool statement_restrictions::partition_key_restrictions_is_all_eq() const {
 
 size_t statement_restrictions::partition_key_restrictions_size() const {
     return expr::get_sorted_column_defs(_new_partition_key_restrictions).size();
+}
+
+bool statement_restrictions::pk_restrictions_need_filtering() const {
+     return !expr::is_empty_restriction(_new_partition_key_restrictions)
+         && !has_token(_new_partition_key_restrictions)
+         && (has_partition_key_unrestricted_components() || expr::has_slice_or_needs_filtering(_new_partition_key_restrictions));
 }
 
 bool statement_restrictions::has_unrestricted_clustering_columns() const {
@@ -1725,7 +1731,7 @@ bool statement_restrictions::need_filtering() const {
         return !(npart == 1 && _has_queriable_pk_index &&
                  _clustering_columns_restrictions->empty() && _nonprimary_key_restrictions->empty());
     }
-    if (_partition_key_restrictions->needs_filtering(*_schema)) {
+    if (pk_restrictions_need_filtering()) {
         // We most likely cannot calculate token(s).  Neither base-table nor index-table queries can avoid filtering.
         return true;
     }

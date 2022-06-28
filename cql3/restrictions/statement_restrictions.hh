@@ -450,9 +450,7 @@ public:
         return !_nonprimary_key_restrictions->empty();
     }
 
-    bool pk_restrictions_need_filtering() const {
-        return _partition_key_restrictions->needs_filtering(*_schema);
-    }
+    bool pk_restrictions_need_filtering() const;
 
     bool ck_restrictions_need_filtering() const {
         if (_clustering_columns_restrictions->empty()) {
