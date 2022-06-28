@@ -14,13 +14,16 @@
 #include "query-result.hh"
 #include "digest_algorithm.hh"
 #include "digester.hh"
+#include "full_position.hh"
 #include "idl/uuid.dist.hh"
 #include "idl/keys.dist.hh"
+#include "idl/position_in_partition.dist.hh"
 #include "idl/query.dist.hh"
 #include "serializer_impl.hh"
 #include "serialization_visitors.hh"
 #include "idl/uuid.dist.impl.hh"
 #include "idl/keys.dist.impl.hh"
+#include "idl/position_in_partition.dist.impl.hh"
 #include "idl/query.dist.impl.hh"
 
 namespace query {
@@ -162,14 +165,19 @@ public:
                                 _partition_count, _last_modified);
     }
 
-    result build() {
-        std::move(_w).end_partitions().end_query_result();
+    result build(std::optional<full_position> last_pos = {}) {
+        auto after_partitions = std::move(_w).end_partitions();
+        if (last_pos) {
+            std::move(after_partitions).write_last_position(*last_pos).end_query_result();
+        } else {
+            std::move(after_partitions).skip_last_position().end_query_result();
+        }
         switch (_request) {
         case result_request::only_result:
             return result(std::move(_out), _short_read, _row_count, _partition_count, std::move(_memory_accounter).done());
         case result_request::only_digest: {
             bytes_ostream buf;
-            ser::writer_of_query_result<bytes_ostream>(buf).start_partitions().end_partitions().end_query_result();
+            ser::writer_of_query_result<bytes_ostream>(buf).start_partitions().end_partitions().skip_last_position().end_query_result();
             return result(std::move(buf), result_digest(_digest.finalize_array()), _last_modified, _short_read, {}, {});
         }
         case result_request::result_and_digest:

@@ -392,13 +392,12 @@ table::do_add_sstable(lw_shared_ptr<sstables::sstable_set> sstables, sstables::s
     if (belongs_to_other_shard(sstable->get_shards_for_this_sstable())) {
         on_internal_error(tlogger, format("Attempted to load the shared SSTable {} at table", sstable->get_filename()));
     }
-    if (sstable->requires_view_building()) {
-        on_internal_error(tlogger, format("Attempted to load staging SSTable {} at table", sstable->get_filename()));
-    }
     // allow in-progress reads to continue using old list
     auto new_sstables = make_lw_shared<sstables::sstable_set>(*sstables);
     new_sstables->insert(sstable);
-    if (backlog_tracker) {
+    if (sstable->requires_view_building()) {
+        _sstables_staging.emplace(sstable->generation(), sstable);
+    } else if (backlog_tracker) {
         add_sstable_to_backlog_tracker(_compaction_strategy.get_backlog_tracker(), sstable);
     }
     // update sstable set last in case either updating
@@ -439,28 +438,6 @@ void table::enable_off_strategy_trigger() {
 
 future<>
 table::do_add_sstable_and_update_cache(sstables::shared_sstable sst, sstables::offstrategy offstrategy) {
-    if (sst->requires_view_building()) {
-        auto [it, inserted] = _sstables_staging.emplace(sst->generation(), sst);
-        if (!inserted) {
-            on_internal_error(tlogger, format("could not add staging sstable: generation {} already exists", sst->generation()));
-        }
-
-        // clone staging sstables so their content may be compacted while
-        // views are built.  When done, the hard-linked copy in the staging
-        // subsirectory will be simply unlinked.
-        //
-        // Note that after restart, we don't know whether we already cloned
-        // the staging sstable or we might have restarted right after sealing it
-        // and before cloning here, so we might be resurrecting an sstable
-        // in the base directory in this rare corner case.
-        try {
-            sst = co_await sst->clone_at(dir(), calculate_generation_for_new_table());
-        } catch (...) {
-            _sstables_staging.erase(it);
-            throw;
-        }
-    }
-
     auto permit = co_await seastar::get_units(_sstable_set_mutation_sem, 1);
     co_return co_await get_row_cache().invalidate(row_cache::external_updater([this, sst, offstrategy] () noexcept {
         // FIXME: this is not really noexcept, but we need to provide strong exception guarantees.
@@ -2135,6 +2112,11 @@ table::query(schema_ptr s,
         }
     }
 
+    std::optional<full_position> last_pos;
+    if (querier_opt && querier_opt->current_position()) {
+        last_pos.emplace(*querier_opt->current_position());
+    }
+
     if (!saved_querier || (querier_opt && !querier_opt->are_limits_reached() && !qs.builder.is_short_read())) {
         co_await querier_opt->close();
         querier_opt = {};
@@ -2143,7 +2125,7 @@ table::query(schema_ptr s,
         *saved_querier = std::move(querier_opt);
     }
 
-    co_return make_lw_shared<query::result>(qs.builder.build());
+    co_return make_lw_shared<query::result>(qs.builder.build(std::move(last_pos)));
 }
 
 future<reconcilable_result>
@@ -2295,18 +2277,21 @@ table::make_reader_v2_excluding_sstables(schema_ptr s,
     return make_combined_reader(s, std::move(permit), std::move(readers), fwd, fwd_mr);
 }
 
-future<> table::remove_sstables_from_staging(std::vector<sstables::shared_sstable> sstables) {
+future<> table::move_sstables_from_staging(std::vector<sstables::shared_sstable> sstables) {
     auto units = co_await get_units(_sstable_deletion_sem, 1);
-    std::set<sstring> dirs_to_sync;
-
+    auto dirs_to_sync = std::set<sstring>({dir()});
+    auto main_sstables = _main_sstables->all();
     for (auto sst : sstables) {
         dirs_to_sync.emplace(sst->get_dir());
-        tlogger.debug("Removing sstable {} from staging", sst->get_filename());
         try {
-            co_await sst->unlink();
+            co_await sst->move_to_new_dir(dir(), sst->generation(), false);
             _sstables_staging.erase(sst->generation());
+            // Maintenance SSTables being moved from staging shouldn't be added to tracker because they're off-strategy
+            if (main_sstables->contains(sst)) {
+                add_sstable_to_backlog_tracker(_compaction_strategy.get_backlog_tracker(), sst);
+            }
         } catch (...) {
-            tlogger.warn("Failed to remove sstable {} from staging: {}", sst->get_filename(), std::current_exception());
+            tlogger.warn("Failed to move sstable {} from staging: {}", sst->get_filename(), std::current_exception());
             throw;
         }
     }

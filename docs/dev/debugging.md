@@ -922,3 +922,56 @@ latter, the following commands might be of help:
     scylla generate-object-graph # generates and visualizes an object graph
 
 Good luck, you are off the charted path here.
+
+#### Use python for inspecting objects and performing computations
+GDB is well integrated with Python, and besides using the predefined set of
+commands from `scylla-gdb.py`, you can also run an interactive prompt by typing
+`python-interactive` or `pi` in gdb console. That allows you to benefit from
+the rich set of helper classes and wrappers defined in `scylla-gdb.py`, e.g. in
+order to iterate over one of the supported collection types (vectors, small
+vectors, maps, tuples, etc.) and print only the interesting bits.
+
+Example:
+```
+(gdb) source /path/to/scylla-gdb.py
+(gdb) python-interactive
+>>> db = gdb.parse_and_eval("*(seastar::sharded<replica::database>*)debug::the_database")
+>>> instances = std_vector(db["_instances"])
+>>> for i, instance in enumerate(instances):
+...     print(i, instance["service"])
+...
+0 {
+  _b = 0x60000403e000,
+  _p = 0x60000403e010
+}
+1 {
+  _b = 0x60100435e000,
+  _p = 0x60100435e010
+}
+```
+
+You can also easily evaluate single expressions by using the `python` (or `py`) command:
+```
+(gdb) py print("\n".join([f" I/O queue {key}: {value}" for key, value in std_unordered_map(next(reactors())["_io_queues"])]))
+ I/O queue 0: std::unique_ptr<seastar::io_queue> = {
+  get() = 0x60100012ae00
+}
+```
+
+In order to define and use variables between gdb and the Python interface,
+one can use `gdb.convenience_variable()` and `gdb.set_convenience_variable()`
+helpers. That can be clearer than relying on `gdb.parse_and_eval()` for
+accessing objects.
+
+Example:
+```
+(gdb) p debug::the_database
+$1 = (seastar::sharded<replica::database> *) 0x7fffffffbdc0
+(gdb) set $db=debug::the_database
+(gdb) pi
+>>> local_db = sharded(gdb.convenience_variable('db')).local()
+>>> gdb.set_convenience_variable('local_db', local_db)
+>>>
+(gdb) p $local_db
+$2 = (replica::database *) 0x60000575e010
+```

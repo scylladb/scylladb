@@ -17,6 +17,7 @@
 #include "utils/UUID.hh"
 #include "dht/i_partitioner.hh"
 #include "db/read_repair_decision.hh"
+#include "position_in_partition.hh"
 
 namespace service {
 
@@ -36,8 +37,11 @@ private:
     uint32_t _rows_fetched_for_last_partition_low_bits;
     uint32_t _remaining_high_bits;
     uint32_t _rows_fetched_for_last_partition_high_bits;
+    bound_weight _ck_weight = bound_weight::equal;
+    partition_region _region = partition_region::partition_start;
 
 public:
+    // IDL ctor
     paging_state(partition_key pk,
             std::optional<clustering_key> ck,
             uint32_t rem,
@@ -46,10 +50,12 @@ public:
             std::optional<db::read_repair_decision> query_read_repair_decision,
             uint32_t rows_fetched_for_last_partition,
             uint32_t remaining_ext,
-            uint32_t rows_fetched_for_last_partition_high_bits);
+            uint32_t rows_fetched_for_last_partition_high_bits,
+            bound_weight ck_weight,
+            partition_region region);
 
     paging_state(partition_key pk,
-            std::optional<clustering_key> ck,
+            position_in_partition_view pos,
             uint64_t rem,
             utils::UUID reader_recall_uuid,
             replicas_per_token_range last_replicas,
@@ -60,8 +66,11 @@ public:
         _partition_key = std::move(pk);
     }
 
+    // sets position to at the given clustering key
     void set_clustering_key(clustering_key ck) {
         _clustering_key = std::move(ck);
+        _ck_weight = bound_weight::equal;
+        _region = partition_region::clustered;
     }
 
     void set_remaining(uint64_t remaining) {
@@ -77,9 +86,26 @@ public:
     }
     /**
      * Clustering key in last partition. I.e. first, next, row
+     *
+     * Use \ref get_position_in_partition() instead.
      */
     const std::optional<clustering_key>& get_clustering_key() const {
         return _clustering_key;
+    }
+    /**
+     * Weight of last processed position, see \ref get_position_in_partition()
+     */
+    bound_weight get_clustering_key_weight() const {
+        return _ck_weight;
+    }
+    /**
+     * Partition region of last processed position, see \ref get_position_in_partition()
+     */
+    partition_region get_partition_region() const {
+        return _region;
+    }
+    position_in_partition_view get_position_in_partition() const {
+        return position_in_partition_view(_region, _ck_weight, _clustering_key ? &*_clustering_key : nullptr);
     }
     /**
      * Max remaining rows to fetch in total.

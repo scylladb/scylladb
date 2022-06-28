@@ -3605,9 +3605,9 @@ static rjson::value encode_paging_state(const schema& schema, const service::pag
         rjson::add_with_string_name(key_entry, type_to_string(cdef.type), json_key_column_value(*exploded_pk_it, cdef));
         ++exploded_pk_it;
     }
-    auto ck = paging_state.get_clustering_key();
-    if (ck) {
-        auto exploded_ck = ck->explode();
+    auto pos = paging_state.get_position_in_partition();
+    if (pos.has_key()) {
+        auto exploded_ck = pos.key().explode();
         auto exploded_ck_it = exploded_ck.begin();
         for (const column_definition& cdef : schema.clustering_key_columns()) {
             rjson::add_with_string_name(last_evaluated_key, std::string_view(cdef.name_as_text()), rjson::empty_object());
@@ -3616,6 +3616,10 @@ static rjson::value encode_paging_state(const schema& schema, const service::pag
             ++exploded_ck_it;
         }
     }
+    rjson::add_with_string_name(last_evaluated_key, scylla_paging_region, rjson::empty_object());
+    rjson::add(last_evaluated_key[scylla_paging_region.data()], "S", rjson::from_string(to_string(pos.region())));
+    rjson::add_with_string_name(last_evaluated_key, scylla_paging_weight, rjson::empty_object());
+    rjson::add(last_evaluated_key[scylla_paging_weight.data()], "N", static_cast<int>(pos.get_bound_weight()));
     return last_evaluated_key;
 }
 
@@ -3639,11 +3643,11 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
 
     if (exclusive_start_key) {
         partition_key pk = pk_from_json(*exclusive_start_key, schema);
-        std::optional<clustering_key> ck;
+        auto pos = position_in_partition(position_in_partition::partition_start_tag_t());
         if (schema->clustering_key_size() > 0) {
-            ck = ck_from_json(*exclusive_start_key, schema);
+            pos = pos_from_json(*exclusive_start_key, schema);
         }
-        paging_state = make_lw_shared<service::pager::paging_state>(pk, ck, query::max_partitions, utils::UUID(), service::pager::paging_state::replicas_per_token_range{}, std::nullopt, 0);
+        paging_state = make_lw_shared<service::pager::paging_state>(pk, pos, query::max_partitions, utils::UUID(), service::pager::paging_state::replicas_per_token_range{}, std::nullopt, 0);
     }
 
     auto regular_columns = boost::copy_range<query::column_id_vector>(

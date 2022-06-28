@@ -33,7 +33,7 @@ std::vector<seastar::sstring> additional_options_for_proto_ext(cql_protocol_exte
         case cql_protocol_extension::LWT_ADD_METADATA_MARK:
             return {format("LWT_OPTIMIZATION_META_BIT_MASK={:d}", cql3::prepared_metadata::LWT_FLAG_MASK)};
         case cql_protocol_extension::RATE_LIMIT_ERROR:
-            return {format("ERROR_CODE={:d}", exceptions::exception_code::RATE_LIMIT_ERROR)};
+            return {format("ERROR_CODE={}", exceptions::exception_code::RATE_LIMIT_ERROR)};
         default:
             return {};
     }

@@ -393,7 +393,7 @@ std::unique_ptr<result_set> result_set_builder::build() {
     return std::move(_result_set);
 }
 
-result_set_builder::restrictions_filter::restrictions_filter(::shared_ptr<restrictions::statement_restrictions> restrictions,
+result_set_builder::restrictions_filter::restrictions_filter(::shared_ptr<const restrictions::statement_restrictions> restrictions,
         const query_options& options,
         uint64_t remaining,
         schema_ptr schema,

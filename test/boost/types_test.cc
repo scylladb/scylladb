@@ -292,11 +292,11 @@ void test_timestamp_like_string_conversions(data_type timestamp_type) {
 
     // test time_stamps around year 0
     tp = db_clock::time_point(db_clock::duration(-62167219200000));
-    BOOST_REQUIRE_EQUAL(timestamp_type->to_string(timestamp_type->decompose(tp)), "0-01-01T00:00:00");
+    BOOST_REQUIRE_EQUAL(timestamp_type->to_string(timestamp_type->decompose(tp)), "0000-01-01T00:00:00");
     tp = db_clock::time_point(db_clock::duration(-62167219199211));
-    BOOST_REQUIRE_EQUAL(timestamp_type->to_string(timestamp_type->decompose(tp)), "0-01-01T00:00:00.789000");
+    BOOST_REQUIRE_EQUAL(timestamp_type->to_string(timestamp_type->decompose(tp)), "0000-01-01T00:00:00.789000");
     tp = db_clock::time_point(db_clock::duration(-62167219200789));
-    BOOST_REQUIRE_EQUAL(timestamp_type->to_string(timestamp_type->decompose(tp)), "-1-12-31T23:59:59.211000");
+    BOOST_REQUIRE_EQUAL(timestamp_type->to_string(timestamp_type->decompose(tp)), "-0001-12-31T23:59:59.211000");
 
     auto now = time(nullptr);
     ::tm local_now;

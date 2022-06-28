@@ -14,6 +14,7 @@
 #include "rapidjson/writer.h"
 #include "concrete_types.hh"
 #include "cql3/type_json.hh"
+#include "position_in_partition.hh"
 
 static logging::logger slogger("alternator-serialization");
 
@@ -162,31 +163,42 @@ bytes get_key_column_value(const rjson::value& item, const column_definition& co
 }
 
 // Parses the JSON encoding for a key value, which is a map with a single
-// entry, whose key is the type (expected to match the key column's type)
-// and the value is the encoded value.
-bytes get_key_from_typed_value(const rjson::value& key_typed_value, const column_definition& column) {
+// entry whose key is the type and the value is the encoded value.
+// If this type does not match the desired "type_str", an api_error::validation
+// error is thrown (the "name" parameter is the name of the column which will
+// mentioned in the exception message).
+// If the type does match, a reference to the encoded value is returned.
+static const rjson::value& get_typed_value(const rjson::value& key_typed_value, std::string_view type_str, std::string_view name, std::string_view value_name) {
     if (!key_typed_value.IsObject() || key_typed_value.MemberCount() != 1 ||
             !key_typed_value.MemberBegin()->value.IsString()) {
         throw api_error::validation(
-                format("Malformed value object for key column {}: {}",
-                        column.name_as_text(), key_typed_value));
+                format("Malformed value object for {} {}: {}",
+                        value_name, name, key_typed_value));
     }
 
     auto it = key_typed_value.MemberBegin();
-    if (it->name != type_to_string(column.type)) {
+    if (rjson::to_string_view(it->name) != type_str) {
         throw api_error::validation(
-                format("Type mismatch: expected type {} for key column {}, got type {}",
-                        type_to_string(column.type), column.name_as_text(), it->name));
+                format("Type mismatch: expected type {} for {} {}, got type {}",
+                        type_str, value_name, name, it->name));
     }
-    std::string_view value_view = rjson::to_string_view(it->value);
+    return it->value;
+}
+
+// Parses the JSON encoding for a key value, which is a map with a single
+// entry, whose key is the type (expected to match the key column's type)
+// and the value is the encoded value.
+bytes get_key_from_typed_value(const rjson::value& key_typed_value, const column_definition& column) {
+    auto& value = get_typed_value(key_typed_value, type_to_string(column.type), column.name_as_text(), "key column");
+    std::string_view value_view = rjson::to_string_view(value);
     if (value_view.empty()) {
         throw api_error::validation(
                 format("The AttributeValue for a key attribute cannot contain an empty string value. Key: {}", column.name_as_text()));
     }
     if (column.type == bytes_type) {
-        return rjson::base64_decode(it->value);
+        return rjson::base64_decode(value);
     } else {
-        return column.type->from_string(rjson::to_string_view(it->value));
+        return column.type->from_string(value_view);
     }
 
 }
@@ -235,6 +247,36 @@ clustering_key ck_from_json(const rjson::value& item, schema_ptr schema) {
     }
 
     return clustering_key::from_exploded(raw_ck);
+}
+
+position_in_partition pos_from_json(const rjson::value& item, schema_ptr schema) {
+    auto ck = ck_from_json(item, schema);
+    const auto region_item = rjson::find(item, scylla_paging_region);
+    const auto weight_item = rjson::find(item, scylla_paging_weight);
+    if (bool(region_item) != bool(weight_item)) {
+        throw api_error::validation("Malformed value object: region and weight has to be either both missing or both present");
+    }
+    partition_region region;
+    bound_weight weight;
+    if (region_item) {
+        auto region_view = rjson::to_string_view(get_typed_value(*region_item, "S", scylla_paging_region, "key region"));
+        auto weight_view = rjson::to_string_view(get_typed_value(*weight_item, "N", scylla_paging_weight, "key weight"));
+        auto region = parse_partition_region(region_view);
+        if (weight_view == "-1") {
+            weight = bound_weight::before_all_prefixed;
+        } else if (weight_view == "0") {
+            weight = bound_weight::equal;
+        } else if (weight_view == "1") {
+            weight = bound_weight::after_all_prefixed;
+        } else {
+            throw std::runtime_error(fmt::format("Invalid value for weight: {}", weight_view));
+        }
+        return position_in_partition(region, weight, region == partition_region::clustered ? std::optional(std::move(ck)) : std::nullopt);
+    }
+    if (ck.is_empty()) {
+        return position_in_partition(position_in_partition::partition_start_tag_t());
+    }
+    return position_in_partition::for_key(std::move(ck));
 }
 
 big_decimal unwrap_number(const rjson::value& v, std::string_view diagnostic) {

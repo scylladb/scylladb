@@ -17,6 +17,8 @@
 #include "utils/rjson.hh"
 #include "utils/big_decimal.hh"
 
+class position_in_partition;
+
 namespace alternator {
 
 enum class alternator_type : int8_t {
@@ -33,6 +35,9 @@ struct type_representation {
     data_type dtype;
 };
 
+inline constexpr std::string_view scylla_paging_region(":scylla:paging:region");
+inline constexpr std::string_view scylla_paging_weight(":scylla:paging:weight");
+
 type_info type_info_from_string(std::string_view type);
 type_representation represent_type(alternator_type atype);
 
@@ -47,6 +52,7 @@ rjson::value json_key_column_value(bytes_view cell, const column_definition& col
 
 partition_key pk_from_json(const rjson::value& item, schema_ptr schema);
 clustering_key ck_from_json(const rjson::value& item, schema_ptr schema);
+position_in_partition pos_from_json(const rjson::value& item, schema_ptr schema);
 
 // If v encodes a number (i.e., it is a {"N": [...]}, returns an object representing it.  Otherwise,
 // raises ValidationException with diagnostic.

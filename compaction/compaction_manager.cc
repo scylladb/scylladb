@@ -565,7 +565,7 @@ sstables::shared_sstable compaction_manager::sstables_task::consume_sstable() {
 }
 
 future<semaphore_units<named_semaphore_exception_factory>> compaction_manager::task::acquire_semaphore(named_semaphore& sem, size_t units) {
-    return seastar::get_units(sem, units, _compaction_data.abort).handle_exception_type([this] (const semaphore_aborted& e) {
+    return seastar::get_units(sem, units, _compaction_data.abort).handle_exception_type([this] (const abort_requested_exception& e) {
         auto s = _compacting_table->schema();
         return make_exception_future<semaphore_units<named_semaphore_exception_factory>>(
                 sstables::compaction_stopped_exception(s->ks_name(), s->cf_name(), e.what()));

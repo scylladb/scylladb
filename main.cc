@@ -676,7 +676,15 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             utils::fb_utilities::set_broadcast_rpc_address(broadcast_rpc_addr);
 
             ctx.api_dir = cfg->api_ui_dir();
+            if (!ctx.api_dir.empty() && ctx.api_dir.back() != '/') {
+                // The api_dir should end with a backslash, add it if it's missing
+                ctx.api_dir.append("/", 1);
+            }
             ctx.api_doc = cfg->api_doc_dir();
+            if (!ctx.api_doc.empty() && ctx.api_doc.back() != '/') {
+                // The api_doc should end with a backslash, add it if it's missing
+                ctx.api_doc.append("/", 1);
+            }
             const auto hinted_handoff_enabled = cfg->hinted_handoff_enabled();
 
             supervisor::notify("starting prometheus API server");
