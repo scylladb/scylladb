@@ -2300,5 +2300,33 @@ type_of(const expression& e) {
     }, e);
 }
 
+bool is_single_column_restriction(const expression& e) {
+    if (find_in_expression<unresolved_identifier>(e, [](const auto&) {return true;})) {
+        on_internal_error(expr_logger,
+                  format("is_single_column_restriction expects a prepared expression, but it's not: {}}", e));
+    }
+
+    const column_value* the_only_column = nullptr;
+    bool result = false;
+
+    for_each_expression<column_value>(e,
+        [&](const column_value& cval) {
+            if (the_only_column == nullptr) {
+                // It's the first column_value we've encountered - set it as the only column
+                the_only_column = &cval;
+                result = true;
+                return;
+            }
+
+            if (cval.col != the_only_column->col) {
+                // In case any other column is encountered the restriction
+                // restricts more than one column.
+                result = false;
+            }
+        }
+    );
+
+    return result;
+}
 } // namespace expr
 } // namespace cql3

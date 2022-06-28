@@ -724,6 +724,11 @@ bool contains_bind_marker(const expression& e);
                                                        data_dictionary::database,
                                                        schema_ptr,
                                                        prepare_context&);
+
+// Checks whether this expression contains restrictions on one single column.
+// There might be more than one restriction, but exactly one column.
+// The expression must be prepared.
+bool is_single_column_restriction(const expression&);
 } // namespace expr
 
 } // namespace cql3
