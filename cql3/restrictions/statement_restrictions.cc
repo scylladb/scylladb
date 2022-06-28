@@ -477,7 +477,7 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
     auto& sim = cf.get_index_manager();
     const expr::allow_local_index allow_local(
             !has_partition_key_unrestricted_components()
-            && _partition_key_restrictions->is_all_eq());
+            && partition_key_restrictions_is_all_eq());
     _has_multi_column = find_binop(_clustering_columns_restrictions->expression, expr::is_multi_column);
     _has_queriable_ck_index = _clustering_columns_restrictions->has_supporting_index(sim, allow_local)
             && !type.is_delete();
@@ -579,7 +579,7 @@ const std::vector<::shared_ptr<restrictions>>& statement_restrictions::index_res
 // local and restrictions does not include full partition key: 0 (do not pick)
 int statement_restrictions::score(const secondary_index::index& index) const {
     if (index.metadata().local()) {
-        const bool allow_local = !has_partition_key_unrestricted_components() && _partition_key_restrictions->is_all_eq();
+        const bool allow_local = !has_partition_key_unrestricted_components() && partition_key_restrictions_is_all_eq();
         return  allow_local ? 2 : 0;
     }
     return 1;
@@ -888,6 +888,16 @@ bool statement_restrictions::has_partition_key_unrestricted_components() const {
 
 bool statement_restrictions::partition_key_restrictions_is_empty() const {
     return expr::is_empty_restriction(_new_partition_key_restrictions);
+}
+
+bool statement_restrictions::partition_key_restrictions_is_all_eq() const {
+    const expr::binary_operator* non_eq_binop = find_in_expression<expr::binary_operator>(_new_partition_key_restrictions,
+        [](const expr::binary_operator& binop) {
+            return binop.op != expr::oper_t::EQ;
+        }
+    );
+
+    return non_eq_binop == nullptr;
 }
 
 bool statement_restrictions::has_unrestricted_clustering_columns() const {
@@ -1684,7 +1694,7 @@ namespace {
 /// True iff get_partition_slice_for_global_index_posting_list() will be able to calculate the token value from the
 /// given restrictions.  Keep in sync with the get_partition_slice_for_global_index_posting_list() source.
 bool token_known(const statement_restrictions& r) {
-    return !r.has_partition_key_unrestricted_components() && r.get_partition_key_restrictions()->is_all_eq();
+    return !r.has_partition_key_unrestricted_components() && r.partition_key_restrictions_is_all_eq();
 }
 
 } // anonymous namespace
