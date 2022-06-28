@@ -162,6 +162,8 @@ unsigned compaction_manager::current_compaction_fan_in_threshold() const {
 bool compaction_manager::can_register_compaction(replica::table* t, int weight, unsigned fan_in) const {
     // Only one weight is allowed if parallel compaction is disabled.
     if (!t->get_compaction_strategy().parallel_compaction() && has_table_ongoing_compaction(t)) {
+        schema_ptr s = t->schema();
+        cmlog.debug("Compaction rejected: strategy doesn't allow parallel compactions and there is one ongoing for {}.{}", s->ks_name(), s->cf_name());
         return false;
     }
     // TODO: Maybe allow only *smaller* compactions to start? That can be done
@@ -170,6 +172,8 @@ bool compaction_manager::can_register_compaction(replica::table* t, int weight, 
     if (_weight_tracker.contains(weight)) {
         // If reached this point, it means that there is an ongoing compaction
         // with the weight of the compaction job.
+        schema_ptr s = t->schema();
+        cmlog.debug("Compaction rejected: ongoing compaction with the same weight {} for table {}.{}", weight, s->ks_name(), s->cf_name());
         return false;
     }
     // A compaction cannot proceed until its fan-in is greater than or equal to the current largest fan-in.
@@ -177,6 +181,8 @@ bool compaction_manager::can_register_compaction(replica::table* t, int weight, 
     // Compactions with the same efficiency can run in parallel as long as they aren't similar sized,
     // i.e. an efficient small-sized job can proceed in parallel to an efficient big-sized one.
     if (fan_in < current_compaction_fan_in_threshold()) {
+        schema_ptr s = t->schema();
+        cmlog.debug("Compaction rejected: fan_in {} smaller than threshold {} for table {}.{}", fan_in, current_compaction_fan_in_threshold(), s->ks_name(), s->cf_name());
         return false;
     }
     return true;
