@@ -481,7 +481,7 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
     _has_multi_column = find_binop(_clustering_columns_restrictions->expression, expr::is_multi_column);
     _has_queriable_ck_index = _clustering_columns_restrictions->has_supporting_index(sim, allow_local)
             && !type.is_delete();
-    _has_queriable_pk_index = _partition_key_restrictions->has_supporting_index(sim, allow_local)
+    _has_queriable_pk_index = parition_key_restrictions_have_supporting_index(sim, allow_local)
             && !type.is_delete();
     _has_queriable_regular_index = _nonprimary_key_restrictions->has_supporting_index(sim, allow_local)
             && !type.is_delete();
@@ -912,6 +912,29 @@ bool statement_restrictions::pk_restrictions_need_filtering() const {
 
 bool statement_restrictions::has_unrestricted_clustering_columns() const {
     return _clustering_columns_restrictions->has_unrestricted_components(*_schema);
+}
+
+bool statement_restrictions::parition_key_restrictions_have_supporting_index(const secondary_index::secondary_index_manager& index_manager,
+                                      expr::allow_local_index allow_local) const {
+    // Token restrictions can't be supported by an index
+    if (has_token(_new_partition_key_restrictions)) {
+        return false;
+    }
+
+    // Otherwise those are single column restrictions
+    std::vector<const column_definition*> restricted_pk_columns = expr::get_sorted_column_defs(_new_partition_key_restrictions);
+
+    for (const column_definition* cdef : restricted_pk_columns) {
+        expr::expression col_restrictions = expr::conjunction {
+            .children = expr::extract_single_column_restrictions_for_column(_new_partition_key_restrictions, *cdef)
+        };
+
+        if (expr::has_supporting_index(col_restrictions, index_manager, allow_local)) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 void statement_restrictions::process_clustering_columns_restrictions(bool for_view, bool allow_filtering) {
