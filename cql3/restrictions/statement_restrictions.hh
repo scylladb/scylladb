@@ -42,8 +42,6 @@ private:
     /**
      * Restrictions on partitioning columns
      */
-    ::shared_ptr<partition_key_restrictions> _partition_key_restrictions;
-
     expr::expression _new_partition_key_restrictions;
 
     expr::single_column_restrictions_map _single_column_partition_key_restrictions;

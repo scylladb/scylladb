@@ -113,7 +113,6 @@ statement_restrictions::initial_key_restrictions<clustering_key_prefix>::merge_t
 
 statement_restrictions::statement_restrictions(schema_ptr schema, bool allow_filtering)
     : _schema(schema)
-    , _partition_key_restrictions(get_initial_partition_key_restrictions(allow_filtering))
     , _clustering_columns_restrictions(get_initial_clustering_key_restrictions(allow_filtering))
     , _nonprimary_key_restrictions(::make_shared<single_column_restrictions>(schema))
     , _partition_range_is_simple(true)
@@ -443,19 +442,10 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
                 if (dynamic_pointer_cast<multi_column_restriction>(restriction)) {
                     _clustering_columns_restrictions = _clustering_columns_restrictions->merge_to(_schema, restriction);
                 } else if (has_token(restriction->expression)) {
-                    _partition_key_restrictions = _partition_key_restrictions->merge_to(_schema, restriction);
                 } else {
                     auto single = restriction;
                     auto& def = *get_the_only_column(single->expression).col;
                     if (def.is_partition_key()) {
-                        // View definition allows PK slices, because it's not a performance problem.
-                        if (has_slice(restriction->expression) && !allow_filtering && !for_view) {
-                            throw exceptions::invalid_request_exception(
-                                    "Only EQ and IN relation are supported on the partition key "
-                                    "(unless you use the token() function or allow filtering)");
-                        }
-                        _partition_key_restrictions = _partition_key_restrictions->merge_to(_schema, restriction);
-                        _partition_range_is_simple &= !find(restriction->expression, expr::oper_t::IN);
                     } else if (def.is_clustering_key()) {
                         _clustering_columns_restrictions = _clustering_columns_restrictions->merge_to(_schema, restriction);
                     } else {
