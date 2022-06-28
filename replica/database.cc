@@ -1835,14 +1835,25 @@ future<> database::apply_with_commitlog(column_family& cf, const mutation& m, db
     db::rp_handle h;
     if (cf.commitlog() != nullptr && cf.durable_writes()) {
         auto fm = freeze(m);
+        std::exception_ptr ex;
         try {
             commitlog_entry_writer cew(m.schema(), fm, db::commitlog::force_sync::no);
-            h = co_await cf.commitlog()->add_entry(m.schema()->id(), cew, timeout);
-        } catch (timed_out_error&) {
-            // see above (#9919)
-            std::rethrow_exception(wrap_commitlog_add_error<wrapped_timed_out_error>(cf.schema(), fm, std::current_exception()));
+            auto f_h = co_await coroutine::as_future(cf.commitlog()->add_entry(m.schema()->id(), cew, timeout));
+            if (!f_h.failed()) {
+                h = f_h.get();
+            } else {
+                ex = f_h.get_exception();
+            }
         } catch (...) {
-            std::rethrow_exception(wrap_commitlog_add_error<>(cf.schema(), fm, std::current_exception()));
+            ex = std::current_exception();
+        }
+        if (ex) {
+            if (try_catch<timed_out_error>(ex)) {
+                ex = wrap_commitlog_add_error<wrapped_timed_out_error>(cf.schema(), fm, std::move(ex));
+            } else {
+                ex = wrap_commitlog_add_error<>(cf.schema(), fm, std::move(ex));
+            }
+            co_await coroutine::exception(std::move(ex));
         }
     }
     try {
@@ -1885,14 +1896,25 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::tra
     db::rp_handle h;
     auto cl = cf.commitlog();
     if (cl != nullptr && cf.durable_writes()) {
+        std::exception_ptr ex;
         try {
             commitlog_entry_writer cew(s, m, sync);
-            h = co_await cf.commitlog()->add_entry(uuid, cew, timeout);
-        } catch (timed_out_error&) {
-            // see above (#9919)
-            std::rethrow_exception(wrap_commitlog_add_error<wrapped_timed_out_error>(cf.schema(), m, std::current_exception()));
+            auto f_h = co_await coroutine::as_future(cf.commitlog()->add_entry(uuid, cew, timeout));
+            if (!f_h.failed()) {
+                h = f_h.get();
+            } else {
+                ex = f_h.get_exception();
+            }
         } catch (...) {
-            std::rethrow_exception(wrap_commitlog_add_error<>(s, m, std::current_exception()));
+            ex = std::current_exception();
+        }
+        if (ex) {
+            if (try_catch<timed_out_error>(ex)) {
+                ex = wrap_commitlog_add_error<wrapped_timed_out_error>(cf.schema(), m, std::move(ex));
+            } else {
+                ex = wrap_commitlog_add_error<>(s, m, std::move(ex));
+            }
+            co_await coroutine::exception(std::move(ex));
         }
     }
     try {
