@@ -648,7 +648,7 @@ std::optional<expression> try_prepare_expression(const expression& expr, data_di
 
 // Prepares a binary operator received from the parser.
 // Does some basic type checks but no advanced validation.
-extern binary_operator prepare_binary_operator(const binary_operator& binop, data_dictionary::database db, schema_ptr schema);
+extern binary_operator prepare_binary_operator(binary_operator binop, data_dictionary::database db, schema_ptr schema);
 
 
 /**

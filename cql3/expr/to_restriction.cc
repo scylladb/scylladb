@@ -320,18 +320,9 @@ void preliminary_binop_vaidation_checks(const binary_operator& binop) {
     if (!is<binary_operator>(e)) {
         throw exceptions::invalid_request_exception("Restriction must be a binary operator");
     }
-    binary_operator binop_to_prepare = as<binary_operator>(e);
+    const binary_operator& binop_to_prepare = as<binary_operator>(e);
 
     preliminary_binop_vaidation_checks(binop_to_prepare);
-
-    // Convert single element IN relation to an EQ relation
-    if (binop_to_prepare.op == oper_t::IN && is<collection_constructor>(binop_to_prepare.rhs)) {
-        const std::vector<expression>& elements = as<collection_constructor>(binop_to_prepare.rhs).elements;
-        if (elements.size() == 1) {
-            binop_to_prepare.op = oper_t::EQ;
-            binop_to_prepare.rhs = elements[0];
-        }
-    }
 
     binary_operator prepared_binop = prepare_binary_operator(binop_to_prepare, db, schema);
 

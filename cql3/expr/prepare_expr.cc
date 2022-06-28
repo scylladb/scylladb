@@ -1176,7 +1176,16 @@ static lw_shared_ptr<column_specification> get_rhs_receiver(lw_shared_ptr<column
     }
 }
 
-binary_operator prepare_binary_operator(const binary_operator& binop, data_dictionary::database db, schema_ptr schema) {
+binary_operator prepare_binary_operator(binary_operator binop, data_dictionary::database db, schema_ptr schema) {
+    // Convert single element IN relation to an EQ relation
+    if (binop.op == oper_t::IN && is<collection_constructor>(binop.rhs)) {
+        const std::vector<expression>& elements = as<collection_constructor>(binop.rhs).elements;
+        if (elements.size() == 1) {
+            binop.op = oper_t::EQ;
+            binop.rhs = elements[0];
+        }
+    }
+
     std::optional<expression> prepared_lhs_opt = try_prepare_expression(binop.lhs, db, "", schema.get(), {});
     if (!prepared_lhs_opt) {
         throw exceptions::invalid_request_exception(fmt::format("Could not infer type of {}", binop.lhs));
