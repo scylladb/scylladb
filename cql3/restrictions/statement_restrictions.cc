@@ -861,7 +861,7 @@ void statement_restrictions::process_partition_key_restrictions(bool for_view, b
     // - Is it queriable without 2ndary index, which is always more efficient
     // If a component of the partition key is restricted by a relation, all preceding
     // components must have a EQ. Only the last partition key component can be in IN relation.
-    if (has_token(_partition_key_restrictions->expression)) {
+    if (has_token(_new_partition_key_restrictions)) {
         _is_key_range = true;
     } else if (expr::is_empty_restriction(_new_partition_key_restrictions)) {
         _is_key_range = true;
@@ -1735,7 +1735,7 @@ bool token_known(const statement_restrictions& r) {
 bool statement_restrictions::need_filtering() const {
     using namespace expr;
 
-    if (_uses_secondary_indexing && has_token(_partition_key_restrictions->expression)) {
+    if (_uses_secondary_indexing && has_token(_new_partition_key_restrictions)) {
         // If there is a token(p1, p2) restriction, no p1, p2 restrictions are allowed in the query.
         // All other restrictions must be on clustering or regular columns.
         int64_t non_pk_restrictions_count = _clustering_columns_restrictions->size();
@@ -1847,11 +1847,11 @@ void statement_restrictions::prepare_indexed_global(const schema& idx_tbl_schema
 
     const column_definition* token_column = &idx_tbl_schema.clustering_column_at(0);
 
-    if (has_token(_partition_key_restrictions->expression)) {
+    if (has_token(_new_partition_key_restrictions)) {
         // When there is a token(p1, p2) >/</= ? restriction, it is not allowed to have restrictions on p1 or p2.
         // This means that p1 and p2 can have many different values (token is a hash, can have collisions).
         // Clustering prefix ends after token_restriction, all further restrictions have to be filtered.
-        expr::expression token_restriction = replace_token(_partition_key_restrictions->expression, token_column);
+        expr::expression token_restriction = replace_token(_new_partition_key_restrictions, token_column);
         _idx_tbl_ck_prefix = std::vector{std::move(token_restriction)};
 
         return;

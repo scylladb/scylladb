@@ -388,9 +388,9 @@ modification_statement::process_where_clause(data_dictionary::database db, std::
             _has_regular_column_conditions = true;
         }
     }
-    if (has_token(_restrictions->get_partition_key_restrictions()->expression)) {
+    if (has_token(_restrictions->get_partition_key_restrictions())) {
         throw exceptions::invalid_request_exception(format("The token function cannot be used in WHERE clauses for UPDATE and DELETE statements: {}",
-                to_string(_restrictions->get_partition_key_restrictions()->expression)));
+                to_string(_restrictions->get_partition_key_restrictions())));
     }
     if (!_restrictions->get_non_pk_restriction().empty()) {
         auto column_names = ::join(", ", _restrictions->get_non_pk_restriction()
