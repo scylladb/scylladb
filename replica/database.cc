@@ -1911,12 +1911,8 @@ Future database::update_write_metrics(Future&& f) {
             auto ep = f.get_exception();
             if (is_timeout_exception(ep)) {
                 ++s->total_writes_timedout;
-            }
-            try {
-                std::rethrow_exception(ep);
-            } catch (replica::rate_limit_exception&) {
+            } else if (try_catch<replica::rate_limit_exception>(ep)) {
                 ++s->total_writes_rate_limited;
-            } catch (...) {
             }
             return futurize<Future>::make_exception_future(std::move(ep));
         }
