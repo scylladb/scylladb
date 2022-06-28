@@ -17,7 +17,8 @@ class mutation_cleaner;
 
 class mutation_cleaner_impl final {
     using snapshot_list = boost::intrusive::slist<partition_snapshot,
-        boost::intrusive::member_hook<partition_snapshot, boost::intrusive::slist_member_hook<>, &partition_snapshot::_cleaner_hook>>;
+        boost::intrusive::member_hook<partition_snapshot, boost::intrusive::slist_member_hook<>, &partition_snapshot::_cleaner_hook>,
+                boost::intrusive::cache_last<true>>;
     struct worker {
         condition_variable cv;
         snapshot_list snapshots;
@@ -90,7 +91,7 @@ void mutation_cleaner_impl::merge_and_destroy(partition_snapshot& ps) noexcept {
         // The snapshot must not be reachable by partitino_entry::read() after this,
         // which is ensured by slide_to_oldest() == stop_iteration::no.
         ps.migrate(&_region, _cleaner);
-        _worker_state->snapshots.push_front(ps);
+        _worker_state->snapshots.push_back(ps);
         _worker_state->cv.signal();
     }
 }
