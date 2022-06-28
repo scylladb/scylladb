@@ -19,4 +19,4 @@ The Scylla C++ source code uses the [Seastar coding style](https://github.com/sc
 
 Header files in Scylla must be self-contained, i.e., each can be included without having to include specific other headers first. To verify that your change did not break this property, run `ninja dev-headers`. If you added or removed header files, you must `touch configure.py` first - this will cause `configure.py` to be automatically re-run to generate a fresh list of header files.
 
-For more criteria on what reviewers consider good code, see the [review checklist](https://github.com/scylladb/scylla/blob/master/docs/contribute/review-checklist.md).
+For more criteria on what reviewers consider good code, see the [review checklist](https://github.com/scylladb/scylla/blob/master/docs/dev/review-checklist.md).
