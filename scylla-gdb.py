@@ -1082,7 +1082,10 @@ class sharded:
         self.instances = std_vector(self.val['_instances'])
 
     def instance(self, shard=None):
-        return self.instances[shard or current_shard()]['service']['_p']
+        idx = shard or current_shard()
+        if idx >= len(self.instances):
+            return None
+        return self.instances[idx]['service']['_p']
 
     def local(self):
         return self.instance()
@@ -1092,7 +1095,10 @@ def find_db(shard=None):
     try:
         db = gdb.parse_and_eval('::debug::the_database')
     except Exception as e:
-        db = gdb.parse_and_eval('::debug::db')
+        try:
+            db = gdb.parse_and_eval('::debug::db')
+        except:
+            return None
 
     return sharded(db).instance(shard)
 
@@ -1806,6 +1812,8 @@ class scylla_memory(gdb.Command):
     @staticmethod
     def print_coordinator_stats():
         sp = sharded(gdb.parse_and_eval('service::_the_storage_proxy')).local()
+        if not sp:
+            return
         global_sp_stats, per_sg_sp_stats = scylla_memory.summarize_storage_proxy_coordinator_stats(sp)
 
         try:
@@ -1848,6 +1856,8 @@ class scylla_memory(gdb.Command):
     @staticmethod
     def print_replica_stats():
         db = find_db()
+        if not db:
+            return
 
         try:
             mem_stats = dict()
