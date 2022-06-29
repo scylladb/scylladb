@@ -1777,12 +1777,8 @@ std::vector<mutation> make_drop_keyspace_mutations(schema_features features, lw_
         m.partition().apply(tombstone{timestamp, gc_clock::now()});
         mutations.emplace_back(std::move(m));
     }
-    auto&& schema = db::system_keyspace::built_indexes();
-    auto pkey = partition_key::from_exploded(*schema, {utf8_type->decompose(keyspace->name())});
-    mutation m{schema, pkey};
-    m.partition().apply(tombstone{timestamp, gc_clock::now()});
-    mutations.emplace_back(std::move(m));
     if (features.contains<schema_feature::SCYLLA_KEYSPACES>()) {
+        auto pkey = partition_key::from_exploded(*scylla_keyspaces(), {utf8_type->decompose(keyspace->name())});
         mutation km{scylla_keyspaces(), pkey};
         km.partition().apply(tombstone{timestamp, gc_clock::now()});
         mutations.emplace_back(std::move(km));
