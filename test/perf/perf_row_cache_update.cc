@@ -36,7 +36,7 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
 
     size_t memtable_size = seastar::memory::stats().total_memory() / 4;
 
-    std::cout << name << ":\n";
+    std::cout << name << ":" << std::endl;
 
     for (int i = 0; i < update_iterations; ++i) {
         auto MB = 1024 * 1024;
@@ -68,15 +68,14 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
         auto prev_rows_merged_from_memtable = tracker.get_stats().rows_merged_from_memtable;
         auto prev_rows_dropped_from_memtable = tracker.get_stats().rows_dropped_from_memtable;
 
-        std::cout << format("cache: {:d}/{:d} [MB], memtable: {:d}/{:d} [MB], alloc/comp: {:d}/{:d} [MB] (amp: {:.3f})\n",
+        std::cout << format("cache: {:d}/{:d} [MB], memtable: {:d}/{:d} [MB], alloc/comp: {:d}/{:d} [MB] (amp: {:.3f})",
             tracker.region().occupancy().used_space() / MB,
             tracker.region().occupancy().total_space() / MB,
             mt->occupancy().used_space() / MB,
             mt->occupancy().total_space() / MB,
             (prev_allocated - prefill_allocated) / MB,
             (prev_compacted - prefill_compacted) / MB,
-            float((prev_compacted - prefill_compacted)) / (prev_allocated - prefill_allocated)
-        );
+            float((prev_compacted - prefill_compacted)) / (prev_allocated - prefill_allocated)) << std::endl;
 
         auto permit = semaphore.make_permit();
         // Create a reader which tests the case of memtable snapshots
