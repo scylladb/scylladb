@@ -44,14 +44,18 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
         auto prefill_allocated = logalloc::memory_allocated();
 
         auto mt = make_lw_shared<replica::memtable>(s);
-        while (mt->occupancy().total_space() < memtable_size) {
-            mutation m = gen();
-            mt->apply(m);
-            seastar::thread::maybe_yield();
-            if (cancelled) {
-                return;
+        auto fill_d = duration_in_seconds([&] {
+            while (mt->occupancy().total_space() < memtable_size) {
+                mutation m = gen();
+                mt->apply(m);
+                seastar::thread::maybe_yield();
+                if (cancelled) {
+                    return;
+                }
             }
-        }
+        });
+        std::cout << format("Memtable fill took {:.6f} [ms]", fill_d.count() * 1000) << std::endl;
+
 
         auto prev_compacted = logalloc::memory_compacted();
         auto prev_allocated = logalloc::memory_allocated();
