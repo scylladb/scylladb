@@ -3749,16 +3749,24 @@ protected:
         for (const gms::inet_address& ep : boost::make_iterator_range(begin, end)) {
             // Waited on indirectly, shared_from_this keeps `this` alive
             (void)make_mutation_data_request(cmd, ep, timeout).then_wrapped([this, resolver, ep, start, exec = shared_from_this()] (future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> f) {
+                std::exception_ptr ex;
                 try {
+                  if (!f.failed()) {
                     auto v = f.get0();
                     _cf->set_hit_rate(ep, std::get<1>(v));
                     resolver->add_mutate_data(ep, std::get<0>(std::move(v)));
                     ++_proxy->get_stats().mutation_data_read_completed.get_ep_stat(get_topology(), ep);
                     register_request_latency(latency_clock::now() - start);
-                } catch(...) {
-                    ++_proxy->get_stats().mutation_data_read_errors.get_ep_stat(get_topology(), ep);
-                    resolver->error(ep, std::current_exception());
+                    return;
+                  } else {
+                    ex = f.get_exception();
+                  }
+                } catch (...) {
+                  ex = std::current_exception();
                 }
+
+                ++_proxy->get_stats().mutation_data_read_errors.get_ep_stat(get_topology(), ep);
+                resolver->error(ep, std::move(ex));
             });
         }
     }
@@ -3767,17 +3775,25 @@ protected:
         for (const gms::inet_address& ep : boost::make_iterator_range(begin, end)) {
             // Waited on indirectly, shared_from_this keeps `this` alive
             (void)make_data_request(ep, timeout, want_digest).then_wrapped([this, resolver, ep, start, exec = shared_from_this()] (future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> f) {
+                std::exception_ptr ex;
                 try {
+                  if (!f.failed()) {
                     auto v = f.get0();
                     _cf->set_hit_rate(ep, std::get<1>(v));
                     resolver->add_data(ep, std::get<0>(std::move(v)));
                     ++_proxy->get_stats().data_read_completed.get_ep_stat(get_topology(), ep);
                     _used_targets.push_back(ep);
                     register_request_latency(latency_clock::now() - start);
-                } catch(...) {
-                    ++_proxy->get_stats().data_read_errors.get_ep_stat(get_topology(), ep);
-                    resolver->error(ep, std::current_exception());
+                    return;
+                  } else {
+                    ex = f.get_exception();
+                  }
+                } catch (...) {
+                  ex = std::current_exception();
                 }
+
+                ++_proxy->get_stats().data_read_errors.get_ep_stat(get_topology(), ep);
+                resolver->error(ep, std::move(ex));
             });
         }
     }
@@ -3786,17 +3802,25 @@ protected:
         for (const gms::inet_address& ep : boost::make_iterator_range(begin, end)) {
             // Waited on indirectly, shared_from_this keeps `this` alive
             (void)make_digest_request(ep, timeout).then_wrapped([this, resolver, ep, start, exec = shared_from_this()] (future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>> f) {
+                std::exception_ptr ex;
                 try {
+                  if (!f.failed()) {
                     auto v = f.get0();
                     _cf->set_hit_rate(ep, std::get<2>(v));
                     resolver->add_digest(ep, std::get<0>(v), std::get<1>(v));
                     ++_proxy->get_stats().digest_read_completed.get_ep_stat(get_topology(), ep);
                     _used_targets.push_back(ep);
                     register_request_latency(latency_clock::now() - start);
-                } catch(...) {
-                    ++_proxy->get_stats().digest_read_errors.get_ep_stat(get_topology(), ep);
-                    resolver->error(ep, std::current_exception());
+                    return;
+                  } else {
+                    ex = f.get_exception();
+                  }
+                } catch (...) {
+                  ex = std::current_exception();
                 }
+
+                ++_proxy->get_stats().digest_read_errors.get_ep_stat(get_topology(), ep);
+                resolver->error(ep, std::move(ex));
             });
         }
     }
