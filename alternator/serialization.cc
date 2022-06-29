@@ -20,6 +20,8 @@ static logging::logger slogger("alternator-serialization");
 
 namespace alternator {
 
+bool is_alternator_keyspace(const sstring& ks_name);
+
 type_info type_info_from_string(std::string_view type) {
     static thread_local const std::unordered_map<std::string_view, type_info> type_infos = {
         {"S", {alternator_type::S, utf8_type}},
@@ -251,6 +253,9 @@ clustering_key ck_from_json(const rjson::value& item, schema_ptr schema) {
 
 position_in_partition pos_from_json(const rjson::value& item, schema_ptr schema) {
     auto ck = ck_from_json(item, schema);
+    if (is_alternator_keyspace(schema->ks_name())) {
+        return position_in_partition::for_key(std::move(ck));
+    }
     const auto region_item = rjson::find(item, scylla_paging_region);
     const auto weight_item = rjson::find(item, scylla_paging_weight);
     if (bool(region_item) != bool(weight_item)) {
