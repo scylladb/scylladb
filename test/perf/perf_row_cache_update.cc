@@ -47,6 +47,7 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
         while (mt->occupancy().total_space() < memtable_size) {
             mutation m = gen();
             mt->apply(m);
+            seastar::thread::maybe_yield();
             if (cancelled) {
                 return;
             }
