@@ -1104,9 +1104,11 @@ future<> storage_service::handle_state_removing(inet_address endpoint, std::vect
             // will be removed from _replicating_nodes on the
             // removal_coordinator.
             auto notify_endpoint = ep.value();
-            //FIXME: discarded future.
-            (void)restore_replica_count(endpoint, notify_endpoint).handle_exception([endpoint, notify_endpoint] (auto ep) {
+            // OK to discard future since _async_gate is closed on stop()
+            (void)with_gate(_async_gate, [this, endpoint, notify_endpoint] {
+              return restore_replica_count(endpoint, notify_endpoint).handle_exception([endpoint, notify_endpoint] (auto ep) {
                 slogger.info("Failed to restore_replica_count for node {}, notify_endpoint={} : {}", endpoint, notify_endpoint, ep);
+              });
             });
         }
     } else { // now that the gossiper has told us about this nonexistent member, notify the gossiper to remove it
