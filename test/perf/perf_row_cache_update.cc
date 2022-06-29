@@ -56,6 +56,11 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
         });
         std::cout << format("Memtable fill took {:.6f} [ms]", fill_d.count() * 1000) << std::endl;
 
+        std::cout << "Draining..." << std::endl;
+        auto drain_d = duration_in_seconds([&] {
+            mt->cleaner().drain().get();
+        });
+        std::cout << format("took {:.6f} [ms]", drain_d.count() * 1000) << std::endl;
 
         auto prev_compacted = logalloc::memory_compacted();
         auto prev_allocated = logalloc::memory_allocated();
