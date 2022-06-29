@@ -157,6 +157,7 @@ private:
     using client_shutdown_hook = noncopyable_function<void()>;
     std::vector<protocol_server*> _protocol_servers;
     std::vector<std::any> _listeners;
+    gate _async_gate;
 
     std::unordered_map<utils::UUID, node_ops_meta_data> _node_ops;
     std::list<std::optional<utils::UUID>> _node_ops_abort_queue;

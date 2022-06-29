@@ -1486,6 +1486,7 @@ future<> storage_service::stop() {
     } catch (...) {
         slogger.error("failed to stop Raft Group 0: {}", std::current_exception());
     }
+    co_await _async_gate.close();
     co_await std::move(_node_ops_abort_thread);
 }
 
