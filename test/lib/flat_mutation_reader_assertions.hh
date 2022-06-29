@@ -72,7 +72,13 @@ private:
         if (!_exact) {
             peek_next();
         }
-        return _reader().get0();
+        auto next = _reader().get0();
+        if (next) {
+            testlog.trace("read_next(): {}", mutation_fragment_v2::printer(*_reader.schema(), *next));
+        } else {
+            testlog.trace("read_next(): null");
+        }
+        return next;
     }
     range_tombstone_change maybe_drop_deletion_time(const range_tombstone_change& rt) const {
         if (!_ignore_deletion_time) {
