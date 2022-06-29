@@ -54,6 +54,8 @@ class gossiper;
 
 }
 
+namespace auth { class service; }
+
 namespace api {
 
 struct http_context {
@@ -88,6 +90,8 @@ future<> set_transport_controller(http_context& ctx, cql_transport::controller& 
 future<> unset_transport_controller(http_context& ctx);
 future<> set_rpc_controller(http_context& ctx, thrift_controller& ctl);
 future<> unset_rpc_controller(http_context& ctx);
+future<> set_server_authorization_cache(http_context& ctx, sharded<auth::service> &auth_service);
+future<> unset_server_authorization_cache(http_context& ctx);
 future<> set_server_snapshot(http_context& ctx, sharded<db::snapshot_ctl>& snap_ctl);
 future<> unset_server_snapshot(http_context& ctx);
 future<> set_server_gossip(http_context& ctx, sharded<gms::gossiper>& g);

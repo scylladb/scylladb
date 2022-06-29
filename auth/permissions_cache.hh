@@ -44,12 +44,6 @@ namespace auth {
 
 class service;
 
-struct permissions_cache_config final {
-    std::size_t max_entries;
-    std::chrono::milliseconds validity_period;
-    std::chrono::milliseconds update_period;
-};
-
 class permissions_cache final {
     using cache_type = utils::loading_cache<
             std::pair<role_or_anonymous, resource>,
@@ -64,12 +58,14 @@ class permissions_cache final {
     cache_type _cache;
 
 public:
-    explicit permissions_cache(const permissions_cache_config&, service&, logging::logger&);
+    explicit permissions_cache(const utils::loading_cache_config&, service&, logging::logger&);
 
     future <> stop() {
         return _cache.stop();
     }
 
+    bool update_config(utils::loading_cache_config);
+    void reset();
     future<permission_set> get(const role_or_anonymous&, const resource&);
 };
 

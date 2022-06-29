@@ -1040,7 +1040,14 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
             debug::the_query_processor = &qp;
             auto local_data_dict = seastar::sharded_parameter([] (const replica::database& db) { return db.as_data_dictionary(); }, std::ref(db));
-            qp.start(std::ref(proxy), std::ref(forward_service), std::move(local_data_dict), std::ref(mm_notifier), std::ref(mm), qp_mcfg, std::ref(cql_config)).get();
+
+            utils::loading_cache_config auth_prep_cache_config;
+            auth_prep_cache_config.max_size = qp_mcfg.authorized_prepared_cache_size;
+            auth_prep_cache_config.expiry = std::min(std::chrono::milliseconds(cfg->permissions_validity_in_ms()),
+                                                     std::chrono::duration_cast<std::chrono::milliseconds>(cql3::prepared_statements_cache::entry_expiry));
+            auth_prep_cache_config.refresh = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
+
+            qp.start(std::ref(proxy), std::ref(forward_service), std::move(local_data_dict), std::ref(mm_notifier), std::ref(mm), qp_mcfg, std::ref(cql_config), std::move(auth_prep_cache_config)).get();
             // #293 - do not stop anything
             // engine().at_exit([&qp] { return qp.stop(); });
             supervisor::notify("initializing batchlog manager");
@@ -1307,10 +1314,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
 
             supervisor::notify("starting auth service");
-            auth::permissions_cache_config perm_cache_config;
-            perm_cache_config.max_entries = cfg->permissions_cache_max_entries();
-            perm_cache_config.validity_period = std::chrono::milliseconds(cfg->permissions_validity_in_ms());
-            perm_cache_config.update_period = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
+            utils::loading_cache_config perm_cache_config;
+            perm_cache_config.max_size = cfg->permissions_cache_max_entries();
+            perm_cache_config.expiry = std::chrono::milliseconds(cfg->permissions_validity_in_ms());
+            perm_cache_config.refresh = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
 
             const qualified_name qualified_authorizer_name(auth::meta::AUTH_PACKAGE_NAME, cfg->authorizer());
             const qualified_name qualified_authenticator_name(auth::meta::AUTH_PACKAGE_NAME, cfg->authenticator());
@@ -1321,7 +1328,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auth_config.authenticator_java_name = qualified_authenticator_name;
             auth_config.role_manager_java_name = qualified_role_manager_name;
 
-            auth_service.start(perm_cache_config, std::ref(qp), std::ref(mm_notifier), std::ref(mm), auth_config).get();
+            auth_service.start(std::move(perm_cache_config), std::ref(qp), std::ref(mm_notifier), std::ref(mm), auth_config).get();
 
             auth_service.invoke_on_all([&mm] (auth::service& auth) {
                 return auth.start(mm.local());
@@ -1331,6 +1338,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 auth_service.stop().get();
             });
 
+            api::set_server_authorization_cache(ctx, auth_service).get();
+            auto stop_authorization_cache_api = defer_verbose_shutdown("authorization cache api", [&ctx] {
+                api::unset_server_authorization_cache(ctx).get();
+            });
 
             snapshot_ctl.start(std::ref(db)).get();
             auto stop_snapshot_ctl = defer_verbose_shutdown("snapshots", [&snapshot_ctl] {

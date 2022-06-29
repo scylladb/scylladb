@@ -23,6 +23,8 @@
 #include "auth/permissions_cache.hh"
 #include "auth/role_manager.hh"
 #include "seastarx.hh"
+#include "utils/observable.hh"
+#include "utils/serialized_action.hh"
 
 namespace cql3 {
 class query_processor;
@@ -68,7 +70,7 @@ public:
 /// peering_sharded_service inheritance is needed to be able to access shard local authentication service
 /// given an object from another shard. Used for bouncing lwt requests to correct shard.
 class service final : public seastar::peering_sharded_service<service> {
-    permissions_cache_config _permissions_cache_config;
+    utils::loading_cache_config _loading_cache_config;
     std::unique_ptr<permissions_cache> _permissions_cache;
 
     cql3::query_processor& _qp;
@@ -84,9 +86,16 @@ class service final : public seastar::peering_sharded_service<service> {
     // Only one of these should be registered, so we end up with some unused instances. Not the end of the world.
     std::unique_ptr<::service::migration_listener> _migration_listener;
 
+    std::function<void(uint32_t)> _permissions_cache_cfg_cb;
+    serialized_action _permissions_cache_config_action;
+
+    utils::observer<uint32_t> _permissions_cache_max_entries_observer;
+    utils::observer<uint32_t> _permissions_cache_update_interval_in_ms_observer;
+    utils::observer<uint32_t> _permissions_cache_validity_in_ms_observer;
+
 public:
     service(
-            permissions_cache_config,
+            utils::loading_cache_config,
             cql3::query_processor&,
             ::service::migration_notifier&,
             std::unique_ptr<authorizer>,
@@ -99,7 +108,7 @@ public:
     /// of the instances themselves.
     ///
     service(
-            permissions_cache_config,
+            utils::loading_cache_config,
             cql3::query_processor&,
             ::service::migration_notifier&,
             ::service::migration_manager&,
@@ -108,6 +117,10 @@ public:
     future<> start(::service::migration_manager&);
 
     future<> stop();
+
+    void update_cache_config();
+
+    void reset_authorization_cache();
 
     ///
     /// \returns an exceptional future with \ref nonexistant_role if the named role does not exist.

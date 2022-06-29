@@ -719,13 +719,13 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "The role-management backend, used to maintain grantts and memberships between roles.\n"
         "The available role-managers are:\n"
         "\tCassandraRoleManager : Stores role data in the system_auth keyspace.")
-    , permissions_validity_in_ms(this, "permissions_validity_in_ms", value_status::Used, 10000,
+    , permissions_validity_in_ms(this, "permissions_validity_in_ms", liveness::LiveUpdate, value_status::Used, 10000,
         "How long permissions in cache remain valid. Depending on the authorizer, such as CassandraAuthorizer, fetching permissions can be resource intensive. Permissions caching is disabled when this property is set to 0 or when AllowAllAuthorizer is used. The cached value is considered valid as long as both its value is not older than the permissions_validity_in_ms "
         "and the cached value has been read at least once during the permissions_validity_in_ms time frame. If any of these two conditions doesn't hold the cached value is going to be evicted from the cache.\n"
         "Related information: Object permissions")
-    , permissions_update_interval_in_ms(this, "permissions_update_interval_in_ms", value_status::Used, 2000,
+    , permissions_update_interval_in_ms(this, "permissions_update_interval_in_ms", liveness::LiveUpdate, value_status::Used, 2000,
         "Refresh interval for permissions cache (if enabled). After this interval, cache entries become eligible for refresh. An async reload is scheduled every permissions_update_interval_in_ms time period and the old value is returned until it completes. If permissions_validity_in_ms has a non-zero value, then this property must also have a non-zero value. It's recommended to set this value to be at least 3 times smaller than the permissions_validity_in_ms.")
-    , permissions_cache_max_entries(this, "permissions_cache_max_entries", value_status::Used, 1000,
+    , permissions_cache_max_entries(this, "permissions_cache_max_entries", liveness::LiveUpdate, value_status::Used, 1000,
         "Maximum cached permission entries. Must have a non-zero value if permissions caching is enabled (see a permissions_validity_in_ms description).")
     , server_encryption_options(this, "server_encryption_options", value_status::Used, {/*none*/},
         "Enable or disable inter-node encryption. You must also generate keys and provide the appropriate key and trust store locations and passwords. The available options are:\n"

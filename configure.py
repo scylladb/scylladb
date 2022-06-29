@@ -1068,6 +1068,8 @@ api = ['api/api.cc',
        Json2Code('api/api-doc/config.json'),
        'api/error_injection.cc',
        Json2Code('api/api-doc/error_injection.json'),
+       'api/authorization_cache.cc',
+       Json2Code('api/api-doc/authorization_cache.json'),
        ]
 
 alternator = [

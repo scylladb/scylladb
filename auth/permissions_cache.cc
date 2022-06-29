@@ -14,11 +14,19 @@
 
 namespace auth {
 
-permissions_cache::permissions_cache(const permissions_cache_config& c, service& ser, logging::logger& log)
-        : _cache(c.max_entries, c.validity_period, c.update_period, log, [&ser, &log](const key_type& k) {
+permissions_cache::permissions_cache(const utils::loading_cache_config& c, service& ser, logging::logger& log)
+        : _cache(c, log, [&ser, &log](const key_type& k) {
               log.debug("Refreshing permissions for {}", k.first);
               return ser.get_uncached_permissions(k.first, k.second);
           }) {
+}
+
+bool permissions_cache::update_config(utils::loading_cache_config c) {
+    return _cache.update_config(std::move(c));
+}
+
+void permissions_cache::reset() {
+    _cache.reset();
 }
 
 future<permission_set> permissions_cache::get(const role_or_anonymous& maybe_role, const resource& r) {
