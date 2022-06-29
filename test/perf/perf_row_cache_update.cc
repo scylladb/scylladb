@@ -45,8 +45,6 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
 
         auto mt = make_lw_shared<replica::memtable>(s);
         while (mt->occupancy().total_space() < memtable_size) {
-            auto pk = dht::decorate_key(*s, partition_key::from_single_value(*s,
-                serialized(utils::UUID_gen::get_time_UUID())));
             mutation m = gen();
             mt->apply(m);
             if (cancelled) {
