@@ -64,7 +64,7 @@ schema_altering_statement::execute0(query_processor& qp, service::query_state& s
     auto& mm = qp.get_migration_manager();
     ::shared_ptr<cql_transport::event::schema_change> ce;
 
-    if (mm.is_raft_enabled() && this_shard_id() != 0) {
+    if (this_shard_id() != 0) {
         // execute all schema altering statements on a shard zero since this is where raft group 0 is
         co_return ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(0,
                     std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls()));

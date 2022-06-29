@@ -23,6 +23,9 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/util/log.hh>
 #include <seastar/util/defer.hh>
+#include <seastar/rpc/rpc_types.hh>
+
+#include "idl/group0.dist.hh"
 
 namespace service {
 
@@ -35,6 +38,25 @@ raft_group0::raft_group0(seastar::abort_source& abort_source,
         raft_group0_client& client)
     : _abort_source(abort_source), _raft_gr(raft_gr), _ms(ms), _gossiper(gs), _qp(qp), _mm(mm), _client(client)
 {
+    init_rpc_verbs();
+}
+
+void raft_group0::init_rpc_verbs() {
+    ser::group0_rpc_verbs::register_group0_peer_exchange(&_ms, [this] (const rpc::client_info&, rpc::opt_time_point, discovery::peer_list peers) {
+        return peer_exchange(std::move(peers));
+    });
+
+    ser::group0_rpc_verbs::register_group0_modify_config(&_ms, [this] (const rpc::client_info&, rpc::opt_time_point,
+            raft::group_id gid, std::vector<raft::server_address> add, std::vector<raft::server_id> del) {
+        return _raft_gr.get_server(gid).modify_config(std::move(add), std::move(del));
+    });
+}
+
+future<> raft_group0::uninit_rpc_verbs() {
+    return when_all_succeed(
+        ser::group0_rpc_verbs::unregister_group0_peer_exchange(&_ms),
+        ser::group0_rpc_verbs::unregister_group0_modify_config(&_ms)
+    ).discard_result();
 }
 
 seastar::future<raft::server_address> raft_group0::load_or_create_my_addr() {
@@ -57,14 +79,16 @@ raft_server_for_group raft_group0::create_server_for_group(raft::group_id gid,
     _raft_gr.address_map().set(my_addr);
     auto state_machine = std::make_unique<group0_state_machine>(_client, _mm, _qp.proxy());
     auto rpc = std::make_unique<raft_rpc>(*state_machine, _ms, _raft_gr.address_map(), gid, my_addr.id,
-            [this] (gms::inet_address addr, bool added) {
+            [this] (gms::inet_address addr, raft::server_id raft_id, bool added) {
                 // FIXME: we should eventually switch to UUID-based (not IP-based) node identification/communication scheme.
                 // See #6403.
-                auto id = _gossiper.get_direct_fd_pinger().allocate_id(addr);
+                auto fd_id = _gossiper.get_direct_fd_pinger().allocate_id(addr);
                 if (added) {
-                    _raft_gr.direct_fd().add_endpoint(id);
+                    rslog.info("Added {} (address: {}) to group 0 RPC map", raft_id, addr);
+                    _raft_gr.direct_fd().add_endpoint(fd_id);
                 } else {
-                    _raft_gr.direct_fd().remove_endpoint(id);
+                    rslog.info("Removed {} (address: {}) from group 0 RPC map", raft_id, addr);
+                    _raft_gr.direct_fd().remove_endpoint(fd_id);
                 }
             });
     // Keep a reference to a specific RPC class.
@@ -161,7 +185,7 @@ raft_group0::do_discover_group0(raft::server_address my_addr) {
             rslog.trace("sending discovery message to {}", peer);
             auto tracker = tracker_; // https://bugs.llvm.org/show_bug.cgi?id=51515
             try {
-                auto reply = co_await _ms.send_group0_peer_exchange(peer, timeout, std::move(req.second));
+                auto reply = co_await ser::group0_rpc_verbs::send_group0_peer_exchange(&_ms, peer, timeout, std::move(req.second));
                 if (std::holds_alternative<discovery::peer_list>(reply.info)) {
                     if (auto p_discovery = std::get_if<service::persistent_discovery>(&_group0)) {
                         p_discovery->response(req.first, std::move(std::get<discovery::peer_list>(reply.info)));
@@ -184,7 +208,8 @@ raft_group0::do_discover_group0(raft::server_address my_addr) {
 }
 
 future<> raft_group0::abort() {
-    return _shutdown_gate.close();
+    co_await uninit_rpc_verbs();
+    co_await _shutdown_gate.close();
 }
 
 
@@ -243,7 +268,7 @@ future<> raft_group0::join_group0() {
         auto timeout = db::timeout_clock::now() + std::chrono::milliseconds{1000};
         netw::msg_addr peer(raft_addr_to_inet_addr(g0_info.addr));
         try {
-            co_await _ms.send_group0_modify_config(peer, timeout, group0_id, add_set, {});
+            co_await ser::group0_rpc_verbs::send_group0_modify_config(&_ms, peer, timeout, group0_id, add_set, {});
             break;
         } catch (std::runtime_error& e) {
             // Retry
@@ -315,7 +340,7 @@ future<> raft_group0::leave_group0(std::optional<gms::inet_address> node) {
     // the operation if necessary, it's move important it's not
     // "flaky" on slow network or CPU.
     auto timeout = db::timeout_clock::now() + std::chrono::minutes{20};
-    co_return co_await _ms.send_group0_modify_config(peer, timeout, g0_info.group0_id, {}, del_set);
+    co_return co_await ser::group0_rpc_verbs::send_group0_modify_config(&_ms, peer, timeout, g0_info.group0_id, {}, del_set);
 }
 
 future<group0_peer_exchange> raft_group0::peer_exchange(discovery::peer_list peers) {

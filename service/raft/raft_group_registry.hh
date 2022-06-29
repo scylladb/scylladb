@@ -18,7 +18,7 @@
 #include "gms/feature.hh"
 #include "direct_failure_detector/failure_detector.hh"
 
-namespace gms { class gossiper; class feature_service; }
+namespace gms { class gossiper; }
 
 namespace service {
 
@@ -74,11 +74,9 @@ private:
     // Group 0 id, valid only on shard 0 after boot is over
     std::optional<raft::group_id> _group0_id;
 
-    gms::feature::listener_registration _raft_support_listener;
-
 public:
-    raft_group_registry(bool is_enabled, netw::messaging_service& ms, gms::gossiper& gs,
-            gms::feature_service& feat, direct_failure_detector::failure_detector& fd);
+    // `is_enabled` must be `true` iff the local RAFT feature is enabled.
+    raft_group_registry(bool is_enabled, netw::messaging_service& ms, gms::gossiper& gs, direct_failure_detector::failure_detector& fd);
     ~raft_group_registry();
 
     // Called manually at start

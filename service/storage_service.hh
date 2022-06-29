@@ -47,9 +47,6 @@ class node_ops_cmd_response;
 class node_ops_info;
 enum class node_ops_cmd : uint32_t;
 class repair_service;
-namespace service {
-class raft_group_registry;
-}
 
 namespace cql3 { class query_processor; }
 
@@ -89,7 +86,6 @@ class storage_service;
 class storage_proxy;
 class migration_manager;
 class raft_group0;
-class raft_group0_client;
 
 enum class disk_error { regular, commit };
 
@@ -147,11 +143,14 @@ private:
     gms::feature_service& _feature_service;
     distributed<replica::database>& _db;
     gms::gossiper& _gossiper;
-    std::unique_ptr<service::raft_group0> _group0;
     sharded<netw::messaging_service>& _messaging;
     sharded<service::migration_manager>& _migration_manager;
     sharded<repair_service>& _repair;
     sharded<streaming::stream_manager>& _stream_manager;
+
+    // Engaged on shard 0 after `join_cluster`.
+    service::raft_group0* _group0;
+
     sstring _operation_in_progress;
     seastar::metrics::metric_groups _metrics;
     using client_shutdown_hook = noncopyable_function<void()>;
@@ -185,7 +184,7 @@ public:
 
     // Needed by distributed<>
     future<> stop();
-    void init_messaging_service(raft_group_registry& raft_gr);
+    void init_messaging_service();
     future<> uninit_messaging_service();
 
 private:
@@ -325,7 +324,7 @@ public:
      * API.
      * \see init_server_without_the_messaging_service_part
      */
-    future<> init_messaging_service_part(sharded<raft_group_registry>& raft_gr);
+    future<> init_messaging_service_part();
     /*!
      * \brief Uninit the messaging service part of the service.
      */
@@ -343,8 +342,8 @@ public:
      *
      * \see init_messaging_service_part
      */
-    future<> join_cluster(cql3::query_processor& qp, raft_group0_client& client, cdc::generation_service& cdc_gen_service,
-            sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy, raft_group_registry& raft_gr);
+    future<> join_cluster(cdc::generation_service& cdc_gen_service,
+            sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy, service::raft_group0&);
 
     future<> drain_on_shutdown();
 

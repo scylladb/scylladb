@@ -959,19 +959,21 @@ SEASTAR_TEST_CASE(flushing_rate_is_reduced_if_compaction_doesnt_keep_up) {
             }
 
             future<> create_table(schema_ptr s) {
-                service::migration_manager& mm = env.migration_manager().local();
-                auto group0_guard = co_await mm.start_group0_operation();
-                auto ts = group0_guard.write_timestamp();
-                auto announcement = co_await mm.prepare_new_column_family_announcement(s, ts);
-                co_await mm.announce(std::move(announcement), std::move(group0_guard));
+                return env.migration_manager().invoke_on(0, [s = global_schema_ptr(std::move(s))] (service::migration_manager& mm) -> future<> {
+                    auto group0_guard = co_await mm.start_group0_operation();
+                    auto ts = group0_guard.write_timestamp();
+                    auto announcement = co_await mm.prepare_new_column_family_announcement(s, ts);
+                    co_await mm.announce(std::move(announcement), std::move(group0_guard));
+                });
             }
 
             future<> drop_table() {
-                service::migration_manager& mm = env.migration_manager().local();
-                auto group0_guard = co_await mm.start_group0_operation();
-                auto ts = group0_guard.write_timestamp();
-                auto announcement = co_await mm.prepare_column_family_drop_announcement(ks_name(), cf_name(this_shard_id()), api::new_timestamp());
-                co_await mm.announce(std::move(announcement), std::move(group0_guard));
+                return env.migration_manager().invoke_on(0, [shard = this_shard_id()] (service::migration_manager& mm) -> future<> {
+                    auto group0_guard = co_await mm.start_group0_operation();
+                    auto ts = group0_guard.write_timestamp();
+                    auto announcement = co_await mm.prepare_column_family_drop_announcement(ks_name(), cf_name(shard), ts);
+                    co_await mm.announce(std::move(announcement), std::move(group0_guard));
+                });
             }
 
             future<> operator()() {

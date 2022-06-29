@@ -5,6 +5,7 @@
 /*
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+#include "service/raft/messaging.hh"
 #include "service/raft/raft_sys_table_storage.hh"
 
 #include "cql3/untyped_result_set.hh"
@@ -170,13 +171,13 @@ future<> raft_sys_table_storage::store_snapshot_descriptor(const raft::snapshot_
         for (const raft::server_address& srv_addr : snap.config.current) {
             co_await _qp.execute_internal(store_raft_cfg_cql,
                 {_group_id.id, _server_id.id, srv_addr.id.id, "CURRENT", srv_addr.can_vote,
-                    ser::deserialize_from_buffer(srv_addr.info, boost::type<gms::inet_address>()).addr()},
+                    raft_addr_to_inet_addr(srv_addr).addr()},
                     cql3::query_processor::cache_internal::yes);
         }
         for (const raft::server_address& srv_addr : snap.config.previous) {
             co_await _qp.execute_internal(store_raft_cfg_cql,
                 {_group_id.id, _server_id.id, srv_addr.id.id, "PREVIOUS", srv_addr.can_vote,
-                    ser::deserialize_from_buffer(srv_addr.info, boost::type<gms::inet_address>()).addr()},
+                    raft_addr_to_inet_addr(srv_addr).addr()},
                     cql3::query_processor::cache_internal::yes);
         }
         // Also update the latest snapshot id in `system.raft` table

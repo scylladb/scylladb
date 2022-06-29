@@ -1003,7 +1003,7 @@ future<> messaging_service::send_gossip_echo(msg_addr id, int64_t generation_num
     return send_message_timeout<void>(this, messaging_verb::GOSSIP_ECHO, std::move(id), timeout, generation_number);
 }
 future<> messaging_service::send_gossip_echo(msg_addr id, int64_t generation_number, abort_source& as) {
-    return send_message_abortable<void>(this, messaging_verb::GOSSIP_ECHO, std::move(id), as, generation_number);
+    return send_message_cancellable<void>(this, messaging_verb::GOSSIP_ECHO, std::move(id), as, generation_number);
 }
 
 void messaging_service::register_gossip_shutdown(std::function<rpc::no_wait_type (inet_address from, rpc::optional<int64_t> generation_number)>&& func) {
@@ -1233,28 +1233,6 @@ future<> messaging_service::unregister_node_ops_cmd() {
 }
 future<node_ops_cmd_response> messaging_service::send_node_ops_cmd(msg_addr id, node_ops_cmd_request req) {
     return send_message<future<node_ops_cmd_response>>(this, messaging_verb::NODE_OPS_CMD, std::move(id), std::move(req));
-}
-
-void messaging_service::register_group0_peer_exchange(std::function<future<service::group0_peer_exchange>(const rpc::client_info&, rpc::opt_time_point, std::vector<raft::server_address>)>&& func) {
-   register_handler(this, netw::messaging_verb::GROUP0_PEER_EXCHANGE, std::move(func));
-}
-future<> messaging_service::unregister_group0_peer_exchange() {
-   return unregister_handler(netw::messaging_verb::GROUP0_PEER_EXCHANGE);
-}
-future<service::group0_peer_exchange> messaging_service::send_group0_peer_exchange(msg_addr id, clock_type::time_point timeout, const std::vector<raft::server_address>& peers) {
-   return send_message_timeout<service::group0_peer_exchange>(this, messaging_verb::GROUP0_PEER_EXCHANGE, std::move(id), timeout, peers);
-}
-
-void messaging_service::register_group0_modify_config(std::function<future<>(const rpc::client_info&, rpc::opt_time_point, raft::group_id gid, std::vector<raft::server_address> add, std::vector<raft::server_id> del)>&& func) {
-   register_handler(this, netw::messaging_verb::GROUP0_MODIFY_CONFIG, std::move(func));
-}
-
-future<> messaging_service::unregister_group0_modify_config() {
-   return unregister_handler(netw::messaging_verb::GROUP0_MODIFY_CONFIG);
-}
-
-future<> messaging_service::send_group0_modify_config(msg_addr id, clock_type::time_point timeout, raft::group_id gid, const std::vector<raft::server_address>& add, const std::vector<raft::server_id>& del) {
-   return send_message_timeout<void>(this, messaging_verb::GROUP0_MODIFY_CONFIG, std::move(id), timeout, std::move(gid), add, del);
 }
 
 void init_messaging_service(sharded<messaging_service>& ms,

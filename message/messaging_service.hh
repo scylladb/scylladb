@@ -108,20 +108,6 @@ class group0_peer_exchange;
 
 }
 
-namespace raft {
-
-namespace internal {
-
-template <typename T> class tagged_id;
-
-}
-
-class server_address;
-using group_id = internal::tagged_id<struct group_id_tag>;
-using server_id = internal::tagged_id<struct server_id_tag>;
-
-}
-
 namespace netw {
 
 /* All verb handler identifiers */
@@ -507,15 +493,6 @@ public:
     void register_replication_finished(std::function<future<> (inet_address from)>&& func);
     future<> unregister_replication_finished();
     future<> send_replication_finished(msg_addr id, inet_address from);
-
-    // RAFT verbs
-    void register_group0_peer_exchange(std::function<future<service::group0_peer_exchange> (const rpc::client_info&, rpc::opt_time_point, std::vector<raft::server_address>)>&& func);
-    future<> unregister_group0_peer_exchange();
-    future<service::group0_peer_exchange> send_group0_peer_exchange(msg_addr id, clock_type::time_point timeout, const std::vector<raft::server_address>& peers);
-
-    void register_group0_modify_config(std::function<future<>(const rpc::client_info&, rpc::opt_time_point, raft::group_id gid, std::vector<raft::server_address> add, std::vector<raft::server_id> del)>&& func);
-    future<> unregister_group0_modify_config();
-    future<> send_group0_modify_config(msg_addr id, clock_type::time_point timeout, raft::group_id gid, const std::vector<raft::server_address>& add, const std::vector<raft::server_id>& del);
 
     void foreach_server_connection_stats(std::function<void(const rpc::client_info&, const rpc::stats&)>&& f) const;
 private:

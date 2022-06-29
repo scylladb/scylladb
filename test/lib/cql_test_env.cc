@@ -62,6 +62,7 @@
 #include "debug.hh"
 #include "db/schema_tables.hh"
 #include "service/raft/raft_group0_client.hh"
+#include "service/raft/raft_group0.hh"
 
 #include <sys/time.h>
 #include <sys/resource.h>
@@ -616,7 +617,7 @@ public:
             });
 
             raft_gr.start(cfg->check_experimental(db::experimental_features_t::RAFT),
-                std::ref(ms), std::ref(gossiper), std::ref(feature_service), std::ref(fd)).get();
+                std::ref(ms), std::ref(gossiper), std::ref(fd)).get();
             auto stop_raft_gr = deferred_stop(raft_gr);
             raft_gr.invoke_on_all(&service::raft_group_registry::start).get();
 
@@ -790,8 +791,15 @@ public:
                 cdc.stop().get();
             });
 
+            service::raft_group0 group0_service{
+                    abort_sources.local(), raft_gr.local(), ms.local(),
+                    gossiper.local(), qp.local(), mm.local(), group0_client};
+            auto stop_group0_service = defer([&group0_service] {
+                group0_service.abort().get();
+            });
+
             try {
-                ss.local().join_cluster(qp.local(), group0_client, cdc_generation_service.local(), sys_dist_ks, proxy, raft_gr.local()).get();
+                ss.local().join_cluster(cdc_generation_service.local(), sys_dist_ks, proxy, group0_service).get();
             } catch (std::exception& e) {
                 // if any of the defers crashes too, we'll never see
                 // the error

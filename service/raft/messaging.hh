@@ -7,10 +7,13 @@
  */
 #pragma once
 #include "raft/raft.hh"
-/////////////////////////////////////////
-// Discovery RPC supporting message types
+#include "gms/inet_address.hh"
 
 namespace service {
+
+gms::inet_address raft_addr_to_inet_addr(const raft::server_info&);
+gms::inet_address raft_addr_to_inet_addr(const raft::server_address&);
+raft::server_info inet_addr_to_raft_addr(const gms::inet_address&);
 
 // Used in a bootstrapped Scylla cluster, provides group  0
 // identifier and the current group leader address.

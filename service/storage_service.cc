@@ -1321,9 +1321,9 @@ future<> storage_service::drain_on_shutdown() {
         _drain_finished.get_future() : do_drain();
 }
 
-future<> storage_service::init_messaging_service_part(sharded<raft_group_registry>& raft_gr) {
-    return container().invoke_on_all([&] (storage_service& local) {
-        return local.init_messaging_service(raft_gr.local());
+future<> storage_service::init_messaging_service_part() {
+    return container().invoke_on_all([] (storage_service& local) {
+        return local.init_messaging_service();
     });
 }
 
@@ -1331,15 +1331,13 @@ future<> storage_service::uninit_messaging_service_part() {
     return container().invoke_on_all(&service::storage_service::uninit_messaging_service);
 }
 
-future<> storage_service::join_cluster(cql3::query_processor& qp, raft_group0_client& client, cdc::generation_service& cdc_gen_service,
-        sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy, raft_group_registry& raft_gr) {
+future<> storage_service::join_cluster(cdc::generation_service& cdc_gen_service,
+        sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy, raft_group0& group0) {
     assert(this_shard_id() == 0);
 
-    return seastar::async([this, &qp, &client, &cdc_gen_service, &sys_dist_ks, &proxy, &raft_gr] {
+    _group0 = &group0;
+    return seastar::async([this, &cdc_gen_service, &sys_dist_ks, &proxy] {
         set_mode(mode::STARTING);
-
-        _group0 = std::make_unique<raft_group0>(_abort_source, raft_gr, _messaging.local(),
-            _gossiper, qp, _migration_manager.local(), client);
 
         std::unordered_set<inet_address> loaded_endpoints;
         if (_db.local().get_config().load_ring_state()) {
@@ -1481,11 +1479,6 @@ future<> storage_service::stop() {
     // make sure nobody uses the semaphore
     node_ops_singal_abort(std::nullopt);
     _listeners.clear();
-    try {
-        co_await (_group0 ?  _group0->abort() : make_ready_future<>());
-    } catch (...) {
-        slogger.error("failed to stop Raft Group 0: {}", std::current_exception());
-    }
     co_await std::move(_node_ops_abort_thread);
 }
 
@@ -3212,7 +3205,7 @@ future<> storage_service::update_topology(inet_address endpoint) {
     });
 }
 
-void storage_service::init_messaging_service(raft_group_registry& raft_gr) {
+void storage_service::init_messaging_service() {
     _messaging.local().register_replication_finished([this] (gms::inet_address from) {
         return confirm_replication(from);
     });
@@ -3223,41 +3216,12 @@ void storage_service::init_messaging_service(raft_group_registry& raft_gr) {
             return ss.node_ops_cmd_handler(coordinator, std::move(req));
         });
     });
-
-    auto group0_peer_exchange_impl = [this](const rpc::client_info& cinfo, rpc::opt_time_point timeout,
-            discovery::peer_list peers) -> future<group0_peer_exchange> {
-
-        return container().invoke_on(0 /* group 0 is on shard 0 */, [peers = std::move(peers)] (
-                storage_service& self) -> future<group0_peer_exchange> {
-
-            if (self._group0) {
-                return self._group0->peer_exchange(std::move(peers));
-            } else {
-                return make_ready_future<group0_peer_exchange>(group0_peer_exchange{std::monostate{}});
-            }
-        });
-    };
-
-    _messaging.local().register_group0_peer_exchange(group0_peer_exchange_impl);
-
-    auto group0_modify_config_impl = [this, &raft_gr](const rpc::client_info& cinfo, rpc::opt_time_point timeout,
-            raft::group_id gid, std::vector<raft::server_address> add, std::vector<raft::server_id> del) -> future<> {
-
-        return container().invoke_on(0, [&raft_gr, gid, add = std::move(add), del = std::move(del)] (
-                storage_service& self) -> future<> {
-
-            return raft_gr.get_server(gid).modify_config(std::move(add), std::move(del));
-        });
-    };
-    _messaging.local().register_group0_modify_config(group0_modify_config_impl);
 }
 
 future<> storage_service::uninit_messaging_service() {
     return when_all_succeed(
         _messaging.local().unregister_replication_finished(),
-        _messaging.local().unregister_node_ops_cmd(),
-        _messaging.local().unregister_group0_peer_exchange(),
-        _messaging.local().unregister_group0_modify_config()
+        _messaging.local().unregister_node_ops_cmd()
     ).discard_result();
 }
 
