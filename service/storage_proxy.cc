@@ -94,6 +94,7 @@
 #include "utils/overloaded_functor.hh"
 #include "utils/result_try.hh"
 #include "utils/error_injection.hh"
+#include "utils/exceptions.hh"
 #include "replica/exceptions.hh"
 #include "db/operation_type.hh"
 
@@ -2987,31 +2988,29 @@ public:
     void error(gms::inet_address ep, std::exception_ptr eptr) {
         sstring why;
         error_kind kind = error_kind::FAILURE;
-        try {
-            std::rethrow_exception(eptr);
-        } catch (replica::rate_limit_exception&) {
+        if (auto ex = try_catch<replica::rate_limit_exception>(eptr)) {
             // There might be a lot of those, so ignore
             kind = error_kind::RATE_LIMIT;
-        } catch (rpc::closed_error&) {
+        } else if (auto ex = try_catch<rpc::closed_error>(eptr)) {
             // do not report connection closed exception, gossiper does that
             kind = error_kind::DISCONNECT;
-        } catch (rpc::timeout_error&) {
+        } else if (try_catch<rpc::timeout_error>(eptr)) {
             // do not report timeouts, the whole operation will timeout and be reported
             return; // also do not report timeout as replica failure for the same reason
-        } catch (semaphore_timed_out&) {
+        } else if (try_catch<semaphore_timed_out>(eptr)) {
             // do not report timeouts, the whole operation will timeout and be reported
             return; // also do not report timeout as replica failure for the same reason
-        } catch (timed_out_error&) {
+        } else if (try_catch<timed_out_error>(eptr)) {
             // do not report timeouts, the whole operation will timeout and be reported
             return; // also do not report timeout as replica failure for the same reason
-        } catch (abort_requested_exception& e) {
+        } else if (try_catch<abort_requested_exception>(eptr)) {
             // do not report aborts, they are trigerred by shutdown or timeouts
-        } catch (rpc::remote_verb_error& e) {
+        } else if (auto ex = try_catch<rpc::remote_verb_error>(eptr)) {
             // Log remote read error with lower severity.
             // If it is really severe it we be handled on the host that sent
             // it.
-            slogger.warn("Exception when communicating with {}, to read from {}.{}: {}", ep, _schema->ks_name(), _schema->cf_name(), e.what());
-        } catch(...) {
+            slogger.warn("Exception when communicating with {}, to read from {}.{}: {}", ep, _schema->ks_name(), _schema->cf_name(), ex->what());
+        } else {
             slogger.error("Exception when communicating with {}, to read from {}.{}: {}", ep, _schema->ks_name(), _schema->cf_name(), eptr);
         }
 
