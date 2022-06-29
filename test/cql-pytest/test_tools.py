@@ -139,10 +139,10 @@ def table_with_counters(cql, keyspace):
         clustering_table_with_udt,
         table_with_counters,
 ])
-def scylla_sstable(request, tmp_path_factory, cql, test_keyspace, scylla_path, scylla_data_dir):
+def scylla_sstable(request, cql, test_keyspace, scylla_path, scylla_data_dir):
     table, schema = request.param(cql, test_keyspace)
 
-    schema_file = os.path.join(tmp_path_factory.getbasetemp(), "schema.cql")
+    schema_file = os.path.join(scylla_data_dir, "..", "test_tools_schema.cql")
     with open(schema_file, "w") as f:
         f.write(schema)
 
@@ -152,6 +152,7 @@ def scylla_sstable(request, tmp_path_factory, cql, test_keyspace, scylla_path, s
         yield (scylla_path, schema_file, sstables)
     finally:
         cql.execute(f"DROP TABLE {test_keyspace}.{table}")
+        os.unlink(schema_file)
 
 
 def one_sstable(sstables):
