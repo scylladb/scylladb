@@ -13,11 +13,12 @@ import time
 import uuid
 from typing import Optional, List, Callable
 from cassandra import InvalidRequest                    # type: ignore
+from cassandra import OperationTimedOut                 # type: ignore
 from cassandra.auth import PlainTextAuthProvider        # type: ignore
 from cassandra.cluster import Cluster, NoHostAvailable  # type: ignore
 from cassandra.cluster import Session                   # type: ignore
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT     # type: ignore
-from cassandra.policies import RoundRobinPolicy                          # type: ignore
+from cassandra.policies import WhiteListRoundRobinPolicy  # type: ignore
 
 #
 # Put all Scylla options in a template file. Sic: if you make a typo in the
@@ -96,6 +97,8 @@ SCYLLA_CMDLINE_OPTIONS = [
 
 
 class ScyllaServer:
+    START_TIMEOUT = 300     # seconds
+
     def __init__(self, exe: str, vardir: str,
                  host_registry,
                  cluster_name: str, seed: str,
@@ -106,7 +109,7 @@ class ScyllaServer:
         self.cmdline_options = cmdline_options
         self.cluster_name = cluster_name
         self.hostname = ""
-        self.seeds = seed
+        self.seed = seed
         self.cmd: Optional[asyncio.subprocess.Process] = None
         self.log_savepoint = 0
         self.control_cluster: Optional[Cluster] = None
@@ -125,12 +128,14 @@ class ScyllaServer:
     async def install_and_start(self) -> None:
         await self.install()
 
-        logging.info("starting server at host %s...", self.hostname)
+        logging.info("starting server at host %s in %s...", self.hostname,
+                     self.workdir.name)
 
         await self.start()
 
         if self.cmd:
-            logging.info("started server at host %s, pid %d", self.hostname, self.cmd.pid)
+            logging.info("started server at host %s in %s, pid %d", self.hostname,
+                         self.workdir.name, self.cmd.pid)
 
     @property
     def is_running(self) -> bool:
@@ -153,8 +158,8 @@ class ScyllaServer:
         # Scylla assumes all instances of a cluster use the same port,
         # so each instance needs an own IP address.
         self.hostname = await self.host_registry.lease_host()
-        if not self.seeds:
-            self.seeds = self.hostname
+        if not self.seed:
+            self.seed = self.hostname
         # Use the last part in host IP 127.151.3.27 -> 27
         # There can be no duplicates within the same test run
         # thanks to how host registry registers subnets, and
@@ -179,7 +184,7 @@ class ScyllaServer:
         fmt = {
               "cluster_name": self.cluster_name,
               "host": self.hostname,
-              "seeds": self.seeds,
+              "seeds": self.seed,
               "workdir": self.workdir,
         }
         with self.config_filename.open('w') as config_file:
@@ -216,25 +221,35 @@ class ScyllaServer:
         # Be quiet about connection failures.
         caslog.setLevel('CRITICAL')
         auth = PlainTextAuthProvider(username='cassandra', password='cassandra')
-        profile = ExecutionProfile(load_balancing_policy=RoundRobinPolicy())
+        # auth::standard_role_manager creates "cassandra" role in an
+        # async loop auth::do_after_system_ready(), which retries
+        # role creation with an exponential back-off. In other
+        # words, even after CQL port is up, Scylla may still be
+        # initializing. When the role is ready, queries begin to
+        # work, so rely on this "side effect".
+        profile = ExecutionProfile(load_balancing_policy=WhiteListRoundRobinPolicy([self.hostname]),
+                                   request_timeout=self.START_TIMEOUT)
         try:
+            # In a cluster setup, it's possible that the CQL
+            # here is directed to a node different from the initial contact
+            # point, so make sure we execute the checks strictly via
+            # this connection
             with Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},
-                         contact_points=[self.hostname], auth_provider=auth) as cluster:
+                         contact_points=[self.hostname],
+                         # This is the latest version Scylla supports
+                         protocol_version=4,
+                         auth_provider=auth) as cluster:
                 with cluster.connect() as session:
-                    # auth::standard_role_manager creates "cassandra" role in an
-                    # async loop auth::do_after_system_ready(), which retries
-                    # role creation with an exponential back-off. In other
-                    # words, even after CQL port is up, Scylla may still be
-                    # initializing. When the role is ready, queries begin to
-                    # work, so rely on this "side effect".
-                    session.execute("CREATE KEYSPACE k WITH REPLICATION = {" +
+                    session.execute("CREATE KEYSPACE IF NOT EXISTS k WITH REPLICATION = {" +
                                     "'class' : 'SimpleStrategy', 'replication_factor' : 1 }")
                     session.execute("DROP KEYSPACE k")
                     self.control_cluster = Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},
-                                                   contact_points=[self.hostname], auth_provider=auth)
+                                                   contact_points=[self.hostname],
+                                                   auth_provider=auth)
                     self.control_connection = self.control_cluster.connect()
                     return True
-        except (NoHostAvailable, InvalidRequest):
+        except (NoHostAvailable, InvalidRequest, OperationTimedOut) as e:
+            logging.debug("Exception when checking if CQL is up: {}".format(e))
             return False
         finally:
             caslog.setLevel(oldlevel)
@@ -254,7 +269,6 @@ class ScyllaServer:
 
     async def start(self) -> None:
         """Start an installed server. May be used for restarts."""
-        START_TIMEOUT = 300     # seconds
 
         # Add suite-specific command line options
         scylla_args = SCYLLA_CMDLINE_OPTIONS + self.cmdline_options
@@ -271,11 +285,13 @@ class ScyllaServer:
         )
 
         self.start_time = time.time()
+        sleep_interval = 0.1
 
-        while time.time() < self.start_time + START_TIMEOUT:
+        while time.time() < self.start_time + self.START_TIMEOUT:
             if self.cmd.returncode:
                 with self.log_filename.open('r') as log_file:
-                    logging.error("failed to start server at host %s", self.hostname)
+                    logging.error("failed to start server at host %s in %s",
+                                  self.hostname, self.workdir.name)
                     logging.error("last line of {}:".format(self.log_filename))
                     log_file.seek(0, 0)
                     logging.error(log_file.readlines()[-1].rstrip())
@@ -290,10 +306,8 @@ Check the log files:
                 if await self.cql_is_up():
                     return
 
-            # Sleep 10 milliseconds and retry
-            await asyncio.sleep(0.1)
-            if self.seeds != self.hostname:
-                await self.force_schema_migration()
+            # Sleep and retry
+            await asyncio.sleep(sleep_interval)
 
         raise RuntimeError("failed to start server {}, check server log at {}".format(
             self.host, self.log_filename))
@@ -304,9 +318,16 @@ Check the log files:
         state. Helps quickly propagate tokens and speed up node boot if the
         previous state propagation was missed."""
         auth = PlainTextAuthProvider(username='cassandra', password='cassandra')
-        with Cluster(contact_points=[self.seeds], auth_provider=auth) as cluster:
+        profile = ExecutionProfile(load_balancing_policy=WhiteListRoundRobinPolicy([self.seed]),
+                                   request_timeout=self.START_TIMEOUT)
+        with Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},
+                     contact_points=[self.seed],
+                     auth_provider=auth,
+                     # This is the latest version Scylla supports
+                     protocol_version=4,
+                     ) as cluster:
             with cluster.connect() as session:
-                session.execute("CREATE KEYSPACE k WITH REPLICATION = {" +
+                session.execute("CREATE KEYSPACE IF NOT EXISTS k WITH REPLICATION = {" +
                                 "'class' : 'SimpleStrategy', 'replication_factor' : 1 }")
                 session.execute("DROP KEYSPACE k")
 
@@ -315,7 +336,8 @@ Check the log files:
         stop, so is not graceful. Waits for the process to exit before return."""
         # Preserve for logging
         hostname = self.hostname
-        logging.info("stopping server at host %s", hostname)
+        logging.info("stopping server at host %s in %s", hostname,
+                     self.workdir.name)
         if not self.cmd:
             return
 
@@ -332,7 +354,8 @@ Check the log files:
             await self.cmd.wait()
         finally:
             if self.cmd:
-                logging.info("stopped server at host %s", hostname)
+                logging.info("stopped server at host %s in %s", hostname,
+                             self.workdir.name)
             self.cmd = None
             self.control_connection = None
             self.control_cluster = None
@@ -356,6 +379,9 @@ Check the log files:
         self.log_file.write(msg.encode())
         self.log_file.flush()
 
+    def __str__(self):
+        return self.hostname
+
 
 class ScyllaCluster:
     def __init__(self, replicas: int,
@@ -373,19 +399,29 @@ class ScyllaCluster:
                 seed = self.cluster[-1].host if self.cluster else None
                 server = self.create_server(self.name, seed)
                 self.cluster.append(server)
-                await server.install_and_start()
+                try:
+                    await server.install_and_start()
+                except Exception as e:
+                    logging.error("Failed to start Scylla server at host %s in %s: %s",
+                                  server.hostname, server.workdir.name, str(e))
+                    raise
             self.keyspace_count = self._get_keyspace_count()
-        except (RuntimeError, NoHostAvailable, InvalidRequest) as e:
+        except (RuntimeError, NoHostAvailable, InvalidRequest, OperationTimedOut) as e:
             # If start fails, swallow the error to throw later,
             # at test time.
             self.start_exception = e
+        logging.info("Created cluster %s", self)
 
     def __getitem__(self, i: int) -> ScyllaServer:
         return self.cluster[i]
 
+    def __str__(self):
+        return "{" + ", ".join(str(c) for c in self.cluster) + "}"
+
     def _get_keyspace_count(self) -> int:
         """Get the current keyspace count"""
         assert(self.start_exception is None)
+        assert self.cluster[0].control_connection is not None
         rows = self.cluster[0].control_connection.execute(
             "select count(*) as c from system_schema.keyspaces")
         keyspace_count = int(rows.one()[0])
