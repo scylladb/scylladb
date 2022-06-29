@@ -327,6 +327,10 @@ elif [ "$ID" = "fedora" ]; then
             echo "$(wasmtime_url) is unreachable, skipping"
         fi
     fi
+    # Issue #10863: the libwasmtime.a archive has debug symbols so when
+    # linking it into Scylla it makes it look like Scylla has debug symbols.
+    # So let's remove the debug symbols from this library.
+    strip --strip-debug /usr/lib64/libwasmtime.a
 elif [ "$ID" = "centos" ]; then
     dnf install -y "${centos_packages[@]}"
     echo -e "Configure example:\n\tpython3.4 ./configure.py --enable-dpdk --mode=release --static-boost --compiler=/opt/scylladb/bin/g++-7.3 --python python3.4 --ldflag=-Wl,-rpath=/opt/scylladb/lib64 --cflags=-I/opt/scylladb/include --with-antlr3=/opt/scylladb/bin/antlr3"
