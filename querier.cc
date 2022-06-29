@@ -287,15 +287,15 @@ void querier_cache::insert_querier(
   }
 }
 
-void querier_cache::insert(utils::UUID key, data_querier&& q, tracing::trace_state_ptr trace_state) {
+void querier_cache::insert_data_querier(utils::UUID key, data_querier&& q, tracing::trace_state_ptr trace_state) {
     insert_querier(key, _data_querier_index, _stats, std::move(q), _entry_ttl, std::move(trace_state));
 }
 
-void querier_cache::insert(utils::UUID key, mutation_querier&& q, tracing::trace_state_ptr trace_state) {
+void querier_cache::insert_mutation_querier(utils::UUID key, mutation_querier&& q, tracing::trace_state_ptr trace_state) {
     insert_querier(key, _mutation_querier_index, _stats, std::move(q), _entry_ttl, std::move(trace_state));
 }
 
-void querier_cache::insert(utils::UUID key, shard_mutation_querier&& q, tracing::trace_state_ptr trace_state) {
+void querier_cache::insert_shard_querier(utils::UUID key, shard_mutation_querier&& q, tracing::trace_state_ptr trace_state) {
     insert_querier(key, _shard_mutation_querier_index, _stats, std::move(q), _entry_ttl, std::move(trace_state));
 }
 

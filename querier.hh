@@ -334,11 +334,11 @@ public:
     querier_cache(querier_cache&&) = delete;
     querier_cache& operator=(querier_cache&&) = delete;
 
-    void insert(utils::UUID key, data_querier&& q, tracing::trace_state_ptr trace_state);
+    void insert_data_querier(utils::UUID key, data_querier&& q, tracing::trace_state_ptr trace_state);
 
-    void insert(utils::UUID key, mutation_querier&& q, tracing::trace_state_ptr trace_state);
+    void insert_mutation_querier(utils::UUID key, mutation_querier&& q, tracing::trace_state_ptr trace_state);
 
-    void insert(utils::UUID key, shard_mutation_querier&& q, tracing::trace_state_ptr trace_state);
+    void insert_shard_querier(utils::UUID key, shard_mutation_querier&& q, tracing::trace_state_ptr trace_state);
 
     /// Lookup a data querier in the cache.
     ///

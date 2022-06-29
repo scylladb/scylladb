@@ -1475,7 +1475,7 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_opti
 
         if (!f.failed()) {
             if (cmd.query_uuid != utils::UUID{} && querier_opt) {
-                _querier_cache.insert(cmd.query_uuid, std::move(*querier_opt), std::move(trace_state));
+                _querier_cache.insert_data_querier(cmd.query_uuid, std::move(*querier_opt), std::move(trace_state));
             }
         } else {
             ex = f.get_exception();
@@ -1541,7 +1541,7 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
 
         if (!f.failed()) {
             if (cmd.query_uuid != utils::UUID{} && querier_opt) {
-                _querier_cache.insert(cmd.query_uuid, std::move(*querier_opt), std::move(trace_state));
+                _querier_cache.insert_mutation_querier(cmd.query_uuid, std::move(*querier_opt), std::move(trace_state));
             }
         } else {
             ex = f.get_exception();
