@@ -1,6 +1,6 @@
 # Scylla developer documentation
 
-This folder (and its subfolders) contain developer-oriented documentation
+This folder contains developer-oriented documentation
 concerning the Scylla codebase.
 We also have a [wiki](https://github.com/scylladb/scylla/wiki), which contains
 additional developer-oriented documentation. There is currently no clear
