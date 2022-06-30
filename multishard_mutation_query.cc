@@ -610,7 +610,7 @@ future<> read_context::save_readers(flat_mutation_reader_v2::tracked_buffer unco
 namespace {
 
 template <typename ResultType>
-using compact_for_result_state = compact_for_query_state_v2<ResultType::only_live>;
+using compact_for_result_state = compact_for_query_state_v2<emit_only_live_rows::no>;
 
 template <typename ResultBuilder>
 requires std::is_nothrow_move_constructible_v<typename ResultBuilder::result_type>
@@ -803,7 +803,6 @@ namespace {
 class mutation_query_result_builder {
 public:
     using result_type = reconcilable_result;
-    static constexpr emit_only_live_rows only_live = emit_only_live_rows::no;
 
 private:
     reconcilable_result_builder _builder;
@@ -824,7 +823,6 @@ public:
 class data_query_result_builder {
 public:
     using result_type = query::result;
-    static constexpr emit_only_live_rows only_live = emit_only_live_rows::yes;
 
 private:
     const compact_for_result_state<data_query_result_builder>& _compaction_state;

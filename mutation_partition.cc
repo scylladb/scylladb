@@ -2072,11 +2072,17 @@ void query_result_builder::consume_new_partition(const dht::decorated_key& dk) {
 void query_result_builder::consume(tombstone t) {
     _mutation_consumer->consume(t);
 }
-stop_iteration query_result_builder::consume(static_row&& sr, tombstone t, bool) {
+stop_iteration query_result_builder::consume(static_row&& sr, tombstone t, bool is_live) {
+    if (!is_live) {
+        return _stop;
+    }
     _stop = _mutation_consumer->consume(std::move(sr), t);
     return _stop;
 }
-stop_iteration query_result_builder::consume(clustering_row&& cr, row_tombstone t,  bool) {
+stop_iteration query_result_builder::consume(clustering_row&& cr, row_tombstone t,  bool is_live) {
+    if (!is_live) {
+        return _stop;
+    }
     _stop = _mutation_consumer->consume(std::move(cr), t);
     return _stop;
 }
@@ -2200,7 +2206,7 @@ to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::pa
         query::result_options opts) {
     // This result was already built with a limit, don't apply another one.
     query::result::builder builder(slice, opts, query::result_memory_accounter{ query::result_memory_limiter::unlimited_result_size });
-    auto consumer = compact_for_query_v2<emit_only_live_rows::yes, query_result_builder>(*s, gc_clock::time_point::min(), slice, max_rows,
+    auto consumer = compact_for_query_v2<emit_only_live_rows::no, query_result_builder>(*s, gc_clock::time_point::min(), slice, max_rows,
             max_partitions, query_result_builder(*s, builder));
     auto compaction_state = consumer.get_state();
     const auto reverse = slice.options.contains(query::partition_slice::option::reversed) ? consume_in_reverse::legacy_half_reverse : consume_in_reverse::no;
@@ -2232,7 +2238,7 @@ to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::pa
 query::result
 query_mutation(mutation&& m, const query::partition_slice& slice, uint64_t row_limit, gc_clock::time_point now, query::result_options opts) {
     query::result::builder builder(slice, opts, query::result_memory_accounter{ query::result_memory_limiter::unlimited_result_size });
-    auto consumer = compact_for_query_v2<emit_only_live_rows::yes, query_result_builder>(*m.schema(), now, slice, row_limit,
+    auto consumer = compact_for_query_v2<emit_only_live_rows::no, query_result_builder>(*m.schema(), now, slice, row_limit,
             query::max_partitions, query_result_builder(*m.schema(), builder));
     auto compaction_state = consumer.get_state();
     const auto reverse = slice.options.contains(query::partition_slice::option::reversed) ? consume_in_reverse::legacy_half_reverse : consume_in_reverse::no;
@@ -2249,11 +2255,17 @@ public:
         _mutation = mutation(_schema.shared_from_this(), dk);
     }
     void consume(tombstone) { }
-    stop_iteration consume(static_row&& sr, tombstone, bool) {
+    stop_iteration consume(static_row&& sr, tombstone, bool is_live) {
+        if (!is_live) {
+            return stop_iteration::no;
+        }
         _mutation->partition().static_row().maybe_create() = std::move(sr.cells());
         return stop_iteration::no;
     }
-    stop_iteration consume(clustering_row&& cr, row_tombstone,  bool) {
+    stop_iteration consume(clustering_row&& cr, row_tombstone,  bool is_live) {
+        if (!is_live) {
+            return stop_iteration::no;
+        }
         _mutation->partition().insert_row(_schema, cr.key(), std::move(cr).as_deletable_row());
         return stop_iteration::no;
     }

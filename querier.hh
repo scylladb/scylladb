@@ -183,7 +183,7 @@ public:
     }
 };
 
-using data_querier = querier<emit_only_live_rows::yes>;
+using data_querier = querier<emit_only_live_rows::no>;
 using mutation_querier = querier<emit_only_live_rows::no>;
 
 /// Local state of a multishard query.
