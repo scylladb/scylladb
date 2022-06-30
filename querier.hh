@@ -28,10 +28,10 @@ namespace query {
 /// Returns a future containing a tuple with the last consumed clustering key,
 /// or std::nullopt if the last row wasn't a clustering row, and whatever the
 /// consumer's `consume_end_of_stream()` method returns.
-template <emit_only_live_rows OnlyLive, typename Consumer>
+template <typename Consumer>
 requires CompactedFragmentsConsumerV2<Consumer>
 auto consume_page(flat_mutation_reader_v2& reader,
-        lw_shared_ptr<compact_for_query_state_v2<OnlyLive>> compaction_state,
+        lw_shared_ptr<compact_for_query_state_v2<emit_only_live_rows::no>> compaction_state,
         const query::partition_slice& slice,
         Consumer&& consumer,
         uint64_t row_limit,
@@ -42,7 +42,7 @@ auto consume_page(flat_mutation_reader_v2& reader,
         const auto next_fragment_region = next_fragment ? next_fragment->position().region() : partition_region::partition_end;
         compaction_state->start_new_page(row_limit, partition_limit, query_time, next_fragment_region, consumer);
 
-        auto reader_consumer = compact_for_query_v2<OnlyLive, Consumer>(compaction_state, std::move(consumer));
+        auto reader_consumer = compact_for_query_v2<emit_only_live_rows::no, Consumer>(compaction_state, std::move(consumer));
 
         return reader.consume(std::move(reader_consumer));
     });
@@ -131,9 +131,8 @@ public:
 ///     mismatch is detected the querier shouldn't be used to produce the next
 ///     page. It should be dropped instead and a new one should be created
 ///     instead.
-template <emit_only_live_rows OnlyLive>
 class querier : public querier_base {
-    lw_shared_ptr<compact_for_query_state_v2<OnlyLive>> _compaction_state;
+    lw_shared_ptr<compact_for_query_state_v2<emit_only_live_rows::no>> _compaction_state;
 
 public:
     querier(const mutation_source& ms,
@@ -144,7 +143,7 @@ public:
             const io_priority_class& pc,
             tracing::trace_state_ptr trace_ptr)
         : querier_base(schema, permit, std::move(range), std::move(slice), ms, pc, std::move(trace_ptr))
-        , _compaction_state(make_lw_shared<compact_for_query_state_v2<OnlyLive>>(*schema, gc_clock::time_point{}, *_slice, 0, 0)) {
+        , _compaction_state(make_lw_shared<compact_for_query_state_v2<emit_only_live_rows::no>>(*schema, gc_clock::time_point{}, *_slice, 0, 0)) {
     }
 
     bool are_limits_reached() const {
@@ -183,8 +182,8 @@ public:
     }
 };
 
-using data_querier = querier<emit_only_live_rows::no>;
-using mutation_querier = querier<emit_only_live_rows::no>;
+using data_querier = querier;
+using mutation_querier = querier;
 
 /// Local state of a multishard query.
 ///
