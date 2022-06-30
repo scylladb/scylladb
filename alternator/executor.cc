@@ -400,8 +400,8 @@ static rjson::value generate_arn_for_index(const schema& schema, std::string_vie
         schema.ks_name(), schema.cf_name(), index_name));
 }
 
-bool executor::is_alternator_keyspace(const sstring& ks_name) {
-    return ks_name.find(KEYSPACE_NAME_PREFIX) == 0;
+bool is_alternator_keyspace(const sstring& ks_name) {
+    return ks_name.find(executor::KEYSPACE_NAME_PREFIX) == 0;
 }
 
 sstring executor::table_name(const schema& s) {
