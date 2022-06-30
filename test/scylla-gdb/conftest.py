@@ -18,6 +18,13 @@ except:
     print('This test must be run inside gdb. Run ./run instead.')
     exit(1)
 
+try:
+    gdb_library.lookup_type('size_t')
+except:
+    print(f'ERROR: Scylla executable was compiled without debugging information (-g)')
+    print(f'so cannot be used to test gdb. Please set SCYLLA environment variable.')
+    exit(1)
+
 def pytest_addoption(parser):
     parser.addoption('--scylla-pid', action='store', default=None,
         help='Process ID of running Scylla to attach gdb to')
@@ -39,7 +46,10 @@ def scylla_gdb(request):
     # Unfortunately, the file's name includes a dash which requires some
     # funky workarounds to import.
     import importlib
-    mod = importlib.import_module("scylla-gdb")
+    try:
+        mod = importlib.import_module("scylla-gdb")
+    except Exception as e:
+        pytest.exit(f'Failed to load scylla-gdb: {e}')
     sys.path = save_sys_path
     yield mod
 
