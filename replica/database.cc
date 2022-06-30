@@ -1446,7 +1446,7 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_opti
     auto& semaphore = get_reader_concurrency_semaphore();
     auto max_result_size = cmd.max_result_size ? *cmd.max_result_size : get_unlimited_query_max_result_size();
 
-    std::optional<query::data_querier> querier_opt;
+    std::optional<query::querier> querier_opt;
     lw_shared_ptr<query::result> result;
     std::exception_ptr ex;
 
@@ -1512,7 +1512,7 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
     auto accounter = co_await get_result_memory_limiter().new_mutation_read(max_result_size, short_read_allwoed);
     column_family& cf = find_column_family(cmd.cf_id);
 
-    std::optional<query::mutation_querier> querier_opt;
+    std::optional<query::querier> querier_opt;
     reconcilable_result result;
     std::exception_ptr ex;
 

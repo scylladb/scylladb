@@ -287,11 +287,11 @@ void querier_cache::insert_querier(
   }
 }
 
-void querier_cache::insert_data_querier(utils::UUID key, data_querier&& q, tracing::trace_state_ptr trace_state) {
+void querier_cache::insert_data_querier(utils::UUID key, querier&& q, tracing::trace_state_ptr trace_state) {
     insert_querier(key, _data_querier_index, _stats, std::move(q), _entry_ttl, std::move(trace_state));
 }
 
-void querier_cache::insert_mutation_querier(utils::UUID key, mutation_querier&& q, tracing::trace_state_ptr trace_state) {
+void querier_cache::insert_mutation_querier(utils::UUID key, querier&& q, tracing::trace_state_ptr trace_state) {
     insert_querier(key, _mutation_querier_index, _stats, std::move(q), _entry_ttl, std::move(trace_state));
 }
 
@@ -348,22 +348,22 @@ std::optional<Querier> querier_cache::lookup_querier(
     return std::nullopt;
 }
 
-std::optional<data_querier> querier_cache::lookup_data_querier(utils::UUID key,
+std::optional<querier> querier_cache::lookup_data_querier(utils::UUID key,
         const schema& s,
         const dht::partition_range& range,
         const query::partition_slice& slice,
         tracing::trace_state_ptr trace_state,
         db::timeout_clock::time_point timeout) {
-    return lookup_querier<data_querier>(_data_querier_index, key, s, range, slice, std::move(trace_state), timeout);
+    return lookup_querier<querier>(_data_querier_index, key, s, range, slice, std::move(trace_state), timeout);
 }
 
-std::optional<mutation_querier> querier_cache::lookup_mutation_querier(utils::UUID key,
+std::optional<querier> querier_cache::lookup_mutation_querier(utils::UUID key,
         const schema& s,
         const dht::partition_range& range,
         const query::partition_slice& slice,
         tracing::trace_state_ptr trace_state,
         db::timeout_clock::time_point timeout) {
-    return lookup_querier<mutation_querier>(_mutation_querier_index, key, s, range, slice, std::move(trace_state), timeout);
+    return lookup_querier<querier>(_mutation_querier_index, key, s, range, slice, std::move(trace_state), timeout);
 }
 
 std::optional<shard_mutation_querier> querier_cache::lookup_shard_mutation_querier(utils::UUID key,

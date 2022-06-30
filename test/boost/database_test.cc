@@ -1078,7 +1078,7 @@ SEASTAR_TEST_CASE(database_drop_column_family_clears_querier_cache) {
 
         auto op = std::optional(tbl.read_in_progress());
         auto s = tbl.schema();
-        auto q = query::data_querier(
+        auto q = query::querier(
                 tbl.as_mutation_source(),
                 tbl.schema(),
                 database_test(db).get_user_read_concurrency_semaphore().make_tracking_only_permit(s.get(), "test", db::no_timeout),

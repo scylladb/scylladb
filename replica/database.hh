@@ -812,7 +812,7 @@ public:
         tracing::trace_state_ptr trace_state,
         query::result_memory_limiter& memory_limiter,
         db::timeout_clock::time_point timeout,
-        std::optional<query::data_querier>* saved_querier = { });
+        std::optional<query::querier>* saved_querier = { });
 
     // Performs a query on given data source returning data in reconcilable form.
     //
@@ -838,7 +838,7 @@ public:
             tracing::trace_state_ptr trace_state,
             query::result_memory_accounter accounter,
             db::timeout_clock::time_point timeout,
-            std::optional<query::mutation_querier>* saved_querier = { });
+            std::optional<query::querier>* saved_querier = { });
 
     void start();
     future<> stop();

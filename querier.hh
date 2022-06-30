@@ -182,9 +182,6 @@ public:
     }
 };
 
-using data_querier = querier;
-using mutation_querier = querier;
-
 /// Local state of a multishard query.
 ///
 /// This querier is not intended to be used directly to read pages. Instead it
@@ -333,9 +330,9 @@ public:
     querier_cache(querier_cache&&) = delete;
     querier_cache& operator=(querier_cache&&) = delete;
 
-    void insert_data_querier(utils::UUID key, data_querier&& q, tracing::trace_state_ptr trace_state);
+    void insert_data_querier(utils::UUID key, querier&& q, tracing::trace_state_ptr trace_state);
 
-    void insert_mutation_querier(utils::UUID key, mutation_querier&& q, tracing::trace_state_ptr trace_state);
+    void insert_mutation_querier(utils::UUID key, querier&& q, tracing::trace_state_ptr trace_state);
 
     void insert_shard_querier(utils::UUID key, shard_mutation_querier&& q, tracing::trace_state_ptr trace_state);
 
@@ -352,7 +349,7 @@ public:
     /// The found querier is checked for a matching position and schema version.
     /// The start position of the querier is checked against the start position
     /// of the page using the `range' and `slice'.
-    std::optional<data_querier> lookup_data_querier(utils::UUID key,
+    std::optional<querier> lookup_data_querier(utils::UUID key,
             const schema& s,
             const dht::partition_range& range,
             const query::partition_slice& slice,
@@ -362,7 +359,7 @@ public:
     /// Lookup a mutation querier in the cache.
     ///
     /// See \ref lookup_data_querier().
-    std::optional<mutation_querier> lookup_mutation_querier(utils::UUID key,
+    std::optional<querier> lookup_mutation_querier(utils::UUID key,
             const schema& s,
             const dht::partition_range& range,
             const query::partition_slice& slice,
