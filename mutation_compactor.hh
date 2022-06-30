@@ -194,9 +194,6 @@ private:
         }
         return gc_consumer_stop || consumer_stop;
     }
-    static constexpr bool only_live() {
-        return false;
-    }
     static constexpr bool sstable_compaction() {
         return SSTableCompaction == compact_for_sstables::yes;
     }
@@ -290,7 +287,6 @@ public:
         , _collector(std::make_unique<mutation_compactor_garbage_collector>(_schema))
     {
         static_assert(sstable_compaction(), "This constructor can only be used for sstable compaction.");
-        static_assert(!only_live(), "SSTable compaction cannot be run with emit_only_live_rows::yes.");
     }
 
     void consume_new_partition(const dht::decorated_key& dk) {
@@ -318,13 +314,11 @@ public:
     requires CompactedFragmentsConsumerV2<Consumer> && CompactedFragmentsConsumerV2<GCConsumer>
     void consume(tombstone t, Consumer& consumer, GCConsumer& gc_consumer) {
         _partition_tombstone = t;
-        if (!only_live()) {
-            if (can_purge_tombstone(t)) {
-                partition_is_not_empty_for_gc_consumer(gc_consumer);
-            } else {
-                partition_is_not_empty(consumer);
-            }
-         }
+        if (can_purge_tombstone(t)) {
+            partition_is_not_empty_for_gc_consumer(gc_consumer);
+        } else {
+            partition_is_not_empty(consumer);
+        }
     }
 
     template <typename Consumer>
@@ -358,7 +352,7 @@ public:
             }
         }
         _static_row_live = is_live;
-        if (is_live || (!only_live() && !sr.empty())) {
+        if (is_live || !sr.empty()) {
             partition_is_not_empty(consumer);
             return consumer.consume(std::move(sr), current_tombstone, is_live);
         }
@@ -408,28 +402,15 @@ public:
             }
         }
 
-        auto consume_row = [&] () mutable {
+        auto stop = stop_iteration::no;
+        if (!cr.empty()) {
             partition_is_not_empty(consumer);
-            return consumer.consume(std::move(cr), t, is_live);
-        };
-
-        if (only_live() && is_live) {
-            auto stop = consume_row();
-            if (++_rows_in_current_partition == _current_partition_limit) {
-                return stop_iteration::yes;
-            }
-            return stop;
-        } else if (!only_live()) {
-            auto stop = stop_iteration::no;
-            if (!cr.empty()) {
-                stop = consume_row();
-            }
-            if (!sstable_compaction() && is_live && ++_rows_in_current_partition == _current_partition_limit) {
-                return stop_iteration::yes;
-            }
-            return stop;
+            stop = consumer.consume(std::move(cr), t, is_live);
         }
-        return stop_iteration::no;
+        if (!sstable_compaction() && is_live && ++_rows_in_current_partition == _current_partition_limit) {
+            return stop_iteration::yes;
+        }
+        return stop;
     }
 
     template <typename Consumer, typename GCConsumer>
