@@ -693,7 +693,7 @@ public:
             auto stop_forward_service =  defer([&forward_service] { forward_service.stop().get(); });
 
             // gropu0 client exists only on shard 0
-            service::raft_group0_client group0_client(raft_gr.local());
+            service::raft_group0_client group0_client(raft_gr.local(), sys_ks.local());
 
             mm.start(std::ref(mm_notif), std::ref(feature_service), std::ref(ms), std::ref(proxy), std::ref(gossiper), std::ref(group0_client), std::ref(sys_ks)).get();
             auto stop_mm = defer([&mm] { mm.stop().get(); });
@@ -757,6 +757,7 @@ public:
                 }
             }).get();
 
+            group0_client.init().get();
             auto stop_system_keyspace = defer([] { db::qctx = {}; });
 
             auto shutdown_db = defer([&db] {
