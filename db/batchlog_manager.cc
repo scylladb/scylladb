@@ -128,13 +128,12 @@ future<> db::batchlog_manager::drain() {
         _sem.broken();
     }
 
-    return _started;
+    co_await _started.get_future();
 }
 
 future<> db::batchlog_manager::stop() {
-    return drain().finally([this] {
-        return _gate.close();
-    });
+    co_await drain();
+    co_await _gate.close();
 }
 
 future<size_t> db::batchlog_manager::count_all_batches() const {
