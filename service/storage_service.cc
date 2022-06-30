@@ -1282,9 +1282,10 @@ future<> endpoint_lifecycle_notifier::unregister_subscriber(endpoint_lifecycle_s
 
 future<> storage_service::stop_transport() {
     if (!_transport_stopped.has_value()) {
-        _transport_stopped.emplace();
+        promise<> stopped;
+        _transport_stopped = stopped.get_future();
 
-        (void) seastar::async([this] {
+        seastar::async([this] {
             slogger.info("Stop transport: starts");
 
             slogger.debug("shutting down migration manager");
@@ -1301,18 +1302,12 @@ future<> storage_service::stop_transport() {
 
             _stream_manager.invoke_on_all(&streaming::stream_manager::shutdown).get();
             slogger.info("Stop transport: shutdown stream_manager done");
-        }).then_wrapped([this] (future<> f) {
-            if (f.failed()) {
-                _transport_stopped->set_exception(f.get_exception());
-            } else {
-                _transport_stopped->set_value();
-            }
 
             slogger.info("Stop transport: done");
-        });
+        }).forward_to(std::move(stopped));
     }
 
-    return _transport_stopped->get_shared_future();
+    return _transport_stopped.value();
 }
 
 future<> storage_service::drain_on_shutdown() {
