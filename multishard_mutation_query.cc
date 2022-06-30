@@ -610,7 +610,7 @@ future<> read_context::save_readers(flat_mutation_reader_v2::tracked_buffer unco
 namespace {
 
 template <typename ResultType>
-using compact_for_result_state = compact_for_query_state_v2<emit_only_live_rows::no>;
+using compact_for_result_state = compact_for_query_state_v2;
 
 template <typename ResultBuilder>
 requires std::is_nothrow_move_constructible_v<typename ResultBuilder::result_type>

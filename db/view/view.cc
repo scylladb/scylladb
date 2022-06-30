@@ -2036,7 +2036,7 @@ public:
 // Called in the context of a seastar::thread.
 void view_builder::execute(build_step& step, exponential_backoff_retry r) {
     gc_clock::time_point now = gc_clock::now();
-    auto consumer = compact_for_query_v2<emit_only_live_rows::no, view_builder::consumer>(
+    auto consumer = compact_for_query_v2<view_builder::consumer>(
             *step.reader.schema(),
             now,
             step.pslice,
