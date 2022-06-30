@@ -170,7 +170,7 @@ else
 fi
 
 if [ "$PWD" != "$toplevel" ]; then
-     docker_common_args+=(-v "$toplevel:$toplevel:z")
+     docker_common_args+=(-v "$toplevel:$toplevel")
 fi
 
 # podman cannot relabel system directories like /tmp, but it can
@@ -180,11 +180,12 @@ tmpdir=$(mktemp -d)
 
 docker_common_args+=(
        --security-opt seccomp=unconfined \
+       --security-opt label:disable \
        --network host \
        --cap-add SYS_PTRACE \
-       -v "$PWD:$PWD:z" \
-       -v "$tmpdir:/tmp:z" \
-       -v "$MAVEN_LOCAL_REPO:$MAVEN_LOCAL_REPO:z" \
+       -v "$PWD:$PWD" \
+       -v "$tmpdir:/tmp" \
+       -v "$MAVEN_LOCAL_REPO:$MAVEN_LOCAL_REPO" \
        -v /etc/localtime:/etc/localtime:ro \
        -w "$PWD" \
        -e HOME="$HOME" \
