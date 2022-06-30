@@ -2448,11 +2448,14 @@ future<> database::flush_non_system_column_families() {
     _drain_progress.total_cfs = total_cfs;
     _drain_progress.remaining_cfs = total_cfs;
     // flush
+    dblog.info("Flushing non-system tables");
     return parallel_for_each(non_system_cfs, [this] (auto&& uuid_and_cf) {
         auto cf = uuid_and_cf.second;
         return cf->flush().then([this] {
             _drain_progress.remaining_cfs--;
         });
+    }).finally([] {
+        dblog.info("Flushed non-system tables");
     });
 }
 
@@ -2461,9 +2464,12 @@ future<> database::flush_system_column_families() {
         auto cf = uuid_and_cf.second;
         return is_system_keyspace(cf->schema()->ks_name());
     });
+    dblog.info("Flushing system tables");
     return parallel_for_each(system_cfs, [] (auto&& uuid_and_cf) {
         auto cf = uuid_and_cf.second;
         return cf->flush();
+    }).finally([] {
+        dblog.info("Flushed system tables");
     });
 }
 

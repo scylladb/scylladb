@@ -2602,7 +2602,6 @@ future<> storage_service::do_drain() {
         return bm.drain();
     });
 
-    slogger.debug("flushing column families");
     co_await _db.invoke_on_all(&replica::database::drain);
 }
 
