@@ -36,7 +36,7 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
 
     size_t memtable_size = seastar::memory::stats().total_memory() / 4;
 
-    std::cout << name << ":\n";
+    std::cout << name << ":" << std::endl;
 
     for (int i = 0; i < update_iterations; ++i) {
         auto MB = 1024 * 1024;
@@ -44,15 +44,23 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
         auto prefill_allocated = logalloc::memory_allocated();
 
         auto mt = make_lw_shared<replica::memtable>(s);
-        while (mt->occupancy().total_space() < memtable_size) {
-            auto pk = dht::decorate_key(*s, partition_key::from_single_value(*s,
-                serialized(utils::UUID_gen::get_time_UUID())));
-            mutation m = gen();
-            mt->apply(m);
-            if (cancelled) {
-                return;
+        auto fill_d = duration_in_seconds([&] {
+            while (mt->occupancy().total_space() < memtable_size) {
+                mutation m = gen();
+                mt->apply(m);
+                seastar::thread::maybe_yield();
+                if (cancelled) {
+                    return;
+                }
             }
-        }
+        });
+        std::cout << format("Memtable fill took {:.6f} [ms]", fill_d.count() * 1000) << std::endl;
+
+        std::cout << "Draining..." << std::endl;
+        auto drain_d = duration_in_seconds([&] {
+            mt->cleaner().drain().get();
+        });
+        std::cout << format("took {:.6f} [ms]", drain_d.count() * 1000) << std::endl;
 
         auto prev_compacted = logalloc::memory_compacted();
         auto prev_allocated = logalloc::memory_allocated();
@@ -60,15 +68,14 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
         auto prev_rows_merged_from_memtable = tracker.get_stats().rows_merged_from_memtable;
         auto prev_rows_dropped_from_memtable = tracker.get_stats().rows_dropped_from_memtable;
 
-        std::cout << format("cache: {:d}/{:d} [MB], memtable: {:d}/{:d} [MB], alloc/comp: {:d}/{:d} [MB] (amp: {:.3f})\n",
+        std::cout << format("cache: {:d}/{:d} [MB], memtable: {:d}/{:d} [MB], alloc/comp: {:d}/{:d} [MB] (amp: {:.3f})",
             tracker.region().occupancy().used_space() / MB,
             tracker.region().occupancy().total_space() / MB,
             mt->occupancy().used_space() / MB,
             mt->occupancy().total_space() / MB,
             (prev_allocated - prefill_allocated) / MB,
             (prev_compacted - prefill_compacted) / MB,
-            float((prev_compacted - prefill_compacted)) / (prev_allocated - prefill_allocated)
-        );
+            float((prev_compacted - prefill_compacted)) / (prev_allocated - prefill_allocated)) << std::endl;
 
         auto permit = semaphore.make_permit();
         // Create a reader which tests the case of memtable snapshots
