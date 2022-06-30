@@ -187,8 +187,10 @@ docker_common_args+=(
        -v "$tmpdir:/tmp" \
        -v "$MAVEN_LOCAL_REPO:$MAVEN_LOCAL_REPO" \
        -v /etc/localtime:/etc/localtime:ro \
+       -v "$HOME/.ccache:$HOME/.ccache" \
        -w "$PWD" \
        -e HOME="$HOME" \
+       -e PATH="/usr/lib64/ccache:/usr/local/bin:/usr/sbin:/usr/bin" \
        "${docker_args[@]}" \
        "$image" \
        "${args[@]}"

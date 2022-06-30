@@ -23,26 +23,18 @@ the working directory mounted:
 
 You can adjust the `docker run` command by adding more flags before the
 command to be executed, separating the flags and the command with `--`.
-This can be useful to attach more volumes (for data or ccache) and to
-set environment variables. For example, to use ccache:
 
-    ./tools/toolchain/dbuild -e PATH=/usr/lib64/ccache:/usr/bin -v $HOME/.ccache:$HOME/.ccache:z -- ninja
+For example to run an interactive "bash" on the build container, giving
+it a hostname (visible on the prompt) "dbuild" and mounting the user's
+home directory, one can do:
 
-The above command works as follows:
-1. Ccache comes pre-installed in the container, and the setting of PATH
-   to put it first causes the ccache wrappers to be used for compilation.
-2. The "-v" option mounts the user's regular ccache cache directory into the
-   container, so the same directory can be reused.
-3. The ":z" flag is necessary on systems with SELinux enabled, and causes a
-   special selinux label to be applied to $HOME/.ccache so docker can write
-   it it. While this (rightfully) sounds fishy, note that dbuild already does
-   the same thing to your current directory, where the build output is
-   written - the current directory is also mounted with the ":z" flag.
+    ./tools/toolchain/dbuild -it --hostname dbuild -v $HOME:$HOME -- bash
 
 To pass the same options to every run of dbuild, put them in the file
-~/.config/scylladb/dbuild, which should contain a bash array assignment:
+~/.config/scylladb/dbuild, which should contain a bash array assignment,
+for example:
 
-SCYLLADB_DBUILD=(-e PATH=/usr/lib64/ccache:/usr/bin -v /home/nyh/.ccache:/home/nyh/.ccache:z)
+SCYLLADB_DBUILD=(-e VAR=value -v /home/nyh:/home/nyh)
 
 The script also works from other directories, so if you have `scylla-ccm` checked
 out alongside scylla, you can write
