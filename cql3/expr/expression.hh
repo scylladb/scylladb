@@ -540,6 +540,21 @@ const binary_operator* find_binop(const expression& e, Fn predicate_fun) {
     return find_in_expression<binary_operator>(e, predicate_fun);
 }
 
+// Goes over each expression of the specified type and calls for_each_func for each of them.
+// For example:
+// for_each_expression<column_vaue>(e, [](const column_value& cval) {std::cout << cval << '\n';});
+// Will print all column values in an expression
+template<ExpressionElement ExprElem, class Fn>
+requires std::invocable<Fn, const ExprElem&>
+void for_each_expression(const expression& e, Fn for_each_func) {
+    recurse_until(e, [&] (const expression& cur_expr) -> bool {
+        if (auto expr_elem = as_if<ExprElem>(&cur_expr)) {
+            for_each_func(*expr_elem);
+        }
+        return false;
+    });
+}
+
 /// Counts binary_operator atoms b for which f(b) is true.
 size_t count_if(const expression& e, const noncopyable_function<bool (const binary_operator&)>& f);
 
