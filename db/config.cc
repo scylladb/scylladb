@@ -1012,9 +1012,8 @@ db::fs::path db::config::get_conf_sub(db::fs::path sub) {
 }
 
 bool db::config::check_experimental(experimental_features_t::feature f) const {
-    if (experimental()
-        && f != experimental_features_t::feature::UNUSED
-        && f != experimental_features_t::feature::RAFT) {
+    if ((experimental() && f != experimental_features_t::feature::UNUSED) ||
+        f == experimental_features_t::feature::RAFT) {
             return true;
     }
     const auto& optval = experimental_features();
@@ -1056,7 +1055,7 @@ std::map<sstring, db::experimental_features_t::feature> db::experimental_feature
         {"cdc", feature::UNUSED},
         {"alternator-streams", feature::ALTERNATOR_STREAMS},
         {"alternator-ttl", feature::ALTERNATOR_TTL},
-        {"raft", feature::RAFT},
+        {"raft", feature::UNUSED},
         {"keyspace-storage-options", feature::KEYSPACE_STORAGE_OPTIONS},
     };
 }
