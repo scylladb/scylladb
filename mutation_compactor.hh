@@ -269,11 +269,6 @@ private:
     };
 
 public:
-    struct parameters {
-        static constexpr emit_only_live_rows only_live = OnlyLive;
-        static constexpr compact_for_sstables sstable_compaction = SSTableCompaction;
-    };
-
     compact_mutation_state(compact_mutation_state&&) = delete; // Because 'this' is captured
 
     compact_mutation_state(const schema& s, gc_clock::time_point query_time, const query::partition_slice& slice, uint64_t limit,
