@@ -42,7 +42,7 @@ private:
     /**
      * Restrictions on partitioning columns
      */
-    expr::expression _new_partition_key_restrictions;
+    expr::expression _partition_key_restrictions;
 
     expr::single_column_restrictions_map _single_column_partition_key_restrictions;
 
@@ -143,7 +143,7 @@ public:
      * otherwise.
      */
     bool key_is_in_relation() const {
-        return find(_new_partition_key_restrictions, expr::oper_t::IN);
+        return find(_partition_key_restrictions, expr::oper_t::IN);
     }
 
     /**
@@ -179,7 +179,7 @@ public:
     }
 
     const expr::expression& get_partition_key_restrictions() const {
-        return _new_partition_key_restrictions;
+        return _partition_key_restrictions;
     }
 
     ::shared_ptr<clustering_key_restrictions> get_clustering_columns_restrictions() const {
@@ -187,7 +187,7 @@ public:
     }
 
     bool has_token_restrictions() const {
-        return has_token(_new_partition_key_restrictions);
+        return has_token(_partition_key_restrictions);
     }
 
     // Checks whether the given column has an EQ restriction.
@@ -263,7 +263,7 @@ private:
      */
     const expr::expression& get_restrictions(column_kind kind) const {
         switch (kind) {
-        case column_kind::partition_key: return _new_partition_key_restrictions;
+        case column_kind::partition_key: return _partition_key_restrictions;
         case column_kind::clustering_key: return _new_clustering_columns_restrictions;
         default: return _new_nonprimary_key_restrictions;
         }
@@ -464,7 +464,7 @@ public:
         // If token restrictions are present in an indexed query, then all other restrictions need to be filtered.
         // A single token restriction can have multiple matching partition key values.
         // Because of this we can't create a clustering prefix with more than token restriction.
-        || (_uses_secondary_indexing && has_token(_new_partition_key_restrictions));
+        || (_uses_secondary_indexing && has_token(_partition_key_restrictions));
     }
 
     /**
