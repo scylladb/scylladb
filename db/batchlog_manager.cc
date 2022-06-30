@@ -127,9 +127,8 @@ future<> db::batchlog_manager::drain() {
         // Abort do_batch_log_replay if waiting on the semaphore.
         _sem.broken();
     }
-    return with_gate(_gate, [this] {
-        return std::exchange(_started, make_ready_future<>());
-    });
+
+    return _started;
 }
 
 future<> db::batchlog_manager::stop() {

@@ -12,6 +12,7 @@
 
 #include <unordered_map>
 #include <seastar/core/future.hh>
+#include <seastar/core/shared_future.hh>
 #include <seastar/core/distributed.hh>
 #include <seastar/core/timer.hh>
 #include <seastar/core/gate.hh>
@@ -57,7 +58,7 @@ private:
     cql3::query_processor& _qp;
     db_clock::duration _write_request_timeout;
     uint64_t _replay_rate;
-    future<> _started;
+    shared_future<> _started;
     std::chrono::milliseconds _delay;
     semaphore _sem{1};
     seastar::gate _gate;
