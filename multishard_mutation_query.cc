@@ -609,18 +609,15 @@ future<> read_context::save_readers(flat_mutation_reader_v2::tracked_buffer unco
 
 namespace {
 
-template <typename ResultType>
-using compact_for_result_state = compact_for_query_state_v2;
-
 template <typename ResultBuilder>
 requires std::is_nothrow_move_constructible_v<typename ResultBuilder::result_type>
 struct page_consume_result {
     typename ResultBuilder::result_type result;
     flat_mutation_reader_v2::tracked_buffer unconsumed_fragments;
-    lw_shared_ptr<compact_for_result_state<ResultBuilder>> compaction_state;
+    lw_shared_ptr<compact_for_query_state_v2> compaction_state;
 
     page_consume_result(typename ResultBuilder::result_type&& result, flat_mutation_reader_v2::tracked_buffer&& unconsumed_fragments,
-            lw_shared_ptr<compact_for_result_state<ResultBuilder>>&& compaction_state) noexcept
+            lw_shared_ptr<compact_for_query_state_v2>&& compaction_state) noexcept
         : result(std::move(result))
         , unconsumed_fragments(std::move(unconsumed_fragments))
         , compaction_state(std::move(compaction_state)) {
@@ -697,8 +694,8 @@ future<page_consume_result<ResultBuilder>> read_page(
         const query::read_command& cmd,
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
-        noncopyable_function<ResultBuilder(const compact_for_result_state<ResultBuilder>&)> result_builder_factory) {
-    auto compaction_state = make_lw_shared<compact_for_result_state<ResultBuilder>>(*s, cmd.timestamp, cmd.slice, cmd.get_row_limit(),
+        noncopyable_function<ResultBuilder(const compact_for_query_state_v2&)> result_builder_factory) {
+    auto compaction_state = make_lw_shared<compact_for_query_state_v2>(*s, cmd.timestamp, cmd.slice, cmd.get_row_limit(),
             cmd.partition_limit);
 
     auto reader = make_multishard_combining_reader_v2(ctx, s, ctx->permit(), ranges.front(), cmd.slice,
@@ -741,7 +738,7 @@ future<typename ResultBuilder::result_type> do_query(
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
         db::timeout_clock::time_point timeout,
-        noncopyable_function<ResultBuilder(const compact_for_result_state<ResultBuilder>&)> result_builder_factory) {
+        noncopyable_function<ResultBuilder(const compact_for_query_state_v2&)> result_builder_factory) {
     auto ctx = seastar::make_shared<read_context>(db, s, cmd, ranges, trace_state, timeout);
 
     // Use coroutine::as_future to prevent exception on timesout.
@@ -769,7 +766,7 @@ static future<std::tuple<foreign_ptr<lw_shared_ptr<typename ResultBuilder::resul
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
         db::timeout_clock::time_point timeout,
-        std::function<ResultBuilder(query::result_memory_accounter&&, const compact_for_result_state<ResultBuilder>&)> result_builder_factory) {
+        std::function<ResultBuilder(query::result_memory_accounter&&, const compact_for_query_state_v2&)> result_builder_factory) {
     if (cmd.get_row_limit() == 0 || cmd.slice.partition_row_limit() == 0 || cmd.partition_limit == 0) {
         co_return std::tuple(
                 make_foreign(make_lw_shared<typename ResultBuilder::result_type>()),
@@ -784,7 +781,7 @@ static future<std::tuple<foreign_ptr<lw_shared_ptr<typename ResultBuilder::resul
         auto accounter = co_await local_db.get_result_memory_limiter().new_mutation_read(*cmd.max_result_size, short_read_allowed);
 
         auto result = co_await do_query<ResultBuilder>(db, s, cmd, ranges, std::move(trace_state), timeout,
-                [result_builder_factory, accounter = std::move(accounter)] (const compact_for_result_state<ResultBuilder>& compaction_state) mutable {
+                [result_builder_factory, accounter = std::move(accounter)] (const compact_for_query_state_v2& compaction_state) mutable {
 			return result_builder_factory(std::move(accounter), compaction_state);
 		});
 
@@ -825,13 +822,13 @@ public:
     using result_type = query::result;
 
 private:
-    const compact_for_result_state<data_query_result_builder>& _compaction_state;
+    const compact_for_query_state_v2& _compaction_state;
     std::unique_ptr<query::result::builder> _res_builder;
     query_result_builder _builder;
 
 public:
     data_query_result_builder(const schema& s, const query::partition_slice& slice, query::result_options opts,
-            query::result_memory_accounter&& accounter, const compact_for_result_state<data_query_result_builder>& compaction_state)
+            query::result_memory_accounter&& accounter, const compact_for_query_state_v2& compaction_state)
         : _compaction_state(compaction_state)
         , _res_builder(std::make_unique<query::result::builder>(slice, opts, std::move(accounter)))
         , _builder(s, *_res_builder) { }
@@ -863,7 +860,7 @@ future<std::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_tempera
     schema_ptr query_schema = cmd.slice.is_reversed() ? table_schema->make_reversed() : table_schema;
 
     return do_query_on_all_shards<mutation_query_result_builder>(db, query_schema, cmd, ranges, std::move(trace_state), timeout,
-            [table_schema, &cmd] (query::result_memory_accounter&& accounter, const compact_for_result_state<mutation_query_result_builder>& compaction_state) {
+            [table_schema, &cmd] (query::result_memory_accounter&& accounter, const compact_for_query_state_v2& compaction_state) {
         return mutation_query_result_builder(*table_schema, cmd.slice, std::move(accounter));
     });
 }
@@ -879,7 +876,7 @@ future<std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>
     schema_ptr query_schema = cmd.slice.is_reversed() ? table_schema->make_reversed() : table_schema;
 
     return do_query_on_all_shards<data_query_result_builder>(db, query_schema, cmd, ranges, std::move(trace_state), timeout,
-            [table_schema, &cmd, opts] (query::result_memory_accounter&& accounter, const compact_for_result_state<data_query_result_builder>& compaction_state) {
+            [table_schema, &cmd, opts] (query::result_memory_accounter&& accounter, const compact_for_query_state_v2& compaction_state) {
         return data_query_result_builder(*table_schema, cmd.slice, opts, std::move(accounter), compaction_state);
     });
 }
