@@ -7,7 +7,6 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 #include "locator/production_snitch_base.hh"
-#include "reconnectable_snitch_helper.hh"
 #include "db/system_keyspace.hh"
 #include "gms/gossiper.hh"
 #include "message/messaging_service.hh"
@@ -188,62 +187,6 @@ void production_snitch_base::throw_bad_format(const sstring& line) const {
 void production_snitch_base::throw_incomplete_file() const {
     logger().error("Property file {} is incomplete. Some obligatory fields are missing.", _prop_file_name);
     throw bad_property_file_error();
-}
-
-logging::logger& reconnectable_snitch_helper::logger() {
-    static logging::logger _logger("reconnectable_snitch_helper");
-    return _logger;
-}
-
-
-future<> reconnectable_snitch_helper::reconnect(gms::inet_address public_address, const gms::versioned_value& local_address_value) {
-    return reconnect(public_address, gms::inet_address(local_address_value.value));
-}
-
-future<> reconnectable_snitch_helper::reconnect(gms::inet_address public_address, gms::inet_address local_address) {
-    return make_ready_future<>();
-}
-
-reconnectable_snitch_helper::reconnectable_snitch_helper(sstring local_dc)
-        : _local_dc(local_dc) {}
-
-future<> reconnectable_snitch_helper::before_change(gms::inet_address endpoint, gms::endpoint_state cs, gms::application_state new_state_key, const gms::versioned_value& new_value) {
-    // do nothing.
-    return make_ready_future();
-}
-
-future<> reconnectable_snitch_helper::on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) {
-    auto* internal_ip_state = ep_state.get_application_state_ptr(gms::application_state::INTERNAL_IP);
-    if (internal_ip_state) {
-        return reconnect(endpoint, *internal_ip_state);
-    }
-    return make_ready_future();
-}
-
-future<> reconnectable_snitch_helper::on_change(gms::inet_address endpoint, gms::application_state state, const gms::versioned_value& value) {
-    if (state == gms::application_state::INTERNAL_IP) {
-        return reconnect(endpoint, value);
-    }
-    return make_ready_future();
-}
-
-future<> reconnectable_snitch_helper::on_alive(gms::inet_address endpoint, gms::endpoint_state ep_state) {
-    return on_join(std::move(endpoint), std::move(ep_state));
-}
-
-future<> reconnectable_snitch_helper::on_dead(gms::inet_address endpoint, gms::endpoint_state ep_state) {
-    // do nothing.
-    return make_ready_future();
-}
-
-future<> reconnectable_snitch_helper::on_remove(gms::inet_address endpoint) {
-    // do nothing.
-    return make_ready_future();
-}
-
-future<> reconnectable_snitch_helper::on_restart(gms::inet_address endpoint, gms::endpoint_state state) {
-    // do nothing.
-    return make_ready_future();
 }
 
 } // namespace locator
