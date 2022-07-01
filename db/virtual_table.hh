@@ -38,6 +38,7 @@ public:
     };
 
     explicit virtual_table(schema_ptr s) : _s(std::move(s)) {}
+    virtual ~virtual_table() = default;
 
     const schema_ptr& schema() const { return _s; }
 
