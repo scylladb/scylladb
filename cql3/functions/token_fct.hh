@@ -32,6 +32,9 @@ public:
     }
 
     bytes_opt execute(cql_serialization_format sf, const std::vector<bytes_opt>& parameters) override {
+        if (std::any_of(parameters.cbegin(), parameters.cend(), [](const auto& param){ return !param; })) {
+            return std::nullopt;
+        }
         auto key = partition_key::from_optional_exploded(*_schema, parameters);
         auto tok = dht::get_token(*_schema, key);
         warn(unimplemented::cause::VALIDATION);
