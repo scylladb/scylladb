@@ -279,13 +279,15 @@ void messaging_service::do_start_listen() {
                 case encrypt_what::none:
                     break;
                 case encrypt_what::dc:
-                    so.filter_connection = [](const seastar::socket_address& addr) {
+                    so.filter_connection = [this](const seastar::socket_address& caddr) {
+                        auto addr = get_public_endpoint_for(caddr);
                         auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
                         return snitch->get_datacenter(addr) == snitch->get_datacenter(utils::fb_utilities::get_broadcast_address());
                     };
                     break;
                 case encrypt_what::rack:
-                    so.filter_connection = [](const seastar::socket_address& addr) {
+                    so.filter_connection = [this](const seastar::socket_address& caddr) {
+                        auto addr = get_public_endpoint_for(caddr);
                         auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
                         return snitch->get_datacenter(addr) == snitch->get_datacenter(utils::fb_utilities::get_broadcast_address())
                             && snitch->get_rack(addr) == snitch->get_rack(utils::fb_utilities::get_broadcast_address())
@@ -675,7 +677,6 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
         remove_error_rpc_client(verb, id);
     }
 
-    auto addr = get_preferred_ip(id.addr);
     auto broadcast_address = utils::fb_utilities::get_broadcast_address();
     bool listen_to_bc = _cfg.listen_on_broadcast_address && _cfg.ip != broadcast_address;
     auto laddr = socket_address(listen_to_bc ? broadcast_address : _cfg.ip, 0);
@@ -699,7 +700,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
 
         // either rack/dc need to be in same dc to use non-tls
         auto my_dc = snitch_ptr->get_datacenter(broadcast_address);
-        if (snitch_ptr->get_datacenter(addr) != my_dc) {
+        if (snitch_ptr->get_datacenter(id.addr) != my_dc) {
             return true;
         }
         // #9653 - if our idea of dc for bind address differs from our official endpoint address,
@@ -713,7 +714,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
             return false;
         }
         auto my_rack = snitch_ptr->get_rack(broadcast_address);
-        if (snitch_ptr->get_rack(addr) != my_rack) {
+        if (snitch_ptr->get_rack(id.addr) != my_rack) {
             return true;
         }
         // See above: We need to ensure either (local) bind address is same as
@@ -747,6 +748,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
         return true;
     }();
 
+    auto addr = get_preferred_ip(id.addr);
     auto remote_addr = socket_address(addr, must_encrypt ? _cfg.ssl_port : _cfg.port);
 
     rpc::client_options opts;

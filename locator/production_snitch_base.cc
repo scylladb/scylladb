@@ -86,11 +86,6 @@ sstring production_snitch_base::get_endpoint_info(inet_address endpoint, gms::ap
         }
     }
 
-    auto resolved = gossiper.get_local_messaging().get_public_endpoint_for(endpoint);
-    if (resolved != endpoint) {
-        return get_endpoint_info(resolved, key, default_val);
-    }
-
     // ...if still not found - return a default value
     return default_val;
 }
