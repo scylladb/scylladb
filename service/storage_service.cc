@@ -1232,6 +1232,16 @@ future<> storage_service::do_update_system_peers_table(gms::inet_address endpoin
         co_await update_table(endpoint, "data_center", value.value);
     } else if (state == application_state::RACK) {
         co_await update_table(endpoint, "rack", value.value);
+    } else if (state == application_state::INTERNAL_IP) {
+        auto col = sstring("preferred_ip");
+        inet_address ep;
+        try {
+            ep = gms::inet_address(value.value);
+        } catch (...) {
+            slogger.error("fail to update {} for {}: invalid address {}", col, endpoint, value.value);
+            co_return;
+        }
+        co_await update_table(endpoint, col, ep.addr());
     } else if (state == application_state::RPC_ADDRESS) {
         auto col = sstring("rpc_address");
         inet_address ep;

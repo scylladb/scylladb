@@ -1552,13 +1552,6 @@ future<std::unordered_map<gms::inet_address, sstring>> system_keyspace::load_pee
     });
 }
 
-future<> system_keyspace::update_preferred_ip(gms::inet_address ep, gms::inet_address preferred_ip) {
-    sstring req = format("INSERT INTO system.{} (peer, preferred_ip) VALUES (?, ?)", PEERS);
-    return qctx->execute_cql(req, ep.addr(), preferred_ip.addr()).discard_result().then([] {
-        return force_blocking_flush(PEERS);
-    });
-}
-
 future<std::unordered_map<gms::inet_address, gms::inet_address>> system_keyspace::get_preferred_ips() {
     sstring req = format("SELECT peer, preferred_ip FROM system.{}", PEERS);
     return execute_cql(req).then([] (::shared_ptr<cql3::untyped_result_set> cql_res_set) {

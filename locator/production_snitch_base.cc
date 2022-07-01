@@ -207,11 +207,6 @@ future<> reconnectable_snitch_helper::reconnect(gms::inet_address public_address
     if (sn_ptr->get_datacenter(public_address) == _local_dc &&
         ms.get_preferred_ip(public_address) != local_address) {
         //
-        // First, store the local address in the system_table...
-        //
-        co_await db::system_keyspace::update_preferred_ip(public_address, local_address);
-
-        //
         // ...then update messaging_service cache and reset the currently
         // open connections to this endpoint on all shards...
         //
