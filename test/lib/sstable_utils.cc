@@ -78,11 +78,13 @@ sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_
 
     std::set<mutation, mutation_decorated_key_less_comparator> merged;
     for (auto&& m : muts) {
-        auto result = merged.insert(m);
-        if (!result.second) {
-            auto old = *result.first;
-            merged.erase(result.first);
-            merged.insert(old + m);
+        auto it = merged.find(m);
+        if (it == merged.end()) {
+            merged.insert(std::move(m));
+        } else {
+            auto old = merged.extract(it);
+            old.value().apply(std::move(m));
+            merged.insert(std::move(old));
         }
     }
 
