@@ -3,6 +3,8 @@
 import sys
 import os
 import shutil
+import subprocess
+import re
 
 import run   # run.py in this directory
 
@@ -17,6 +19,41 @@ def find_cassandra():
     return cassandra_path
 
 cassandra = find_cassandra()
+
+# By default, the Cassandra startup script simply looks for "java" in the
+# path, and in an ideal world, this should have just worked.
+# However, today Cassandra only supports Java versions 8 and 11, and your
+# Linux distribution might have one of those installed but not as the default
+# "java" command. So find_java() tries to find a supported version elsewhere
+# on your system.
+# See https://github.com/scylladb/scylla/issues/10946
+# https://issues.apache.org/jira/browse/CASSANDRA-16895
+def java_major_version(java):
+    out = subprocess.check_output([java, '-version'], stderr=subprocess.STDOUT).decode('UTF-8')
+    version = re.search(r'"(\d+)\.(\d+).*"', out).groups()
+    major = int(version[0])
+    minor = int(version[1])
+    if major == 1:
+        # Return 8 for Java 1.8
+        return minor
+    else:
+        return major
+
+def find_java():
+    # Look for the Java in one of several places known to host the Java
+    # executable, and return the first one that works and has the appropriate
+    # version. The first attempt is just "java" in the path, which is
+    # preferred if has the right version.
+    for java in ['java', '/usr/lib/jvm/jre-11/bin/java', '/usr/lib/jvm/jre-1.8.0/bin/java']:
+        try:
+            version = java_major_version(java)
+            if version == 8 or version == 11:
+                return java
+        except:
+            pass
+    print("WARNING: find_java() couldn't find Java 8 or 11. Trying default 'java' anyway.")
+
+java = find_java()
 
 def run_cassandra_cmd(pid, dir):
     global cassandra
@@ -59,6 +96,12 @@ def run_cassandra_cmd(pid, dir):
             # configures that:
             'JVM_OPTS': '-Dcassandra.jmx.remote.port=7199',
           }
+    # By default, Cassandra's startup script runs "java". We can override this
+    # choice with the JAVA_HOME environment variable based on the Java we
+    # found earlier in find_java().
+    if java and java.startswith('/'):
+        env['JAVA_HOME'] = os.path.dirname(os.path.dirname(java))
+        print('JAVA_HOME: ' + env['JAVA_HOME'])
     # On JVM 11, Cassandra requires a bunch of configuration options in
     # conf/jvm11-server.options, or it fails loading classes because of JPMS.
     # The following options were copied from Cassandra's jvm11-server.options.
