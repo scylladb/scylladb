@@ -231,7 +231,7 @@ void stats::register_stats() {
 }
 
 bool partition_key_matches(const schema& base, const view_info& view, const dht::decorated_key& key) {
-    const auto r = view.select_statement().get_restrictions()->get_partition_key_restrictions();
+    const cql3::expr::expression& pk_restrictions = view.select_statement().get_restrictions()->get_partition_key_restrictions();
     std::vector<bytes> exploded_pk = key.key().explode();
     std::vector<bytes> exploded_ck;
     std::vector<const column_definition*> pk_columns;
@@ -245,7 +245,7 @@ bool partition_key_matches(const schema& base, const view_info& view, const dht:
     auto dummy_options = cql3::query_options({ });
     // FIXME: pass nullptrs for some of theses dummies
     return cql3::expr::is_satisfied_by(
-            r->expression,
+            pk_restrictions,
             cql3::expr::evaluation_inputs{
                 .partition_key = &exploded_pk,
                 .clustering_key = &exploded_ck,

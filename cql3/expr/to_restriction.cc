@@ -8,7 +8,6 @@
 
 #include "cql3/column_specification.hh"
 #include "expression.hh"
-#include "cql3/restrictions/single_column_restriction.hh"
 #include "cql3/restrictions/multi_column_restriction.hh"
 #include "cql3/restrictions/token_restriction.hh"
 #include "cql3/prepare_context.hh"
@@ -95,7 +94,7 @@ void validate_single_column_relation(const column_value& lhs, oper_t oper, const
                                                                       const schema& schema) {
     validate_single_column_relation(lhs_col, oper, schema, false);
 
-    ::shared_ptr<restrictions::restriction> r = ::make_shared<restrictions::single_column_restriction>(*lhs_col.col);
+    ::shared_ptr<restrictions::restriction> r = ::make_shared<restrictions::restriction>();
     r->expression = binary_operator(std::move(lhs_col), oper, std::move(prepared_rhs), order);
     return r;
 }
@@ -108,7 +107,7 @@ void validate_single_column_relation(const column_value& lhs, oper_t oper, const
     const column_value& sub_col = get_subscripted_column(lhs_sub);
     validate_single_column_relation(sub_col, oper, schema, true);
 
-    ::shared_ptr<restrictions::restriction> r = ::make_shared<restrictions::single_column_restriction>(*sub_col.col);
+    ::shared_ptr<restrictions::restriction> r = ::make_shared<restrictions::restriction>();
     r->expression = binary_operator(std::move(lhs_sub), oper, std::move(prepared_rhs));
     return r;
 }
@@ -321,18 +320,9 @@ void preliminary_binop_vaidation_checks(const binary_operator& binop) {
     if (!is<binary_operator>(e)) {
         throw exceptions::invalid_request_exception("Restriction must be a binary operator");
     }
-    binary_operator binop_to_prepare = as<binary_operator>(e);
+    const binary_operator& binop_to_prepare = as<binary_operator>(e);
 
     preliminary_binop_vaidation_checks(binop_to_prepare);
-
-    // Convert single element IN relation to an EQ relation
-    if (binop_to_prepare.op == oper_t::IN && is<collection_constructor>(binop_to_prepare.rhs)) {
-        const std::vector<expression>& elements = as<collection_constructor>(binop_to_prepare.rhs).elements;
-        if (elements.size() == 1) {
-            binop_to_prepare.op = oper_t::EQ;
-            binop_to_prepare.rhs = elements[0];
-        }
-    }
 
     binary_operator prepared_binop = prepare_binary_operator(binop_to_prepare, db, schema);
 

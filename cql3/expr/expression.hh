@@ -540,6 +540,21 @@ const binary_operator* find_binop(const expression& e, Fn predicate_fun) {
     return find_in_expression<binary_operator>(e, predicate_fun);
 }
 
+// Goes over each expression of the specified type and calls for_each_func for each of them.
+// For example:
+// for_each_expression<column_vaue>(e, [](const column_value& cval) {std::cout << cval << '\n';});
+// Will print all column values in an expression
+template<ExpressionElement ExprElem, class Fn>
+requires std::invocable<Fn, const ExprElem&>
+void for_each_expression(const expression& e, Fn for_each_func) {
+    recurse_until(e, [&] (const expression& cur_expr) -> bool {
+        if (auto expr_elem = as_if<ExprElem>(&cur_expr)) {
+            for_each_func(*expr_elem);
+        }
+        return false;
+    });
+}
+
 /// Counts binary_operator atoms b for which f(b) is true.
 size_t count_if(const expression& e, const noncopyable_function<bool (const binary_operator&)>& f);
 
@@ -633,7 +648,7 @@ std::optional<expression> try_prepare_expression(const expression& expr, data_di
 
 // Prepares a binary operator received from the parser.
 // Does some basic type checks but no advanced validation.
-extern binary_operator prepare_binary_operator(const binary_operator& binop, data_dictionary::database db, schema_ptr schema);
+extern binary_operator prepare_binary_operator(binary_operator binop, data_dictionary::database db, schema_ptr schema);
 
 
 /**
@@ -709,6 +724,53 @@ bool contains_bind_marker(const expression& e);
                                                        data_dictionary::database,
                                                        schema_ptr,
                                                        prepare_context&);
+
+// Checks whether this expression contains restrictions on one single column.
+// There might be more than one restriction, but exactly one column.
+// The expression must be prepared.
+bool is_single_column_restriction(const expression&);
+
+// Gets the only column from a single_column_restriction expression.
+const column_value& get_the_only_column(const expression&);
+
+// A comparator that orders columns by their position in the schema
+// For primary key columns the `id` field is used to determine their position.
+// Other columns are assumed to have position std::numeric_limits<uint32_t>::max().
+// In case the position is the same they are compared by their name.
+// This comparator has been used in the original restricitons code to keep
+// restrictions for each column sorted by their place in the schema.
+// It's not recommended to use this comparator with columns of different kind
+// (partition/clustering/nonprimary) because the id field is unique
+// for (kind, schema). So a partition and clustering column might
+// have the same id within one schema.
+struct schema_pos_column_definition_comparator {
+    bool operator()(const column_definition* def1, const column_definition* def2) const;
+};
+
+// Extracts column_defs from the expression and sorts them using schema_pos_column_definition_comparator.
+std::vector<const column_definition*> get_sorted_column_defs(const expression&);
+
+// Extracts column_defs and returns the last one according to schema_pos_column_definition_comparator.
+const column_definition* get_last_column_def(const expression&);
+
+// A map of single column restrictions for each column
+using single_column_restrictions_map = std::map<const column_definition*, expression, schema_pos_column_definition_comparator>;
+
+// Extracts map of single column restrictions for each column from expression
+single_column_restrictions_map get_single_column_restrictions_map(const expression&);
+
+// Checks whether this expression is empty - doesn't restrict anything
+bool is_empty_restriction(const expression&);
+
+// Finds common columns between both expressions and prints them to a string.
+// Uses schema_pos_column_definition_comparator for comparison.
+sstring get_columns_in_commons(const expression& a, const expression& b);
+
+// Finds the value of the given column in the expression
+// In case of multpiple possible values calls on_internal_error
+bytes_opt value_for(const column_definition&, const expression&, const query_options&);
+
+bool contains_multi_column_restriction(const expression&);
 } // namespace expr
 
 } // namespace cql3

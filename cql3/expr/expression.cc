@@ -2300,5 +2300,166 @@ type_of(const expression& e) {
     }, e);
 }
 
+static std::optional<std::reference_wrapper<const column_value>> get_single_column_restriction_column(const expression& e) {
+    if (find_in_expression<unresolved_identifier>(e, [](const auto&) {return true;})) {
+        on_internal_error(expr_logger,
+            format("get_single_column_restriction_column expects a prepared expression, but it's not: {}}", e));
+    }
+
+    const column_value* the_only_column = nullptr;
+    bool expression_is_single_column = false;
+
+    for_each_expression<column_value>(e,
+        [&](const column_value& cval) {
+            if (the_only_column == nullptr) {
+                // It's the first column_value we've encountered - set it as the only column
+                the_only_column = &cval;
+                expression_is_single_column = true;
+                return;
+            }
+
+            if (cval.col != the_only_column->col) {
+                // In case any other column is encountered the restriction
+                // restricts more than one column.
+                expression_is_single_column = false;
+            }
+        }
+    );
+
+    if (expression_is_single_column) {
+        return std::cref(*the_only_column);
+    } else {
+        return std::nullopt;
+    }
+}
+
+bool is_single_column_restriction(const expression& e) {
+    return get_single_column_restriction_column(e).has_value();
+}
+
+const column_value& get_the_only_column(const expression& e) {
+    std::optional<std::reference_wrapper<const column_value>> result = get_single_column_restriction_column(e);
+
+    if (!result.has_value()) {
+        on_internal_error(expr_logger,
+            format("get_the_only_column - bad expression: {}", e));
+    }
+
+    return *result;
+}
+
+
+bool schema_pos_column_definition_comparator::operator()(const column_definition *def1, const column_definition *def2) const {
+    auto column_pos = [](const column_definition* cdef) -> uint32_t {
+        if (cdef->is_primary_key()) {
+            return cdef->id;
+        }
+
+        return std::numeric_limits<uint32_t>::max();
+    };
+
+    uint32_t pos1 = column_pos(def1);
+    uint32_t pos2 = column_pos(def2);
+    if (pos1 != pos2) {
+        return pos1 < pos2;
+    }
+    // FIXME: shouldn't we use regular column name comparator here? Origin does not...
+    return less_unsigned(def1->name(), def2->name());
+}
+
+std::vector<const column_definition*> get_sorted_column_defs(const expression& e) {
+    std::set<const column_definition*, schema_pos_column_definition_comparator> cols;
+
+    for_each_expression<column_value>(e,
+        [&](const column_value& cval) {
+            cols.insert(cval.col);
+        }
+    );
+
+    std::vector<const column_definition*> result;
+    result.reserve(cols.size());
+    for (const column_definition* col : cols) {
+        result.push_back(col);
+    }
+    return result;
+}
+
+const column_definition* get_last_column_def(const expression& e) {
+    std::vector<const column_definition*> sorted_defs = get_sorted_column_defs(e);
+
+    if (sorted_defs.empty()) {
+        return nullptr;
+    }
+
+    return sorted_defs.back();
+}
+
+single_column_restrictions_map get_single_column_restrictions_map(const expression& e) {
+    single_column_restrictions_map result;
+
+    std::vector<const column_definition*> sorted_defs = get_sorted_column_defs(e);
+    for (const column_definition* cdef : sorted_defs) {
+        expression col_restrictions = conjunction {
+            .children = extract_single_column_restrictions_for_column(e, *cdef)
+        };
+        result.emplace(cdef, std::move(col_restrictions));
+    }
+
+    return result;
+}
+
+bool is_empty_restriction(const expression& e) {
+    bool contains_non_conjunction = recurse_until(e, [&](const expression& e) -> bool {
+        return !is<conjunction>(e);
+    });
+
+    return !contains_non_conjunction;
+}
+
+sstring get_columns_in_commons(const expression& a, const expression& b) {
+    std::vector<const column_definition*> ours = get_sorted_column_defs(a);
+    std::vector<const column_definition*> theirs = get_sorted_column_defs(b);
+
+    std::sort(ours.begin(), ours.end());
+    std::sort(theirs.begin(), theirs.end());
+    std::vector<const column_definition*> common;
+    std::set_intersection(ours.begin(), ours.end(), theirs.begin(), theirs.end(), std::back_inserter(common));
+
+    sstring str;
+    for (auto&& c : common) {
+        if (!str.empty()) {
+            str += " ,";
+        }
+        str += c->name_as_text();
+    }
+    return str;
+}
+
+bytes_opt value_for(const column_definition& cdef, const expression& e, const query_options& options) {
+    value_set possible_vals = possible_lhs_values(&cdef, e, options);
+    return std::visit(overloaded_functor {
+        [&](const value_list& val_list) -> bytes_opt {
+            if (val_list.empty()) {
+                return std::nullopt;
+            }
+
+            if (val_list.size() != 1) {
+                on_internal_error(expr_logger, format("expr::value_for - multiple possible values for column: {}", e));
+            }
+
+            return to_bytes(val_list.front());
+        },
+        [&](const nonwrapping_range<managed_bytes>&) -> bytes_opt {
+            on_internal_error(expr_logger, format("expr::value_for - possible values are a range: {}", e));
+        }
+    }, possible_vals);
+}
+
+bool contains_multi_column_restriction(const expression& e) {
+    const binary_operator* find_res = find_binop(e, [](const binary_operator& binop) {
+        return is<tuple_constructor>(binop.lhs);
+    });
+    return find_res != nullptr;
+}
 } // namespace expr
 } // namespace cql3

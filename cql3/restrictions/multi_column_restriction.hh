@@ -14,6 +14,7 @@
 #include "cql3/restrictions/primary_key_restrictions.hh"
 #include "cql3/statements/request_validations.hh"
 #include "cql3/restrictions/single_column_primary_key_restrictions.hh"
+#include "cql3/restrictions/bounds_slice.hh"
 #include "cql3/constants.hh"
 #include "cql3/lists.hh"
 #include "cql3/expr/expression.hh"
@@ -434,66 +435,6 @@ private:
         } else {
             return std::nullopt;
         }
-    }
-
-    /**
-     * Creates a single column restriction which is either slice or equality.
-     * @param bound - if bound is empty this is an equality, if its either START or END ,
-     *        this is the corresponding slice restriction.
-     * @param inclusive - is the slice inclusive (ignored for equality).
-     * @param column_pos - the column position to restrict
-     * @param value - the value to restrict the colum with.
-     * @return a shared pointer to the just created restriction.
-     */
-    ::shared_ptr<restriction> make_single_column_restriction(std::optional<cql3::statements::bound> bound, bool inclusive,
-                                                             std::size_t column_pos, const managed_bytes_opt& value) const {
-        expr::expression e = expr::constant(cql3::raw_value::make_value(value), _column_defs[column_pos]->type);
-        using namespace expr;
-        if (!bound){
-            auto r = ::make_shared<cql3::restrictions::single_column_restriction>(*_column_defs[column_pos]);
-            r->expression = binary_operator{column_value{_column_defs[column_pos]}, expr::oper_t::EQ, std::move(e)};
-            return r;
-        } else {
-            auto r = ::make_shared<cql3::restrictions::single_column_restriction>(*_column_defs[column_pos]);
-            r->expression = binary_operator{
-                column_value(_column_defs[column_pos]), pick_operator(*bound, inclusive), std::move(e)};
-            return r;
-        }
-    }
-
-    /**
-     * A helper function to create a single column restrictions set from a tuple relation on
-     * clustering keys.
-     * i.e : (a,b,c) >= (0,1,2) will become:
-     *      1.a > 0
-     *      2. a = 0 and b > 1
-     *      3. a = 0 and b = 1 and c >=2
-     * @param bound - determines if the operator is '>' (START) or '<' (END)
-     * @param bound_inclusive - determines if to append equality to the operator i.e: if > becomes >=
-     * @param bound_values - the tuple values for the restriction
-     * @param first_neq_component - the first component that will have inequality.
-     *        for the example above, if this parameter is 1, only restrictions 2 and 3 will be created.
-     *        this parameter helps to facilitate the nuances of breaking more complex relations, for example when
-     *        there is in existence a second condition limiting the other side of the bound
-     *        i.e:(a,b,c) >= (0,1,2)  and (a,b,c) < (5,6,7), this will require each bound to use the parameter.
-     * @return the single column restriction set built according to the above parameters.
-     */
-    std::vector<restriction_shared_ptr> make_single_bound_restrictions(statements::bound bound, bool bound_inclusive,
-                                                                       std::vector<managed_bytes_opt>& bound_values,
-                                                                       std::size_t first_neq_component) const{
-        std::vector<restriction_shared_ptr> ret;
-        std::size_t num_of_restrictions = bound_values.size() - first_neq_component;
-        ret.reserve(num_of_restrictions);
-        for (std::size_t i = 0;i < num_of_restrictions ; i++) {
-            ret.emplace_back(::make_shared<cql3::restrictions::single_column_clustering_key_restrictions>(_schema, false));
-            std::size_t neq_component_idx = first_neq_component + i;
-            for (std::size_t j = 0;j < neq_component_idx; j++) {
-                ret[i]->merge_with(make_single_column_restriction(std::nullopt, false, j, bound_values[j]));
-            }
-            bool inclusive = (i == (num_of_restrictions-1)) && bound_inclusive;
-            ret[i]->merge_with(make_single_column_restriction(bound, inclusive, neq_component_idx, bound_values[neq_component_idx]));
-        }
-        return ret;
     }
 };
 

@@ -12,6 +12,7 @@
 
 #include <vector>
 #include <list>
+#include "cql3/expr/expression.hh"
 #include "to_string.hh"
 #include "schema_fwd.hh"
 #include "cql3/restrictions/restrictions.hh"
@@ -41,24 +42,30 @@ private:
     /**
      * Restrictions on partitioning columns
      */
-    ::shared_ptr<partition_key_restrictions> _partition_key_restrictions;
+    expr::expression _partition_key_restrictions;
+
+    expr::single_column_restrictions_map _single_column_partition_key_restrictions;
 
     /**
      * Restrictions on clustering columns
      */
     ::shared_ptr<clustering_key_restrictions> _clustering_columns_restrictions;
 
+    expr::expression _new_clustering_columns_restrictions;
+
     /**
      * Restriction on non-primary key columns (i.e. secondary index restrictions)
      */
     ::shared_ptr<single_column_restrictions> _nonprimary_key_restrictions;
+
+    expr::expression _new_nonprimary_key_restrictions;
 
     std::unordered_set<const column_definition*> _not_null_columns;
 
     /**
      * The restrictions used to build the index expressions
      */
-    std::vector<::shared_ptr<restrictions>> _index_restrictions;
+    std::vector<expr::expression> _index_restrictions;
 
     /**
      * <code>true</code> if the secondary index need to be queried, <code>false</code> otherwise
@@ -127,7 +134,7 @@ public:
         bool for_view = false,
         bool allow_filtering = false);
 
-    const std::vector<::shared_ptr<restrictions>>& index_restrictions() const;
+    const std::vector<expr::expression>& index_restrictions() const;
 
     /**
      * Checks if the restrictions on the partition key is an IN restriction.
@@ -136,7 +143,7 @@ public:
      * otherwise.
      */
     bool key_is_in_relation() const {
-        return find(_partition_key_restrictions->expression, expr::oper_t::IN);
+        return find(_partition_key_restrictions, expr::oper_t::IN);
     }
 
     /**
@@ -171,7 +178,7 @@ public:
         return _uses_secondary_indexing;
     }
 
-    ::shared_ptr<partition_key_restrictions> get_partition_key_restrictions() const {
+    const expr::expression& get_partition_key_restrictions() const {
         return _partition_key_restrictions;
     }
 
@@ -180,7 +187,7 @@ public:
     }
 
     bool has_token_restrictions() const {
-        return has_token(_partition_key_restrictions->expression);
+        return has_token(_partition_key_restrictions);
     }
 
     // Checks whether the given column has an EQ restriction.
@@ -208,7 +215,7 @@ public:
      * @return If an index can be used, an optional containing this index, otherwise an empty optional.
      * In case the index is returned, second parameter returns the index restriction it uses.
      */
-    std::pair<std::optional<secondary_index::index>, ::shared_ptr<cql3::restrictions::restrictions>> find_idx(const secondary_index::secondary_index_manager& sim) const;
+    std::pair<std::optional<secondary_index::index>, expr::expression> find_idx(const secondary_index::secondary_index_manager& sim) const;
 
     /**
      * Checks if the partition key has some unrestricted components.
@@ -216,12 +223,28 @@ public:
      */
     bool has_partition_key_unrestricted_components() const;
 
+    bool partition_key_restrictions_is_empty() const;
+
+    bool partition_key_restrictions_is_all_eq() const;
+
+    size_t partition_key_restrictions_size() const;
+
+    bool parition_key_restrictions_have_supporting_index(const secondary_index::secondary_index_manager& index_manager, expr::allow_local_index allow_local) const;
+
     /**
      * Checks if the clustering key has some unrestricted components.
      * @return <code>true</code> if the clustering key has some unrestricted components, <code>false</code> otherwise.
      */
     bool has_unrestricted_clustering_columns() const;
 private:
+    void add_restriction(const expr::binary_operator& restr, schema_ptr schema, bool allow_filtering, bool for_view);
+    void add_is_not_restriction(const expr::binary_operator& restr, schema_ptr schema, bool for_view);
+    void add_single_column_parition_key_restriction(const expr::binary_operator& restr, schema_ptr schema, bool allow_filtering, bool for_view);
+    void add_token_partition_key_restriction(const expr::binary_operator& restr);
+    void add_single_column_clustering_key_restriction(const expr::binary_operator& restr, schema_ptr schema, bool allow_filtering);
+    void add_multi_column_clustering_key_restriction(const expr::binary_operator& restr);
+    void add_single_column_nonprimary_key_restriction(const expr::binary_operator& restr);
+
     void process_partition_key_restrictions(bool for_view, bool allow_filtering);
 
     /**
@@ -238,11 +261,11 @@ private:
      * @param kind the column type
      * @return the <code>restrictions</code> for the specified type of columns
      */
-    ::shared_ptr<restrictions> get_restrictions(column_kind kind) const {
+    const expr::expression& get_restrictions(column_kind kind) const {
         switch (kind) {
         case column_kind::partition_key: return _partition_key_restrictions;
-        case column_kind::clustering_key: return _clustering_columns_restrictions;
-        default: return _nonprimary_key_restrictions;
+        case column_kind::clustering_key: return _new_clustering_columns_restrictions;
+        default: return _new_nonprimary_key_restrictions;
         }
     }
 
@@ -429,21 +452,19 @@ public:
         return !_nonprimary_key_restrictions->empty();
     }
 
-    bool pk_restrictions_need_filtering() const {
-        return _partition_key_restrictions->needs_filtering(*_schema);
-    }
+    bool pk_restrictions_need_filtering() const;
 
     bool ck_restrictions_need_filtering() const {
         if (_clustering_columns_restrictions->empty()) {
             return false;
         }
 
-        return _partition_key_restrictions->has_unrestricted_components(*_schema)
+        return has_partition_key_unrestricted_components()
         || _clustering_columns_restrictions->needs_filtering(*_schema)
         // If token restrictions are present in an indexed query, then all other restrictions need to be filtered.
         // A single token restriction can have multiple matching partition key values.
         // Because of this we can't create a clustering prefix with more than token restriction.
-        || (_uses_secondary_indexing && has_token(_partition_key_restrictions->expression));
+        || (_uses_secondary_indexing && has_token(_partition_key_restrictions));
     }
 
     /**
@@ -454,7 +475,7 @@ public:
             return true;
         }
 
-        auto&& restricted = get_restrictions(cdef->kind).get()->get_column_defs();
+        auto restricted = expr::get_sorted_column_defs(get_restrictions(cdef->kind));
         return std::find(restricted.begin(), restricted.end(), cdef) != restricted.end();
     }
 
@@ -468,7 +489,7 @@ public:
     /**
      * @return partition key restrictions split into single column restrictions (e.g. for filtering support).
      */
-    const single_column_restrictions::restrictions_map& get_single_column_partition_key_restrictions() const;
+    const expr::single_column_restrictions_map& get_single_column_partition_key_restrictions() const;
 
     /**
      * @return clustering key restrictions split into single column restrictions (e.g. for filtering support).
