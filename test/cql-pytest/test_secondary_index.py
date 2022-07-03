@@ -239,19 +239,80 @@ def test_range_deletion(cql, test_keyspace, scylla_only):
         res = [row.c1 for row in cql.execute(f"SELECT * FROM {table}_c1_idx_index")]
         assert sorted(res) == [x for x in range(1342) if x <= 5 or x >= 846]
 
+# Reproduces #8627:
 # Test that trying to insert a value for an indexed column that exceeds 64KiB fails,
 # because this value is too large to be written as a key in the underlying index
+@pytest.mark.xfail(reason="issue #8627")
 def test_too_large_indexed_value(cql, test_keyspace):
     schema = 'p int, c int, v text, primary key (p,c)'
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"CREATE INDEX ON {table}(v)")
         big = 'x'*66536
-        with pytest.raises(WriteFailure):
-            try:
-                cql.execute(f"INSERT INTO {table}(p,c,v) VALUES (0,1,'{big}')")
-            # Cassandra 4.0 uses a different error type - so a minor translation is needed
-            except InvalidRequest as ir:
-                raise WriteFailure(str(ir))
+        with pytest.raises(InvalidRequest, match='size'):
+            cql.execute(f"INSERT INTO {table}(p,c,v) VALUES (0,1,'{big}')")
+
+# Similar to the above test (test_too_large_indexed_value) but when indexing
+# keys of collection. Modern Cassandra, and Scylla, allow collection keys
+# and values to be up to 2GB, but the keys written to an index are limited
+# to 64 KB. When a collection is indexed, the insertion of oversized elements
+# should fail cleanly at the time of write.
+# Reproduces #8627
+@pytest.mark.xfail(reason="issue #8627")
+def test_too_large_indexed_collection_value(cql, test_keyspace):
+    schema = 'p int, c int, m map<text,text>, primary key (p,c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE INDEX ON {table}(values(m))")
+        cql.execute(f"CREATE INDEX ON {table}(keys(m))")
+        big = 'x'*66536
+        with pytest.raises(InvalidRequest, match='size'):
+            cql.execute(f"INSERT INTO {table}(p,c,m) VALUES (0,1,{{'hi': '{big}'}})")
+        with pytest.raises(InvalidRequest, match='size'):
+            cql.execute(f"INSERT INTO {table}(p,c,m) VALUES (0,1,{{'{big}': 'hi'}})")
+
+# Reproduces #8627:
+# Same as test_too_large_indexed_value above, just check adding an index
+# to a table with pre-existing data. The background index-building process
+# cannot return an error to the user, but we do expect it to skip the
+# problematic row and continue to complete the rest of the index build.
+@pytest.mark.xfail(reason="issue #8627")
+def test_too_large_indexed_value_build(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int primary key, v text') as table:
+        # No index yet - a "big" value in v is perfectly fine:
+        stmt = cql.prepare(f'INSERT INTO {table} (p,v) VALUES (?, ?)')
+        for i in range(30):
+            cql.execute(stmt, [i, str(i)])
+        big = 'x'*66536
+        cql.execute(stmt, [30, big])
+        assert [(30,big)] == list(cql.execute(f'SELECT * FROM {table} WHERE p=30'))
+        # Create an index on v as the new key. The background index-building
+        # process should start promptly.
+        cql.execute(f"CREATE INDEX ON {table}(v)")
+        # If Scylla's view builder hangs or stops, there is no way to
+        # tell this state apart from a view build that simply hasn't
+        # completed yet (besides looking at the logs, which we don't).
+        # This means, unfortunately, that a failure of this test is slow -
+        # it needs to wait for a timeout.
+        # However, today we are lucky (?) that the cql.execute(read, [big])
+        # test also fails immediately on Scylla, so this test fails quickly.
+        read = cql.prepare(f'SELECT * FROM {table} WHERE v = ?')
+        start_time = time.time()
+        while time.time() < start_time + 30:
+            # The oversized "big" cannot be a key in the view, and
+            # cannot be searched. Cassandra reports: "Index expression
+            # values may not be larger than 64K".
+            with pytest.raises(InvalidRequest):
+                cql.execute(read, [big])
+            # All the other keys should eventually be there
+            c = 0
+            for i in range(30):
+                if list(cql.execute(read, [str(i)])):
+                    c += 1
+            if c == 30:
+                break
+            print(c)
+            time.sleep(0.1)
+        for i in range(30):
+            assert list(cql.execute(read, [str(i)]))
 
 # Selecting values using only clustering key should require filtering, but work correctly
 # Reproduces issue #8991
