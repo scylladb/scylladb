@@ -61,8 +61,13 @@ if [[ $nr_commits == 1 ]]; then
 	message="$(git log -1 "$commit" --format="format:%s%n%n%b")"
 	if ! git cherry-pick $commit
 	then
-		git cherry-pick --abort
-		exit 1
+		echo "Cherry-pick failed. You are now in a subshell. Either resolve with git cherry-pick --continue or git cherry-pick --abort, then exit the subshell"
+		head_before=$(git rev-parse HEAD)
+		bash
+		head_after=$(git rev-parse HEAD)
+		if [[ "$head_before" = "$head_after" ]]; then
+			exit 1
+		fi
 	fi
 	git commit --amend -m "${message}${closes}"
 else
