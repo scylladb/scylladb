@@ -66,6 +66,13 @@ private:
         // Raised by any function running under run_with_compaction_disabled();
         long compaction_disabled_counter = 0;
 
+        // Signaled whenever a compaction task completes.
+        condition_variable compaction_done;
+
+        compaction_state() = default;
+        compaction_state(compaction_state&&) = default;
+        ~compaction_state();
+
         bool compaction_disabled() const noexcept {
             return compaction_disabled_counter > 0;
         }
@@ -378,6 +385,13 @@ public:
 
     // Submit a table to be compacted.
     void submit(compaction::table_state& t);
+
+    // Can regular compaction be performed in the given table
+    bool can_perform_regular_compaction(compaction::table_state& t);
+
+    // Maybe wait before adding more sstables
+    // if there are too many sstables.
+    future<> maybe_wait_for_sstable_count_reduction(compaction::table_state& t);
 
     // Submit a table to be off-strategy compacted.
     // Returns true iff off-strategy compaction was required and performed.
