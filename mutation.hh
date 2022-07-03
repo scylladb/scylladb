@@ -156,7 +156,7 @@ public:
     // * consume_in_reverse::legacy_half_reverse - consume rows and range
     //   tombstones in legacy reverse order[2].
     //
-    // For definition of [1] and [2] see docs/design-notes/reverse-reads.md.
+    // For definition of [1] and [2] see docs/dev/reverse-reads.md.
     //
     // The consume operation is pausable and resumable:
     // * To pause return stop_iteration::yes from one of the consume() methods;

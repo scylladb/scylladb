@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 ##############################################################################
-# Tests for Scylla's metrics (see docs/design-notes/metrics.md) for Alternator
+# Tests for Scylla's metrics (see docs/dev/metrics.md) for Alternator
 # queries. Reproduces issue #9406, where although metrics was implemented for
 # Alternator requests, they were missing for some operations (BatchGetItem).
 # In the tests here we attempt to ensure that the metrics continue to work

@@ -1,19 +1,17 @@
+# Global variables
 # You can set these variables from the command line.
 POETRY        := poetry
-SPHINXBUILD   := $(POETRY) run sphinx-build
 SPHINXOPTS    :=
+SPHINXBUILD   := $(POETRY) run sphinx-build
 PAPER         :=
 BUILDDIR      := _build
 SOURCEDIR     := .
 
-# Internal variables.
+# Internal variables
 PAPEROPT_a4     := -D latex_paper_size=a4
 PAPEROPT_letter := -D latex_paper_size=letter
 ALLSPHINXOPTS   := -d $(BUILDDIR)/doctrees $(PAPEROPT_$(PAPER)) $(SPHINXOPTS) $(SOURCEDIR)
 TESTSPHINXOPTS  := $(ALLSPHINXOPTS) -W --keep-going
-
-# the i18n builder cannot share the environment and doctrees with the others
-I18NSPHINXOPTS  := $(PAPEROPT_$(PAPER)) $(SPHINXOPTS) $(SOURCEDIR)
 
 # Windows variables
 ifeq ($(OS),Windows_NT)
@@ -72,6 +70,13 @@ multiversion: setup
 	$(POETRY) run sphinx-multiversion $(SOURCEDIR) $(BUILDDIR)/dirhtml
 	@echo
 	@echo "Build finished. The HTML pages are in $(BUILDDIR)/dirhtml."
+
+.PHONY: redirects
+redirects: setup
+	$(POETRY) run redirects-cli fromfile --yaml-file ./_utils/redirects.yaml --output-dir $(BUILDDIR)/dirhtml
+	@echo
+	@echo "Build finished. The HTML pages are in $(BUILDDIR)/dirhtml."
+
 
 # Preview commands
 .PHONY: preview

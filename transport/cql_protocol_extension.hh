@@ -25,7 +25,7 @@ namespace cql_transport {
  * to be used in a connection.
  * 
  * The negotiation procedure and extensions themselves are documented in the
- * `docs/protocol-extensions.md`. 
+ * `docs/dev/protocol-extensions.md`. 
  */
 enum class cql_protocol_extension {
     LWT_ADD_METADATA_MARK,

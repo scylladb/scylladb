@@ -268,7 +268,7 @@ still has to rely on their judgemenet.
 2. Have a subject matter expert review the code. If you are
    not familiar with the modified code, ask one to do a
    review. For more details on how to review patches, see
-   the [review checklist](https://github.com/scylladb/scylla/blob/master/docs/contribute/review-checklist.md).
+   the [review checklist](review-checklist.md).
 
 3. If the pull request fixes an issue, it should have a
    Fixes or Refs depending on whether the fix is complete or

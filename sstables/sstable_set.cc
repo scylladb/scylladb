@@ -488,7 +488,7 @@ class sstable_position_reader_queue : public position_reader_queue {
 public:
     // Assumes that `create_reader` returns readers that emit only fragments from partition `pk`.
     //
-    // For reversed reads `query_schema` must be reversed (see docs/design-notes/reverse-reads.md).
+    // For reversed reads `query_schema` must be reversed (see docs/dev/reverse-reads.md).
     sstable_position_reader_queue(const time_series_sstable_set& set,
             schema_ptr query_schema,
             std::function<flat_mutation_reader_v2(sstable&)> create_reader,

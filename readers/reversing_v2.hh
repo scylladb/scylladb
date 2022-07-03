@@ -27,7 +27,7 @@ namespace query {
 ///    account for the implicit null tombstone at the start of the stream moving
 ///    from start to end (due to reversing).
 /// Ordering of partitions themselves remains unchanged.
-/// For more details see docs/design-notes/reverse-reads.md.
+/// For more details see docs/dev/reverse-reads.md.
 ///
 /// The reader's schema (returned by `schema()`) is the reverse of `original`'s schema.
 ///

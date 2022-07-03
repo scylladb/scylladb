@@ -727,7 +727,7 @@ void cache_flat_mutation_reader::maybe_drop_last_entry() noexcept {
     // This prevents unnecessary dummy entries from accumulating in cache and slowing down scans.
     //
     // Eviction can happen only from oldest versions to preserve the continuity non-overlapping rule
-    // (See docs/design-notes/row_cache.md)
+    // (See docs/dev/row_cache.md)
     //
     if (_last_row
             && !_read_context.is_reversed() // FIXME

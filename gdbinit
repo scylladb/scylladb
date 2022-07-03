@@ -1,5 +1,5 @@
 # Recommended .gdbinit for debugging scylla
-# See docs/guides/debugging.md for more information
+# See docs/dev/debugging.md for more information
 handle SIG34 pass noprint
 handle SIGUSR1 pass noprint
 set print pretty

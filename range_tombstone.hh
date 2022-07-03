@@ -180,7 +180,7 @@ public:
     }
 
     // Swap bounds to reverse range-tombstone -- as if it came from a table with
-    // reverse native order. See docs/design-notes/reverse-reads.md.
+    // reverse native order. See docs/dev/reverse-reads.md.
     void reverse() {
         std::swap(start, end);
         std::swap(start_kind, end_kind);

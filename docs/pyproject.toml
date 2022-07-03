@@ -15,6 +15,7 @@ sphinx-autobuild = "2021.3.14"
 Sphinx = "4.3.2"
 sphinx-multiversion-scylla = "~0.2.10"
 sphinx-markdown-tables = "0.0.15"
+redirects_cli ="0.1.0"
 
 [build-system]
 requires = ["poetry>=0.12"]
