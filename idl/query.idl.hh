@@ -27,7 +27,6 @@ class qr_partition stub [[writable]] {
 
 class query_result stub [[writable]] {
     utils::chunked_vector<qr_partition> partitions; // in ring order
-    std::optional<full_position> last_position [[version 5.1]];
 };
 
 enum class digest_algorithm : uint8_t {

@@ -314,12 +314,21 @@ void result::ensure_counts() {
     }
 }
 
+full_position result::get_or_calculate_last_position() const {
+    if (_last_position) {
+        return *_last_position;
+    }
+    return result_view::do_with(*this, [] (const result_view& v) {
+        return v.calculate_last_position();
+    });
+}
+
 result::result()
     : result([] {
         bytes_ostream out;
-        ser::writer_of_query_result<bytes_ostream>(out).skip_partitions().skip_last_position().end_query_result();
+        ser::writer_of_query_result<bytes_ostream>(out).skip_partitions().end_query_result();
         return out;
-    }(), short_read::no, 0, 0)
+    }(), short_read::no, 0, 0, {})
 { }
 
 static void write_partial_partition(ser::writer_of_qr_partition<bytes_ostream>&& pw, const ser::qr_partition_view& pv, uint64_t rows_to_include) {
@@ -378,7 +387,7 @@ foreign_ptr<lw_shared_ptr<query::result>> result_merger::get() {
                     return;
                 }
             }
-            last_position = rv._v.last_position();
+            last_position = r->last_position();
         });
         if (r->is_short_read()) {
             is_short_read = short_read::yes;
@@ -391,14 +400,8 @@ foreign_ptr<lw_shared_ptr<query::result>> result_merger::get() {
         }
     }
 
-    auto after_partitions = std::move(partitions).end_partitions();
-    if (last_position) {
-        std::move(after_partitions).write_last_position(*last_position).end_query_result();
-    } else {
-        std::move(after_partitions).skip_last_position().end_query_result();
-    }
-
-    return make_foreign(make_lw_shared<query::result>(std::move(w), is_short_read, row_count, partition_count));
+    std::move(partitions).end_partitions().end_query_result();
+    return make_foreign(make_lw_shared<query::result>(std::move(w), is_short_read, row_count, partition_count, std::move(last_position)));
 }
 
 static bytes_opt merge_singular_results(bytes_opt r1, bytes_opt r2, forward_request::reduction_type reduction) {

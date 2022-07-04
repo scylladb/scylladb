@@ -405,9 +405,9 @@ void query_pager::handle_result(
             if (_last_pkey) {
                 update_slice(*_last_pkey);
             }
-            auto last_pos = view.get_last_position();
-            _last_pkey = last_pos.partition;
-            _last_pos = last_pos.position;
+            auto last_pos = results->get_or_calculate_last_position();
+            _last_pkey = std::move(last_pos.partition);
+            _last_pos = std::move(last_pos.position);
         }
     }
 
