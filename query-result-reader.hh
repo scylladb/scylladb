@@ -193,10 +193,7 @@ public:
         return std::make_tuple(ps.size(), rows);
     }
 
-    full_position get_last_position() const {
-        if (_v.last_position()) {
-            return *_v.last_position();
-        }
+    full_position calculate_last_position() const {
         auto ps = _v.partitions();
         assert(!ps.empty());
         auto pit = ps.begin();
