@@ -65,7 +65,8 @@ def create_perftune_conf(cfg):
         nic = cfg.get('IFNAME')
         if not nic:
             nic = 'eth0'
-        params += '--tune net --nic "{nic}"'.format(nic=nic)
+        mode = get_tune_mode(nic)
+        params += '--tune net --nic "{nic}" --mode {mode}'.format(nic=nic, mode=mode)
 
     if cfg.has_option('SET_CLOCKSOURCE') and cfg.get('SET_CLOCKSOURCE') == 'yes':
         params += ' --tune system --tune-clock'
@@ -77,8 +78,7 @@ def create_perftune_conf(cfg):
         if os.path.exists('/etc/scylla.d/perftune.yaml') and not config_updated():
             return True
 
-        mode = get_tune_mode(nic)
-        params += ' --mode {mode} --dump-options-file'.format(mode=mode)
+        params += ' --dump-options-file'
         yaml = out('/opt/scylladb/scripts/perftune.py ' + params)
         with open('/etc/scylla.d/perftune.yaml', 'w') as f:
             f.write(yaml)
