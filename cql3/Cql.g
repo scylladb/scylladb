@@ -1859,7 +1859,7 @@ unreserved_keyword returns [sstring str]
 
 unreserved_function_keyword returns [sstring str]
     : u=basic_unreserved_keyword { $str = u; }
-    | t=native_or_internal_type[true]   { $str = t->as_cql3_type().to_string(); }
+    | u=type_unreserved_keyword  { $str = u; }
     ;
 
 basic_unreserved_keyword returns [sstring str]
@@ -1923,6 +1923,32 @@ basic_unreserved_keyword returns [sstring str]
         | K_LEVEL
         | K_LEVELS
         | K_PRUNE
+        ) { $str = $k.text; }
+    ;
+
+type_unreserved_keyword returns [sstring str]
+    : k=( K_ASCII
+        | K_BIGINT
+        | K_BLOB
+        | K_BOOLEAN
+        | K_COUNTER
+        | K_DECIMAL
+        | K_DOUBLE
+        | K_DURATION
+        | K_FLOAT
+        | K_INET
+        | K_INT
+        | K_SMALLINT
+        | K_TEXT
+        | K_TIMESTAMP
+        | K_TINYINT
+        | K_UUID
+        | K_VARCHAR
+        | K_VARINT
+        | K_TIMEUUID
+        | K_DATE
+        | K_TIME
+        | K_EMPTY
         ) { $str = $k.text; }
     ;
 
