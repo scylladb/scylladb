@@ -1535,7 +1535,7 @@ if status != 0:
     sys.exit(1)
 
 file = open(f'{outdir}/SCYLLA-VERSION-FILE', 'r')
-scylla_version = file.read().strip()
+scylla_version = file.read().strip().replace('-', '~')
 file = open(f'{outdir}/SCYLLA-RELEASE-FILE', 'r')
 scylla_release = file.read().strip()
 file = open(f'{outdir}/SCYLLA-PRODUCT-FILE', 'r')
@@ -2153,7 +2153,7 @@ with open(buildfile, 'w') as f:
         build dist-server: phony dist-server-tar dist-server-compat dist-server-compat-arch dist-server-rpm dist-server-deb
 
         rule build-submodule-reloc
-          command = cd $reloc_dir && ./reloc/build_reloc.sh --version $$(<../../build/SCYLLA-PRODUCT-FILE)-$$(<../../build/SCYLLA-VERSION-FILE)-$$(<../../build/SCYLLA-RELEASE-FILE) --nodeps $args
+          command = cd $reloc_dir && ./reloc/build_reloc.sh --version $$(<../../build/SCYLLA-PRODUCT-FILE)-$$(sed 's/-/~/' <../../build/SCYLLA-VERSION-FILE)-$$(<../../build/SCYLLA-RELEASE-FILE) --nodeps $args
         rule build-submodule-rpm
           command = cd $dir && ./reloc/build_rpm.sh --reloc-pkg $artifact
         rule build-submodule-deb
