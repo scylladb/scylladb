@@ -1860,7 +1860,7 @@ def dotestContainsOnPartitionKey(cql, test_keyspace, schema):
         execute(cql, table, "INSERT INTO %s (pk, ck, v) VALUES (?, ?, ?)", {5: 6}, 5, 5)
         execute(cql, table, "INSERT INTO %s (pk, ck, v) VALUES (?, ?, ?)", {7: 8}, 6, 6)
 
-        assert_invalid_message(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
+        assert_invalid_message_re(cql, table, 'allow filtering|ALLOW FILTERING',
                              "SELECT * FROM %s WHERE pk CONTAINS KEY 1")
 
         for _ in before_and_after_flush(cql, table):
