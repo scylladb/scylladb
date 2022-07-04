@@ -180,7 +180,7 @@ tmpdir=$(mktemp -d)
 
 docker_common_args+=(
        --security-opt seccomp=unconfined \
-       --security-opt label:disable \
+       --security-opt label=disable \
        --network host \
        --cap-add SYS_PTRACE \
        -v "$PWD:$PWD" \
