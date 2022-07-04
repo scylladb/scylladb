@@ -155,7 +155,6 @@ public:
         return entry_ptr(std::move(wptr));
     }
 
-    using list_ptr = entry_ptr; // for compatibility with old code
 private:
     using cache_type = bplus::tree<key_type, entry, key_less_comparator, 8, bplus::key_search::linear>;
     cache_type _cache;

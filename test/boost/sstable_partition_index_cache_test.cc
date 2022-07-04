@@ -51,7 +51,7 @@ static partition_index_page make_page0(logalloc::region& r, simple_schema& s) {
     return page;
 }
 
-static void has_page0(partition_index_cache::list_ptr ptr) {
+static void has_page0(partition_index_cache::entry_ptr ptr) {
     BOOST_REQUIRE(!ptr->empty());
     BOOST_REQUIRE_EQUAL(ptr->_entries.size(), 4);
     BOOST_REQUIRE_EQUAL(ptr->_entries[0]->position(), 0);
@@ -86,8 +86,8 @@ SEASTAR_THREAD_TEST_CASE(test_caching) {
         lru.evict_all();
     });
 
-    partition_index_cache::list_ptr ptr0 = f0.get0();
-    partition_index_cache::list_ptr ptr1 = f1.get0();
+    partition_index_cache::entry_ptr ptr0 = f0.get0();
+    partition_index_cache::entry_ptr ptr1 = f1.get0();
 
     r.full_compaction();
     with_allocator(r.allocator(), [&] {
