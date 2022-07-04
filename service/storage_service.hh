@@ -734,7 +734,7 @@ public:
 
 private:
     promise<> _drain_finished;
-    std::optional<shared_promise<>> _transport_stopped;
+    std::optional<shared_future<>> _transport_stopped;
     future<> do_drain();
     /**
      * Seed data to the endpoints that will be responsible for it at the future

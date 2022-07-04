@@ -120,6 +120,7 @@ future<> db::batchlog_manager::start() {
 }
 
 future<> db::batchlog_manager::drain() {
+    blogger.info("Asked to drain");
     if (!_stop.abort_requested()) {
         _stop.request_abort();
     }
@@ -127,15 +128,16 @@ future<> db::batchlog_manager::drain() {
         // Abort do_batch_log_replay if waiting on the semaphore.
         _sem.broken();
     }
-    return with_gate(_gate, [this] {
-        return std::exchange(_started, make_ready_future<>());
-    });
+
+    co_await _started.get_future();
+    blogger.info("Drained");
 }
 
 future<> db::batchlog_manager::stop() {
-    return drain().finally([this] {
-        return _gate.close();
-    });
+    blogger.info("Asked to stop");
+    co_await drain();
+    co_await _gate.close();
+    blogger.info("Stopped");
 }
 
 future<size_t> db::batchlog_manager::count_all_batches() const {

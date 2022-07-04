@@ -745,12 +745,12 @@ future<> compaction_manager::stop_ongoing_compactions(sstring reason, replica::t
 }
 
 future<> compaction_manager::drain() {
-    if (!*_early_abort_subscription) {
-        return make_ready_future<>();
+    cmlog.info("Asked to drain");
+    if (*_early_abort_subscription) {
+        _state = state::disabled;
+        co_await stop_ongoing_compactions("drain");
     }
-
-    _state = state::disabled;
-    return stop_ongoing_compactions("drain");
+    cmlog.info("Drained");
 }
 
 future<> compaction_manager::stop() {
