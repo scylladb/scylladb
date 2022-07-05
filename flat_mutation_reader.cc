@@ -774,11 +774,14 @@ make_flat_mutation_reader_from_mutations_v2(schema_ptr s, reader_permit permit, 
         std::optional<mutation_consume_cookie> _cookie;
 
     private:
-        void flush_tombstones(position_in_partition_view pos) {
+        void flush_tombstones(position_in_partition_view pos, bool emit_end = false) {
             _rt_gen.flush(pos, [&] (range_tombstone_change rt) {
                 _current_rt = rt.tombstone();
                 push_mutation_fragment(*_schema, _permit, std::move(rt));
             });
+            if (emit_end && _current_rt) {
+                push_mutation_fragment(*_schema, _permit, range_tombstone_change(pos, {}));
+            }
         }
         void maybe_emit_partition_start() {
             if (_dk) {
@@ -815,10 +818,7 @@ make_flat_mutation_reader_from_mutations_v2(schema_ptr s, reader_permit permit, 
                 return stop_iteration::yes;
             }
             maybe_emit_partition_start();
-            flush_tombstones(position_in_partition::after_all_clustered_rows());
-            if (_current_rt) {
-                push_mutation_fragment(*_schema, _permit, range_tombstone_change(position_in_partition::after_all_clustered_rows(), {}));
-            }
+            flush_tombstones(position_in_partition::after_all_clustered_rows(), true);
             push_mutation_fragment(*_schema, _permit, partition_end{});
             return stop_iteration::no;
         }
@@ -1986,11 +1986,14 @@ flat_mutation_reader_v2 upgrade_to_v2(flat_mutation_reader r) {
         tombstone _current_rt;
         std::optional<position_range> _pr;
     public:
-        void flush_tombstones(position_in_partition_view pos) {
+        void flush_tombstones(position_in_partition_view pos, bool emit_end = false) {
             _rt_gen.flush(pos, [&] (range_tombstone_change rt) {
                 _current_rt = rt.tombstone();
                 push_mutation_fragment(*_schema, _permit, std::move(rt));
             });
+            if (emit_end && _current_rt) {
+                push_mutation_fragment(*_schema, _permit, range_tombstone_change(pos, {}));
+            }
         }
         void consume(static_row mf) {
             push_mutation_fragment(*_schema, _permit, std::move(mf));
@@ -2015,11 +2018,9 @@ flat_mutation_reader_v2 upgrade_to_v2(flat_mutation_reader r) {
             push_mutation_fragment(*_schema, _permit, std::move(mf));
         }
         void consume(partition_end mf) {
-            flush_tombstones(position_in_partition::after_all_clustered_rows());
+            flush_tombstones(position_in_partition::after_all_clustered_rows(), true);
             if (_current_rt) {
                 assert(!_pr);
-                push_mutation_fragment(*_schema, _permit, range_tombstone_change(
-                        position_in_partition::after_all_clustered_rows(), {}));
             }
             push_mutation_fragment(*_schema, _permit, std::move(mf));
         }
@@ -2042,10 +2043,7 @@ flat_mutation_reader_v2 upgrade_to_v2(flat_mutation_reader r) {
                 if (_reader.is_end_of_stream() && _reader.is_buffer_empty()) {
                     if (_pr) {
                         // If !_pr we should flush on partition_end
-                        flush_tombstones(_pr->end());
-                        if (_current_rt) {
-                            push_mutation_fragment(*_schema, _permit, range_tombstone_change(_pr->end(), {}));
-                        }
+                        flush_tombstones(_pr->end(), true);
                     }
                     _end_of_stream = true;
                 }
