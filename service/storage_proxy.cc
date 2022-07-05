@@ -850,7 +850,7 @@ static future<> sleep_approx_50ms() {
 future<paxos_response_handler::ballot_and_data>
 paxos_response_handler::begin_and_repair_paxos(client_state& cs, unsigned& contentions, bool is_write) {
     if (!_proxy->features().lwt) {
-        co_return coroutine::make_exception(std::runtime_error("The cluster does not support Paxos. Upgrade all the nodes to the version with LWT support."));
+        co_await coroutine::return_exception(std::runtime_error("The cluster does not support Paxos. Upgrade all the nodes to the version with LWT support."));
     }
 
     api::timestamp_type min_timestamp_micros_to_use = 0;
@@ -858,7 +858,7 @@ paxos_response_handler::begin_and_repair_paxos(client_state& cs, unsigned& conte
 
     while(true) {
         if (storage_proxy::clock_type::now() > _cas_timeout) {
-            co_return coroutine::make_exception(
+            co_await coroutine::return_exception(
                 mutation_write_timeout_exception(_schema->ks_name(), _schema->cf_name(), _cl_for_paxos, 0, _required_participants, db::write_type::CAS)
             );
         }
@@ -915,7 +915,7 @@ paxos_response_handler::begin_and_repair_paxos(client_state& cs, unsigned& conte
                 } catch (mutation_write_timeout_exception& e) {
                     e.type = db::write_type::CAS;
                     // we're still doing preparation for the paxos rounds, so we want to use the CAS (see CASSANDRA-8672)
-                    co_return coroutine::make_exception(std::move(e));
+                    co_return coroutine::exception(std::make_exception_ptr(e));
                 }
             } else {
                 paxos::paxos_state::logger.debug("CAS[{}] Some replicas have already promised a higher ballot than ours; aborting", _id);
@@ -4288,7 +4288,7 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
     const auto tmptr = get_token_metadata_ptr();
     for (auto&& pr: partition_ranges) {
         if (!pr.is_singular()) {
-            co_return coroutine::make_exception(std::runtime_error("mixed singular and non singular range are not supported"));
+            co_await coroutine::return_exception(std::runtime_error("mixed singular and non singular range are not supported"));
         }
 
         auto token_range = dht::token_range::make_singular(pr.start()->value().token());
@@ -4838,7 +4838,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
     db::validate_for_cas_learn(cl_for_learn, schema->ks_name());
 
     if (cas_shard(*schema, partition_ranges[0].start()->value().as_decorated_key().token()) != this_shard_id()) {
-        co_return coroutine::make_exception(std::logic_error("storage_proxy::cas called on a wrong shard"));
+        co_await coroutine::return_exception(std::logic_error("storage_proxy::cas called on a wrong shard"));
     }
 
     // In case a nullptr is passed to this function (i.e. the caller isn't interested in

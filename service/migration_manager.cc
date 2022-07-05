@@ -695,8 +695,9 @@ future<std::vector<mutation>> migration_manager::prepare_column_family_update_an
         });
         co_return co_await include_keyspace(*keyspace, std::move(mutations));
     } catch (const replica::no_such_column_family& e) {
-        co_return coroutine::make_exception(exceptions::configuration_exception(format("Cannot update non existing table '{}' in keyspace '{}'.",
+        auto&& ex = std::make_exception_ptr(exceptions::configuration_exception(format("Cannot update non existing table '{}' in keyspace '{}'.",
                                                          cfm->cf_name(), cfm->ks_name())));
+        co_return coroutine::exception(std::move(ex));
     }
 }
 
@@ -762,7 +763,7 @@ future<std::vector<mutation>> migration_manager::prepare_column_family_drop_anno
         auto& old_cfm = db.find_column_family(ks_name, cf_name);
         auto& schema = old_cfm.schema();
         if (schema->is_view()) {
-            co_return coroutine::make_exception(exceptions::invalid_request_exception("Cannot use DROP TABLE on Materialized View"));
+            co_await coroutine::return_exception(exceptions::invalid_request_exception("Cannot use DROP TABLE on Materialized View"));
         }
         auto keyspace = db.find_keyspace(ks_name).metadata();
 
@@ -774,7 +775,7 @@ future<std::vector<mutation>> migration_manager::prepare_column_family_drop_anno
             auto explicit_view_names = views
                                     | boost::adaptors::filtered([&old_cfm](const view_ptr& v) { return !old_cfm.get_index_manager().is_index(v); })
                                     | boost::adaptors::transformed([](const view_ptr& v) { return v->cf_name(); });
-            co_return coroutine::make_exception(exceptions::invalid_request_exception(format("Cannot drop table when materialized views still depend on it ({}.{{{}}})",
+            co_await coroutine::return_exception(exceptions::invalid_request_exception(format("Cannot drop table when materialized views still depend on it ({}.{{{}}})",
                         schema->ks_name(), ::join(", ", explicit_view_names))));
         }
         mlogger.info("Drop table '{}.{}'", schema->ks_name(), schema->cf_name());
@@ -800,7 +801,8 @@ future<std::vector<mutation>> migration_manager::prepare_column_family_drop_anno
         });
         co_return co_await include_keyspace(*keyspace, std::move(mutations));
     } catch (const replica::no_such_column_family& e) {
-        co_return coroutine::make_exception(exceptions::configuration_exception(format("Cannot drop non existing table '{}' in keyspace '{}'.", cf_name, ks_name)));
+        auto&& ex = std::make_exception_ptr(exceptions::configuration_exception(format("Cannot drop non existing table '{}' in keyspace '{}'.", cf_name, ks_name)));
+        co_return coroutine::exception(std::move(ex));
     }
 }
 
@@ -827,7 +829,8 @@ future<std::vector<mutation>> migration_manager::prepare_new_view_announcement(v
         auto mutations = db::schema_tables::make_create_view_mutations(keyspace, std::move(view), ts);
         co_return co_await include_keyspace(*keyspace, std::move(mutations));
     } catch (const replica::no_such_keyspace& e) {
-        co_return coroutine::make_exception(exceptions::configuration_exception(format("Cannot add view '{}' to non existing keyspace '{}'.", view->cf_name(), view->ks_name())));
+        auto&& ex = std::make_exception_ptr(exceptions::configuration_exception(format("Cannot add view '{}' to non existing keyspace '{}'.", view->cf_name(), view->ks_name())));
+        co_return coroutine::exception(std::move(ex));
     }
 }
 
@@ -840,7 +843,7 @@ future<std::vector<mutation>> migration_manager::prepare_view_update_announcemen
         auto&& keyspace = db.find_keyspace(view->ks_name()).metadata();
         auto& old_view = keyspace->cf_meta_data().at(view->cf_name());
         if (!old_view->is_view()) {
-            co_return coroutine::make_exception(exceptions::invalid_request_exception("Cannot use ALTER MATERIALIZED VIEW on Table"));
+            co_await coroutine::return_exception(exceptions::invalid_request_exception("Cannot use ALTER MATERIALIZED VIEW on Table"));
         }
 #if 0
         oldCfm.validateCompatility(cfm);
@@ -849,8 +852,9 @@ future<std::vector<mutation>> migration_manager::prepare_view_update_announcemen
         auto mutations = db::schema_tables::make_update_view_mutations(keyspace, view_ptr(old_view), std::move(view), ts, true);
         co_return co_await include_keyspace(*keyspace, std::move(mutations));
     } catch (const std::out_of_range& e) {
-        co_return coroutine::make_exception(exceptions::configuration_exception(format("Cannot update non existing materialized view '{}' in keyspace '{}'.",
+        auto&& ex = std::make_exception_ptr(exceptions::configuration_exception(format("Cannot update non existing materialized view '{}' in keyspace '{}'.",
                                                          view->cf_name(), view->ks_name())));
+        co_return coroutine::exception(std::move(ex));
     }
 }
 

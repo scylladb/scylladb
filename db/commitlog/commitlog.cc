@@ -1796,7 +1796,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
     gate::holder g(_gate);
 
     if (_shutdown) {
-        co_return coroutine::make_exception(std::runtime_error("Commitlog has been shut down. Cannot add data"));
+        co_await coroutine::return_exception(std::runtime_error("Commitlog has been shut down. Cannot add data"));
     }
 
     ++_new_counter;
