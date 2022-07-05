@@ -53,6 +53,9 @@ constexpr std::chrono::milliseconds gossiper::INTERVAL;
 constexpr std::chrono::hours gossiper::A_VERY_LONG_TIME;
 constexpr int64_t gossiper::MAX_GENERATION_DIFFERENCE;
 
+constexpr std::chrono::minutes gossiper::apply_timeout;
+constexpr size_t gossiper::apply_max_queue_size;
+
 netw::msg_addr gossiper::get_msg_addr(inet_address to) const noexcept {
     return msg_addr{to, _default_cpuid};
 }
@@ -613,7 +616,10 @@ future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state> ma
             logger.trace("Ignoring gossip for {} because it is quarantined", ep);
             return make_ready_future<>();
         }
-        return seastar::with_semaphore(_apply_state_locally_semaphore, 1, [this, &ep, &map] () mutable {
+        if (_apply_state_locally_semaphore.waiters() > apply_max_queue_size) {
+            return make_exception_future<>(std::runtime_error("apply_state_locally(): max queue size reached"));
+        }
+        return seastar::with_semaphore(_apply_state_locally_semaphore, 1, apply_timeout, [this, &ep, &map] () mutable {
             return do_apply_state_locally(ep, map[ep], true);
         });
     });

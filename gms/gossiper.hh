@@ -103,6 +103,9 @@ private:
     using messaging_service = netw::messaging_service;
     using msg_addr = netw::msg_addr;
 
+    static constexpr std::chrono::minutes apply_timeout{1};
+    static constexpr size_t apply_max_queue_size{10000};
+
     void init_messaging_service_handler();
     future<> uninit_messaging_service_handler();
     future<> handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg);
