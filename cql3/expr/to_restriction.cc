@@ -342,8 +342,11 @@ void preliminary_binop_vaidation_checks(const binary_operator& binop) {
         throw exceptions::invalid_request_exception(format("Unsupported \"!=\" relation: {}", prepared_binop));
     }
 
-    if (prepared_binop.op == oper_t::IS_NOT && !is<null>(prepared_binop.rhs)) {
-        throw exceptions::invalid_request_exception(format("Unsupported \"IS NOT\" relation: {}", prepared_binop));
+    if (prepared_binop.op == oper_t::IS_NOT) {
+        bool rhs_is_null = is<constant>(prepared_binop.rhs) && as<constant>(prepared_binop.rhs).is_null();
+        if (!rhs_is_null) {
+            throw exceptions::invalid_request_exception(format("Unsupported \"IS NOT\" relation: {}", prepared_binop));
+        }
     }
 
     if (auto col_val = as_if<column_value>(&prepared_binop.lhs)) {
