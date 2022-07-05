@@ -135,6 +135,24 @@ void validate_token_relation(const std::vector<const column_definition*> column_
 }
 
 void preliminary_binop_vaidation_checks(const binary_operator& binop) {
+    // Needed to print unprepared expressions in non-debug mode
+    expression::printer pretty_binop_printer {
+        .expr_to_print = binop,
+        .debug_mode = false
+    };
+
+    if (binop.op == oper_t::NEQ) {
+        throw exceptions::invalid_request_exception(format("Unsupported \"!=\" relation: {}", pretty_binop_printer));
+    }
+
+    if (binop.op == oper_t::IS_NOT) {
+        bool rhs_is_null = is<null>(binop.rhs)
+                           || (is<constant>(binop.rhs) && as<constant>(binop.rhs).is_null());
+        if (!rhs_is_null) {
+            throw exceptions::invalid_request_exception(format("Unsupported \"IS NOT\" relation: {}", pretty_binop_printer));
+        }
+    }
+
     if (auto lhs_tup = as_if<tuple_constructor>(&binop.lhs)) {
         if (binop.op == oper_t::CONTAINS) {
             throw exceptions::invalid_request_exception("CONTAINS cannot be used for Multi-column relations");
@@ -199,18 +217,6 @@ binary_operator validate_and_prepare_new_restriction(const binary_operator& rest
     }
     fill_prepare_context(prepared_binop.lhs, ctx);
     fill_prepare_context(prepared_binop.rhs, ctx);
-
-    // Check for disallowed operators
-    if (prepared_binop.op == oper_t::NEQ) {
-        throw exceptions::invalid_request_exception(format("Unsupported \"!=\" relation: {}", prepared_binop));
-    }
-
-    if (prepared_binop.op == oper_t::IS_NOT) {
-        bool rhs_is_null = is<constant>(prepared_binop.rhs) && as<constant>(prepared_binop.rhs).is_null();
-        if (!rhs_is_null) {
-            throw exceptions::invalid_request_exception(format("Unsupported \"IS NOT\" relation: {}", prepared_binop));
-        }
-    }
 
     // Perform more throughout validation depending on restriction type
     if (auto col_val = as_if<column_value>(&prepared_binop.lhs)) {
