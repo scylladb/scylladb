@@ -101,6 +101,7 @@ private:
     server::configuration _config;
     std::optional<promise<>> _stepdown_promise;
     std::optional<shared_promise<>> _leader_promise;
+    std::optional<promise<>> _conf_commit_promise;
     // Index of the last entry applied to `_state_machine`.
     index_t _applied_idx;
     std::list<active_read> _reads;
@@ -206,13 +207,6 @@ private:
     // This fiber runs in the background and applies committed entries.
     future<> applier_fiber();
 
-    // Add a special entry such as configuration or a dummy
-    // entry. Is not restricted by max log size, so never
-    // preempts before adding an entry to this leader's
-    // in-memory log. This allows to avoid deadlocks when
-    // automatically appending a non-joint configuration
-    // and makes set_configuration() safe from preemption.
-    template <typename T> future<> add_entry_internal(T command, wait_type type, seastar::abort_source* as);
     template <typename Message> void send_message(server_id id, Message m);
 
     // Abort all snapshot transfer.
@@ -266,9 +260,6 @@ private:
     // is typically already committed, so we don't worry about the
     // term.
     future<> wait_for_apply(index_t idx, abort_source*);
-    // Set configuration but don't wait for transition joint ->
-    // non_joint.
-    future<> enter_joint_configuration(server_address_set c_new, seastar::abort_source* as);
 
     friend std::ostream& operator<<(std::ostream& os, const server_impl& s);
 };
@@ -450,14 +441,6 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abor
     co_return;
 }
 
-template <typename T>
-future<> server_impl::add_entry_internal(T command, wait_type type, seastar::abort_source* as) {
-    // Must not preempt before adding entry, the caller, such as
-    // set_configuration(), relies on it.
-    const log_entry& e = _fsm->add_entry(std::move(command));
-    co_return co_await wait_for_entry({.term = e.term, .idx = e.idx}, type, as);
-}
-
 future<entry_id> server_impl::add_entry_on_leader(command cmd, seastar::abort_source* as) {
     // Wait for a new slot to become available
     try {
@@ -562,14 +545,11 @@ future<add_entry_reply> server_impl::execute_modify_config(server_id from,
             logger.trace("[{}] removing server {}", id(), to_remove);
             cfg.erase(server_address{.id = to_remove});
         }
-        co_await enter_joint_configuration(cfg, as);
-        const log_entry& e = _fsm->add_entry(log_entry::dummy());
-        auto eid = entry_id{.term = e.term, .idx = e.idx};
-        co_await wait_for_entry(eid, wait_type::committed, as);
+        co_await set_configuration(cfg, as);
+
         // `modify_config` doesn't actually need the entry id for anything
         // but we reuse the `add_entry` RPC verb which requires it.
-        co_return add_entry_reply{eid};
-
+        co_return add_entry_reply{entry_id{}};
     } catch (raft::error& e) {
         if (is_uncertainty(e)) {
             // Although modify_config() is safe to retry, preserve
@@ -891,6 +871,15 @@ future<> server_impl::io_fiber(index_t last_stable) {
 
             // Process committed entries.
             if (batch.committed.size()) {
+                if (_conf_commit_promise) {
+                    for (const auto& e: batch.committed) {
+                        const auto* cfg = get_if<raft::configuration>(&e->data);
+                        if (cfg != nullptr && !cfg->is_joint()) {
+                            std::exchange(_conf_commit_promise, std::nullopt)->set_value();
+                            break;
+                        }
+                    }
+                }
                 co_await _persistence->store_commit_idx(batch.committed.back()->idx);
                 _stats.queue_entries_for_apply += batch.committed.size();
                 co_await _apply_entries.push_eventually(std::move(batch.committed));
@@ -1226,6 +1215,9 @@ future<> server_impl::abort() {
     }
     _awaited_commits.clear();
     _awaited_applies.clear();
+    if (_conf_commit_promise) {
+        std::exchange(_conf_commit_promise, std::nullopt)->set_exception(stopped_error());
+    }
 
     // Complete all read attempts with not_a_leader
     for (auto& r: _reads) {
@@ -1256,7 +1248,7 @@ future<> server_impl::abort() {
     co_await seastar::when_all_succeed(all_futures.begin(), all_futures.end()).discard_result();
 }
 
-future<> server_impl::enter_joint_configuration(server_address_set c_new, seastar::abort_source* as) {
+future<> server_impl::set_configuration(server_address_set c_new, seastar::abort_source* as) {
     const auto& cfg = _fsm->get_configuration();
     // 4.1 Cluster membership changes. Safety.
     // When the leader receives a request to add or remove a server
@@ -1267,20 +1259,30 @@ future<> server_impl::enter_joint_configuration(server_address_set c_new, seasta
     if (joining.size() == 0 && leaving.size() == 0) {
         co_return;
     }
-    _stats.add_config++;
-    co_await add_entry_internal(raft::configuration{std::move(c_new)}, wait_type::committed, as);
-}
 
-future<> server_impl::set_configuration(server_address_set c_new, seastar::abort_source* as) {
-    co_await enter_joint_configuration(std::move(c_new), as);
-    // Above we co_wait that the joint configuration is committed.
+    _stats.add_config++;
+    const auto& e = _fsm->add_entry(raft::configuration{std::move(c_new)});
+
+    // We've just submitted a joint configuration to be committed.
     // Immediately, without yield, once the FSM discovers
-    // this, it appends non-joint entry. Hence,
-    // at this point in execution, non-joint entry is in the log.
-    // By waiting for a follow up dummy to get committed, we
-    // automatically wait for the non-joint entry to get
-    // committed.
-    co_await add_entry_internal(log_entry::dummy(), wait_type::committed, as);
+    // joint configuration, it appends a corresponding non-joint entry.
+    // By waiting for the joint configuration first we ensure
+    // that the next non-joint configuration we get from fsm in io_fiber
+    // would be the one corresponding to our joint configuration,
+    // no matter if the leader changed in the meantime.
+
+    auto f = _conf_commit_promise.emplace().get_future();
+    try {
+        co_await wait_for_entry({.term = e.term, .idx = e.idx}, wait_type::committed, as);
+    } catch (...) {
+        // We need to 'observe' possible exceptions in f, otherwise they will be
+        // considered unhandled and cause a warning.
+        (void)f.handle_exception([id = _id] (auto e) {
+            logger.trace("[{}] error while waiting for non-joint configuration to be committed: {}", id, e);
+        });
+        throw;
+    }
+    co_await std::move(f);
 }
 
 raft::configuration

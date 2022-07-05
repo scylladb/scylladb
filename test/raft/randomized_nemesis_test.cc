@@ -2353,6 +2353,41 @@ SEASTAR_TEST_CASE(removed_follower_with_forwarding_learns_about_removal) {
     });
 }
 
+SEASTAR_TEST_CASE(remove_leader_with_forwarding_finishes) {
+    logical_timer timer;
+    environment_config cfg {
+            .rnd{0},
+            .network_delay{1, 1},
+            .fd_convict_threshold = 10_t,
+    };
+    co_await with_env_and_ticker<ExReg>(cfg, [&timer] (environment<ExReg>& env, ticker& t) -> future<> {
+        t.start([&] (uint64_t tick) {
+            env.tick_network();
+            timer.tick();
+            if (tick % 10 == 0) {
+                env.tick_servers();
+            }
+            return ping_shards();
+        }, 10'000);
+
+        raft::server::configuration cfg {
+                .enable_forwarding = true,
+        };
+
+        auto id1 = co_await env.new_server(true, cfg);
+        assert(co_await wait_for_leader<ExReg>{}(env, {id1}, timer, timer.now() + 1000_t) == id1);
+        auto id2 = co_await env.new_server(false, cfg);
+        assert(std::holds_alternative<std::monostate>(
+                co_await env.reconfigure(id1, {id1, id2}, timer.now() + 100_t, timer)));
+        // Server 2 forwards the entry that removes server 1 to server 1.
+        // We want server 2 to either learn from server 1 about the removal,
+        // or become a leader and learn from itself; in both cases the call should finish (no timeout).
+        auto result = co_await env.modify_config(id2, std::vector<raft::server_id>{}, {id1}, timer.now() + 100_t, timer);
+        tlogger.trace("env.modify_config result {}", result);
+        assert(std::holds_alternative<std::monostate>(result));
+    });
+}
+
 // Given a function `F` which takes a `raft::server_id` argument and returns a variant type
 // which contains `not_a_leader`, repeatedly calls `F` until it returns something else than
 // `not_a_leader` or until we reach a limit, whichever happens first.
