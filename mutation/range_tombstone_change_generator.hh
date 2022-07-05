@@ -78,6 +78,7 @@ public:
     template<RangeTombstoneChangeConsumer C>
     void flush(const position_in_partition_view upper_bound, C consumer, bool end_of_range = false) {
         if (_range_tombstones.empty()) {
+            _lower_bound = upper_bound;
             return;
         }
 
