@@ -4162,9 +4162,10 @@ class scylla_smp_queues(gdb.Command):
             qs = std_unique_ptr(qs).get()
         for i in range(cpus()):
             for j in range(cpus()):
-                self.queues.add(int(qs[i][j].address))
+                self.queues.add(qs[i][j])
         self._queue_type = gdb.lookup_type('seastar::smp_message_queue').pointer()
         self._ptr_type = gdb.lookup_type('uintptr_t').pointer()
+        self._queue_size = 128
 
     def invoke(self, arg, from_tty):
         if not self.queues:
@@ -4175,39 +4176,20 @@ class scylla_smp_queues(gdb.Command):
             return '{:2} -> {:2}'.format(a, b)
 
         h = histogram(formatter=formatter)
-        known_vptrs = dict()
 
-        for obj, vptr in find_vptrs():
-            obj = int(obj)
-            vptr = int(vptr)
-
-            if not vptr in known_vptrs:
-                name = resolve(vptr, startswith='vtable for seastar::smp_message_queue::async_work_item')
-                if name:
-                    known_vptrs[vptr] = None
-                else:
-                    continue
-
-            offset = known_vptrs[vptr]
-
-            if offset is None:
-                q = None
-                ptr_meta = scylla_ptr.analyze(obj)
-                for offset in range(0, ptr_meta.size, self._ptr_type.sizeof):
-                    ptr = int(gdb.Value(obj + offset).reinterpret_cast(self._ptr_type).dereference())
-                    if ptr in self.queues:
-                        q = gdb.Value(ptr).reinterpret_cast(self._queue_type).dereference()
-                        break
-                if q is None:
-                    continue
-                known_vptrs[vptr] = offset
-            else:
-                ptr = int(gdb.Value(obj + offset).reinterpret_cast(self._ptr_type).dereference())
-                q = gdb.Value(ptr).reinterpret_cast(self._queue_type).dereference()
-
+        for q in self.queues:
             a = int(q['_completed']['remote']['_id'])
             b = int(q['_pending']['remote']['_id'])
-            h[(a, b)] += 1
+
+            tx_queue = std_deque(q['_tx']['a']['pending_fifo'])
+            pending_queue = q['_pending']
+            pending_start = int(pending_queue['read_index_']['_M_i'])
+            pending_end = int(pending_queue['write_index_']['_M_i'])
+            if pending_end < pending_start:
+                pending_end += self._queue_size
+
+            h[(a, b)] += len(tx_queue)
+            h[(a, b)] += pending_end - pending_start
 
         gdb.write('{}\n'.format(h))
 
