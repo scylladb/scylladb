@@ -1384,15 +1384,7 @@ db::commitlog::segment_manager::segment_manager(config c)
         if (cfg.commitlog_flush_threshold_in_mb.has_value()) {
             return size_t(std::ceil(*cfg.commitlog_flush_threshold_in_mb / double(smp::count))) * 1024 * 1024;
         } else {
-            if (max_disk_size >= (max_size*2)) {
-                return max_disk_size - max_size;
-            } else {
-                if (max_disk_size > (max_size/2)) {
-                    return max_disk_size - (max_size/2);
-                } else {
-                    return max_disk_size - max_disk_size/3;
-                }
-            }
+            return max_disk_size / 2;
         }
     }())
     , _flush_semaphore(cfg.max_active_flushes)
