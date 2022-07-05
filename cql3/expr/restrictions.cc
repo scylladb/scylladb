@@ -247,6 +247,29 @@ binary_operator validate_and_prepare_new_restriction(const binary_operator& rest
             format("expr::validate_and_prepare_new_restriction unhandled restriction: {}", prepared_binop));
     }
 
+    // Convert single element IN relation to an EQ relation
+    if (prepared_binop.op == oper_t::IN) {
+        if (is<collection_constructor>(prepared_binop.rhs)) {
+            const std::vector<expression>& elements = as<collection_constructor>(prepared_binop.rhs).elements;
+            if (elements.size() == 1) {
+                prepared_binop.op = oper_t::EQ;
+                prepared_binop.rhs = elements[0];
+            }
+        }
+
+        if(is<constant>(prepared_binop.rhs) && as<constant>(prepared_binop.rhs).type->without_reversed().is_list()) {
+            const constant& rhs_constant = as<constant>(prepared_binop.rhs);
+            const list_type_impl* rhs_list_type =
+                dynamic_cast<const list_type_impl*>(&rhs_constant.type->without_reversed());
+            utils::chunked_vector<managed_bytes> elements = get_list_elements(rhs_constant.value);
+            if (elements.size() == 1) {
+                prepared_binop.op = oper_t::EQ;
+                prepared_binop.rhs = constant(cql3::raw_value::make_value(elements[0]),
+                                              rhs_list_type->get_elements_type());
+            }
+        }
+    }
+
     return prepared_binop;
 }
 
