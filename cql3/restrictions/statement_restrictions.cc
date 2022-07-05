@@ -415,33 +415,10 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
                 on_internal_error(rlogger, format("statement_restrictions: where clause has non-binop element: {}", relation_expr));
             }
 
-            if (is<expr::binary_operator>(relation_expr) && as<expr::binary_operator>(relation_expr).op == expr::oper_t::IS_NOT) {
-                const expr::binary_operator& relation = as<expr::binary_operator>(relation_expr);
-                const expr::unresolved_identifier* lhs_col_ident =
-                        expr::as_if<expr::unresolved_identifier>(&relation.lhs);
-                // The "IS NOT NULL" restriction is only supported (and
-                // mandatory) for materialized view creation:
-                if (lhs_col_ident == nullptr) {
-                    throw exceptions::invalid_request_exception("IS NOT only supports single column");
-                }
-                // currently, the grammar only allows the NULL argument to be
-                // "IS NOT", so this assertion should not be able to fail
-                assert(expr::is<expr::null>(relation.rhs));
+            expr::binary_operator prepared_restriction = expr::validate_and_prepare_new_restriction(*relation_binop, db, schema, ctx);
+            add_restriction(prepared_restriction, schema, allow_filtering, for_view);
 
-                auto col_id = lhs_col_ident->ident->prepare_column_identifier(*schema);
-                const auto *cd = get_column_definition(*schema, *col_id);
-                if (!cd) {
-                    throw exceptions::invalid_request_exception(format("restriction '{}' unknown column {}", relation, lhs_col_ident->ident->to_string()));
-                }
-                _not_null_columns.insert(cd);
-
-                if (!for_view) {
-                    throw exceptions::invalid_request_exception(format("restriction '{}' is only supported in materialized view creation", relation));
-                }
-            } else {
-                expr::binary_operator prepared_restriction = expr::validate_and_prepare_new_restriction(*relation_binop, db, schema, ctx);
-                add_restriction(prepared_restriction, schema, allow_filtering, for_view);
-
+            if (prepared_restriction.op != expr::oper_t::IS_NOT) {
                 const auto restriction = expr::convert_to_restriction(prepared_restriction, schema);
                 if (dynamic_pointer_cast<multi_column_restriction>(restriction)) {
                     _clustering_columns_restrictions = _clustering_columns_restrictions->merge_to(_schema, restriction);
@@ -456,7 +433,8 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
                         _nonprimary_key_restrictions->add_restriction(single);
                     }
                 }
-                _where = _where.has_value() ? make_conjunction(std::move(*_where), restriction->expression) : restriction->expression;
+
+                _where = _where.has_value() ? make_conjunction(std::move(*_where), prepared_restriction) : prepared_restriction;
             }
         }
     }
