@@ -4168,6 +4168,7 @@ class scylla_smp_queues(gdb.Command):
         self._queue_type = gdb.lookup_type('seastar::smp_message_queue').pointer()
         self._ptr_type = gdb.lookup_type('uintptr_t').pointer()
         self._queue_size = 128
+        self._item_ptr_array_type = gdb.lookup_type('seastar::smp_message_queue::work_item').pointer().pointer()
 
     def invoke(self, arg, from_tty):
         if not self.queues:
@@ -4178,6 +4179,8 @@ class scylla_smp_queues(gdb.Command):
                 help="Filter for queues going from the given CPU")
         parser.add_argument("-t", "--to", action="store", type=int, required=False, dest="to_cpu",
                 help="Filter for queues going to the given CPU")
+        parser.add_argument("-c", "--content", action="store_true",
+                help="Create a histogram from the content of the queues, rather than the number of items in them")
 
         try:
             args = parser.parse_args(arg.split())
@@ -4185,10 +4188,19 @@ class scylla_smp_queues(gdb.Command):
             return
 
         def formatter(q):
-            a, b = q
-            return '{:2} -> {:2}'.format(a, b)
+            if args.content:
+                return "0x{:x} {}".format(q, resolve(q))
+            else:
+                return '{:2} -> {:2}'.format(*q)
 
-        h = histogram(formatter=formatter)
+        h = histogram(formatter=formatter, print_indicators=not args.content)
+
+        def add_to_histogram(a, b, key=None, count=1):
+            if args.content:
+                vptr = int(gdb.Value(key).reinterpret_cast(self._ptr_type).dereference())
+                h[vptr] += count
+            else:
+                h[(a, b)] += count
 
         for q in self.queues:
             a = int(q['_completed']['remote']['_id'])
@@ -4205,8 +4217,18 @@ class scylla_smp_queues(gdb.Command):
             if pending_end < pending_start:
                 pending_end += self._queue_size
 
-            h[(a, b)] += len(tx_queue)
-            h[(a, b)] += pending_end - pending_start
+            if args.content:
+                for item_ptr in tx_queue:
+                    add_to_histogram(a, b, key=item_ptr)
+
+                # Boost uses an aligned (to 8 bytes) buffer here.
+                # We'll just assume alignment is right.
+                buf = gdb.Value(pending_queue['storage_']['data_']['buf']).reinterpret_cast(self._item_ptr_array_type)
+
+                for i in range(pending_start, pending_end):
+                    add_to_histogram(a, b, key=buf[i % self._queue_size])
+            else:
+                add_to_histogram(a, b, count=(len(tx_queue) + pending_end - pending_start))
 
         gdb.write('{}\n'.format(h))
 
