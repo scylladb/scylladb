@@ -31,6 +31,7 @@
 #include "types/list.hh"
 #include "types/map.hh"
 #include "types/set.hh"
+#include "cql3/expr/restrictions.hh"
 
 namespace cql3 {
 namespace restrictions {
@@ -438,7 +439,10 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
                     throw exceptions::invalid_request_exception(format("restriction '{}' is only supported in materialized view creation", relation));
                 }
             } else {
-                const auto restriction = expr::to_restriction(relation_expr, db, schema, ctx);
+                expr::binary_operator prepared_restriction = expr::validate_and_prepare_new_restriction(*relation_binop, db, schema, ctx);
+                add_restriction(prepared_restriction, schema, allow_filtering, for_view);
+
+                const auto restriction = expr::convert_to_restriction(prepared_restriction, schema);
                 if (dynamic_pointer_cast<multi_column_restriction>(restriction)) {
                     _clustering_columns_restrictions = _clustering_columns_restrictions->merge_to(_schema, restriction);
                 } else if (has_token(restriction->expression)) {
@@ -454,9 +458,6 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
                 }
                 _where = _where.has_value() ? make_conjunction(std::move(*_where), restriction->expression) : restriction->expression;
             }
-
-            expr::binary_operator prepared_restriction = expr::prepare_binary_operator(*relation_binop, db, schema);
-            add_restriction(prepared_restriction, schema, allow_filtering, for_view);
         }
     }
     if (_where.has_value()) {

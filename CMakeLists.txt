@@ -349,7 +349,7 @@ set(scylla_sources
     cql3/cql3_type.cc
     cql3/expr/expression.cc
     cql3/expr/prepare_expr.cc
-    cql3/expr/to_restriction.cc
+    cql3/expr/restrictions.cc
     cql3/functions/aggregate_fcts.cc
     cql3/functions/castas_fcts.cc
     cql3/functions/error_injection_fcts.cc
