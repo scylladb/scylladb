@@ -800,7 +800,7 @@ void statement_restrictions::add_multi_column_clustering_key_restriction(const e
             static auto order2str = [](auto o) { return o == expr::comparison_order::cql ? "plain" : "SCYLLA_CLUSTERING_BOUND"; };
             throw exceptions::invalid_request_exception(
                     format("Invalid combination of restrictions ({} / {})",
-                    order2str(restr.order), order2str(other_slice->order)));
+                    order2str(other_slice->order), order2str(restr.order)));
         }
 
         // Here check that there aren't two < <= or two > and >=
