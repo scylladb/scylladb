@@ -4168,6 +4168,8 @@ class scylla_smp_queues(gdb.Command):
         from: the shard, from which the message was sent (this shard);
         to: the shard, to which the message is sent;
         ++++: visual illustration of the relative size of this queue;
+
+    See `scylla smp-queues --help` for more details on usage.
     """
     def __init__(self):
         gdb.Command.__init__(self, 'scylla smp-queues', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
@@ -4189,6 +4191,17 @@ class scylla_smp_queues(gdb.Command):
         if not self.queues:
             self._init()
 
+        parser = argparse.ArgumentParser(description="scylla smp-queues")
+        parser.add_argument("-f", "--from", action="store", type=int, required=False, dest="from_cpu",
+                help="Filter for queues going from the given CPU")
+        parser.add_argument("-t", "--to", action="store", type=int, required=False, dest="to_cpu",
+                help="Filter for queues going to the given CPU")
+
+        try:
+            args = parser.parse_args(arg.split())
+        except SystemExit:
+            return
+
         def formatter(q):
             a, b = q
             return '{:2} -> {:2}'.format(a, b)
@@ -4198,6 +4211,10 @@ class scylla_smp_queues(gdb.Command):
         for q in self.queues:
             a = int(q['_completed']['remote']['_id'])
             b = int(q['_pending']['remote']['_id'])
+            if args.from_cpu is not None and a != args.from_cpu:
+                continue
+            if args.to_cpu is not None and b != args.to_cpu:
+                continue
 
             tx_queue = std_deque(q['_tx']['a']['pending_fifo'])
             pending_queue = q['_pending']
