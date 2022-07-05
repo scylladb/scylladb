@@ -21,7 +21,6 @@ def testInvalidCollectionEqualityRelation(cql, test_keyspace):
         assert_invalid_message(cql, table, "Collection column 'd' (map<int, int>) cannot be restricted by a '=' relation",
                              "SELECT * FROM %s WHERE a = 0 AND d=?", {0: 0})
 
-@pytest.mark.xfail(reason="#10631 - wrong error message")
 def testInvalidCollectionNonEQRelation(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int PRIMARY KEY, b set<int>, c int)") as table:
         execute(cql, table, "CREATE INDEX ON %s (c)")
