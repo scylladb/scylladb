@@ -1127,7 +1127,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
 
     for (auto& s : unsupported) {
         if (rjson::find(request, s)) {
-            co_return coroutine::make_exception(api_error::validation(s + " not supported"));
+            co_await coroutine::return_exception(api_error::validation(s + " not supported"));
         }
     }
 
@@ -1148,7 +1148,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
         // the ugly but harmless conversion to string_view here is because
         // Seastar's sstring is missing a find(std::string_view) :-()
         if (std::string_view(tab->cf_name()).find(INTERNAL_TABLE_PREFIX) == 0) {
-            co_return coroutine::make_exception(api_error::validation(format("Prefix {} is reserved for accessing internal tables", INTERNAL_TABLE_PREFIX)));
+            co_await coroutine::return_exception(api_error::validation(format("Prefix {} is reserved for accessing internal tables", INTERNAL_TABLE_PREFIX)));
         }
 
         schema_builder builder(tab);
@@ -3320,7 +3320,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     }
     elogger.trace("Unprocessed keys: {}", response["UnprocessedKeys"]);
     if (!some_succeeded && eptr) {
-        co_return coroutine::make_exception(std::move(eptr));
+        co_await coroutine::return_exception_ptr(std::move(eptr));
     }
     if (is_big(response)) {
         co_return make_streamed(std::move(response));

@@ -816,7 +816,8 @@ future<mutation> query_partition_mutation(service::storage_proxy& proxy,
     } else if (partitions.size() == 1) {
         co_return partitions[0].mut().unfreeze(s);
     } else {
-        co_return coroutine::make_exception(std::invalid_argument("Results must have at most one partition"));
+        auto&& ex = std::make_exception_ptr(std::invalid_argument("Results must have at most one partition"));
+        co_return coroutine::exception(std::move(ex));
     }
 }
 
@@ -1108,7 +1109,7 @@ future<lw_shared_ptr<query::result_set>> extract_scylla_specific_keyspace_info(d
     if (proxy.local().features().cluster_schema_features().contains<schema_feature::SCYLLA_KEYSPACES>()) {
         auto&& rs = partition.second;
         if (rs->empty()) {
-            co_return coroutine::make_exception(std::runtime_error("query result has no rows"));
+            co_await coroutine::return_exception(std::runtime_error("query result has no rows"));
         }
         auto&& row = rs->row(0);
         auto keyspace_name = row.get_nonnull<sstring>("keyspace_name");
@@ -2447,7 +2448,7 @@ future<schema_ptr> create_table_from_name(distributed<service::storage_proxy>& p
     auto qn = qualified_name(keyspace, table);
     auto sm = co_await read_table_mutations(proxy, qn, tables());
     if (!sm.live()) {
-        co_return coroutine::make_exception(std::runtime_error(format("{}:{} not found in the schema definitions keyspace.", qn.keyspace_name, qn.table_name)));
+        co_await coroutine::return_exception(std::runtime_error(format("{}:{} not found in the schema definitions keyspace.", qn.keyspace_name, qn.table_name)));
     }
     co_return create_table_from_mutations(proxy, std::move(sm));
 }
@@ -2945,7 +2946,7 @@ static future<view_ptr> create_view_from_table_row(distributed<service::storage_
     qualified_name qn(row.get_nonnull<sstring>("keyspace_name"), row.get_nonnull<sstring>("view_name"));
     schema_mutations sm = co_await read_table_mutations(proxy, qn, views());
     if (!sm.live()) {
-        co_return coroutine::make_exception(std::runtime_error(format("{}:{} not found in the view definitions keyspace.", qn.keyspace_name, qn.table_name)));
+        co_await coroutine::return_exception(std::runtime_error(format("{}:{} not found in the view definitions keyspace.", qn.keyspace_name, qn.table_name)));
     }
     co_return create_view_from_mutations(proxy, std::move(sm));
 }
@@ -3307,7 +3308,7 @@ future<column_mapping> get_column_mapping(utils::UUID table_id, table_schema_ver
         // If we don't have a stored column_mapping for an obsolete schema version
         // then it means it's way too old and been cleaned up already.
         // Fail the whole learn stage in this case.
-        co_return coroutine::make_exception(std::runtime_error(
+        co_await coroutine::return_exception(std::runtime_error(
             format("Failed to look up column mapping for schema version {}",
                 version)));
     }

@@ -305,7 +305,7 @@ seastar::future<bytes_opt> run_script(context& ctx, const std::vector<data_type>
     // Replenish the store with initial amount of fuel
     auto added = store.context().add_fuel(ctx.engine_ptr->initial_fuel_amount());
     if (!added) {
-        co_return coroutine::make_exception(wasm::exception(added.err().message()));
+        co_await coroutine::return_exception(wasm::exception(added.err().message()));
     }
     auto [instance, func] = create_instance_and_func(ctx, store);
     std::vector<wasmtime::Val> argv;
@@ -319,7 +319,7 @@ seastar::future<bytes_opt> run_script(context& ctx, const std::vector<data_type>
         } else if (param) {
             visit(type, init_arg_visitor{param, argv, store, instance});
         } else {
-            co_return coroutine::make_exception(wasm::exception(format("Function {} cannot be called on null values", ctx.function_name)));
+            co_await coroutine::return_exception(wasm::exception(format("Function {} cannot be called on null values", ctx.function_name)));
         }
     }
     uint64_t fuel_before = *store.context().fuel_consumed();
@@ -330,11 +330,11 @@ seastar::future<bytes_opt> run_script(context& ctx, const std::vector<data_type>
     wasm_logger.debug("Consumed {} fuel units", consumed);
 
     if (!result) {
-        co_return coroutine::make_exception(wasm::exception("Calling wasm function failed: " + result.err().message()));
+        co_await coroutine::return_exception(wasm::exception("Calling wasm function failed: " + result.err().message()));
     }
     std::vector<wasmtime::Val> result_vec = std::move(result).unwrap();
     if (result_vec.size() != 1) {
-      co_return coroutine::make_exception(wasm::exception(format("Unexpected number of returned values: {} (expected: 1)", result_vec.size())));
+      co_await coroutine::return_exception(wasm::exception(format("Unexpected number of returned values: {} (expected: 1)", result_vec.size())));
     }
 
     // TODO: ABI for return values is experimental and subject to change in the future.

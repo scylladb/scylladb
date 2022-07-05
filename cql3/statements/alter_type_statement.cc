@@ -117,7 +117,8 @@ alter_type_statement::prepare_schema_mutations(query_processor& qp, api::timesta
 
         co_return std::make_pair(std::move(ret), std::move(m));
     } catch(data_dictionary::no_such_keyspace& e) {
-        co_return coroutine::make_exception(exceptions::invalid_request_exception(format("Cannot alter type in unknown keyspace {}", keyspace())));
+        auto&& ex = std::make_exception_ptr(exceptions::invalid_request_exception(format("Cannot alter type in unknown keyspace {}", keyspace())));
+        co_return coroutine::exception(std::move(ex));
     }
 }
 

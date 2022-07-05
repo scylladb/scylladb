@@ -129,7 +129,7 @@ future<std::string> get_key_from_roles(service::storage_proxy& proxy, std::strin
     std::vector<query::clustering_range> bounds{query::clustering_range::make_open_ended_both_sides()};
     const column_definition* salted_hash_col = schema->get_column_definition(bytes("salted_hash"));
     if (!salted_hash_col) {
-        co_return coroutine::make_exception(api_error::unrecognized_client(format("Credentials cannot be fetched for: {}", username)));
+        co_await coroutine::return_exception(api_error::unrecognized_client(format("Credentials cannot be fetched for: {}", username)));
     }
     auto selection = cql3::selection::selection::for_columns(schema, {salted_hash_col});
     auto partition_slice = query::partition_slice(std::move(bounds), {}, query::column_id_vector{salted_hash_col->id}, selection->get_query_options());
@@ -145,11 +145,11 @@ future<std::string> get_key_from_roles(service::storage_proxy& proxy, std::strin
 
     auto result_set = builder.build();
     if (result_set->empty()) {
-        co_return coroutine::make_exception(api_error::unrecognized_client(format("User not found: {}", username)));
+        co_await coroutine::return_exception(api_error::unrecognized_client(format("User not found: {}", username)));
     }
     const bytes_opt& salted_hash = result_set->rows().front().front(); // We only asked for 1 row and 1 column
     if (!salted_hash) {
-        co_return coroutine::make_exception(api_error::unrecognized_client(format("No password found for user: {}", username)));
+        co_await coroutine::return_exception(api_error::unrecognized_client(format("No password found for user: {}", username)));
     }
     co_return value_cast<sstring>(utf8_type->deserialize(*salted_hash));
 }
