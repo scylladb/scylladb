@@ -361,6 +361,11 @@ protected:
         compaction_backlog_tracker bt(std::make_unique<user_initiated_backlog_tracker>(_cm._compaction_controller.backlog_of_shares(200), _cm._available_memory));
         _cm.register_backlog_tracker(bt);
 
+        // Now that the sstables for major compaction are registered
+        // and the user_initiated_backlog_tracker is set up
+        // the exclusive lock can be freed to let regular compaction run in parallel to major
+        lock_holder.return_all();
+
         co_await compact_sstables_and_update_history(std::move(descriptor), _compaction_data, std::move(release_exhausted));
 
         finish_compaction();
