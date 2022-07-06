@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <stdexcept>
 #include <vector>
 #include "cql3/selection/selector.hh"
@@ -124,19 +125,12 @@ public:
     }
 
     bool does_reduction() const {
-        if (_factories.size() != 1) {
-            return false;
-        }
-
-        return _factories[0]->is_reducible_selector_factory() && _factories[0]->contains_only_simple_arguments();
+        return std::all_of(_factories.cbegin(), _factories.cend(), [](const ::shared_ptr<selector::factory>& factory) {
+            return factory->is_reducible_selector_factory() && factory->contains_only_simple_arguments();
+        });
     }
 
     query::forward_request::reductions_info get_reductions() const {
-        // For now we only supports reduction of single selection
-        if (_factories.size() != 1) {
-            return {};
-        }
-
         std::vector<query::forward_request::reduction_type> types;
         std::vector<query::forward_request::aggregation_info> infos;
         for (const auto& factory: _factories) {

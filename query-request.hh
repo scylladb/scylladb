@@ -385,8 +385,6 @@ struct forward_request {
         std::vector<aggregation_info> infos;
     };
 
-    // `SELECT min(x), max(x), avg(x) FROM tab`
-    // multiple reduction types are needed to support queries like:
     std::vector<reduction_type> reduction_types;
 
     query::read_command cmd;

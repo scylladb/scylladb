@@ -1516,7 +1516,7 @@ parallelized_select_statement::do_execute(
     return qp.forwarder().dispatch(req, state.get_trace_state()).then([this] (query::forward_result res) {
         auto meta = make_shared<metadata>(*_selection->get_result_metadata());
         auto rs = std::make_unique<result_set>(std::move(meta));
-        rs->add_column_value(*res.query_results[0]);
+        rs->add_row(res.query_results);
         update_stats_rows_read(rs->size());
         return shared_ptr<cql_transport::messages::result_message>(
             make_shared<cql_transport::messages::result_message::rows>(result(std::move(rs)))
