@@ -3163,6 +3163,7 @@ SEASTAR_TEST_CASE(compaction_strategy_aware_major_compaction_test) {
             auto descriptor = cs.get_major_compaction_job(*table_s, candidates);
             BOOST_REQUIRE(descriptor.sstables.size() == candidates.size());
             BOOST_REQUIRE(uint32_t(descriptor.level) == leveled_compaction_strategy::ideal_level_for_input(candidates, 160*1024*1024));
+            BOOST_REQUIRE(descriptor.io_priority.id() == service::get_local_streaming_priority().id());
         }
 
         {
@@ -3170,6 +3171,7 @@ SEASTAR_TEST_CASE(compaction_strategy_aware_major_compaction_test) {
             auto descriptor = cs.get_major_compaction_job(*table_s, candidates);
             BOOST_REQUIRE(descriptor.sstables.size() == candidates.size());
             BOOST_REQUIRE(descriptor.level == 0);
+            BOOST_REQUIRE(descriptor.io_priority.id() == service::get_local_streaming_priority().id());
         }
     });
 }
