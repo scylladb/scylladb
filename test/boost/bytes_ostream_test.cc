@@ -325,3 +325,12 @@ BOOST_AUTO_TEST_CASE(test_remove_suffix) {
         test(std::max(a, b), std::min(a, b));
     }
 }
+
+BOOST_AUTO_TEST_CASE(test_conversion_to_managed_bytes) {
+    bytes_ostream buf;
+    append_sequence(buf, 1024);
+    auto mb = std::move(buf).to_managed_bytes();
+    bytes_ostream buf2;
+    buf2.write(to_bytes(mb));
+    assert_sequence(buf2, 1024);
+}

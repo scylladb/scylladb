@@ -18,6 +18,8 @@
 #include <unordered_map>
 #include <type_traits>
 
+class bytes_ostream;
+
 template <mutable_view is_mutable_view>
 class managed_bytes_basic_view;
 using managed_bytes_view = managed_bytes_basic_view<mutable_view::no>;
@@ -25,7 +27,7 @@ using managed_bytes_mutable_view = managed_bytes_basic_view<mutable_view::yes>;
 
 struct blob_storage {
     struct [[gnu::packed]] ref_type {
-        blob_storage* ptr;
+        blob_storage* ptr = nullptr;
 
         ref_type() {}
         ref_type(blob_storage* ptr) : ptr(ptr) {}
@@ -72,6 +74,7 @@ struct blob_storage {
 
 // A managed version of "bytes" (can be used with LSA).
 class managed_bytes {
+    friend class bytes_ostream;
     static constexpr size_t max_inline_size = 15;
     struct small_blob {
         bytes_view::value_type data[max_inline_size];
@@ -112,6 +115,11 @@ private:
     }
     std::unique_ptr<bytes_view::value_type[]> do_linearize_pure() const;
 
+    explicit managed_bytes(blob_storage* data) {
+        _u.small.size = -1;
+        _u.ptr.ptr = data;
+        data->backref = &_u.ptr;
+    }
 public:
     using size_type = blob_storage::size_type;
     struct initialized_later {};
