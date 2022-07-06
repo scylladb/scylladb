@@ -11,6 +11,7 @@
 #include <boost/range/iterator_range.hpp>
 
 #include "bytes.hh"
+#include "utils/managed_bytes.hh"
 #include "hashing.hh"
 #include <seastar/core/simple-stream.hh>
 #include <seastar/core/loop.hh>
@@ -31,26 +32,15 @@ public:
     static constexpr size_type max_chunk_size() { return max_alloc_size() - sizeof(chunk); }
 private:
     static_assert(sizeof(value_type) == 1, "value_type is assumed to be one byte long");
-    struct chunk {
-        // FIXME: group fragment pointers to reduce pointer chasing when packetizing
-        std::unique_ptr<chunk> next;
-        ~chunk() {
-            auto p = std::move(next);
-            while (p) {
-                // Avoid recursion when freeing chunks
-                auto p_next = std::move(p->next);
-                p = std::move(p_next);
-            }
-        }
-        size_type offset; // Also means "size" after chunk is closed
-        size_type size;
-        value_type data[0];
-        void operator delete(void* ptr) { free(ptr); }
-    };
+    // Note: while appending data, chunk::size refers to the allocated space in the chunk,
+    //       and chunk::frag_size refers to the currently occupied space in the chunk.
+    //       After building, the first chunk::size is the whole object size, and chunk::frag_size
+    //       doesn't change. This fits with managed_bytes interpretation.
+    using chunk = blob_storage;
     static constexpr size_type default_chunk_size{512};
     static constexpr size_type max_alloc_size() { return 128 * 1024; }
 private:
-    std::unique_ptr<chunk> _begin;
+    blob_storage::ref_type _begin;
     chunk* _current;
     size_type _size;
     size_type _initial_chunk_size = default_chunk_size;
@@ -70,13 +60,13 @@ public:
         fragment_iterator(const fragment_iterator&) = default;
         fragment_iterator& operator=(const fragment_iterator&) = default;
         bytes_view operator*() const {
-            return { _current->data, _current->offset };
+            return { _current->data, _current->frag_size };
         }
         bytes_view operator->() const {
             return *(*this);
         }
         fragment_iterator& operator++() {
-            _current = _current->next.get();
+            _current = _current->next;
             return *this;
         }
         fragment_iterator operator++(int) {
@@ -119,7 +109,7 @@ private:
         if (!_current) {
             return 0;
         }
-        return _current->size - _current->offset;
+        return _current->size - _current->frag_size;
     }
     // Figure out next chunk size.
     //   - must be enough for data_size + sizeof(chunk)
@@ -139,8 +129,8 @@ private:
     [[gnu::always_inline]]
     value_type* alloc(size_type size) {
         if (__builtin_expect(size <= current_space_left(), true)) {
-            auto ret = _current->data + _current->offset;
-            _current->offset += size;
+            auto ret = _current->data + _current->frag_size;
+            _current->frag_size += size;
             _size += size;
             return ret;
         } else {
@@ -154,18 +144,20 @@ private:
             if (!space) {
                 throw std::bad_alloc();
             }
-            auto new_chunk = std::unique_ptr<chunk>(new (space) chunk());
-            new_chunk->offset = size;
-            new_chunk->size = alloc_size - sizeof(chunk);
-            if (_current) {
-                _current->next = std::move(new_chunk);
-                _current = _current->next.get();
-            } else {
-                _begin = std::move(new_chunk);
-                _current = _begin.get();
-            }
+            auto backref = _current ? &_current->next : &_begin;
+            auto new_chunk = new (space) chunk(backref, alloc_size - sizeof(chunk), size);
+            _current = new_chunk;
             _size += size;
             return _current->data;
+    }
+    [[gnu::noinline]]
+    void free_chain(chunk* c) noexcept {
+        while (c) {
+            auto n = c->next;
+            c->~chunk();
+            ::free(c);
+            c = n;
+        }
     }
 public:
     explicit bytes_ostream(size_t initial_chunk_size) noexcept
@@ -178,7 +170,7 @@ public:
     bytes_ostream() noexcept : bytes_ostream(default_chunk_size) {}
 
     bytes_ostream(bytes_ostream&& o) noexcept
-        : _begin(std::move(o._begin))
+        : _begin(std::exchange(o._begin, {}))
         , _current(o._current)
         , _size(o._size)
         , _initial_chunk_size(o._initial_chunk_size)
@@ -194,6 +186,10 @@ public:
         , _initial_chunk_size(o._initial_chunk_size)
     {
         append(o);
+    }
+
+    ~bytes_ostream() {
+        free_chain(_begin.ptr);
     }
 
     bytes_ostream& operator=(const bytes_ostream& o) {
@@ -243,8 +239,8 @@ public:
 
         auto this_size = std::min(v.size(), size_t(current_space_left()));
         if (__builtin_expect(this_size, true)) {
-            memcpy(_current->data + _current->offset, v.begin(), this_size);
-            _current->offset += this_size;
+            memcpy(_current->data + _current->frag_size, v.begin(), this_size);
+            _current->frag_size += this_size;
             _size += this_size;
             v.remove_prefix(this_size);
         }
@@ -287,19 +283,20 @@ public:
             throw std::bad_alloc();
         }
 
-        auto new_chunk = std::unique_ptr<chunk>(new (space) chunk());
-        new_chunk->offset = _size;
-        new_chunk->size = _size;
+        auto old_begin = _begin;
+        auto new_chunk = new (space) chunk(&_begin, _size, _size);
 
         auto dst = new_chunk->data;
-        auto r = _begin.get();
+        auto r = old_begin.ptr;
         while (r) {
-            auto next = r->next.get();
-            dst = std::copy_n(r->data, r->offset, dst);
+            auto next = r->next;
+            dst = std::copy_n(r->data, r->frag_size, dst);
+            r->~chunk();
+            ::free(r);
             r = next;
         }
 
-        _current = new_chunk.get();
+        _current = new_chunk;
         _begin = std::move(new_chunk);
         return bytes_view(_current->data, _size);
     }
@@ -333,22 +330,23 @@ public:
     void remove_suffix(size_t n) {
         _size -= n;
         auto left = _size;
-        auto current = _begin.get();
+        auto current = _begin.ptr;
         while (current) {
-            if (current->offset >= left) {
-                current->offset = left;
+            if (current->frag_size >= left) {
+                current->frag_size = left;
                 _current = current;
-                current->next.reset();
+                free_chain(current->next);
+                current->next = nullptr;
                 return;
             }
-            left -= current->offset;
-            current = current->next.get();
+            left -= current->frag_size;
+            current = current->next;
         }
     }
 
     // begin() and end() form an input range to bytes_view representing fragments.
     // Any modification of this instance invalidates iterators.
-    fragment_iterator begin() const { return { _begin.get() }; }
+    fragment_iterator begin() const { return { _begin.ptr }; }
     fragment_iterator end() const { return { nullptr }; }
 
     output_iterator write_begin() { return output_iterator(*this); }
@@ -363,7 +361,7 @@ public:
     };
 
     position pos() const {
-        return { _current, _current ? _current->offset : 0 };
+        return { _current, _current ? _current->frag_size : 0 };
     }
 
     // Returns the amount of bytes written since given position.
@@ -373,11 +371,11 @@ public:
         if (!c) {
             return _size;
         }
-        size_type total = c->offset - pos._offset;
-        c = c->next.get();
+        size_type total = c->frag_size - pos._offset;
+        c = c->next;
         while (c) {
-            total += c->offset;
-            c = c->next.get();
+            total += c->frag_size;
+            c = c->next;
         }
         return total;
     }
@@ -391,8 +389,9 @@ public:
         }
         _size -= written_since(pos);
         _current = pos._chunk;
+        free_chain(_current->next);
         _current->next = nullptr;
-        _current->offset = pos._offset;
+        _current->frag_size = pos._offset;
     }
 
     void reduce_chunk_count() {
@@ -441,11 +440,23 @@ public:
     // the clear() calls then writes will not involve any memory allocations,
     // except for the first write made on this instance.
     void clear() {
-        if (_begin) {
-            _begin->offset = 0;
+        if (_begin.ptr) {
+            _begin.ptr->frag_size = 0;
             _size = 0;
-            _current = _begin.get();
-            _begin->next.reset();
+            free_chain(_begin.ptr->next);
+            _begin.ptr->next = nullptr;
+            _current = _begin.ptr;
+        }
+    }
+
+    managed_bytes to_managed_bytes() && {
+        if (_size) {
+            _begin.ptr->size = _size;
+            _current = nullptr;
+            _size = 0;
+            return managed_bytes(std::exchange(_begin.ptr, {}));
+        } else {
+            return managed_bytes();
         }
     }
 
@@ -456,15 +467,17 @@ public:
     // the clear() calls then writes will not involve any memory allocations,
     // except for the first write made on this instance.
     future<> clear_gently() noexcept {
-        if (!_begin) {
+        if (!_begin.ptr) {
             return make_ready_future<>();
         }
-        _begin->offset = 0;
+        _begin->frag_size = 0;
+        _current = _begin.ptr;
         _size = 0;
-        return do_until([this] { return !_begin->next; }, [this] {
-            // move next->next first to avoid it being recursively destroyed
-            // in ~chunk when _begin->next is move-assigned.
-            auto next = std::move(_begin->next->next);
+        return do_until([this] { return !_begin.ptr->next; }, [this] {
+            auto second_chunk = _begin.ptr->next;
+            auto next = second_chunk->next;
+            second_chunk->~chunk();
+            ::free(second_chunk);
             _begin->next = std::move(next);
             return make_ready_future<>();
         });
