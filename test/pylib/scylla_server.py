@@ -78,6 +78,7 @@ request_timeout_in_ms: 300000
 # and other modules dependent on it: e.g. service levels
 
 authenticator: PasswordAuthenticator
+authorizer: CassandraAuthorizer
 strict_allow_filtering: true
 """
 
