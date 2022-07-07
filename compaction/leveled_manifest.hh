@@ -141,7 +141,7 @@ public:
 
 
     sstables::compaction_descriptor get_descriptor_for_level(int level, const std::vector<std::optional<dht::decorated_key>>& last_compacted_keys,
-                                                             std::vector<int>& compaction_counter) {
+                                                             const std::vector<int>& compaction_counter) {
         auto info = get_candidates_for(level, last_compacted_keys);
         if (!info.candidates.empty()) {
             int next_level = get_next_level(info.candidates, info.can_promote);
@@ -162,7 +162,7 @@ public:
      * If no compactions are necessary, will return null
      */
     sstables::compaction_descriptor get_compaction_candidates(const std::vector<std::optional<dht::decorated_key>>& last_compacted_keys,
-        std::vector<int>& compaction_counter) {
+        const std::vector<int>& compaction_counter) {
         // LevelDB gives each level a score of how much data it contains vs its ideal amount, and
         // compacts the level with the highest score. But this falls apart spectacularly once you
         // get behind.  Consider this set of levels:
