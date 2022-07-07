@@ -38,6 +38,8 @@ enum class permission {
     AUTHORIZE, // required for GRANT and REVOKE.
     DESCRIBE, // required on the root-level role resource to list all roles.
 
+    // function/aggregate/procedure calls
+    EXECUTE,
 };
 
 typedef enum_set<
@@ -51,7 +53,8 @@ typedef enum_set<
                 permission::SELECT,
                 permission::MODIFY,
                 permission::AUTHORIZE,
-                permission::DESCRIBE>> permission_set;
+                permission::DESCRIBE,
+                permission::EXECUTE>> permission_set;
 
 bool operator<(const permission_set&, const permission_set&);
 
