@@ -10,6 +10,7 @@
 
 #include <vector>
 #include <unordered_set>
+#include <cstddef>
 
 namespace utils {
 /**
