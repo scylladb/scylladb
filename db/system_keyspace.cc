@@ -1349,6 +1349,38 @@ struct truncation_record {
     db_clock::time_point time_stamp;
 };
 
+table_selector& table_selector::all() {
+    class all_selector : public table_selector {
+    public:
+        bool contains(const schema_ptr&) override {
+            return true;
+        }
+
+        bool contains_keyspace(std::string_view) override {
+            return true;
+        }
+    };
+    static all_selector instance;
+    return instance;
+}
+
+std::unique_ptr<table_selector> table_selector::all_in_keyspace(sstring name) {
+    class keyspace_selector : public table_selector {
+        sstring _name;
+    public:
+        keyspace_selector(sstring name) : _name(std::move(name)) {}
+
+        bool contains(const schema_ptr& s) override {
+            return s->ks_name() == _name;
+        }
+
+        bool contains_keyspace(std::string_view name) override {
+            return name == _name;
+        }
+    };
+    return std::make_unique<keyspace_selector>(name);
+}
+
 }
 
 #include "idl/replay_position.dist.hh"
@@ -1365,6 +1397,10 @@ typedef std::unordered_map<truncation_key, truncation_record> truncation_map;
 static constexpr uint8_t current_version = 1;
 
 future<truncation_record> system_keyspace::get_truncation_record(utils::UUID cf_id) {
+    if (qctx->qp().db().get_config().ignore_truncation_record.is_set()) {
+        truncation_record r{truncation_record::current_magic};
+        return make_ready_future<truncation_record>(std::move(r));
+    }
     sstring req = format("SELECT * from system.{} WHERE table_uuid = ?", TRUNCATED);
     return qctx->qp().execute_internal(req, {cf_id}, cql3::query_processor::cache_internal::yes).then([cf_id](::shared_ptr<cql3::untyped_result_set> rs) {
         truncation_record r{truncation_record::current_magic};
@@ -1384,6 +1420,9 @@ future<truncation_record> system_keyspace::get_truncation_record(utils::UUID cf_
 
 // Read system.truncate table and cache last truncation time in `table` object for each table on every shard
 future<> system_keyspace::cache_truncation_record() {
+    if (_db.local().get_config().ignore_truncation_record.is_set()) {
+        return make_ready_future<>();
+    }
     sstring req = format("SELECT DISTINCT table_uuid, truncated_at from system.{}", TRUNCATED);
     return execute_cql(req).then([this] (::shared_ptr<cql3::untyped_result_set> rs) {
         return parallel_for_each(rs->begin(), rs->end(), [this] (const cql3::untyped_result_set_row& row) {
@@ -1574,7 +1613,12 @@ template <typename T>
 future<> set_scylla_local_param_as(const sstring& key, const T& value) {
     sstring req = format("UPDATE system.{} SET value = ? WHERE key = ?", system_keyspace::SCYLLA_LOCAL);
     auto type = data_type_for<T>();
-    return qctx->execute_cql(req, type->to_string_impl(data_value(value)), key).discard_result();
+    co_await qctx->execute_cql(req, type->to_string_impl(data_value(value)), key).discard_result();
+    // Flush the table so that the value is available on boot before commitlog replay.
+    // database::before_schema_keyspace_init() depends on it.
+    co_await smp::invoke_on_all([] () -> future<> {
+        co_await qctx->qp().db().real_database().flush(db::system_keyspace::NAME, system_keyspace::SCYLLA_LOCAL);
+    });
 }
 
 template <typename T>
@@ -2677,14 +2721,19 @@ static bool maybe_write_in_user_memory(schema_ptr s) {
             || s == system_keyspace::raft();
 }
 
-future<> system_keyspace_make(distributed<replica::database>& dist_db, distributed<service::storage_service>& dist_ss, sharded<gms::gossiper>& dist_gossiper, db::config& cfg) {
-    register_virtual_tables(dist_db, dist_ss, dist_gossiper, cfg);
+future<> system_keyspace_make(distributed<replica::database>& dist_db, distributed<service::storage_service>& dist_ss, sharded<gms::gossiper>& dist_gossiper, db::config& cfg, table_selector& tables) {
+    if (tables.contains_keyspace(system_keyspace::NAME)) {
+        register_virtual_tables(dist_db, dist_ss, dist_gossiper, cfg);
+    }
 
     auto& db = dist_db.local();
     auto& db_config = db.get_config();
     auto enable_cache = db_config.enable_cache();
     bool durable = db_config.data_file_directories().size() > 0;
     for (auto&& table : system_keyspace::all_tables(db_config)) {
+        if (!tables.contains(table)) {
+            continue;
+        }
         auto ks_name = table->ks_name();
         if (!db.has_keyspace(ks_name)) {
             auto ksm = make_lw_shared<keyspace_metadata>(ks_name,
@@ -2705,11 +2754,13 @@ future<> system_keyspace_make(distributed<replica::database>& dist_db, distribut
         db.add_column_family(ks, table, std::move(cfg));
     }
 
-    install_virtual_readers(db);
+    if (tables.contains_keyspace(system_keyspace::NAME)) {
+        install_virtual_readers(db);
+    }
 }
 
-future<> system_keyspace::make(distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, db::config& cfg) {
-    return system_keyspace_make(db, ss, g, cfg);
+future<> system_keyspace::make(distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, db::config& cfg, table_selector& tables) {
+    return system_keyspace_make(db, ss, g, cfg, tables);
 }
 
 future<utils::UUID> system_keyspace::load_local_host_id() {

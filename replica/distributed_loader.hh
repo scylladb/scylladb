@@ -19,6 +19,7 @@
 #include <filesystem>
 #include "seastarx.hh"
 #include "compaction/compaction_descriptor.hh"
+#include "db/system_keyspace.hh"
 
 namespace replica {
 class database;
@@ -77,7 +78,7 @@ class distributed_loader {
     static future<> handle_sstables_pending_delete(sstring pending_deletes_dir);
 
 public:
-    static future<> init_system_keyspace(distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, db::config& cfg);
+    static future<> init_system_keyspace(distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, db::config& cfg, db::table_selector&);
     static future<> init_non_system_keyspaces(distributed<replica::database>& db, distributed<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks);
 
     // Scan sstables under upload directory. Return a vector with smp::count entries.

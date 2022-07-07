@@ -74,6 +74,16 @@ class system_keyspace_view_build_progress;
 struct truncation_record;
 typedef std::vector<db::replay_position> replay_positions;
 
+class table_selector {
+public:
+    static table_selector& all();
+    static std::unique_ptr<table_selector> all_in_keyspace(sstring);
+public:
+    virtual ~table_selector() = default;
+    virtual bool contains(const schema_ptr&) = 0;
+    virtual bool contains_keyspace(std::string_view) = 0;
+};
+
 class system_keyspace : public seastar::peering_sharded_service<system_keyspace> {
     sharded<cql3::query_processor>& _qp;
     sharded<replica::database>& _db;
@@ -239,7 +249,11 @@ public:
     static future<std::optional<sstring>> get_scylla_local_param(const sstring& key);
 
     static std::vector<schema_ptr> all_tables(const db::config& cfg);
-    static future<> make(distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, db::config& cfg);
+    static future<> make(distributed<replica::database>& db,
+                         distributed<service::storage_service>& ss,
+                         sharded<gms::gossiper>& g,
+                         db::config& cfg,
+                         table_selector& = table_selector::all());
 
     /// overloads
 
@@ -455,6 +469,6 @@ private:
     }
 }; // class system_keyspace
 
-future<> system_keyspace_make(distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g);
+future<> system_keyspace_make(distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, table_selector&);
 
 } // namespace db

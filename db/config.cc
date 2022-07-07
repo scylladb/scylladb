@@ -893,6 +893,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Flush tables in the system_schema keyspace after schema modification. This is required for crash recovery, but slows down tests and can be disabled for them")
     , restrict_replication_simplestrategy(this, "restrict_replication_simplestrategy", liveness::LiveUpdate, value_status::Used, db::tri_mode_restriction_t::mode::FALSE, "Controls whether to disable SimpleStrategy replication. Can be true, false, or warn.")
     , restrict_dtcs(this, "restrict_dtcs", liveness::LiveUpdate, value_status::Used, db::tri_mode_restriction_t::mode::WARN, "Controls whether to prevent setting DateTieredCompactionStrategy. Can be true, false, or warn.")
+    , ignore_truncation_record(this, "unsafe_ignore_truncation_record", value_status::Used, false,
+        "Ignore truncation record stored in system tables as if tables were never truncated.")
+    , force_schema_commit_log(this, "force_schema_commit_log", value_status::Used, false,
+        "Use separate schema commit log unconditionally rater than after restart following discovery of cluster-wide support for it.")
     , default_log_level(this, "default_log_level", value_status::Used)
     , logger_log_level(this, "logger_log_level", value_status::Used)
     , log_to_stdout(this, "log_to_stdout", value_status::Used)

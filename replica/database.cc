@@ -896,6 +896,45 @@ static bool is_system_table(const schema& s) {
         || s.ks_name() == db::system_distributed_keyspace::NAME_EVERYWHERE;
 }
 
+void database::before_schema_keyspace_init() {
+    assert(this_shard_id() == 0);
+
+    if (!_feat.schema_commitlog && !_cfg.force_schema_commit_log()) {
+        dblog.info("Not using schema commit log.");
+        _listeners.push_back(_feat.schema_commitlog.when_enabled([] {
+            dblog.warn("All nodes can now switch to use the schema commit log. Restart is needed for this to take effect.");
+        }));
+        return;
+    }
+
+    dblog.info("Using schema commit log.");
+    _uses_schema_commitlog = true;
+
+    db::commitlog::config c;
+    c.commit_log_location = _cfg.commitlog_directory();
+    c.fname_prefix = db::schema_tables::COMMITLOG_FILENAME_PREFIX;
+    c.metrics_category_name = "schema-commitlog";
+    c.commitlog_total_space_in_mb = 10 >> 20;
+    c.commitlog_segment_size_in_mb = _cfg.commitlog_segment_size_in_mb();
+    c.commitlog_sync_period_in_ms = _cfg.commitlog_sync_period_in_ms();
+    c.mode = db::commitlog::sync_mode::BATCH;
+    c.extensions = &_cfg.extensions();
+    c.use_o_dsync = _cfg.commitlog_use_o_dsync();
+    c.allow_going_over_size_limit = true; // for lower latency
+
+    _schema_commitlog = std::make_unique<db::commitlog>(db::commitlog::create_commitlog(std::move(c)).get0());
+    _schema_commitlog->add_flush_handler([this] (db::cf_id_type id, db::replay_position pos) {
+        if (!_column_families.contains(id)) {
+            // the CF has been removed.
+            _schema_commitlog->discard_completed_segments(id);
+            return;
+        }
+        // Initiate a background flush. Waited upon in `stop()`.
+        (void)_column_families[id]->flush(pos);
+
+    }).release();
+}
+
 void database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg) {
     schema = local_schema_registry().learn(schema);
     schema->registry_entry()->mark_synced();
@@ -903,7 +942,10 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
     auto& sst_manager = is_system_table(*schema) ? get_system_sstables_manager() : get_user_sstables_manager();
     lw_shared_ptr<column_family> cf;
     if (cfg.enable_commitlog && _commitlog) {
-       cf = make_lw_shared<column_family>(schema, std::move(cfg), *_commitlog, *_compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker);
+        db::commitlog& cl = schema->ks_name() == db::schema_tables::NAME && _uses_schema_commitlog
+                ? *_schema_commitlog
+                : *_commitlog;
+        cf = make_lw_shared<column_family>(schema, std::move(cfg), cl, *_compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker);
     } else {
        cf = make_lw_shared<column_family>(schema, std::move(cfg), column_family::no_commitlog(), *_compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker);
     }
@@ -1843,6 +1885,62 @@ future<> database::apply_with_commitlog(column_family& cf, const mutation& m, db
     }
 }
 
+future<> database::apply(const std::vector<frozen_mutation>& muts, db::timeout_clock::time_point timeout) {
+    if (timeout <= db::timeout_clock::now()) {
+        update_write_metrics_for_timed_out_write();
+        return make_exception_future<>(timed_out_error{});
+    }
+    return update_write_metrics(do_apply_many(muts, timeout));
+}
+
+future<> database::do_apply_many(const std::vector<frozen_mutation>& muts, db::timeout_clock::time_point timeout) {
+    std::vector<commitlog_entry_writer> writers;
+    db::commitlog* cl = nullptr;
+    std::optional<shard_id> shard;
+
+    writers.reserve(muts.size());
+
+    for (auto i = 0; i < muts.size(); ++i) {
+        auto s = local_schema_registry().get(muts[i].schema_version());
+        auto&& cf = find_column_family(muts[i].column_family_id());
+
+        if (!cl) {
+            cl = cf.commitlog();
+        } else if (cl != cf.commitlog()) {
+            auto&& first_cf = find_column_family(muts[0].column_family_id());
+            on_internal_error(dblog, format("Cannot apply atomically across commitlog domains: {}.{}, {}.{}",
+                              cf.schema()->ks_name(), cf.schema()->cf_name(),
+                              first_cf.schema()->ks_name(), first_cf.schema()->cf_name()));
+        }
+
+        auto m_shard = dht::shard_of(*s, dht::get_token(*s, muts[i].key()));
+        if (!shard) {
+            if (this_shard_id() != m_shard) {
+                on_internal_error(dblog, format("Must call apply() on the owning shard ({} != {})", this_shard_id(), m_shard));
+            }
+            shard = m_shard;
+        } else if (*shard != m_shard) {
+            on_internal_error(dblog, "Cannot apply atomically across shards");
+        }
+
+        dblog.trace("apply [{}/{}]: {}", i, muts.size() - 1, muts[i].pretty_printer(s));
+        writers.emplace_back(s, muts[i], commitlog_entry_writer::force_sync::yes);
+    }
+
+    if (!cl) {
+        on_internal_error(dblog, "Cannot apply atomically without commitlog");
+    }
+
+    std::vector<rp_handle> handles = co_await cl->add_entries(std::move(writers), timeout);
+
+    // FIXME: Memtable application is not atomic so reads may observe mutations partially applied until restart.
+    for (auto i = 0; i < muts.size(); ++i) {
+        auto&& cf = find_column_family(muts[i].column_family_id());
+        auto s = local_schema_registry().get(muts[i].schema_version());
+        co_await apply_in_memory(muts[i], s, std::move(handles[i]), timeout);
+    }
+}
+
 future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout, db::commitlog::force_sync sync, db::per_partition_rate_limit::info rate_limit_info) {
     // I'm doing a nullcheck here since the init code path for db etc
     // is a little in flux and commitlog is created only when db is
@@ -2123,9 +2221,15 @@ future<> database::stop() {
     if (_commitlog) {
         co_await _commitlog->shutdown();
     }
+    if (_schema_commitlog) {
+        co_await _schema_commitlog->shutdown();
+    }
     co_await _view_update_concurrency_sem.wait(max_memory_pending_view_updates());
     if (_commitlog) {
         co_await _commitlog->release();
+    }
+    if (_schema_commitlog) {
+        co_await _schema_commitlog->release();
     }
     co_await _system_dirty_memory_manager.shutdown();
     co_await _dirty_memory_manager.shutdown();
@@ -2209,6 +2313,13 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
 
     const auto auto_snapshot = with_snapshot && get_config().auto_snapshot();
     const auto should_flush = auto_snapshot;
+
+    // Schema tables changed commitlog domain at some point and this node will refuse to boot with
+    // truncation record present for schema tables to protect against misinterpreting of replay positions.
+    // Also, the replay_position returned by discard_sstables() may refer to old commit log domain.
+    if (cf.schema()->ks_name() == db::schema_tables::NAME) {
+        throw std::runtime_error(format("Truncating of {}.{} is not allowed.", cf.schema()->ks_name(), cf.schema()->cf_name()));
+    }
 
     // Force mutations coming in to re-acquire higher rp:s
     // This creates a "soft" ordering, in that we will guarantee that
@@ -2487,6 +2598,9 @@ future<> database::drain() {
     co_await flush_system_column_families();
     co_await _stop_barrier.arrive_and_wait();
     co_await _commitlog->shutdown();
+    if (_schema_commitlog) {
+        co_await _schema_commitlog->shutdown();
+    }
     b.cancel();
 }
 

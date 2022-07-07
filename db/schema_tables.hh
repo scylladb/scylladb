@@ -10,6 +10,7 @@
 #pragma once
 
 #include "mutation.hh"
+#include "db/commitlog/replay_position.hh"
 #include "schema_fwd.hh"
 #include "schema_features.hh"
 #include "hashing.hh"
@@ -97,6 +98,8 @@ namespace schema_tables {
 
 using schema_result = std::map<sstring, lw_shared_ptr<query::result_set>>;
 using schema_result_value_type = std::pair<sstring, lw_shared_ptr<query::result_set>>;
+
+const std::string COMMITLOG_FILENAME_PREFIX("SchemaLog-");
 
 namespace v3 {
 
