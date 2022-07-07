@@ -4529,7 +4529,9 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
                 t->stop().get();
             }
         });
-        for (auto i = 0; i < 100; i++) {
+
+        constexpr size_t num_tables = 10;
+        for (auto i = 0; i < num_tables; i++) {
             tables.push_back(make_table_with_single_fully_expired_sstable(i));
         }
 
