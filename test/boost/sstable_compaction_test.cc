@@ -4548,8 +4548,9 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
         // Make sure everything is expired
         forward_jump_clocks(std::chrono::hours(100));
 
+      auto compact_all_tables = [&] (size_t expected_before, size_t expected_after) {
         for (auto& t : tables) {
-            BOOST_REQUIRE(t->sstables_count() == 1);
+            BOOST_REQUIRE_EQUAL(t->sstables_count(), expected_before);
             t->trigger_compaction();
         }
 
@@ -4558,9 +4559,9 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
         size_t max_ongoing_compaction = 0;
 
         // wait for submitted jobs to finish.
-        auto end = [cm, &tables] {
+        auto end = [cm, &tables, expected_after] {
             return cm->get_stats().pending_tasks == 0 && cm->get_stats().active_tasks == 0
-                && boost::algorithm::all_of(tables, [] (auto& t) { return t->sstables_count() == 0; });
+                && boost::algorithm::all_of(tables, [expected_after] (auto& t) { return t->sstables_count() == expected_after; });
         };
         while (!end()) {
             if (!cm->get_stats().pending_tasks && !cm->get_stats().active_tasks) {
@@ -4574,7 +4575,10 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
             yield().get();
         }
         BOOST_REQUIRE(cm->get_stats().errors == 0);
-        BOOST_REQUIRE(max_ongoing_compaction == 1);
+        return max_ongoing_compaction;
+      };
+
+        BOOST_REQUIRE_EQUAL(compact_all_tables(1, 0), 1);
     });
 }
 
