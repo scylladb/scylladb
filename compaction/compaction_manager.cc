@@ -505,11 +505,7 @@ std::ostream& operator<<(std::ostream& os, const compaction_manager::task& task)
 }
 
 inline compaction_controller make_compaction_controller(compaction_manager::scheduling_group& csg, uint64_t static_shares, std::function<double()> fn) {
-    if (static_shares > 0) {
-        return compaction_controller(csg, static_shares);
-    }
-
-    return compaction_controller(csg, 250ms, std::move(fn));
+    return compaction_controller(csg, static_shares, 250ms, std::move(fn));
 }
 
 std::string compaction_manager::task::describe() const {
@@ -657,7 +653,7 @@ compaction_manager::compaction_manager(config cfg, abort_source& as)
 compaction_manager::compaction_manager()
     : _compaction_sg(scheduling_group{default_scheduling_group(), default_priority_class()})
     , _maintenance_sg(scheduling_group{default_scheduling_group(), default_priority_class()})
-    , _compaction_controller(_compaction_sg, 1)
+    , _compaction_controller(make_compaction_controller(_compaction_sg, 1, [] () -> float { return 1.0; }))
     , _backlog_manager(_compaction_controller)
     , _available_memory(1)
     , _strategy_control(std::make_unique<strategy_control>(*this))

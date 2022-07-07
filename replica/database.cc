@@ -86,10 +86,7 @@ namespace replica {
 inline
 flush_controller
 make_flush_controller(const db::config& cfg, backlog_controller::scheduling_group& sg, std::function<double()> fn) {
-    if (cfg.memtable_flush_static_shares() > 0) {
-        return flush_controller(sg, cfg.memtable_flush_static_shares());
-    }
-    return flush_controller(sg, 50ms, cfg.virtual_dirty_soft_limit(), std::move(fn));
+    return flush_controller(sg, cfg.memtable_flush_static_shares(), 50ms, cfg.virtual_dirty_soft_limit(), std::move(fn));
 }
 
 inline compaction_manager::config make_compaction_manager_config(const db::config& cfg, database_config& dbcfg) {
@@ -405,6 +402,11 @@ const data_dictionary::user_types_storage& database::user_types() const noexcept
 } // namespace replica
 
 void backlog_controller::adjust() {
+    if (controller_disabled()) {
+        update_controller(_static_shares);
+        return;
+    }
+
     auto backlog = _current_backlog();
 
     if (backlog >= _control_points.back().input) {
@@ -427,8 +429,7 @@ void backlog_controller::adjust() {
 
 float backlog_controller::backlog_of_shares(float shares) const {
     size_t idx = 1;
-    // No control points means the controller is disabled.
-    if (_control_points.size() == 0) {
+    if (controller_disabled() || _control_points.size() == 0) {
             return 1.0f;
     }
     while ((idx < _control_points.size() - 1) && (_control_points[idx].output < shares)) {
