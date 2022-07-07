@@ -4548,35 +4548,35 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
         // Make sure everything is expired
         forward_jump_clocks(std::chrono::hours(100));
 
-      auto compact_all_tables = [&] (size_t expected_before, size_t expected_after) {
-        for (auto& t : tables) {
-            BOOST_REQUIRE_EQUAL(t->sstables_count(), expected_before);
-            t->trigger_compaction();
-        }
+        auto compact_all_tables = [&] (size_t expected_before, size_t expected_after) {
+            for (auto& t : tables) {
+                BOOST_REQUIRE_EQUAL(t->sstables_count(), expected_before);
+                t->trigger_compaction();
+            }
 
-        BOOST_REQUIRE(cm->get_stats().pending_tasks >= 1 || cm->get_stats().active_tasks >= 1);
+            BOOST_REQUIRE(cm->get_stats().pending_tasks >= 1 || cm->get_stats().active_tasks >= 1);
 
-        size_t max_ongoing_compaction = 0;
+            size_t max_ongoing_compaction = 0;
 
-        // wait for submitted jobs to finish.
-        auto end = [cm, &tables, expected_after] {
-            return cm->get_stats().pending_tasks == 0 && cm->get_stats().active_tasks == 0
-                && boost::algorithm::all_of(tables, [expected_after] (auto& t) { return t->sstables_count() == expected_after; });
-        };
-        while (!end()) {
-            if (!cm->get_stats().pending_tasks && !cm->get_stats().active_tasks) {
-                for (auto& t : tables) {
-                    if (t->sstables_count()) {
-                        t->trigger_compaction();
+            // wait for submitted jobs to finish.
+            auto end = [cm, &tables, expected_after] {
+                return cm->get_stats().pending_tasks == 0 && cm->get_stats().active_tasks == 0
+                    && boost::algorithm::all_of(tables, [expected_after] (auto& t) { return t->sstables_count() == expected_after; });
+            };
+            while (!end()) {
+                if (!cm->get_stats().pending_tasks && !cm->get_stats().active_tasks) {
+                    for (auto& t : tables) {
+                        if (t->sstables_count()) {
+                            t->trigger_compaction();
+                        }
                     }
                 }
+                max_ongoing_compaction = std::max(cm->get_stats().active_tasks, max_ongoing_compaction);
+                yield().get();
             }
-            max_ongoing_compaction = std::max(cm->get_stats().active_tasks, max_ongoing_compaction);
-            yield().get();
-        }
-        BOOST_REQUIRE(cm->get_stats().errors == 0);
-        return max_ongoing_compaction;
-      };
+            BOOST_REQUIRE(cm->get_stats().errors == 0);
+            return max_ongoing_compaction;
+        };
 
         BOOST_REQUIRE_EQUAL(compact_all_tables(1, 0), 1);
     });
