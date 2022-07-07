@@ -96,6 +96,7 @@ inline compaction_manager::config make_compaction_manager_config(const db::confi
         .maintenance_sched_group = compaction_manager::scheduling_group{dbcfg.streaming_scheduling_group, service::get_local_streaming_priority()},
         .available_memory = dbcfg.available_memory,
         .static_shares = cfg.compaction_static_shares(),
+        .throughput_mb_per_sec = cfg.compaction_throughput_mb_per_sec,
     };
 }
 

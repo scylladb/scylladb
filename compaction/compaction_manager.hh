@@ -20,6 +20,8 @@
 #include <seastar/core/condition-variable.hh>
 #include "log.hh"
 #include "utils/exponential_backoff_retry.hh"
+#include "utils/updateable_value.hh"
+#include "utils/serialized_action.hh"
 #include <vector>
 #include <list>
 #include <functional>
@@ -54,6 +56,7 @@ public:
         scheduling_group maintenance_sched_group;
         size_t available_memory;
         uint64_t static_shares = 0;
+        utils::updateable_value<uint32_t> throughput_mb_per_sec = utils::updateable_value<uint32_t>(0);
     };
 private:
     struct compaction_state {
@@ -289,6 +292,9 @@ private:
     compaction_backlog_manager _backlog_manager;
     size_t _available_memory;
     optimized_optional<abort_source::subscription> _early_abort_subscription;
+    utils::updateable_value<uint32_t> _throughput_mbs;
+    serialized_action _throughput_updater = serialized_action([this] { return update_throughput(_throughput_mbs()); });
+    std::optional<utils::observer<uint32_t>> _throughput_option_observer;
 
     class strategy_control;
     std::unique_ptr<strategy_control> _strategy_control;
@@ -296,6 +302,7 @@ private:
     future<> perform_task(shared_ptr<task>);
 
     future<> stop_tasks(std::vector<shared_ptr<task>> tasks, sstring reason);
+    future<> update_throughput(uint32_t value_mbs);
 
     // Return the largest fan-in of currently running compactions
     unsigned current_compaction_fan_in_threshold() const;

@@ -371,7 +371,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "\n"
         "Related information: Initializing a multiple node cluster (single data center) and Initializing a multiple node cluster (multiple data centers).")
     /* Common compaction settings */
-    , compaction_throughput_mb_per_sec(this, "compaction_throughput_mb_per_sec", value_status::Unused, 16,
+    , compaction_throughput_mb_per_sec(this, "compaction_throughput_mb_per_sec", liveness::LiveUpdate, value_status::Unused, 0,
         "Throttles compaction to the specified total throughput across the entire system. The faster you insert data, the faster you need to compact in order to keep the SSTable count down. The recommended Value is 16 to 32 times the rate of write throughput (in MBs/second). Setting the value to 0 disables compaction throttling.\n"
         "Related information: Configuring compaction")
     , compaction_large_partition_warning_threshold_mb(this, "compaction_large_partition_warning_threshold_mb", value_status::Used, 1000,
