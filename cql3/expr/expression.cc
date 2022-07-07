@@ -265,7 +265,7 @@ bool limits(const expression& col, oper_t op, const expression& rhs, const evalu
         return false;
     }
     const auto b = evaluate(rhs, inputs).to_managed_bytes_opt();
-    return b ? limits(*lhs, op, *b, *type_of(col)) : false;
+    return b ? limits(*lhs, op, *b, type_of(col)->without_reversed()) : false;
 }
 
 /// True iff the column values are limited by t in the manner prescribed by op.
@@ -291,7 +291,7 @@ bool limits(const tuple_constructor& columns_tuple, const oper_t op, const expre
             // NULL = always fails comparison
             return false;
         }
-        const auto cmp = type_of(cv)->compare(
+        const auto cmp = type_of(cv)->without_reversed().compare(
                 *lhs,
                 *rhs[i]);
         // If the components aren't equal, then we just learned the LHS/RHS order.
