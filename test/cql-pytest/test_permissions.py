@@ -123,3 +123,62 @@ def test_grant_revoke_data_permissions(cql, test_keyspace):
                 # Same for DROP
                 cql.execute(f"CREATE TABLE IF NOT EXISTS {keyspace}.{t}(id int primary key)")
                 check_enforced(cql, username, permission='DROP', resource='ALL KEYSPACES', function=drop_table_idempotent)
+
+# Test that permissions for user-defined functions are serialized in a Cassandra-compatible way
+def test_udf_permissions_serialization(cql):
+    schema = "a int primary key"
+    user = "cassandra"
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 1 }") as keyspace:
+        with new_test_table(cql, keyspace, schema) as table:
+            # Creating a bilingual function makes this test case work for both Scylla and Cassandra
+            div_body_lua = "(b bigint, i int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return b//i'"
+            div_body_java = "(b bigint, i int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return b/i;'"
+            div_body = div_body_lua
+            try:
+                with new_function(cql, keyspace, div_body) as div_fun:
+                    pass
+            except:
+                div_body = div_body_java
+            with new_function(cql, keyspace, div_body) as div_fun:
+                applicable_permissions = {
+                    'all functions': ['create', 'alter', 'drop', 'authorize', 'execute'],
+                    f'all functions in keyspace {keyspace}': ['create', 'alter', 'drop', 'authorize', 'execute'],
+                    f'function {keyspace}.{div_fun}(bigint, int)': ['alter', 'drop', 'authorize', 'execute'],
+                }
+                for resource, permissions in applicable_permissions.items():
+                    # Applicable permissions can be legally granted
+                    for permission in permissions:
+                        cql.execute(f"GRANT {permission} ON {resource} TO {user}")
+
+                permissions = {row.resource: row.permissions for row in cql.execute(f"SELECT * FROM system_auth.role_permissions")}
+                assert permissions['functions'] == set(['ALTER', 'AUTHORIZE', 'CREATE', 'DROP', 'EXECUTE'])
+                assert permissions[f'functions/{keyspace}'] == set(['ALTER', 'AUTHORIZE', 'CREATE', 'DROP', 'EXECUTE'])
+                assert permissions[f'functions/{keyspace}/{div_fun}[org.apache.cassandra.db.marshal.LongType^org.apache.cassandra.db.marshal.Int32Type]'] == set(['ALTER', 'AUTHORIZE', 'DROP', 'EXECUTE'])
+
+                resources_with_execute = [row.resource for row in cql.execute(f"LIST EXECUTE OF {user}")]
+                assert '<all functions>' in resources_with_execute
+                assert f'<all functions in {keyspace}>' in resources_with_execute
+                assert f'<function {keyspace}.{div_fun}(bigint, int)>' in resources_with_execute
+
+# Test that names that require quoting (e.g. due to having nonorthodox characters)
+# are properly handled, with right permissions granted.
+# Cassandra doesn't quote names properly, so the test fails
+def test_udf_permissions_quoted_names(cassandra_bug, cql):
+    schema = "a int primary key"
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 1 }") as keyspace:
+        with new_test_table(cql, keyspace, schema) as table:
+            weird_body_lua = "(i int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return 42;'"
+            weird_body_java = "(i int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return 42;'"
+            weird_body = weird_body_lua
+            try:
+                with new_function(cql, keyspace, weird_body) as weird_fun:
+                    pass
+            except:
+                weird_body = weird_body_java
+            with new_function(cql, keyspace, weird_body, '"weird[name]"') as weird_fun:
+                with new_user(cql) as username:
+                    with new_session(cql, username) as user_session:
+                        grant(cql, 'EXECUTE', f'FUNCTION {keyspace}.{weird_fun}(int)', username)
+                        grant(cql, 'SELECT', table, username)
+                        cql.execute(f"INSERT INTO {table}(a) VALUES (7)")
+                        assert list([r[0] for r in user_session.execute(f"SELECT {keyspace}.{weird_fun}(a) FROM {table}")]) == [42]
