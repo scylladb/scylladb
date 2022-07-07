@@ -4578,7 +4578,8 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
             return max_ongoing_compaction;
         };
 
-        BOOST_REQUIRE_EQUAL(compact_all_tables(1, 0), 1);
+        // Allow fully expired sstables to be compacted in parallel
+        BOOST_REQUIRE_LE(compact_all_tables(1, 0), num_tables);
 
         auto add_sstables_to_table = [&] (auto idx, size_t num_sstables) {
             auto s = schemas[idx];
