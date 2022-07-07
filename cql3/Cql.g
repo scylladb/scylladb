@@ -1145,7 +1145,7 @@ listPermissionsStatement returns [std::unique_ptr<list_permissions_statement> st
     ;
 
 permission returns [auth::permission perm]
-    : p=(K_CREATE | K_ALTER | K_DROP | K_SELECT | K_MODIFY | K_AUTHORIZE | K_DESCRIBE)
+    : p=(K_CREATE | K_ALTER | K_DROP | K_SELECT | K_MODIFY | K_AUTHORIZE | K_DESCRIBE | K_EXECUTE)
     { $perm = auth::permissions::from_string($p.text); }
     ;
 
@@ -1155,8 +1155,9 @@ permissionOrAll returns [auth::permission_set perms]
     ;
 
 resource returns [uninitialized<auth::resource> res]
-    : d=dataResource { $res = std::move(d); }
-    | r=roleResource { $res = std::move(r); }
+    : d=dataResource     { $res = std::move(d); }
+    | r=roleResource     { $res = std::move(r); }
+    | f=functionResource { $res = std::move(f); }
     ;
 
 dataResource returns [uninitialized<auth::resource> res]
@@ -1169,6 +1170,24 @@ dataResource returns [uninitialized<auth::resource> res]
 roleResource returns [uninitialized<auth::resource> res]
     : K_ALL K_ROLES { $res = auth::resource(auth::resource_kind::role); }
     | K_ROLE role = userOrRoleName { $res = auth::make_role_resource(static_cast<const cql3::role_name&>(role).to_string()); }
+    ;
+
+functionResource returns [uninitialized<auth::resource> res]
+    @init {
+        std::vector<shared_ptr<cql3_type::raw>> args_types;
+    }
+    : K_ALL K_FUNCTIONS { $res = auth::make_functions_resource(); }
+    | K_ALL K_FUNCTIONS K_IN K_KEYSPACE ks = keyspaceName { $res = auth::make_functions_resource($ks.id); }
+    | K_FUNCTION fn=functionName
+      (
+        '('
+          (
+            v=comparatorType { args_types.push_back(v); }
+            ( ',' v=comparatorType { args_types.push_back(v); } )*
+          )?
+        ')'
+      )
+      { $res = auth::make_functions_resource($fn.s.keyspace, $fn.s.name, args_types); }
     ;
 
 /**
@@ -2065,6 +2084,7 @@ basic_unreserved_keyword returns [sstring str]
         | K_ONLY
         | K_DESCRIBE
         | K_DESC
+        | K_EXECUTE
         ) { $str = $k.text; }
     ;
 
@@ -2270,6 +2290,8 @@ K_LIKE:        L I K E;
 
 K_TIMEOUT:     T I M E O U T;
 K_PRUNE:       P R U N E;
+
+K_EXECUTE:     E X E C U T E;
 
 // Case-insensitive alpha characters
 fragment A: ('a'|'A');
