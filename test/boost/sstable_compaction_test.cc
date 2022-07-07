@@ -4579,6 +4579,24 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
         };
 
         BOOST_REQUIRE_EQUAL(compact_all_tables(1, 0), 1);
+
+        auto add_sstables_to_table = [&] (auto idx, size_t num_sstables) {
+            auto s = schemas[idx];
+            auto cf = tables[idx];
+            auto cft = column_family_test(cf);
+            for (auto i = 0; i < num_sstables; i++) {
+                auto muts = { make_expiring_cell(s, std::chrono::hours(1)) };
+                cft.add_sstable(make_sstable_containing([&sst_gen, idx] { return sst_gen(idx); }, muts));
+            }
+        };
+
+        for (auto i = 0; i < num_tables; i++) {
+            add_sstables_to_table(i, DEFAULT_MIN_COMPACTION_THRESHOLD);
+        }
+
+        // All buckets are expected to have the same weight (0)
+        // and therefore their compaction is expected to be serialized
+        BOOST_REQUIRE_EQUAL(compact_all_tables(DEFAULT_MIN_COMPACTION_THRESHOLD, 1), 1);
     });
 }
 
