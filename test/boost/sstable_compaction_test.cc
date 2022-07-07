@@ -4501,28 +4501,8 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
             return m;
         };
 
-        auto make_table_with_single_fully_expired_sstable = [&] (auto idx) {
-            auto s = make_schema(idx);
-            replica::column_family::config cfg = column_family_test_config(env.semaphore());
-            cfg.datadir = tmp.path().string() + "/" + std::to_string(idx);
-            touch_directory(cfg.datadir).get();
-            cfg.enable_commitlog = false;
-            cfg.enable_incremental_backups = false;
-
-            auto sst_gen = [&env, s, dir = cfg.datadir, gen = make_lw_shared<unsigned>(1)] () mutable {
-                return env.make_sstable(s, dir, (*gen)++, sstables::sstable::version_types::md, big);
-            };
-
-            auto cf = make_lw_shared<replica::column_family>(s, cfg, replica::column_family::no_commitlog(), *cm, env.manager(), *cl_stats, *tracker);
-            cf->start();
-            cf->mark_ready_for_writes();
-
-            auto muts = { make_expiring_cell(s, std::chrono::hours(1)) };
-            auto sst = make_sstable_containing(sst_gen, muts);
-            column_family_test(cf).add_sstable(sst);
-            return cf;
-        };
-
+        constexpr size_t num_tables = 10;
+        std::vector<schema_ptr> schemas;
         std::vector<lw_shared_ptr<replica::column_family>> tables;
         auto stop_tables = defer([&tables] {
             for (auto& t : tables) {
@@ -4530,9 +4510,39 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
             }
         });
 
-        constexpr size_t num_tables = 10;
+        // Make tables
+        for (auto idx = 0; idx < num_tables; idx++) {
+            auto s = make_schema(idx);
+            schemas.push_back(s);
+
+            replica::column_family::config cfg = column_family_test_config(env.semaphore());
+            cfg.datadir = tmp.path().string() + "/" + std::to_string(idx);
+            touch_directory(cfg.datadir).get();
+            cfg.enable_commitlog = false;
+            cfg.enable_incremental_backups = false;
+
+            auto cf = make_lw_shared<replica::column_family>(s, cfg, replica::column_family::no_commitlog(), *cm, env.manager(), *cl_stats, *tracker);
+            cf->start();
+            cf->mark_ready_for_writes();
+            tables.push_back(cf);
+        }
+
+        auto sst_gen = [&, gen = make_lw_shared<unsigned>(1)] (size_t idx) mutable {
+            auto s = schemas[idx];
+            auto t = tables[idx];
+            return env.make_sstable(s, t->dir(), (*gen)++, sstables::sstable::version_types::md, big);
+        };
+
+        auto add_single_fully_expired_sstable_to_table = [&] (auto idx) {
+            auto s = schemas[idx];
+            auto cf = tables[idx];
+            auto muts = { make_expiring_cell(s, std::chrono::hours(1)) };
+            auto sst = make_sstable_containing([&sst_gen, idx] { return sst_gen(idx); }, muts);
+            column_family_test(cf).add_sstable(sst);
+        };
+
         for (auto i = 0; i < num_tables; i++) {
-            tables.push_back(make_table_with_single_fully_expired_sstable(i));
+            add_single_fully_expired_sstable_to_table(i);
         }
 
         // Make sure everything is expired
