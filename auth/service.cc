@@ -346,6 +346,18 @@ future<bool> service::exists(const resource& r) const {
         }
         case resource_kind::service_level:
             return make_ready_future<bool>(true);
+
+        case resource_kind::functions: {
+            const auto& db = _qp.db();
+
+            functions_resource_view v(r);
+            const auto keyspace = v.keyspace();
+            const auto function_signature = v.function_signature();
+
+            //FIXME(sarna): look up the function (if present), and signature too (if present)
+
+            return make_ready_future<bool>(true);
+        }
     }
 
     return make_ready_future<bool>(false);

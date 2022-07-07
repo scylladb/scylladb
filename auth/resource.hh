@@ -25,6 +25,7 @@
 #include "seastarx.hh"
 #include "utils/hash.hh"
 #include "utils/small_vector.hh"
+#include "cql3/cql3_type.hh"
 
 namespace auth {
 
@@ -36,7 +37,7 @@ public:
 };
 
 enum class resource_kind {
-    data, role, service_level
+    data, role, service_level, functions
 };
 
 std::ostream& operator<<(std::ostream&, resource_kind);
@@ -57,9 +58,14 @@ struct role_resource_t final {};
 struct service_level_resource_t final {};
 
 ///
+/// Type tag for constructing function resources.
+///
+struct functions_resource_t final {};
+
+///
 /// Resources are entities that users can be granted permissions on.
 ///
-/// There are data (keyspaces and tables) and role resources. There may be other kinds of resources in the future.
+/// There are data (keyspaces and tables), role and function resources. There may be other kinds of resources in the future.
 ///
 /// When they are stored as system metadata, resources have the form `root/part_0/part_1/.../part_n`. Each kind of
 /// resource has a specific root prefix, followed by a maximum of `n` parts (where `n` is distinct for each kind of
@@ -83,6 +89,11 @@ public:
     resource(data_resource_t, std::string_view keyspace, std::string_view table);
     resource(role_resource_t, std::string_view role);
     resource(service_level_resource_t);
+    explicit resource(functions_resource_t);
+    resource(functions_resource_t, std::string_view keyspace);
+    resource(functions_resource_t, std::string_view keyspace, std::string_view function_name);
+    resource(functions_resource_t, std::string_view keyspace, std::string_view function_name,
+            std::vector<sstring> function_signature);
 
     resource_kind kind() const noexcept {
         return _kind;
@@ -104,6 +115,7 @@ private:
     friend class data_resource_view;
     friend class role_resource_view;
     friend class service_level_resource_view;
+    friend class functions_resource_view;
 
     friend bool operator<(const resource&, const resource&);
     friend bool operator==(const resource&, const resource&);
@@ -183,6 +195,23 @@ public:
 std::ostream& operator<<(std::ostream&, const service_level_resource_view&);
 
 ///
+/// A "function" view of \ref resource.
+///
+class functions_resource_view final {
+    const resource& _resource;
+public:
+    ///
+    /// \throws \ref resource_kind_mismatch if the argument is not a "function" resource.
+    ///
+    explicit functions_resource_view(const resource&);
+
+    std::optional<std::string_view> keyspace() const;
+    std::optional<std::string_view> function_signature() const;
+};
+
+std::ostream& operator<<(std::ostream&, const functions_resource_view&);
+
+///
 /// Parse a resource from its name.
 ///
 /// \throws \ref invalid_resource_name when the name is malformed.
@@ -210,6 +239,22 @@ inline resource make_service_level_resource() {
     return resource(service_level_resource_t{});
 }
 
+const resource& root_function_resource();
+
+inline resource make_functions_resource() {
+    return resource(functions_resource_t{});
+}
+
+inline resource make_functions_resource(std::string_view keyspace) {
+    return resource(functions_resource_t{}, keyspace);
+}
+
+inline resource make_functions_resource(std::string_view keyspace, std::string_view function_name) {
+    return resource(functions_resource_t{}, keyspace, function_name);
+}
+
+resource make_functions_resource(std::string_view keyspace, std::string_view function_name, std::vector<::shared_ptr<cql3::cql3_type::raw>> function_signature);
+
 }
 
 namespace std {
@@ -228,6 +273,10 @@ struct hash<auth::resource> {
             return utils::tuple_hash()(std::make_tuple(auth::resource_kind::service_level));
     }
 
+    static size_t hash_function(const auth::functions_resource_view& fv) {
+        return utils::tuple_hash()(std::make_tuple(auth::resource_kind::functions, fv.keyspace(), fv.function_signature()));
+    }
+
     size_t operator()(const auth::resource& r) const {
         std::size_t value;
 
@@ -235,6 +284,7 @@ struct hash<auth::resource> {
         case auth::resource_kind::data: value = hash_data(auth::data_resource_view(r)); break;
         case auth::resource_kind::role: value = hash_role(auth::role_resource_view(r)); break;
         case auth::resource_kind::service_level: value = hash_service_level(auth::service_level_resource_view(r)); break;
+        case auth::resource_kind::functions: value = hash_function(auth::functions_resource_view(r)); break;
         }
 
         return value;

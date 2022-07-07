@@ -16,8 +16,11 @@
 
 #include <boost/algorithm/string/join.hpp>
 #include <boost/algorithm/string/split.hpp>
+#include <boost/algorithm/string/classification.hpp>
 
 #include "service/storage_proxy.hh"
+#include "data_dictionary/user_types_metadata.hh"
+#include "cql3/util.hh"
 
 namespace auth {
 
@@ -26,6 +29,7 @@ std::ostream& operator<<(std::ostream& os, resource_kind kind) {
         case resource_kind::data: os << "data"; break;
         case resource_kind::role: os << "role"; break;
         case resource_kind::service_level: os << "service_level"; break;
+        case resource_kind::functions: os << "functions"; break;
     }
 
     return os;
@@ -34,12 +38,14 @@ std::ostream& operator<<(std::ostream& os, resource_kind kind) {
 static const std::unordered_map<resource_kind, std::string_view> roots{
         {resource_kind::data, "data"},
         {resource_kind::role, "roles"},
-        {resource_kind::service_level, "service_levels"}};
+        {resource_kind::service_level, "service_levels"},
+        {resource_kind::functions, "functions"}};
 
 static const std::unordered_map<resource_kind, std::size_t> max_parts{
         {resource_kind::data, 2},
         {resource_kind::role, 1},
-        {resource_kind::service_level, 0}};
+        {resource_kind::service_level, 0},
+        {resource_kind::functions, 2}};
 
 static permission_set applicable_permissions(const data_resource_view& dv) {
     if (dv.table()) {
@@ -82,6 +88,15 @@ static permission_set applicable_permissions(const service_level_resource_view &
             permission::AUTHORIZE>();
 }
 
+static permission_set applicable_permissions(const functions_resource_view& fv) {
+    return permission_set::of<
+            permission::CREATE,
+            permission::ALTER,
+            permission::DROP,
+            permission::AUTHORIZE,
+            permission::EXECUTE>();
+}
+
 resource::resource(resource_kind kind) : _kind(kind) {
     _parts.emplace_back(roots.at(kind));
 }
@@ -106,6 +121,39 @@ resource::resource(role_resource_t, std::string_view role) : resource(resource_k
 resource::resource(service_level_resource_t): resource(resource_kind::service_level) {
 }
 
+resource::resource(functions_resource_t) : resource(resource_kind::functions) {
+}
+
+resource::resource(functions_resource_t, std::string_view keyspace) : resource(resource_kind::functions) {
+    _parts.emplace_back(keyspace);
+}
+
+resource::resource(functions_resource_t, std::string_view keyspace, std::string_view function_name) : resource(resource_kind::functions) {
+    _parts.emplace_back(keyspace);
+    _parts.emplace_back(function_name);
+}
+
+resource::resource(functions_resource_t, std::string_view keyspace, std::string_view function_name, std::vector<sstring> function_signature) : resource(resource_kind::functions) {
+    _parts.emplace_back(keyspace);
+    sstring encoded_signature = format("{}[{}]",
+            function_name,
+            ::join("^", function_signature));
+    _parts.emplace_back(encoded_signature);
+}
+
+resource make_functions_resource(std::string_view keyspace, std::string_view function_name, std::vector<::shared_ptr<cql3::cql3_type::raw>> function_signature) {
+    if (keyspace.empty()) {
+        throw exceptions::invalid_request_exception("In this context function name must be explictly qualified by a keyspace");
+    }
+    std::vector<sstring> args_types;
+    for (auto& raw_type : function_signature) {
+        // FIXME(sarna): provide information on user-defined types - this is tricky, because this information
+        // is kept in a database instance, and is thus dynamic
+        args_types.emplace_back(raw_type->prepare_internal(sstring(keyspace), data_dictionary::user_types_metadata{}).get_type()->name());
+    }
+    return resource(functions_resource_t{}, keyspace, function_name, std::move(args_types));
+}
+
 sstring resource::name() const {
     return boost::algorithm::join(_parts, "/");
 }
@@ -127,6 +175,7 @@ permission_set resource::applicable_permissions() const {
         case resource_kind::data: ps = ::auth::applicable_permissions(data_resource_view(*this)); break;
         case resource_kind::role: ps = ::auth::applicable_permissions(role_resource_view(*this)); break;
         case resource_kind::service_level: ps = ::auth::applicable_permissions(service_level_resource_view(*this)); break;
+        case resource_kind::functions: ps = ::auth::applicable_permissions(functions_resource_view(*this)); break;
     }
 
     return ps;
@@ -149,6 +198,7 @@ std::ostream& operator<<(std::ostream& os, const resource& r) {
         case resource_kind::data: return os << data_resource_view(r);
         case resource_kind::role: return os << role_resource_view(r);
         case resource_kind::service_level: return os << service_level_resource_view(r);
+        case resource_kind::functions: return os << functions_resource_view(r);
     }
 
     return os;
@@ -163,6 +213,60 @@ service_level_resource_view::service_level_resource_view(const resource &r) {
 std::ostream &operator<<(std::ostream &os, const service_level_resource_view &v) {
     os << "<all service levels>";
     return os;
+}
+
+// Purely for Cassandra compatibility, types in the function signature are
+// decoded from their verbose form (org.apache.cassandra.db.marshal.Int32Type)
+// to the short form (int)
+static sstring decode_signature(std::string_view encoded_signature) {
+    auto name_delim = encoded_signature.find_last_of('[');
+    std::string_view function_name = encoded_signature.substr(0, name_delim);
+    encoded_signature.remove_prefix(name_delim + 1);
+    encoded_signature.remove_suffix(1);
+    std::vector<std::string_view> raw_types;
+    boost::split(raw_types, encoded_signature, boost::is_any_of("^"));
+    std::vector<std::string> decoded_types = boost::copy_range<std::vector<std::string>>(
+        raw_types | boost::adaptors::transformed([] (std::string_view raw_type) {
+            return abstract_type::parse_type(sstring(raw_type))->cql3_type_name();
+        })
+    );
+    return format("{}({})", cql3::util::maybe_quote(sstring(function_name)), boost::algorithm::join(decoded_types, ", "));
+}
+
+std::ostream &operator<<(std::ostream &os, const functions_resource_view &v) {
+    const auto keyspace = v.keyspace();
+    const auto function_signature = v.function_signature();
+
+    if (!keyspace) {
+        os << "<all functions>";
+    } else if (!function_signature) {
+        os << "<all functions in " << *keyspace << '>';
+    } else {
+        os << "<function " << *keyspace << '.' << decode_signature(*function_signature) << '>';
+    }
+    return os;
+}
+
+functions_resource_view::functions_resource_view(const resource& r) : _resource(r) {
+    if (r._kind != resource_kind::functions) {
+        throw resource_kind_mismatch(resource_kind::functions, r._kind);
+    }
+}
+
+std::optional<std::string_view> functions_resource_view::keyspace() const {
+    if (_resource._parts.size() == 1) {
+        return {};
+    }
+
+    return _resource._parts[1];
+}
+
+std::optional<std::string_view> functions_resource_view::function_signature() const {
+    if (_resource._parts.size() <= 2) {
+        return {};
+    }
+
+    return _resource._parts[2];
 }
 
 data_resource_view::data_resource_view(const resource& r) : _resource(r) {

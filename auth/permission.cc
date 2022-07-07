@@ -21,7 +21,8 @@ const auth::permission_set auth::permissions::ALL = auth::permission_set::of<
         auth::permission::SELECT,
         auth::permission::MODIFY,
         auth::permission::AUTHORIZE,
-        auth::permission::DESCRIBE>();
+        auth::permission::DESCRIBE,
+        auth::permission::EXECUTE>();
 
 const auth::permission_set auth::permissions::NONE;
 
@@ -34,7 +35,8 @@ static const std::unordered_map<sstring, auth::permission> permission_names({
         {"SELECT", auth::permission::SELECT},
         {"MODIFY", auth::permission::MODIFY},
         {"AUTHORIZE", auth::permission::AUTHORIZE},
-        {"DESCRIBE", auth::permission::DESCRIBE}});
+        {"DESCRIBE", auth::permission::DESCRIBE},
+        {"EXECUTE", auth::permission::EXECUTE}});
 
 const sstring& auth::permissions::to_string(permission p) {
     for (auto& v : permission_names) {
