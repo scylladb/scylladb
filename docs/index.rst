@@ -181,4 +181,5 @@
   faq
   Contribute to Scylla <contribute>
   glossary
+  alternator
 
