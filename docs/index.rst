@@ -181,5 +181,5 @@
   faq
   Contribute to Scylla <contribute>
   glossary
-  alternator
+  alternator/alternator
 
