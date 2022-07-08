@@ -15,6 +15,7 @@
 #include "hashing.hh"
 #include <seastar/core/simple-stream.hh>
 #include <seastar/core/loop.hh>
+#include <bit>
 #include <concepts>
 
 /**
@@ -116,12 +117,14 @@ private:
     //   - must be at least _initial_chunk_size
     //   - try to double each time to prevent too many allocations
     //   - should not exceed max_alloc_size, unless data_size requires so
+    //   - will be power-of-two so the allocated memory can be fully utilized.
     size_type next_alloc_size(size_t data_size) const {
         auto next_size = _current
                 ? _current->size * 2
                 : _initial_chunk_size;
         next_size = std::min(next_size, max_alloc_size());
-        return std::max<size_type>(next_size, data_size + sizeof(chunk));
+        auto r = std::max<size_type>(next_size, data_size + sizeof(chunk));
+        return std::bit_ceil(r);
     }
     // Makes room for a contiguous region of given size.
     // The region is accounted for as already written.
