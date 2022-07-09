@@ -594,6 +594,61 @@ SEASTAR_TEST_CASE(clear_snapshot) {
     });
 }
 
+SEASTAR_TEST_CASE(clear_multiple_snapshots) {
+    sstring ks_name = "ks";
+    sstring table_name = "cf";
+    auto num_snapshots = 2;
+
+    auto snapshot_name = [] (int idx) {
+        return format("test-snapshot-{}", idx);
+    };
+
+    co_await do_with_some_data({table_name}, [&] (cql_test_env& e) {
+        auto& t = e.local_db().find_column_family(ks_name, table_name);
+        auto table_dir = fs::path(t.dir());
+        auto snapshots_dir = table_dir / sstables::snapshots_dir;
+
+        for (auto i = 0; i < num_snapshots; i++) {
+            testlog.debug("Taking snapshot {} on {}.{}", snapshot_name(i), ks_name, table_name);
+            take_snapshot(e, ks_name, table_name, snapshot_name(i)).get();
+        }
+
+        for (auto i = 0; i < num_snapshots; i++) {
+            unsigned count = 0;
+            testlog.debug("Verifying {}", snapshots_dir / snapshot_name(i));
+            lister::scan_dir(snapshots_dir / snapshot_name(i), { directory_entry_type::regular }, [&count] (fs::path parent_dir, directory_entry de) {
+                count++;
+                return make_ready_future<>();
+            }).get();
+            BOOST_REQUIRE_GT(count, 1); // expect more than the manifest alone
+        }
+
+        // non-existent tag
+        testlog.debug("Clearing bogus tag");
+        e.local_db().clear_snapshot("bogus", {ks_name}, table_name).get();
+        for (auto i = 0; i < num_snapshots; i++) {
+            BOOST_REQUIRE_EQUAL(fs::exists(snapshots_dir / snapshot_name(i)), true);
+        }
+
+        // clear single tag
+        testlog.debug("Clearing snapshot={} of {}.{}", snapshot_name(0), ks_name, table_name);
+        e.local_db().clear_snapshot(snapshot_name(0), {ks_name}, table_name).get();
+        BOOST_REQUIRE_EQUAL(fs::exists(snapshots_dir / snapshot_name(0)), false);
+        for (auto i = 1; i < num_snapshots; i++) {
+            BOOST_REQUIRE_EQUAL(fs::exists(snapshots_dir / snapshot_name(i)), true);
+        }
+
+        // clear all tags (all tables)
+        testlog.debug("Clearing all snapshots in {}", ks_name);
+        e.local_db().clear_snapshot("", {ks_name}, "").get();
+        for (auto i = 0; i < num_snapshots; i++) {
+            BOOST_REQUIRE_EQUAL(fs::exists(snapshots_dir / snapshot_name(i)), false);
+        }
+
+        return make_ready_future<>();
+    });
+}
+
 SEASTAR_TEST_CASE(clear_nonexistent_snapshot) {
     // no crashes, no exceptions
     return do_with_some_data({"cf"}, [] (cql_test_env& e) {
