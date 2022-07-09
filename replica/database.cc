@@ -2355,7 +2355,7 @@ future<> database::truncate(sstring ksname, sstring cfname, timestamp_func tsf) 
 }
 
 future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_func tsf, bool with_snapshot) {
-    dblog.debug("Truncating {}.{}", cf.schema()->ks_name(), cf.schema()->cf_name());
+    dblog.debug("Truncating {}.{}: with_snapshot={} auto_snapshot={}", cf.schema()->ks_name(), cf.schema()->cf_name(), with_snapshot, get_config().auto_snapshot());
     auto holder = cf.async_gate().hold();
 
     const auto auto_snapshot = with_snapshot && get_config().auto_snapshot();

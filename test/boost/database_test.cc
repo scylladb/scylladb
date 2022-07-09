@@ -1103,21 +1103,33 @@ SEASTAR_TEST_CASE(database_drop_column_family_clears_querier_cache) {
     });
 }
 
-SEASTAR_TEST_CASE(drop_table_with_auto_snapshot) {
+static future<> test_drop_table_with_auto_snapshot(bool auto_snapshot) {
     sstring ks_name = "ks";
-    sstring table_name = "table_with_auto_snapshot";
+    sstring table_name = format("table_with_auto_snapshot_{}", auto_snapshot ? "enabled" : "disabled");
+    auto tmpdir_for_data = make_lw_shared<tmpdir>();
+    auto db_cfg_ptr = make_shared<db::config>();
+    db_cfg_ptr->data_file_directories(std::vector<sstring>({ tmpdir_for_data->path().string() }));
+    db_cfg_ptr->auto_snapshot(auto_snapshot);
 
     co_await do_with_some_data({table_name}, [&] (cql_test_env& e) -> future<> {
         auto cf_dir = e.local_db().find_column_family(ks_name, table_name).dir();
 
         // Pass `with_snapshot=true` to drop_table_on_all
-        // to allow auto_snapshot (which is true by default).
-        // The table directory should therefore exist after the table is dropped.
+        // to allow auto_snapshot (based on the configuration above).
+        // The table directory should therefore exist after the table is dropped if auto_snapshot is disabled in the configuration.
         co_await replica::database::drop_table_on_all_shards(e.db(), ks_name, table_name, [ts = db_clock::now()] { return make_ready_future<db_clock::time_point>(ts); }, true);
         auto cf_dir_exists = co_await file_exists(cf_dir);
-        BOOST_REQUIRE_EQUAL(cf_dir_exists, true);
+        BOOST_REQUIRE_EQUAL(cf_dir_exists, auto_snapshot);
         co_return;
-    });
+    }, db_cfg_ptr);
+}
+
+SEASTAR_TEST_CASE(drop_table_with_auto_snapshot_enabled) {
+    return test_drop_table_with_auto_snapshot(true);
+}
+
+SEASTAR_TEST_CASE(drop_table_with_auto_snapshot_disabled) {
+    return test_drop_table_with_auto_snapshot(false);
 }
 
 SEASTAR_TEST_CASE(drop_table_with_no_snapshot) {
