@@ -1423,7 +1423,7 @@ future<> table::snapshot(database& db, sstring name) {
         co_await snapshot->manifest_write.wait(1);
         tlogger.debug("snapshot {}: done: error={}", jsondir, ex);
         if (ex) {
-            co_await coroutine::return_exception(std::move(ex));
+            co_await coroutine::return_exception_ptr(std::move(ex));
         }
     });
 }
