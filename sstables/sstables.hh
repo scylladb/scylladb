@@ -953,4 +953,8 @@ public:
     }
 };
 
-}
+// safely removes the table directory.
+// swallows all errors and just reports them to the log.
+future<> remove_table_directory_if_has_no_snapshots(fs::path table_dir);
+
+} // namespace sstables

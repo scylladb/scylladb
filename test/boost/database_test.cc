@@ -1101,3 +1101,56 @@ SEASTAR_TEST_CASE(database_drop_column_family_clears_querier_cache) {
         BOOST_REQUIRE_EQUAL(qc.get_stats().population, 0);
     });
 }
+
+SEASTAR_TEST_CASE(drop_table_with_auto_snapshot) {
+    sstring ks_name = "ks";
+    sstring table_name = "table_with_auto_snapshot";
+
+    co_await do_with_some_data({table_name}, [&] (cql_test_env& e) -> future<> {
+        auto cf_dir = e.local_db().find_column_family(ks_name, table_name).dir();
+
+        // Pass `with_snapshot=true` to drop_table_on_all
+        // to allow auto_snapshot (which is true by default).
+        // The table directory should therefore exist after the table is dropped.
+        co_await replica::database::drop_table_on_all_shards(e.db(), ks_name, table_name, [ts = db_clock::now()] { return make_ready_future<db_clock::time_point>(ts); }, true);
+        auto cf_dir_exists = co_await file_exists(cf_dir);
+        BOOST_REQUIRE_EQUAL(cf_dir_exists, true);
+        co_return;
+    });
+}
+
+SEASTAR_TEST_CASE(drop_table_with_no_snapshot) {
+    sstring ks_name = "ks";
+    sstring table_name = "table_with_no_snapshot";
+
+    co_await do_with_some_data({table_name}, [&] (cql_test_env& e) -> future<> {
+        auto cf_dir = e.local_db().find_column_family(ks_name, table_name).dir();
+
+        // Pass `with_snapshot=false` to drop_table_on_all
+        // to disallow auto_snapshot.
+        // The table directory should therefore not exist after the table is dropped.
+        co_await replica::database::drop_table_on_all_shards(e.db(), ks_name, table_name, [ts = db_clock::now()] { return make_ready_future<db_clock::time_point>(ts); }, false);
+        auto cf_dir_exists = co_await file_exists(cf_dir);
+        BOOST_REQUIRE_EQUAL(cf_dir_exists, false);
+        co_return;
+    });
+}
+
+SEASTAR_TEST_CASE(drop_table_with_explicit_snapshot) {
+    sstring ks_name = "ks";
+    sstring table_name = "table_with_explicit_snapshot";
+
+    co_await do_with_some_data({table_name}, [&] (cql_test_env& e) -> future<> {
+        auto snapshot_tag = format("test-{}", db_clock::now().time_since_epoch().count());
+        co_await e.local_db().snapshot_on_all(ks_name, snapshot_tag, false);
+        auto cf_dir = e.local_db().find_column_family(ks_name, table_name).dir();
+
+        // With explicit snapshot and with_snapshot=false
+        // dir should still be kept, regardless of the
+        // with_snapshot parameter and auto_snapshot config.
+        co_await replica::database::drop_table_on_all_shards(e.db(), ks_name, table_name, [ts = db_clock::now()] { return make_ready_future<db_clock::time_point>(ts); }, false);
+        auto cf_dir_exists = co_await file_exists(cf_dir);
+        BOOST_REQUIRE_EQUAL(cf_dir_exists, true);
+        co_return;
+    });
+}
