@@ -2453,15 +2453,15 @@ static sstring get_snapshot_table_dir_prefix(const sstring& table_name) {
     return table_name + "-";
 }
 
-static sstring extract_cf_name(const sstring& directory_name) {
+static std::pair<sstring, utils::UUID> extract_cf_name_and_uuid(const sstring& directory_name) {
     // cf directory is of the form: 'cf_name-uuid'
-    // since cf_name may contain '-' characters, look for the last occurance of '-'
-    // in the directory entry name
-    auto pos = directory_name.find_last_of('-');
-    if (pos == sstring::npos) {
-        on_internal_error(dblog, format("table directory entry name '{}' is invalid: no '-' separator found", directory_name));
+    // uuid is assumed to be exactly 32 hex characters wide.
+    constexpr size_t uuid_size = 32;
+    ssize_t pos = directory_name.size() - uuid_size - 1;
+    if (pos <= 0 || directory_name[pos] != '-') {
+        on_internal_error(dblog, format("table directory entry name '{}' is invalid: no '-' separator found at pos {}", directory_name, pos));
     }
-    return directory_name.substr(0, pos);
+    return std::make_pair(directory_name.substr(0, pos), utils::UUID(directory_name.substr(pos + 1)));
 }
 
 future<std::vector<database::snapshot_details_result>> database::get_snapshot_details() {
@@ -2485,8 +2485,8 @@ future<std::vector<database::snapshot_details_result>> database::get_snapshot_de
                     co_return;
                 }
 
-                sstring cf_name = extract_cf_name(de.name);
-                co_return co_await lister::scan_dir(cf_dir / sstables::snapshots_dir, dirs_only_entries, [this, &details, &ks_name, &cf_name, &cf_dir] (fs::path parent_dir, directory_entry de) -> future<> {
+                auto cf_name_and_uuid = extract_cf_name_and_uuid(de.name);
+                co_return co_await lister::scan_dir(cf_dir / sstables::snapshots_dir, dirs_only_entries, [this, &details, &ks_name, &cf_name = cf_name_and_uuid.first, &cf_dir] (fs::path parent_dir, directory_entry de) -> future<> {
                     database::snapshot_details_result snapshot_result = {
                         .snapshot_name = de.name,
                         .details = {0, 0, cf_name, ks_name}
@@ -2592,20 +2592,36 @@ future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_nam
                         if (tag.empty()) {
                             dblog.info("Removing {}", snapshots_dir);
                             recursive_remove_directory(std::move(snapshots_dir)).get();
+                            has_snapshots = false;
                         } else {
                             // if specific snapshots tags were given - filter only these snapshot directories
-                            auto snapshots_dir_lister = directory_lister(snapshots_dir, {directory_entry_type::directory},
-                                    [&] (const fs::path&, const directory_entry& dir_entry) { return dir_entry.name == tag; });
+                            auto snapshots_dir_lister = directory_lister(snapshots_dir, {directory_entry_type::directory});
                             auto close_snapshots_dir_lister = deferred_close(snapshots_dir_lister);
                             dblog.debug("clear_snapshot: listing snapshots dir {} with filter={}", snapshots_dir, tag);
+                            has_snapshots = false;  // unless other snapshots are found
                             while (auto snapshot_ent = snapshots_dir_lister.get().get0()) {
-                                auto snapshot_dir = snapshots_dir / snapshot_ent->name;
-                                dblog.info("Removing {}", snapshot_dir);
-                                recursive_remove_directory(std::move(snapshot_dir)).get();
+                                if (snapshot_ent->name == tag) {
+                                    auto snapshot_dir = snapshots_dir / snapshot_ent->name;
+                                    dblog.info("Removing {}", snapshot_dir);
+                                    recursive_remove_directory(std::move(snapshot_dir)).get();
+                                } else {
+                                    has_snapshots = true;
+                                }
                             }
                         }
                     } else {
                         dblog.debug("clear_snapshot: {} not found", snapshots_dir);
+                    }
+                    // zap the table directory if the table is dropped
+                    // and has no remaining snapshots
+                    if (!has_snapshots) {
+                        auto [cf_name, cf_uuid] = extract_cf_name_and_uuid(table_ent->name);
+                        const auto& it = _ks_cf_to_uuid.find(std::make_pair(ks_name, cf_name));
+                        auto dropped = (it == _ks_cf_to_uuid.cend()) || (cf_uuid != it->second);
+                        if (dropped) {
+                            dblog.info("Removing dropped table dir {}", table_dir);
+                            sstables::remove_table_directory_if_has_no_snapshots(table_dir).get();
+                        }
                     }
                 }
             }

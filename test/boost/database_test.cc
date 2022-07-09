@@ -653,6 +653,16 @@ SEASTAR_TEST_CASE(clear_multiple_snapshots) {
         replica::database::drop_table_on_all_shards(e.db(), ks_name, table_name, [ts = db_clock::now()] { return make_ready_future<db_clock::time_point>(ts); }).get();
         BOOST_REQUIRE_EQUAL(fs::exists(snapshots_dir / snapshot_name(num_snapshots)), true);
 
+        // clear all tags
+        testlog.debug("Clearing all snapshots in {}.{} after it had been dropped", ks_name, table_name);
+        e.local_db().clear_snapshot("", {ks_name}, table_name).get();
+
+        assert(!fs::exists(table_dir));
+
+        // after all snapshots had been cleared,
+        // the dropped table directory is expected to be removed.
+        BOOST_REQUIRE_EQUAL(fs::exists(table_dir), false);
+
         return make_ready_future<>();
     });
 }
