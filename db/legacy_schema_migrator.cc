@@ -537,9 +537,7 @@ public:
         return parallel_for_each(legacy_schema_tables, [this](const sstring& cfname) {
             return do_with(utils::make_joinpoint([] { return db_clock::now();}),[this, cfname](auto& tsf) {
                 auto with_snapshot = !_keyspaces.empty();
-                return _db.invoke_on_all([&tsf, cfname, with_snapshot](replica::database& db) {
-                    return db.drop_column_family(db::system_keyspace::NAME, cfname, [&tsf] { return tsf.value(); }, with_snapshot);
-                });
+                return replica::database::drop_table_on_all_shards(_db, db::system_keyspace::NAME, cfname, [&tsf] { return tsf.value(); }, with_snapshot);
             });
         });
     }
