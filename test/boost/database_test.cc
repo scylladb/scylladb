@@ -396,13 +396,14 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_pending_delete) {
 }
 
 // Snapshot tests and their helpers
-future<> do_with_some_data(std::vector<sstring> cf_names, std::function<future<> (cql_test_env& env)> func, lw_shared_ptr<tmpdir> tmpdir_for_data = {}) {
-    return seastar::async([cf_names = std::move(cf_names), func = std::move(func), tmpdir_for_data = std::move(tmpdir_for_data)] () mutable {
-        if (!tmpdir_for_data) {
+future<> do_with_some_data(std::vector<sstring> cf_names, std::function<future<> (cql_test_env& env)> func, shared_ptr<db::config> db_cfg_ptr = {}) {
+    return seastar::async([cf_names = std::move(cf_names), func = std::move(func), db_cfg_ptr = std::move(db_cfg_ptr)] () mutable {
+        lw_shared_ptr<tmpdir> tmpdir_for_data;
+        if (!db_cfg_ptr) {
             tmpdir_for_data = make_lw_shared<tmpdir>();
+            db_cfg_ptr = make_shared<db::config>();
+            db_cfg_ptr->data_file_directories(std::vector<sstring>({ tmpdir_for_data->path().string() }));
         }
-        auto db_cfg_ptr = make_shared<db::config>();
-        db_cfg_ptr->data_file_directories(std::vector<sstring>({ tmpdir_for_data->path().string() }));
         do_with_cql_env_thread([cf_names = std::move(cf_names), func = std::move(func)] (cql_test_env& e) {
             for (const auto& cf_name : cf_names) {
                 e.create_table([&cf_name] (std::string_view ks_name) {
@@ -959,6 +960,8 @@ SEASTAR_TEST_CASE(upgrade_sstables) {
 
 SEASTAR_TEST_CASE(populate_from_quarantine_works) {
     auto tmpdir_for_data = make_lw_shared<tmpdir>();
+    auto db_cfg_ptr = make_shared<db::config>();
+    db_cfg_ptr->data_file_directories(std::vector<sstring>({ tmpdir_for_data->path().string() }));
     utils::UUID host_id;
 
     // populate tmpdir_for_data and
@@ -989,12 +992,10 @@ SEASTAR_TEST_CASE(populate_from_quarantine_works) {
             });
         }
         BOOST_REQUIRE(found);
-    }, tmpdir_for_data);
+    }, db_cfg_ptr);
 
     // reload the table from tmpdir_for_data and
     // verify that all rows are still there
-    auto db_cfg_ptr = make_shared<db::config>();
-    db_cfg_ptr->data_file_directories(std::vector<sstring>({ tmpdir_for_data->path().string() }));
     db_cfg_ptr->host_id = host_id;
     size_t row_count = 0;
     co_await do_with_cql_env([&row_count] (cql_test_env& e) -> future<> {
