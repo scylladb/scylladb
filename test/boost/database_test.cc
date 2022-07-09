@@ -645,6 +645,14 @@ SEASTAR_TEST_CASE(clear_multiple_snapshots) {
             BOOST_REQUIRE_EQUAL(fs::exists(snapshots_dir / snapshot_name(i)), false);
         }
 
+        testlog.debug("Taking an extra {} of {}.{}", snapshot_name(num_snapshots), ks_name, table_name);
+        take_snapshot(e, ks_name, table_name, snapshot_name(num_snapshots)).get();
+
+        // existing snapshots expected to remain after dropping the table
+        testlog.debug("Dropping table {}.{}", ks_name, table_name);
+        replica::database::drop_table_on_all_shards(e.db(), ks_name, table_name, [ts = db_clock::now()] { return make_ready_future<db_clock::time_point>(ts); }).get();
+        BOOST_REQUIRE_EQUAL(fs::exists(snapshots_dir / snapshot_name(num_snapshots)), true);
+
         return make_ready_future<>();
     });
 }
