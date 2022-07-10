@@ -13,6 +13,7 @@ from botocore.exceptions import ClientError
 import re
 import time
 from util import multiset, create_test_table, unique_table_name, random_string
+from packaging.version import Version
 
 def delete_tags(table, arn):
     got = table.meta.client.list_tags_of_resource(ResourceArn=arn)
@@ -95,8 +96,7 @@ def test_table_tags(dynamodb):
     # https://aws.amazon.com/about-aws/whats-new/2019/04/now-you-can-tag-amazon-dynamodb-tables-when-you-create-them/
     # so older versions of the library cannot run this test.
     import botocore
-    from distutils.version import LooseVersion
-    if (LooseVersion(botocore.__version__) < LooseVersion('1.12.136')):
+    if (Version(botocore.__version__) < Version('1.12.136')):
         pytest.skip("Botocore version 1.12.136 or above required to run this test")
 
     table = create_test_table(dynamodb,
@@ -151,8 +151,7 @@ def test_too_long_tags_from_creation(dynamodb):
     # DynamoDB in April 2019, and to the botocore library in version 1.12.136
     # so older versions of the library cannot run this test.
     import botocore
-    from distutils.version import LooseVersion
-    if (LooseVersion(botocore.__version__) < LooseVersion('1.12.136')):
+    if (Version(botocore.__version__) < Version('1.12.136')):
         pytest.skip("Botocore version 1.12.136 or above required to run this test")
     name = unique_table_name()
     # Setting 100 tags is not allowed, the following table creation should fail:
@@ -177,8 +176,7 @@ def test_forbidden_tags_from_creation(scylla_only, dynamodb):
     # DynamoDB in April 2019, and to the botocore library in version 1.12.136
     # so older versions of the library cannot run this test.
     import botocore
-    from distutils.version import LooseVersion
-    if (LooseVersion(botocore.__version__) < LooseVersion('1.12.136')):
+    if (Version(botocore.__version__) < Version('1.12.136')):
         pytest.skip("Botocore version 1.12.136 or above required to run this test")
     name = unique_table_name()
     # It is not allowed to set the system:write_isolation to "dog", so the
