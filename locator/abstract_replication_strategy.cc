@@ -256,7 +256,7 @@ abstract_replication_strategy::get_address_ranges(const token_metadata& tm, inet
     co_return ret;
 }
 
-std::unordered_map<dht::token_range, inet_address_vector_replica_set>
+future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
 effective_replication_map::get_range_addresses() const {
     const token_metadata& tm = *_tmptr;
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> ret;
@@ -265,8 +265,9 @@ effective_replication_map::get_range_addresses() const {
         for (auto& r : ranges) {
             ret.emplace(r, eps);
         }
+        co_await coroutine::maybe_yield();
     }
-    return ret;
+    co_return ret;
 }
 
 future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>

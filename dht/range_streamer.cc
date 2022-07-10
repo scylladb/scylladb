@@ -84,7 +84,7 @@ std::unordered_map<dht::token_range, std::vector<inet_address>>
 range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, locator::effective_replication_map_ptr erm, dht::token_range_vector desired_ranges) {
     logger.debug("{} ks={}", __func__, keyspace_name);
 
-    auto range_addresses = erm->get_range_addresses();
+    auto range_addresses = erm->get_range_addresses().get0();
 
     logger.debug("keyspace={}, desired_ranges.size={}, range_addresses.size={}", keyspace_name, desired_ranges.size(), range_addresses.size());
 

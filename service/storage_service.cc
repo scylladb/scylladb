@@ -2805,7 +2805,7 @@ future<> storage_service::removenode_add_ranges(lw_shared_ptr<dht::range_streame
                 my_new_ranges.emplace_back(x.first);
             }
         }
-        std::unordered_multimap<inet_address, dht::token_range> source_ranges = get_new_source_ranges(erm, my_new_ranges);
+        std::unordered_multimap<inet_address, dht::token_range> source_ranges = co_await get_new_source_ranges(erm, my_new_ranges);
         std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint;
         for (auto& x : source_ranges) {
             ranges_per_endpoint[x.first].emplace_back(x.second);
@@ -3034,10 +3034,10 @@ future<> storage_service::shutdown_protocol_servers() {
     }
 }
 
-std::unordered_multimap<inet_address, dht::token_range>
+future<std::unordered_multimap<inet_address, dht::token_range>>
 storage_service::get_new_source_ranges(locator::effective_replication_map_ptr erm, const dht::token_range_vector& ranges) const {
     auto my_address = get_broadcast_address();
-    std::unordered_map<dht::token_range, inet_address_vector_replica_set> range_addresses = erm->get_range_addresses();
+    std::unordered_map<dht::token_range, inet_address_vector_replica_set> range_addresses = co_await erm->get_range_addresses();
     std::unordered_multimap<inet_address, dht::token_range> source_ranges;
 
     // find alive sources for our new ranges
@@ -3064,8 +3064,10 @@ storage_service::get_new_source_ranges(locator::effective_replication_map_ptr er
                 break;
             }
         }
+
+        co_await coroutine::maybe_yield();
     }
-    return source_ranges;
+    co_return source_ranges;
 }
 
 future<> storage_service::move(token new_token) {
