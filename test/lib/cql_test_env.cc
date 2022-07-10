@@ -616,7 +616,7 @@ public:
                 fd.stop().get();
             });
 
-            raft_gr.start(cfg->check_experimental(db::experimental_features_t::RAFT),
+            raft_gr.start(cfg->check_experimental(db::experimental_features_t::feature::RAFT),
                 std::ref(ms), std::ref(gossiper), std::ref(fd)).get();
             auto stop_raft_gr = deferred_stop(raft_gr);
             raft_gr.invoke_on_all(&service::raft_group_registry::start).get();
@@ -915,7 +915,7 @@ reader_permit make_reader_permit(cql_test_env& env) {
 
 cql_test_config raft_cql_test_config() {
     cql_test_config c;
-    c.db_config->experimental_features({db::experimental_features_t::RAFT});
+    c.db_config->experimental_features({db::experimental_features_t::feature::RAFT});
     return c;
 }
 

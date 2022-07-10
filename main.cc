@@ -1012,7 +1012,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // #293 - do not stop anything
             // engine().at_exit([&proxy] { return proxy.stop(); });
 
-            raft_gr.start(cfg->check_experimental(db::experimental_features_t::RAFT),
+            raft_gr.start(cfg->check_experimental(db::experimental_features_t::feature::RAFT),
                 std::ref(messaging), std::ref(gossiper), std::ref(fd)).get();
 
             // gropu0 client exists only on shard 0
@@ -1033,7 +1033,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_raft = defer_verbose_shutdown("Raft", [&raft_gr] {
                 raft_gr.stop().get();
             });
-            if (cfg->check_experimental(db::experimental_features_t::RAFT)) {
+            if (cfg->check_experimental(db::experimental_features_t::feature::RAFT)) {
                 supervisor::notify("starting Raft Group Registry service");
             }
             raft_gr.invoke_on_all(&service::raft_group_registry::start).get();
@@ -1543,7 +1543,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 // only Alternator uses it for its TTL feature. But in the
                 // future if we add a CQL interface to it, we may want to
                 // start this outside the Alternator if().
-                if (cfg->check_experimental(db::experimental_features_t::ALTERNATOR_TTL)) {
+                if (cfg->check_experimental(db::experimental_features_t::feature::ALTERNATOR_TTL)) {
                     supervisor::notify("starting the expiration service");
                     es.start(seastar::sharded_parameter([] (const replica::database& db) { return db.as_data_dictionary(); }, std::ref(db)),
                              std::ref(proxy)).get();

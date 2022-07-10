@@ -911,8 +911,8 @@ SEASTAR_TEST_CASE(test_parse_broken) {
     return make_ready_future<>();
 }
 
-using ef = experimental_features_t;
-using features = std::vector<enum_option<ef>>;
+using ef = experimental_features_t::feature;
+using features = std::vector<enum_option<experimental_features_t>>;
 
 SEASTAR_TEST_CASE(test_parse_experimental_features_cdc) {
     auto cfg_ptr = std::make_unique<config>();

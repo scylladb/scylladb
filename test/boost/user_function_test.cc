@@ -55,7 +55,7 @@ static future<> with_udf_enabled(Func&& func) {
     // Raise timeout to survive debug mode and contention, but keep in
     // mind that some tests expect timeout.
     db_cfg.user_defined_function_time_limit_ms(1000);
-    db_cfg.experimental_features({db::experimental_features_t::UDF}, db::config::config_source::CommandLine);
+    db_cfg.experimental_features({db::experimental_features_t::feature::UDF}, db::config::config_source::CommandLine);
     return do_with_cql_env_thread(std::forward<Func>(func), db_cfg_ptr);
 }
 
@@ -985,7 +985,7 @@ SEASTAR_THREAD_TEST_CASE(test_user_function_db_init) {
 
     db_cfg.data_file_directories({data_dir.path().string()}, db::config::config_source::CommandLine);
     db_cfg.enable_user_defined_functions({true}, db::config::config_source::CommandLine);
-    db_cfg.experimental_features({db::experimental_features_t::UDF}, db::config::config_source::CommandLine);
+    db_cfg.experimental_features({db::experimental_features_t::feature::UDF}, db::config::config_source::CommandLine);
 
     do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("CREATE FUNCTION my_func(a int, b float) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2';").get();

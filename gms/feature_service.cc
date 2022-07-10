@@ -50,20 +50,20 @@ feature_config feature_config_from_db_config(db::config& cfg, std::set<sstring> 
     if (!cfg.enable_user_defined_functions()) {
         fcfg._disabled_features.insert("UDF");
     } else {
-        if (!cfg.check_experimental(db::experimental_features_t::UDF)) {
+        if (!cfg.check_experimental(db::experimental_features_t::feature::UDF)) {
             throw std::runtime_error(
                     "You must use both enable_user_defined_functions and experimental_features:udf "
                     "to enable user-defined functions");
         }
     }
 
-    if (!cfg.check_experimental(db::experimental_features_t::ALTERNATOR_STREAMS)) {
+    if (!cfg.check_experimental(db::experimental_features_t::feature::ALTERNATOR_STREAMS)) {
         fcfg._disabled_features.insert("ALTERNATOR_STREAMS"s);
     }
-    if (!cfg.check_experimental(db::experimental_features_t::ALTERNATOR_TTL)) {
+    if (!cfg.check_experimental(db::experimental_features_t::feature::ALTERNATOR_TTL)) {
         fcfg._disabled_features.insert("ALTERNATOR_TTL"s);
     }
-    if (!cfg.check_experimental(db::experimental_features_t::RAFT)) {
+    if (!cfg.check_experimental(db::experimental_features_t::feature::RAFT)) {
         fcfg._disabled_features.insert("SUPPORTS_RAFT_CLUSTER_MANAGEMENT"s);
         fcfg._disabled_features.insert("USES_RAFT_CLUSTER_MANAGEMENT"s);
     } else {
@@ -73,7 +73,7 @@ feature_config feature_config_from_db_config(db::config& cfg, std::set<sstring> 
         // advertised via gossip ahead of time.
         fcfg._masked_features.insert("USES_RAFT_CLUSTER_MANAGEMENT"s);
     }
-    if (!cfg.check_experimental(db::experimental_features_t::KEYSPACE_STORAGE_OPTIONS)) {
+    if (!cfg.check_experimental(db::experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS)) {
         fcfg._disabled_features.insert("KEYSPACE_STORAGE_OPTIONS"s);
     }
 

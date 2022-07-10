@@ -429,7 +429,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     //  - it's a fresh node start (in a fresh cluster)
     //  - it's a restart of an existing node, which have already joined some group0
     const bool can_join_with_raft =
-        _db.local().get_config().check_experimental(db::experimental_features_t::RAFT) && (
+        _db.local().get_config().check_experimental(db::experimental_features_t::feature::RAFT) && (
             _sys_ks.local().bootstrap_needed() ||
             !(co_await _sys_ks.local().get_raft_group0_id()).is_null());
     if (can_join_with_raft) {

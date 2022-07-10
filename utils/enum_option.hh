@@ -44,11 +44,11 @@ concept HasMapInterface = requires(T t) {
 /// Example:
 ///
 /// struct Type {
-///   enum ty { a1, a2, b1 };
+///   enum class ty { a1, a2, b1 };
 ///   static unordered_map<string, ty> map();
 /// };
 /// unordered_map<string, Type::ty> Type::map() {
-///   return {{"a1", Type::a1}, {"a2", Type::a2}, {"b1", Type::b1}};
+///   return {{"a1", Type::ty::a1}, {"a2", Type::ty::a2}, {"b1", Type::ty::b1}};
 /// }
 /// int main(int ac, char* av[]) {
 ///   namespace po = boost::program_options;

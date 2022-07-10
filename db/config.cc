@@ -253,7 +253,7 @@ static db::tri_mode_restriction_t::mode strict_allow_filtering_default() {
 static std::vector<sstring> experimental_feature_names() {
     std::vector<sstring> ret;
     for (const auto& f : db::experimental_features_t::map()) {
-        if (f.second != db::experimental_features_t::UNUSED) {
+        if (f.second != db::experimental_features_t::feature::UNUSED) {
             ret.push_back(f.first);
         }
     }
@@ -1009,8 +1009,8 @@ db::fs::path db::config::get_conf_sub(db::fs::path sub) {
 
 bool db::config::check_experimental(experimental_features_t::feature f) const {
     if (experimental()
-        && f != experimental_features_t::UNUSED
-        && f != experimental_features_t::RAFT) {
+        && f != experimental_features_t::feature::UNUSED
+        && f != experimental_features_t::feature::RAFT) {
             return true;
     }
     const auto& optval = experimental_features();
@@ -1047,20 +1047,20 @@ std::unordered_map<sstring, db::experimental_features_t::feature> db::experiment
     // to UNUSED switch for a while, and can be eventually
     // removed altogether.
     return {
-        {"lwt", UNUSED},
-        {"udf", UDF},
-        {"cdc", UNUSED},
-        {"alternator-streams", ALTERNATOR_STREAMS},
-        {"alternator-ttl", ALTERNATOR_TTL},
-        {"raft", RAFT},
-        {"keyspace-storage-options", KEYSPACE_STORAGE_OPTIONS},
+        {"lwt", feature::UNUSED},
+        {"udf", feature::UDF},
+        {"cdc", feature::UNUSED},
+        {"alternator-streams", feature::ALTERNATOR_STREAMS},
+        {"alternator-ttl", feature::ALTERNATOR_TTL},
+        {"raft", feature::RAFT},
+        {"keyspace-storage-options", feature::KEYSPACE_STORAGE_OPTIONS},
     };
 }
 
 std::vector<enum_option<db::experimental_features_t>> db::experimental_features_t::all() {
     std::vector<enum_option<db::experimental_features_t>> ret;
     for (const auto& f : db::experimental_features_t::map()) {
-        if (f.second != db::experimental_features_t::UNUSED) {
+        if (f.second != db::experimental_features_t::feature::UNUSED) {
             ret.push_back(f.second);
         }
     }
