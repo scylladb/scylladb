@@ -260,9 +260,8 @@ std::unordered_map<dht::token_range, inet_address_vector_replica_set>
 effective_replication_map::get_range_addresses() const {
     const token_metadata& tm = *_tmptr;
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> ret;
-    for (auto& t : tm.sorted_tokens()) {
+    for (const auto& [t, eps] : _replication_map) {
         dht::token_range_vector ranges = tm.get_primary_ranges_for(t);
-        auto eps = get_natural_endpoints(t);
         for (auto& r : ranges) {
             ret.emplace(r, eps);
         }
