@@ -27,7 +27,6 @@ def table1(cql, test_keyspace):
 # As discovered in issue #10081, if the row determined by WHERE does NOT
 # exist, Scylla still needs to read the static column, but forgets to do so.
 # this test reproduces this issue.
-@pytest.mark.xfail(reason="Issue #10081")
 def test_lwt_missing_row_with_static(cql, table1):
     p = unique_key_int()
     # Insert into partition p just the static column - and no clustering rows.
