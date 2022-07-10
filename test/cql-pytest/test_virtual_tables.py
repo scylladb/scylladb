@@ -59,7 +59,8 @@ def test_versions(scylla_only, cql):
 # parameters. As we noticed in issue #10047, each type of configuration
 # parameter can have a different function for printing it out, and some of
 # those may be wrong so we want to check as many as we can - including
-# specifically the experimental_features option which was wrong in #10047.
+# specifically the experimental_features option which was wrong in #10047
+# and #11003.
 def test_system_config_read(scylla_only, cql):
     # All rows should have the columns name, source, type and value:
     rows = list(cql.execute("SELECT name, source, type, value FROM system.config"))
@@ -68,12 +69,14 @@ def test_system_config_read(scylla_only, cql):
         values[row.name] = row.value
     # Check that experimental_features exists and makes sense.
     # It needs to be a JSON-formatted strings, and the strings need to be
-    # ASCII feature names - not binary garbage as it was in #10047.
+    # ASCII feature names - not binary garbage as it was in #10047,
+    # and not numbers-formatted-as-string as in #11003.
     assert 'experimental_features' in values
     obj = json.loads(values['experimental_features'])
     assert isinstance(obj, list)
     assert isinstance(obj[0], str)
     assert obj[0] and obj[0].isascii() and obj[0].isprintable()
+    assert not obj[0].isnumeric()  # issue #11003
     # Check formatting of tri_mode_restriction like
     # restrict_replication_simplestrategy. These need to be one of
     # allowed string values 0, 1, true, false or warn - but in particular
