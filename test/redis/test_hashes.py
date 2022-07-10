@@ -6,6 +6,7 @@ import pytest
 import redis
 import logging
 from util import random_string, connect
+from packaging.version import Version
 
 logger = logging.getLogger('redis-test')
 
@@ -40,8 +41,7 @@ def test_hset_multiple_key_field(redis_host, redis_port):
     # This test requires the library to support multiple mappings in one
     # command, or we cannot test this feature. This was added to redis-py
     # in version 3.5.0, in April 29, 2020.
-    from distutils.version import LooseVersion
-    if LooseVersion(redis.__version__) < LooseVersion('3.5.0'):
+    if Version(redis.__version__) < Version('3.5.0'):
         pytest.skip('redis-py library too old to run this test')
     r = connect(redis_host, redis_port)
     key = random_string(10)

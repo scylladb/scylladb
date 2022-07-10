@@ -30,8 +30,8 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # In particular, the BillingMode feature was added in botocore 1.12.54.
 import botocore
 import sys
-from distutils.version import LooseVersion
-if (LooseVersion(botocore.__version__) < LooseVersion('1.12.54')):
+from packaging.version import Version
+if (Version(botocore.__version__) < Version('1.12.54')):
     pytest.exit("Your Boto library is too old. Please upgrade it,\ne.g. using:\n    sudo pip{} install --upgrade boto3".format(sys.version_info[0]))
 
 # By default, tests run against a local Scylla installation on localhost:8080/.
