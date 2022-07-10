@@ -527,8 +527,6 @@ def testIndexOnPartitionKeyWithStaticColumnAndNoRows(cql, test_keyspace):
         execute(cql, table, "UPDATE %s SET s=? WHERE pk1=? AND pk2=?", 9, 1, 20)
         assert_rows(execute(cql, table, "SELECT * FROM %s WHERE pk2 = ?", 20), [1, 20, None, 9, None])
 
-# Reproduces #8627
-@pytest.mark.xfail(reason="issue #8627")
 def testIndexOnClusteringColumnInsertValueOver64k(cql, test_keyspace):
     too_big = bytearray([1])*TOO_BIG
     with create_table(cql, test_keyspace, "(a int, b int, c blob, PRIMARY KEY ((a, b)))") as table:
