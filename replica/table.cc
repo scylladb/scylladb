@@ -2397,7 +2397,7 @@ public:
     bool compaction_enforce_min_threshold() const noexcept override {
         return _t.get_config().compaction_enforce_min_threshold || _t._is_bootstrap_or_replace;
     }
-    const sstables::sstable_set& get_sstable_set() const override {
+    const sstables::sstable_set& main_sstable_set() const override {
         return _t.get_sstable_set();
     }
     std::unordered_set<sstables::shared_sstable> fully_expired_sstables(const std::vector<sstables::shared_sstable>& sstables, gc_clock::time_point query_time) const override {
