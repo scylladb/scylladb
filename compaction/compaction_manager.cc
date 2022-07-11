@@ -252,7 +252,7 @@ private:
     virtual void replace_sstables(std::vector<sstables::shared_sstable> old_ssts, std::vector<sstables::shared_sstable> new_ssts) override {}
 };
 
-compaction_manager::compaction_state& compaction_manager::get_compaction_state(replica::table* t) {
+compaction_manager::compaction_state& compaction_manager::get_compaction_state(compaction::table_state* t) {
     try {
         return _compaction_state.at(t);
     } catch (std::out_of_range&) {
@@ -264,7 +264,7 @@ compaction_manager::compaction_state& compaction_manager::get_compaction_state(r
 compaction_manager::task::task(compaction_manager& mgr, replica::table* t, sstables::compaction_type type, sstring desc)
     : _cm(mgr)
     , _compacting_table(t)
-    , _compaction_state(_cm.get_compaction_state(t))
+    , _compaction_state(_cm.get_compaction_state(&t->as_table_state()))
     , _type(type)
     , _gate_holder(_compaction_state.gate.hold())
     , _description(std::move(desc))
@@ -434,7 +434,7 @@ future<> compaction_manager::run_custom_job(replica::table* t, sstables::compact
 compaction_manager::compaction_reenabler::compaction_reenabler(compaction_manager& cm, replica::table* t)
     : _cm(cm)
     , _table(t)
-    , _compaction_state(cm.get_compaction_state(_table))
+    , _compaction_state(cm.get_compaction_state(&_table->as_table_state()))
     , _holder(_compaction_state.gate.hold())
 {
     _compaction_state.compaction_disabled_counter++;
@@ -709,7 +709,7 @@ void compaction_manager::enable() {
 std::function<void()> compaction_manager::compaction_submission_callback() {
     return [this] () mutable {
         for (auto& e: _compaction_state) {
-            submit(e.first);
+            submit(e.second.t);
         }
     };
 }
@@ -831,7 +831,7 @@ void compaction_manager::do_stop() noexcept {
 }
 
 inline bool compaction_manager::can_proceed(replica::table* t) const {
-    return (_state == state::enabled) && _compaction_state.contains(t) && !_compaction_state.at(t).compaction_disabled();
+    return (_state == state::enabled) && _compaction_state.contains(&t->as_table_state()) && !_compaction_state.at(&t->as_table_state()).compaction_disabled();
 }
 
 inline bool compaction_manager::task::can_proceed(throw_if_stopping do_throw_if_stopping) const {
@@ -1432,7 +1432,7 @@ future<> compaction_manager::perform_sstable_scrub(replica::table* t, sstables::
 }
 
 void compaction_manager::add(replica::table* t) {
-    auto [_, inserted] = _compaction_state.insert({t, compaction_state{}});
+    auto [_, inserted] = _compaction_state.insert({&t->as_table_state(), compaction_state{.t = t}});
     if (!inserted) {
         auto s = t->schema();
         on_internal_error(cmlog, format("compaction_state for table {}.{} [{}] already exists", s->ks_name(), s->cf_name(), fmt::ptr(t)));
@@ -1440,7 +1440,7 @@ void compaction_manager::add(replica::table* t) {
 }
 
 future<> compaction_manager::remove(replica::table* t) {
-    auto handle = _compaction_state.extract(t);
+    auto handle = _compaction_state.extract(&t->as_table_state());
 
     if (!handle.empty()) {
         auto& c_state = handle.mapped();
@@ -1489,6 +1489,10 @@ const std::vector<sstables::compaction_info> compaction_manager::get_compactions
     return boost::copy_range<ret>(_tasks | boost::adaptors::filtered([t] (const shared_ptr<task>& task) {
                 return (!t || task->compacting_table() == t) && task->compaction_running();
             }) | boost::adaptors::transformed(to_info));
+}
+
+bool compaction_manager::compaction_disabled(replica::table* t) const {
+    return _compaction_state.contains(&t->as_table_state()) && _compaction_state.at(&t->as_table_state()).compaction_disabled();
 }
 
 future<> compaction_manager::stop_compaction(sstring type, replica::table* table) {

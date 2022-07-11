@@ -60,6 +60,9 @@ public:
     };
 private:
     struct compaction_state {
+        // FIXME: remove once we complete the transition to table_state.
+        replica::table* t = nullptr;
+
         // Used both by compaction tasks that refer to the compaction_state
         // and by any function running under run_with_compaction_disabled().
         seastar::gate gate;
@@ -262,7 +265,7 @@ private:
     // weight is value assigned to a compaction job that is log base N of total size of all input sstables.
     std::unordered_set<int> _weight_tracker;
 
-    std::unordered_map<replica::table*, compaction_state> _compaction_state;
+    std::unordered_map<compaction::table_state*, compaction_state> _compaction_state;
 
     // Purpose is to serialize all maintenance (non regular) compaction activity to reduce aggressiveness and space requirement.
     // If the operation must be serialized with regular, then the per-table write lock must be taken.
@@ -321,7 +324,7 @@ private:
 
     // gets the table's compaction state
     // throws std::out_of_range exception if not found.
-    compaction_state& get_compaction_state(replica::table* t);
+    compaction_state& get_compaction_state(compaction::table_state* t);
 
     // Return true if compaction manager is enabled and
     // table still exists and compaction is not disabled for the table.
@@ -461,9 +464,7 @@ public:
         });
     };
 
-    bool compaction_disabled(replica::table* t) const {
-        return _compaction_state.contains(t) && _compaction_state.at(t).compaction_disabled();
-    }
+    bool compaction_disabled(replica::table* t) const;
 
     // Stops ongoing compaction of a given type.
     future<> stop_compaction(sstring type, replica::table* table = nullptr);
