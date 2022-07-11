@@ -1398,6 +1398,12 @@ class scylla_task_histogram(gdb.Command):
 
         text_start, text_end = get_text_range()
 
+        def formatter(o):
+            return "0x{:x} {}".format(o, resolve(o))
+
+        limit = None if args.all or args.count == 0 else args.count
+        h = histogram(print_indicators=False, formatter=formatter, limit=limit)
+
         sc = span_checker()
         vptr_count = defaultdict(int)
         scanned_pages = 0
@@ -1413,20 +1419,15 @@ class scylla_task_histogram(gdb.Command):
             span_size = span.used_span_size() * page_size
             for idx2 in range(0, int(span_size / objsize)):
                 obj_addr = span.start + idx2 * objsize
-                addr = gdb.Value(obj_addr).reinterpret_cast(vptr_type).dereference()
+                addr = int(gdb.Value(obj_addr).reinterpret_cast(vptr_type).dereference())
                 if addr >= text_start and addr <= text_end:
-                    vptr_count[int(addr)] += 1
+                    h[addr] += 1
             if args.all or args.samples == 0:
                 continue
             if scanned_pages >= args.samples or len(vptr_count) >= args.samples:
                 break
 
-        sorted_counts = sorted(vptr_count.items(), key=lambda e: -e[1])
-        to_show = sorted_counts if args.all or args.count == 0 else sorted_counts[:args.count]
-        for vptr, count in to_show:
-            sym = resolve(vptr)
-            if sym:
-                gdb.write('%10d: 0x%x %s\n' % (count, vptr, sym))
+        h.print_to_console()
 
 
 def find_vptrs():
