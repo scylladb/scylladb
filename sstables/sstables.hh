@@ -121,6 +121,7 @@ constexpr const char* staging_dir = "staging";
 constexpr const char* upload_dir = "upload";
 constexpr const char* snapshots_dir = "snapshots";
 constexpr const char* quarantine_dir = "quarantine";
+constexpr const char* pending_delete_dir = "pending_delete";
 
 constexpr const char* repair_origin = "repair";
 
@@ -374,7 +375,7 @@ public:
     }
 
     static sstring pending_delete_dir_basename() {
-        return "pending_delete";
+        return pending_delete_dir;
     }
 
     static bool is_pending_delete_dir(const fs::path& dirpath)
