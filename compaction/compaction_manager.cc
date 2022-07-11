@@ -261,6 +261,15 @@ compaction_manager::compaction_state& compaction_manager::get_compaction_state(r
     }
 }
 
+compaction_manager::task::task(compaction_manager& mgr, replica::table* t, sstables::compaction_type type, sstring desc)
+    : _cm(mgr)
+    , _compacting_table(t)
+    , _compaction_state(_cm.get_compaction_state(t))
+    , _type(type)
+    , _gate_holder(_compaction_state.gate.hold())
+    , _description(std::move(desc))
+{}
+
 future<> compaction_manager::perform_task(shared_ptr<compaction_manager::task> task) {
     _tasks.push_back(task);
     auto unregister_task = defer([this, task] {

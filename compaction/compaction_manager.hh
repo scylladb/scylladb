@@ -112,14 +112,7 @@ public:
         sstring _description;
 
     public:
-        explicit task(compaction_manager& mgr, replica::table* t, sstables::compaction_type type, sstring desc)
-            : _cm(mgr)
-            , _compacting_table(t)
-            , _compaction_state(_cm.get_compaction_state(t))
-            , _type(type)
-            , _gate_holder(_compaction_state.gate.hold())
-            , _description(std::move(desc))
-        {}
+        explicit task(compaction_manager& mgr, replica::table* t, sstables::compaction_type type, sstring desc);
 
         task(task&&) = delete;
         task(const task&) = delete;
