@@ -508,6 +508,8 @@ scylla_tests = set([
     'test/boost/rate_limiter_test',
     'test/boost/per_partition_rate_limit_test',
     'test/boost/expr_test',
+    'test/boost/exceptions_optimized_test',
+    'test/boost/exceptions_fallback_test',
     'test/manual/ec2_snitch_test',
     'test/manual/enormous_table_scan_test',
     'test/manual/gce_snitch_test',
@@ -1290,6 +1292,8 @@ deps['test/boost/linearizing_input_stream_test'] = [
 ]
 deps['test/boost/expr_test'] = ['test/boost/expr_test.cc'] + scylla_core
 deps['test/boost/rate_limiter_test'] = ['test/boost/rate_limiter_test.cc', 'db/rate_limiter.cc']
+deps['test/boost/exceptions_optimized_test'] = ['test/boost/exceptions_optimized_test.cc', 'utils/exceptions.cc']
+deps['test/boost/exceptions_fallback_test'] = ['test/boost/exceptions_fallback_test.cc', 'utils/exceptions.cc']
 
 deps['test/boost/duration_test'] += ['test/lib/exception_utils.cc']
 deps['test/boost/schema_loader_test'] += ['tools/schema_loader.cc']

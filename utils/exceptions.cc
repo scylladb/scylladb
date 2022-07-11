@@ -15,6 +15,7 @@
 #include <system_error>
 #include <atomic>
 #include "exceptions.hh"
+#include "utils/abi/eh_ia64.hh"
 
 #include <iostream>
 
@@ -59,17 +60,36 @@ bool should_stop_on_system_error(const std::system_error& e) {
 }
 
 bool is_timeout_exception(std::exception_ptr e) {
-    try {
-        std::rethrow_exception(e);
-    } catch (seastar::rpc::timeout_error& unused) {
+    if (try_catch<seastar::rpc::timeout_error>(e)) {
         return true;
-    } catch (seastar::semaphore_timed_out& unused) {
+    } else if (try_catch<seastar::semaphore_timed_out>(e)) {
         return true;
-    } catch (seastar::timed_out_error& unused) {
+    } else if (try_catch<seastar::timed_out_error>(e)) {
         return true;
-    } catch (const std::nested_exception& e) {
-        return is_timeout_exception(e.nested_ptr());
-    } catch (...) {
+    } else if (const auto* ex = try_catch<const std::nested_exception>(e)) {
+        return is_timeout_exception(ex->nested_ptr());
     }
     return false;
 }
+
+#if defined(OPTIMIZED_EXCEPTION_HANDLING_AVAILABLE)
+
+#include <typeinfo>
+#include "utils/abi/eh_ia64.hh"
+
+void* utils::internal::try_catch_dynamic(std::exception_ptr& eptr, const std::type_info* catch_type) noexcept {
+    // In both libstdc++ and libc++, exception_ptr has just one field
+    // which is a pointer to the exception data
+    void* raw_ptr = reinterpret_cast<void*&>(eptr);
+    const std::type_info* ex_type = utils::abi::get_cxa_exception(raw_ptr)->exceptionType;
+
+    // __do_catch can return true and set raw_ptr to nullptr, but only in the case
+    // when catch_type is a pointer and a nullptr is thrown. try_catch_dynamic
+    // doesn't work with catching pointers.
+    if (catch_type->__do_catch(ex_type, &raw_ptr, 1)) {
+        return raw_ptr;
+    }
+    return nullptr;
+}
+
+#endif // __GLIBCXX__

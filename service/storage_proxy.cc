@@ -94,6 +94,7 @@
 #include "utils/overloaded_functor.hh"
 #include "utils/result_try.hh"
 #include "utils/error_injection.hh"
+#include "utils/exceptions.hh"
 #include "replica/exceptions.hh"
 #include "db/operation_type.hh"
 
@@ -2896,24 +2897,22 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
             ++stats.writes_errors.get_ep_stat(p->get_token_metadata_ptr()->get_topology(), coordinator);
             error err = error::FAILURE;
             std::optional<sstring> msg;
-            try {
-                std::rethrow_exception(eptr);
-            } catch (replica::rate_limit_exception&) {
+            if (try_catch<replica::rate_limit_exception>(eptr)) {
                 // There might be a lot of those, so ignore
                 err = error::RATE_LIMIT;
-            } catch(rpc::closed_error&) {
+            } else if (try_catch<rpc::closed_error>(eptr)) {
                 // ignore, disconnect will be logged by gossiper
-            } catch(seastar::gate_closed_exception&) {
+            } else if (try_catch<seastar::gate_closed_exception>(eptr)) {
                 // may happen during shutdown, ignore it
-            } catch(timed_out_error&) {
+            } else if (try_catch<timed_out_error>(eptr)) {
                 // from lmutate(). Ignore so that logs are not flooded
                 // database total_writes_timedout counter was incremented.
                 // It needs to be recorded that the timeout occurred locally though.
                 err = error::TIMEOUT;
-            } catch(db::virtual_table_update_exception& e) {
-                msg = e.grab_cause();
-            } catch(...) {
-                slogger.error("exception during mutation write to {}: {}", coordinator, std::current_exception());
+            } else if (auto* e = try_catch<db::virtual_table_update_exception>(eptr)) {
+                msg = e->grab_cause();
+            } else {
+                slogger.error("exception during mutation write to {}: {}", coordinator, eptr);
             }
             p->got_failure_response(response_id, coordinator, forward_size + 1, std::nullopt, err, std::move(msg));
         });
@@ -2987,31 +2986,29 @@ public:
     void error(gms::inet_address ep, std::exception_ptr eptr) {
         sstring why;
         error_kind kind = error_kind::FAILURE;
-        try {
-            std::rethrow_exception(eptr);
-        } catch (replica::rate_limit_exception&) {
+        if (auto ex = try_catch<replica::rate_limit_exception>(eptr)) {
             // There might be a lot of those, so ignore
             kind = error_kind::RATE_LIMIT;
-        } catch (rpc::closed_error&) {
+        } else if (auto ex = try_catch<rpc::closed_error>(eptr)) {
             // do not report connection closed exception, gossiper does that
             kind = error_kind::DISCONNECT;
-        } catch (rpc::timeout_error&) {
+        } else if (try_catch<rpc::timeout_error>(eptr)) {
             // do not report timeouts, the whole operation will timeout and be reported
             return; // also do not report timeout as replica failure for the same reason
-        } catch (semaphore_timed_out&) {
+        } else if (try_catch<semaphore_timed_out>(eptr)) {
             // do not report timeouts, the whole operation will timeout and be reported
             return; // also do not report timeout as replica failure for the same reason
-        } catch (timed_out_error&) {
+        } else if (try_catch<timed_out_error>(eptr)) {
             // do not report timeouts, the whole operation will timeout and be reported
             return; // also do not report timeout as replica failure for the same reason
-        } catch (abort_requested_exception& e) {
+        } else if (try_catch<abort_requested_exception>(eptr)) {
             // do not report aborts, they are trigerred by shutdown or timeouts
-        } catch (rpc::remote_verb_error& e) {
+        } else if (auto ex = try_catch<rpc::remote_verb_error>(eptr)) {
             // Log remote read error with lower severity.
             // If it is really severe it we be handled on the host that sent
             // it.
-            slogger.warn("Exception when communicating with {}, to read from {}.{}: {}", ep, _schema->ks_name(), _schema->cf_name(), e.what());
-        } catch(...) {
+            slogger.warn("Exception when communicating with {}, to read from {}.{}: {}", ep, _schema->ks_name(), _schema->cf_name(), ex->what());
+        } else {
             slogger.error("Exception when communicating with {}, to read from {}.{}: {}", ep, _schema->ks_name(), _schema->cf_name(), eptr);
         }
 
@@ -3749,16 +3746,24 @@ protected:
         for (const gms::inet_address& ep : boost::make_iterator_range(begin, end)) {
             // Waited on indirectly, shared_from_this keeps `this` alive
             (void)make_mutation_data_request(cmd, ep, timeout).then_wrapped([this, resolver, ep, start, exec = shared_from_this()] (future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> f) {
+                std::exception_ptr ex;
                 try {
+                  if (!f.failed()) {
                     auto v = f.get0();
                     _cf->set_hit_rate(ep, std::get<1>(v));
                     resolver->add_mutate_data(ep, std::get<0>(std::move(v)));
                     ++_proxy->get_stats().mutation_data_read_completed.get_ep_stat(get_topology(), ep);
                     register_request_latency(latency_clock::now() - start);
-                } catch(...) {
-                    ++_proxy->get_stats().mutation_data_read_errors.get_ep_stat(get_topology(), ep);
-                    resolver->error(ep, std::current_exception());
+                    return;
+                  } else {
+                    ex = f.get_exception();
+                  }
+                } catch (...) {
+                  ex = std::current_exception();
                 }
+
+                ++_proxy->get_stats().mutation_data_read_errors.get_ep_stat(get_topology(), ep);
+                resolver->error(ep, std::move(ex));
             });
         }
     }
@@ -3767,17 +3772,25 @@ protected:
         for (const gms::inet_address& ep : boost::make_iterator_range(begin, end)) {
             // Waited on indirectly, shared_from_this keeps `this` alive
             (void)make_data_request(ep, timeout, want_digest).then_wrapped([this, resolver, ep, start, exec = shared_from_this()] (future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> f) {
+                std::exception_ptr ex;
                 try {
+                  if (!f.failed()) {
                     auto v = f.get0();
                     _cf->set_hit_rate(ep, std::get<1>(v));
                     resolver->add_data(ep, std::get<0>(std::move(v)));
                     ++_proxy->get_stats().data_read_completed.get_ep_stat(get_topology(), ep);
                     _used_targets.push_back(ep);
                     register_request_latency(latency_clock::now() - start);
-                } catch(...) {
-                    ++_proxy->get_stats().data_read_errors.get_ep_stat(get_topology(), ep);
-                    resolver->error(ep, std::current_exception());
+                    return;
+                  } else {
+                    ex = f.get_exception();
+                  }
+                } catch (...) {
+                  ex = std::current_exception();
                 }
+
+                ++_proxy->get_stats().data_read_errors.get_ep_stat(get_topology(), ep);
+                resolver->error(ep, std::move(ex));
             });
         }
     }
@@ -3786,17 +3799,25 @@ protected:
         for (const gms::inet_address& ep : boost::make_iterator_range(begin, end)) {
             // Waited on indirectly, shared_from_this keeps `this` alive
             (void)make_digest_request(ep, timeout).then_wrapped([this, resolver, ep, start, exec = shared_from_this()] (future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>> f) {
+                std::exception_ptr ex;
                 try {
+                  if (!f.failed()) {
                     auto v = f.get0();
                     _cf->set_hit_rate(ep, std::get<2>(v));
                     resolver->add_digest(ep, std::get<0>(v), std::get<1>(v));
                     ++_proxy->get_stats().digest_read_completed.get_ep_stat(get_topology(), ep);
                     _used_targets.push_back(ep);
                     register_request_latency(latency_clock::now() - start);
-                } catch(...) {
-                    ++_proxy->get_stats().digest_read_errors.get_ep_stat(get_topology(), ep);
-                    resolver->error(ep, std::current_exception());
+                    return;
+                  } else {
+                    ex = f.get_exception();
+                  }
+                } catch (...) {
+                  ex = std::current_exception();
                 }
+
+                ++_proxy->get_stats().digest_read_errors.get_ep_stat(get_topology(), ep);
+                resolver->error(ep, std::move(ex));
             });
         }
     }
