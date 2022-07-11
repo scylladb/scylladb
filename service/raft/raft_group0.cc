@@ -205,6 +205,15 @@ future<> raft_group0::abort() {
     co_await _shutdown_gate.close();
 }
 
+future<> raft_group0::start_server_for_group0(raft::group_id group0_id) {
+    assert(group0_id != raft::group_id{});
+
+    auto my_addr = co_await load_or_create_my_addr();
+
+    rslog.info("Server {} is starting group 0 with id {}", my_addr.id, group0_id);
+    co_await _raft_gr.start_server_for_group(create_server_for_group(group0_id, my_addr));
+    _group0.emplace<raft::group_id>(group0_id);
+}
 
 future<> raft_group0::join_group0() {
     assert(this_shard_id() == 0);
@@ -214,15 +223,15 @@ future<> raft_group0::join_group0() {
     if (!_raft_gr.is_enabled() || std::holds_alternative<raft::group_id>(_group0)) {
         co_return;
     }
-    auto my_addr = co_await load_or_create_my_addr();
-    raft::group_id group0_id = raft::group_id{co_await db::system_keyspace::get_raft_group0_id()};
-    if (group0_id != raft::group_id{}) {
-        rslog.trace("{} is starting group 0 with id {}", my_addr.id, group0_id);
-        co_await _raft_gr.start_server_for_group(create_server_for_group(group0_id, my_addr));
-        _group0 = group0_id;
-        co_return;
+
+    auto group0_id = raft::group_id{co_await db::system_keyspace::get_raft_group0_id()};
+    if (group0_id) {
+        // Group 0 ID present means we've already joined group 0 before.
+        co_return co_await start_server_for_group0(group0_id);
     }
+
     raft::server* server = nullptr;
+    auto my_addr = co_await load_or_create_my_addr();
     rslog.trace("{} found no local group 0. Discovering...", my_addr.id);
     while (true) {
         auto g0_info = co_await discover_group0(my_addr);

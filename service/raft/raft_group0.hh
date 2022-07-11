@@ -126,6 +126,17 @@ private:
     // Called by `discover_group0`.
     // Precondition: `_group0` contains `persistent_discovery`.
     future<group0_info> do_discover_group0(raft::server_address my_addr);
+
+    // Start an existing Raft server for the cluster-wide group 0.
+    // Assumes the server was already added to the group earlier so we don't attempt to join it again.
+    //
+    // `group0_id` must be non-null and equal to the ID of group 0 that we joined earlier.
+    // The existing group 0 server must not have been started yet after the last restart of Scylla.
+    //
+    // XXX: perhaps it would be good to make this function callable multiple times,
+    // if we want to handle crashes of the group 0 server without crashing the entire Scylla process
+    // (we could then try restarting the server internally).
+    future<> start_server_for_group0(raft::group_id group0_id);
 };
 
 } // end of namespace service
