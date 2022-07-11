@@ -1382,6 +1382,9 @@ class scylla_task_histogram(gdb.Command):
                 help="The size of objects to sample. When set, only objects of this size will be sampled. A size of 0 (the default value) means no size restrictions.")
         parser.add_argument("-f", "--filter-tasks", action="store_true",
                 help="Include only task objects in the histogram, reduces noise but might exclude items due to inexact filtering.")
+        parser.add_argument("-g", "--scheduling-groups", action="store_true",
+                help="Histogram is made from the scheduling groups of the sampled task objects. Implies -f.")
+
         try:
             args = parser.parse_args(arg.split())
         except SystemExit:
@@ -1393,6 +1396,10 @@ class scylla_task_histogram(gdb.Command):
         mem_start = cpu_mem['memory']
 
         vptr_type = gdb.lookup_type('uintptr_t').pointer()
+        task_type = gdb.lookup_type('seastar::task')
+        task_fields = {f.name: f for f in task_type.fields()}
+        sg_offset = int(task_fields['_sg'].bitpos / 8)
+        sg_ptr = gdb.lookup_type('unsigned').pointer()
 
         pages = cpu_mem['pages']
         nr_pages = int(cpu_mem['nr_pages'])
@@ -1400,8 +1407,13 @@ class scylla_task_histogram(gdb.Command):
 
         text_start, text_end = get_text_range()
 
+        scheduling_group_names = {int(tq['_id']): str(tq['_name']) for tq in get_local_task_queues()}
+
         def formatter(o):
-            return "0x{:x} {}".format(o, resolve(o))
+            if args.scheduling_groups:
+                return "{:02} {}".format(o, scheduling_group_names[o])
+            else:
+                return "0x{:x} {}".format(o, resolve(o))
 
         limit = None if args.all or args.count == 0 else args.count
         h = histogram(print_indicators=False, formatter=formatter, limit=limit)
@@ -1429,7 +1441,26 @@ class scylla_task_histogram(gdb.Command):
                     sym = resolve(addr)
                     if not sym or not symbol_matcher(sym):
                         continue # we only want tasks
-                h[addr] += 1
+                if args.scheduling_groups:
+                    # This is a dirty trick to make this reasonably fast even with 100K+ or 1M+ objects
+                    # We have two good choices here:
+                    # 1) gdb.Value(obj_addr).reinterpret_cast(task_type).dereference()['_sg']['_id']
+                    #    This prints tons of warning about missing RTTI symbols
+                    #    and is quite slow.
+                    # 2) gdb.parse_and_eval("(seastar::task*)0x{:x}".format(obj_addr))
+                    #    Works well but is horrendously slow: one type lookup per
+                    #    obj + parsing is too much apparently.
+                    #
+                    # So we bypass casting to seastar::task* and use the known
+                    # offset of the _id field instead directly.
+                    key = int(gdb.Value(obj_addr + sg_offset).reinterpret_cast(sg_ptr).dereference())
+                    # Task matching is not exact, we'll have some non-task
+                    # objects here, with invalid sg derived, ignore these.
+                    if key not in scheduling_group_names:
+                        continue
+                else:
+                    key = addr
+                h[key] += 1
             if args.all or args.samples == 0:
                 continue
             if scanned_pages >= args.samples or len(vptr_count) >= args.samples:
