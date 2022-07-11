@@ -58,7 +58,6 @@ private:
 };
 
 class raft_group0 {
-public:
     seastar::gate _shutdown_gate;
     seastar::abort_source& _abort_source;
     raft_group_registry& _raft_gr;
@@ -75,14 +74,6 @@ public:
     // created.
     std::variant<std::monostate, service::persistent_discovery, raft::group_id> _group0;
 
-    raft_server_for_group create_server_for_group(raft::group_id id, raft::server_address my_addr);
-    future<raft::server_address> load_or_create_my_addr();
-    // A helper function to discover Raft Group 0 leader in
-    // absence of running group 0 server.
-    future<group0_info> discover_group0(raft::server_address my_addr);
-private:
-    // Precondition: `_group0` contains `persistent_discovery`.
-    future<group0_info> do_discover_group0(raft::server_address my_addr);
 public:
     raft_group0(seastar::abort_source& abort_source,
         service::raft_group_registry& raft_gr,
@@ -110,11 +101,31 @@ public:
     // it can't do it by itself (it's dead).
     future<> leave_group0(std::optional<gms::inet_address> host = {});
 
+private:
     void init_rpc_verbs();
     future<> uninit_rpc_verbs();
 
     // Handle peer_exchange RPC
     future<group0_peer_exchange> peer_exchange(discovery::peer_list peers);
+
+    raft_server_for_group create_server_for_group(raft::group_id id, raft::server_address my_addr);
+
+    // Loads server address for group 0 from disk if present, otherwise randomly generates a new one and persists it.
+    // Execute on shard 0 only.
+    future<raft::server_address> load_or_create_my_addr();
+
+    // Run the discovery algorithm.
+    //
+    // Discovers an existing group 0 cluster or elects a server (called a 'leader')
+    // responsible for creating a new group 0 cluster if one doesn't exist
+    // (in particular, we may become that leader).
+    //
+    // See 'raft-in-scylla.md', 'Establishing group 0 in a fresh cluster'.
+    future<group0_info> discover_group0(raft::server_address my_addr);
+
+    // Called by `discover_group0`.
+    // Precondition: `_group0` contains `persistent_discovery`.
+    future<group0_info> do_discover_group0(raft::server_address my_addr);
 };
 
 } // end of namespace service
