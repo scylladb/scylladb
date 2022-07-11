@@ -261,8 +261,7 @@ future<> raft_group0::join_group0() {
             if (g0_info.addr.id == my_addr.id) {
                 // We should start a new group with this node as voter.
                 rslog.trace("server {} creating configuration as voter", my_addr.id);
-                bool can_vote = true;
-                initial_configuration.current.emplace(my_addr, can_vote);
+                initial_configuration.current.emplace(my_addr, true);
             }
             auto grp = create_server_for_group0(group0_id, my_addr);
             server = grp.server.get();
@@ -276,14 +275,11 @@ future<> raft_group0::join_group0() {
                     server->get_configuration().can_vote(my_addr.id)? "voter" : "non-voter");
             break;
         }
-        std::vector<raft::config_member> add_set;
-        bool can_vote = false;
-        add_set.emplace_back(my_addr, can_vote);
         auto pause_shutdown = _shutdown_gate.hold();
         auto timeout = db::timeout_clock::now() + std::chrono::milliseconds{1000};
         netw::msg_addr peer(raft_addr_to_inet_addr(g0_info.addr));
         try {
-            co_await ser::group0_rpc_verbs::send_group0_modify_config(&_ms, peer, timeout, group0_id, add_set, {});
+            co_await ser::group0_rpc_verbs::send_group0_modify_config(&_ms, peer, timeout, group0_id, {{my_addr, false}}, {});
             break;
         } catch (std::runtime_error& e) {
             // Retry
@@ -307,11 +303,8 @@ future<> raft_group0::become_voter() {
     assert(std::holds_alternative<raft::group_id>(_group0));
     auto& gid = std::get<raft::group_id>(_group0);
     if (!_raft_gr.get_server(gid).get_configuration().can_vote(my_addr.id)) {
-        std::vector<raft::config_member> add_set;
-        bool can_vote = true;
-        add_set.emplace_back(my_addr, can_vote);
         auto pause_shutdown = _shutdown_gate.hold();
-        co_return co_await _raft_gr.group0().modify_config(add_set, {});
+        co_return co_await _raft_gr.group0().modify_config({{my_addr, true}}, {});
     }
 }
 
@@ -339,11 +332,9 @@ future<> raft_group0::leave_group0(std::optional<gms::inet_address> node) {
         // Nothing to do
         co_return;
     }
-    std::vector<raft::server_id> del_set;
-    del_set.push_back(remove_addr);
     auto pause_shutdown = _shutdown_gate.hold();
     if (std::holds_alternative<raft::group_id>(_group0)) {
-        co_return co_await _raft_gr.group0().modify_config({}, del_set);
+        co_return co_await _raft_gr.group0().modify_config({}, {remove_addr});
     }
     auto g0_info = co_await discover_group0(raft::server_address{my_id, raft::server_info{}});
     if (g0_info.addr.id == my_id) {
@@ -354,7 +345,7 @@ future<> raft_group0::leave_group0(std::optional<gms::inet_address> node) {
     // the operation if necessary, it's move important it's not
     // "flaky" on slow network or CPU.
     auto timeout = db::timeout_clock::now() + std::chrono::minutes{20};
-    co_return co_await ser::group0_rpc_verbs::send_group0_modify_config(&_ms, peer, timeout, g0_info.group0_id, {}, del_set);
+    co_return co_await ser::group0_rpc_verbs::send_group0_modify_config(&_ms, peer, timeout, g0_info.group0_id, {}, {remove_addr});
 }
 
 future<group0_peer_exchange> raft_group0::peer_exchange(discovery::peer_list peers) {
