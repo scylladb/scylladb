@@ -123,6 +123,14 @@ constexpr const char* snapshots_dir = "snapshots";
 constexpr const char* quarantine_dir = "quarantine";
 constexpr const char* pending_delete_dir = "pending_delete";
 
+constexpr auto table_subdirectories = std::to_array({
+    staging_dir,
+    upload_dir,
+    snapshots_dir,
+    quarantine_dir,
+    pending_delete_dir,
+});
+
 constexpr const char* repair_origin = "repair";
 
 class sstable : public enable_lw_shared_from_this<sstable> {
