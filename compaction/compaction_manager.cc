@@ -315,7 +315,7 @@ future<> compaction_manager::task::compact_sstables_and_update_history(sstables:
     sstables::compaction_result res = co_await compact_sstables(std::move(descriptor), cdata, std::move(release_exhausted), std::move(can_purge));
 
     if (should_update_history) {
-        co_await update_history(*_compacting_table, res, cdata);
+        co_await update_history(_compacting_table->as_table_state(), res, cdata);
     }
 }
 future<sstables::compaction_result> compaction_manager::task::compact_sstables(sstables::compaction_descriptor descriptor, sstables::compaction_data& cdata, release_exhausted_func_t release_exhausted, can_purge_tombstones can_purge) {
@@ -340,10 +340,10 @@ future<sstables::compaction_result> compaction_manager::task::compact_sstables(s
 
     co_return co_await sstables::compact_sstables(std::move(descriptor), cdata, t.as_table_state());
 }
-future<> compaction_manager::task::update_history(replica::table& t, const sstables::compaction_result& res, const sstables::compaction_data& cdata) {
+future<> compaction_manager::task::update_history(compaction::table_state& t, const sstables::compaction_result& res, const sstables::compaction_data& cdata) {
     auto ended_at = std::chrono::duration_cast<std::chrono::milliseconds>(res.ended_at.time_since_epoch());
 
-    co_return co_await t.as_table_state().update_compaction_history(cdata.compaction_uuid, t.schema()->ks_name(), t.schema()->cf_name(), ended_at,
+    co_return co_await t.update_compaction_history(cdata.compaction_uuid, t.schema()->ks_name(), t.schema()->cf_name(), ended_at,
                                                                     res.start_size, res.end_size);
 }
 
@@ -947,7 +947,7 @@ protected:
                     // the weight earlier to remove unnecessary
                     // serialization.
                     weight_r.deregister();
-                    co_await update_history(*_compacting_table, res, _compaction_data);
+                    co_await update_history(_compacting_table->as_table_state(), res, _compaction_data);
                 }
                 _cm.reevaluate_postponed_compactions();
                 continue;
