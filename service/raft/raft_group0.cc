@@ -59,6 +59,17 @@ future<> raft_group0::uninit_rpc_verbs() {
     ).discard_result();
 }
 
+future<raft::server_address> raft_group0::load_my_addr() {
+    assert(this_shard_id() == 0);
+
+    auto id = raft::server_id{co_await db::system_keyspace::get_raft_server_id()};
+    if (!id) {
+        on_internal_error(rslog, "raft_group0::load_my_addr(): server ID for group 0 missing");
+    }
+
+    co_return raft::server_address{id, inet_addr_to_raft_addr(_gossiper.get_broadcast_address())};
+}
+
 seastar::future<raft::server_address> raft_group0::load_or_create_my_addr() {
     assert(this_shard_id() == 0);
     auto id = raft::server_id{co_await db::system_keyspace::get_raft_server_id()};
@@ -220,7 +231,7 @@ future<> raft_group0::abort() {
 future<> raft_group0::start_server_for_group0(raft::group_id group0_id) {
     assert(group0_id != raft::group_id{});
 
-    auto my_addr = co_await load_or_create_my_addr();
+    auto my_addr = co_await load_my_addr();
 
     rslog.info("Server {} is starting group 0 with id {}", my_addr.id, group0_id);
     co_await _raft_gr.start_server_for_group(create_server_for_group0(group0_id, my_addr));
@@ -300,7 +311,7 @@ future<> raft_group0::become_voter() {
     if (!_raft_gr.is_enabled()) {
         co_return;
     }
-    auto my_addr = co_await load_or_create_my_addr();
+    auto my_addr = co_await load_my_addr();
     assert(std::holds_alternative<raft::group_id>(_group0));
     auto& gid = std::get<raft::group_id>(_group0);
     if (!_raft_gr.get_server(gid).get_configuration().can_vote(my_addr.id)) {

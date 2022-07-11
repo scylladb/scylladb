@@ -112,6 +112,14 @@ private:
 
     raft_server_for_group create_server_for_group0(raft::group_id id, raft::server_address my_addr);
 
+    // Assumes server address for group 0 is already persisted and loads it from disk.
+    // It's a fatal error if the address is missing.
+    //
+    // Execute on shard 0 only.
+    //
+    // The returned ID is not empty.
+    future<raft::server_address> load_my_addr();
+
     // Loads server address for group 0 from disk if present, otherwise randomly generates a new one and persists it.
     // Execute on shard 0 only.
     future<raft::server_address> load_or_create_my_addr();
