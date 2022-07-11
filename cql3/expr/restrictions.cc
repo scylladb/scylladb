@@ -6,15 +6,16 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include "cql3/column_specification.hh"
-#include "expression.hh"
+#include "restrictions.hh"
+#include "cql3/statements/request_validations.hh"
+#include "seastar/util/defer.hh"
+#include "cql3/prepare_context.hh"
 #include "cql3/restrictions/multi_column_restriction.hh"
 #include "cql3/restrictions/token_restriction.hh"
-#include "cql3/prepare_context.hh"
-#include "schema.hh"
 
 namespace cql3 {
 namespace expr {
+
 extern logging::logger expr_logger;
 
 namespace {
@@ -87,31 +88,6 @@ void validate_single_column_relation(const column_value& lhs, oper_t oper, const
     }
 }
 
-::shared_ptr<restrictions::restriction> new_single_column_restriction(column_value&& lhs_col,
-                                                                      oper_t oper,
-                                                                      expression&& prepared_rhs,
-                                                                      comparison_order order,
-                                                                      const schema& schema) {
-    validate_single_column_relation(lhs_col, oper, schema, false);
-
-    ::shared_ptr<restrictions::restriction> r = ::make_shared<restrictions::restriction>();
-    r->expression = binary_operator(std::move(lhs_col), oper, std::move(prepared_rhs), order);
-    return r;
-}
-
-::shared_ptr<restrictions::restriction> new_subscripted_column_restriction(subscript&& lhs_sub,
-                                                                           oper_t oper,
-                                                                           expression&& prepared_rhs,
-                                                                           comparison_order order,
-                                                                           const schema& schema) {
-    const column_value& sub_col = get_subscripted_column(lhs_sub);
-    validate_single_column_relation(sub_col, oper, schema, true);
-
-    ::shared_ptr<restrictions::restriction> r = ::make_shared<restrictions::restriction>();
-    r->expression = binary_operator(std::move(lhs_sub), oper, std::move(prepared_rhs));
-    return r;
-}
-
 std::vector<const column_definition*> to_column_definitions(const std::vector<expression>& cols) {
     std::vector<const column_definition*> result;
     result.reserve(cols.size());
@@ -145,20 +121,166 @@ void validate_multi_column_relation(const std::vector<const column_definition*>&
     }
 }
 
+void validate_token_relation(const std::vector<const column_definition*> column_defs, oper_t oper, const schema& schema) {
+    auto pk = schema.partition_key_columns();
+    if (!std::equal(column_defs.begin(), column_defs.end(), pk.begin(),
+            pk.end(), [](auto* c1, auto& c2) {
+                return c1 == &c2; // same, not "equal".
+        })) {
+
+        throw exceptions::invalid_request_exception(
+                format("The token function arguments must be in the partition key order: {}",
+                        std::to_string(column_defs)));
+    }
+}
+
+void preliminary_binop_vaidation_checks(const binary_operator& binop) {
+    // Needed to print unprepared expressions in non-debug mode
+    expression::printer pretty_binop_printer {
+        .expr_to_print = binop,
+        .debug_mode = false
+    };
+
+    if (binop.op == oper_t::NEQ) {
+        throw exceptions::invalid_request_exception(format("Unsupported \"!=\" relation: {}", pretty_binop_printer));
+    }
+
+    if (binop.op == oper_t::IS_NOT) {
+        bool rhs_is_null = is<null>(binop.rhs)
+                           || (is<constant>(binop.rhs) && as<constant>(binop.rhs).is_null());
+        if (!rhs_is_null) {
+            throw exceptions::invalid_request_exception(format("Unsupported \"IS NOT\" relation: {}", pretty_binop_printer));
+        }
+    }
+
+    if (auto lhs_tup = as_if<tuple_constructor>(&binop.lhs)) {
+        if (binop.op == oper_t::CONTAINS) {
+            throw exceptions::invalid_request_exception("CONTAINS cannot be used for Multi-column relations");
+        }
+
+        if (binop.op == oper_t::CONTAINS_KEY) {
+            throw exceptions::invalid_request_exception("CONTAINS_KEY cannot be used for Multi-column relations");
+        }
+
+        if (binop.op == oper_t::LIKE) {
+            throw exceptions::invalid_request_exception("LIKE cannot be used for Multi-column relations");
+        }
+
+        if (auto rhs_tup = as_if<tuple_constructor>(&binop.rhs)) {
+            if (lhs_tup->elements.size() != rhs_tup->elements.size()) {
+                throw exceptions::invalid_request_exception(
+                    format("Expected {} elements in value tuple, but got {}: {}",
+                                  lhs_tup->elements.size(), rhs_tup->elements.size(), *rhs_tup));
+            }
+        }
+    }
+
+    if (is<token>(binop.lhs)) {
+        if (binop.op == oper_t::IN) {
+            throw exceptions::invalid_request_exception("IN cannot be used with the token function");
+        }
+
+        if (binop.op == oper_t::LIKE) {
+            throw exceptions::invalid_request_exception("LIKE cannot be used with the token function");
+        }
+
+        if (binop.op == oper_t::CONTAINS) {
+            throw exceptions::invalid_request_exception("CONTAINS cannot be used with the token function");
+        }
+
+        if (binop.op == oper_t::CONTAINS_KEY) {
+            throw exceptions::invalid_request_exception("CONTAINS_KEY cannot be used with the token function");
+        }
+    }
+}
+} // anonymous namespace
+
+binary_operator validate_and_prepare_new_restriction(const binary_operator& restriction,
+                                                     data_dictionary::database db,
+                                                     schema_ptr schema,
+                                                     prepare_context& ctx) {
+    // Perform basic initial checks
+    preliminary_binop_vaidation_checks(restriction);
+
+    // Prepare the restriction
+    binary_operator prepared_binop = prepare_binary_operator(restriction, db, schema);
+
+    // Fill prepare context
+    const column_value* lhs_pk_col_search_res = find_in_expression<column_value>(prepared_binop.lhs,
+        [](const column_value& col) {
+            return col.col->is_partition_key();
+        }
+    );
+    auto reset_processing_pk_column = defer([&ctx] () noexcept { ctx.set_processing_pk_restrictions(false); });
+    if (lhs_pk_col_search_res != nullptr) {
+        ctx.set_processing_pk_restrictions(true);
+    }
+    fill_prepare_context(prepared_binop.lhs, ctx);
+    fill_prepare_context(prepared_binop.rhs, ctx);
+
+    // Perform more throughout validation depending on restriction type
+    if (auto col_val = as_if<column_value>(&prepared_binop.lhs)) {
+        // Simple single column restriction
+        validate_single_column_relation(*col_val, prepared_binop.op, *schema, false);
+    } else if (auto sub = as_if<subscript>(&prepared_binop.lhs)) {
+        // Subscripted single column restriction
+        const column_value& sub_col = get_subscripted_column(*sub);
+        validate_single_column_relation(sub_col, prepared_binop.op, *schema, true);
+    } else if (auto multi_col_tuple = as_if<tuple_constructor>(&prepared_binop.lhs)) {
+        // Multi column restriction
+        std::vector<const column_definition*> lhs_cols = to_column_definitions(multi_col_tuple->elements);
+        std::vector<lw_shared_ptr<column_specification>> lhs_col_specs;
+        lhs_col_specs.reserve(multi_col_tuple->elements.size());
+
+        for (const column_definition* col_def : lhs_cols) {
+            lhs_col_specs.push_back(col_def->column_specification);
+        }
+
+        validate_multi_column_relation(lhs_cols, prepared_binop.op);
+    } else if (auto lhs_token = as_if<token>(&prepared_binop.lhs)) {
+        // Token restriction
+        std::vector<const column_definition*> column_defs = to_column_definitions(lhs_token->args);
+        validate_token_relation(column_defs, prepared_binop.op, *schema);
+    } else {
+        // Anything else
+        throw exceptions::invalid_request_exception(
+            format("expr::validate_and_prepare_new_restriction unhandled restriction: {}", prepared_binop));
+    }
+
+    // Convert single element IN relation to an EQ relation
+    if (prepared_binop.op == oper_t::IN) {
+        if (is<collection_constructor>(prepared_binop.rhs)) {
+            const std::vector<expression>& elements = as<collection_constructor>(prepared_binop.rhs).elements;
+            if (elements.size() == 1) {
+                prepared_binop.op = oper_t::EQ;
+                prepared_binop.rhs = elements[0];
+            }
+        }
+
+        if(is<constant>(prepared_binop.rhs) && as<constant>(prepared_binop.rhs).type->without_reversed().is_list()) {
+            const constant& rhs_constant = as<constant>(prepared_binop.rhs);
+            const list_type_impl* rhs_list_type =
+                dynamic_cast<const list_type_impl*>(&rhs_constant.type->without_reversed());
+            utils::chunked_vector<managed_bytes> elements = get_list_elements(rhs_constant.value);
+            if (elements.size() == 1) {
+                prepared_binop.op = oper_t::EQ;
+                prepared_binop.rhs = constant(cql3::raw_value::make_value(elements[0]),
+                                              rhs_list_type->get_elements_type());
+            }
+        }
+    }
+
+    return prepared_binop;
+}
+
+namespace {
+
 ::shared_ptr<restrictions::restriction> new_multi_column_restriction(const tuple_constructor& prepared_lhs_tuple,
                                                                      oper_t oper,
-                                                                     expression&& prepared_rhs,
+                                                                     expression prepared_rhs,
                                                                      comparison_order order,
                                                                      const schema_ptr& schema) {
     std::vector<const column_definition*> lhs_cols = to_column_definitions(prepared_lhs_tuple.elements);
-    std::vector<lw_shared_ptr<column_specification>> lhs_col_specs;
-    lhs_col_specs.reserve(prepared_lhs_tuple.elements.size());
-
-    for (const column_definition* col_def : lhs_cols) {
-        lhs_col_specs.push_back(col_def->column_specification);
-    }
-
-    validate_multi_column_relation(lhs_cols, oper);
 
     if (oper == oper_t::EQ) {
         return ::make_shared<restrictions::multi_column_restriction::EQ>(schema,
@@ -238,132 +360,24 @@ void validate_multi_column_relation(const std::vector<const column_definition*>&
                       fmt::format("new_multi_column_restriction operation type: {} not handled", oper));
 }
 
-void validate_token_relation(const std::vector<const column_definition*> column_defs, oper_t oper, const schema& schema) {
-    auto pk = schema.partition_key_columns();
-    if (!std::equal(column_defs.begin(), column_defs.end(), pk.begin(),
-            pk.end(), [](auto* c1, auto& c2) {
-                return c1 == &c2; // same, not "equal".
-        })) {
-
-        throw exceptions::invalid_request_exception(
-                format("The token function arguments must be in the partition key order: {}",
-                        std::to_string(column_defs)));
-    }
-}
-
-::shared_ptr<restrictions::restriction> new_token_restriction(token&& prepared_lhs_token,
-                                                              oper_t oper,
-                                                              expression&& prepared_rhs,
-                                                              comparison_order order,
-                                                              const schema& schema) {
-    std::vector<const column_definition*> column_defs = to_column_definitions(prepared_lhs_token.args);
-    validate_token_relation(column_defs, oper, schema);
-
-    ::shared_ptr<restrictions::restriction> r = ::make_shared<restrictions::token_restriction>(column_defs);
-    r->expression = binary_operator(std::move(prepared_lhs_token), oper, std::move(prepared_rhs));
-
-    return r;
-}
-
-void preliminary_binop_vaidation_checks(const binary_operator& binop) {
-    if (auto lhs_tup = as_if<tuple_constructor>(&binop.lhs)) {
-        if (binop.op == oper_t::CONTAINS) {
-            throw exceptions::invalid_request_exception("CONTAINS cannot be used for Multi-column relations");
-        }
-
-        if (binop.op == oper_t::CONTAINS_KEY) {
-            throw exceptions::invalid_request_exception("CONTAINS_KEY cannot be used for Multi-column relations");
-        }
-
-        if (binop.op == oper_t::LIKE) {
-            throw exceptions::invalid_request_exception("LIKE cannot be used for Multi-column relations");
-        }
-
-        if (auto rhs_tup = as_if<tuple_constructor>(&binop.rhs)) {
-            if (lhs_tup->elements.size() != rhs_tup->elements.size()) {
-                throw exceptions::invalid_request_exception(
-                    format("Expected {} elements in value tuple, but got {}: {}",
-                                  lhs_tup->elements.size(), rhs_tup->elements.size(), *rhs_tup));
-            }
-        }
-    }
-
-    if (is<token>(binop.lhs)) {
-        if (binop.op == oper_t::IN) {
-            throw exceptions::invalid_request_exception("IN cannot be used with the token function");
-        }
-
-        if (binop.op == oper_t::LIKE) {
-            throw exceptions::invalid_request_exception("LIKE cannot be used with the token function");
-        }
-
-        if (binop.op == oper_t::CONTAINS) {
-            throw exceptions::invalid_request_exception("CONTAINS cannot be used with the token function");
-        }
-
-        if (binop.op == oper_t::CONTAINS_KEY) {
-            throw exceptions::invalid_request_exception("CONTAINS_KEY cannot be used with the token function");
-        }
-    }
-}
-
 } // anonymous namespace
 
-::shared_ptr<restrictions::restriction> to_restriction(const expression& e,
-                                                       data_dictionary::database db,
-                                                       schema_ptr schema,
-                                                       prepare_context& ctx) {
-    if (is<constant>(e)) {
-        throw exceptions::invalid_request_exception("Constant value by itself is not supported as a restriction yet");
+::shared_ptr<restrictions::restriction> convert_to_restriction(const binary_operator& prepared_binop, const schema_ptr& schema) {
+    if (is<column_value>(prepared_binop.lhs) || is<subscript>(prepared_binop.lhs)) {
+        ::shared_ptr<restrictions::restriction> r = ::make_shared<restrictions::restriction>();
+        r->expression = prepared_binop;
+        return r;
+    } else if (auto lhs_tuple = as_if<tuple_constructor>(&prepared_binop.lhs)) {
+        return new_multi_column_restriction(*lhs_tuple, prepared_binop.op, prepared_binop.rhs, prepared_binop.order, schema);
+    } else if (auto lhs_token = as_if<token>(&prepared_binop.lhs)) {
+        std::vector<const column_definition*> column_defs = to_column_definitions(lhs_token->args);
+        ::shared_ptr<restrictions::restriction> r = ::make_shared<restrictions::token_restriction>(std::move(column_defs));
+        r->expression = prepared_binop;
+        return r;
+    } else {
+        throw exceptions::invalid_request_exception(
+            format("expr::validate_and_prepare_new_restriction unhandled restriction: {}", prepared_binop));
     }
-
-    if (!is<binary_operator>(e)) {
-        throw exceptions::invalid_request_exception("Restriction must be a binary operator");
-    }
-    const binary_operator& binop_to_prepare = as<binary_operator>(e);
-
-    preliminary_binop_vaidation_checks(binop_to_prepare);
-
-    binary_operator prepared_binop = prepare_binary_operator(binop_to_prepare, db, schema);
-
-    const column_value* lhs_pk_col_search_res = find_in_expression<column_value>(prepared_binop.lhs,
-        [](const column_value& col) {
-            return col.col->is_partition_key();
-        }
-    );
-    auto reset_processing_pk_column = defer([&ctx] () noexcept { ctx.set_processing_pk_restrictions(false); });
-    if (lhs_pk_col_search_res != nullptr) {
-        ctx.set_processing_pk_restrictions(true);
-    }
-    fill_prepare_context(prepared_binop.lhs, ctx);
-    fill_prepare_context(prepared_binop.rhs, ctx);
-
-    if (prepared_binop.op == oper_t::NEQ) {
-        throw exceptions::invalid_request_exception(format("Unsupported \"!=\" relation: {}", prepared_binop));
-    }
-
-    if (prepared_binop.op == oper_t::IS_NOT && !is<null>(prepared_binop.rhs)) {
-        throw exceptions::invalid_request_exception(format("Unsupported \"IS NOT\" relation: {}", prepared_binop));
-    }
-
-    if (auto col_val = as_if<column_value>(&prepared_binop.lhs)) {
-        return new_single_column_restriction(std::move(*col_val), prepared_binop.op, std::move(prepared_binop.rhs), prepared_binop.order, *schema);
-    }
-
-    if (auto sub = as_if<subscript>(&prepared_binop.lhs)) {
-        return new_subscripted_column_restriction(std::move(*sub), prepared_binop.op, std::move(prepared_binop.rhs), prepared_binop.order, *schema);
-    }
-
-    if (auto multi_col_tuple = as_if<tuple_constructor>(&prepared_binop.lhs)) {
-        return new_multi_column_restriction(*multi_col_tuple, prepared_binop.op, std::move(prepared_binop.rhs), prepared_binop.order, schema);
-    }
-
-    if (auto lhs_token = as_if<token>(&prepared_binop.lhs)) {
-        return new_token_restriction(std::move(*lhs_token), prepared_binop.op, std::move(prepared_binop.rhs), prepared_binop.order, *schema);
-    }
-
-    on_internal_error(expr_logger, format("expr::to_restriction unhandled case: {}", e));
 }
-
 } // namespace expr
 } // namespace cql3

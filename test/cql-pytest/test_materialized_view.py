@@ -8,7 +8,7 @@ import time
 import pytest
 
 from util import new_test_table, unique_name, new_materialized_view
-from cassandra.protocol import InvalidRequest
+from cassandra.protocol import InvalidRequest, SyntaxException
 
 import nodetool
 
@@ -213,3 +213,17 @@ def test_filter_with_unused_static_column(cql, test_keyspace, scylla_only):
                         cql.execute(f"INSERT INTO {table} (p,c,v) VALUES (1,2,3)")
                         expected = [(42,43,44)] if '4' in where else [(42,43,44),(1,2,3)]
                         assert list(cql.execute(f"SELECT * FROM {mv}")) == expected
+
+
+# IS_NOT operator can only be used in the context of materialized view creation and it must be of the form IS NOT NULL.
+# Trying to do something like IS NOT 42 should fail.
+# The error is a SyntaxException because Scylla and Cassandra check this during parsing.
+def test_is_not_operator_must_be_null(cql, test_keyspace):
+    schema = 'p int PRIMARY KEY'
+    mv = unique_name()
+    with new_test_table(cql, test_keyspace, schema) as table:
+        try:
+            with pytest.raises(SyntaxException, match="NULL"):
+                cql.execute(f"CREATE MATERIALIZED VIEW {test_keyspace}.{mv} AS SELECT * FROM {table} WHERE p IS NOT 42 PRIMARY KEY (p)")
+        finally:
+            cql.execute(f"DROP MATERIALIZED VIEW IF EXISTS {test_keyspace}.{mv}")

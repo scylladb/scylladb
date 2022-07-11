@@ -717,14 +717,6 @@ void fill_prepare_context(expression&, cql3::prepare_context&);
 // For example an expression can contain calls to nonpure functions.
 bool contains_bind_marker(const expression& e);
 
-// Converts the given expression to the corresponding restriction instance.
-// The expression does't have to be prepared, it will be prepared in this function.
-// Needed for now, but in the future all restrictions will be replaced by expression.
-::shared_ptr<restrictions::restriction> to_restriction(const expression&,
-                                                       data_dictionary::database,
-                                                       schema_ptr,
-                                                       prepare_context&);
-
 // Checks whether this expression contains restrictions on one single column.
 // There might be more than one restriction, but exactly one column.
 // The expression must be prepared.
