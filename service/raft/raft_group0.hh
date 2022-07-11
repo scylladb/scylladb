@@ -29,31 +29,33 @@ public:
     using peer_list = discovery::peer_list;
     using tick_output = discovery::tick_output;
 
-    persistent_discovery(persistent_discovery&&) = default;
-
     // See `discovery::discovery`.
     // The provided seed list will be extended with already known persisted peers.
     // `self` must be the same across restarts.
     static future<persistent_discovery> make(raft::server_address self, peer_list seeds, cql3::query_processor&);
 
+    // Run the discovery algorithm to find information about group 0.
+    future<group0_info> run(
+        netw::messaging_service&,
+        gate::holder pause_shutdown,
+        abort_source&,
+        raft::server_address my_addr);
+
+    // Must be called and waited for before destroying the object.
+    // Must not be called concurrently with `run`.
+    // Can be called concurrently with `request`.
+    future<> stop();
+
     // See `discovery::request`.
     future<std::optional<peer_list>> request(peer_list peers);
 
+private:
     // See `discovery::response`.
     void response(raft::server_address from, const peer_list& peers);
 
     // See `discovery::tick`.
     future<tick_output> tick();
 
-    // Must be called and waited for before destroying the object.
-    //
-    // Must be called after all calls to `tick` finish,
-    // and no new calls to `tick` must be made after calling `stop`.
-    //
-    // Can be called concurrently with `request`.
-    future<> stop();
-
-private:
     persistent_discovery(raft::server_address, const peer_list&, cql3::query_processor&);
 };
 
@@ -122,10 +124,6 @@ private:
     //
     // See 'raft-in-scylla.md', 'Establishing group 0 in a fresh cluster'.
     future<group0_info> discover_group0(raft::server_address my_addr);
-
-    // Called by `discover_group0`.
-    // Precondition: `_group0` contains `persistent_discovery`.
-    future<group0_info> do_discover_group0(raft::server_address my_addr);
 
     // Start an existing Raft server for the cluster-wide group 0.
     // Assumes the server was already added to the group earlier so we don't attempt to join it again.

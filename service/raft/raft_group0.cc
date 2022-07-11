@@ -112,22 +112,24 @@ raft_group0::discover_group0(raft::server_address my_addr) {
         seeds.emplace_back(raft::server_id{}, inet_addr_to_raft_addr(seed));
     }
 
-    _group0.emplace<persistent_discovery>(co_await persistent_discovery::make(my_addr, std::move(seeds), _qp));
-    co_return co_await futurize_invoke([this, my_addr = std::move(my_addr)] () mutable {
-        return do_discover_group0(std::move(my_addr));
-    }).finally(std::bind_front([] (raft_group0& self) -> future<> {
-        co_await std::get<persistent_discovery>(self._group0).stop();
+    auto& p_discovery = _group0.emplace<persistent_discovery>(co_await persistent_discovery::make(my_addr, std::move(seeds), _qp));
+    co_return co_await futurize_invoke([this, &p_discovery, my_addr = std::move(my_addr)] () mutable {
+        return p_discovery.run(_ms, _shutdown_gate.hold(), _abort_source, std::move(my_addr));
+    }).finally(std::bind_front([] (raft_group0& self, persistent_discovery& p_discovery) -> future<> {
+        co_await p_discovery.stop();
         self._group0 = std::monostate{};
-    }, std::ref(*this)));
+    }, std::ref(*this), std::ref(p_discovery)));
 }
 
-future<group0_info>
-raft_group0::do_discover_group0(raft::server_address my_addr) {
+future<group0_info> persistent_discovery::run(
+        netw::messaging_service& ms,
+        gate::holder pause_shutdown,
+        abort_source& as,
+        raft::server_address my_addr) {
     struct tracker {
-        explicit tracker(discovery::tick_output output_arg) : output(std::move(output_arg)) {}
-        discovery::tick_output output;
-        promise<std::optional<group0_info>> g0_info;
         bool is_set = false;
+        promise<std::optional<group0_info>> g0_info;
+
         void set_value(std::optional<group0_info> opt_g0_info) {
             if (!is_set) {
                 is_set = true;
@@ -141,6 +143,7 @@ raft_group0::do_discover_group0(raft::server_address my_addr) {
             }
         }
     };
+
     // Send peer information to all known peers. If replies
     // discover new peers, send peer information to them as well.
     // As soon as we get a Raft Group 0 member information from
@@ -151,8 +154,9 @@ raft_group0::do_discover_group0(raft::server_address my_addr) {
     // creates a group and shares its group 0 id and peer address
     // with us.
     while (true) {
-        auto tracker = make_lw_shared<struct tracker>(co_await std::get<persistent_discovery>(_group0).tick());
-        if (std::holds_alternative<discovery::i_am_leader>(tracker->output)) {
+        auto output = co_await tick();
+
+        if (std::holds_alternative<discovery::i_am_leader>(output)) {
             co_return group0_info{
                 // Time-based ordering for groups identifiers may be
                 // useful to provide linearisability between group
@@ -161,37 +165,47 @@ raft_group0::do_discover_group0(raft::server_address my_addr) {
                 .addr = my_addr
             };
         }
-        if (std::holds_alternative<discovery::pause>(tracker->output)) {
+
+        if (std::holds_alternative<discovery::pause>(output)) {
             rslog.trace("server {} pausing discovery...", my_addr.id);
-            co_await seastar::sleep_abortable(std::chrono::milliseconds{1000}, _abort_source);
+            co_await seastar::sleep_abortable(std::chrono::milliseconds{1000}, as);
             continue;
         }
-        auto& request_list = std::get<discovery::request_list>(tracker->output);
-        auto timeout = db::timeout_clock::now() + std::chrono::milliseconds{1000};
-        (void) parallel_for_each(request_list, [this, tracker_ = tracker, timeout]
-                (std::pair<raft::server_address, discovery::peer_list>& req) -> future<> {
 
-            netw::msg_addr peer(raft_addr_to_inet_addr(req.first));
-            auto pause_shutdown = _shutdown_gate.hold();
-            rslog.trace("sending discovery message to {}", peer);
-            auto tracker = tracker_; // https://bugs.llvm.org/show_bug.cgi?id=51515
-            try {
-                auto reply = co_await ser::group0_rpc_verbs::send_group0_peer_exchange(&_ms, peer, timeout, std::move(req.second));
-                if (std::holds_alternative<discovery::peer_list>(reply.info)) {
-                    if (auto p_discovery = std::get_if<service::persistent_discovery>(&_group0)) {
-                        p_discovery->response(req.first, std::move(std::get<discovery::peer_list>(reply.info)));
+        auto tracker = make_lw_shared<struct tracker>();
+        (void)[] (persistent_discovery& self, netw::messaging_service& ms, gate::holder pause_shutdown,
+                  discovery::request_list request_list, lw_shared_ptr<struct tracker> tracker) -> future<> {
+            auto timeout = db::timeout_clock::now() + std::chrono::milliseconds{1000};
+            co_await parallel_for_each(request_list, [&] (std::pair<raft::server_address, discovery::peer_list>& req) -> future<> {
+                netw::msg_addr peer(raft_addr_to_inet_addr(req.first));
+                rslog.trace("sending discovery message to {}", peer);
+                try {
+                    auto reply = co_await ser::group0_rpc_verbs::send_group0_peer_exchange(&ms, peer, timeout, std::move(req.second));
+
+                    if (tracker->is_set) {
+                        // Another peer was used to discover group 0 before us.
+                        co_return;
                     }
-                } else if (std::holds_alternative<group0_info>(reply.info)) {
-                    tracker->set_value(std::move(std::get<group0_info>(reply.info)));
+
+                    if (auto peer_list = std::get_if<discovery::peer_list>(&reply.info)) {
+                        // `tracker->is_set` is false so `run_discovery` hasn't exited yet, still safe to access `self`.
+                        self.response(req.first, std::move(*peer_list));
+                    } else if (auto g0_info = std::get_if<group0_info>(&reply.info)) {
+                        tracker->set_value(std::move(*g0_info));
+                    }
+                } catch (std::exception& e) {
+                    if (dynamic_cast<std::runtime_error*>(&e)) {
+                        rslog.trace("failed to send message: {}", e);
+                    } else {
+                        tracker->set_exception();
+                    }
                 }
-            } catch (std::exception& e) {
-                if (dynamic_cast<std::runtime_error*>(&e)) {
-                    rslog.trace("failed to send message: {}", e);
-                } else {
-                    tracker->set_exception();
-                }
-            }
-        }).then([tracker] { tracker->set_value({}); });
+            });
+
+            // In case we haven't discovered group 0 yet - need to run another iteration.
+            tracker->set_value(std::nullopt);
+        }(std::ref(*this), ms, pause_shutdown, std::move(std::get<discovery::request_list>(output)), tracker);
+
         if (auto g0_info = co_await tracker->g0_info.get_future()) {
             co_return *g0_info;
         }
