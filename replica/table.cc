@@ -1118,14 +1118,6 @@ std::vector<sstables::shared_sstable> table::select_sstables(const dht::partitio
     return _sstables->select(range);
 }
 
-std::vector<sstables::shared_sstable> table::in_strategy_sstables() const {
-    auto sstables = _main_sstables->all();
-    return boost::copy_range<std::vector<sstables::shared_sstable>>(*sstables
-            | boost::adaptors::filtered([this] (auto& sst) {
-        return sstables::is_eligible_for_compaction(sst);
-    }));
-}
-
 // Gets the list of all sstables in the column family, including ones that are
 // not used for active queries because they have already been compacted, but are
 // waiting for delete_atomically() to return.

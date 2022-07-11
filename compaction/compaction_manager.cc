@@ -195,6 +195,13 @@ void compaction_manager::deregister_weight(int weight) {
     reevaluate_postponed_compactions();
 }
 
+std::vector<sstables::shared_sstable> in_strategy_sstables(compaction::table_state& table_s) {
+    auto sstables = table_s.main_sstable_set().all();
+    return boost::copy_range<std::vector<sstables::shared_sstable>>(*sstables | boost::adaptors::filtered([] (const sstables::shared_sstable& sst) {
+        return sstables::is_eligible_for_compaction(sst);
+    }));
+}
+
 std::vector<sstables::shared_sstable> compaction_manager::get_candidates(const replica::table& t) {
     std::vector<sstables::shared_sstable> candidates;
     candidates.reserve(t.sstables_count());
@@ -206,7 +213,7 @@ std::vector<sstables::shared_sstable> compaction_manager::get_candidates(const r
     auto& cs = t.get_compaction_strategy();
 
     // Filter out sstables that are being compacted.
-    for (auto& sst : t.in_strategy_sstables()) {
+    for (auto& sst : in_strategy_sstables(t.as_table_state())) {
         if (_compacting_sstables.contains(sst)) {
             continue;
         }

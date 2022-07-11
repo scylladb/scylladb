@@ -487,5 +487,8 @@ public:
 
 bool needs_cleanup(const sstables::shared_sstable& sst, const dht::token_range_vector& owned_ranges, schema_ptr s);
 
+// Return all sstables but those that are off-strategy like the ones in maintenance set and staging dir.
+std::vector<sstables::shared_sstable> in_strategy_sstables(compaction::table_state& table_s);
+
 std::ostream& operator<<(std::ostream& os, compaction_manager::task::state s);
 std::ostream& operator<<(std::ostream& os, const compaction_manager::task& task);

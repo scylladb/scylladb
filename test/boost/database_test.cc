@@ -975,7 +975,7 @@ SEASTAR_TEST_CASE(populate_from_quarantine_works) {
         for (auto i = 0; i < smp::count && !found; i++) {
             found = co_await db.invoke_on((shard + i) % smp::count, [] (replica::database& db) -> future<bool> {
                 auto& cf = db.find_column_family("ks", "cf");
-                auto sstables = cf.in_strategy_sstables();
+                auto sstables = in_strategy_sstables(cf.as_table_state());
                 if (sstables.empty()) {
                     co_return false;
                 }
@@ -1024,7 +1024,7 @@ SEASTAR_TEST_CASE(snapshot_with_quarantine_works) {
         for (auto i = 0; i < smp::count; i++) {
             co_await db.invoke_on((shard + i) % smp::count, [&] (replica::database& db) -> future<> {
                 auto& cf = db.find_column_family("ks", "cf");
-                auto sstables = cf.in_strategy_sstables();
+                auto sstables = in_strategy_sstables(cf.as_table_state());
                 if (sstables.empty()) {
                     co_return;
                 }

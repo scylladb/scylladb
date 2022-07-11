@@ -2286,8 +2286,8 @@ SEASTAR_TEST_CASE(sstable_scrub_validate_mode_test) {
 
             table->add_sstable_and_update_cache(sst).get();
 
-            BOOST_REQUIRE(table->in_strategy_sstables().size() == 1);
-            BOOST_REQUIRE(table->in_strategy_sstables().front() == sst);
+            BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).size() == 1);
+            BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).front() == sst);
 
             auto verify_fragments = [&] (sstables::shared_sstable sst, const std::vector<mutation_fragment_v2>& mfs) {
                 auto r = assert_that(sst->as_mutation_source().make_reader_v2(schema, env.make_reader_permit()));
@@ -2312,7 +2312,7 @@ SEASTAR_TEST_CASE(sstable_scrub_validate_mode_test) {
             compaction_manager.perform_sstable_scrub(table.get(), opts).get();
 
             BOOST_REQUIRE(sst->is_quarantined());
-            BOOST_REQUIRE(table->in_strategy_sstables().empty());
+            BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).empty());
             verify_fragments(sst, corrupt_fragments);
         });
     }, test_cfg);
@@ -2485,8 +2485,8 @@ SEASTAR_TEST_CASE(sstable_scrub_skip_mode_test) {
 
             table->add_sstable_and_update_cache(sst).get();
 
-            BOOST_REQUIRE(table->in_strategy_sstables().size() == 1);
-            BOOST_REQUIRE(table->in_strategy_sstables().front() == sst);
+            BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).size() == 1);
+            BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).front() == sst);
 
             auto verify_fragments = [&] (sstables::shared_sstable sst, const std::vector<mutation_fragment_v2>& mfs) {
                 auto r = assert_that(sst->as_mutation_source().make_reader_v2(schema, permit));
@@ -2509,7 +2509,7 @@ SEASTAR_TEST_CASE(sstable_scrub_skip_mode_test) {
             opts.operation_mode = sstables::compaction_type_options::scrub::mode::abort;
             compaction_manager.perform_sstable_scrub(table.get(), opts).get();
 
-            BOOST_REQUIRE(table->in_strategy_sstables().size() == 1);
+            BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).size() == 1);
             verify_fragments(sst, corrupt_fragments);
 
             testlog.info("Scrub in skip mode");
@@ -2518,9 +2518,9 @@ SEASTAR_TEST_CASE(sstable_scrub_skip_mode_test) {
             opts.operation_mode = sstables::compaction_type_options::scrub::mode::skip;
             compaction_manager.perform_sstable_scrub(table.get(), opts).get();
 
-            BOOST_REQUIRE(table->in_strategy_sstables().size() == 1);
-            BOOST_REQUIRE(table->in_strategy_sstables().front() != sst);
-            verify_fragments(table->in_strategy_sstables().front(), scrubbed_fragments);
+            BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).size() == 1);
+            BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).front() != sst);
+            verify_fragments(in_strategy_sstables(table->as_table_state()).front(), scrubbed_fragments);
         });
     }, test_cfg);
 }
@@ -2582,8 +2582,8 @@ SEASTAR_TEST_CASE(sstable_scrub_segregate_mode_test) {
 
             table->add_sstable_and_update_cache(sst).get();
 
-            BOOST_REQUIRE(table->in_strategy_sstables().size() == 1);
-            BOOST_REQUIRE(table->in_strategy_sstables().front() == sst);
+            BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).size() == 1);
+            BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).front() == sst);
 
             auto verify_fragments = [&] (sstables::shared_sstable sst, const std::vector<mutation_fragment_v2>& mfs) {
                 auto r = assert_that(sst->as_mutation_source().make_reader_v2(schema, env.make_reader_permit()));
@@ -2606,7 +2606,7 @@ SEASTAR_TEST_CASE(sstable_scrub_segregate_mode_test) {
             opts.operation_mode = sstables::compaction_type_options::scrub::mode::abort;
             compaction_manager.perform_sstable_scrub(table.get(), opts).get();
 
-            BOOST_REQUIRE(table->in_strategy_sstables().size() == 1);
+            BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).size() == 1);
             verify_fragments(sst, corrupt_fragments);
 
             testlog.info("Scrub in segregate mode");
@@ -2615,8 +2615,8 @@ SEASTAR_TEST_CASE(sstable_scrub_segregate_mode_test) {
             opts.operation_mode = sstables::compaction_type_options::scrub::mode::segregate;
             compaction_manager.perform_sstable_scrub(table.get(), opts).get();
 
-            testlog.info("Scrub resulted in {} sstables", table->in_strategy_sstables().size());
-            BOOST_REQUIRE(table->in_strategy_sstables().size() > 1);
+            testlog.info("Scrub resulted in {} sstables", in_strategy_sstables(table->as_table_state()).size());
+            BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).size() > 1);
             {
                 auto sst_reader = assert_that(table->as_mutation_source().make_reader_v2(schema, env.make_reader_permit()));
                 auto mt_reader = scrubbed_mt->as_data_source().make_reader_v2(schema, env.make_reader_permit());
@@ -2694,8 +2694,8 @@ SEASTAR_TEST_CASE(sstable_scrub_quarantine_mode_test) {
 
                 table->add_sstable_and_update_cache(sst).get();
 
-                BOOST_REQUIRE(table->in_strategy_sstables().size() == 1);
-                BOOST_REQUIRE(table->in_strategy_sstables().front() == sst);
+                BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).size() == 1);
+                BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).front() == sst);
 
                 auto verify_fragments = [&] (sstables::shared_sstable sst, const std::vector<mutation_fragment_v2>& mfs) {
                     auto r = assert_that(sst->as_mutation_source().make_reader_v2(schema, env.make_reader_permit()));
@@ -2718,7 +2718,7 @@ SEASTAR_TEST_CASE(sstable_scrub_quarantine_mode_test) {
                 opts.operation_mode = sstables::compaction_type_options::scrub::mode::validate;
                 compaction_manager.perform_sstable_scrub(table.get(), opts).get();
 
-                BOOST_REQUIRE(table->in_strategy_sstables().empty());
+                BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).empty());
                 BOOST_REQUIRE(sst->is_quarantined());
                 verify_fragments(sst, corrupt_fragments);
 
@@ -2733,8 +2733,8 @@ SEASTAR_TEST_CASE(sstable_scrub_quarantine_mode_test) {
                 case sstables::compaction_type_options::scrub::quarantine_mode::include:
                 case sstables::compaction_type_options::scrub::quarantine_mode::only:
                     // The sstable should be found and scrubbed when scrub::quarantine_mode is scrub::quarantine_mode::{include,only}
-                    testlog.info("Scrub resulted in {} sstables", table->in_strategy_sstables().size());
-                    BOOST_REQUIRE(table->in_strategy_sstables().size() > 1);
+                    testlog.info("Scrub resulted in {} sstables", in_strategy_sstables(table->as_table_state()).size());
+                    BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).size() > 1);
                     {
                         auto sst_reader = assert_that(table->as_mutation_source().make_reader_v2(schema, env.make_reader_permit()));
                         auto mt_reader = scrubbed_mt->as_data_source().make_reader_v2(schema, env.make_reader_permit());
@@ -2748,7 +2748,7 @@ SEASTAR_TEST_CASE(sstable_scrub_quarantine_mode_test) {
                     break;
                 case sstables::compaction_type_options::scrub::quarantine_mode::exclude:
                     // The sstable should not be found when scrub::quarantine_mode is scrub::quarantine_mode::exclude
-                    BOOST_REQUIRE(table->in_strategy_sstables().empty());
+                    BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).empty());
                     BOOST_REQUIRE(sst->is_quarantined());
                     verify_fragments(sst, corrupt_fragments);
                     break;
