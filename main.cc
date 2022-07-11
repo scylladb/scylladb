@@ -1041,6 +1041,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
             if (cfg->check_experimental(db::experimental_features_t::feature::RAFT)) {
                 supervisor::notify("starting Raft Group Registry service");
+            } else {
+                if (cfg->check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
+                    startlog.error("Bad configuration: RAFT feature has to be enabled if BROADCAST_TABLES is enabled");
+                    throw bad_configuration_error();
+                }
             }
             raft_gr.invoke_on_all(&service::raft_group_registry::start).get();
 
