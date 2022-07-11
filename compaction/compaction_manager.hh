@@ -312,7 +312,7 @@ private:
     void deregister_weight(int weight);
 
     // Get candidates for compaction strategy, which are all sstables but the ones being compacted.
-    std::vector<sstables::shared_sstable> get_candidates(const replica::table& t);
+    std::vector<sstables::shared_sstable> get_candidates(compaction::table_state& t);
 
     template <typename Iterator, typename Sentinel>
     requires std::same_as<Sentinel, Iterator> || std::sentinel_for<Sentinel, Iterator>
