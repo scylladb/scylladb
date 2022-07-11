@@ -1229,7 +1229,10 @@ class histogram:
             else:
                 indicator = ''
             for item in items:
-                lines.append('{:9d} {} {}'.format(count, self._formatter(item), indicator))
+                try:
+                    lines.append('{:9d} {} {}'.format(count, self._formatter(item), indicator))
+                except:
+                    gdb.write("error: failed to format item `{}': {}\n".format(item, sys.exc_info()[1]))
 
         return '\n'.join(lines)
 
