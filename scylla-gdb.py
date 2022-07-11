@@ -1380,6 +1380,8 @@ class scylla_task_histogram(gdb.Command):
                 help="Sample all pages and show all results. Equivalent to -m=0 -c=0.")
         parser.add_argument("-s", "--size", type=int, action="store", default=0,
                 help="The size of objects to sample. When set, only objects of this size will be sampled. A size of 0 (the default value) means no size restrictions.")
+        parser.add_argument("-f", "--filter-tasks", action="store_true",
+                help="Include only task objects in the histogram, reduces noise but might exclude items due to inexact filtering.")
         try:
             args = parser.parse_args(arg.split())
         except SystemExit:
@@ -1403,6 +1405,7 @@ class scylla_task_histogram(gdb.Command):
 
         limit = None if args.all or args.count == 0 else args.count
         h = histogram(print_indicators=False, formatter=formatter, limit=limit)
+        symbol_matcher = task_symbol_matcher()
 
         sc = span_checker()
         vptr_count = defaultdict(int)
@@ -1420,8 +1423,13 @@ class scylla_task_histogram(gdb.Command):
             for idx2 in range(0, int(span_size / objsize)):
                 obj_addr = span.start + idx2 * objsize
                 addr = int(gdb.Value(obj_addr).reinterpret_cast(vptr_type).dereference())
-                if addr >= text_start and addr <= text_end:
-                    h[addr] += 1
+                if addr < text_start or addr > text_end:
+                    continue
+                if args.filter_tasks:
+                    sym = resolve(addr)
+                    if not sym or not symbol_matcher(sym):
+                        continue # we only want tasks
+                h[addr] += 1
             if args.all or args.samples == 0:
                 continue
             if scanned_pages >= args.samples or len(vptr_count) >= args.samples:
