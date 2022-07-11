@@ -12,6 +12,8 @@
 
 namespace cql3 { class query_processor; }
 
+namespace db { class system_keyspace; }
+
 namespace gms { class gossiper; }
 
 namespace service {
@@ -87,14 +89,20 @@ public:
 
     future<> abort();
 
-    // Join this node to the cluster-wide Raft group
-    // Called during bootstrap. Is idempotent - it
-    // does nothing if already done, or resumes from the
-    // unifinished state if aborted. The result is that
-    // raft service has group 0 running.
-    future<> join_group0();
+    // Call during the startup procedure.
+    //
+    // If the local RAFT feature is enabled, does one of the following:
+    // - join group 0 (if we're bootstrapping),
+    // - start existing group 0 server (if we bootstrapped before),
+    // - (TODO: not implemented yet) prepare us for the upgrade procedure, which will create group 0 later.
+    //
+    // Cannot be called twice.
+    //
+    // TODO: specify dependencies on other services: where during startup should we setup group 0?
+    future<> setup_group0(db::system_keyspace&);
 
     // After successful bootstrapping, make this node a voting member.
+    // Precondition: `setup_group0` successfully finished earlier.
     future<> become_voter();
 
     // Remove the node from the cluster-wide raft group.
@@ -106,6 +114,8 @@ public:
 private:
     void init_rpc_verbs();
     future<> uninit_rpc_verbs();
+
+    bool joined_group0() const;
 
     // Handle peer_exchange RPC
     future<group0_peer_exchange> peer_exchange(discovery::peer_list peers);
@@ -133,11 +143,28 @@ private:
     // See 'raft-in-scylla.md', 'Establishing group 0 in a fresh cluster'.
     future<group0_info> discover_group0(raft::server_address my_addr);
 
+    // Start a Raft server for the cluster-wide group 0 and join it to the group.
+    // Called during bootstrap or upgrade.
+    //
+    // The Raft server may already exist on disk (e.g. because we initialized it earlier but then crashed),
+    // but it doesn't have to. It may also already be part of group 0, but if not, we will attempt
+    // to discover and join it.
+    //
+    // Persists group 0 ID on disk at the end so subsequent restarts of Scylla process can detect that group 0
+    // has already been joined and the server initialized.
+    //
+    // Preconditions: Raft local feature enabled
+    // and we haven't initialized group 0 yet after last Scylla start (`joined_group0()` is false).
+    // Postcondition: `joined_group0()` is true.
+    future<> join_group0();
+
     // Start an existing Raft server for the cluster-wide group 0.
     // Assumes the server was already added to the group earlier so we don't attempt to join it again.
     //
-    // `group0_id` must be non-null and equal to the ID of group 0 that we joined earlier.
-    // The existing group 0 server must not have been started yet after the last restart of Scylla.
+    // Preconditions: `group0_id` must be non-null and equal to the ID of group 0 that we joined earlier.
+    // The existing group 0 server must not have been started yet after the last restart of Scylla
+    // (`joined_group0()` is false).
+    // Postcondition: `joined_group0()` is true.
     //
     // XXX: perhaps it would be good to make this function callable multiple times,
     // if we want to handle crashes of the group 0 server without crashing the entire Scylla process

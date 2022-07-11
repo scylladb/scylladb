@@ -240,12 +240,7 @@ future<> raft_group0::start_server_for_group0(raft::group_id group0_id) {
 
 future<> raft_group0::join_group0() {
     assert(this_shard_id() == 0);
-    // do nothing either if raft group registry is not enabled or we've already
-    // finished joining some existing group0, so that subsequent calls
-    // to the function are safe.
-    if (!_raft_gr.is_enabled() || std::holds_alternative<raft::group_id>(_group0)) {
-        co_return;
-    }
+    assert(!joined_group0());
 
     auto group0_id = raft::group_id{co_await db::system_keyspace::get_raft_group0_id()};
     if (group0_id) {
@@ -307,10 +302,41 @@ future<> raft_group0::join_group0() {
     rslog.info("{} joined group 0 with id {}", my_addr.id, group0_id);
 }
 
-future<> raft_group0::become_voter() {
+future<> raft_group0::setup_group0(db::system_keyspace& sys_ks) {
+    assert(this_shard_id() == 0);
+
     if (!_raft_gr.is_enabled()) {
+        rslog.info("raft_group0::setup_group0(): local RAFT feature disabled, skipping group 0 setup.");
+        // Note: if the local feature was enabled by every node earlier, that would enable the cluster
+        // SUPPORTS_RAFT feature, and the node should then refuse to start during feature check
+        // (because if the local feature is disabled, then the cluster feature - enabled in the cluster - is 'unknown' to us).
         co_return;
     }
+
+    if (sys_ks.bootstrap_complete()) {
+        auto group0_id = raft::group_id{co_await db::system_keyspace::get_raft_group0_id()};
+        if (group0_id) {
+            // Group 0 ID is present => we've already joined group 0 earlier.
+            rslog.info("raft_group0::setup_group0(): group 0 ID present. Starting existing Raft server.");
+            co_await start_server_for_group0(group0_id);
+        } else {
+            // Scylla has bootstrapped earlier but group 0 ID not present. This means we're upgrading.
+            // TODO: Prepare for upgrade.
+        }
+
+        co_return;
+    }
+
+    rslog.info("raft_group0::setup_group0(): joining group 0...");
+    co_await join_group0();
+    rslog.info("raft_group0::setup_group0(): successfully joined group 0.");
+}
+
+future<> raft_group0::become_voter() {
+    if (!_raft_gr.is_enabled() || !joined_group0()) {
+        co_return;
+    }
+
     auto my_addr = co_await load_my_addr();
     assert(std::holds_alternative<raft::group_id>(_group0));
     auto& gid = std::get<raft::group_id>(_group0);
@@ -359,6 +385,10 @@ future<> raft_group0::leave_group0(std::optional<gms::inet_address> node) {
     auto timeout = db::timeout_clock::now() + std::chrono::minutes{20};
     // TODO: aborts?
     co_return co_await ser::group0_rpc_verbs::send_group0_modify_config(&_ms, peer, timeout, g0_info.group0_id, {}, {remove_addr});
+}
+
+bool raft_group0::joined_group0() const {
+    return std::holds_alternative<raft::group_id>(_group0);
 }
 
 future<group0_peer_exchange> raft_group0::peer_exchange(discovery::peer_list peers) {

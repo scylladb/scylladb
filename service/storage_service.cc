@@ -389,6 +389,10 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     auto broadcast_rpc_address = utils::fb_utilities::get_broadcast_rpc_address();
     // Ensure we know our own actual Schema UUID in preparation for updates
     co_await db::schema_tables::recalculate_schema_version(_sys_ks, proxy, _feature_service);
+
+    assert(_group0);
+    co_await _group0->setup_group0(_sys_ks.local());
+
     app_states.emplace(gms::application_state::NET_VERSION, versioned_value::network_version());
     app_states.emplace(gms::application_state::HOST_ID, versioned_value::host_id(local_host_id));
     app_states.emplace(gms::application_state::RPC_ADDRESS, versioned_value::rpcaddress(broadcast_rpc_address));
@@ -424,18 +428,6 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     auto advertise = gms::advertise_myself(!replacing_a_node_with_same_ip);
     co_await _gossiper.start_gossiping(generation_number, app_states, advertise);
 
-    // Raft group0 can be joined before we wait for gossip to settle
-    // if one of the following applies:
-    //  - it's a fresh node start (in a fresh cluster)
-    //  - it's a restart of an existing node, which have already joined some group0
-    const bool can_join_with_raft =
-        _db.local().get_config().check_experimental(db::experimental_features_t::feature::RAFT) && (
-            _sys_ks.local().bootstrap_needed() ||
-            !(co_await _sys_ks.local().get_raft_group0_id()).is_null());
-    if (can_join_with_raft) {
-        co_await _group0->join_group0();
-    }
-
     auto schema_change_announce = _db.local().observable_schema_version().observe([this] (utils::UUID schema_version) mutable {
         _migration_manager.local().passive_announce(std::move(schema_version));
     });
@@ -443,8 +435,6 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     co_await _gossiper.wait_for_gossip_to_settle();
 
     set_mode(mode::JOINING);
-
-    co_await _group0->join_group0();
 
     // We bootstrap if we haven't successfully bootstrapped before, as long as we are not a seed.
     // If we are a seed, or if the user manually sets auto_bootstrap to false,
