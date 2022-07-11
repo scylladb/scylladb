@@ -84,8 +84,8 @@ class TestSuite(ABC):
     _next_id = 0
 
     def __init__(self, path: str, cfg: dict, options: argparse.Namespace, mode: str) -> None:
-        self.path = path
-        self.name = os.path.basename(self.path)
+        self.suite_path = pathlib.Path(path)
+        self.name = str(self.suite_path.name)
         self.cfg = cfg
         self.options = options
         self.mode = mode
@@ -198,9 +198,13 @@ class TestSuite(ABC):
         """Tests which participate in a consolidated junit report"""
         return self.tests
 
-    async def add_test_list(self):
+    def build_test_list(self) -> List[str]:
+        return [os.path.splitext(t.relative_to(self.suite_path))[0] for t in
+                self.suite_path.glob(self.pattern)]
+
+    async def add_test_list(self) -> None:
         options = self.options
-        lst = [os.path.splitext(os.path.basename(t))[0] for t in glob.glob(os.path.join(self.path, self.pattern))]
+        lst = self.build_test_list()
         if lst:
             # Some tests are long and are better to be started earlier,
             # so pop them up while sorting the list
@@ -365,13 +369,19 @@ class PythonTestSuite(TestSuite):
         else:
             raise RuntimeError("Unsupported topology name")
 
-    async def add_test(self, shortname) -> None:
-        test = PythonTest(self.next_id, shortname, self)
-        self.tests.append(test)
+    def build_test_list(self) -> List[str]:
+        """For pytest, search for directories recursively"""
+        path = self.suite_path
+        pytests = itertools.chain(path.rglob("*_test.py"), path.rglob("test_*.py"))
+        return [os.path.splitext(t.relative_to(self.suite_path))[0] for t in pytests]
 
     @property
     def pattern(self) -> str:
-        return "test_*.py"
+        assert False
+
+    async def add_test(self, shortname) -> None:
+        test = PythonTest(self.next_id, shortname, self)
+        self.tests.append(test)
 
 
 class CQLApprovalTestSuite(PythonTestSuite):
@@ -425,6 +435,7 @@ class Test:
         # Unique file name, which is also readable by human, as filename prefix
         self.uname = "{}.{}".format(self.shortname, self.id)
         self.log_filename = pathlib.Path(suite.options.tmpdir) / self.mode / (self.uname + ".log")
+        self.log_filename.parent.mkdir(parents=True, exist_ok=True)
         self.is_flaky = self.shortname in suite.flaky_tests
         # True if the test was retried after it failed
         self.is_flaky_failure = False
@@ -576,10 +587,10 @@ class CQLApprovalTest(Test):
         super().__init__(test_no, shortname, suite)
         # Path to cql_repl driver, in the given build mode
         self.path = "pytest"
-        self.cql = os.path.join(suite.path, self.shortname + ".cql")
-        self.result = os.path.join(suite.path, self.shortname + ".result")
+        self.cql = suite.suite_path / (self.shortname + ".cql")
+        self.result = suite.suite_path / (self.shortname + ".result")
         self.tmpfile = os.path.join(suite.options.tmpdir, self.mode, self.uname + ".reject")
-        self.reject = os.path.join(suite.path, self.shortname + ".reject")
+        self.reject = suite.suite_path / (self.shortname + ".reject")
         CQLApprovalTest._reset(self)
 
     def _reset(self) -> None:
@@ -702,7 +713,7 @@ class RunTest(Test):
 
     def __init__(self, test_no: int, shortname: str, suite) -> None:
         super().__init__(test_no, shortname, suite)
-        self.path = os.path.join(suite.path, shortname)
+        self.path = suite.suite_path / shortname
         self.xmlout = os.path.join(suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
         self.args = ["--junit-xml={}".format(self.xmlout)]
         RunTest._reset(self)
@@ -741,7 +752,7 @@ class PythonTest(Test):
             "-o",
             "junit_family=xunit2",
             "--junit-xml={}".format(self.xmlout),
-            os.path.join(self.suite.path, self.shortname + ".py")]
+            str(self.suite.suite_path / (self.shortname + ".py"))]
 
     def print_summary(self) -> None:
         print("Output of {} {}:".format(self.path, " ".join(self.args)))
