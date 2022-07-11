@@ -1253,6 +1253,54 @@ class histogram:
         gdb.write(str(self) + '\n')
 
 
+class task_symbol_matcher:
+    def __init__(self):
+        # List of whitelisted symbol names. Each symbol is a tuple, where each
+        # element is a component of the name, the last element being the class
+        # name itself.
+        # We can't just merge them as `info symbol` might return mangled names too.
+        self._whitelist = task_symbol_matcher._make_symbol_matchers([
+                ("seastar", "continuation"),
+                ("seastar", "future", "thread_wake_task"), # backward compatibility with older versions
+                ("seastar", "(anonymous namespace)", "thread_wake_task"),
+                ("seastar", "thread_context"),
+                ("seastar", "internal", "do_until_state"),
+                ("seastar", "internal", "do_with_state"),
+                ("seastar", "internal", "do_for_each_state"),
+                ("seastar", "parallel_for_each_state"),
+                ("seastar", "internal", "repeat_until_value_state"),
+                ("seastar", "internal", "repeater"),
+                ("seastar", "internal", "when_all_state_component"),
+                ("seastar", "lambda_task"),
+                ("seastar", "smp_message_queue", "async_work_item"),
+        ])
+
+    @staticmethod
+    def _make_symbol_matchers(symbol_specs):
+        return list(map(task_symbol_matcher._make_symbol_matcher, symbol_specs))
+
+    @staticmethod
+    def _make_symbol_matcher(symbol_spec):
+        unmangled_prefix = 'vtable for {}'.format('::'.join(symbol_spec))
+        def matches_symbol(name):
+            if name.startswith(unmangled_prefix):
+                return True
+
+            try:
+                positions = [name.index(part) for part in symbol_spec]
+                return sorted(positions) == positions
+            except ValueError:
+                return False
+
+        return matches_symbol
+
+    def __call__(self, name):
+        for matcher in self._whitelist:
+            if matcher(name):
+                return True
+        return False
+
+
 class scylla(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND, True)
@@ -3396,51 +3444,10 @@ class scylla_fiber(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla fiber', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
         self._vptr_type = gdb.lookup_type('uintptr_t').pointer()
-        # List of whitelisted symbol names. Each symbol is a tuple, where each
-        # element is a component of the name, the last element being the class
-        # name itself.
-        # We can't just merge them as `info symbol` might return mangled names too.
-        self._whitelist = scylla_fiber._make_symbol_matchers([
-                ("seastar", "continuation"),
-                ("seastar", "future", "thread_wake_task"), # backward compatibility with older versions
-                ("seastar", "(anonymous namespace)", "thread_wake_task"),
-                ("seastar", "thread_context"),
-                ("seastar", "internal", "do_until_state"),
-                ("seastar", "internal", "do_with_state"),
-                ("seastar", "internal", "do_for_each_state"),
-                ("seastar", "parallel_for_each_state"),
-                ("seastar", "internal", "repeat_until_value_state"),
-                ("seastar", "internal", "repeater"),
-                ("seastar", "internal", "when_all_state_component"),
-                ("seastar", "lambda_task"),
-                ("seastar", "smp_message_queue", "async_work_item"),
-        ])
-
-
-    @staticmethod
-    def _make_symbol_matchers(symbol_specs):
-        return list(map(scylla_fiber._make_symbol_matcher, symbol_specs))
-
-    @staticmethod
-    def _make_symbol_matcher(symbol_spec):
-        unmangled_prefix = 'vtable for {}'.format('::'.join(symbol_spec))
-        def matches_symbol(name):
-            if name.startswith(unmangled_prefix):
-                return True
-
-            try:
-                positions = [name.index(part) for part in symbol_spec]
-                return sorted(positions) == positions
-            except ValueError:
-                return False
-
-        return matches_symbol
+        self._task_symbol_matcher = task_symbol_matcher()
 
     def _name_is_on_whitelist(self, name):
-        for matcher in self._whitelist:
-            if matcher(name):
-                return True
-        return False
+        return self._task_symbol_matcher(name)
 
     def _maybe_log(self, msg, verbose):
         if verbose:
