@@ -4167,6 +4167,7 @@ class scylla_smp_queues(gdb.Command):
                 self.queues.add(qs[i][j])
         self._queue_type = gdb.lookup_type('seastar::smp_message_queue').pointer()
         self._ptr_type = gdb.lookup_type('uintptr_t').pointer()
+        self._unsigned_type = gdb.lookup_type('unsigned')
         self._queue_size = 128
         self._item_ptr_array_type = gdb.lookup_type('seastar::smp_message_queue::work_item').pointer().pointer()
 
@@ -4179,6 +4180,8 @@ class scylla_smp_queues(gdb.Command):
                 help="Filter for queues going from the given CPU")
         parser.add_argument("-t", "--to", action="store", type=int, required=False, dest="to_cpu",
                 help="Filter for queues going to the given CPU")
+        parser.add_argument("-g", "--scheduling-group", action="store", type=str, required=False,
+                help="Filter for work items belonging to the specified scheduling group (by name or id)")
         parser.add_argument("-c", "--content", action="store_true",
                 help="Create a histogram from the content of the queues, rather than the number of items in them")
 
@@ -4186,6 +4189,18 @@ class scylla_smp_queues(gdb.Command):
             args = parser.parse_args(arg.split())
         except SystemExit:
             return
+
+        sg_id = None
+        if args.scheduling_group:
+            for tq in get_local_task_queues():
+                id_str = "{}".format(tq['_id'].cast(self._unsigned_type))
+                name_str = str(tq['_name']).replace('"', '')
+                if args.scheduling_group == id_str or args.scheduling_group == name_str:
+                    sg_id = int(tq['_id'])
+
+            if sg_id is None:
+                gdb.write("error: non-existent scheduling-group provided for filtering: `{}', run `scylla task-queues` for a list of valid scheduling group names and ids\n".format(args.scheduling_group))
+                return
 
         def formatter(q):
             if args.content:
@@ -4196,6 +4211,9 @@ class scylla_smp_queues(gdb.Command):
         h = histogram(formatter=formatter, print_indicators=not args.content)
 
         def add_to_histogram(a, b, key=None, count=1):
+            if not sg_id is None and int(key.dereference()['_sg']['_id']) != sg_id:
+                return
+
             if args.content:
                 vptr = int(gdb.Value(key).reinterpret_cast(self._ptr_type).dereference())
                 h[vptr] += count
@@ -4217,7 +4235,7 @@ class scylla_smp_queues(gdb.Command):
             if pending_end < pending_start:
                 pending_end += self._queue_size
 
-            if args.content:
+            if args.content or args.scheduling_group:
                 for item_ptr in tx_queue:
                     add_to_histogram(a, b, key=item_ptr)
 
