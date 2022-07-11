@@ -1491,8 +1491,8 @@ const std::vector<sstables::compaction_info> compaction_manager::get_compactions
             }) | boost::adaptors::transformed(to_info));
 }
 
-bool compaction_manager::compaction_disabled(replica::table* t) const {
-    return _compaction_state.contains(&t->as_table_state()) && _compaction_state.at(&t->as_table_state()).compaction_disabled();
+bool compaction_manager::compaction_disabled(compaction::table_state& t) const {
+    return _compaction_state.contains(&t) && _compaction_state.at(&t).compaction_disabled();
 }
 
 future<> compaction_manager::stop_compaction(sstring type, replica::table* table) {

@@ -1521,7 +1521,7 @@ future<> table::clear() {
 // NOTE: does not need to be futurized, but might eventually, depending on
 // if we implement notifications, whatnot.
 future<db::replay_position> table::discard_sstables(db_clock::time_point truncated_at) {
-    assert(_compaction_manager.compaction_disabled(this));
+    assert(_compaction_manager.compaction_disabled(as_table_state()));
 
     struct pruner {
         column_family& cf;

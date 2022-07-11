@@ -464,7 +464,7 @@ public:
         });
     };
 
-    bool compaction_disabled(replica::table* t) const;
+    bool compaction_disabled(compaction::table_state& t) const;
 
     // Stops ongoing compaction of a given type.
     future<> stop_compaction(sstring type, replica::table* table = nullptr);
