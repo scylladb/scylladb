@@ -63,7 +63,7 @@ compaction_descriptor leveled_compaction_strategy::get_major_compaction_job(tabl
 
     auto max_sstable_size_in_bytes = _max_sstable_size_in_mb*1024*1024;
     auto ideal_level = ideal_level_for_input(candidates, max_sstable_size_in_bytes);
-    return compaction_descriptor(std::move(candidates), service::get_local_compaction_priority(),
+    return make_major_compaction_job(std::move(candidates),
                                  ideal_level, max_sstable_size_in_bytes);
 }
 

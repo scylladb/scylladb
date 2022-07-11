@@ -337,7 +337,7 @@ protected:
     // it cannot be the other way around, or minor compaction for this table would be
     // prevented while an ongoing major compaction doesn't release the semaphore.
     virtual future<> do_run() override {
-        co_await coroutine::switch_to(_cm._compaction_sg.cpu);
+        co_await coroutine::switch_to(_cm._maintenance_sg.cpu);
 
         switch_state(state::pending);
         auto units = co_await acquire_semaphore(_cm._maintenance_ops_sem);
@@ -360,6 +360,11 @@ protected:
         cmlog.info0("User initiated compaction started on behalf of {}.{}", t->schema()->ks_name(), t->schema()->cf_name());
         compaction_backlog_tracker bt(std::make_unique<user_initiated_backlog_tracker>(_cm._compaction_controller.backlog_of_shares(200), _cm._available_memory));
         _cm.register_backlog_tracker(bt);
+
+        // Now that the sstables for major compaction are registered
+        // and the user_initiated_backlog_tracker is set up
+        // the exclusive lock can be freed to let regular compaction run in parallel to major
+        lock_holder.return_all();
 
         co_await compact_sstables_and_update_history(std::move(descriptor), _compaction_data, std::move(release_exhausted));
 

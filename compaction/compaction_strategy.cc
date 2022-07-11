@@ -36,8 +36,9 @@ logging::logger leveled_manifest::logger("LeveledManifest");
 
 namespace sstables {
 
-compaction_descriptor compaction_strategy_impl::get_major_compaction_job(table_state& table_s, std::vector<sstables::shared_sstable> candidates) {
-    return compaction_descriptor(std::move(candidates), service::get_local_compaction_priority());
+compaction_descriptor compaction_strategy_impl::make_major_compaction_job(std::vector<sstables::shared_sstable> candidates, int level, uint64_t max_sstable_bytes) {
+    // run major compaction in maintenance priority
+    return compaction_descriptor(std::move(candidates), service::get_local_streaming_priority(), level, max_sstable_bytes);
 }
 
 std::vector<compaction_descriptor> compaction_strategy_impl::get_cleanup_compaction_jobs(table_state& table_s, std::vector<shared_sstable> candidates) const {

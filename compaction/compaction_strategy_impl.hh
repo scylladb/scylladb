@@ -12,6 +12,7 @@
 #include "compaction_backlog_manager.hh"
 #include "compaction_strategy.hh"
 #include "db_clock.hh"
+#include "compaction_descriptor.hh"
 
 namespace compaction {
 class table_state;
@@ -23,7 +24,6 @@ namespace sstables {
 compaction_backlog_tracker& get_unimplemented_backlog_tracker();
 
 class sstable_set_impl;
-class compaction_descriptor;
 class resharding_descriptor;
 
 class compaction_strategy_impl {
@@ -43,10 +43,15 @@ public:
 protected:
     compaction_strategy_impl() = default;
     explicit compaction_strategy_impl(const std::map<sstring, sstring>& options);
+    static compaction_descriptor make_major_compaction_job(std::vector<sstables::shared_sstable> candidates,
+            int level = compaction_descriptor::default_level,
+            uint64_t max_sstable_bytes = compaction_descriptor::default_max_sstable_bytes);
 public:
     virtual ~compaction_strategy_impl() {}
     virtual compaction_descriptor get_sstables_for_compaction(table_state& table_s, strategy_control& control, std::vector<sstables::shared_sstable> candidates) = 0;
-    virtual compaction_descriptor get_major_compaction_job(table_state& table_s, std::vector<sstables::shared_sstable> candidates);
+    virtual compaction_descriptor get_major_compaction_job(table_state& table_s, std::vector<sstables::shared_sstable> candidates) {
+        return make_major_compaction_job(std::move(candidates));
+    }
     virtual std::vector<compaction_descriptor> get_cleanup_compaction_jobs(table_state& table_s, std::vector<shared_sstable> candidates) const;
     virtual void notify_completion(const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added) { }
     virtual compaction_strategy_type type() const = 0;
