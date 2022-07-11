@@ -1164,7 +1164,7 @@ class histogram:
     """
     _column_count = 40
 
-    def __init__(self, counts = None, print_indicators = True, formatter=None):
+    def __init__(self, counts = None, print_indicators = True, formatter=None, limit=None):
         """Constructor.
 
         Params:
@@ -1175,6 +1175,7 @@ class histogram:
         * formatter: a callable that receives the item as its argument and is
             expected to return the string to be printed in the second column.
             By default, items are printed verbatim.
+        * limit: limit the number of printed items to the top limit ones.
         """
         if counts is None:
             self._counts = defaultdict(int)
@@ -1188,6 +1189,11 @@ class histogram:
             self._formatter = default_formatter
         else:
             self._formatter = formatter
+
+        if limit is None:
+            self._limit = -1
+        else:
+            self._limit = limit
 
     def __len__(self):
         return len(self._counts)
@@ -1221,6 +1227,7 @@ class histogram:
             count_per_column = self._column_count / max_count
 
         lines = []
+        limit = self._limit
 
         for count in counts_sorted:
             items = by_counts[count]
@@ -1233,6 +1240,9 @@ class histogram:
                     lines.append('{:9d} {} {}'.format(count, self._formatter(item), indicator))
                 except:
                     gdb.write("error: failed to format item `{}': {}\n".format(item, sys.exc_info()[1]))
+            limit -= 1
+            if not limit:
+                break
 
         return '\n'.join(lines)
 
