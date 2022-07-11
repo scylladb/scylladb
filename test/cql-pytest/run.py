@@ -241,6 +241,8 @@ def run_scylla_cmd(pid, dir):
         '--authenticator', 'PasswordAuthenticator',
         '--authorizer', 'CassandraAuthorizer',
         '--strict-allow-filtering', 'true',
+        '--permissions-update-interval-in-ms', '100',
+        '--permissions-validity-in-ms', '100',
         ], env)
 
 # Same as run_scylla_cmd, just use SSL encryption for the CQL port (same
