@@ -1,0 +1,1 @@
+.. note:: This feature is only available with Scylla Enterprise. If you are using Scylla Open Source, this feature will not be available.

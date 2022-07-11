@@ -49,14 +49,15 @@ author = u"ScyllaDB Project Contributors"
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "dev"]
+exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store', 'lib', 'lib64','**/_common/*', 'README.md', 'index.md', '.git', '.github', '_utils', 'rst_include', 'venv', 'dev']
 
 # The name of the Pygments (syntax highlighting) style to use.
 pygments_style = "sphinx"
 
 # List of substitutions
 rst_prolog = """
-.. |rst| replace:: restructuredText
+.. |mon_root| replace::  `Scylla Monitoring Stack <https://monitoring.docs.scylladb.com>`__
+.. |cql-version| replace:: 3.3.1
 """
 # -- Options for not found extension ---------------------------------------
 
