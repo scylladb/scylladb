@@ -128,7 +128,7 @@ class intrusive_slist:
         return self.__nonzero__()
 
     def __len__(self):
-        return len(list(self))
+        return len(list(iter(self)))
 
 
 class std_optional:
