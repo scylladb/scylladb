@@ -111,9 +111,6 @@ raft_group0::discover_group0(raft::server_address my_addr) {
     std::vector<raft::server_address> seeds;
     seeds.reserve(_gossiper.get_seeds().size());
     for (auto& seed : _gossiper.get_seeds()) {
-        if (seed == _gossiper.get_broadcast_address()) {
-            continue;
-        }
         seeds.emplace_back(raft::server_id{}, inet_addr_to_raft_addr(seed));
     }
 
