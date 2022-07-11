@@ -735,14 +735,14 @@ future<std::vector<mutation>> migration_manager::prepare_function_drop_announcem
 future<std::vector<mutation>> migration_manager::prepare_new_aggregate_announcement(shared_ptr<cql3::functions::user_aggregate> aggregate, api::timestamp_type ts) {
     auto& db = _storage_proxy.get_db().local();
     auto&& keyspace = db.find_keyspace(aggregate->name().keyspace);
-    auto mutations = db::schema_tables::make_create_aggregate_mutations(aggregate, ts);
+    auto mutations = db::schema_tables::make_create_aggregate_mutations(db.features().cluster_schema_features(), aggregate, ts);
     return include_keyspace(*keyspace.metadata(), std::move(mutations));
 }
 
 future<std::vector<mutation>> migration_manager::prepare_aggregate_drop_announcement(shared_ptr<cql3::functions::user_aggregate> aggregate, api::timestamp_type ts) {
     auto& db = _storage_proxy.get_db().local();
     auto&& keyspace = db.find_keyspace(aggregate->name().keyspace);
-    auto mutations = db::schema_tables::make_drop_aggregate_mutations(aggregate, ts);
+    auto mutations = db::schema_tables::make_drop_aggregate_mutations(db.features().cluster_schema_features(), aggregate, ts);
     return include_keyspace(*keyspace.metadata(), std::move(mutations));
 }
 

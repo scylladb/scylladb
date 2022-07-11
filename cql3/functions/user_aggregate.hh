@@ -26,11 +26,15 @@ public:
     virtual bool is_pure() const override;
     virtual bool is_native() const override;
     virtual bool is_aggregate() const override;
+    bool is_reducible() const override;
     virtual bool requires_thread() const override;
     bool has_finalfunc() const;
 
     const scalar_function& sfunc() const {
         return *_sfunc;
+    }
+    const scalar_function& reducefunc() const {
+        return *_reducefunc;
     }
     const scalar_function& finalfunc() const {
         return *_finalfunc;
