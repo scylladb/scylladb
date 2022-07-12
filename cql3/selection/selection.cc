@@ -16,6 +16,7 @@
 #include "cql3/selection/selection.hh"
 #include "cql3/selection/raw_selector.hh"
 #include "cql3/selection/selector_factories.hh"
+#include "cql3/selection/abstract_function_selector.hh"
 #include "cql3/result_set.hh"
 #include "cql3/query_options.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
@@ -202,6 +203,10 @@ public:
         return _factories->get_reductions();
     }
 
+    virtual std::vector<shared_ptr<functions::function>> used_functions() const override {
+        return selectors_with_processing(_factories).used_functions();
+    }
+
 protected:
     class selectors_with_processing : public selectors {
     private:
@@ -242,6 +247,20 @@ protected:
             for (auto&& s : _selectors) {
                 s->add_input(rs);
             }
+        }
+
+        std::vector<shared_ptr<functions::function>> used_functions() const {
+            std::vector<shared_ptr<functions::function>> functions;
+            for (const auto& selector : _selectors) {
+                if (auto fun_selector = dynamic_pointer_cast<abstract_function_selector>(selector); fun_selector) {
+                    functions.push_back(fun_selector->function());
+                    if (auto user_aggr = dynamic_pointer_cast<functions::user_aggregate>(fun_selector); user_aggr) {
+                        functions.push_back(user_aggr->sfunc());
+                        functions.push_back(user_aggr->finalfunc());
+                    }
+                }
+            }
+            return functions;
         }
     };
 
