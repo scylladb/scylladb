@@ -403,6 +403,21 @@ def test_put_item_replace(test_table_s, test_table):
     test_table.put_item(Item={'p': p, 'c': c, 'b': 'hello'})
     assert test_table.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)['Item'] == {'p': p, 'c': c, 'b': 'hello'}
 
+# Test that UpdateItem merges the change with a previously existing item -
+# it doesn't outright replace it like PutItem does in test_put_item_replace()
+def test_update_item_merge(test_table_s):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'a': 'hi'})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 'hi'}
+    test_table_s.update_item(Key={'p': p}, AttributeUpdates={'b': {'Value': 'hello', 'Action': 'PUT'}})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 'hi', 'b': 'hello'}
+    test_table_s.update_item(Key={'p': p}, AttributeUpdates={'a': {'Value': 'hey', 'Action': 'PUT'}})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 'hey', 'b': 'hello'}
+    test_table_s.update_item(Key={'p': p}, AttributeUpdates={'a': {'Action': 'DELETE'}})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'b': 'hello'}
+    test_table_s.update_item(Key={'p': p}, AttributeUpdates={'b': {'Action': 'DELETE'}})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p}
+
 # Test what UpdateItem does on a non-existent item. An operation that puts an
 # attribute, creates this item. Even an empty operation creates an item
 # (this is test_empty_update() above). But an operation that only deletes
@@ -751,3 +766,26 @@ def test_key_empty_bytes_value(test_table_b, test_table_sb):
         test_table_b.put_item(Item={'p': b''})
     with pytest.raises(ClientError, match='ValidationException.*empty'):
         test_table_sb.put_item(Item={'p': p, 'c': b''})
+
+# And UpdateItem's AttributeUpdates may specify an operation on more than
+# one attribute. Note that because AttributeUpdates is a map, by definition
+# these are operations on *different* attributes.
+def test_update_item_multiple(test_table_s):
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'a': {'Value': 'hello', 'Action': 'PUT'},
+                          'b': {'Value': 'hi', 'Action': 'PUT'}})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 'hello', 'b': 'hi'}
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'a': {'Action': 'DELETE'},
+                          'b': {'Action': 'DELETE'}})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p}
+
+# Using UpdateItem DELETE on a non-existent attribute of an existing item
+# succeeds but does nothing. Note that we have a separate test for the case
+# the whole item doesn't exist (test_update_item_non_existent)
+def test_update_item_delete_nonexistent_attribute(test_table_s):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'a': 'hello'})
+    test_table_s.update_item(Key={'p': p}, AttributeUpdates={'b': {'Action': 'DELETE'}})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 'hello'}
