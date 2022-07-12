@@ -463,10 +463,10 @@ public:
     bool compaction_disabled(compaction::table_state& t) const;
 
     // Stops ongoing compaction of a given type.
-    future<> stop_compaction(sstring type, replica::table* table = nullptr);
+    future<> stop_compaction(sstring type, compaction::table_state* table = nullptr);
 
     // Stops ongoing compaction of a given table and/or compaction_type.
-    future<> stop_ongoing_compactions(sstring reason, replica::table* t = nullptr, std::optional<sstables::compaction_type> type_opt = {});
+    future<> stop_ongoing_compactions(sstring reason, compaction::table_state* t = nullptr, std::optional<sstables::compaction_type> type_opt = {});
 
     double backlog() {
         return _backlog_manager.backlog();

@@ -473,7 +473,7 @@ compaction_manager::compaction_reenabler::~compaction_reenabler() {
 future<compaction_manager::compaction_reenabler>
 compaction_manager::stop_and_disable_compaction(replica::table* t) {
     compaction_reenabler cre(*this, t);
-    co_await stop_ongoing_compactions("user-triggered operation", t);
+    co_await stop_ongoing_compactions("user-triggered operation", &t->as_table_state());
     co_return cre;
 }
 
@@ -772,10 +772,10 @@ future<> compaction_manager::stop_tasks(std::vector<shared_ptr<task>> tasks, sst
     });
 }
 
-future<> compaction_manager::stop_ongoing_compactions(sstring reason, replica::table* t, std::optional<sstables::compaction_type> type_opt) {
-    auto ongoing_compactions = get_compactions(&t->as_table_state()).size();
+future<> compaction_manager::stop_ongoing_compactions(sstring reason, compaction::table_state* t, std::optional<sstables::compaction_type> type_opt) {
+    auto ongoing_compactions = get_compactions(t).size();
     auto tasks = boost::copy_range<std::vector<shared_ptr<task>>>(_tasks | boost::adaptors::filtered([t, type_opt] (auto& task) {
-        return (!t || task->compacting_table() == t) && (!type_opt || task->type() == *type_opt);
+        return (!t || &task->compacting_table()->as_table_state() == t) && (!type_opt || task->type() == *type_opt);
     }));
     logging::log_level level = tasks.empty() ? log_level::debug : log_level::info;
     if (cmlog.is_enabled(level)) {
@@ -1458,7 +1458,7 @@ future<> compaction_manager::remove(replica::table* t) {
         _postponed.erase(t);
 
         // Wait for the termination of an ongoing compaction on table T, if any.
-        co_await stop_ongoing_compactions("table removal", t);
+        co_await stop_ongoing_compactions("table removal", &t->as_table_state());
 
         // Wait for all functions running under gate to terminate.
         co_await c_state.gate.close();
@@ -1508,7 +1508,7 @@ bool compaction_manager::compaction_disabled(compaction::table_state& t) const {
     return _compaction_state.contains(&t) && _compaction_state.at(&t).compaction_disabled();
 }
 
-future<> compaction_manager::stop_compaction(sstring type, replica::table* table) {
+future<> compaction_manager::stop_compaction(sstring type, compaction::table_state* table) {
     sstables::compaction_type target_type;
     try {
         target_type = sstables::to_compaction_type(type);

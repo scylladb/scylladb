@@ -119,7 +119,7 @@ void set_compaction_manager(http_context& ctx, routes& r) {
             auto& cm = db.get_compaction_manager();
             return parallel_for_each(table_names, [&db, &cm, &ks_name, type] (sstring& table_name) {
                 auto& t = db.find_column_family(ks_name, table_name);
-                return cm.stop_compaction(type, &t);
+                return cm.stop_compaction(type, &t.as_table_state());
             });
         });
         co_return json_void();
