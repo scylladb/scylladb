@@ -2433,6 +2433,9 @@ public:
         _t.on_compaction_completion(std::move(desc));
         return make_ready_future<>();
     }
+    bool is_auto_compaction_disabled_by_user() const noexcept override {
+        return _t.is_auto_compaction_disabled_by_user();
+    }
 };
 
 compaction::table_state& table::as_table_state() const noexcept {

@@ -173,6 +173,9 @@ public:
     future<> on_compaction_completion(sstables::compaction_completion_desc desc, sstables::offstrategy offstrategy) override {
         return _t->as_table_state().on_compaction_completion(std::move(desc), offstrategy);
     }
+    bool is_auto_compaction_disabled_by_user() const noexcept override {
+        return false;
+    }
 };
 
 static std::unique_ptr<table_state> make_table_state_for_test(column_family_for_tests& t, test_env& env) {
