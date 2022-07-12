@@ -33,15 +33,15 @@ simple_strategy::simple_strategy(const replication_strategy_config_options& conf
     }
 }
 
-future<inet_address_vector_replica_set> simple_strategy::calculate_natural_endpoints(const token& t, const token_metadata& tm) const {
+future<endpoint_set> simple_strategy::calculate_natural_endpoints(const token& t, const token_metadata& tm) const {
     const std::vector<token>& tokens = tm.sorted_tokens();
 
     if (tokens.empty()) {
-        co_return inet_address_vector_replica_set();
+        co_return endpoint_set();
     }
 
     size_t replicas = _replication_factor;
-    utils::sequenced_set<inet_address> endpoints;
+    endpoint_set endpoints;
     endpoints.reserve(replicas);
 
     for (auto& token : tm.ring_range(t)) {
@@ -60,7 +60,7 @@ future<inet_address_vector_replica_set> simple_strategy::calculate_natural_endpo
         co_await coroutine::maybe_yield();
     }
 
-    co_return boost::copy_range<inet_address_vector_replica_set>(endpoints.get_vector());
+    co_return endpoints;
 }
 
 size_t simple_strategy::get_replication_factor(const token_metadata&) const {

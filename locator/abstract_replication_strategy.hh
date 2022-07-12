@@ -18,6 +18,7 @@
 #include "snitch_base.hh"
 #include <seastar/util/bool_class.hh>
 #include "utils/maybe_yield.hh"
+#include "utils/sequenced_set.hh"
 
 // forward declaration since replica/database.hh includes this file
 namespace replica {
@@ -43,6 +44,8 @@ using can_yield = utils::can_yield;
 using replication_strategy_config_options = std::map<sstring, sstring>;
 
 using replication_map = std::unordered_map<token, inet_address_vector_replica_set>;
+
+using endpoint_set = utils::basic_sequenced_set<inet_address, inet_address_vector_replica_set>;
 
 class effective_replication_map;
 class effective_replication_map_factory;
@@ -80,7 +83,7 @@ public:
     // is small, that implementation may not yield since by itself it won't cause a reactor stall (assuming practical
     // cluster sizes and number of tokens per node). The caller is responsible for yielding if they call this function
     // in a loop.
-    virtual future<inet_address_vector_replica_set> calculate_natural_endpoints(const token& search_token, const token_metadata& tm) const  = 0;
+    virtual future<endpoint_set> calculate_natural_endpoints(const token& search_token, const token_metadata& tm) const  = 0;
 
     virtual ~abstract_replication_strategy() {}
     static ptr_type create_replication_strategy(const sstring& strategy_name, const replication_strategy_config_options& config_options);

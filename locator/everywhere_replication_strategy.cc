@@ -19,8 +19,9 @@ namespace locator {
 everywhere_replication_strategy::everywhere_replication_strategy(const replication_strategy_config_options& config_options) :
         abstract_replication_strategy(config_options, replication_strategy_type::everywhere_topology) {}
 
-future<inet_address_vector_replica_set> everywhere_replication_strategy::calculate_natural_endpoints(const token& search_token, const token_metadata& tm) const {
-    return make_ready_future<inet_address_vector_replica_set>(boost::copy_range<inet_address_vector_replica_set>(tm.get_all_endpoints()));
+future<endpoint_set> everywhere_replication_strategy::calculate_natural_endpoints(const token& search_token, const token_metadata& tm) const {
+    auto eps = tm.get_all_endpoints();
+    return make_ready_future<endpoint_set>(endpoint_set(eps.begin(), eps.end()));
 }
 
 size_t everywhere_replication_strategy::get_replication_factor(const token_metadata& tm) const {

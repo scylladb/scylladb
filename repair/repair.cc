@@ -1559,7 +1559,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
             rlogger.info("{}: started with keyspace={}, leaving_node={}, nr_ranges={}", op, keyspace_name, leaving_node, ranges.size() * nr_tables);
             size_t nr_ranges_total = ranges.size() * nr_tables;
             size_t nr_ranges_skipped = 0;
-            std::unordered_map<dht::token_range, inet_address_vector_replica_set> current_replica_endpoints;
+            std::unordered_map<dht::token_range, locator::endpoint_set> current_replica_endpoints;
             // Find (for each range) all nodes that store replicas for these ranges as well
             for (auto& r : ranges) {
                 auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
@@ -1583,8 +1583,8 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
                     ops->check_abort();
                 }
                 auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
-                const inet_address_vector_replica_set new_eps = ks.get_replication_strategy().calculate_natural_endpoints(end_token, temp).get0();
-                const inet_address_vector_replica_set& current_eps = current_replica_endpoints[r];
+                const auto new_eps = ks.get_replication_strategy().calculate_natural_endpoints(end_token, temp).get0();
+                const auto& current_eps = current_replica_endpoints[r];
                 std::unordered_set<inet_address> neighbors_set(new_eps.begin(), new_eps.end());
                 bool skip_this_range = false;
                 auto new_owner = neighbors_set;

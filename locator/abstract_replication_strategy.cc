@@ -286,7 +286,7 @@ abstract_replication_strategy::get_range_addresses(const token_metadata& tm) con
         dht::token_range_vector ranges = tm.get_primary_ranges_for(t);
         auto eps = co_await calculate_natural_endpoints(t, tm);
         for (auto& r : ranges) {
-            ret.emplace(r, eps);
+            ret.emplace(r, eps.get_vector());
         }
     }
     co_return ret;
@@ -314,7 +314,8 @@ future<mutable_effective_replication_map_ptr> calculate_effective_replication_ma
     replication_map replication_map;
 
     for (const auto &t : tmptr->sorted_tokens()) {
-        replication_map.emplace(t, co_await rs->calculate_natural_endpoints(t, *tmptr));
+        auto eps = co_await rs->calculate_natural_endpoints(t, *tmptr);
+        replication_map.emplace(t, eps.get_vector());
     }
 
     auto rf = rs->get_replication_factor(*tmptr);
