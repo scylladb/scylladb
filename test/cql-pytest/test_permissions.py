@@ -9,7 +9,7 @@
 import pytest
 import time
 from cassandra.protocol import SyntaxException, InvalidRequest, Unauthorized
-from util import new_test_table, new_user, new_session, new_test_keyspace, unique_name
+from util import new_test_table, new_function, new_user, new_session, new_test_keyspace, unique_name
 
 # Test that granting permissions to various resources works for the default user.
 # This case does not include functions, because due to differences in implementation
@@ -182,3 +182,74 @@ def test_udf_permissions_quoted_names(cassandra_bug, cql):
                         grant(cql, 'SELECT', table, username)
                         cql.execute(f"INSERT INTO {table}(a) VALUES (7)")
                         assert list([r[0] for r in user_session.execute(f"SELECT {keyspace}.{weird_fun}(a) FROM {table}")]) == [42]
+
+# Test that permissions set for user-defined functions are enforced
+# Tests for ALTER are separate, because they are qualified as cassandra_bug
+def test_grant_revoke_udf_permissions(cql):
+    schema = "a int primary key"
+    user = "cassandra"
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 1 }") as keyspace:
+        with new_test_table(cql, keyspace, schema) as table:
+            fun_body_lua = "(i int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return 42;'"
+            fun_body_java = "(i int) CALLED ON NULL INPUT RETURNS int LANGUAGE java AS 'return 42;'"
+            fun_body = fun_body_lua
+            try:
+                with new_function(cql, keyspace, fun_body) as fun:
+                    pass
+            except:
+                fun_body = fun_body_java
+            with new_user(cql) as username:
+                with new_session(cql, username) as user_session:
+                    fun = "fun42"
+
+                    def create_function_idempotent():
+                        user_session.execute(f"CREATE FUNCTION IF NOT EXISTS {keyspace}.{fun} {fun_body}")
+                        cql.execute(f"DROP FUNCTION IF EXISTS {keyspace}.{fun}(int)")
+                    check_enforced(cql, username, permission='CREATE', resource=f'all functions in keyspace {keyspace}',
+                            function=create_function_idempotent)
+                    check_enforced(cql, username, permission='CREATE', resource='all functions',
+                            function=create_function_idempotent)
+
+                    def drop_function_idempotent():
+                        user_session.execute(f"DROP FUNCTION IF EXISTS {keyspace}.{fun}(int)")
+                        cql.execute(f"CREATE FUNCTION IF NOT EXISTS {keyspace}.{fun} {fun_body}")
+                    for resource in [f'function {keyspace}.{fun}(int)', f'all functions in keyspace {keyspace}', 'all functions']:
+                        check_enforced(cql, username, permission='DROP', resource=resource, function=drop_function_idempotent)
+
+                    grant(cql, 'SELECT', table, username)
+                    for resource in [f'function {keyspace}.{fun}(int)', f'all functions in keyspace {keyspace}', 'all functions']:
+                        check_enforced(cql, username, permission='EXECUTE', resource=resource,
+                                function=lambda: user_session.execute(f"SELECT {keyspace}.{fun}(a) FROM {table}"))
+
+                    grant(cql, 'EXECUTE', 'ALL FUNCTIONS', username)
+                    def grant_idempotent():
+                        grant(user_session, 'EXECUTE', f'function {keyspace}.{fun}(int)', 'cassandra')
+                        revoke(cql, 'EXECUTE', f'function {keyspace}.{fun}(int)', 'cassandra')
+                    for resource in [f'function {keyspace}.{fun}(int)', f'all functions in keyspace {keyspace}', 'all functions']:
+                        check_enforced(cql, username, permission='AUTHORIZE', resource=resource, function=grant_idempotent)
+
+# This test case is artificially extracted from the one above,
+# because it's qualified as cassandra_bug - the documentation quotes that ALTER is needed on
+# functions if the definition is replaced (CREATE OR REPLACE FUNCTION (...)),
+# and yet it's not enforced
+def test_grant_revoke_alter_udf_permissions(cassandra_bug, cql):
+    schema = "a int primary key"
+    user = "cassandra"
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 1 }") as keyspace:
+        with new_test_table(cql, keyspace, schema) as table:
+            fun_body_lua = "(i int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return 42;'"
+            fun_body_java = "(i int) CALLED ON NULL INPUT RETURNS int LANGUAGE java AS 'return 42;'"
+            fun_body = fun_body_lua
+            try:
+                with new_function(cql, keyspace, fun_body) as fun:
+                    pass
+            except:
+                fun_body = fun_body_java
+            with new_user(cql) as username:
+                with new_session(cql, username) as user_session:
+                    fun = "fun42"
+                    grant(cql, 'CREATE', 'ALL FUNCTIONS', username)
+                    check_enforced(cql, username, permission='ALTER', resource=f'all functions in keyspace {keyspace}',
+                            function=lambda: user_session.execute(f"CREATE OR REPLACE FUNCTION {keyspace}.{fun} {fun_body}"))
+                    check_enforced(cql, username, permission='ALTER', resource='all functions',
+                            function=lambda: user_session.execute(f"CREATE OR REPLACE FUNCTION {keyspace}.{fun} {fun_body}")) 
