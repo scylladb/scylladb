@@ -131,6 +131,77 @@ which is recommended in order to make the operation less heavyweight
 and allow for running multiple parallel pruning statements for non-overlapping
 token ranges.
 
+## Synchronous materialized views
+
+Materialized view updates can be applied synchronously (with errors propagated
+back to the user) or asynchronously, in the background. Historically, in order
+to use synchronous updates, the materialized view had to be local,
+which could be achieved e.g. by using the same partition key definition
+as the one present in the base table.
+Scylla also allows explicitly marking the view as synchronous, which forces
+all its view updates to be updated synchronously. Such views tend to reduce
+observed availability of the base table, because a base table write would only
+succeed if all synchronous view updates also succeed. On the other hand,
+failed view updates would be detected immediately, and appropriate action
+can be taken (e.g. pruning the materialized view, as mentioned in the paragraph
+above).
+
+In order to mark a materialized view as synchronous, one can use the following
+syntax:
+
+```cql
+CREATE MATERIALIZED VIEW main.mv
+  AS SELECT * FROM main.t
+  wHERE v IS NOT NULL
+  PRIMARY KEY (v, id)
+  WITH synchronous_updates = true;
+```
+
+```cql
+ALTER MATERIALIZED VIEW main.mv WITH synchronous_updates = true;
+```
+
+Synchronous updates can also be dynamically turned off by setting
+the value of `synchronous_updates` to `false`.
+
+### Synchronous global secondary indexes
+
+Synchronous updates can also be turned on for global secondary indexes.
+At the time of writing this paragraph there is no direct syntax to do that,
+but it's possible to mark the underlying materialized view of an index
+as synchronous. ScyllaDB's implementation of secondary indexes is based
+on materialized views and the generated view's name can be extracted
+from schema tables, and is generally constructed by appending `_index`
+suffix to the index name:
+
+```cql
+create table main.t(id int primary key, v int);
+create index on main.t(v);
+
+select * from system_schema.indexes ;
+
+ keyspace_name | table_name | index_name | kind       | options
+---------------+------------+------------+------------+-----------------
+          main |          t |    t_v_idx | COMPOSITES | {'target': 'v'}
+
+(1 rows)
+
+
+select keyspace_name, view_name from system_schema.views ;
+
+ keyspace_name | view_name
+---------------+---------------
+          main | t_v_idx_index
+
+(1 rows)
+
+alter materialized view t_v_idx_index with synchronous_updates = true;
+
+```
+
+Local secondary indexes already have synchronous updates, so there's no need
+to explicitly mark them as such.
+
 ## Expressions
 
 ## REDUCEFUNC for UDA
