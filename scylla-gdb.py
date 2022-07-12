@@ -3502,6 +3502,13 @@ class scylla_fiber(gdb.Command):
         In addition, ptr has to point to an allocation block, managed by
         seastar, that contains a live object.
         """
+        # Save work if caller already analyzed the pointer
+        if isinstance(ptr, pointer_metadata):
+            ptr_meta = ptr
+            ptr = ptr.ptr
+        else:
+            ptr_meta = None
+
         try:
             maybe_vptr = int(gdb.Value(ptr).reinterpret_cast(self._vptr_type).dereference())
             self._maybe_log("\t-> 0x{:016x}\n".format(maybe_vptr), verbose)
@@ -3521,7 +3528,8 @@ class scylla_fiber(gdb.Command):
             return
 
         if using_seastar_allocator:
-            ptr_meta = scylla_ptr.analyze(ptr)
+            if ptr_meta is None:
+                ptr_meta = scylla_ptr.analyze(ptr)
             if not ptr_meta.is_managed_by_seastar() or not ptr_meta.is_live:
                 self._maybe_log("\t\t\tNot a live object\n", verbose)
                 return
