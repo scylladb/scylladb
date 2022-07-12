@@ -164,6 +164,10 @@ bool compaction_manager::can_register_compaction(replica::table* t, int weight, 
     if (!t->get_compaction_strategy().parallel_compaction() && has_table_ongoing_compaction(t)) {
         return false;
     }
+    // Weightless compaction doesn't have to be serialized, and won't dillute overall efficiency.
+    if (!weight) {
+        return true;
+    }
     // TODO: Maybe allow only *smaller* compactions to start? That can be done
     // by returning true only if weight is not in the set and is lower than any
     // entry in the set.

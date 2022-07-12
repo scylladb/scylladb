@@ -4501,68 +4501,103 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
             return m;
         };
 
-        auto make_table_with_single_fully_expired_sstable = [&] (auto idx) {
-            auto s = make_schema(idx);
-            replica::column_family::config cfg = column_family_test_config(env.semaphore());
-            cfg.datadir = tmp.path().string() + "/" + std::to_string(idx);
-            touch_directory(cfg.datadir).get();
-            cfg.enable_commitlog = false;
-            cfg.enable_incremental_backups = false;
-
-            auto sst_gen = [&env, s, dir = cfg.datadir, gen = make_lw_shared<unsigned>(1)] () mutable {
-                return env.make_sstable(s, dir, (*gen)++, sstables::sstable::version_types::md, big);
-            };
-
-            auto cf = make_lw_shared<replica::column_family>(s, cfg, replica::column_family::no_commitlog(), *cm, env.manager(), *cl_stats, *tracker);
-            cf->start();
-            cf->mark_ready_for_writes();
-
-            auto muts = { make_expiring_cell(s, std::chrono::hours(1)) };
-            auto sst = make_sstable_containing(sst_gen, muts);
-            column_family_test(cf).add_sstable(sst);
-            return cf;
-        };
-
+        constexpr size_t num_tables = 10;
+        std::vector<schema_ptr> schemas;
         std::vector<lw_shared_ptr<replica::column_family>> tables;
         auto stop_tables = defer([&tables] {
             for (auto& t : tables) {
                 t->stop().get();
             }
         });
-        for (auto i = 0; i < 100; i++) {
-            tables.push_back(make_table_with_single_fully_expired_sstable(i));
+
+        // Make tables
+        for (auto idx = 0; idx < num_tables; idx++) {
+            auto s = make_schema(idx);
+            schemas.push_back(s);
+
+            replica::column_family::config cfg = column_family_test_config(env.semaphore());
+            cfg.datadir = tmp.path().string() + "/" + std::to_string(idx);
+            touch_directory(cfg.datadir).get();
+            cfg.enable_commitlog = false;
+            cfg.enable_incremental_backups = false;
+
+            auto cf = make_lw_shared<replica::column_family>(s, cfg, replica::column_family::no_commitlog(), *cm, env.manager(), *cl_stats, *tracker);
+            cf->start();
+            cf->mark_ready_for_writes();
+            tables.push_back(cf);
+        }
+
+        auto sst_gen = [&, gen = make_lw_shared<unsigned>(1)] (size_t idx) mutable {
+            auto s = schemas[idx];
+            auto t = tables[idx];
+            return env.make_sstable(s, t->dir(), (*gen)++, sstables::sstable::version_types::md, big);
+        };
+
+        auto add_single_fully_expired_sstable_to_table = [&] (auto idx) {
+            auto s = schemas[idx];
+            auto cf = tables[idx];
+            auto muts = { make_expiring_cell(s, std::chrono::hours(1)) };
+            auto sst = make_sstable_containing([&sst_gen, idx] { return sst_gen(idx); }, muts);
+            column_family_test(cf).add_sstable(sst);
+        };
+
+        for (auto i = 0; i < num_tables; i++) {
+            add_single_fully_expired_sstable_to_table(i);
         }
 
         // Make sure everything is expired
         forward_jump_clocks(std::chrono::hours(100));
 
-        for (auto& t : tables) {
-            BOOST_REQUIRE(t->sstables_count() == 1);
-            t->trigger_compaction();
-        }
+        auto compact_all_tables = [&] (size_t expected_before, size_t expected_after) {
+            for (auto& t : tables) {
+                BOOST_REQUIRE_EQUAL(t->sstables_count(), expected_before);
+                t->trigger_compaction();
+            }
 
-        BOOST_REQUIRE(cm->get_stats().pending_tasks >= 1 || cm->get_stats().active_tasks >= 1);
+            BOOST_REQUIRE(cm->get_stats().pending_tasks >= 1 || cm->get_stats().active_tasks >= 1);
 
-        size_t max_ongoing_compaction = 0;
+            size_t max_ongoing_compaction = 0;
 
-        // wait for submitted jobs to finish.
-        auto end = [cm, &tables] {
-            return cm->get_stats().pending_tasks == 0 && cm->get_stats().active_tasks == 0
-                && boost::algorithm::all_of(tables, [] (auto& t) { return t->sstables_count() == 0; });
-        };
-        while (!end()) {
-            if (!cm->get_stats().pending_tasks && !cm->get_stats().active_tasks) {
-                for (auto& t : tables) {
-                    if (t->sstables_count()) {
-                        t->trigger_compaction();
+            // wait for submitted jobs to finish.
+            auto end = [cm, &tables, expected_after] {
+                return cm->get_stats().pending_tasks == 0 && cm->get_stats().active_tasks == 0
+                    && boost::algorithm::all_of(tables, [expected_after] (auto& t) { return t->sstables_count() == expected_after; });
+            };
+            while (!end()) {
+                if (!cm->get_stats().pending_tasks && !cm->get_stats().active_tasks) {
+                    for (auto& t : tables) {
+                        if (t->sstables_count()) {
+                            t->trigger_compaction();
+                        }
                     }
                 }
+                max_ongoing_compaction = std::max(cm->get_stats().active_tasks, max_ongoing_compaction);
+                yield().get();
             }
-            max_ongoing_compaction = std::max(cm->get_stats().active_tasks, max_ongoing_compaction);
-            yield().get();
+            BOOST_REQUIRE(cm->get_stats().errors == 0);
+            return max_ongoing_compaction;
+        };
+
+        // Allow fully expired sstables to be compacted in parallel
+        BOOST_REQUIRE_LE(compact_all_tables(1, 0), num_tables);
+
+        auto add_sstables_to_table = [&] (auto idx, size_t num_sstables) {
+            auto s = schemas[idx];
+            auto cf = tables[idx];
+            auto cft = column_family_test(cf);
+            for (auto i = 0; i < num_sstables; i++) {
+                auto muts = { make_expiring_cell(s, std::chrono::hours(1)) };
+                cft.add_sstable(make_sstable_containing([&sst_gen, idx] { return sst_gen(idx); }, muts));
+            }
+        };
+
+        for (auto i = 0; i < num_tables; i++) {
+            add_sstables_to_table(i, DEFAULT_MIN_COMPACTION_THRESHOLD);
         }
-        BOOST_REQUIRE(cm->get_stats().errors == 0);
-        BOOST_REQUIRE(max_ongoing_compaction == 1);
+
+        // All buckets are expected to have the same weight (0)
+        // and therefore their compaction is expected to be serialized
+        BOOST_REQUIRE_EQUAL(compact_all_tables(DEFAULT_MIN_COMPACTION_THRESHOLD, 1), 1);
     });
 }
 
