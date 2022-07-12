@@ -12,6 +12,7 @@ PAPEROPT_a4     := -D latex_paper_size=a4
 PAPEROPT_letter := -D latex_paper_size=letter
 ALLSPHINXOPTS   := -d $(BUILDDIR)/doctrees $(PAPEROPT_$(PAPER)) $(SPHINXOPTS) $(SOURCEDIR)
 TESTSPHINXOPTS  := $(ALLSPHINXOPTS) -W --keep-going
+PROD_OPTS       := -D html_theme_options.collapse_navigation='false' -D html_theme_options.navigation_depth=3
 
 # Windows variables
 ifeq ($(OS),Windows_NT)
@@ -67,7 +68,7 @@ epub3: setup
 
 .PHONY: multiversion
 multiversion: setup
-	$(POETRY) run sphinx-multiversion $(SOURCEDIR) $(BUILDDIR)/dirhtml
+	$(POETRY) run sphinx-multiversion $(SOURCEDIR) $(BUILDDIR)/dirhtml $(PROD_OPTS)
 	@echo
 	@echo "Build finished. The HTML pages are in $(BUILDDIR)/dirhtml."
 
