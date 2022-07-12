@@ -118,6 +118,15 @@ public:
     future<> leave_group0();
 
     // Remove `host` from group 0.
+    //
+    // Assumes that either
+    // 1. we've finished bootstrapping and now running a `removenode` operation,
+    // 2. or we're currently bootstrapping and replacing an existing node.
+    //
+    // In both cases, `setup_group0()` must have finished earlier.
+    //
+    // The provided address may be our own - if we're replacing a node that had the same address as ours.
+    // We'll look for the other node's Raft ID in the group 0 configuration.
     future<> remove_from_group0(gms::inet_address host);
 
 private:

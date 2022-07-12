@@ -9,6 +9,7 @@
 #include "service/raft/raft_rpc.hh"
 #include "service/raft/raft_sys_table_storage.hh"
 #include "service/raft/group0_state_machine.hh"
+#include "service/raft/raft_group0_client.hh"
 
 #include "message/messaging_service.hh"
 #include "cql3/query_processor.hh"
@@ -372,37 +373,55 @@ future<> raft_group0::leave_group0() {
 }
 
 future<> raft_group0::remove_from_group0(gms::inet_address node) {
-    if (!_raft_gr.is_enabled()) {
-        co_return;
-    }
     assert(this_shard_id() == 0);
-    auto my_id = raft::server_id{co_await db::system_keyspace::get_raft_server_id()};
-    if (my_id == raft::server_id{}) {
-        throw std::runtime_error("Can't invoke removenode on a node which is not part of the cluster");
-    }
-    auto opt_id = _raft_gr.address_map().find_replace_id(node, my_id);
-    if (!opt_id) {
-        // The node being removed is not part of the
-        // configuration.
-        co_return;
-    }
-    auto remove_addr = *opt_id;
 
-    auto pause_shutdown = _shutdown_gate.hold();
-    if (std::holds_alternative<raft::group_id>(_group0)) {
-        co_return co_await _raft_gr.group0().modify_config({}, {remove_addr}, &_abort_source);
-    }
-    auto g0_info = co_await discover_group0(my_id, raft::server_info{} /* XXX: apparently passing empty info works */);
-    if (g0_info.addr.id == my_id) {
+    if (!_raft_gr.is_enabled()) {
+        rslog.info("remove_from_group0({}): local RAFT feature disabled, skipping.", node);
         co_return;
     }
-    netw::msg_addr peer(raft_addr_to_inet_addr(g0_info.addr));
-    // During removenode, the client itself will retry or abort
-    // the operation if necessary, it's move important it's not
-    // "flaky" on slow network or CPU.
-    auto timeout = db::timeout_clock::now() + std::chrono::minutes{20};
-    // TODO: aborts?
-    co_return co_await ser::group0_rpc_verbs::send_group0_modify_config(&_ms, peer, timeout, g0_info.group0_id, {}, {remove_addr});
+
+    if (!joined_group0()) {
+        // TODO: unimplemented upgrade case.
+        co_return;
+    }
+
+    auto my_id = raft::server_id{co_await db::system_keyspace::get_raft_server_id()};
+    if (!my_id) {
+        on_internal_error(rslog, format(
+            "remove_from_group0({}): we're fully upgraded to use Raft and group 0 ID is present but Raft server ID is not."
+            " Please report a bug.", node));
+    }
+
+    // Find their group 0 server's Raft ID.
+    // Note: even if the removed node had the same inet_address as us, `find_replace_id` should correctly find them
+    // (if they are still a member of group 0); hence we provide `my_id` to skip us in the search.
+    auto their_id = _raft_gr.address_map().find_replace_id(node, my_id);
+    if (!their_id) {
+        // The address map is updated with the ID of every member of the configuration.
+        // We could not find them in the address map. This could mean two things:
+        // 1. they are not a member.
+        // 2. They are a member, but we don't know about it yet; e.g. we just upgraded
+        //    and joined group 0 but the leader is still pushing entires to us (including config entries)
+        //    and we don't yet have the entry which contains `their_id`.
+        //
+        // To handle the second case we perform a read barrier now and check the address again.
+        // Ignore the returned guard, we don't need it.
+        rslog.info("remove_from_group0({}): did not find them in group 0 configuration, synchronizing Raft before retrying...", node);
+        (void)co_await _client.start_operation(&_abort_source);
+
+        their_id = _raft_gr.address_map().find_replace_id(node, my_id);
+        if (!their_id) {
+            rslog.info("remove_from_group0({}): did not find them in group 0 configuration. Skipping.", node);
+            co_return;
+        }
+    }
+
+    rslog.info(
+        "remove_from_group0({}): found the node in group 0 configuration, Raft ID: {}. Proceeding with the remove...",
+        node, *their_id);
+
+    // TODO: add a timeout+retry mechanism? This could get stuck (and _abort_source is only called on shutdown).
+    co_return co_await _raft_gr.group0().modify_config({}, {*their_id}, &_abort_source);
 }
 
 bool raft_group0::joined_group0() const {
