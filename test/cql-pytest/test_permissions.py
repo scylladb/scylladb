@@ -219,3 +219,111 @@ def test_drop_udf_with_same_name(cql):
                     user_session.execute(f"DROP FUNCTION {keyspace}.{fun}")
                 eventually_authorized(lambda: user_session.execute(f"DROP FUNCTION {keyspace}.{fun}(int)"))
                 eventually_authorized(lambda: user_session.execute(f"DROP FUNCTION {keyspace}.{fun}"))
+
+# Test that permissions set for user-defined functions are enforced
+# Tests for ALTER are separate, because they are qualified as cassandra_bug
+def test_grant_revoke_udf_permissions(cql):
+    schema = "a int primary key"
+    user = "cassandra"
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 1 }") as keyspace:
+        with new_test_table(cql, keyspace, schema) as table:
+            fun_body_lua = "(i int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return 42;'"
+            fun_body_java = "(i int) CALLED ON NULL INPUT RETURNS int LANGUAGE java AS 'return 42;'"
+            fun_body = fun_body_lua
+            try:
+                with new_function(cql, keyspace, fun_body) as fun:
+                    pass
+            except:
+                fun_body = fun_body_java
+            with new_user(cql) as username:
+                with new_session(cql, username) as user_session:
+                    fun = "fun42"
+
+                    def create_function_idempotent():
+                        user_session.execute(f"CREATE FUNCTION IF NOT EXISTS {keyspace}.{fun} {fun_body}")
+                        cql.execute(f"DROP FUNCTION IF EXISTS {keyspace}.{fun}(int)")
+                    check_enforced(cql, username, permission='CREATE', resource=f'all functions in keyspace {keyspace}',
+                            function=create_function_idempotent)
+                    check_enforced(cql, username, permission='CREATE', resource='all functions',
+                            function=create_function_idempotent)
+
+                    def drop_function_idempotent():
+                        user_session.execute(f"DROP FUNCTION IF EXISTS {keyspace}.{fun}(int)")
+                        cql.execute(f"CREATE FUNCTION IF NOT EXISTS {keyspace}.{fun} {fun_body}")
+                    for resource in [f'function {keyspace}.{fun}(int)', f'all functions in keyspace {keyspace}', 'all functions']:
+                        check_enforced(cql, username, permission='DROP', resource=resource, function=drop_function_idempotent)
+
+                    grant(cql, 'SELECT', table, username)
+                    for resource in [f'function {keyspace}.{fun}(int)', f'all functions in keyspace {keyspace}', 'all functions']:
+                        check_enforced(cql, username, permission='EXECUTE', resource=resource,
+                                function=lambda: user_session.execute(f"SELECT {keyspace}.{fun}(a) FROM {table}"))
+
+                    grant(cql, 'EXECUTE', 'ALL FUNCTIONS', username)
+                    def grant_idempotent():
+                        grant(user_session, 'EXECUTE', f'function {keyspace}.{fun}(int)', 'cassandra')
+                        revoke(cql, 'EXECUTE', f'function {keyspace}.{fun}(int)', 'cassandra')
+                    for resource in [f'function {keyspace}.{fun}(int)', f'all functions in keyspace {keyspace}', 'all functions']:
+                        check_enforced(cql, username, permission='AUTHORIZE', resource=resource, function=grant_idempotent)
+
+# This test case is artificially extracted from the one above,
+# because it's qualified as cassandra_bug - the documentation quotes that ALTER is needed on
+# functions if the definition is replaced (CREATE OR REPLACE FUNCTION (...)),
+# and yet it's not enforced
+def test_grant_revoke_alter_udf_permissions(cassandra_bug, cql):
+    schema = "a int primary key"
+    user = "cassandra"
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 1 }") as keyspace:
+        with new_test_table(cql, keyspace, schema) as table:
+            fun_body_lua = "(i int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return 42;'"
+            fun_body_java = "(i int) CALLED ON NULL INPUT RETURNS int LANGUAGE java AS 'return 42;'"
+            fun_body = fun_body_lua
+            try:
+                with new_function(cql, keyspace, fun_body) as fun:
+                    pass
+            except:
+                fun_body = fun_body_java
+            with new_user(cql) as username:
+                with new_session(cql, username) as user_session:
+                    fun = "fun42"
+
+                    grant(cql, 'ALTER', 'ALL FUNCTIONS', username)
+                    check_enforced(cql, username, permission='CREATE', resource=f'all functions in keyspace {keyspace}',
+                            function=lambda: user_session.execute(f"CREATE OR REPLACE FUNCTION {keyspace}.{fun} {fun_body}"))
+                    check_enforced(cql, username, permission='CREATE', resource='all functions',
+                            function=lambda: user_session.execute(f"CREATE OR REPLACE FUNCTION {keyspace}.{fun} {fun_body}"))
+                    revoke(cql, 'ALTER', 'ALL FUNCTIONS', username)
+
+                    grant(cql, 'CREATE', 'ALL FUNCTIONS', username)
+                    check_enforced(cql, username, permission='ALTER', resource=f'all functions in keyspace {keyspace}',
+                            function=lambda: user_session.execute(f"CREATE OR REPLACE FUNCTION {keyspace}.{fun} {fun_body}"))
+                    check_enforced(cql, username, permission='ALTER', resource='all functions',
+                            function=lambda: user_session.execute(f"CREATE OR REPLACE FUNCTION {keyspace}.{fun} {fun_body}"))
+
+# Test that granting permissions on non-existent UDFs fails
+def test_grant_perms_on_nonexistent_udf(cql):
+    keyspace = "ks"
+    fun_name = "fun42"
+    with new_user(cql) as username:
+        grant(cql, 'EXECUTE', 'ALL FUNCTIONS', username)
+        revoke(cql, 'EXECUTE', 'ALL FUNCTIONS', username)
+        with pytest.raises(InvalidRequest):
+            grant(cql, 'EXECUTE', f'ALL FUNCTIONS IN KEYSPACE {keyspace}', username)
+        with pytest.raises(InvalidRequest):
+            grant(cql, 'EXECUTE', f'FUNCTION {keyspace}.{fun_name}(int)', username)
+        cql.execute(f"CREATE KEYSPACE IF NOT EXISTS {keyspace} WITH REPLICATION = {{ 'class' : 'SimpleStrategy', 'replication_factor' : 1 }}")
+        grant(cql, 'EXECUTE', f'ALL FUNCTIONS IN KEYSPACE {keyspace}', username)
+        revoke(cql, 'EXECUTE', f'ALL FUNCTIONS IN KEYSPACE {keyspace}', username)
+        with pytest.raises(InvalidRequest):
+            grant(cql, 'EXECUTE', f'FUNCTION {keyspace}.{fun_name}(int)', username)
+
+        fun_body_lua = "(i int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return 42;'"
+        fun_body_java = "(i int) CALLED ON NULL INPUT RETURNS int LANGUAGE java AS 'return 42;'"
+        fun_body = fun_body_lua
+        try:
+            with new_function(cql, keyspace, fun_body) as fun:
+                pass
+        except:
+            fun_body = fun_body_java
+        with new_function(cql, keyspace, fun_body, fun_name):
+            grant(cql, 'EXECUTE', f'FUNCTION {keyspace}.{fun_name}(int)', username)
+        cql.execute(f"DROP KEYSPACE IF EXISTS {keyspace}")
