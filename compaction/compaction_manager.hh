@@ -455,7 +455,7 @@ public:
         return _stats;
     }
 
-    const std::vector<sstables::compaction_info> get_compactions(replica::table* t = nullptr) const;
+    const std::vector<sstables::compaction_info> get_compactions(compaction::table_state* t = nullptr) const;
 
     // Returns true if table has an ongoing compaction, running on its behalf
     bool has_table_ongoing_compaction(const compaction::table_state& t) const;

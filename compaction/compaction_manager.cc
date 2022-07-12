@@ -773,7 +773,7 @@ future<> compaction_manager::stop_tasks(std::vector<shared_ptr<task>> tasks, sst
 }
 
 future<> compaction_manager::stop_ongoing_compactions(sstring reason, replica::table* t, std::optional<sstables::compaction_type> type_opt) {
-    auto ongoing_compactions = get_compactions(t).size();
+    auto ongoing_compactions = get_compactions(&t->as_table_state()).size();
     auto tasks = boost::copy_range<std::vector<shared_ptr<task>>>(_tasks | boost::adaptors::filtered([t, type_opt] (auto& task) {
         return (!t || task->compacting_table() == t) && (!type_opt || task->type() == *type_opt);
     }));
@@ -1481,7 +1481,7 @@ future<> compaction_manager::remove(replica::table* t) {
 #endif
 }
 
-const std::vector<sstables::compaction_info> compaction_manager::get_compactions(replica::table* t) const {
+const std::vector<sstables::compaction_info> compaction_manager::get_compactions(compaction::table_state* t) const {
     auto to_info = [] (const shared_ptr<task>& task) {
         sstables::compaction_info ret;
         ret.compaction_uuid = task->compaction_data().compaction_uuid;
@@ -1494,7 +1494,7 @@ const std::vector<sstables::compaction_info> compaction_manager::get_compactions
     };
     using ret = std::vector<sstables::compaction_info>;
     return boost::copy_range<ret>(_tasks | boost::adaptors::filtered([t] (const shared_ptr<task>& task) {
-                return (!t || task->compacting_table() == t) && task->compaction_running();
+                return (!t || &task->compacting_table()->as_table_state() == t) && task->compaction_running();
             }) | boost::adaptors::transformed(to_info));
 }
 
