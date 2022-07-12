@@ -2406,6 +2406,9 @@ public:
     reader_permit make_compaction_reader_permit() const override {
         return _t.compaction_concurrency_semaphore().make_tracking_only_permit(schema().get(), "compaction", db::no_timeout);
     }
+    sstables::shared_sstable make_sstable() const override {
+        return _t.make_sstable();
+    }
     sstables::sstable_writer_config configure_writer(sstring origin) const override {
         return _t.get_sstables_manager().configure_writer(std::move(origin));
     }

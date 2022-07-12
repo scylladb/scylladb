@@ -157,6 +157,9 @@ public:
     reader_permit make_compaction_reader_permit() const override {
         return _env.make_reader_permit();
     }
+    sstables::shared_sstable make_sstable() const override {
+        return _t->make_sstable();
+    }
     sstables::sstable_writer_config configure_writer(sstring origin) const override {
         return _env.manager().configure_writer(std::move(origin));
     }
