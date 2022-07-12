@@ -18,6 +18,7 @@
 #include <vector>
 #include <unordered_set>
 
+#include <boost/range/adaptor/transformed.hpp>
 #include <seastar/core/print.hh>
 #include <seastar/core/sstring.hh>
 

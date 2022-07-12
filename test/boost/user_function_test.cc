@@ -998,8 +998,10 @@ SEASTAR_THREAD_TEST_CASE(test_user_function_db_init) {
 
 SEASTAR_TEST_CASE(test_user_function_mixups) {
     return with_udf_enabled([] (cql_test_env& e) {
-        BOOST_REQUIRE_EXCEPTION(e.execute_cql("DROP FUNCTION system.now;").get(), ire, message_equals("'system.now : () -> timeuuid' is not a user defined function"));
-        BOOST_REQUIRE_EXCEPTION(e.execute_cql("DROP FUNCTION system.now();").get(), ire, message_equals("'system.now : () -> timeuuid' is not a user defined function"));
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("DROP FUNCTION system.now;").get(), exceptions::unauthorized_exception,
+                message_contains("system keyspace is not user-modifiable"));
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("DROP FUNCTION system.now();").get(), exceptions::unauthorized_exception,
+                message_contains("system keyspace is not user-modifiable"));
         BOOST_REQUIRE_EXCEPTION(e.execute_cql("CREATE OR REPLACE FUNCTION system.now() RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2';").get(),
                 exceptions::unauthorized_exception,
                 message_contains("system keyspace is not user-modifiable"));

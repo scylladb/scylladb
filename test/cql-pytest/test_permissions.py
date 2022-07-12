@@ -9,7 +9,7 @@
 import pytest
 import time
 from cassandra.protocol import SyntaxException, InvalidRequest, Unauthorized
-from util import new_test_table, new_user, new_session, new_test_keyspace, unique_name
+from util import new_test_table, new_function, new_user, new_session, new_test_keyspace, unique_name
 
 # Test that granting permissions to various resources works for the default user.
 # This case does not include functions, because due to differences in implementation
@@ -185,3 +185,37 @@ def test_udf_permissions_quoted_names(cassandra_bug, cql):
 
                         resources_with_execute = [row.resource for row in cql.execute(f"LIST EXECUTE OF {username}")]
                         assert f'<function {keyspace}.{weird_fun}(int)>' in resources_with_execute
+
+# Test that dropping a function without specifying its signature works with the DROP permission if there's only
+# one function with the given name, and that it fails if there are multiple functions with the same name,
+# regardless of the permissions of the user.
+# If the signature is specified, test that the permission check is performed as usual.
+def test_drop_udf_with_same_name(cql):
+    schema = "a int primary key"
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 1 }") as keyspace:
+        body1_lua = "(i int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return 42;'"
+        body1_java = "(i int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return 42;'"
+        body2_lua = "(i int, j int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return 42;'"
+        body2_java = "(i int, j int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return 42;'"
+        body1 = body1_lua
+        body2 = body2_lua
+        try:
+            with new_function(cql, keyspace, body1):
+                pass
+        except:
+            body1 = body1_java
+            body2 = body2_java
+        fun = "fun43"
+        cql.execute(f"CREATE FUNCTION {keyspace}.{fun}{body1}")
+        cql.execute(f"CREATE FUNCTION {keyspace}.{fun}{body2}")
+        with new_user(cql) as username:
+            with new_session(cql, username) as user_session:
+                grant(cql, 'DROP', f'FUNCTION {keyspace}.{fun}(int)', username)
+                with pytest.raises(InvalidRequest):
+                    user_session.execute(f"DROP FUNCTION {keyspace}.{fun}")
+                eventually_unauthorized(lambda: user_session.execute(f"DROP FUNCTION {keyspace}.{fun}(int, int)"))
+                grant(cql, 'DROP', f'FUNCTION {keyspace}.{fun}(int, int)', username)
+                with pytest.raises(InvalidRequest):
+                    user_session.execute(f"DROP FUNCTION {keyspace}.{fun}")
+                eventually_authorized(lambda: user_session.execute(f"DROP FUNCTION {keyspace}.{fun}(int)"))
+                eventually_authorized(lambda: user_session.execute(f"DROP FUNCTION {keyspace}.{fun}"))
