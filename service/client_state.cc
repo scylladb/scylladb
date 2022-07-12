@@ -80,6 +80,21 @@ future<> service::client_state::has_keyspace_access(data_dictionary::database db
     co_return co_await has_access(db, ks, {p, r});
 }
 
+future<> service::client_state::has_functions_access(data_dictionary::database db, auth::permission p) const {
+    auth::resource r = auth::make_functions_resource();
+    co_return co_await ensure_has_permission({p, r});
+}
+
+future<> service::client_state::has_functions_access(data_dictionary::database db, const sstring& ks, auth::permission p) const {
+    auth::resource r = auth::make_functions_resource(ks);
+    co_return co_await has_access(db, ks, {p, r});
+}
+
+future<> service::client_state::has_function_access(data_dictionary::database db, const sstring& ks, const sstring& function_name, auth::permission p) const {
+    auth::resource r = auth::make_functions_resource(ks, function_name);
+    co_return co_await has_access(db, ks, {p, r});
+}
+
 future<> service::client_state::has_column_family_access(data_dictionary::database db, const sstring& ks,
                 const sstring& cf, auth::permission p, auth::command_desc::type t) const {
     // NOTICE: callers of this function tend to assume that this error will be thrown
