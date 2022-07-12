@@ -21,8 +21,12 @@ namespace utils {
  * class.
  */
 template<typename T>
-struct sequenced_set {
-    typedef typename std::vector<T>::iterator iterator;
+class sequenced_set {
+public:
+    using value_type = T;
+    using size_type = size_t;
+    using iterator = typename std::vector<T>::iterator;
+    using const_iterator = typename std::vector<T>::const_iterator;
 
     void push_back(const T& val) {
         insert(val);
@@ -42,23 +46,39 @@ struct sequenced_set {
         return std::make_pair(_vec.end(), false);
     }
 
-    size_t size() {
+    size_type size() const noexcept {
         return _vec.size();
     }
 
-    iterator begin() {
+    iterator begin() noexcept {
         return _vec.begin();
     }
 
-    iterator end() {
+    iterator end() noexcept {
         return _vec.end();
     }
 
-    const std::vector<T>& get_vector() const {
+    const_iterator begin() const noexcept {
+        return _vec.begin();
+    }
+
+    const_iterator end() const noexcept {
+        return _vec.end();
+    }
+
+    const_iterator cbegin() const noexcept {
+        return _vec.cbegin();
+    }
+
+    const_iterator cend() const noexcept {
+        return _vec.cend();
+    }
+
+    const auto& get_vector() const noexcept {
         return _vec;
     }
 
-    void reserve(size_t sz) {
+    void reserve(size_type sz) {
         _set.reserve(sz);
         _vec.reserve(sz);
     }
