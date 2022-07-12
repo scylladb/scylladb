@@ -949,6 +949,8 @@ Dropping a table results in the immediate removal of the table, including all da
 If the table does not exist, the statement will return an error unless ``IF EXISTS`` is used, in which case the
 operation is a no-op.
 
+.. note:: Dropping a table that has materialized views or secondary indexes is disallowed and will return an error. To do so, the materialized views or secondary indexes that depend on the table must first be explicitly dropped. Refer to :doc:`Materialized Views </getting-started/mv>` and :doc:`Secondary Indexes </getting-started/secondary-indexes>` for details.
+
 .. _truncate-statement:
 
 TRUNCATE
