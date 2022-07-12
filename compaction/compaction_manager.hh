@@ -328,7 +328,7 @@ private:
 
     // Return true if compaction manager is enabled and
     // table still exists and compaction is not disabled for the table.
-    inline bool can_proceed(replica::table* t) const;
+    inline bool can_proceed(compaction::table_state* t) const;
 
     void postponed_compactions_reevaluation();
     void reevaluate_postponed_compactions() noexcept;

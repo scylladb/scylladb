@@ -837,8 +837,8 @@ void compaction_manager::do_stop() noexcept {
     }
 }
 
-inline bool compaction_manager::can_proceed(replica::table* t) const {
-    return (_state == state::enabled) && _compaction_state.contains(&t->as_table_state()) && !_compaction_state.at(&t->as_table_state()).compaction_disabled();
+inline bool compaction_manager::can_proceed(compaction::table_state* t) const {
+    return (_state == state::enabled) && _compaction_state.contains(t) && !_compaction_state.at(t).compaction_disabled();
 }
 
 inline bool compaction_manager::task::can_proceed(throw_if_stopping do_throw_if_stopping) const {
@@ -849,7 +849,7 @@ inline bool compaction_manager::task::can_proceed(throw_if_stopping do_throw_if_
         }
         return false;
     }
-    return _cm.can_proceed(_compacting_table);
+    return _cm.can_proceed(&_compacting_table->as_table_state());
 }
 
 future<stop_iteration> compaction_manager::task::maybe_retry(std::exception_ptr err) {
