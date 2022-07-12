@@ -380,7 +380,6 @@ static query::partition_slice make_partition_slice(const schema& s) {
 class data_query_result_builder {
 public:
     using result_type = query::result;
-    static constexpr emit_only_live_rows only_live = emit_only_live_rows::yes;
 
 private:
     query::result::builder _res_builder;
@@ -1958,8 +1957,11 @@ public:
         return stop_iteration::no;
     }
 
-    stop_iteration consume(clustering_row&& cr, row_tombstone, bool) {
+    stop_iteration consume(clustering_row&& cr, row_tombstone, bool is_live) {
         inject_failure("view_builder_consume_clustering_row");
+        if (!is_live) {
+            return stop_iteration::no;
+        }
         if (_views_to_build.empty() || _builder._as.abort_requested()) {
             return stop_iteration::yes;
         }
@@ -2034,7 +2036,7 @@ public:
 // Called in the context of a seastar::thread.
 void view_builder::execute(build_step& step, exponential_backoff_retry r) {
     gc_clock::time_point now = gc_clock::now();
-    auto consumer = compact_for_query_v2<emit_only_live_rows::yes, view_builder::consumer>(
+    auto consumer = compact_for_query_v2<view_builder::consumer>(
             *step.reader.schema(),
             now,
             step.pslice,

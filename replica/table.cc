@@ -2028,7 +2028,7 @@ table::query(schema_ptr s,
         tracing::trace_state_ptr trace_state,
         query::result_memory_limiter& memory_limiter,
         db::timeout_clock::time_point timeout,
-        std::optional<query::data_querier>* saved_querier) {
+        std::optional<query::querier>* saved_querier) {
     if (cmd.get_row_limit() == 0 || cmd.slice.partition_row_limit() == 0 || cmd.partition_limit == 0) {
         co_return make_lw_shared<query::result>();
     }
@@ -2052,7 +2052,7 @@ table::query(schema_ptr s,
 
     query_state qs(s, cmd, opts, partition_ranges, std::move(accounter));
 
-    std::optional<query::data_querier> querier_opt;
+    std::optional<query::querier> querier_opt;
     if (saved_querier) {
         querier_opt = std::move(*saved_querier);
     }
@@ -2061,7 +2061,7 @@ table::query(schema_ptr s,
         auto&& range = *qs.current_partition_range++;
 
         if (!querier_opt) {
-            querier_opt = query::data_querier(as_mutation_source(), s, permit, range, qs.cmd.slice,
+            querier_opt = query::querier(as_mutation_source(), s, permit, range, qs.cmd.slice,
                     service::get_local_sstable_query_read_priority(), trace_state);
         }
         auto& q = *querier_opt;
@@ -2105,17 +2105,17 @@ table::mutation_query(schema_ptr s,
         tracing::trace_state_ptr trace_state,
         query::result_memory_accounter accounter,
         db::timeout_clock::time_point timeout,
-        std::optional<query::mutation_querier>* saved_querier) {
+        std::optional<query::querier>* saved_querier) {
     if (cmd.get_row_limit() == 0 || cmd.slice.partition_row_limit() == 0 || cmd.partition_limit == 0) {
         co_return reconcilable_result();
     }
 
-    std::optional<query::mutation_querier> querier_opt;
+    std::optional<query::querier> querier_opt;
     if (saved_querier) {
         querier_opt = std::move(*saved_querier);
     }
     if (!querier_opt) {
-        querier_opt = query::mutation_querier(as_mutation_source(), s, permit, range, cmd.slice,
+        querier_opt = query::querier(as_mutation_source(), s, permit, range, cmd.slice,
                 service::get_local_sstable_query_read_priority(), trace_state);
     }
     auto& q = *querier_opt;

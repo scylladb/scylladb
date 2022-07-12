@@ -205,8 +205,8 @@ public:
     }
 
     template <typename Querier>
-    entry_info produce_first_page_and_save_querier(unsigned key, const dht::partition_range& range,
-            const query::partition_slice& slice, uint64_t row_limit) {
+    entry_info produce_first_page_and_save_querier(void(query::querier_cache::*insert_mem_ptr)(utils::UUID, Querier&&, tracing::trace_state_ptr), unsigned key,
+            const dht::partition_range& range, const query::partition_slice& slice, uint64_t row_limit) {
         const auto cache_key = make_cache_key(key);
 
         auto querier = make_querier<Querier>(range);
@@ -214,7 +214,8 @@ public:
         auto&& dk = dk_ck.first;
         auto&& ck = dk_ck.second;
         auto permit = querier.permit();
-        _cache.insert(cache_key, std::move(querier), nullptr);
+        auto insert_fn = std::mem_fn(insert_mem_ptr);
+        insert_fn(_cache, cache_key, std::move(querier), nullptr);
 
         // Either no keys at all (nothing read) or at least partition key.
         BOOST_REQUIRE((dk && ck) || !ck);
@@ -254,7 +255,7 @@ public:
 
     entry_info produce_first_page_and_save_data_querier(unsigned key, const dht::partition_range& range,
             const query::partition_slice& slice, uint64_t row_limit = 5) {
-        return produce_first_page_and_save_querier<query::data_querier>(key, range, slice, row_limit);
+        return produce_first_page_and_save_querier<query::querier>(&query::querier_cache::insert_data_querier, key, range, slice, row_limit);
     }
 
     entry_info produce_first_page_and_save_data_querier(unsigned key, const dht::partition_range& range, uint64_t row_limit = 5) {
@@ -278,7 +279,7 @@ public:
 
     entry_info produce_first_page_and_save_mutation_querier(unsigned key, const dht::partition_range& range,
             const query::partition_slice& slice, uint64_t row_limit = 5) {
-        return produce_first_page_and_save_querier<query::mutation_querier>(key, range, slice, row_limit);
+        return produce_first_page_and_save_querier<query::querier>(&query::querier_cache::insert_mutation_querier, key, range, slice, row_limit);
     }
 
     entry_info produce_first_page_and_save_mutation_querier(unsigned key, const dht::partition_range& range, uint64_t row_limit = 5) {

@@ -21,11 +21,6 @@ static inline bool has_ck_selector(const query::clustering_row_ranges& ranges) {
     });
 }
 
-enum class emit_only_live_rows {
-    no,
-    yes,
-};
-
 enum class compact_for_sstables {
     no,
     yes,
@@ -133,10 +128,7 @@ struct compaction_stats {
     uint64_t range_tombstones = 0;
 };
 
-// emit_only_live::yes will cause compact_for_query to emit only live
-// static and clustering rows. It doesn't affect the way range tombstones are
-// emitted.
-template<emit_only_live_rows OnlyLive, compact_for_sstables SSTableCompaction>
+template<compact_for_sstables SSTableCompaction>
 class compact_mutation_state {
     const schema& _schema;
     gc_clock::time_point _query_time;
@@ -202,9 +194,6 @@ private:
         }
         return gc_consumer_stop || consumer_stop;
     }
-    static constexpr bool only_live() {
-        return OnlyLive == emit_only_live_rows::yes;
-    }
     static constexpr bool sstable_compaction() {
         return SSTableCompaction == compact_for_sstables::yes;
     }
@@ -269,11 +258,6 @@ private:
     };
 
 public:
-    struct parameters {
-        static constexpr emit_only_live_rows only_live = OnlyLive;
-        static constexpr compact_for_sstables sstable_compaction = SSTableCompaction;
-    };
-
     compact_mutation_state(compact_mutation_state&&) = delete; // Because 'this' is captured
 
     compact_mutation_state(const schema& s, gc_clock::time_point query_time, const query::partition_slice& slice, uint64_t limit,
@@ -303,7 +287,6 @@ public:
         , _collector(std::make_unique<mutation_compactor_garbage_collector>(_schema))
     {
         static_assert(sstable_compaction(), "This constructor can only be used for sstable compaction.");
-        static_assert(!only_live(), "SSTable compaction cannot be run with emit_only_live_rows::yes.");
     }
 
     void consume_new_partition(const dht::decorated_key& dk) {
@@ -331,13 +314,11 @@ public:
     requires CompactedFragmentsConsumerV2<Consumer> && CompactedFragmentsConsumerV2<GCConsumer>
     void consume(tombstone t, Consumer& consumer, GCConsumer& gc_consumer) {
         _partition_tombstone = t;
-        if (!only_live()) {
-            if (can_purge_tombstone(t)) {
-                partition_is_not_empty_for_gc_consumer(gc_consumer);
-            } else {
-                partition_is_not_empty(consumer);
-            }
-         }
+        if (can_purge_tombstone(t)) {
+            partition_is_not_empty_for_gc_consumer(gc_consumer);
+        } else {
+            partition_is_not_empty(consumer);
+        }
     }
 
     template <typename Consumer>
@@ -371,7 +352,7 @@ public:
             }
         }
         _static_row_live = is_live;
-        if (is_live || (!only_live() && !sr.empty())) {
+        if (is_live || !sr.empty()) {
             partition_is_not_empty(consumer);
             return consumer.consume(std::move(sr), current_tombstone, is_live);
         }
@@ -421,28 +402,15 @@ public:
             }
         }
 
-        auto consume_row = [&] () mutable {
+        auto stop = stop_iteration::no;
+        if (!cr.empty()) {
             partition_is_not_empty(consumer);
-            return consumer.consume(std::move(cr), t, is_live);
-        };
-
-        if (only_live() && is_live) {
-            auto stop = consume_row();
-            if (++_rows_in_current_partition == _current_partition_limit) {
-                return stop_iteration::yes;
-            }
-            return stop;
-        } else if (!only_live()) {
-            auto stop = stop_iteration::no;
-            if (!cr.empty()) {
-                stop = consume_row();
-            }
-            if (!sstable_compaction() && is_live && ++_rows_in_current_partition == _current_partition_limit) {
-                return stop_iteration::yes;
-            }
-            return stop;
+            stop = consumer.consume(std::move(cr), t, is_live);
         }
-        return stop_iteration::no;
+        if (!sstable_compaction() && is_live && ++_rows_in_current_partition == _current_partition_limit) {
+            return stop_iteration::yes;
+        }
+        return stop;
     }
 
     template <typename Consumer, typename GCConsumer>
@@ -576,10 +544,10 @@ public:
     const compaction_stats& stats() const { return _stats; }
 };
 
-template<emit_only_live_rows OnlyLive, compact_for_sstables SSTableCompaction, typename Consumer, typename GCConsumer>
+template<compact_for_sstables SSTableCompaction, typename Consumer, typename GCConsumer>
 requires CompactedFragmentsConsumerV2<Consumer> && CompactedFragmentsConsumerV2<GCConsumer>
 class compact_mutation_v2 {
-    lw_shared_ptr<compact_mutation_state<OnlyLive, SSTableCompaction>> _state;
+    lw_shared_ptr<compact_mutation_state<SSTableCompaction>> _state;
     Consumer _consumer;
     // Garbage Collected Consumer
     GCConsumer _gc_consumer;
@@ -587,7 +555,7 @@ class compact_mutation_v2 {
 public:
     compact_mutation_v2(const schema& s, gc_clock::time_point query_time, const query::partition_slice& slice, uint64_t limit,
               uint32_t partition_limit, Consumer consumer, GCConsumer gc_consumer = GCConsumer())
-        : _state(make_lw_shared<compact_mutation_state<OnlyLive, SSTableCompaction>>(s, query_time, slice, limit, partition_limit))
+        : _state(make_lw_shared<compact_mutation_state<SSTableCompaction>>(s, query_time, slice, limit, partition_limit))
         , _consumer(std::move(consumer))
         , _gc_consumer(std::move(gc_consumer)) {
     }
@@ -595,12 +563,12 @@ public:
     compact_mutation_v2(const schema& s, gc_clock::time_point compaction_time,
             std::function<api::timestamp_type(const dht::decorated_key&)> get_max_purgeable,
             Consumer consumer, GCConsumer gc_consumer = GCConsumer())
-        : _state(make_lw_shared<compact_mutation_state<OnlyLive, SSTableCompaction>>(s, compaction_time, get_max_purgeable))
+        : _state(make_lw_shared<compact_mutation_state<SSTableCompaction>>(s, compaction_time, get_max_purgeable))
         , _consumer(std::move(consumer))
         , _gc_consumer(std::move(gc_consumer)) {
     }
 
-    compact_mutation_v2(lw_shared_ptr<compact_mutation_state<OnlyLive, SSTableCompaction>> state, Consumer consumer,
+    compact_mutation_v2(lw_shared_ptr<compact_mutation_state<SSTableCompaction>> state, Consumer consumer,
                      GCConsumer gc_consumer = GCConsumer())
         : _state(std::move(state))
         , _consumer(std::move(consumer))
@@ -635,22 +603,21 @@ public:
         return _state->consume_end_of_stream(_consumer, _gc_consumer);
     }
 
-    lw_shared_ptr<compact_mutation_state<OnlyLive, SSTableCompaction>> get_state() {
+    lw_shared_ptr<compact_mutation_state<SSTableCompaction>> get_state() {
         return _state;
     }
 };
 
-template<emit_only_live_rows only_live, typename Consumer>
+template<typename Consumer>
 requires CompactedFragmentsConsumerV2<Consumer>
-struct compact_for_query_v2 : compact_mutation_v2<only_live, compact_for_sstables::no, Consumer, noop_compacted_fragments_consumer> {
-    using compact_mutation_v2<only_live, compact_for_sstables::no, Consumer, noop_compacted_fragments_consumer>::compact_mutation_v2;
+struct compact_for_query_v2 : compact_mutation_v2<compact_for_sstables::no, Consumer, noop_compacted_fragments_consumer> {
+    using compact_mutation_v2<compact_for_sstables::no, Consumer, noop_compacted_fragments_consumer>::compact_mutation_v2;
 };
 
-template<emit_only_live_rows OnlyLive>
-using compact_for_query_state_v2 = compact_mutation_state<OnlyLive, compact_for_sstables::no>;
+using compact_for_query_state_v2 = compact_mutation_state<compact_for_sstables::no>;
 
 template<typename Consumer, typename GCConsumer = noop_compacted_fragments_consumer>
 requires CompactedFragmentsConsumerV2<Consumer> && CompactedFragmentsConsumerV2<GCConsumer>
-struct compact_for_compaction_v2 : compact_mutation_v2<emit_only_live_rows::no, compact_for_sstables::yes, Consumer, GCConsumer> {
-    using compact_mutation_v2<emit_only_live_rows::no, compact_for_sstables::yes, Consumer, GCConsumer>::compact_mutation_v2;
+struct compact_for_compaction_v2 : compact_mutation_v2<compact_for_sstables::yes, Consumer, GCConsumer> {
+    using compact_mutation_v2<compact_for_sstables::yes, Consumer, GCConsumer>::compact_mutation_v2;
 };

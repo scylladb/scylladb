@@ -28,10 +28,10 @@ namespace query {
 /// Returns a future containing a tuple with the last consumed clustering key,
 /// or std::nullopt if the last row wasn't a clustering row, and whatever the
 /// consumer's `consume_end_of_stream()` method returns.
-template <emit_only_live_rows OnlyLive, typename Consumer>
+template <typename Consumer>
 requires CompactedFragmentsConsumerV2<Consumer>
 auto consume_page(flat_mutation_reader_v2& reader,
-        lw_shared_ptr<compact_for_query_state_v2<OnlyLive>> compaction_state,
+        lw_shared_ptr<compact_for_query_state_v2> compaction_state,
         const query::partition_slice& slice,
         Consumer&& consumer,
         uint64_t row_limit,
@@ -42,7 +42,7 @@ auto consume_page(flat_mutation_reader_v2& reader,
         const auto next_fragment_region = next_fragment ? next_fragment->position().region() : partition_region::partition_end;
         compaction_state->start_new_page(row_limit, partition_limit, query_time, next_fragment_region, consumer);
 
-        auto reader_consumer = compact_for_query_v2<OnlyLive, Consumer>(compaction_state, std::move(consumer));
+        auto reader_consumer = compact_for_query_v2<Consumer>(compaction_state, std::move(consumer));
 
         return reader.consume(std::move(reader_consumer));
     });
@@ -131,9 +131,8 @@ public:
 ///     mismatch is detected the querier shouldn't be used to produce the next
 ///     page. It should be dropped instead and a new one should be created
 ///     instead.
-template <emit_only_live_rows OnlyLive>
 class querier : public querier_base {
-    lw_shared_ptr<compact_for_query_state_v2<OnlyLive>> _compaction_state;
+    lw_shared_ptr<compact_for_query_state_v2> _compaction_state;
 
 public:
     querier(const mutation_source& ms,
@@ -144,7 +143,7 @@ public:
             const io_priority_class& pc,
             tracing::trace_state_ptr trace_ptr)
         : querier_base(schema, permit, std::move(range), std::move(slice), ms, pc, std::move(trace_ptr))
-        , _compaction_state(make_lw_shared<compact_for_query_state_v2<OnlyLive>>(*schema, gc_clock::time_point{}, *_slice, 0, 0)) {
+        , _compaction_state(make_lw_shared<compact_for_query_state_v2>(*schema, gc_clock::time_point{}, *_slice, 0, 0)) {
     }
 
     bool are_limits_reached() const {
@@ -182,9 +181,6 @@ public:
         return full_position_view(dk->key(), _compaction_state->current_position());
     }
 };
-
-using data_querier = querier<emit_only_live_rows::yes>;
-using mutation_querier = querier<emit_only_live_rows::no>;
 
 /// Local state of a multishard query.
 ///
@@ -334,11 +330,11 @@ public:
     querier_cache(querier_cache&&) = delete;
     querier_cache& operator=(querier_cache&&) = delete;
 
-    void insert(utils::UUID key, data_querier&& q, tracing::trace_state_ptr trace_state);
+    void insert_data_querier(utils::UUID key, querier&& q, tracing::trace_state_ptr trace_state);
 
-    void insert(utils::UUID key, mutation_querier&& q, tracing::trace_state_ptr trace_state);
+    void insert_mutation_querier(utils::UUID key, querier&& q, tracing::trace_state_ptr trace_state);
 
-    void insert(utils::UUID key, shard_mutation_querier&& q, tracing::trace_state_ptr trace_state);
+    void insert_shard_querier(utils::UUID key, shard_mutation_querier&& q, tracing::trace_state_ptr trace_state);
 
     /// Lookup a data querier in the cache.
     ///
@@ -353,7 +349,7 @@ public:
     /// The found querier is checked for a matching position and schema version.
     /// The start position of the querier is checked against the start position
     /// of the page using the `range' and `slice'.
-    std::optional<data_querier> lookup_data_querier(utils::UUID key,
+    std::optional<querier> lookup_data_querier(utils::UUID key,
             const schema& s,
             const dht::partition_range& range,
             const query::partition_slice& slice,
@@ -363,7 +359,7 @@ public:
     /// Lookup a mutation querier in the cache.
     ///
     /// See \ref lookup_data_querier().
-    std::optional<mutation_querier> lookup_mutation_querier(utils::UUID key,
+    std::optional<querier> lookup_mutation_querier(utils::UUID key,
             const schema& s,
             const dht::partition_range& range,
             const query::partition_slice& slice,
