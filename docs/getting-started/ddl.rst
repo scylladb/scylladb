@@ -942,12 +942,14 @@ Dropping a table uses the ``DROP TABLE`` statement:
    
    drop_table_statement: DROP TABLE [ IF EXISTS ] `table_name`
 
-Dropping a table results in the immediate removal of the table, including all data it contains.
+Dropping a table results in the immediate removal of the table, including all data it contains and any associated secondary indexes.
 
 .. include:: /getting-started/_common/note-reclaim-space.rst
 
 If the table does not exist, the statement will return an error unless ``IF EXISTS`` is used, in which case the
 operation is a no-op.
+
+.. note:: Dropping a table that has materialized views is disallowed and will return an error. To do so, the materialized views that depend on the table must first be explicitly dropped. Refer to :doc:`Materialized Views </getting-started/mv>` for details.
 
 .. _truncate-statement:
 
