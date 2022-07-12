@@ -326,6 +326,9 @@ public:
     future<> has_schema_access(data_dictionary::database db, const schema& s, auth::permission p) const;
     future<> has_schema_access(data_dictionary::database db, const sstring&, const sstring&, auth::permission p) const;
 
+    future<> has_functions_access(data_dictionary::database db, auth::permission p) const;
+    future<> has_functions_access(data_dictionary::database db, const sstring& ks, auth::permission p) const;
+    future<> has_function_access(data_dictionary::database db, const sstring& ks, const sstring& function_signature, auth::permission p) const;
 private:
     future<> has_access(data_dictionary::database db, const sstring& keyspace, auth::command_desc) const;
 
