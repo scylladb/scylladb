@@ -3549,18 +3549,8 @@ class scylla_fiber(gdb.Command):
 
         return None
 
-    def _walk(self, ptr, max_depth, scanned_region_size, force_fallback_mode, verbose):
-        using_seastar_allocator = not force_fallback_mode and scylla_ptr.is_seastar_allocator_used()
-        if not using_seastar_allocator:
-            gdb.write("Not using the seastar allocator, falling back to scanning a fixed-size region of memory\n")
-
-        this_task = self._probe_pointer(ptr, scanned_region_size, using_seastar_allocator, verbose)
-        if this_task is None:
-            gdb.write("Provided pointer 0x{:016x} is not an object managed by seastar or not a task pointer\n".format(ptr))
-            return this_task, []
-
+    def _walk(self, tptr_meta, max_depth, scanned_region_size, using_seastar_allocator, verbose):
         i = 0
-        tptr_meta = this_task[0]
         fiber = []
         known_tasks = set()
         while True:
@@ -3583,7 +3573,7 @@ class scylla_fiber(gdb.Command):
 
             i += 1
 
-        return this_task, fiber
+        return fiber
 
     def invoke(self, arg, for_tty):
         parser = argparse.ArgumentParser(description="scylla fiber")
@@ -3606,13 +3596,20 @@ class scylla_fiber(gdb.Command):
             return
 
         try:
+            using_seastar_allocator = not args.force_fallback_mode and scylla_ptr.is_seastar_allocator_used()
+            if not using_seastar_allocator:
+                gdb.write("Not using the seastar allocator, falling back to scanning a fixed-size region of memory\n")
+
             initial_task_ptr = int(gdb.parse_and_eval(args.task))
-            this_task, fiber = self._walk(initial_task_ptr, args.max_depth, args.scanned_region_size, args.force_fallback_mode, args.verbose)
+            this_task = self._probe_pointer(initial_task_ptr, args.scanned_region_size, using_seastar_allocator, args.verbose)
             if this_task is None:
+                gdb.write("Provided pointer 0x{:016x} is not an object managed by seastar or not a task pointer\n".format(ptr))
                 return
 
             tptr, vptr, name = this_task
             gdb.write("Starting task: (task*) 0x{:016x} 0x{:016x} {}\n".format(tptr.ptr, int(vptr), name))
+
+            fiber = self._walk(tptr, args.max_depth, args.scanned_region_size, using_seastar_allocator, args.verbose)
 
             for i, (tptr, vptr, name) in enumerate(fiber):
                 gdb.write("#{:<2d} (task*) 0x{:016x} 0x{:016x} {}\n".format(i, int(tptr), int(vptr), name))
