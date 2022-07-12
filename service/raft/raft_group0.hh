@@ -105,11 +105,11 @@ public:
     // Precondition: `setup_group0` successfully finished earlier.
     future<> become_voter();
 
-    // Remove the node from the cluster-wide raft group.
-    // This procedure is idempotent. In case of replace node,
-    // it removes the replaced node from the group, since
-    // it can't do it by itself (it's dead).
-    future<> leave_group0(std::optional<gms::inet_address> host = {});
+    // Remove ourselves from group 0.
+    future<> leave_group0();
+
+    // Remove `host` from group 0.
+    future<> remove_from_group0(gms::inet_address host);
 
 private:
     void init_rpc_verbs();

@@ -707,9 +707,16 @@ future<> storage_service::bootstrap(cdc::generation_service& cdc_gen_service, st
             }
         } else {
             auto replace_addr = get_replace_address();
+            assert(replace_addr);
+
             slogger.debug("Removing replaced endpoint {} from system.peers", *replace_addr);
             _sys_ks.local().remove_endpoint(*replace_addr).get();
-            _group0->leave_group0(replace_addr).get();
+
+            slogger.info("Replace: removing {} from group 0...", *replace_addr);
+            assert(_group0);
+            _group0->remove_from_group0(*replace_addr).get();
+            slogger.info("Replace: {} removed from group 0.", *replace_addr);
+
             slogger.info("Starting to bootstrap...");
             run_replace_ops(bootstrap_tokens);
         }
@@ -1943,7 +1950,9 @@ future<> storage_service::decommission() {
             }
 
             slogger.info("DECOMMISSIONING: leaving Raft group 0");
+            assert(ss._group0);
             ss._group0->leave_group0().get();
+
             slogger.info("DECOMMISSIONING: left Raft group 0");
 
             ss.stop_transport().get();
@@ -2303,7 +2312,12 @@ future<> storage_service::removenode(sstring host_id_string, std::list<gms::inet
                         return make_ready_future<>();
                     });
                 }).get();
-                ss._group0->leave_group0(endpoint).get();
+
+                slogger.info("removenode[{}]: removing node {} from group 0", uuid, endpoint);
+                assert(ss._group0);
+                ss._group0->remove_from_group0(endpoint).get();
+                slogger.info("removenode[{}]: node {} removed from group 0", uuid, endpoint);
+
                 slogger.info("removenode[{}]: Finished removenode operation, removing node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
             } catch (...) {
                 // we need to revert the effect of prepare verb the removenode ops is failed
@@ -3276,7 +3290,10 @@ future<> storage_service::force_remove_completion() {
                     co_await ss._gossiper.advertise_token_removed(endpoint, host_id);
                     std::unordered_set<token> tokens_set(tokens.begin(), tokens.end());
                     co_await ss.excise(tokens_set, endpoint);
-                    co_await ss._group0->leave_group0(endpoint);
+
+                    slogger.info("force_remove_completion: removing endpoint {} from group 0", endpoint);
+                    assert(ss._group0);
+                    co_await ss._group0->remove_from_group0(endpoint);
                 }
                 ss._replicating_nodes.clear();
                 ss._removing_node = std::nullopt;
