@@ -998,7 +998,11 @@ public:
             auto desc = t.get_compaction_strategy().get_reshaping_job(reshape_candidates, t.schema(), iop, sstables::reshape_mode::strict);
             if (desc.sstables.empty()) {
                 // at this moment reshape_candidates contains a set of sstables ready for integration into main set
-                co_await t.update_sstable_lists_on_off_strategy_completion(old_sstables, reshape_candidates);
+                auto desc = sstables::compaction_completion_desc{
+                    .old_sstables = std::move(old_sstables),
+                    .new_sstables = std::move(reshape_candidates)
+                };
+                co_await t.update_sstable_lists_on_off_strategy_completion(std::move(desc));
                 break;
             }
 

@@ -597,8 +597,7 @@ public:
     // input files will be removed from the maintenance set and output files will
     // be inserted into the main set.
     future<>
-    update_sstable_lists_on_off_strategy_completion(const std::vector<sstables::shared_sstable>& old_maintenance_sstables,
-                                                    const std::vector<sstables::shared_sstable>& new_main_sstables);
+    update_sstable_lists_on_off_strategy_completion(sstables::compaction_completion_desc desc);
 
     // Rebuild sstable set, delete input sstables right away, and update row cache and statistics.
     void on_compaction_completion(sstables::compaction_completion_desc& desc);

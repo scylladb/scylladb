@@ -856,8 +856,7 @@ table::sstable_list_builder::build_new_list(const sstables::sstable_set& current
 }
 
 future<>
-table::update_sstable_lists_on_off_strategy_completion(const std::vector<sstables::shared_sstable>& old_maintenance_sstables,
-                                                       const std::vector<sstables::shared_sstable>& new_main_sstables) {
+table::update_sstable_lists_on_off_strategy_completion(sstables::compaction_completion_desc desc) {
     class sstable_lists_updater : public row_cache::external_updater_impl {
         using sstables_t = std::vector<sstables::shared_sstable>;
         table& _t;
@@ -889,7 +888,7 @@ table::update_sstable_lists_on_off_strategy_completion(const std::vector<sstable
         }
     };
     auto permit = co_await seastar::get_units(_sstable_set_mutation_sem, 1);
-    auto updater = row_cache::external_updater(sstable_lists_updater::make(*this, std::move(permit), old_maintenance_sstables, new_main_sstables));
+    auto updater = row_cache::external_updater(sstable_lists_updater::make(*this, std::move(permit), desc.old_sstables, desc.new_sstables));
 
     // row_cache::invalidate() is only used to synchronize sstable list updates, to prevent race conditions from occurring,
     // meaning nothing is actually invalidated.
