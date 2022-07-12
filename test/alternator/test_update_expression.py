@@ -37,6 +37,18 @@ def test_update_expression_set_multi(test_table_s):
         ExpressionAttributeValues={':val1': 4})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'x': 4, 'y': 4}
 
+# Test that UpdateItem merges the change with a previously existing item -
+# it doesn't outright replace it like PutItem does. This merge is done
+# even if the expression doesn't need to read the old value of the item.
+def test_update_expression_set_merge(test_table_s):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'a': 'hi'})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 'hi'}
+    test_table_s.update_item(Key={'p': p}, UpdateExpression='SET b = :val', ExpressionAttributeValues={':val': 'hello'})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 'hi', 'b': 'hello'}
+    test_table_s.update_item(Key={'p': p}, UpdateExpression='SET a = :val', ExpressionAttributeValues={':val': 'hey'})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 'hey', 'b': 'hello'}
+
 # SET can be used to copy an existing attribute to a new one
 def test_update_expression_set_copy(test_table_s):
     p = random_string()
