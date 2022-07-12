@@ -79,6 +79,7 @@ class raft_group0 {
     std::variant<std::monostate, service::persistent_discovery, raft::group_id> _group0;
 
 public:
+    // Assumes that the provided services are fully started.
     raft_group0(seastar::abort_source& abort_source,
         service::raft_group_registry& raft_gr,
         netw::messaging_service& ms,
@@ -87,6 +88,7 @@ public:
         migration_manager& mm,
         raft_group0_client& client);
 
+    // Call before destroying the object.
     future<> abort();
 
     // Call during the startup procedure.

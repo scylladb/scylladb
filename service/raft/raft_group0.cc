@@ -250,41 +250,52 @@ future<> raft_group0::join_group0(std::vector<raft::server_info> seeds, bool as_
 
     raft::server* server = nullptr;
     auto my_addr = co_await load_or_create_my_addr();
-    rslog.trace("{} found no local group 0. Discovering...", my_addr.id);
+    rslog.info("{} found no local group 0. Discovering...", my_addr.id);
     while (true) {
         auto g0_info = co_await discover_group0(my_addr, seeds);
-        rslog.trace("server {} found group 0 with id {}, leader {}", my_addr.id,
-            g0_info.group0_id, g0_info.addr.id);
+        rslog.info("server {} found group 0 with id {}, leader {}", my_addr.id, g0_info.group0_id, g0_info.addr.id);
 
         if (server && group0_id != g0_info.group0_id) {
-            // Subsequent discovery returned a different group 0 id?!
-            throw std::runtime_error(format("Can't add server to two clusters ({} and {}). Please check your seeds don't overlap",
+            // `server` is not `nullptr` so we finished discovery in an earlier iteration and found a group 0 ID.
+            // But in this iteration it's different. That shouldn't be possible.
+            on_internal_error(rslog, format(
+                "The Raft discovery algorithm returned two different group IDs on subsequent runs: {} and {}."
+                " Cannot proceed due to possible inconsistency problems."
+                " If you're bootstrapping a fresh cluster, make sure that every node uses the same seeds configuration, then retry."
+                " If this is happening after upgrade, please report a bug, then try following the manual recovery procedure.",
                 group0_id, g0_info.group0_id));
+            // TODO: link to the manual recovery docs
         }
         group0_id = g0_info.group0_id;
 
         if (server == nullptr) {
-            // This is the first time the discovery is run.
+            // This is the first time discovery is run. Create and start a Raft server for group 0 on this node.
             raft::configuration initial_configuration;
             if (g0_info.addr.id == my_addr.id) {
+                // We were chosen as the discovery leader.
                 // We should start a new group with this node as voter.
-                rslog.trace("server {} creating configuration as voter", my_addr.id);
-                // even if `as_voter == false`, if we're the first member we need to be a voter.
+                rslog.info("Server {} chosen as discovery leader; bootstrapping group 0 from scratch", my_addr.id);
                 initial_configuration.current.emplace(my_addr, true);
             }
             auto grp = create_server_for_group0(group0_id, my_addr);
             server = grp.server.get();
             co_await grp.persistence.bootstrap(std::move(initial_configuration));
             co_await _raft_gr.start_server_for_group(std::move(grp));
+            // FIXME if we crash now or after getting added to the config but before storing group 0 ID,
+            // we'll end with a bootstrapped server that possibly added some entries, but we won't remember that we have such a server
+            // after we restart. Then we'll call `persistence.bootstrap` again after restart which will overwrite our snapshot, leading to
+            // possibly incorrect state. One way of handling this may be changing `persistence.bootstrap` so it checks if any persistent
+            // state is present, and if it is, do nothing.
         }
+
+        assert(server);
         if (server->get_configuration().contains(my_addr.id)) {
-            // True if we started a new group or completed a configuration change
-            // initiated earlier.
-            rslog.trace("server {} already in group as {}", my_addr.id,
+            // True if we started a new group or completed a configuration change initiated earlier.
+            rslog.info("server {} already in group 0 (id {}) as {}", group0_id, my_addr.id,
                     server->get_configuration().can_vote(my_addr.id)? "voter" : "non-voter");
             break;
         }
-        auto pause_shutdown = _shutdown_gate.hold();
+
         auto timeout = db::timeout_clock::now() + std::chrono::milliseconds{1000};
         netw::msg_addr peer(raft_addr_to_inet_addr(g0_info.addr));
         try {
@@ -295,6 +306,7 @@ future<> raft_group0::join_group0(std::vector<raft::server_info> seeds, bool as_
             // Retry
             rslog.error("failed to modify config at peer {}: {}", g0_info.addr.id, e);
         }
+
         // Try again after a pause
         co_await seastar::sleep_abortable(std::chrono::milliseconds{1000}, _abort_source);
     }
