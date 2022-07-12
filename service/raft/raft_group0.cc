@@ -347,33 +347,28 @@ future<> raft_group0::become_voter() {
 }
 
 future<> raft_group0::leave_group0() {
-    if (!_raft_gr.is_enabled()) {
-        co_return;
-    }
     assert(this_shard_id() == 0);
-    raft::server_id remove_addr;
+
+    if (!_raft_gr.is_enabled()) {
+        rslog.info("leave_group0: local RAFT feature disabled, skipping.");
+        co_return;
+    }
+
+    if (!joined_group0()) {
+        // TODO: unimplemented upgrade case.
+        co_return;
+    }
+
     auto my_id = raft::server_id{co_await db::system_keyspace::get_raft_server_id()};
-    if (my_id) {
-        remove_addr = my_id;
-    } else {
-        // Nothing to do
-        co_return;
+    if (!my_id) {
+        on_internal_error(rslog,
+            "leave_group0: we're fully upgraded to use Raft and group 0 ID is present but Raft server ID is not."
+            " Please report a bug.");
     }
-    auto pause_shutdown = _shutdown_gate.hold();
-    if (std::holds_alternative<raft::group_id>(_group0)) {
-        co_return co_await _raft_gr.group0().modify_config({}, {remove_addr}, &_abort_source);
-    }
-    auto g0_info = co_await discover_group0(raft::server_address{my_id, raft::server_info{}});
-    if (g0_info.addr.id == my_id) {
-        co_return;
-    }
-    netw::msg_addr peer(raft_addr_to_inet_addr(g0_info.addr));
-    // During removenode, the client itself will retry or abort
-    // the operation if necessary, it's move important it's not
-    // "flaky" on slow network or CPU.
-    auto timeout = db::timeout_clock::now() + std::chrono::minutes{20};
-    // TODO: aborts?
-    co_return co_await ser::group0_rpc_verbs::send_group0_modify_config(&_ms, peer, timeout, g0_info.group0_id, {}, {remove_addr});
+
+    // Note: if this gets stuck due to a failure, the DB admin can abort.
+    // FIXME: this gets stuck without failures if we're the leader (#10833)
+    co_return co_await _raft_gr.group0().modify_config({}, {my_id}, &_abort_source);
 }
 
 future<> raft_group0::remove_from_group0(gms::inet_address node) {

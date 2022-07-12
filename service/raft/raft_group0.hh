@@ -106,6 +106,15 @@ public:
     future<> become_voter();
 
     // Remove ourselves from group 0.
+    //
+    // Assumes we've finished the startup procedure (`setup_group0()` finished earlier).
+    // Assumes to run during decommission, after the node entered LEFT status.
+    //
+    // FIXME: make it retryable and do nothing if we're not a member.
+    // Currently if we call leave_group0 twice, it will get stuck the second time
+    // (it will try to forward an entry to a leader but never find the leader).
+    // Not sure how easy or hard it is and whether it's a problem worth solving; if decommission crashes,
+    // one can simply call `removenode` on another node to make sure we areremoved (from group 0 too).
     future<> leave_group0();
 
     // Remove `host` from group 0.
