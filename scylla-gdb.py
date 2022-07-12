@@ -128,7 +128,7 @@ class intrusive_slist:
         return self.__nonzero__()
 
     def __len__(self):
-        return len(list(self))
+        return len(list(iter(self)))
 
 
 class std_optional:
@@ -562,39 +562,6 @@ class std_deque:
     # should reflect the value of _GLIBCXX_DEQUE_BUF_SIZE
     DEQUE_BUF_SIZE = 512
 
-    class iterator:
-        def __init__(self, ref, buf_size):
-            self.cur = ref['_M_cur']
-            self.first = ref['_M_first']
-            self.last = ref['_M_last']
-            self.node = ref['_M_node']
-            self.buf_size = buf_size
-
-        def _set_node(self, node):
-            self.first = node.dereference()
-            self.last = self.first + self.buf_size
-            self.node = node
-
-        def __eq__(self, other):
-            return self.node == other.node and self.cur == other.cur
-
-        def __str__(self):
-            return "{{node=0x{:x}, first=0x{:x}, last=0x{:x}, cur=0x{:x}}}".format(
-                    int(self.node),
-                    int(self.first),
-                    int(self.last),
-                    int(self.cur))
-
-        def next(self):
-            self.cur += 1
-            if self.cur == self.last:
-                self._set_node(self.node + 1)
-                self.cur = self.first
-
-        def get(self):
-            return self.cur.dereference()
-
-
     def __init__(self, ref):
         self.ref = ref
         self.value_type = self.ref.type.strip_typedefs().template_argument(0)
@@ -603,12 +570,29 @@ class std_deque:
         else:
             self.buf_size = 1
 
+    def _foreach_node(self):
+        node_it = self.ref['_M_impl']['_M_start']
+        node_end = self.ref['_M_impl']['_M_finish']
+        node = node_it['_M_node']
+        it = node_it['_M_first']
+        end = node_it['_M_last']
+
+        if not bool(node):
+            return
+
+        while node != node_end['_M_node']:
+            yield it, end
+            node = node + 1
+            it = node.dereference()
+            end = it + self.buf_size
+
+        yield node_end['_M_first'], node_end['_M_cur']
+
     def __len__(self):
-        start = self.ref['_M_impl']['_M_start']
-        finish = self.ref['_M_impl']['_M_finish']
-        return (self.buf_size * (max(1, finish['_M_node'] - start['_M_node']) - 1) +
-            start['_M_last'] - start['_M_cur'] +
-            finish['_M_cur'] - finish['_M_first'])
+        l = 0
+        for start, end in self._foreach_node():
+            l += (end - start)
+        return l
 
     def __nonzero__(self):
         return self.__len__() > 0
@@ -617,12 +601,10 @@ class std_deque:
         return self.__len__() > 0
 
     def __iter__(self):
-        it = std_deque.iterator(self.ref['_M_impl']['_M_start'], self.buf_size)
-        finish = std_deque.iterator(self.ref['_M_impl']['_M_finish'], self.buf_size)
-
-        while it != finish:
-            yield it.get()
-            it.next()
+        for it, end in self._foreach_node():
+            while it != end:
+                yield it.dereference()
+                it += 1
 
     def __str__(self):
         items = [str(item) for item in self]
@@ -1182,7 +1164,7 @@ class histogram:
     """
     _column_count = 40
 
-    def __init__(self, counts = None, print_indicators = True, formatter=None):
+    def __init__(self, counts = None, print_indicators = True, formatter=None, limit=None):
         """Constructor.
 
         Params:
@@ -1193,6 +1175,7 @@ class histogram:
         * formatter: a callable that receives the item as its argument and is
             expected to return the string to be printed in the second column.
             By default, items are printed verbatim.
+        * limit: limit the number of printed items to the top limit ones.
         """
         if counts is None:
             self._counts = defaultdict(int)
@@ -1206,6 +1189,11 @@ class histogram:
             self._formatter = default_formatter
         else:
             self._formatter = formatter
+
+        if limit is None:
+            self._limit = -1
+        else:
+            self._limit = limit
 
     def __len__(self):
         return len(self._counts)
@@ -1239,6 +1227,7 @@ class histogram:
             count_per_column = self._column_count / max_count
 
         lines = []
+        limit = self._limit
 
         for count in counts_sorted:
             items = by_counts[count]
@@ -1247,7 +1236,13 @@ class histogram:
             else:
                 indicator = ''
             for item in items:
-                lines.append('{:9d} {} {}'.format(count, self._formatter(item), indicator))
+                try:
+                    lines.append('{:9d} {} {}'.format(count, self._formatter(item), indicator))
+                except:
+                    gdb.write("error: failed to format item `{}': {}\n".format(item, sys.exc_info()[1]))
+            limit -= 1
+            if not limit:
+                break
 
         return '\n'.join(lines)
 
@@ -1256,6 +1251,54 @@ class histogram:
 
     def print_to_console(self):
         gdb.write(str(self) + '\n')
+
+
+class task_symbol_matcher:
+    def __init__(self):
+        # List of whitelisted symbol names. Each symbol is a tuple, where each
+        # element is a component of the name, the last element being the class
+        # name itself.
+        # We can't just merge them as `info symbol` might return mangled names too.
+        self._whitelist = task_symbol_matcher._make_symbol_matchers([
+                ("seastar", "continuation"),
+                ("seastar", "future", "thread_wake_task"), # backward compatibility with older versions
+                ("seastar", "(anonymous namespace)", "thread_wake_task"),
+                ("seastar", "thread_context"),
+                ("seastar", "internal", "do_until_state"),
+                ("seastar", "internal", "do_with_state"),
+                ("seastar", "internal", "do_for_each_state"),
+                ("seastar", "parallel_for_each_state"),
+                ("seastar", "internal", "repeat_until_value_state"),
+                ("seastar", "internal", "repeater"),
+                ("seastar", "internal", "when_all_state_component"),
+                ("seastar", "lambda_task"),
+                ("seastar", "smp_message_queue", "async_work_item"),
+        ])
+
+    @staticmethod
+    def _make_symbol_matchers(symbol_specs):
+        return list(map(task_symbol_matcher._make_symbol_matcher, symbol_specs))
+
+    @staticmethod
+    def _make_symbol_matcher(symbol_spec):
+        unmangled_prefix = 'vtable for {}'.format('::'.join(symbol_spec))
+        def matches_symbol(name):
+            if name.startswith(unmangled_prefix):
+                return True
+
+            try:
+                positions = [name.index(part) for part in symbol_spec]
+                return sorted(positions) == positions
+            except ValueError:
+                return False
+
+        return matches_symbol
+
+    def __call__(self, name):
+        for matcher in self._whitelist:
+            if matcher(name):
+                return True
+        return False
 
 
 class scylla(gdb.Command):
@@ -1337,6 +1380,11 @@ class scylla_task_histogram(gdb.Command):
                 help="Sample all pages and show all results. Equivalent to -m=0 -c=0.")
         parser.add_argument("-s", "--size", type=int, action="store", default=0,
                 help="The size of objects to sample. When set, only objects of this size will be sampled. A size of 0 (the default value) means no size restrictions.")
+        parser.add_argument("-f", "--filter-tasks", action="store_true",
+                help="Include only task objects in the histogram, reduces noise but might exclude items due to inexact filtering.")
+        parser.add_argument("-g", "--scheduling-groups", action="store_true",
+                help="Histogram is made from the scheduling groups of the sampled task objects. Implies -f.")
+
         try:
             args = parser.parse_args(arg.split())
         except SystemExit:
@@ -1348,12 +1396,28 @@ class scylla_task_histogram(gdb.Command):
         mem_start = cpu_mem['memory']
 
         vptr_type = gdb.lookup_type('uintptr_t').pointer()
+        task_type = gdb.lookup_type('seastar::task')
+        task_fields = {f.name: f for f in task_type.fields()}
+        sg_offset = int(task_fields['_sg'].bitpos / 8)
+        sg_ptr = gdb.lookup_type('unsigned').pointer()
 
         pages = cpu_mem['pages']
         nr_pages = int(cpu_mem['nr_pages'])
         page_samples = range(0, nr_pages) if args.all else random.sample(range(0, nr_pages), nr_pages)
 
         text_start, text_end = get_text_range()
+
+        scheduling_group_names = {int(tq['_id']): str(tq['_name']) for tq in get_local_task_queues()}
+
+        def formatter(o):
+            if args.scheduling_groups:
+                return "{:02} {}".format(o, scheduling_group_names[o])
+            else:
+                return "0x{:x} {}".format(o, resolve(o))
+
+        limit = None if args.all or args.count == 0 else args.count
+        h = histogram(print_indicators=False, formatter=formatter, limit=limit)
+        symbol_matcher = task_symbol_matcher()
 
         sc = span_checker()
         vptr_count = defaultdict(int)
@@ -1370,20 +1434,39 @@ class scylla_task_histogram(gdb.Command):
             span_size = span.used_span_size() * page_size
             for idx2 in range(0, int(span_size / objsize)):
                 obj_addr = span.start + idx2 * objsize
-                addr = gdb.Value(obj_addr).reinterpret_cast(vptr_type).dereference()
-                if addr >= text_start and addr <= text_end:
-                    vptr_count[int(addr)] += 1
+                addr = int(gdb.Value(obj_addr).reinterpret_cast(vptr_type).dereference())
+                if addr < text_start or addr > text_end:
+                    continue
+                if args.filter_tasks:
+                    sym = resolve(addr)
+                    if not sym or not symbol_matcher(sym):
+                        continue # we only want tasks
+                if args.scheduling_groups:
+                    # This is a dirty trick to make this reasonably fast even with 100K+ or 1M+ objects
+                    # We have two good choices here:
+                    # 1) gdb.Value(obj_addr).reinterpret_cast(task_type).dereference()['_sg']['_id']
+                    #    This prints tons of warning about missing RTTI symbols
+                    #    and is quite slow.
+                    # 2) gdb.parse_and_eval("(seastar::task*)0x{:x}".format(obj_addr))
+                    #    Works well but is horrendously slow: one type lookup per
+                    #    obj + parsing is too much apparently.
+                    #
+                    # So we bypass casting to seastar::task* and use the known
+                    # offset of the _id field instead directly.
+                    key = int(gdb.Value(obj_addr + sg_offset).reinterpret_cast(sg_ptr).dereference())
+                    # Task matching is not exact, we'll have some non-task
+                    # objects here, with invalid sg derived, ignore these.
+                    if key not in scheduling_group_names:
+                        continue
+                else:
+                    key = addr
+                h[key] += 1
             if args.all or args.samples == 0:
                 continue
             if scanned_pages >= args.samples or len(vptr_count) >= args.samples:
                 break
 
-        sorted_counts = sorted(vptr_count.items(), key=lambda e: -e[1])
-        to_show = sorted_counts if args.all or args.count == 0 else sorted_counts[:args.count]
-        for vptr, count in to_show:
-            sym = resolve(vptr)
-            if sym:
-                gdb.write('%10d: 0x%x %s\n' % (count, vptr, sym))
+        h.print_to_console()
 
 
 def find_vptrs():
@@ -3382,15 +3465,18 @@ class scylla_fiber(gdb.Command):
     """ Walk the continuation chain starting from the given task
 
     Example (cropped for brevity):
-    (gdb) scylla fiber 0x60001a305910
-    Starting task: (task*) 0x000060001a305910 0x0000000004aa5260 vtable for seastar::continuation<...> + 16
+    (gdb) scylla fiber 0x600016217c80
+    #-1 (task*) 0x000060001a305910 0x0000000004aa5260 vtable for seastar::continuation<...> + 16
     #0  (task*) 0x0000600016217c80 0x0000000004aa5288 vtable for seastar::continuation<...> + 16
     #1  (task*) 0x000060000ac42940 0x0000000004aa2aa0 vtable for seastar::continuation<...> + 16
     #2  (task*) 0x0000600023f59a50 0x0000000004ac1b30 vtable for seastar::continuation<...> + 16
      ^          ^                  ^                  ^
     (1)        (2)                (3)                (4)
 
-    1) Task index (0 is the task passed to the command).
+    1) Task index:
+        - 0 is the task passed to the command
+        - < 0 are tasks this task waits on
+        - > 0 are tasks waiting on this task
     2) Pointer to the task object.
     3) Pointer to the task's vtable.
     4) Symbol name of the task's vtable.
@@ -3401,51 +3487,10 @@ class scylla_fiber(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla fiber', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
         self._vptr_type = gdb.lookup_type('uintptr_t').pointer()
-        # List of whitelisted symbol names. Each symbol is a tuple, where each
-        # element is a component of the name, the last element being the class
-        # name itself.
-        # We can't just merge them as `info symbol` might return mangled names too.
-        self._whitelist = scylla_fiber._make_symbol_matchers([
-                ("seastar", "continuation"),
-                ("seastar", "future", "thread_wake_task"), # backward compatibility with older versions
-                ("seastar", "(anonymous namespace)", "thread_wake_task"),
-                ("seastar", "thread_context"),
-                ("seastar", "internal", "do_until_state"),
-                ("seastar", "internal", "do_with_state"),
-                ("seastar", "internal", "do_for_each_state"),
-                ("seastar", "parallel_for_each_state"),
-                ("seastar", "internal", "repeat_until_value_state"),
-                ("seastar", "internal", "repeater"),
-                ("seastar", "internal", "when_all_state_component"),
-                ("seastar", "lambda_task"),
-                ("seastar", "smp_message_queue", "async_work_item"),
-        ])
-
-
-    @staticmethod
-    def _make_symbol_matchers(symbol_specs):
-        return list(map(scylla_fiber._make_symbol_matcher, symbol_specs))
-
-    @staticmethod
-    def _make_symbol_matcher(symbol_spec):
-        unmangled_prefix = 'vtable for {}'.format('::'.join(symbol_spec))
-        def matches_symbol(name):
-            if name.startswith(unmangled_prefix):
-                return True
-
-            try:
-                positions = [name.index(part) for part in symbol_spec]
-                return sorted(positions) == positions
-            except ValueError:
-                return False
-
-        return matches_symbol
+        self._task_symbol_matcher = task_symbol_matcher()
 
     def _name_is_on_whitelist(self, name):
-        for matcher in self._whitelist:
-            if matcher(name):
-                return True
-        return False
+        return self._task_symbol_matcher(name)
 
     def _maybe_log(self, msg, verbose):
         if verbose:
@@ -3460,6 +3505,13 @@ class scylla_fiber(gdb.Command):
         In addition, ptr has to point to an allocation block, managed by
         seastar, that contains a live object.
         """
+        # Save work if caller already analyzed the pointer
+        if isinstance(ptr, pointer_metadata):
+            ptr_meta = ptr
+            ptr = ptr.ptr
+        else:
+            ptr_meta = None
+
         try:
             maybe_vptr = int(gdb.Value(ptr).reinterpret_cast(self._vptr_type).dereference())
             self._maybe_log("\t-> 0x{:016x}\n".format(maybe_vptr), verbose)
@@ -3479,7 +3531,8 @@ class scylla_fiber(gdb.Command):
             return
 
         if using_seastar_allocator:
-            ptr_meta = scylla_ptr.analyze(ptr)
+            if ptr_meta is None:
+                ptr_meta = scylla_ptr.analyze(ptr)
             if not ptr_meta.is_managed_by_seastar() or not ptr_meta.is_live:
                 self._maybe_log("\t\t\tNot a live object\n", verbose)
                 return
@@ -3490,7 +3543,8 @@ class scylla_fiber(gdb.Command):
 
         return ptr_meta, maybe_vptr, resolved_symbol
 
-    def _do_walk(self, ptr_meta, i, max_depth, scanned_region_size, using_seastar_allocator, verbose):
+   # Find futures waiting on this task
+    def _walk_forward(self, ptr_meta, i, max_depth, scanned_region_size, using_seastar_allocator, verbose):
         ptr = ptr_meta.ptr
         region_start = ptr + self._vptr_type.sizeof # ignore our own vtable
         region_end = region_start + (ptr_meta.size - ptr_meta.size % self._vptr_type.sizeof)
@@ -3507,25 +3561,25 @@ class scylla_fiber(gdb.Command):
 
         return None
 
-    def _walk(self, ptr, max_depth, scanned_region_size, force_fallback_mode, verbose):
-        using_seastar_allocator = not force_fallback_mode and scylla_ptr.is_seastar_allocator_used()
-        if not using_seastar_allocator:
-            gdb.write("Not using the seastar allocator, falling back to scanning a fixed-size region of memory\n")
+   # Find futures waited-on by this task
+    def _walk_backward(self, ptr_meta, i, max_depth, scanned_region_size, using_seastar_allocator, verbose):
+        res = None
+        for maybe_tptr_meta, _ in scylla_find.find(ptr_meta.ptr):
+            maybe_tptr_meta.ptr -= maybe_tptr_meta.offset_in_object
+            res = self._probe_pointer(maybe_tptr_meta.ptr, scanned_region_size, using_seastar_allocator, verbose)
+            if not res is None:
+                return res
+        return res
 
-        this_task = self._probe_pointer(ptr, scanned_region_size, using_seastar_allocator, verbose)
-        if this_task is None:
-            gdb.write("Provided pointer 0x{:016x} is not an object managed by seastar or not a task pointer\n".format(ptr))
-            return this_task, []
-
+    def _walk(self, walk_method, tptr_meta, max_depth, scanned_region_size, using_seastar_allocator, verbose):
         i = 0
-        tptr_meta = this_task[0]
         fiber = []
         known_tasks = set()
         while True:
             if max_depth > -1 and i >= max_depth:
                 break
 
-            res = self._do_walk(tptr_meta, i + 1, max_depth, scanned_region_size, using_seastar_allocator, verbose)
+            res = walk_method(tptr_meta, i + 1, max_depth, scanned_region_size, using_seastar_allocator, verbose)
             if res is None:
                 break
 
@@ -3541,7 +3595,7 @@ class scylla_fiber(gdb.Command):
 
             i += 1
 
-        return this_task, fiber
+        return fiber
 
     def invoke(self, arg, for_tty):
         parser = argparse.ArgumentParser(description="scylla fiber")
@@ -3564,22 +3618,34 @@ class scylla_fiber(gdb.Command):
             return
 
         try:
+            using_seastar_allocator = not args.force_fallback_mode and scylla_ptr.is_seastar_allocator_used()
+            if not using_seastar_allocator:
+                gdb.write("Not using the seastar allocator, falling back to scanning a fixed-size region of memory\n")
+
             initial_task_ptr = int(gdb.parse_and_eval(args.task))
-            this_task, fiber = self._walk(initial_task_ptr, args.max_depth, args.scanned_region_size, args.force_fallback_mode, args.verbose)
+            this_task = self._probe_pointer(initial_task_ptr, args.scanned_region_size, using_seastar_allocator, args.verbose)
             if this_task is None:
+                gdb.write("Provided pointer 0x{:016x} is not an object managed by seastar or not a task pointer\n".format(ptr))
                 return
 
-            tptr, vptr, name = this_task
-            gdb.write("Starting task: (task*) 0x{:016x} 0x{:016x} {}\n".format(tptr.ptr, int(vptr), name))
+            backwards_fiber = self._walk(self._walk_backward, this_task[0], args.max_depth, args.scanned_region_size, using_seastar_allocator, args.verbose)
 
-            for i, (tptr, vptr, name) in enumerate(fiber):
-                gdb.write("#{:<2d} (task*) 0x{:016x} 0x{:016x} {}\n".format(i, int(tptr), int(vptr), name))
+            for i, (tptr, vptr, name) in enumerate(backwards_fiber):
+                gdb.write("#{:<2d} (task*) 0x{:016x} 0x{:016x} {}\n".format(i - len(backwards_fiber), int(tptr), int(vptr), name))
+
+            tptr, vptr, name = this_task
+            gdb.write("#0 (task*) 0x{:016x} 0x{:016x} {}\n".format(int(tptr.ptr), int(vptr), name))
+
+            forward_fiber = self._walk(self._walk_forward, this_task[0], args.max_depth, args.scanned_region_size, using_seastar_allocator, args.verbose)
+
+            for i, (tptr, vptr, name) in enumerate(forward_fiber):
+                gdb.write("#{:<2d} (task*) 0x{:016x} 0x{:016x} {}\n".format(i + 1, int(tptr), int(vptr), name))
 
             gdb.write("\nFound no further pointers to task objects.\n")
-            if not fiber:
+            if not backwards_fiber and not forward_fiber:
                 gdb.write("If this is unexpected, run `scylla fiber 0x{:016x} --verbose` to learn more.\n".format(initial_task_ptr))
             else:
-                gdb.write("If you think there should be more, run `scylla fiber 0x{:016x} --verbose` to learn more.\n".format(fiber[-1][0]))
+                gdb.write("If you think there should be more, run `scylla fiber 0x{:016x} --verbose` to learn more.\n".format(int(this_task[0].ptr)))
         except KeyboardInterrupt:
             return
 
@@ -4168,6 +4234,8 @@ class scylla_smp_queues(gdb.Command):
         from: the shard, from which the message was sent (this shard);
         to: the shard, to which the message is sent;
         ++++: visual illustration of the relative size of this queue;
+
+    See `scylla smp-queues --help` for more details on usage.
     """
     def __init__(self):
         gdb.Command.__init__(self, 'scylla smp-queues', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
@@ -4180,52 +4248,89 @@ class scylla_smp_queues(gdb.Command):
             qs = std_unique_ptr(qs).get()
         for i in range(cpus()):
             for j in range(cpus()):
-                self.queues.add(int(qs[i][j].address))
+                self.queues.add(qs[i][j])
         self._queue_type = gdb.lookup_type('seastar::smp_message_queue').pointer()
         self._ptr_type = gdb.lookup_type('uintptr_t').pointer()
+        self._unsigned_type = gdb.lookup_type('unsigned')
+        self._queue_size = 128
+        self._item_ptr_array_type = gdb.lookup_type('seastar::smp_message_queue::work_item').pointer().pointer()
 
     def invoke(self, arg, from_tty):
         if not self.queues:
             self._init()
 
+        parser = argparse.ArgumentParser(description="scylla smp-queues")
+        parser.add_argument("-f", "--from", action="store", type=int, required=False, dest="from_cpu",
+                help="Filter for queues going from the given CPU")
+        parser.add_argument("-t", "--to", action="store", type=int, required=False, dest="to_cpu",
+                help="Filter for queues going to the given CPU")
+        parser.add_argument("-g", "--scheduling-group", action="store", type=str, required=False,
+                help="Filter for work items belonging to the specified scheduling group (by name or id)")
+        parser.add_argument("-c", "--content", action="store_true",
+                help="Create a histogram from the content of the queues, rather than the number of items in them")
+
+        try:
+            args = parser.parse_args(arg.split())
+        except SystemExit:
+            return
+
+        sg_id = None
+        if args.scheduling_group:
+            for tq in get_local_task_queues():
+                id_str = "{}".format(tq['_id'].cast(self._unsigned_type))
+                name_str = str(tq['_name']).replace('"', '')
+                if args.scheduling_group == id_str or args.scheduling_group == name_str:
+                    sg_id = int(tq['_id'])
+
+            if sg_id is None:
+                gdb.write("error: non-existent scheduling-group provided for filtering: `{}', run `scylla task-queues` for a list of valid scheduling group names and ids\n".format(args.scheduling_group))
+                return
+
         def formatter(q):
-            a, b = q
-            return '{:2} -> {:2}'.format(a, b)
-
-        h = histogram(formatter=formatter)
-        known_vptrs = dict()
-
-        for obj, vptr in find_vptrs():
-            obj = int(obj)
-            vptr = int(vptr)
-
-            if not vptr in known_vptrs:
-                name = resolve(vptr, startswith='vtable for seastar::smp_message_queue::async_work_item')
-                if name:
-                    known_vptrs[vptr] = None
-                else:
-                    continue
-
-            offset = known_vptrs[vptr]
-
-            if offset is None:
-                q = None
-                ptr_meta = scylla_ptr.analyze(obj)
-                for offset in range(0, ptr_meta.size, self._ptr_type.sizeof):
-                    ptr = int(gdb.Value(obj + offset).reinterpret_cast(self._ptr_type).dereference())
-                    if ptr in self.queues:
-                        q = gdb.Value(ptr).reinterpret_cast(self._queue_type).dereference()
-                        break
-                if q is None:
-                    continue
-                known_vptrs[vptr] = offset
+            if args.content:
+                return "0x{:x} {}".format(q, resolve(q))
             else:
-                ptr = int(gdb.Value(obj + offset).reinterpret_cast(self._ptr_type).dereference())
-                q = gdb.Value(ptr).reinterpret_cast(self._queue_type).dereference()
+                return '{:2} -> {:2}'.format(*q)
 
+        h = histogram(formatter=formatter, print_indicators=not args.content)
+
+        def add_to_histogram(a, b, key=None, count=1):
+            if not sg_id is None and int(key.dereference()['_sg']['_id']) != sg_id:
+                return
+
+            if args.content:
+                vptr = int(gdb.Value(key).reinterpret_cast(self._ptr_type).dereference())
+                h[vptr] += count
+            else:
+                h[(a, b)] += count
+
+        for q in self.queues:
             a = int(q['_completed']['remote']['_id'])
             b = int(q['_pending']['remote']['_id'])
-            h[(a, b)] += 1
+            if args.from_cpu is not None and a != args.from_cpu:
+                continue
+            if args.to_cpu is not None and b != args.to_cpu:
+                continue
+
+            tx_queue = std_deque(q['_tx']['a']['pending_fifo'])
+            pending_queue = q['_pending']
+            pending_start = int(pending_queue['read_index_']['_M_i'])
+            pending_end = int(pending_queue['write_index_']['_M_i'])
+            if pending_end < pending_start:
+                pending_end += self._queue_size
+
+            if args.content or args.scheduling_group:
+                for item_ptr in tx_queue:
+                    add_to_histogram(a, b, key=item_ptr)
+
+                # Boost uses an aligned (to 8 bytes) buffer here.
+                # We'll just assume alignment is right.
+                buf = gdb.Value(pending_queue['storage_']['data_']['buf']).reinterpret_cast(self._item_ptr_array_type)
+
+                for i in range(pending_start, pending_end):
+                    add_to_histogram(a, b, key=buf[i % self._queue_size])
+            else:
+                add_to_histogram(a, b, count=(len(tx_queue) + pending_end - pending_start))
 
         gdb.write('{}\n'.format(h))
 

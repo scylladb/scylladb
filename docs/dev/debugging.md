@@ -588,34 +588,26 @@ of task, there are other kinds of tasks as well. Many seastar primites,
 like `do_with()`, `repeat()`, `do_until()`, etc. have their own task
 types.
 
-##### Traversing the continuation chain forward
+##### Traversing the continuation chain
 
-Or in other words finding out what are the continuations waiting on this one.
-This involves searching for all outbound references in the task and identifying
+Or in other words finding out what are the continuations waited on by this one as
+well as the ones waiting on this one.
+This involves searching for inbound and outbound references in the task and identifying
 the one which is also a task. As this is quite a labour-intensive task, there is
 a command in scylla-gdb.py which automates it, called `scylla fiber`. Example
 usage:
 
-    (gdb) scylla fiber 0x60001a305910
-    Starting task: (task*) 0x000060001a305910 0x0000000004aa5260 vtable for seastar::continuation<...> + 16
+    (gdb) scylla fiber 0x0000600016217c80
+    #-1 (task*) 0x000060001a305910 0x0000000004aa5260 vtable for seastar::continuation<...> + 16
     #0  (task*) 0x0000600016217c80 0x0000000004aa5288 vtable for seastar::continuation<...> + 16
     #1  (task*) 0x000060000ac42940 0x0000000004aa2aa0 vtable for seastar::continuation<...> + 16
     #2  (task*) 0x0000600023f59a50 0x0000000004ac1b30 vtable for seastar::continuation<...> + 16
 
-This is somewhat similar to a backtrace, in that it shows tasks that are waiting
+This is somewhat similar to a backtrace, in that it shows tasks that are waited
+on by this continuation and tasks that are waiting
 for this continuation to finish, similar to how upstream functions are waiting
 for the called function to finish before continuing their own execution.
 See `help scylla fiber` and `scylla fiber --help` for more information on usage.
-
-##### Traversing the continuation chain backward
-
-Or in other words find the continuations the current continuation is waiting on.
-This involves searching for all references to the task and identifying the one
-which is also a task. This is made quite easy with the `scylla find` command
-from `scylla-gdb.py`. By using the `--resolve` flag, the vtable symbol will be
-printed next to each inbound reference, making spotting the other task easy.
-Once found, repeat the same with the pointer of the other task, until a
-non-continuation future is found, e.g. a I/O, `smp::submit()`, etc.
 
 ##### Seastar threads
 
