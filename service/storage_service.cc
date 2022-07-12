@@ -477,9 +477,11 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
             }
         } else {
             auto replace_addr = get_replace_address();
+            assert(replace_addr);
             if (*replace_addr != get_broadcast_address()) {
                 // Sleep additionally to make sure that the server actually is not alive
                 // and giving it more time to gossip if alive.
+                slogger.info("Sleeping before replacing {}...", *replace_addr);
                 co_await sleep_abortable(service::load_broadcaster::BROADCAST_INTERVAL, _abort_source);
 
                 // check for operator errors...
@@ -496,6 +498,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
                     }
                 }
             } else {
+                slogger.info("Sleeping before replacing {}...", *replace_addr);
                 co_await sleep_abortable(get_ring_delay(), _abort_source);
             }
             slogger.info("Replacing a node with token(s): {}", bootstrap_tokens);
@@ -576,6 +579,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     co_await _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED);
     // At this point our local tokens and CDC streams timestamp are chosen (bootstrap_tokens, cdc_gen_id) and will not be changed.
 
+    assert(_group0);
     co_await _group0->become_voter();
 
     // start participating in the ring.
