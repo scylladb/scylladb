@@ -20,6 +20,13 @@ namespace statements {
 
 future<> function_statement::check_access(query_processor& qp, const service::client_state& state) const { return make_ready_future<>(); }
 
+future<> create_function_statement_base::check_access(query_processor& qp, const service::client_state& state) const {
+    co_await state.has_functions_access(qp.db(), _name.keyspace, auth::permission::CREATE);
+    if (_or_replace) {
+        co_await state.has_functions_access(qp.db(), _name.keyspace, auth::permission::ALTER);
+    }
+}
+
 function_statement::function_statement(
         functions::function_name name, std::vector<shared_ptr<cql3_type::raw>> raw_arg_types)
     : _name(std::move(name)), _raw_arg_types(std::move(raw_arg_types)) {}

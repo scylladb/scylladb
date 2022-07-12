@@ -22,6 +22,7 @@ namespace cql3 {
 
 namespace statements {
 
+
 shared_ptr<functions::function> create_function_statement::create(query_processor& qp, functions::function* old) const {
     if (old && !dynamic_cast<functions::user_function*>(old)) {
         throw exceptions::invalid_request_exception(format("Cannot replace '{}' which is not a user defined function", *old));
