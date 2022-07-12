@@ -20,13 +20,13 @@ namespace utils {
  * This class provides a similar functionality to the Java's LinkedHashSet
  * class.
  */
-template<typename T>
-class sequenced_set {
+template<typename T, typename VectorType>
+class basic_sequenced_set {
 public:
     using value_type = T;
     using size_type = size_t;
-    using iterator = typename std::vector<T>::iterator;
-    using const_iterator = typename std::vector<T>::const_iterator;
+    using iterator = typename VectorType::iterator;
+    using const_iterator = typename VectorType::const_iterator;
 
     void push_back(const T& val) {
         insert(val);
@@ -85,7 +85,11 @@ public:
 
 private:
     std::unordered_set<T> _set;
-    std::vector<T> _vec;
+    VectorType _vec;
 };
+
+template <typename T>
+using sequenced_set = basic_sequenced_set<T, std::vector<T>>;
+
 } // namespace utils
 
