@@ -1123,7 +1123,6 @@ private:
 
         for (;;) {
             switch_state(state::active);
-            replica::table& t = *_compacting_table;
             auto sstable_level = sst->get_sstable_level();
             auto run_identifier = sst->run_identifier();
             // FIXME: this compaction should run with maintenance priority.
