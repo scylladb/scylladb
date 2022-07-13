@@ -600,7 +600,7 @@ public:
     update_sstable_lists_on_off_strategy_completion(sstables::compaction_completion_desc desc);
 
     // Rebuild sstable set, delete input sstables right away, and update row cache and statistics.
-    void on_compaction_completion(sstables::compaction_completion_desc& desc);
+    void on_compaction_completion(sstables::compaction_completion_desc desc);
 private:
     void rebuild_statistics();
 

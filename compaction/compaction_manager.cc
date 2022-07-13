@@ -314,10 +314,11 @@ future<sstables::compaction_result> compaction_manager::task::compact_sstables(s
     descriptor.replacer = [this, &t, release_exhausted] (sstables::compaction_completion_desc desc) {
         t.get_compaction_strategy().notify_completion(desc.old_sstables, desc.new_sstables);
         _cm.propagate_replacement(&t, desc.old_sstables, desc.new_sstables);
-        t.on_compaction_completion(desc);
+        auto old_sstables = desc.old_sstables;
+        t.on_compaction_completion(std::move(desc));
         // Calls compaction manager's task for this compaction to release reference to exhausted SSTables.
         if (release_exhausted) {
-            release_exhausted(desc.old_sstables);
+            release_exhausted(old_sstables);
         }
     };
 
