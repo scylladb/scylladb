@@ -442,11 +442,11 @@ public:
     // Adds a table to the compaction manager.
     // Creates a compaction_state structure that can be used for submitting
     // compaction jobs of all types.
-    void add(replica::table* t);
+    void add(compaction::table_state& t);
 
     // Remove a table from the compaction manager.
     // Cancel requests on table and wait for possible ongoing compactions.
-    future<> remove(replica::table* t);
+    future<> remove(compaction::table_state& t);
 
     const stats& get_stats() const {
         return _stats;

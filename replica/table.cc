@@ -747,7 +747,7 @@ table::stop() {
     return _async_gate.close().then([this] {
         return await_pending_ops().finally([this] {
             return _memtables->flush().finally([this] {
-                return _compaction_manager.remove(this).then([this] {
+                return _compaction_manager.remove(as_table_state()).then([this] {
                     return _sstable_deletion_gate.close().then([this] {
                         return get_row_cache().invalidate(row_cache::external_updater([this] {
                             _main_sstables = _compaction_strategy.make_sstable_set(_schema);
@@ -1183,7 +1183,7 @@ table::table(schema_ptr schema, config config, db::commitlog* cl, compaction_man
         tlogger.warn("Writes disabled, column family no durable.");
     }
     set_metrics();
-    _compaction_manager.add(this);
+    _compaction_manager.add(as_table_state());
 
     update_optimized_twcs_queries_flag();
 }

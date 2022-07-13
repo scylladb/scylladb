@@ -1445,16 +1445,16 @@ future<> compaction_manager::perform_sstable_scrub(compaction::table_state& t, s
     }, can_purge_tombstones::no);
 }
 
-void compaction_manager::add(replica::table* t) {
-    auto [_, inserted] = _compaction_state.insert({&t->as_table_state(), compaction_state{}});
+void compaction_manager::add(compaction::table_state& t) {
+    auto [_, inserted] = _compaction_state.insert({&t, compaction_state{}});
     if (!inserted) {
-        auto s = t->schema();
-        on_internal_error(cmlog, format("compaction_state for table {}.{} [{}] already exists", s->ks_name(), s->cf_name(), fmt::ptr(t)));
+        auto s = t.schema();
+        on_internal_error(cmlog, format("compaction_state for table {}.{} [{}] already exists", s->ks_name(), s->cf_name(), fmt::ptr(&t)));
     }
 }
 
-future<> compaction_manager::remove(replica::table* t) {
-    auto handle = _compaction_state.extract(&t->as_table_state());
+future<> compaction_manager::remove(compaction::table_state& t) {
+    auto handle = _compaction_state.extract(&t);
 
     if (!handle.empty()) {
         auto& c_state = handle.mapped();
@@ -1462,10 +1462,10 @@ future<> compaction_manager::remove(replica::table* t) {
         // We need to guarantee that a task being stopped will not retry to compact
         // a table being removed.
         // The requirement above is provided by stop_ongoing_compactions().
-        _postponed.erase(&t->as_table_state());
+        _postponed.erase(&t);
 
         // Wait for the termination of an ongoing compaction on table T, if any.
-        co_await stop_ongoing_compactions("table removal", &t->as_table_state());
+        co_await stop_ongoing_compactions("table removal", &t);
 
         // Wait for all functions running under gate to terminate.
         co_await c_state.gate.close();
@@ -1474,7 +1474,7 @@ future<> compaction_manager::remove(replica::table* t) {
     auto found = false;
     sstring msg;
     for (auto& task : _tasks) {
-        if (task->compacting_table() == &t->as_table_state()) {
+        if (task->compacting_table() == &t) {
             if (!msg.empty()) {
                 msg += "\n";
             }
