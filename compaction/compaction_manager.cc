@@ -1177,7 +1177,7 @@ private:
 
 template<typename TaskType, typename... Args>
 requires std::derived_from<TaskType, compaction_manager::task>
-future<> compaction_manager::perform_task_on_all_files(replica::table* t, sstables::compaction_type_options options, get_candidates_func get_func, Args... args) {
+future<> compaction_manager::perform_task_on_all_files(compaction::table_state& t, sstables::compaction_type_options options, get_candidates_func get_func, Args... args) {
     if (_state != state::enabled) {
         co_return;
     }
@@ -1188,7 +1188,7 @@ future<> compaction_manager::perform_task_on_all_files(replica::table* t, sstabl
     // compaction.
     std::vector<sstables::shared_sstable> sstables;
     compacting_sstable_registration compacting(*this);
-    co_await run_with_compaction_disabled(t->as_table_state(), [this, &sstables, &compacting, get_func = std::move(get_func)] () -> future<> {
+    co_await run_with_compaction_disabled(t, [this, &sstables, &compacting, get_func = std::move(get_func)] () -> future<> {
         // Getting sstables and registering them as compacting must be atomic, to avoid a race condition where
         // regular compaction runs in between and picks the same files.
         sstables = co_await get_func();
@@ -1201,10 +1201,10 @@ future<> compaction_manager::perform_task_on_all_files(replica::table* t, sstabl
             return a->data_size() > b->data_size();
         });
     });
-    co_await perform_task(seastar::make_shared<TaskType>(*this, &t->as_table_state(), std::move(options), std::move(sstables), std::move(compacting), std::forward<Args>(args)...));
+    co_await perform_task(seastar::make_shared<TaskType>(*this, &t, std::move(options), std::move(sstables), std::move(compacting), std::forward<Args>(args)...));
 }
 
-future<> compaction_manager::rewrite_sstables(replica::table* t, sstables::compaction_type_options options, get_candidates_func get_func, can_purge_tombstones can_purge) {
+future<> compaction_manager::rewrite_sstables(compaction::table_state& t, sstables::compaction_type_options options, get_candidates_func get_func, can_purge_tombstones can_purge) {
     return perform_task_on_all_files<rewrite_sstables_compaction_task>(t, std::move(options), std::move(get_func), can_purge);
 }
 
@@ -1380,7 +1380,7 @@ future<> compaction_manager::perform_cleanup(replica::database& db, replica::tab
         });
     };
 
-    co_await perform_task_on_all_files<cleanup_sstables_compaction_task>(t, sstables::compaction_type_options::make_cleanup(std::move(sorted_owned_ranges)),
+    co_await perform_task_on_all_files<cleanup_sstables_compaction_task>(t->as_table_state(), sstables::compaction_type_options::make_cleanup(std::move(sorted_owned_ranges)),
                                                                          std::move(get_sstables));
 }
 
@@ -1409,7 +1409,7 @@ future<> compaction_manager::perform_sstable_upgrade(replica::database& db, repl
     // Note that we potentially could be doing multiple
     // upgrades here in parallel, but that is really the users
     // problem.
-    return rewrite_sstables(t, sstables::compaction_type_options::make_upgrade(db.get_keyspace_local_ranges(t->schema()->ks_name())), std::move(get_sstables));
+    return rewrite_sstables(t->as_table_state(), sstables::compaction_type_options::make_upgrade(db.get_keyspace_local_ranges(t->schema()->ks_name())), std::move(get_sstables));
 }
 
 // Submit a table to be scrubbed and wait for its termination.
@@ -1418,7 +1418,7 @@ future<> compaction_manager::perform_sstable_scrub(replica::table* t, sstables::
     if (scrub_mode == sstables::compaction_type_options::scrub::mode::validate) {
         return perform_sstable_scrub_validate_mode(t);
     }
-    return rewrite_sstables(t, sstables::compaction_type_options::make_scrub(scrub_mode), [this, t, opts] {
+    return rewrite_sstables(t->as_table_state(), sstables::compaction_type_options::make_scrub(scrub_mode), [this, t, opts] {
         auto all_sstables = t->get_sstable_set().all();
         std::vector<sstables::shared_sstable> sstables = boost::copy_range<std::vector<sstables::shared_sstable>>(*all_sstables
                 | boost::adaptors::filtered([&opts] (const sstables::shared_sstable& sst) {
