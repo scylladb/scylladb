@@ -1633,6 +1633,7 @@ future<std::map<gms::inet_address, float>> storage_service::get_ownership() {
 
 future<std::map<gms::inet_address, float>> storage_service::effective_ownership(sstring keyspace_name) {
     return run_with_no_api_lock([keyspace_name] (storage_service& ss) mutable -> future<std::map<gms::inet_address, float>> {
+        locator::effective_replication_map_ptr erm;
         if (keyspace_name != "") {
             //find throws no such keyspace if it is missing
             const replica::keyspace& ks = ss._db.local().find_keyspace(keyspace_name);
@@ -1641,6 +1642,7 @@ future<std::map<gms::inet_address, float>> storage_service::effective_ownership(
             if (typeid(rs) == typeid(locator::local_strategy)) {
                 throw std::runtime_error("Ownership values for keyspaces with LocalStrategy are meaningless");
             }
+            erm = ks.get_effective_replication_map();
         } else {
             auto non_system_keyspaces = ss._db.local().get_non_system_keyspaces();
 
@@ -1654,6 +1656,8 @@ future<std::map<gms::inet_address, float>> storage_service::effective_ownership(
                 throw std::runtime_error("Non-system keyspaces don't have the same replication settings, effective ownership information is meaningless");
             }
             keyspace_name = "system_traces";
+            const auto& ks = ss._db.local().find_keyspace(keyspace_name);
+            erm = ks.get_effective_replication_map();
         }
 
         // The following loops seems computationally heavy, but it's not as bad.
@@ -1661,7 +1665,7 @@ future<std::map<gms::inet_address, float>> storage_service::effective_ownership(
         // DC and all the instances in each DC.
         //
         // The call for get_range_for_endpoint is done once per endpoint
-        const auto& tm = ss.get_token_metadata();
+        const auto& tm = *erm->get_token_metadata_ptr();
         const auto token_ownership = dht::token::describe_ownership(tm.sorted_tokens());
         const auto datacenter_endpoints = tm.get_topology().get_datacenter_endpoints();
         std::map<gms::inet_address, float> final_ownership;
@@ -1671,7 +1675,7 @@ future<std::map<gms::inet_address, float>> storage_service::effective_ownership(
                 // calculate the ownership with replication and add the endpoint to the final ownership map
                 try {
                     float ownership = 0.0f;
-                    auto ranges = ss.get_ranges_for_endpoint(keyspace_name, endpoint);
+                    auto ranges = ss.get_ranges_for_endpoint(erm, endpoint);
                     for (auto& r : ranges) {
                         // get_ranges_for_endpoint will unwrap the first range.
                         // With t0 t1 t2 t3, the first range (t3,t0] will be splitted
@@ -2657,9 +2661,9 @@ future<> storage_service::rebuild(sstring source_dc) {
             if (source_dc != "") {
                 streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(source_dc));
             }
-            auto keyspaces = ss._db.local().get_non_local_strategy_keyspaces();
-            for (auto& keyspace_name : keyspaces) {
-                co_await streamer->add_ranges(keyspace_name, ss.get_ranges_for_endpoint(keyspace_name, utils::fb_utilities::get_broadcast_address()), ss._gossiper, false);
+            auto ks_erms = ss._db.local().get_non_local_strategy_keyspaces_erms();
+            for (const auto& [keyspace_name, erm] : ks_erms) {
+                co_await streamer->add_ranges(keyspace_name, ss.get_ranges_for_endpoint(erm, utils::fb_utilities::get_broadcast_address()), ss._gossiper, false);
             }
             try {
                 co_await streamer->stream_async();
@@ -2684,16 +2688,17 @@ int32_t storage_service::get_exception_count() {
 }
 
 future<std::unordered_multimap<dht::token_range, inet_address>> storage_service::get_changed_ranges_for_leaving(sstring keyspace_name, inet_address endpoint) {
+    // FIXME: get erm as param
+    auto& ks = _db.local().find_keyspace(keyspace_name);
+    auto erm = ks.get_effective_replication_map();
     // First get all ranges the leaving endpoint is responsible for
-    auto ranges = get_ranges_for_endpoint(keyspace_name, endpoint);
+    auto ranges = get_ranges_for_endpoint(erm, endpoint);
 
     slogger.debug("Node {} ranges [{}]", endpoint, ranges);
 
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> current_replica_endpoints;
 
     // Find (for each range) all nodes that store replicas for these ranges as well
-    auto& ks = _db.local().find_keyspace(keyspace_name);
-    auto erm = ks.get_effective_replication_map();
     for (auto& r : ranges) {
         auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
         auto eps = erm->get_natural_endpoints(end_token);
@@ -3378,8 +3383,8 @@ storage_service::get_splits(const sstring& ks_name, const sstring& cf_name, rang
 };
 
 dht::token_range_vector
-storage_service::get_ranges_for_endpoint(const sstring& name, const gms::inet_address& ep) const {
-    return _db.local().find_keyspace(name).get_effective_replication_map()->get_ranges(ep);
+storage_service::get_ranges_for_endpoint(const locator::effective_replication_map_ptr& erm, const gms::inet_address& ep) const {
+    return erm->get_ranges(ep);
 }
 
 // Caller is responsible to hold token_metadata valid until the returned future is resolved

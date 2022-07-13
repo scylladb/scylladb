@@ -611,12 +611,12 @@ public:
 
 
     /**
-     * Get all ranges an endpoint is responsible for (by keyspace)
+     * Get all ranges an endpoint is responsible for (by keyspace effective_replication_map)
      * Replication strategy's get_ranges() guarantees that no wrap-around range is returned.
      * @param ep endpoint we are interested in.
      * @return ranges for the specified endpoint.
      */
-    dht::token_range_vector get_ranges_for_endpoint(const sstring& name, const gms::inet_address& ep) const;
+    dht::token_range_vector get_ranges_for_endpoint(const locator::effective_replication_map_ptr& erm, const gms::inet_address& ep) const;
 
     /**
      * Get all ranges that span the ring given a set
