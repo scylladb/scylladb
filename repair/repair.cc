@@ -1585,7 +1585,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
                 auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
                 const auto new_eps = ks.get_replication_strategy().calculate_natural_endpoints(end_token, temp).get0();
                 const auto& current_eps = current_replica_endpoints[r];
-                std::unordered_set<inet_address> neighbors_set(new_eps.begin(), new_eps.end());
+                std::unordered_set<inet_address> neighbors_set = new_eps.get_set();
                 bool skip_this_range = false;
                 auto new_owner = neighbors_set;
                 for (const auto& node : current_eps) {

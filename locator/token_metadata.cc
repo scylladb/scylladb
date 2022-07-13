@@ -816,13 +816,10 @@ void token_metadata_impl::calculate_pending_ranges_for_leaving(
         auto t = r.end() ? r.end()->value() : dht::maximum_token();
         auto current_endpoints = strategy.calculate_natural_endpoints(t, metadata).get0();
         auto new_endpoints = strategy.calculate_natural_endpoints(t, *all_left_metadata).get0();
-        std::vector<inet_address> diff;
-        std::sort(current_endpoints.begin(), current_endpoints.end());
-        std::sort(new_endpoints.begin(), new_endpoints.end());
-        std::set_difference(new_endpoints.begin(), new_endpoints.end(),
-            current_endpoints.begin(), current_endpoints.end(), std::back_inserter(diff));
-        for (auto& ep : diff) {
+        for (auto ep : new_endpoints) {
+          if (!current_endpoints.contains(ep)) {
             new_pending_ranges.emplace(r, ep);
+          }
         }
         seastar::thread::maybe_yield();
     }

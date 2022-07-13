@@ -125,6 +125,14 @@ public:
         return _vec;
     }
 
+    const auto& get_set() const noexcept {
+        return _set;
+    }
+
+    bool contains(const T& t) const noexcept {
+        return _set.contains(t);
+    }
+
     void reserve(size_type sz) {
         _set.reserve(sz);
         _vec.reserve(sz);

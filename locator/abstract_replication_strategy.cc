@@ -174,11 +174,9 @@ abstract_replication_strategy::get_ranges(inet_address ep, token_metadata_ptr tm
     }
     auto prev_tok = sorted_tokens.back();
     for (auto tok : sorted_tokens) {
-        for (inet_address a : co_await calculate_natural_endpoints(tok, tm)) {
-            if (a == ep) {
+        auto eps = co_await calculate_natural_endpoints(tok, tm);
+        if (eps.contains(ep)) {
                 insert_token_range_to_sorted_container_while_unwrapping(prev_tok, tok, ret);
-                break;
-            }
         }
         prev_tok = tok;
     }
@@ -245,20 +243,13 @@ abstract_replication_strategy::get_address_ranges(const token_metadata& tm, inet
             continue;
         }
         auto eps = co_await calculate_natural_endpoints(t, tm);
-        bool found = false;
-        for (auto ep : eps) {
-            if (ep != endpoint) {
-                continue;
-            }
+        if (eps.contains(endpoint)) {
             dht::token_range_vector r = tm.get_primary_ranges_for(t);
             rslogger.debug("token={} primary_range={} endpoint={}", t, r, endpoint);
             for (auto&& rng : r) {
-                ret.emplace(ep, rng);
+                ret.emplace(endpoint, rng);
             }
-            found = true;
-            break;
-        }
-        if (!found) {
+        } else {
             rslogger.debug("token={} natural_endpoints={}: endpoint={} not found", t, eps, endpoint);
         }
     }
