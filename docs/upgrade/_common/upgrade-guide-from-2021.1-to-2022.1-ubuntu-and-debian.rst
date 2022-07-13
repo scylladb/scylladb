@@ -57,7 +57,7 @@ Before any major procedure, like an upgrade, it is recommended to backup all the
 
 Take note of the directory name that nodetool gives you, and copy all the directories having this name under ``/var/lib/scylla`` to a backup device.
 
-When the upgrade is completed on all nodes, the snapshot should be removed with the ``nodetool clearsnapshot -t <snapshot>``command to prevent running out of space.
+When the upgrade is completed on all nodes, the snapshot should be removed with the ``nodetool clearsnapshot -t <snapshot>`` command to prevent running out of space.
 
 Backup the configuration file
 ------------------------------
