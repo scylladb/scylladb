@@ -438,10 +438,10 @@ future<> compaction_manager::run_custom_job(replica::table* t, sstables::compact
     return perform_task(make_shared<custom_compaction_task>(*this, &t->as_table_state(), type, desc, std::move(job)));
 }
 
-compaction_manager::compaction_reenabler::compaction_reenabler(compaction_manager& cm, replica::table* t)
+compaction_manager::compaction_reenabler::compaction_reenabler(compaction_manager& cm, compaction::table_state& t)
     : _cm(cm)
-    , _table(t)
-    , _compaction_state(cm.get_compaction_state(&_table->as_table_state()))
+    , _table(&t)
+    , _compaction_state(cm.get_compaction_state(_table))
     , _holder(_compaction_state.gate.hold())
 {
     _compaction_state.compaction_disabled_counter++;
@@ -462,7 +462,7 @@ compaction_manager::compaction_reenabler::~compaction_reenabler() {
         cmlog.debug("Reenabling compaction for {}.{}",
                 _table->schema()->ks_name(), _table->schema()->cf_name());
         try {
-            _cm.submit(_table->as_table_state());
+            _cm.submit(*_table);
         } catch (...) {
             cmlog.warn("compaction_reenabler could not reenable compaction for {}.{}: {}",
                     _table->schema()->ks_name(), _table->schema()->cf_name(), std::current_exception());
@@ -471,15 +471,15 @@ compaction_manager::compaction_reenabler::~compaction_reenabler() {
 }
 
 future<compaction_manager::compaction_reenabler>
-compaction_manager::stop_and_disable_compaction(replica::table* t) {
+compaction_manager::stop_and_disable_compaction(compaction::table_state& t) {
     compaction_reenabler cre(*this, t);
-    co_await stop_ongoing_compactions("user-triggered operation", &t->as_table_state());
+    co_await stop_ongoing_compactions("user-triggered operation", &t);
     co_return cre;
 }
 
 future<>
 compaction_manager::run_with_compaction_disabled(replica::table* t, std::function<future<> ()> func) {
-    compaction_reenabler cre = co_await stop_and_disable_compaction(t);
+    compaction_reenabler cre = co_await stop_and_disable_compaction(t->as_table_state());
 
     co_await func();
 }

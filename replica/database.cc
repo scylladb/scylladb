@@ -2372,10 +2372,10 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
     std::vector<compaction_manager::compaction_reenabler> cres;
     cres.reserve(1 + cf.views().size());
 
-    cres.emplace_back(co_await _compaction_manager->stop_and_disable_compaction(&cf));
+    cres.emplace_back(co_await _compaction_manager->stop_and_disable_compaction(cf.as_table_state()));
     co_await coroutine::parallel_for_each(cf.views(), [&, this] (view_ptr v) -> future<> {
         auto& vcf = find_column_family(v);
-        cres.emplace_back(co_await _compaction_manager->stop_and_disable_compaction(&vcf));
+        cres.emplace_back(co_await _compaction_manager->stop_and_disable_compaction(vcf.as_table_state()));
     });
 
     bool did_flush = false;

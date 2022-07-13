@@ -413,17 +413,17 @@ public:
 
     class compaction_reenabler {
         compaction_manager& _cm;
-        replica::table* _table;
+        compaction::table_state* _table;
         compaction_manager::compaction_state& _compaction_state;
         gate::holder _holder;
 
     public:
-        compaction_reenabler(compaction_manager&, replica::table*);
+        compaction_reenabler(compaction_manager&, compaction::table_state&);
         compaction_reenabler(compaction_reenabler&&) noexcept;
 
         ~compaction_reenabler();
 
-        replica::table* compacting_table() const noexcept {
+        compaction::table_state* compacting_table() const noexcept {
             return _table;
         }
 
@@ -434,7 +434,7 @@ public:
 
     // Disable compaction temporarily for a table t.
     // Caller should call the compaction_reenabler::reenable
-    future<compaction_reenabler> stop_and_disable_compaction(replica::table* t);
+    future<compaction_reenabler> stop_and_disable_compaction(compaction::table_state& t);
 
     // Run a function with compaction temporarily disabled for a table T.
     future<> run_with_compaction_disabled(replica::table* t, std::function<future<> ()> func);
