@@ -120,6 +120,3 @@ More information
   - `Hands-on Lab Part 1 <https://university.scylladb.com/courses/data-modeling/lessons/materialized-views-secondary-indexes-and-filtering/topic/materialized-views-and-indexes-hands-on-lab-1/>`_
   - `Hands-on Lab Part 2 <https://university.scylladb.com/courses/data-modeling/lessons/materialized-views-secondary-indexes-and-filtering/topic/materialized-views-and-secondary-indexes-hands-on-updated/>`_
 
-* Hands-on Labs are also available at Katacoda (Free, registration required)
-
-  - `Materialized Views Lab <https://katacoda.com/scylla/scenarios/mv_indexes_lab_1>`_
