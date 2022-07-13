@@ -3003,6 +3003,8 @@ public:
             return; // also do not report timeout as replica failure for the same reason
         } else if (try_catch<abort_requested_exception>(eptr)) {
             // do not report aborts, they are trigerred by shutdown or timeouts
+        } else if (try_catch<gate_closed_exception>(eptr)) {
+            // do not report gate_closed errors, they are trigerred by shutdown (See #8995)
         } else if (auto ex = try_catch<rpc::remote_verb_error>(eptr)) {
             // Log remote read error with lower severity.
             // If it is really severe it we be handled on the host that sent
