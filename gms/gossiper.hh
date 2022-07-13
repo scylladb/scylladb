@@ -165,6 +165,14 @@ private:
     // Used for serializing changes to _endpoint_state_map and running of associated change listeners.
     endpoint_locks_map _endpoint_locks;
 
+    // Map where updates introduced by incoming messages are accumulated, to be
+    // applied locally in a batch.
+    // Only on shard 0.
+    std::unordered_map<inet_address, endpoint_state> _staging_endpoint_state_map;
+    condition_variable _have_staging_updates;
+    bool _stop_staging_updates_loop = false;
+    future<> _staging_updates_loop_done;
+
 public:
     const std::vector<sstring> DEAD_STATES = {
         versioned_value::REMOVING_TOKEN,
@@ -438,6 +446,8 @@ public:
 private:
     future<> do_apply_state_locally(gms::inet_address node, const endpoint_state& remote_state, bool listener_notification);
     future<> apply_state_locally_without_listener_notification(std::unordered_map<inet_address, endpoint_state> map);
+
+    future<> run_staging_update_apply_loop();
 
     future<> apply_new_states(inet_address addr, endpoint_state& local_state, const endpoint_state& remote_state);
 

@@ -92,7 +92,8 @@ public:
 };
 
 gossiper::gossiper(abort_source& as, feature_service& features, const locator::shared_token_metadata& stm, netw::messaging_service& ms, sharded<db::system_keyspace>& sys_ks, const db::config& cfg, gossip_config gcfg)
-        : _abort_source(as)
+        : _staging_updates_loop_done(make_ready_future<>())
+        , _abort_source(as)
         , _feature_service(features)
         , _shared_token_metadata(stm)
         , _messaging(ms)
@@ -132,6 +133,8 @@ gossiper::gossiper(abort_source& as, feature_service& features, const locator::s
                 return _unreachable_endpoints.size();
             }, sm::description("How many unreachable nodes the current node sees")),
     });
+
+    _staging_updates_loop_done = run_staging_update_apply_loop();
 }
 
 /*
@@ -631,7 +634,16 @@ future<> gossiper::apply_state_locally_without_listener_notification(std::unorde
     }
 }
 
-future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state> map) {
+future<> gossiper::run_staging_update_apply_loop() {
+  while (!_stop_staging_updates_loop) {
+    co_await _have_staging_updates.wait();
+
+    if (_staging_endpoint_state_map.empty()) {
+        continue;
+    }
+
+    auto map = std::exchange(_staging_endpoint_state_map, {});
+
     auto start = std::chrono::steady_clock::now();
     auto endpoints = boost::copy_range<utils::chunked_vector<inet_address>>(map | boost::adaptors::map_keys);
     std::shuffle(endpoints.begin(), endpoints.end(), _random_engine);
@@ -654,6 +666,17 @@ future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state> ma
 
     logger.debug("apply_state_locally() took {} ms", std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - start).count());
+  }
+}
+
+future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state> map) {
+    for (auto& entry : map) {
+        //FIXME: this probably has to be much more sophisticated than this, checking generations, etc.
+        //Q: are state updates always full overwrites? Do we ever have to do some merging?
+        _staging_endpoint_state_map[entry.first] = std::move(entry.second);
+    }
+    _have_staging_updates.signal();
+    return make_ready_future<>();
 }
 
 future<> gossiper::force_remove_endpoint(inet_address endpoint) {
@@ -2157,6 +2180,9 @@ future<> gossiper::shutdown() {
         co_await _background_msg.close();
     }
     if (this_shard_id() == 0) {
+        _stop_staging_updates_loop = true;
+        _have_staging_updates.broadcast();
+        co_await std::move(_staging_updates_loop_done);
         co_await do_stop_gossiping();
     }
 }
