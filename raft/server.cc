@@ -1264,8 +1264,8 @@ future<> server_impl::set_configuration(server_address_set c_new, seastar::abort
     const auto& e = _fsm->add_entry(raft::configuration{std::move(c_new)});
 
     // We've just submitted a joint configuration to be committed.
-    // Immediately, without yield, once the FSM discovers
-    // joint configuration, it appends a corresponding non-joint entry.
+    // Once the FSM discovers a committed joint configuration,
+    // it appends a corresponding non-joint entry.
     // By waiting for the joint configuration first we ensure
     // that the next non-joint configuration we get from fsm in io_fiber
     // would be the one corresponding to our joint configuration,
