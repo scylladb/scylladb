@@ -393,7 +393,7 @@ public:
     future<> perform_cleanup(replica::database& db, compaction::table_state& t);
 
     // Submit a table to be upgraded and wait for its termination.
-    future<> perform_sstable_upgrade(replica::database& db, replica::table* t, bool exclude_current_version);
+    future<> perform_sstable_upgrade(replica::database& db, compaction::table_state& t, bool exclude_current_version);
 
     // Submit a table to be scrubbed and wait for its termination.
     future<> perform_sstable_scrub(replica::table* t, sstables::compaction_type_options::scrub opts);

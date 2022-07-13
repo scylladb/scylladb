@@ -1385,13 +1385,13 @@ future<> compaction_manager::perform_cleanup(replica::database& db, compaction::
 }
 
 // Submit a table to be upgraded and wait for its termination.
-future<> compaction_manager::perform_sstable_upgrade(replica::database& db, replica::table* t, bool exclude_current_version) {
-    auto get_sstables = [this, &db, t, exclude_current_version] {
+future<> compaction_manager::perform_sstable_upgrade(replica::database& db, compaction::table_state& t, bool exclude_current_version) {
+    auto get_sstables = [this, &db, &t, exclude_current_version] {
         std::vector<sstables::shared_sstable> tables;
 
-        auto last_version = t->get_sstables_manager().get_highest_supported_format();
+        auto last_version = t.get_sstables_manager().get_highest_supported_format();
 
-        for (auto& sst : get_candidates(t->as_table_state())) {
+        for (auto& sst : get_candidates(t)) {
             // if we are a "normal" upgrade, we only care about
             // tables with older versions, but potentially
             // we are to actually rewrite everything. (-a)
@@ -1409,7 +1409,7 @@ future<> compaction_manager::perform_sstable_upgrade(replica::database& db, repl
     // Note that we potentially could be doing multiple
     // upgrades here in parallel, but that is really the users
     // problem.
-    return rewrite_sstables(t->as_table_state(), sstables::compaction_type_options::make_upgrade(db.get_keyspace_local_ranges(t->schema()->ks_name())), std::move(get_sstables));
+    return rewrite_sstables(t, sstables::compaction_type_options::make_upgrade(db.get_keyspace_local_ranges(t.schema()->ks_name())), std::move(get_sstables));
 }
 
 // Submit a table to be scrubbed and wait for its termination.

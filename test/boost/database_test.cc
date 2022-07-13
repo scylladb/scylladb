@@ -951,7 +951,7 @@ SEASTAR_TEST_CASE(upgrade_sstables) {
             auto& cm = db.get_compaction_manager();
             return do_for_each(db.get_column_families(), [&] (std::pair<utils::UUID, lw_shared_ptr<replica::column_family>> t) {
                 constexpr bool exclude_current_version = false;
-                return cm.perform_sstable_upgrade(db, t.second.get(), exclude_current_version);
+                return cm.perform_sstable_upgrade(db, t.second->as_table_state(), exclude_current_version);
             });
         }).get();
     });
