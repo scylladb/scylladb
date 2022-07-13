@@ -31,14 +31,14 @@ public:
     virtual bool requires_thread() const override;
     bool has_finalfunc() const;
 
-    const scalar_function& sfunc() const {
-        return *_sfunc;
+    ::shared_ptr<scalar_function> sfunc() const {
+        return _sfunc;
     }
     const scalar_function& reducefunc() const {
         return *_reducefunc;
     }
-    const scalar_function& finalfunc() const {
-        return *_finalfunc;
+   ::shared_ptr<scalar_function> finalfunc() const {
+        return _finalfunc;
     }
     const bytes_opt& initcond() const {
         return _initcond;

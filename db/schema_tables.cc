@@ -2180,15 +2180,15 @@ std::vector<mutation> make_create_aggregate_mutations(schema_features features, 
     mutation& m = p.first;
     clustering_key& ckey = p.second;
 
-    data_type state_type = aggregate->sfunc().arg_types()[0];
+    data_type state_type = aggregate->sfunc()->arg_types()[0];
     if (aggregate->has_finalfunc()) {
-        m.set_clustered_cell(ckey, "final_func", aggregate->finalfunc().name().name, timestamp);
+        m.set_clustered_cell(ckey, "final_func", aggregate->finalfunc()->name().name, timestamp);
     }
     if (aggregate->initcond()) {
         m.set_clustered_cell(ckey, "initcond", state_type->deserialize(*aggregate->initcond()).to_parsable_string(), timestamp);
     }
     m.set_clustered_cell(ckey, "return_type", aggregate->return_type()->as_cql3_type().to_string(), timestamp);
-    m.set_clustered_cell(ckey, "state_func", aggregate->sfunc().name().name, timestamp);
+    m.set_clustered_cell(ckey, "state_func", aggregate->sfunc()->name().name, timestamp);
     m.set_clustered_cell(ckey, "state_type", state_type->as_cql3_type().to_string(), timestamp);
     std::vector<mutation> muts = {m};
 

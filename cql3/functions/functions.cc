@@ -149,7 +149,7 @@ void functions::remove_function(const function_name& name, const std::vector<dat
 std::optional<function_name> functions::used_by_user_aggregate(const function_name& name) {
     for (const shared_ptr<function>& fptr : _declared | boost::adaptors::map_values) {
         auto aggregate = dynamic_pointer_cast<user_aggregate>(fptr);
-        if (aggregate && (aggregate->sfunc().name() == name || (aggregate->has_finalfunc() && aggregate->finalfunc().name() == name))) {
+        if (aggregate && (aggregate->sfunc()->name() == name || (aggregate->has_finalfunc() && aggregate->finalfunc()->name() == name))) {
             return aggregate->name();
         }
     }
