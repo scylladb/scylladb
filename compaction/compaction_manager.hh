@@ -409,7 +409,7 @@ public:
     // parameter type is the compaction type the operation can most closely be
     //      associated with, use compaction_type::Compaction, if none apply.
     // parameter job is a function that will carry the operation
-    future<> run_custom_job(replica::table* t, sstables::compaction_type type, const char *desc, noncopyable_function<future<>(sstables::compaction_data&)> job);
+    future<> run_custom_job(compaction::table_state& s, sstables::compaction_type type, const char *desc, noncopyable_function<future<>(sstables::compaction_data&)> job);
 
     class compaction_reenabler {
         compaction_manager& _cm;

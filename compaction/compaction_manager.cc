@@ -430,12 +430,12 @@ protected:
     }
 };
 
-future<> compaction_manager::run_custom_job(replica::table* t, sstables::compaction_type type, const char* desc, noncopyable_function<future<>(sstables::compaction_data&)> job) {
+future<> compaction_manager::run_custom_job(compaction::table_state& t, sstables::compaction_type type, const char* desc, noncopyable_function<future<>(sstables::compaction_data&)> job) {
     if (_state != state::enabled) {
         return make_ready_future<>();
     }
 
-    return perform_task(make_shared<custom_compaction_task>(*this, &t->as_table_state(), type, desc, std::move(job)));
+    return perform_task(make_shared<custom_compaction_task>(*this, &t, type, desc, std::move(job)));
 }
 
 compaction_manager::compaction_reenabler::compaction_reenabler(compaction_manager& cm, compaction::table_state& t)
