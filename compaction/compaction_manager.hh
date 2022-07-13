@@ -437,7 +437,7 @@ public:
     future<compaction_reenabler> stop_and_disable_compaction(compaction::table_state& t);
 
     // Run a function with compaction temporarily disabled for a table T.
-    future<> run_with_compaction_disabled(replica::table* t, std::function<future<> ()> func);
+    future<> run_with_compaction_disabled(compaction::table_state& t, std::function<future<> ()> func);
 
     // Adds a table to the compaction manager.
     // Creates a compaction_state structure that can be used for submitting

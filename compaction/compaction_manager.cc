@@ -478,8 +478,8 @@ compaction_manager::stop_and_disable_compaction(compaction::table_state& t) {
 }
 
 future<>
-compaction_manager::run_with_compaction_disabled(replica::table* t, std::function<future<> ()> func) {
-    compaction_reenabler cre = co_await stop_and_disable_compaction(t->as_table_state());
+compaction_manager::run_with_compaction_disabled(compaction::table_state& t, std::function<future<> ()> func) {
+    compaction_reenabler cre = co_await stop_and_disable_compaction(t);
 
     co_await func();
 }
@@ -1188,7 +1188,7 @@ future<> compaction_manager::perform_task_on_all_files(replica::table* t, sstabl
     // compaction.
     std::vector<sstables::shared_sstable> sstables;
     compacting_sstable_registration compacting(*this);
-    co_await run_with_compaction_disabled(t, [this, &sstables, &compacting, get_func = std::move(get_func)] () -> future<> {
+    co_await run_with_compaction_disabled(t->as_table_state(), [this, &sstables, &compacting, get_func = std::move(get_func)] () -> future<> {
         // Getting sstables and registering them as compacting must be atomic, to avoid a race condition where
         // regular compaction runs in between and picks the same files.
         sstables = co_await get_func();
