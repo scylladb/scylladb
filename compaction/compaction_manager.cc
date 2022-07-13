@@ -393,11 +393,11 @@ protected:
     }
 };
 
-future<> compaction_manager::perform_major_compaction(replica::table* t) {
+future<> compaction_manager::perform_major_compaction(compaction::table_state& t) {
     if (_state != state::enabled) {
         return make_ready_future<>();
     }
-    return perform_task(make_shared<major_compaction_task>(*this, &t->as_table_state()));
+    return perform_task(make_shared<major_compaction_task>(*this, &t));
 }
 
 class compaction_manager::custom_compaction_task : public compaction_manager::task {

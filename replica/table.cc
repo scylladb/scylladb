@@ -988,7 +988,7 @@ table::on_compaction_completion(sstables::compaction_completion_desc desc) {
 future<>
 table::compact_all_sstables() {
     co_await flush();
-    co_await _compaction_manager.perform_major_compaction(this);
+    co_await _compaction_manager.perform_major_compaction(as_table_state());
 }
 
 void table::start_compaction() {
