@@ -253,3 +253,52 @@ def test_grant_revoke_alter_udf_permissions(cassandra_bug, cql):
                             function=lambda: user_session.execute(f"CREATE OR REPLACE FUNCTION {keyspace}.{fun} {fun_body}"))
                     check_enforced(cql, username, permission='ALTER', resource='all functions',
                             function=lambda: user_session.execute(f"CREATE OR REPLACE FUNCTION {keyspace}.{fun} {fun_body}")) 
+
+# Test that permissions for user-defined aggregates are also enforced.
+# scylla_only, because Lua is used as the target language
+def test_grant_revoke_uda_permissions(scylla_only, cql):
+    schema = 'id bigint primary key'
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 1 }") as keyspace:
+        with new_test_table(cql, keyspace, schema) as table:
+            for i in range(8):
+                cql.execute(f"INSERT INTO {table} (id) VALUES ({10**i})")
+            avg_partial_body = "(state tuple<bigint, bigint>, val bigint) CALLED ON NULL INPUT RETURNS tuple<bigint, bigint> LANGUAGE lua AS 'return {state[1] + val, state[2] + 1}'"
+            div_body = "(state tuple<bigint, bigint>) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return state[1]//state[2]'"
+            with new_function(cql, keyspace, avg_partial_body) as avg_partial, new_function(cql, keyspace, div_body) as div_fun:
+                custom_avg_body = f"(bigint) SFUNC {avg_partial} STYPE tuple<bigint, bigint> FINALFUNC {div_fun} INITCOND (0,0)"
+                with new_user(cql) as username:
+                    with new_session(cql, username) as user_session:
+                        custom_avg = "custom_avg"
+                        def create_aggr_idempotent():
+                            user_session.execute(f"CREATE AGGREGATE IF NOT EXISTS {keyspace}.{custom_avg} {custom_avg_body}")
+                            cql.execute(f"DROP AGGREGATE IF EXISTS {keyspace}.{custom_avg}(bigint)")
+                        check_enforced(cql, username, permission='CREATE', resource=f'all functions in keyspace {keyspace}',
+                                function=create_aggr_idempotent)
+                        check_enforced(cql, username, permission='CREATE', resource='all functions',
+                                function=create_aggr_idempotent)
+
+                        grant(cql, 'CREATE', 'ALL FUNCTIONS', username)
+                        check_enforced(cql, username, permission='ALTER', resource=f'all functions in keyspace {keyspace}',
+                                function=lambda: user_session.execute(f"CREATE OR REPLACE AGGREGATE {keyspace}.{custom_avg} {custom_avg_body}"))
+                        check_enforced(cql, username, permission='ALTER', resource='all functions',
+                                function=lambda: user_session.execute(f"CREATE OR REPLACE AGGREGATE {keyspace}.{custom_avg} {custom_avg_body}"))
+
+                        grant(cql, 'SELECT', table, username)
+                        for resource in [f'function {keyspace}.{custom_avg}(bigint)', f'all functions in keyspace {keyspace}', 'all functions']:
+                            check_enforced(cql, username, permission='EXECUTE', resource=resource,
+                                    function=lambda: user_session.execute(f"SELECT {keyspace}.{custom_avg}(id) FROM {table}"))
+
+                        def drop_aggr_idempotent():
+                            user_session.execute(f"DROP AGGREGATE IF EXISTS {keyspace}.{custom_avg}(bigint)")
+                            cql.execute(f"CREATE AGGREGATE IF NOT EXISTS {keyspace}.{custom_avg} {custom_avg_body}")
+                        for resource in [f'function {keyspace}.{custom_avg}(bigint)', f'all functions in keyspace {keyspace}', 'all functions']:
+                            check_enforced(cql, username, permission='DROP', resource=resource, function=drop_aggr_idempotent)
+
+                        grant(cql, 'EXECUTE', 'ALL FUNCTIONS', username)
+                        def grant_idempotent():
+                            grant(user_session, 'EXECUTE', f'function {keyspace}.{custom_avg}(bigint)', 'cassandra')
+                            revoke(cql, 'EXECUTE', f'function {keyspace}.{custom_avg}(bigint)', 'cassandra')
+                        for resource in [f'function {keyspace}.{custom_avg}(bigint)', f'all functions in keyspace {keyspace}', 'all functions']:
+                            check_enforced(cql, username, permission='AUTHORIZE', resource=resource, function=grant_idempotent)
+
+                        cql.execute(f"DROP AGGREGATE IF EXISTS {keyspace}.{custom_avg}(bigint)")
