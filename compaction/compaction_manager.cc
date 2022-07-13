@@ -1099,11 +1099,11 @@ protected:
     }
 };
 
-future<bool> compaction_manager::perform_offstrategy(replica::table* t) {
+future<bool> compaction_manager::perform_offstrategy(compaction::table_state& t) {
     if (_state != state::enabled) {
         co_return false;
     }
-    auto task = make_shared<offstrategy_compaction_task>(*this, &t->as_table_state());
+    auto task = make_shared<offstrategy_compaction_task>(*this, &t);
     co_await perform_task(task);
     co_return task->performed();
 }

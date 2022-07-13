@@ -381,7 +381,7 @@ public:
 
     // Submit a table to be off-strategy compacted.
     // Returns true iff off-strategy compaction was required and performed.
-    future<bool> perform_offstrategy(replica::table* t);
+    future<bool> perform_offstrategy(compaction::table_state& t);
 
     // Submit a table to be cleaned up and wait for its termination.
     //
