@@ -548,7 +548,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
 
     ss::describe_any_ring.set(r, [&ctx, &ss](std::unique_ptr<request> req) {
         // Find an arbitrary non-system keyspace.
-        auto keyspaces = ctx.db.local().get_non_system_keyspaces();
+        auto keyspaces = ctx.db.local().get_non_local_strategy_keyspaces();
         if (keyspaces.empty()) {
             throw std::runtime_error("No keyspace provided and no non system kespace exist");
         }
@@ -806,9 +806,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         if (type == "user") {
             return ctx.db.local().get_user_keyspaces();
         } else if (type == "non_local_strategy") {
-            return map_keys(ctx.db.local().get_keyspaces() | boost::adaptors::filtered([](const auto& p) {
-                return p.second.get_replication_strategy().get_type() != locator::replication_strategy_type::local;
-            }));
+            return ctx.db.local().get_non_local_strategy_keyspaces();
         }
         return map_keys(ctx.db.local().get_keyspaces());
     });

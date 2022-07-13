@@ -46,8 +46,8 @@ future<> boot_strapper::bootstrap(streaming::stream_reason reason, gms::gossiper
         }
         blogger.debug("nodes_to_filter={}", nodes_to_filter);
         streamer->add_source_filter(std::make_unique<range_streamer::failure_detector_source_filter>(nodes_to_filter));
-        auto keyspaces = _db.local().get_non_system_keyspaces();
-        for (auto& keyspace_name : keyspaces) {
+        auto keyspace = _db.local().get_non_local_strategy_keyspaces();
+        for (auto& keyspace_name : keyspace) {
             if (!_db.local().has_keyspace(keyspace_name)) {
                 // The keyspace was dropped while we were looping.
                 continue;

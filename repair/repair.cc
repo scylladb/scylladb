@@ -1342,7 +1342,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
     using inet_address = gms::inet_address;
     return seastar::async([this, tmptr = std::move(tmptr), tokens = std::move(bootstrap_tokens)] () mutable {
         seastar::sharded<replica::database>& db = get_db();
-        auto keyspaces = db.local().get_non_system_keyspaces();
+        auto keyspaces = db.local().get_non_local_strategy_keyspaces();
         auto myip = utils::fb_utilities::get_broadcast_address();
         auto reason = streaming::stream_reason::bootstrap;
         // Calculate number of ranges to sync data
@@ -1519,7 +1519,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
     return seastar::async([this, tmptr = std::move(tmptr), leaving_node = std::move(leaving_node), ops] () mutable {
         seastar::sharded<replica::database>& db = get_db();
         auto myip = utils::fb_utilities::get_broadcast_address();
-        auto keyspaces = db.local().get_non_system_keyspaces();
+        auto keyspaces = db.local().get_non_local_strategy_keyspaces();
         bool is_removenode = myip != leaving_node;
         auto op = is_removenode ? "removenode_with_repair" : "decommission_with_repair";
         streaming::stream_reason reason = is_removenode ? streaming::stream_reason::removenode : streaming::stream_reason::decommission;
@@ -1737,7 +1737,7 @@ future<> repair_service::abort_repair_node_ops(utils::UUID ops_uuid) {
 future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_ptr tmptr, sstring op, sstring source_dc, streaming::stream_reason reason, std::list<gms::inet_address> ignore_nodes) {
     return seastar::async([this, tmptr = std::move(tmptr), source_dc = std::move(source_dc), op = std::move(op), reason, ignore_nodes = std::move(ignore_nodes)] () mutable {
         seastar::sharded<replica::database>& db = get_db();
-        auto keyspaces = db.local().get_non_system_keyspaces();
+        auto keyspaces = db.local().get_non_local_strategy_keyspaces();
         auto myip = utils::fb_utilities::get_broadcast_address();
         size_t nr_ranges_total = 0;
         for (auto& keyspace_name : keyspaces) {
