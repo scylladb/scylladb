@@ -1355,23 +1355,23 @@ bool needs_cleanup(const sstables::shared_sstable& sst,
     return true;
 }
 
-future<> compaction_manager::perform_cleanup(replica::database& db, replica::table* t) {
-    auto check_for_cleanup = [this, t] {
-        return boost::algorithm::any_of(_tasks, [t] (auto& task) {
-            return task->compacting_table() == &t->as_table_state() && task->type() == sstables::compaction_type::Cleanup;
+future<> compaction_manager::perform_cleanup(replica::database& db, compaction::table_state& t) {
+    auto check_for_cleanup = [this, &t] {
+        return boost::algorithm::any_of(_tasks, [&t] (auto& task) {
+            return task->compacting_table() == &t && task->type() == sstables::compaction_type::Cleanup;
         });
     };
     if (check_for_cleanup()) {
         throw std::runtime_error(format("cleanup request failed: there is an ongoing cleanup on {}.{}",
-            t->schema()->ks_name(), t->schema()->cf_name()));
+            t.schema()->ks_name(), t.schema()->cf_name()));
     }
 
-    auto sorted_owned_ranges = db.get_keyspace_local_ranges(t->schema()->ks_name());
-    auto get_sstables = [this, &db, t, sorted_owned_ranges] () -> future<std::vector<sstables::shared_sstable>> {
-        return seastar::async([this, &db, t, sorted_owned_ranges = std::move(sorted_owned_ranges)] {
-            auto schema = t->schema();
+    auto sorted_owned_ranges = db.get_keyspace_local_ranges(t.schema()->ks_name());
+    auto get_sstables = [this, &db, &t, sorted_owned_ranges] () -> future<std::vector<sstables::shared_sstable>> {
+        return seastar::async([this, &db, &t, sorted_owned_ranges = std::move(sorted_owned_ranges)] {
+            auto schema = t.schema();
             auto sstables = std::vector<sstables::shared_sstable>{};
-            const auto candidates = get_candidates(t->as_table_state());
+            const auto candidates = get_candidates(t);
             std::copy_if(candidates.begin(), candidates.end(), std::back_inserter(sstables), [&sorted_owned_ranges, schema] (const sstables::shared_sstable& sst) {
                 seastar::thread::maybe_yield();
                 return sorted_owned_ranges.empty() || needs_cleanup(sst, sorted_owned_ranges, schema);
@@ -1380,7 +1380,7 @@ future<> compaction_manager::perform_cleanup(replica::database& db, replica::tab
         });
     };
 
-    co_await perform_task_on_all_files<cleanup_sstables_compaction_task>(t->as_table_state(), sstables::compaction_type_options::make_cleanup(std::move(sorted_owned_ranges)),
+    co_await perform_task_on_all_files<cleanup_sstables_compaction_task>(t, sstables::compaction_type_options::make_cleanup(std::move(sorted_owned_ranges)),
                                                                          std::move(get_sstables));
 }
 

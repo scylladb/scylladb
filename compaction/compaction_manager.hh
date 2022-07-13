@@ -390,7 +390,7 @@ public:
     // Cleanup is about discarding keys that are no longer relevant for a
     // given sstable, e.g. after node loses part of its token range because
     // of a newly added node.
-    future<> perform_cleanup(replica::database& db, replica::table* t);
+    future<> perform_cleanup(replica::database& db, compaction::table_state& t);
 
     // Submit a table to be upgraded and wait for its termination.
     future<> perform_sstable_upgrade(replica::database& db, replica::table* t, bool exclude_current_version);
