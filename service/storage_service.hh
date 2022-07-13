@@ -570,11 +570,11 @@ private:
     /**
      * Finds living endpoints responsible for the given ranges
      *
-     * @param keyspaceName the keyspace ranges belong to
+     * @param erm the keyspace effective_replication_map ranges belong to
      * @param ranges the ranges to find sources for
      * @return multimap of addresses to ranges the address is responsible for
      */
-    std::unordered_multimap<inet_address, dht::token_range> get_new_source_ranges(const sstring& keyspaceName, const dht::token_range_vector& ranges) const;
+    std::unordered_multimap<inet_address, dht::token_range> get_new_source_ranges(locator::effective_replication_map_ptr erm, const dht::token_range_vector& ranges) const;
 
     /**
      * Sends a notification to a node indicating we have finished replicating data.
