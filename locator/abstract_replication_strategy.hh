@@ -174,6 +174,10 @@ public:
         return _tmptr;
     }
 
+    const locator::abstract_replication_strategy& get_replication_strategy() const noexcept {
+        return *_rs;
+    }
+
     const replication_map& get_replication_map() const noexcept {
         return _replication_map;
     }

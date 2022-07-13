@@ -2716,7 +2716,7 @@ future<std::unordered_multimap<dht::token_range, inet_address>> storage_service:
     // is gone. Whoever is present in newReplicaEndpoints list, but
     // not in the currentReplicaEndpoints list, will be needing the
     // range.
-    auto& rs = ks.get_replication_strategy();
+    const auto& rs = erm->get_replication_strategy();
     for (auto& r : ranges) {
         auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
         auto new_replica_endpoints = co_await rs.calculate_natural_endpoints(end_token, temp);
