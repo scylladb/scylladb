@@ -176,7 +176,7 @@ abstract_replication_strategy::get_ranges(inet_address ep, token_metadata_ptr tm
     for (auto tok : sorted_tokens) {
         auto eps = co_await calculate_natural_endpoints(tok, tm);
         if (eps.contains(ep)) {
-                insert_token_range_to_sorted_container_while_unwrapping(prev_tok, tok, ret);
+            insert_token_range_to_sorted_container_while_unwrapping(prev_tok, tok, ret);
         }
         prev_tok = tok;
     }
@@ -295,7 +295,7 @@ abstract_replication_strategy::get_pending_address_ranges(const token_metadata_p
     temp = co_await tmptr->clone_only_token_map();
     co_await temp.update_normal_tokens(pending_tokens, pending_address);
     for (auto& x : co_await get_address_ranges(temp, pending_address)) {
-            ret.push_back(x.second);
+        ret.push_back(x.second);
     }
     co_await temp.clear_gently();
     co_return ret;
