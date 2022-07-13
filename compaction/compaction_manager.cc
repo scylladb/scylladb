@@ -462,7 +462,7 @@ compaction_manager::compaction_reenabler::~compaction_reenabler() {
         cmlog.debug("Reenabling compaction for {}.{}",
                 _table->schema()->ks_name(), _table->schema()->cf_name());
         try {
-            _cm.submit(_table);
+            _cm.submit(_table->as_table_state());
         } catch (...) {
             cmlog.warn("compaction_reenabler could not reenable compaction for {}.{}: {}",
                     _table->schema()->ks_name(), _table->schema()->cf_name(), std::current_exception());
@@ -716,7 +716,7 @@ void compaction_manager::enable() {
 std::function<void()> compaction_manager::compaction_submission_callback() {
     return [this] () mutable {
         for (auto& e: _compaction_state) {
-            submit(e.second.t);
+            submit(*e.first);
         }
     };
 }
@@ -733,7 +733,7 @@ void compaction_manager::postponed_compactions_reevaluation() {
                 for (auto& t : postponed) {
                     auto s = t->schema();
                     cmlog.debug("resubmitting postponed compaction for table {}.{} [{}]", s->ks_name(), s->cf_name(), fmt::ptr(t));
-                    submit(t);
+                    submit(*t);
                 }
             } catch (...) {
                 _postponed = std::move(postponed);
@@ -747,7 +747,7 @@ void compaction_manager::reevaluate_postponed_compactions() noexcept {
     _postponed_reevaluation.signal();
 }
 
-void compaction_manager::postpone_compaction_for_table(replica::table* t) {
+void compaction_manager::postpone_compaction_for_table(compaction::table_state* t) {
     _postponed.insert(t);
 }
 
@@ -883,12 +883,9 @@ future<stop_iteration> compaction_manager::task::maybe_retry(std::exception_ptr 
 }
 
 class compaction_manager::regular_compaction_task : public compaction_manager::task {
-    // FIXME: remove it once submit() switches to table_state.
-    replica::table* _table;
 public:
-    regular_compaction_task(compaction_manager& mgr, replica::table* t)
-        : task(mgr, &t->as_table_state(), sstables::compaction_type::Compaction, "Compaction")
-        , _table(t)
+    regular_compaction_task(compaction_manager& mgr, compaction::table_state& t)
+        : task(mgr, &t, sstables::compaction_type::Compaction, "Compaction")
     {}
 protected:
     virtual future<> do_run() override {
@@ -918,7 +915,7 @@ protected:
                 cmlog.debug("Refused compaction job ({} sstable(s)) of weight {} for {}.{}, postponing it...",
                     descriptor.sstables.size(), weight, t.schema()->ks_name(), t.schema()->cf_name());
                 switch_state(state::postponed);
-                _cm.postpone_compaction_for_table(_table);
+                _cm.postpone_compaction_for_table(&t);
                 co_return;
             }
             auto compacting = compacting_sstable_registration(_cm, descriptor.sstables);
@@ -966,8 +963,8 @@ protected:
     }
 };
 
-void compaction_manager::submit(replica::table* t) {
-    if (_state != state::enabled || t->is_auto_compaction_disabled_by_user()) {
+void compaction_manager::submit(compaction::table_state& t) {
+    if (_state != state::enabled || t.is_auto_compaction_disabled_by_user()) {
         return;
     }
 
@@ -1442,7 +1439,7 @@ future<> compaction_manager::perform_sstable_scrub(replica::table* t, sstables::
 }
 
 void compaction_manager::add(replica::table* t) {
-    auto [_, inserted] = _compaction_state.insert({&t->as_table_state(), compaction_state{.t = t}});
+    auto [_, inserted] = _compaction_state.insert({&t->as_table_state(), compaction_state{}});
     if (!inserted) {
         auto s = t->schema();
         on_internal_error(cmlog, format("compaction_state for table {}.{} [{}] already exists", s->ks_name(), s->cf_name(), fmt::ptr(t)));
@@ -1458,7 +1455,7 @@ future<> compaction_manager::remove(replica::table* t) {
         // We need to guarantee that a task being stopped will not retry to compact
         // a table being removed.
         // The requirement above is provided by stop_ongoing_compactions().
-        _postponed.erase(t);
+        _postponed.erase(&t->as_table_state());
 
         // Wait for the termination of an ongoing compaction on table T, if any.
         co_await stop_ongoing_compactions("table removal", &t->as_table_state());

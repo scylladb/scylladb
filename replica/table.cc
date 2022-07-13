@@ -1011,7 +1011,7 @@ void table::try_trigger_compaction() noexcept {
 void table::do_trigger_compaction() {
     // But not if we're locked out or stopping
     if (!_async_gate.is_closed()) {
-        _compaction_manager.submit(this);
+        _compaction_manager.submit(as_table_state());
     }
 }
 

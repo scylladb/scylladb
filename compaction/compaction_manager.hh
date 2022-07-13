@@ -60,9 +60,6 @@ public:
     };
 private:
     struct compaction_state {
-        // FIXME: remove once we complete the transition to table_state.
-        replica::table* t = nullptr;
-
         // Used both by compaction tasks that refer to the compaction_state
         // and by any function running under run_with_compaction_disabled().
         seastar::gate gate;
@@ -260,7 +257,7 @@ private:
     future<> _waiting_reevalution = make_ready_future<>();
     condition_variable _postponed_reevaluation;
     // tables that wait for compaction but had its submission postponed due to ongoing compaction.
-    std::unordered_set<replica::table*> _postponed;
+    std::unordered_set<compaction::table_state*> _postponed;
     // tracks taken weights of ongoing compactions, only one compaction per weight is allowed.
     // weight is value assigned to a compaction job that is log base N of total size of all input sstables.
     std::unordered_set<int> _weight_tracker;
@@ -334,7 +331,7 @@ private:
     void reevaluate_postponed_compactions() noexcept;
     // Postpone compaction for a table that couldn't be executed due to ongoing
     // similar-sized compaction.
-    void postpone_compaction_for_table(replica::table* t);
+    void postpone_compaction_for_table(compaction::table_state* t);
 
     future<> perform_sstable_scrub_validate_mode(replica::table* t);
 
@@ -380,7 +377,7 @@ public:
     future<> drain();
 
     // Submit a table to be compacted.
-    void submit(replica::table* t);
+    void submit(compaction::table_state& t);
 
     // Submit a table to be off-strategy compacted.
     // Returns true iff off-strategy compaction was required and performed.
