@@ -118,9 +118,13 @@ public:
      * Return true if the current event should be sample.
      * In the typical case, there is no need to use this method
      * Call set_latency, that would start a latency object if needed.
+     *
+     * Typically, sample_mask is of the form of 2^n-1 which would
+     * mean that we sample one of 2^n, but setting sample_mask to zero
+     * would mean we would always sample.
      */
-    bool should_sample() const {
-        return total == 0 || (started & sample_mask);
+    bool should_sample() const noexcept {
+        return total == 0 || ((started & sample_mask) == sample_mask);
     }
     /**
      * Set the latency according to the sample rate.
