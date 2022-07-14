@@ -871,7 +871,7 @@ bool statement_restrictions::clustering_key_restrictions_need_filtering() const 
 }
 
 bool statement_restrictions::has_unrestricted_clustering_columns() const {
-    return _clustering_columns_restrictions->has_unrestricted_components(*_schema);
+    return clustering_columns_restrictions_size() < _schema->clustering_key_size();
 }
 
 bool statement_restrictions::parition_key_restrictions_have_supporting_index(const secondary_index::secondary_index_manager& index_manager,
