@@ -994,27 +994,21 @@ public:
             }
         });
 
-        for (;;) {
+        auto get_next_job = [&] () -> std::optional<sstables::compaction_descriptor> {
             auto& iop = service::get_local_streaming_priority(); // run reshape in maintenance mode
             auto desc = t.get_compaction_strategy().get_reshaping_job(reshape_candidates, t.schema(), iop, sstables::reshape_mode::strict);
-            if (desc.sstables.empty()) {
-                // at this moment reshape_candidates contains a set of sstables ready for integration into main set
-                auto desc = sstables::compaction_completion_desc{
-                    .old_sstables = std::move(old_sstables),
-                    .new_sstables = std::move(reshape_candidates)
-                };
-                co_await t.update_sstable_lists_on_off_strategy_completion(std::move(desc));
-                break;
-            }
+            return desc.sstables.size() ? std::make_optional(std::move(desc)) : std::nullopt;
+        };
 
-            desc.creator = [this, &new_unused_sstables, &t] (shard_id dummy) {
+        while (auto desc = get_next_job()) {
+            desc->creator = [this, &new_unused_sstables, &t] (shard_id dummy) {
                 auto sst = t.make_sstable();
                 new_unused_sstables.insert(sst);
                 return sst;
             };
-            auto input = boost::copy_range<std::unordered_set<sstables::shared_sstable>>(desc.sstables);
+            auto input = boost::copy_range<std::unordered_set<sstables::shared_sstable>>(desc->sstables);
 
-            auto ret = co_await sstables::compact_sstables(std::move(desc), cdata, t.as_table_state());
+            auto ret = co_await sstables::compact_sstables(std::move(*desc), cdata, t.as_table_state());
             _performed = true;
 
             // update list of reshape candidates without input but with output added to it
@@ -1036,6 +1030,13 @@ public:
                 }
             }
         }
+
+        // at this moment reshape_candidates contains a set of sstables ready for integration into main set
+        auto completion_desc = sstables::compaction_completion_desc{
+            .old_sstables = std::move(old_sstables),
+            .new_sstables = std::move(reshape_candidates)
+        };
+        co_await t.update_sstable_lists_on_off_strategy_completion(std::move(completion_desc));
 
         cleanup_new_unused_sstables_on_failure.cancel();
         // By marking input sstables for deletion instead, the ones which require view building will stay in the staging
