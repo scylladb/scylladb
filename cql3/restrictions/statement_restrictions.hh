@@ -231,6 +231,8 @@ public:
 
     bool parition_key_restrictions_have_supporting_index(const secondary_index::secondary_index_manager& index_manager, expr::allow_local_index allow_local) const;
 
+    size_t clustering_columns_restrictions_size() const;
+
     /**
      * Checks if the clustering key has some unrestricted components.
      * @return <code>true</code> if the clustering key has some unrestricted components, <code>false</code> otherwise.

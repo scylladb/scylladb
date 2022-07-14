@@ -858,6 +858,10 @@ bool statement_restrictions::pk_restrictions_need_filtering() const {
          && (has_partition_key_unrestricted_components() || expr::has_slice_or_needs_filtering(_partition_key_restrictions));
 }
 
+size_t statement_restrictions::clustering_columns_restrictions_size() const {
+    return expr::get_sorted_column_defs(_new_clustering_columns_restrictions).size();
+}
+
 bool statement_restrictions::has_unrestricted_clustering_columns() const {
     return _clustering_columns_restrictions->has_unrestricted_components(*_schema);
 }
@@ -1686,7 +1690,7 @@ bool statement_restrictions::need_filtering() const {
     if (_uses_secondary_indexing && has_token(_partition_key_restrictions)) {
         // If there is a token(p1, p2) restriction, no p1, p2 restrictions are allowed in the query.
         // All other restrictions must be on clustering or regular columns.
-        int64_t non_pk_restrictions_count = _clustering_columns_restrictions->size();
+        int64_t non_pk_restrictions_count = clustering_columns_restrictions_size();
         non_pk_restrictions_count += _nonprimary_key_restrictions->size();
 
         // We are querying using an index, one restriction goes to the index restriction.
@@ -1746,7 +1750,7 @@ bool statement_restrictions::need_filtering() const {
         // WHERE p = ? AND c1 = ? AND c2 LIKE ? AND c3 = ? - requires filtering
         // WHERE p = ? AND c1 = ? AND c2 = ? AND c3 = ? - doesn't use an index
         // WHERE p = ? AND c1 = ? AND c2 < ? AND c3 = ? - doesn't require filtering, but we report it does
-        return _clustering_columns_restrictions->size() > 1;
+        return clustering_columns_restrictions_size() > 1;
     }
     // Now we know that the query doesn't use an index.
 
