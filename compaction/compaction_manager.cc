@@ -353,7 +353,7 @@ protected:
         // candidates are sstables that aren't being operated on by other compaction types.
         // those are eligible for major compaction.
         auto* t = _compacting_table;
-        sstables::compaction_strategy cs = t->get_compaction_strategy();
+        auto& cs = t->get_compaction_strategy();
         sstables::compaction_descriptor descriptor = cs.get_major_compaction_job(t->as_table_state(), _cm.get_candidates(*t));
         auto compacting = compacting_sstable_registration(_cm, descriptor.sstables);
         auto release_exhausted = [&compacting] (const std::vector<sstables::shared_sstable>& exhausted_sstables) {
@@ -886,7 +886,7 @@ protected:
             }
 
             replica::table& t = *_compacting_table;
-            sstables::compaction_strategy cs = t.get_compaction_strategy();
+            auto& cs = t.get_compaction_strategy();
             sstables::compaction_descriptor descriptor = cs.get_sstables_for_compaction(t.as_table_state(), _cm.get_strategy_control(), _cm.get_candidates(t));
             int weight = calculate_weight(descriptor);
 
