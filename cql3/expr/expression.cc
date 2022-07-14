@@ -1028,6 +1028,21 @@ bool has_supporting_index(
                     support);
 }
 
+bool index_supports_some_column(
+        const expression& e,
+        const secondary_index::secondary_index_manager& index_manager,
+        allow_local_index allow_local) {
+    single_column_restrictions_map single_col_restrictions = get_single_column_restrictions_map(e);
+
+    for (auto&& [col, col_restrictions] : single_col_restrictions) {
+        if (has_supporting_index(col_restrictions, index_manager, allow_local)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 std::ostream& operator<<(std::ostream& os, const column_value& cv) {
     os << cv.col->name_as_text();
     return os;

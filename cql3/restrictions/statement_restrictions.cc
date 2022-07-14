@@ -881,20 +881,7 @@ bool statement_restrictions::parition_key_restrictions_have_supporting_index(con
         return false;
     }
 
-    // Otherwise those are single column restrictions
-    std::vector<const column_definition*> restricted_pk_columns = expr::get_sorted_column_defs(_partition_key_restrictions);
-
-    for (const column_definition* cdef : restricted_pk_columns) {
-        expr::expression col_restrictions = expr::conjunction {
-            .children = expr::extract_single_column_restrictions_for_column(_partition_key_restrictions, *cdef)
-        };
-
-        if (expr::has_supporting_index(col_restrictions, index_manager, allow_local)) {
-            return true;
-        }
-    }
-
-    return false;
+    return expr::index_supports_some_column(_partition_key_restrictions, index_manager, allow_local);
 }
 
 void statement_restrictions::process_clustering_columns_restrictions(bool for_view, bool allow_filtering) {

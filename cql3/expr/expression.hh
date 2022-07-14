@@ -499,6 +499,13 @@ extern bool is_supported_by(const expression&, const secondary_index::index&);
 extern bool has_supporting_index(
         const expression&, const secondary_index::secondary_index_manager&, allow_local_index allow_local);
 
+// Looks at each column indivudually and checks whether some index can support restrictions on this single column.
+// Expression has to consist only of single column restrictions.
+extern bool index_supports_some_column(
+    const expression&,
+    const secondary_index::secondary_index_manager&,
+    allow_local_index allow_local);
+
 extern sstring to_string(const expression&);
 
 extern std::ostream& operator<<(std::ostream&, const column_value&);
