@@ -69,9 +69,7 @@ seastar::future<raft::server_address> raft_group0::load_or_create_my_addr() {
     co_return raft::server_address{id, inet_addr_to_raft_addr(_gossiper.get_broadcast_address())};
 }
 
-raft_server_for_group raft_group0::create_server_for_group(raft::group_id gid,
-        raft::server_address my_addr) {
-
+raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, raft::server_address my_addr) {
     _raft_gr.address_map().set(my_addr);
     auto state_machine = std::make_unique<group0_state_machine>(_client, _mm, _qp.proxy());
     auto rpc = std::make_unique<raft_rpc>(*state_machine, _ms, _raft_gr.address_map(), gid, my_addr.id,
@@ -211,7 +209,7 @@ future<> raft_group0::start_server_for_group0(raft::group_id group0_id) {
     auto my_addr = co_await load_or_create_my_addr();
 
     rslog.info("Server {} is starting group 0 with id {}", my_addr.id, group0_id);
-    co_await _raft_gr.start_server_for_group(create_server_for_group(group0_id, my_addr));
+    co_await _raft_gr.start_server_for_group(create_server_for_group0(group0_id, my_addr));
     _group0.emplace<raft::group_id>(group0_id);
 }
 
@@ -252,7 +250,7 @@ future<> raft_group0::join_group0() {
                 bool can_vote = true;
                 initial_configuration.current.emplace(my_addr, can_vote);
             }
-            auto grp = create_server_for_group(group0_id, my_addr);
+            auto grp = create_server_for_group0(group0_id, my_addr);
             server = grp.server.get();
             co_await grp.persistence.bootstrap(std::move(initial_configuration));
             co_await _raft_gr.start_server_for_group(std::move(grp));

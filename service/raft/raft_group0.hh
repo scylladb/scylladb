@@ -108,7 +108,7 @@ private:
     // Handle peer_exchange RPC
     future<group0_peer_exchange> peer_exchange(discovery::peer_list peers);
 
-    raft_server_for_group create_server_for_group(raft::group_id id, raft::server_address my_addr);
+    raft_server_for_group create_server_for_group0(raft::group_id id, raft::server_address my_addr);
 
     // Loads server address for group 0 from disk if present, otherwise randomly generates a new one and persists it.
     // Execute on shard 0 only.
