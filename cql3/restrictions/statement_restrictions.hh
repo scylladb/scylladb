@@ -279,6 +279,7 @@ private:
      */
     void add_clustering_restrictions_to_idx_ck_prefix(const schema& idx_tbl_schema);
 
+    unsigned int num_clustering_prefix_columns_that_need_not_be_filtered() const;
 #if 0
     std::vector<::shared_ptr<index_expression>> get_index_expressions(const query_options& options) {
         if (!_uses_secondary_indexing || _index_restrictions.empty()) {

@@ -616,7 +616,7 @@ std::vector<const column_definition*> statement_restrictions::get_column_defs_fo
         const bool pk_has_unrestricted_components = has_partition_key_unrestricted_components();
         if (pk_has_unrestricted_components || _clustering_columns_restrictions->needs_filtering(*_schema)) {
             column_id first_filtering_id = pk_has_unrestricted_components ? 0 : _schema->clustering_key_columns().begin()->id +
-                    _clustering_columns_restrictions->num_prefix_columns_that_need_not_be_filtered();
+                    num_clustering_prefix_columns_that_need_not_be_filtered();
             for (auto&& cdef : expr::get_sorted_column_defs(_new_clustering_columns_restrictions)) {
                 const expr::expression* single_col_restr = nullptr;
                 if (single_ck_restrs) {
@@ -1859,6 +1859,38 @@ void statement_restrictions::add_clustering_restrictions_to_idx_ck_prefix(const 
         const auto col = expr::as<column_value>(any_binop->lhs).col;
         _idx_tbl_ck_prefix->push_back(replace_column_def(e, idx_tbl_schema.get_column_definition(col->name())));
     }
+}
+
+// How many of the restrictions (in column order) do not need filtering
+// because they are implemented as a slice (potentially, a contiguous disk
+// read). For example, if we have the filter "c1 < 3 and c2 > 3", c1 does not
+// need filtering but c2 does so num_prefix_columns_that_need_not_be_filtered
+// will be 1.
+unsigned int statement_restrictions::num_clustering_prefix_columns_that_need_not_be_filtered() const {
+    if (expr::contains_multi_column_restriction(_new_clustering_columns_restrictions)) {
+        return 0;
+    }
+
+    expr::single_column_restrictions_map column_restrictions =
+        expr::get_single_column_restrictions_map(_new_clustering_columns_restrictions);
+
+    // Restrictions currently need filtering in three cases:
+    // 1. any of them is a CONTAINS restriction
+    // 2. restrictions do not form a contiguous prefix (i.e. there are gaps in it)
+    // 3. a SLICE restriction isn't on a last place
+    column_id position = 0;
+    unsigned int count = 0;
+    for (const auto& restriction : column_restrictions | boost::adaptors::map_values) {
+        if (find_needs_filtering(restriction)
+            || position != get_the_only_column(restriction).col->id) {
+            return count;
+        }
+        if (!has_slice(restriction)) {
+            position = get_the_only_column(restriction).col->id + 1;
+        }
+        count++;
+    }
+    return count;
 }
 
 std::vector<query::clustering_range> statement_restrictions::get_global_index_clustering_ranges(
