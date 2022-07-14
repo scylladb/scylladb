@@ -1706,7 +1706,7 @@ bool statement_restrictions::need_filtering() const {
         // Can't calculate the token value, so a naive base-table query must be filtered.  Same for any index tables,
         // except if there's only one restriction supported by an index.
         return !(npart == 1 && _has_queriable_pk_index &&
-                 _clustering_columns_restrictions->empty() && _nonprimary_key_restrictions->empty());
+                 expr::is_empty_restriction(_new_clustering_columns_restrictions) && _nonprimary_key_restrictions->empty());
     }
     if (pk_restrictions_need_filtering()) {
         // We most likely cannot calculate token(s).  Neither base-table nor index-table queries can avoid filtering.
@@ -1721,7 +1721,7 @@ bool statement_restrictions::need_filtering() const {
     if (nreg == 1) { // Single non-key restriction supported by an index.
         // Will the index-table query require filtering?  That depends on whether its clustering key is restricted to a
         // continuous range.  Recall that this clustering key is (token, pk, ck) of the base table.
-        if (npart == 0 && _clustering_columns_restrictions->empty()) {
+        if (npart == 0 && expr::is_empty_restriction(_new_clustering_columns_restrictions)) {
             return false; // No clustering key restrictions => whole partitions.
         }
         return !token_known(*this) || _clustering_columns_restrictions->needs_filtering(*_schema)

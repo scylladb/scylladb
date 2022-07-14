@@ -157,7 +157,7 @@ public:
     }
 
     bool clustering_key_restrictions_has_only_eq() const {
-        return _clustering_columns_restrictions->empty() || _clustering_columns_restrictions->is_all_eq();
+        return expr::is_empty_restriction(_new_clustering_columns_restrictions) || _clustering_columns_restrictions->is_all_eq();
     }
 
     /**
@@ -440,7 +440,7 @@ public:
      * <code>false</code> otherwise.
      */
     bool has_clustering_columns_restriction() const {
-        return !_clustering_columns_restrictions->empty();
+        return !expr::is_empty_restriction(_new_clustering_columns_restrictions);
     }
 
     /**
@@ -455,7 +455,7 @@ public:
     bool pk_restrictions_need_filtering() const;
 
     bool ck_restrictions_need_filtering() const {
-        if (_clustering_columns_restrictions->empty()) {
+        if (expr::is_empty_restriction(_new_clustering_columns_restrictions)) {
             return false;
         }
 
