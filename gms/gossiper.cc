@@ -52,6 +52,7 @@ static logging::logger logger("gossip");
 constexpr std::chrono::milliseconds gossiper::INTERVAL;
 constexpr std::chrono::hours gossiper::A_VERY_LONG_TIME;
 constexpr int64_t gossiper::MAX_GENERATION_DIFFERENCE;
+constexpr size_t gossiper::apply_max_queue_size;
 
 netw::msg_addr gossiper::get_msg_addr(inet_address to) const noexcept {
     return msg_addr{to, _default_cpuid};
@@ -302,7 +303,7 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
     auto f = make_ready_future<>();
     if (ep_state_map.size() > 0) {
         update_timestamp_for_nodes(ep_state_map);
-        f = this->apply_state_locally(std::move(ep_state_map));
+        f = this->apply_state_locally(std::move(ep_state_map), is_critical_message(count_as_msg_processing));
     }
 
     return f.then([this, from = id, ack_msg_digest = std::move(g_digest_list), mp = std::move(mp), g = this->shared_from_this()] () mutable {
@@ -402,7 +403,7 @@ future<> gossiper::handle_ack2_msg(msg_addr from, gossip_digest_ack2 msg) {
         }
     });
 
-    return apply_state_locally(std::move(remote_ep_state_map)).finally([mp = std::move(mp)] {});
+    return apply_state_locally(std::move(remote_ep_state_map), is_critical_message(count_as_msg_processing)).finally([mp = std::move(mp)] {});
 }
 
 future<> gossiper::handle_echo_msg(gms::inet_address from, std::optional<int64_t> generation_number_opt) {
@@ -631,7 +632,13 @@ future<> gossiper::apply_state_locally_without_listener_notification(std::unorde
     }
 }
 
-future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state> map) {
+future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state> map, is_critical_message is_critical) {
+    if (_apply_state_locally_semaphore.waiters() > gossiper::apply_max_queue_size && is_critical == is_critical_message::no) {
+        // We reached the maximum queue size we are comfortable with, start
+        // dropping non-critical updates, until the node catches up.
+        logger.debug("Dropping non-critical message due to message queue overload");
+        co_return;
+    }
     auto start = std::chrono::steady_clock::now();
     auto endpoints = boost::copy_range<utils::chunked_vector<inet_address>>(map | boost::adaptors::map_keys);
     std::shuffle(endpoints.begin(), endpoints.end(), _random_engine);

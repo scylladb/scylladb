@@ -188,6 +188,10 @@ public:
     // value this node would get if this node were restarted that we are
     // willing to accept about a peer.
     static constexpr int64_t MAX_GENERATION_DIFFERENCE = 86400 * 365;
+    // Maximum queue size on _apply_state_locally_semaphore.
+    // After this queue size is reached, we drop non-critical updates.
+    static constexpr size_t apply_max_queue_size{100};
+
     std::chrono::milliseconds fat_client_timeout;
 
     std::chrono::milliseconds quarantine_delay() const noexcept;
@@ -431,7 +435,8 @@ public:
     // Wait for nodes to be alive on all shards
     future<> wait_alive(std::vector<gms::inet_address> nodes, std::chrono::milliseconds timeout);
 
-    future<> apply_state_locally(std::map<inet_address, endpoint_state> map);
+    using is_critical_message = bool_class<class is_critical_message_tag>;
+    future<> apply_state_locally(std::map<inet_address, endpoint_state> map, is_critical_message is_critical);
 
     // filter `endpoints` by `local_rack`
     inet_address_vector_replica_set endpoint_filter(const sstring& local_rack, const std::unordered_map<sstring, std::unordered_set<gms::inet_address>>& endpoints);
