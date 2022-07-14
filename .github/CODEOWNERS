@@ -31,6 +31,9 @@ cql3/* @tgrabiec @psarna @cvybhu
 counters* @jul-stas
 tests/counter_test* @jul-stas
 
+# DOCS
+docs/* @annastuchlik @tzach
+
 # GOSSIP
 gms/* @tgrabiec @asias
 
