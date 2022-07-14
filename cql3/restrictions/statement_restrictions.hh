@@ -463,12 +463,14 @@ public:
         }
 
         return has_partition_key_unrestricted_components()
-        || _clustering_columns_restrictions->needs_filtering(*_schema)
+        || clustering_key_restrictions_need_filtering()
         // If token restrictions are present in an indexed query, then all other restrictions need to be filtered.
         // A single token restriction can have multiple matching partition key values.
         // Because of this we can't create a clustering prefix with more than token restriction.
         || (_uses_secondary_indexing && has_token(_partition_key_restrictions));
     }
+
+    bool clustering_key_restrictions_need_filtering() const;
 
     /**
      * @return true if column is restricted by some restriction, false otherwise

@@ -495,7 +495,7 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
         _uses_secondary_indexing = true;
     }
 
-    if (_uses_secondary_indexing || _clustering_columns_restrictions->needs_filtering(*_schema)) {
+    if (_uses_secondary_indexing || clustering_key_restrictions_need_filtering()) {
         _index_restrictions.push_back(_new_clustering_columns_restrictions);
     } else if (find_binop(_new_clustering_columns_restrictions, expr::is_on_collection)) {
         fail(unimplemented::cause::INDEXES);
@@ -614,7 +614,7 @@ std::vector<const column_definition*> statement_restrictions::get_column_defs_fo
         }
         auto single_ck_restrs = dynamic_pointer_cast<single_column_clustering_key_restrictions>(_clustering_columns_restrictions);
         const bool pk_has_unrestricted_components = has_partition_key_unrestricted_components();
-        if (pk_has_unrestricted_components || _clustering_columns_restrictions->needs_filtering(*_schema)) {
+        if (pk_has_unrestricted_components || clustering_key_restrictions_need_filtering()) {
             column_id first_filtering_id = pk_has_unrestricted_components ? 0 : _schema->clustering_key_columns().begin()->id +
                     num_clustering_prefix_columns_that_need_not_be_filtered();
             for (auto&& cdef : expr::get_sorted_column_defs(_new_clustering_columns_restrictions)) {
@@ -862,6 +862,14 @@ size_t statement_restrictions::clustering_columns_restrictions_size() const {
     return expr::get_sorted_column_defs(_new_clustering_columns_restrictions).size();
 }
 
+bool statement_restrictions::clustering_key_restrictions_need_filtering() const {
+    if (expr::contains_multi_column_restriction(_new_clustering_columns_restrictions)) {
+        return false;
+    }
+
+    return num_clustering_prefix_columns_that_need_not_be_filtered() < clustering_columns_restrictions_size();
+}
+
 bool statement_restrictions::has_unrestricted_clustering_columns() const {
     return _clustering_columns_restrictions->has_unrestricted_components(*_schema);
 }
@@ -900,7 +908,7 @@ void statement_restrictions::process_clustering_columns_restrictions(bool for_vi
             "Cannot restrict clustering columns by a CONTAINS relation without a secondary index or filtering");
     }
 
-    if (has_clustering_columns_restriction() && _clustering_columns_restrictions->needs_filtering(*_schema)) {
+    if (has_clustering_columns_restriction() && clustering_key_restrictions_need_filtering()) {
         if (_has_queriable_ck_index) {
             _uses_secondary_indexing = true;
         } else if (!allow_filtering && !for_view) {
@@ -1722,7 +1730,7 @@ bool statement_restrictions::need_filtering() const {
         if (npart == 0 && expr::is_empty_restriction(_new_clustering_columns_restrictions)) {
             return false; // No clustering key restrictions => whole partitions.
         }
-        return !token_known(*this) || _clustering_columns_restrictions->needs_filtering(*_schema)
+        return !token_known(*this) || clustering_key_restrictions_need_filtering()
                 // Multi-column restrictions don't require filtering when querying the base table, but the index
                 // table has a different clustering key and may require filtering.
                 || _has_multi_column;
@@ -1755,7 +1763,7 @@ bool statement_restrictions::need_filtering() const {
     // Now we know that the query doesn't use an index.
 
     // The only thing that can cause filtering now are the clustering columns.
-    return _clustering_columns_restrictions->needs_filtering(*_schema);
+    return clustering_key_restrictions_need_filtering();
 }
 
 void statement_restrictions::validate_secondary_index_selections(bool selects_only_static_columns) {
