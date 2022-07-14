@@ -117,11 +117,10 @@ raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, 
 }
 
 future<group0_info>
-raft_group0::discover_group0(raft::server_address my_addr) {
+raft_group0::discover_group0(raft::server_address my_addr, const std::vector<raft::server_info>& seed_infos) {
     std::vector<raft::server_address> seeds;
-    seeds.reserve(_gossiper.get_seeds().size());
-    for (auto& seed : _gossiper.get_seeds()) {
-        seeds.emplace_back(raft::server_id{}, inet_addr_to_raft_addr(seed));
+    for (auto& info : seed_infos) {
+        seeds.emplace_back(raft::server_id{}, info);
     }
 
     auto& p_discovery = _group0.emplace<persistent_discovery>(co_await persistent_discovery::make(my_addr, std::move(seeds), _qp));
@@ -239,7 +238,7 @@ future<> raft_group0::start_server_for_group0(raft::group_id group0_id) {
     _group0.emplace<raft::group_id>(group0_id);
 }
 
-future<> raft_group0::join_group0() {
+future<> raft_group0::join_group0(std::vector<raft::server_info> seeds, bool as_voter) {
     assert(this_shard_id() == 0);
     assert(!joined_group0());
 
@@ -253,21 +252,24 @@ future<> raft_group0::join_group0() {
     auto my_addr = co_await load_or_create_my_addr();
     rslog.trace("{} found no local group 0. Discovering...", my_addr.id);
     while (true) {
-        auto g0_info = co_await discover_group0(my_addr);
+        auto g0_info = co_await discover_group0(my_addr, seeds);
         rslog.trace("server {} found group 0 with id {}, leader {}", my_addr.id,
             g0_info.group0_id, g0_info.addr.id);
+
         if (server && group0_id != g0_info.group0_id) {
             // Subsequent discovery returned a different group 0 id?!
             throw std::runtime_error(format("Can't add server to two clusters ({} and {}). Please check your seeds don't overlap",
                 group0_id, g0_info.group0_id));
         }
         group0_id = g0_info.group0_id;
+
         if (server == nullptr) {
             // This is the first time the discovery is run.
             raft::configuration initial_configuration;
             if (g0_info.addr.id == my_addr.id) {
                 // We should start a new group with this node as voter.
                 rslog.trace("server {} creating configuration as voter", my_addr.id);
+                // even if `as_voter == false`, if we're the first member we need to be a voter.
                 initial_configuration.current.emplace(my_addr, true);
             }
             auto grp = create_server_for_group0(group0_id, my_addr);
@@ -287,7 +289,7 @@ future<> raft_group0::join_group0() {
         netw::msg_addr peer(raft_addr_to_inet_addr(g0_info.addr));
         try {
             // TODO: aborts?
-            co_await ser::group0_rpc_verbs::send_group0_modify_config(&_ms, peer, timeout, group0_id, {{my_addr, false}}, {});
+            co_await ser::group0_rpc_verbs::send_group0_modify_config(&_ms, peer, timeout, group0_id, {{my_addr, as_voter}}, {});
             break;
         } catch (std::runtime_error& e) {
             // Retry
@@ -303,7 +305,7 @@ future<> raft_group0::join_group0() {
     rslog.info("{} joined group 0 with id {}", my_addr.id, group0_id);
 }
 
-future<> raft_group0::setup_group0(db::system_keyspace& sys_ks) {
+future<> raft_group0::setup_group0(db::system_keyspace& sys_ks, const std::unordered_set<gms::inet_address>& initial_contact_nodes) {
     assert(this_shard_id() == 0);
 
     if (!_raft_gr.is_enabled()) {
@@ -328,8 +330,15 @@ future<> raft_group0::setup_group0(db::system_keyspace& sys_ks) {
         co_return;
     }
 
+    std::vector<raft::server_info> initial_contacts_as_raft_addrs;
+    for (auto& addr: initial_contact_nodes) {
+        if (addr != utils::fb_utilities::get_broadcast_address()) {
+            initial_contacts_as_raft_addrs.push_back(inet_addr_to_raft_addr(addr));
+        }
+    }
+
     rslog.info("raft_group0::setup_group0(): joining group 0...");
-    co_await join_group0();
+    co_await join_group0(std::move(initial_contacts_as_raft_addrs), false /* non-voter */);
     rslog.info("raft_group0::setup_group0(): successfully joined group 0.");
 }
 

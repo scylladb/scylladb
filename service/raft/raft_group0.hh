@@ -99,7 +99,7 @@ public:
     // Cannot be called twice.
     //
     // TODO: specify dependencies on other services: where during startup should we setup group 0?
-    future<> setup_group0(db::system_keyspace&);
+    future<> setup_group0(db::system_keyspace&, const std::unordered_set<gms::inet_address>& initial_contact_nodes);
 
     // After successful bootstrapping, make this node a voting member.
     // Precondition: `setup_group0` successfully finished earlier.
@@ -159,10 +159,16 @@ private:
     // (in particular, we may become that leader).
     //
     // See 'raft-in-scylla.md', 'Establishing group 0 in a fresh cluster'.
-    future<group0_info> discover_group0(raft::server_address my_addr);
+    future<group0_info> discover_group0(raft::server_address my_addr, const std::vector<raft::server_info>& seeds);
 
     // Start a Raft server for the cluster-wide group 0 and join it to the group.
     // Called during bootstrap or upgrade.
+    //
+    // Uses `seeds` as contact points to discover other servers which will be part of group 0.
+    //
+    // `as_voter` determines whether the server joins as a voter. If `false`, it will join
+    // as a non-voter with one exception: if it becomes the 'discovery leader', meaning that
+    // it is elected as the server which creates group 0, it will become a voter.
     //
     // The Raft server may already exist on disk (e.g. because we initialized it earlier but then crashed),
     // but it doesn't have to. It may also already be part of group 0, but if not, we will attempt
@@ -171,10 +177,14 @@ private:
     // Persists group 0 ID on disk at the end so subsequent restarts of Scylla process can detect that group 0
     // has already been joined and the server initialized.
     //
+    // `as_voter` should be initially `false` when joining an existing cluster; calling `become_voter`
+    // will cause it to become a voter. `as_voter` should be `true` when upgrading, when we create
+    // a group 0 using all nodes in the cluster.
+    //
     // Preconditions: Raft local feature enabled
     // and we haven't initialized group 0 yet after last Scylla start (`joined_group0()` is false).
     // Postcondition: `joined_group0()` is true.
-    future<> join_group0();
+    future<> join_group0(std::vector<raft::server_info> seeds, bool as_voter);
 
     // Start an existing Raft server for the cluster-wide group 0.
     // Assumes the server was already added to the group earlier so we don't attempt to join it again.

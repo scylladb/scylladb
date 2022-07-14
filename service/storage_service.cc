@@ -391,7 +391,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     co_await db::schema_tables::recalculate_schema_version(_sys_ks, proxy, _feature_service);
 
     assert(_group0);
-    co_await _group0->setup_group0(_sys_ks.local());
+    co_await _group0->setup_group0(_sys_ks.local(), initial_contact_nodes);
 
     app_states.emplace(gms::application_state::NET_VERSION, versioned_value::network_version());
     app_states.emplace(gms::application_state::HOST_ID, versioned_value::host_id(local_host_id));
