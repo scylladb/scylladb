@@ -3184,10 +3184,9 @@ future<> storage_service::update_pending_ranges(mutable_token_metadata_ptr tmptr
     assert(this_shard_id() == 0);
 
     try {
-        auto keyspaces = _db.local().get_non_local_strategy_keyspaces();
-        for (const auto& keyspace_name : keyspaces) {
-            auto& ks = this->_db.local().find_keyspace(keyspace_name);
-            auto& strategy = ks.get_replication_strategy();
+        auto ks_erms = _db.local().get_non_local_strategy_keyspaces_erms();
+        for (const auto& [keyspace_name, erm] : ks_erms) {
+            auto& strategy = erm->get_replication_strategy();
             slogger.debug("Updating pending ranges for keyspace={} starts", keyspace_name);
             co_await tmptr->update_pending_ranges(strategy, keyspace_name);
             slogger.debug("Updating pending ranges for keyspace={} ends", keyspace_name);
