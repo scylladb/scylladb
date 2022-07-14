@@ -157,7 +157,7 @@ public:
     }
 
     bool clustering_key_restrictions_has_only_eq() const {
-        return expr::is_empty_restriction(_new_clustering_columns_restrictions) || _clustering_columns_restrictions->is_all_eq();
+        return expr::has_only_eq_binops(_new_clustering_columns_restrictions);
     }
 
     /**
