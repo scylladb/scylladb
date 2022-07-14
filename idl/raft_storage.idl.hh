@@ -24,13 +24,17 @@ struct tagged_uint64 {
 
 struct server_address {
     raft::server_id id;
-    bool can_vote;
     bytes info;
 };
 
+struct config_member {
+    raft::server_address addr;
+    bool can_vote;
+};
+
 struct configuration {
-    std::unordered_set<raft::server_address> current;
-    std::unordered_set<raft::server_address> previous;
+    std::unordered_set<raft::config_member, raft::config_member_hash, std::equal_to<void>> current;
+    std::unordered_set<raft::config_member, raft::config_member_hash, std::equal_to<void>> previous;
 };
 
 struct log_entry {

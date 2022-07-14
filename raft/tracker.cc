@@ -105,22 +105,22 @@ void tracker::set_configuration(const configuration& configuration, index_t next
     // only those entries which are still present.
     progress old_progress = std::move(*this);
 
-    auto emplace_simple_config = [&](const server_address_set& config, std::unordered_set<server_id>& voter_ids) {
+    auto emplace_simple_config = [&](const config_member_set& config, std::unordered_set<server_id>& voter_ids) {
         for (const auto& s : config) {
             if (s.can_vote) {
-                voter_ids.emplace(s.id);
+                voter_ids.emplace(s.addr.id);
             }
-            auto newp = this->progress::find(s.id);
+            auto newp = this->progress::find(s.addr.id);
             if (newp != this->progress::end()) {
                 // Processing joint configuration and already added
                 // an entry for this id.
                 continue;
             }
-            auto oldp = old_progress.find(s.id);
+            auto oldp = old_progress.find(s.addr.id);
             if (oldp != old_progress.end()) {
-                newp = this->progress::emplace(s.id, std::move(oldp->second)).first;
+                newp = this->progress::emplace(s.addr.id, std::move(oldp->second)).first;
             } else {
-                newp = this->progress::emplace(s.id, follower_progress{s.id, next_idx}).first;
+                newp = this->progress::emplace(s.addr.id, follower_progress{s.addr.id, next_idx}).first;
             }
             newp->second.can_vote = s.can_vote;
         }
@@ -218,8 +218,11 @@ template read_id tracker::committed(read_id);
 votes::votes(configuration configuration)
         : _current(configuration.current) {
     for (auto* cfg: {&configuration.previous, &configuration.current}) {
-        std::copy_if(cfg->begin(), cfg->end(), std::inserter(_voters, _voters.end()),
-                [] (const server_address& srv) { return srv.can_vote; });
+        for (auto& srv: *cfg) {
+            if (srv.can_vote) {
+                _voters.insert(srv.addr);
+            }
+        }
     }
 
     if (configuration.is_joint()) {

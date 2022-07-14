@@ -155,10 +155,10 @@ class election_tracker {
     std::unordered_set<server_id> _responded;
     size_t _granted = 0;
 public:
-    election_tracker(const server_address_set& configuration) {
-        for (const auto& a : configuration) {
-            if (a.can_vote) {
-                _suffrage.emplace(a.id);
+    election_tracker(const config_member_set& configuration) {
+        for (const auto& s : configuration) {
+            if (s.can_vote) {
+                _suffrage.emplace(s.addr.id);
             }
         }
     }

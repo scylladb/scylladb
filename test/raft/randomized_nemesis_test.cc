@@ -415,7 +415,7 @@ class rpc : public raft::rpc {
     };
 
     struct modify_config_message {
-        std::vector<raft::server_address> add;
+        std::vector<raft::config_member> add;
         std::vector<raft::server_id> del;
         reply_id_t reply_id;
     };
@@ -737,7 +737,7 @@ public:
         });
     }
     virtual future<raft::add_entry_reply> send_modify_config(raft::server_id dst,
-                const std::vector<raft::server_address>& add,
+                const std::vector<raft::config_member>& add,
                 const std::vector<raft::server_id>& del) override {
         co_return co_await with_gate([&] () -> future<raft::add_entry_reply> {
             auto id = new_reply_id();
@@ -851,8 +851,8 @@ public:
         _send(dst, m);
     }
 
-    virtual void add_server(raft::server_id id, raft::server_info) override {
-        _on_server_update(id, true);
+    virtual void add_server(raft::server_address addr) override {
+        _on_server_update(addr.id, true);
     }
 
     virtual void remove_server(raft::server_id id) override {
@@ -900,7 +900,7 @@ public:
     persistence(std::optional<raft::server_id> init_config_id, State init_state)
         : _stored_snapshot(
                 raft::snapshot_descriptor{
-                    .config = init_config_id ? raft::configuration{*init_config_id} : raft::configuration{}
+                    .config = init_config_id ? config_from_ids({*init_config_id}) : raft::configuration{}
                 },
                 std::move(init_state))
         , _stored_term_and_vote(raft::term_t{1}, raft::server_id{})
@@ -1261,9 +1261,9 @@ future<reconfigure_result_t> reconfigure(
         raft::logical_clock::time_point timeout,
         logical_timer& timer,
         raft::server& server) {
-    raft::server_address_set config;
+    raft::config_member_set config;
     for (auto [id, can_vote] : ids) {
-        config.insert(raft::server_address { .id = id, .can_vote = can_vote });
+        config.insert(raft::config_member{server_addr_from_id(id), can_vote});
     }
 
     try {
@@ -1298,9 +1298,9 @@ future<reconfigure_result_t> modify_config(
         raft::logical_clock::time_point timeout,
         logical_timer& timer,
         raft::server& server) {
-    std::vector<raft::server_address> added_set;
+    std::vector<raft::config_member> added_set;
     for (auto [id, can_vote] : added) {
-        added_set.push_back(raft::server_address { .id = id, .can_vote = can_vote });
+        added_set.push_back(raft::config_member{server_addr_from_id(id), can_vote});
     }
 
     try {
