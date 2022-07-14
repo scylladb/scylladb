@@ -617,7 +617,7 @@ std::vector<const column_definition*> statement_restrictions::get_column_defs_fo
         if (pk_has_unrestricted_components || _clustering_columns_restrictions->needs_filtering(*_schema)) {
             column_id first_filtering_id = pk_has_unrestricted_components ? 0 : _schema->clustering_key_columns().begin()->id +
                     _clustering_columns_restrictions->num_prefix_columns_that_need_not_be_filtered();
-            for (auto&& cdef : _clustering_columns_restrictions->get_column_defs()) {
+            for (auto&& cdef : expr::get_sorted_column_defs(_new_clustering_columns_restrictions)) {
                 const expr::expression* single_col_restr = nullptr;
                 if (single_ck_restrs) {
                     auto it = single_ck_restrs->restrictions().find(cdef);
@@ -901,7 +901,7 @@ void statement_restrictions::process_clustering_columns_restrictions(bool for_vi
             _uses_secondary_indexing = true;
         } else if (!allow_filtering && !for_view) {
             auto clustering_columns_iter = _schema->clustering_key_columns().begin();
-            for (auto&& restricted_column : _clustering_columns_restrictions->get_column_defs()) {
+            for (auto&& restricted_column : expr::get_sorted_column_defs(_new_clustering_columns_restrictions)) {
                 const column_definition* clustering_column = &(*clustering_columns_iter);
                 ++clustering_columns_iter;
                 if (clustering_column != restricted_column) {
