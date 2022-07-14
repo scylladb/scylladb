@@ -2461,5 +2461,15 @@ bool contains_multi_column_restriction(const expression& e) {
     });
     return find_res != nullptr;
 }
+
+bool has_only_eq_binops(const expression& e) {
+    const expr::binary_operator* non_eq_binop = find_in_expression<expr::binary_operator>(e,
+        [](const expr::binary_operator& binop) {
+            return binop.op != expr::oper_t::EQ;
+        }
+    );
+
+    return non_eq_binop == nullptr;
+}
 } // namespace expr
 } // namespace cql3

@@ -763,6 +763,8 @@ sstring get_columns_in_commons(const expression& a, const expression& b);
 bytes_opt value_for(const column_definition&, const expression&, const query_options&);
 
 bool contains_multi_column_restriction(const expression&);
+
+bool has_only_eq_binops(const expression&);
 } // namespace expr
 
 } // namespace cql3

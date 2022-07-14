@@ -845,13 +845,7 @@ bool statement_restrictions::partition_key_restrictions_is_empty() const {
 }
 
 bool statement_restrictions::partition_key_restrictions_is_all_eq() const {
-    const expr::binary_operator* non_eq_binop = find_in_expression<expr::binary_operator>(_partition_key_restrictions,
-        [](const expr::binary_operator& binop) {
-            return binop.op != expr::oper_t::EQ;
-        }
-    );
-
-    return non_eq_binop == nullptr;
+    return expr::has_only_eq_binops(_partition_key_restrictions);
 }
 
 size_t statement_restrictions::partition_key_restrictions_size() const {
