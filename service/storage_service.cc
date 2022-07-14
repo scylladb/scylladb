@@ -3183,21 +3183,20 @@ future<> storage_service::mutate_token_metadata(std::function<future<> (mutable_
 future<> storage_service::update_pending_ranges(mutable_token_metadata_ptr tmptr, sstring reason) {
     assert(this_shard_id() == 0);
 
-    // long start = System.currentTimeMillis();
-    return do_with(_db.local().get_non_system_keyspaces(), [this, tmptr = std::move(tmptr)] (auto& keyspaces) mutable {
-        return do_for_each(keyspaces, [this, tmptr = std::move(tmptr)] (auto& keyspace_name) mutable {
+    try {
+        auto keyspaces = _db.local().get_non_system_keyspaces();
+        for (const auto& keyspace_name : keyspaces) {
             auto& ks = this->_db.local().find_keyspace(keyspace_name);
             auto& strategy = ks.get_replication_strategy();
             slogger.debug("Updating pending ranges for keyspace={} starts", keyspace_name);
-            return tmptr->update_pending_ranges(strategy, keyspace_name).finally([&keyspace_name] {
-                slogger.debug("Updating pending ranges for keyspace={} ends", keyspace_name);
-            });
-        });
-    }).handle_exception([this, reason = std::move(reason)] (std::exception_ptr ep) mutable {
+            co_await tmptr->update_pending_ranges(strategy, keyspace_name);
+            slogger.debug("Updating pending ranges for keyspace={} ends", keyspace_name);
+        }
+    } catch (...) {
+        auto ep = std::current_exception();
         slogger.error("Failed to update pending ranges for {}: {}", reason, ep);
-        return make_exception_future<>(std::move(ep));
-    });
-    // slogger.debug("finished calculation for {} keyspaces in {}ms", keyspaces.size(), System.currentTimeMillis() - start);
+        std::rethrow_exception(std::move(ep));
+    }
 }
 
 future<> storage_service::update_pending_ranges(sstring reason, acquire_merge_lock acquire_merge_lock) {
