@@ -1784,26 +1784,23 @@ static shared_ptr<cql3::functions::user_aggregate> create_aggregate(replica::dat
     return ::make_shared<cql3::functions::user_aggregate>(name, initcond, std::move(state_func), std::move(reduce_func), std::move(final_func));
 }
 
-static future<> merge_functions(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after,
-        std::function<shared_ptr<cql3::functions::function>(replica::database& db, const query::result_set_row& row)> create) {
+static future<> merge_functions(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after) {
     auto diff = diff_rows(before, after);
 
     co_await proxy.local().get_db().invoke_on_all([&] (replica::database& db) {
         for (const auto& val : diff.created) {
-            cql3::functions::functions::add_function(create(db, *val));
+            cql3::functions::functions::add_function(create_func(db, *val));
         }
         for (const auto& val : diff.dropped) {
-            auto func = create(db, *val);
-            cql3::functions::functions::remove_function(func->name(), func->arg_types());
+            cql3::functions::function_name name{
+                val->get_nonnull<sstring>("keyspace_name"), val->get_nonnull<sstring>("function_name")};
+            auto arg_types = read_arg_types(db, *val, name.keyspace);
+            cql3::functions::functions::remove_function(name, arg_types);
         }
         for (const auto& val : diff.altered) {
-            cql3::functions::functions::replace_function(create(db, *val));
+            cql3::functions::functions::replace_function(create_func(db, *val));
         }
     });
-}
-
-static future<> merge_functions(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after) {
-    co_await merge_functions(proxy, before, after, create_func);
 }
 
 static future<> merge_aggregates(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after, 
