@@ -340,6 +340,14 @@ Check the log files:
                                 "'class' : 'SimpleStrategy', 'replication_factor' : 1 }")
                 session.execute("DROP KEYSPACE k")
 
+    async def shutdown_control_connection(self) -> None:
+        if self.control_connection is not None:
+            self.control_connection.shutdown()
+            self.control_connection = None
+        if self.control_cluster is not None:
+            self.control_cluster.shutdown()
+            self.control_cluster = None
+
     async def stop(self) -> None:
         """Stop a running server. No-op if not running. Uses SIGKILL to
         stop, so is not graceful. Waits for the process to exit before return."""
@@ -350,12 +358,8 @@ Check the log files:
         if not self.cmd:
             return
 
+        await self.shutdown_control_connection()
         try:
-            if self.control_connection is not None:
-                self.control_connection.shutdown()
-            if self.control_cluster is not None:
-                self.control_cluster.shutdown()
-
             self.cmd.kill()
         except ProcessLookupError:
             pass
@@ -366,8 +370,6 @@ Check the log files:
                 logging.info("stopped server at host %s in %s", hostname,
                              self.workdir.name)
             self.cmd = None
-            self.control_connection = None
-            self.control_cluster = None
 
     async def stop_gracefully(self) -> None:
         """Stop a running server. No-op if not running. Uses SIGTERM to
@@ -378,6 +380,7 @@ Check the log files:
         if not self.cmd:
             return
 
+        await self.shutdown_control_connection()
         try:
             self.cmd.terminate()
         except ProcessLookupError:
@@ -388,7 +391,6 @@ Check the log files:
             if self.cmd:
                 logging.info("gracefully stopped server at host %s", hostname)
             self.cmd = None
-            self.control_connection = None
 
     async def uninstall(self) -> None:
         """Clear all files left from a stopped server, including the
