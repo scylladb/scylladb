@@ -201,7 +201,7 @@ int64_t size_tiered_compaction_strategy::estimated_pending_compactions(table_sta
     int max_threshold = table_s.schema()->max_compaction_threshold();
     std::vector<sstables::shared_sstable> sstables;
 
-    auto all_sstables = table_s.get_sstable_set().all();
+    auto all_sstables = table_s.main_sstable_set().all();
     sstables.reserve(all_sstables->size());
     for (auto& entry : *all_sstables) {
         sstables.push_back(entry);

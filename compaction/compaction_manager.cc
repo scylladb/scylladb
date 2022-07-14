@@ -314,10 +314,11 @@ future<sstables::compaction_result> compaction_manager::task::compact_sstables(s
     descriptor.replacer = [this, &t, release_exhausted] (sstables::compaction_completion_desc desc) {
         t.get_compaction_strategy().notify_completion(desc.old_sstables, desc.new_sstables);
         _cm.propagate_replacement(&t, desc.old_sstables, desc.new_sstables);
-        t.on_compaction_completion(desc);
+        auto old_sstables = desc.old_sstables;
+        t.on_compaction_completion(std::move(desc));
         // Calls compaction manager's task for this compaction to release reference to exhausted SSTables.
         if (release_exhausted) {
-            release_exhausted(desc.old_sstables);
+            release_exhausted(old_sstables);
         }
     };
 
@@ -998,7 +999,11 @@ public:
             auto desc = t.get_compaction_strategy().get_reshaping_job(reshape_candidates, t.schema(), iop, sstables::reshape_mode::strict);
             if (desc.sstables.empty()) {
                 // at this moment reshape_candidates contains a set of sstables ready for integration into main set
-                co_await t.update_sstable_lists_on_off_strategy_completion(old_sstables, reshape_candidates);
+                auto desc = sstables::compaction_completion_desc{
+                    .old_sstables = std::move(old_sstables),
+                    .new_sstables = std::move(reshape_candidates)
+                };
+                co_await t.update_sstable_lists_on_off_strategy_completion(std::move(desc));
                 break;
             }
 
@@ -1118,7 +1123,6 @@ private:
 
         for (;;) {
             switch_state(state::active);
-            replica::table& t = *_compacting_table;
             auto sstable_level = sst->get_sstable_level();
             auto run_identifier = sst->run_identifier();
             // FIXME: this compaction should run with maintenance priority.
