@@ -450,7 +450,7 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
     const expr::allow_local_index allow_local(
             !has_partition_key_unrestricted_components()
             && partition_key_restrictions_is_all_eq());
-    _has_multi_column = find_binop(_clustering_columns_restrictions->expression, expr::is_multi_column);
+    _has_multi_column = find_binop(_new_clustering_columns_restrictions, expr::is_multi_column);
     _has_queriable_ck_index = _clustering_columns_restrictions->has_supporting_index(sim, allow_local)
             && !type.is_delete();
     _has_queriable_pk_index = parition_key_restrictions_have_supporting_index(sim, allow_local)
@@ -497,7 +497,7 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
 
     if (_uses_secondary_indexing || _clustering_columns_restrictions->needs_filtering(*_schema)) {
         _index_restrictions.push_back(_new_clustering_columns_restrictions);
-    } else if (find_binop(_clustering_columns_restrictions->expression, expr::is_on_collection)) {
+    } else if (find_binop(_new_clustering_columns_restrictions, expr::is_on_collection)) {
         fail(unimplemented::cause::INDEXES);
 #if 0
         _index_restrictions.push_back(new Forwardingprimary_key_restrictions() {
@@ -894,7 +894,7 @@ void statement_restrictions::process_clustering_columns_restrictions(bool for_vi
         return;
     }
 
-    if (find_binop(_clustering_columns_restrictions->expression, expr::is_on_collection)
+    if (find_binop(_new_clustering_columns_restrictions, expr::is_on_collection)
         && !_has_queriable_ck_index && !allow_filtering) {
         throw exceptions::invalid_request_exception(
             "Cannot restrict clustering columns by a CONTAINS relation without a secondary index or filtering");

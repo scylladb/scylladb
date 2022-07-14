@@ -153,7 +153,7 @@ public:
      * otherwise.
      */
     bool clustering_key_restrictions_has_IN() const {
-        return find(_clustering_columns_restrictions->expression, expr::oper_t::IN);
+        return find(_new_clustering_columns_restrictions, expr::oper_t::IN);
     }
 
     bool clustering_key_restrictions_has_only_eq() const {
