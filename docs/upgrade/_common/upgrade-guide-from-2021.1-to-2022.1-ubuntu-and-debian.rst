@@ -7,7 +7,7 @@ This document is a step-by-step procedure for upgrading from ScyllaDB Enterprise
 
 Applicable Versions
 ===================
-This guide covers upgrading ScyllaDB from version **2021.1.8** or later to ScyllaDB Enterprise version 2021.1.y on the following platform:
+This guide covers upgrading ScyllaDB Enterprise from version 2021.1.x to ScyllaDB Enterprise version 2022.1.y on the following platform:
 
 * |OS|
 
