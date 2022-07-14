@@ -18,6 +18,8 @@
 #include <seastar/util/log.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/iostream.hh>
+#include <seastar/http/response_parser.hh>
+#include <boost/algorithm/string/trim.hpp>
 
 #include <unordered_map>
 
@@ -27,17 +29,16 @@ namespace s3 {
 
 seastar::logger log("s3");
 
-struct http_response {
-    int status;
+struct s3_http_response : public http_response {
     uint64_t content_length;
     temporary_buffer<char> content;
-    std::unordered_map<sstring, sstring> headers;
 
     sstring get_header(const sstring& name) {
-        if (!headers.contains(name)) {
+        auto it = _headers.find(name);
+        if (it == _headers.end()) {
             throw_with_backtrace<std::runtime_error>(format("Expected header not found: {}", name));
         }
-        return headers[name];
+        return boost::trim_copy(it->second);
     }
 
     std::string_view content_as_string() const {
@@ -45,65 +46,25 @@ struct http_response {
     }
 };
 
-std::ostream& operator<<(std::ostream& out, http_response& r) {
+std::ostream& operator<<(std::ostream& out, s3_http_response& r) {
     return out << "http_response{"
-        << "status=" << r.status
-        << ", headers=" << r.headers
+        << "status=" << r._status_code
+        << ", headers=" << r._headers
         << ", body=" << std::string_view(r.content.begin(), r.content.size())
         << "}";
 }
-
-class line_consumer {
-    sstring _result;
-public:
-    future<consumption_result<char>> operator()(temporary_buffer<char> buf) {
-        auto i = std::find(buf.begin(), buf.end(), '\n');
-        if (i == buf.end()) [[unlikely]] {
-            _result += sstring(buf.begin(), buf.end());
-            return make_ready_future<consumption_result<char>>(continue_consuming());
-        }
-        --i;
-        if (*i != '\r') {
-            throw_with_backtrace<std::runtime_error>(format("Line does not end with CRLF: {}", sstring(buf.begin(), i)));
-        }
-        _result += sstring(buf.begin(), i);
-        buf.trim_front(i - buf.begin() + 2);
-        return make_ready_future<consumption_result<char>>(stop_consuming<char>(std::move(buf)));
-    }
-
-    sstring get() {
-        return std::move(_result);
-    }
-};
 
 struct http_content_writer {
     size_t size;
     noncopyable_function<future<>(output_stream<char>&)> writer;
 };
 
-static
-std::pair<sstring, sstring> parse_header(const sstring& line) {
-    auto i = std::find(line.begin(), line.end(), ':');
-    if (i != line.end()) {
-        sstring key(line.begin(), i);
-        ++i;
-        // Skip space after ":"
-        if (i != line.end() && *i == ' ') {
-            ++i;
-        }
-        sstring value(i, line.end());
-        return std::make_pair(std::move(key), std::move(value));
-    } else {
-        return std::make_pair(line, sstring());
-    }
-}
-
 // Keep headers alive around async operation.
 static
-future<http_response> make_http_request(connection_ptr con,
+future<s3_http_response> make_http_request(connection_ptr con,
                                         const sstring& method,
                                         const sstring& path,
-                                        const std::map<sstring, sstring>& headers,
+                                        const std::unordered_map<sstring, sstring>& headers,
                                         std::optional<http_content_writer> content) {
     log.debug("conn {}: {} {} {}", fmt::ptr(&*con), method, path, headers);
 
@@ -136,63 +97,36 @@ future<http_response> make_http_request(connection_ptr con,
     co_await out.flush();
 
     auto& in = con->in();
-    line_consumer lc;
-    co_await in.consume(lc);
-    auto status_line = lc.get();
-    log.debug("conn {}: status line: {}", fmt::ptr(&*con), status_line);
+    http_response_parser parser;
+    parser.init();
+    co_await in.consume(parser);
 
-    // Example status_line:
-    // HTTP/1.1 200 OK
-
-    // Parse response code
-    auto i = status_line.find(' ');
-    if (i == sstring::npos) {
-        throw std::runtime_error(format("invalid response line: {}", status_line));
+    auto parsed_response = parser.get_parsed_response();
+    if (!parsed_response) {
+        co_await coroutine::return_exception(std::runtime_error("Parsing HTTP response failed"));
     }
-    ++i;
-    auto e = status_line.find(' ', i);
-    if (i == sstring::npos) {
-        throw std::runtime_error(format("invalid response line: {}", status_line));
-    }
+    s3_http_response response{std::move(*parsed_response)};
 
-    auto response_code = std::atoi(status_line.substr(i, e - i).begin());
-
-    size_t content_length = 0;
-
-    // Parse response headers
-    std::unordered_map<sstring, sstring> response_headers;
-    while (1) {
-        co_await in.consume(lc);
-        auto line = lc.get();
-        if (line.empty()) {
-            break;
-        }
-        log.debug("conn {}: response header: {}", fmt::ptr(&*con), line);
-        auto hdr = parse_header(line);
-        if (hdr.first == "Content-Length") {
-            content_length = std::atoi(hdr.second.begin());
-        }
-        response_headers.emplace(std::move(hdr));
+    if (response._status_code != 204) { // 204 = No Content
+        response.content_length = [&response] {
+            auto it = response._headers.find("Content-Length");
+            return it != response._headers.end() ? std::atoi(it->second.c_str()) : 0;
+        }();
+        response.content = co_await in.read_exactly(response.content_length);
     }
 
-    temporary_buffer<char> response_content;
-    if (response_code != 204) { // 204 = No Content
-        response_content = co_await in.read_exactly(content_length);
+    if (response._status_code < 200 || response._status_code >= 300) {
+        co_await coroutine::return_exception(std::runtime_error(format("request failed: {}, {}", response._status_code, (const char*)response.content.get())));
     }
-
-    if (response_code < 200 || response_code >= 300) {
-        throw std::runtime_error(format("request failed: {}", status_line));
-    }
-
-    co_return http_response{response_code, content_length, std::move(response_content), std::move(response_headers)};
+    co_return response;
 }
 
 // Keep headers alive around async operation.
 static
-future<http_response> make_http_request(connection_ptr con,
+future<s3_http_response> make_http_request(connection_ptr con,
                                         const sstring& method,
                                         const sstring& path,
-                                        const std::map<sstring, sstring>& headers = {},
+                                        const std::unordered_map<sstring, sstring>& headers = {},
                                         std::optional<sstring> content = std::nullopt) {
     if (!content) {
         std::optional<http_content_writer> wr = std::nullopt;
@@ -387,7 +321,7 @@ private:
             (void)_client_impl.do_with_connection([part_number, wr = std::move(wr), this] (connection_ptr con) mutable -> future<> {
                 // UploadPart: https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
                 auto part_number_ = part_number;
-                http_response resp = co_await make_http_request(con, "PUT",
+                s3_http_response resp = co_await make_http_request(con, "PUT",
                     format("{}?partNumber={}&uploadId={}", _path, part_number, _upload_id), _client_impl._headers, std::move(wr));
                 _parts[part_number_].etag = resp.get_header("ETag");
             }).finally([op = _uploads_barrier.start(), units = std::move(units)] {});
@@ -396,7 +330,7 @@ private:
         future<> start_upload() {
             _upload_id = co_await _client_impl.do_with_connection([this] (connection_ptr con) -> future<sstring> {
                 // CreateMultipartUpload: https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateMultipartUpload.html
-                http_response resp = co_await make_http_request(con, "POST", _path + "?uploads", _client_impl._headers);
+                s3_http_response resp = co_await make_http_request(con, "POST", _path + "?uploads", _client_impl._headers);
                 co_return parse_xml_tag(resp.content_as_string(), "UploadId");
             });
         }
@@ -547,14 +481,14 @@ public:
         return do_with_connection([path, offset, length, this] (auto con) -> future<temporary_buffer<char>> {
             auto headers = _headers;
             headers["Range"] = format("bytes={}-{}", offset, offset + length - 1);
-            http_response resp = co_await make_http_request(con, "GET", path, headers);
+            s3_http_response resp = co_await make_http_request(con, "GET", path, headers);
             co_return std::move(resp.content);
         });
     }
 
     future<uint64_t> get_size(const seastar::sstring& path) override {
         return do_with_connection([this, path] (connection_ptr con) -> future<uint64_t> {
-            http_response resp = co_await make_http_request(con, "HEAD", path, _headers);
+            s3_http_response resp = co_await make_http_request(con, "HEAD", path, _headers);
             co_return resp.content_length;
         });
     }
