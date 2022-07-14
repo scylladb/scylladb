@@ -847,6 +847,7 @@ static size_t entry_size(const log_entry& e) {
             for (auto& s : c.current) {
                 size += sizeof(s.addr.id);
                 size += s.addr.info.size();
+                size += sizeof(s.can_vote);
             }
             return size;
         }
