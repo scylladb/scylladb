@@ -77,6 +77,16 @@ public:
         const replication_strategy_config_options& config_options,
         replication_strategy_type my_type);
 
+    abstract_replication_strategy(abstract_replication_strategy&&) = default;
+    abstract_replication_strategy& operator=(abstract_replication_strategy&&) = default;
+
+    // Delete the copy constructor and assignment operator
+    // as some strategies must keep state in the "master" instance
+    // kept in the table shard, and copying it unintentionally might
+    // cause the state changes to be applied on a temporary copy.
+    abstract_replication_strategy(const abstract_replication_strategy&) = delete;
+    abstract_replication_strategy& operator=(const abstract_replication_strategy&) = delete;
+
     // The returned vector has size O(number of normal token owners), which is O(number of nodes in the cluster).
     // Note: it is not guaranteed that the function will actually yield. If the complexity of a particular implementation
     // is small, that implementation may not yield since by itself it won't cause a reactor stall (assuming practical
