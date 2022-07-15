@@ -1071,6 +1071,16 @@ std::vector<sstring>  database::get_non_system_keyspaces() const {
     return res;
 }
 
+std::vector<sstring> database::get_user_keyspaces() const {
+    std::vector<sstring> res;
+    for (auto const& i : _keyspaces) {
+        if (!is_internal_keyspace(i.first)) {
+            res.push_back(i.first);
+        }
+    }
+    return res;
+}
+
 std::vector<sstring> database::get_all_keyspaces() const {
     std::vector<sstring> res;
     res.reserve(_keyspaces.size());

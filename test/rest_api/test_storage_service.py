@@ -20,6 +20,27 @@ def new_keyspace(cql, this_dc):
     cql.execute(f"CREATE KEYSPACE {name} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}")
     return name
 
+def test_storage_service_keyspaces(cql, this_dc, rest_api):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
+        resp_user = rest_api.send("GET", "storage_service/keyspaces", { "type": "user" })
+        resp_user.raise_for_status()
+        keyspaces_user = resp_user.json()
+        assert keyspace in keyspaces_user
+        assert all(not ks.startswith("system") for ks in keyspaces_user)
+
+        resp_nls = rest_api.send("GET", "storage_service/keyspaces", { "type": "non_local_strategy" })
+        resp_nls.raise_for_status()
+        assert keyspace in resp_nls.json()
+
+        resp_all = rest_api.send("GET", "storage_service/keyspaces", { "type": "all" })
+        resp_all.raise_for_status()
+        assert keyspace in resp_all.json()
+
+        resp = rest_api.send("GET", "storage_service/keyspaces")
+        resp.raise_for_status()
+        assert keyspace in resp.json()
+
+
 def test_storage_service_auto_compaction_keyspace(cql, this_dc, rest_api):
     keyspace = new_keyspace(cql, this_dc)
     # test empty keyspace
