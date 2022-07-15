@@ -451,7 +451,7 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
             !has_partition_key_unrestricted_components()
             && partition_key_restrictions_is_all_eq());
     _has_multi_column = find_binop(_new_clustering_columns_restrictions, expr::is_multi_column);
-    _has_queriable_ck_index = _clustering_columns_restrictions->has_supporting_index(sim, allow_local)
+    _has_queriable_ck_index = clustering_columns_restrictions_have_supporting_index(sim, allow_local)
             && !type.is_delete();
     _has_queriable_pk_index = parition_key_restrictions_have_supporting_index(sim, allow_local)
             && !type.is_delete();
@@ -872,6 +872,81 @@ bool statement_restrictions::clustering_key_restrictions_need_filtering() const 
 
 bool statement_restrictions::has_unrestricted_clustering_columns() const {
     return clustering_columns_restrictions_size() < _schema->clustering_key_size();
+}
+
+bool statement_restrictions::clustering_columns_restrictions_have_supporting_index(
+        const secondary_index::secondary_index_manager& index_manager,
+        expr::allow_local_index allow_local) const {
+    // Single column restrictions can be handled by the existing code
+    if (!expr::contains_multi_column_restriction(_new_clustering_columns_restrictions)) {
+        return expr::index_supports_some_column(_new_clustering_columns_restrictions, index_manager, allow_local);
+    }
+
+    // Multi column restrictions have to be handled separately
+    for (const auto& index : index_manager.list_indexes()) {
+        if (!allow_local && index.metadata().local()) {
+            continue;
+        }
+        if (multi_column_clustering_restrictions_are_supported_by(index)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool statement_restrictions::multi_column_clustering_restrictions_are_supported_by(
+        const secondary_index::index& index) const {
+    // Slice restrictions have to be checked depending on the clustering slice
+    if (has_slice(_new_clustering_columns_restrictions)) {
+        bounds_slice clustering_slice = get_clustering_slice();
+
+        const expr::column_value* supported_column =
+            find_in_expression<expr::column_value>(_new_clustering_columns_restrictions,
+                [&](const expr::column_value& cval) -> bool {
+                    return clustering_slice.is_supported_by(*cval.col, index);
+                }
+        );
+        return supported_column != nullptr;
+    }
+
+    // Otherwise it has to be a singe binary operator with EQ or IN.
+    // This is checked earlier during add_restriction.
+    const expr::binary_operator* single_binop =
+        expr::as_if<expr::binary_operator>(&_new_clustering_columns_restrictions);
+    if (single_binop == nullptr) {
+        on_internal_error(rlogger, format(
+            "multi_column_clustering_restrictions_are_supported_by more than one non-slice restriction: {}",
+            _new_clustering_columns_restrictions));
+    }
+
+    if (single_binop->op != expr::oper_t::IN && single_binop->op != expr::oper_t::EQ) {
+        on_internal_error(rlogger, format("Disallowed multi column restriction: {}", *single_binop));
+    }
+
+    const expr::column_value* supported_column =
+        find_in_expression<expr::column_value>(_new_clustering_columns_restrictions,
+            [&](const expr::column_value& cval) -> bool {
+                return index.supports_expression(*cval.col, single_binop->op);
+            }
+    );
+    return supported_column != nullptr;
+}
+
+bounds_slice statement_restrictions::get_clustering_slice() const {
+    std::optional<bounds_slice> result;
+
+    expr::for_each_expression<expr::binary_operator>(_new_clustering_columns_restrictions,
+        [&](const expr::binary_operator& binop) {
+            bounds_slice cur_slice = bounds_slice::from_binary_operator(binop);
+            if (!result.has_value()) {
+                result = cur_slice;
+            } else {
+                result->merge(cur_slice);
+            }
+        }
+    );
+
+    return *result;
 }
 
 bool statement_restrictions::parition_key_restrictions_have_supporting_index(const secondary_index::secondary_index_manager& index_manager,

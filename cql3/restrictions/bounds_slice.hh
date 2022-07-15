@@ -41,6 +41,26 @@ public:
         }
     }
 
+    static bounds_slice from_binary_operator(const expr::binary_operator& binop) {
+        if (binop.op == expr::oper_t::LT) {
+            return new_instance(statements::bound::END, false, binop.rhs);
+        }
+
+        if (binop.op == expr::oper_t::LTE) {
+            return new_instance(statements::bound::END, true, binop.rhs);
+        }
+
+        if (binop.op == expr::oper_t::GT) {
+            return new_instance(statements::bound::START, false, binop.rhs);
+        }
+
+        if (binop.op == expr::oper_t::GTE) {
+            return new_instance(statements::bound::START, true, binop.rhs);
+        }
+
+        throw std::runtime_error(format("bounds_slice::from_binary_operator - invalid operator: {}", binop.op));
+    }
+
     /**
      * Checks if this slice has a boundary for the specified type.
      *
