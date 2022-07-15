@@ -1,6 +1,23 @@
 ### a dictionary of redirections
 #old path: new path
 
+### moving the CQL reference files to the new cql folder
+
+/stable/getting-started/ddl.html: /stable/cql/ddl.html:
+/getting-started/dml.html: /cql/dml.html
+/stable/getting-started/time-to-live.html: /stable/cql/time-to-live.html
+/stable/getting-started/types.html: /stable/cql/types.html
+/stable/getting-started/appendices.html: /stable/cql/appendices.html
+/stable/getting-started/definitions.html: /stable/cql/definitions.html
+/stable/getting-started/mv.html: /stable/cql/mv.html
+/stable/getting-started/functions.html: /cql/functions.html
+/stable/getting-started/json.html: /stable/cql/json.html
+/stable/getting-started/secondary-indexes.html: /stable/cql/secondary-indexes.html
+/stable/getting-started/consistency.html: /stable/cql/consistency.html
+/stable/getting-started/compaction.html: /stable/cql/compaction.html
+/stable/getting-started/reserved-keywords.html: /stable/cql/reserved-keywords.html
+/stable/getting-started/non-reserved-keywords.html: /stable/cql/non-reserved-keywords.html
+
 ### scylladb/scylla dev docs migration
 
 # stable branch
