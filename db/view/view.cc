@@ -389,7 +389,7 @@ private:
 
 public:
     data_query_result_builder(const schema& s, const query::partition_slice& slice)
-        : _res_builder(slice, query::result_options::only_result(), query::result_memory_accounter{query::result_memory_limiter::unlimited_result_size})
+        : _res_builder(slice, query::result_options::only_result(), query::result_memory_accounter{query::result_memory_limiter::unlimited_result_size}, query::max_tombstones)
         , _builder(s, _res_builder) { }
 
     void consume_new_partition(const dht::decorated_key& dk) { _builder.consume_new_partition(dk); }

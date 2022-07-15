@@ -2071,9 +2071,11 @@ void query_result_builder::consume_new_partition(const dht::decorated_key& dk) {
 
 void query_result_builder::consume(tombstone t) {
     _mutation_consumer->consume(t);
+    _stop = _rb.bump_and_check_tombstone_limit();
 }
 stop_iteration query_result_builder::consume(static_row&& sr, tombstone t, bool is_live) {
     if (!is_live) {
+        _stop = _rb.bump_and_check_tombstone_limit();
         return _stop;
     }
     _stop = _mutation_consumer->consume(std::move(sr), t);
@@ -2081,12 +2083,14 @@ stop_iteration query_result_builder::consume(static_row&& sr, tombstone t, bool 
 }
 stop_iteration query_result_builder::consume(clustering_row&& cr, row_tombstone t,  bool is_live) {
     if (!is_live) {
+        _stop = _rb.bump_and_check_tombstone_limit();
         return _stop;
     }
     _stop = _mutation_consumer->consume(std::move(cr), t);
     return _stop;
 }
 stop_iteration query_result_builder::consume(range_tombstone_change&& rtc) {
+    _stop = _rb.bump_and_check_tombstone_limit();
     return _stop;
 }
 
@@ -2205,7 +2209,7 @@ future<query::result>
 to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::partition_slice& slice, uint64_t max_rows, uint32_t max_partitions,
         query::result_options opts) {
     // This result was already built with a limit, don't apply another one.
-    query::result::builder builder(slice, opts, query::result_memory_accounter{ query::result_memory_limiter::unlimited_result_size });
+    query::result::builder builder(slice, opts, query::result_memory_accounter{ query::result_memory_limiter::unlimited_result_size }, query::max_tombstones);
     auto consumer = compact_for_query_v2<query_result_builder>(*s, gc_clock::time_point::min(), slice, max_rows,
             max_partitions, query_result_builder(*s, builder));
     auto compaction_state = consumer.get_state();
@@ -2237,7 +2241,7 @@ to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::pa
 
 query::result
 query_mutation(mutation&& m, const query::partition_slice& slice, uint64_t row_limit, gc_clock::time_point now, query::result_options opts) {
-    query::result::builder builder(slice, opts, query::result_memory_accounter{ query::result_memory_limiter::unlimited_result_size });
+    query::result::builder builder(slice, opts, query::result_memory_accounter{ query::result_memory_limiter::unlimited_result_size }, query::max_tombstones);
     auto consumer = compact_for_query_v2<query_result_builder>(*m.schema(), now, slice, row_limit,
             query::max_partitions, query_result_builder(*m.schema(), builder));
     auto compaction_state = consumer.get_state();
