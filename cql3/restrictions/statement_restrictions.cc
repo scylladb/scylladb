@@ -442,6 +442,9 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
         if (!has_token(_partition_key_restrictions)) {
             _single_column_partition_key_restrictions = expr::get_single_column_restrictions_map(_partition_key_restrictions);
         }
+        if (!expr::contains_multi_column_restriction(_new_clustering_columns_restrictions)) {
+            _single_column_clustering_key_restrictions = expr::get_single_column_restrictions_map(_new_clustering_columns_restrictions);
+        }
         _clustering_prefix_restrictions = extract_clustering_prefix_restrictions(*_where, _schema);
         _partition_range_restrictions = extract_partition_range(*_where, _schema);
     }
@@ -1842,16 +1845,8 @@ const expr::single_column_restrictions_map& statement_restrictions::get_single_c
 /**
  * @return clustering key restrictions split into single column restrictions (e.g. for filtering support).
  */
-const single_column_restrictions::restrictions_map& statement_restrictions::get_single_column_clustering_key_restrictions() const {
-    static single_column_restrictions::restrictions_map empty;
-    auto single_restrictions = dynamic_pointer_cast<single_column_clustering_key_restrictions>(_clustering_columns_restrictions);
-    if (!single_restrictions) {
-        if (dynamic_pointer_cast<initial_key_restrictions<clustering_key>>(_clustering_columns_restrictions)) {
-            return empty;
-        }
-        throw std::runtime_error("statement restrictions for multi-column partition key restrictions are not implemented yet");
-    }
-    return single_restrictions->restrictions();
+const expr::single_column_restrictions_map& statement_restrictions::get_single_column_clustering_key_restrictions() const {
+    return _single_column_clustering_key_restrictions;
 }
 
 void statement_restrictions::prepare_indexed_global(const schema& idx_tbl_schema) {

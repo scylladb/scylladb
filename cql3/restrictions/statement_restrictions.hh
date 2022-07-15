@@ -54,6 +54,8 @@ private:
 
     expr::expression _new_clustering_columns_restrictions;
 
+    expr::single_column_restrictions_map _single_column_clustering_key_restrictions;
+
     /**
      * Restriction on non-primary key columns (i.e. secondary index restrictions)
      */
@@ -508,7 +510,7 @@ public:
     /**
      * @return clustering key restrictions split into single column restrictions (e.g. for filtering support).
      */
-    const single_column_restrictions::restrictions_map& get_single_column_clustering_key_restrictions() const;
+    const expr::single_column_restrictions_map& get_single_column_clustering_key_restrictions() const;
 
     /// Prepares internal data for evaluating index-table queries.  Must be called before
     /// get_local_index_clustering_ranges().

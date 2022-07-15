@@ -500,7 +500,8 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
             if (_skip_ck_restrictions) {
                 continue;
             }
-            auto clustering_key_restrictions_map = _restrictions->get_single_column_clustering_key_restrictions();
+            const expr::single_column_restrictions_map& clustering_key_restrictions_map =
+                _restrictions->get_single_column_clustering_key_restrictions();
             auto restr_it = clustering_key_restrictions_map.find(cdef);
             if (restr_it == clustering_key_restrictions_map.end()) {
                 continue;
@@ -508,9 +509,9 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
             if (clustering_key.empty()) {
                 return false;
             }
-            restrictions::restriction& single_col_restriction = *restr_it->second;
+            const expr::expression& single_col_restriction = restr_it->second;
             if (!expr::is_satisfied_by(
-                        single_col_restriction.expression,
+                        single_col_restriction,
                         expr::evaluation_inputs{
                             .partition_key = &partition_key,
                             .clustering_key = &clustering_key,
