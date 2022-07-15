@@ -82,6 +82,11 @@ service::broadcast_tables::select_query strongly_consistent_select_statement::pr
 
 future<::shared_ptr<cql_transport::messages::result_message>>
 strongly_consistent_select_statement::execute_without_checking_exception_message(query_processor& qp, service::query_state& qs, const query_options& options) const {
+    if (this_shard_id() != 0) {
+        return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(
+            ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(0, cql3::computed_function_values{}));
+    }
+
     return service::broadcast_tables::execute(qp.get_group0_client(), { _query })
         .then(make_ready_future<::shared_ptr<cql_transport::messages::result_message>>);
 }

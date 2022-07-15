@@ -85,6 +85,8 @@ public:
 
     future<> add_entry(group0_command group0_cmd, group0_guard guard, seastar::abort_source* as = nullptr);
 
+    future<> add_entry_unguarded(group0_command group0_cmd, seastar::abort_source* as = nullptr);
+
     // Ensures that all previously finished operations on group 0 are visible on this node;
     // in particular, performs a Raft read barrier on group 0.
     //
@@ -108,6 +110,7 @@ public:
     future<group0_guard> start_operation(seastar::abort_source* as = nullptr);
 
     group0_command prepare_command(schema_change change, group0_guard& guard, std::string_view description);
+    group0_command prepare_command(broadcast_table_query query);
 
     // Returns the current group 0 upgrade state.
     //

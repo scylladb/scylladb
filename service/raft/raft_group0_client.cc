@@ -13,6 +13,9 @@
 
 #include "frozen_schema.hh"
 #include "schema_mutations.hh"
+#include "service/broadcast_tables/experimental/lang.hh"
+#include "idl/experimental/broadcast_tables_lang.dist.hh"
+#include "idl/experimental/broadcast_tables_lang.dist.impl.hh"
 #include "idl/group0_state_machine.dist.hh"
 #include "idl/group0_state_machine.dist.impl.hh"
 
@@ -196,6 +199,25 @@ future<> raft_group0_client::add_entry(group0_command group0_cmd, group0_guard g
     }
 }
 
+future<> raft_group0_client::add_entry_unguarded(group0_command group0_cmd, seastar::abort_source* as) {
+    if (this_shard_id() != 0) {
+        on_internal_error(logger, "add_entry_unguarded: must run on shard 0");
+    }
+
+    raft::command cmd;
+    ser::serialize(cmd, group0_cmd);
+
+    // Command is not retried, because for now it's not idempotent.
+    try {
+        co_await _raft_gr.group0().add_entry(cmd, raft::wait_type::applied, as);
+    } catch (const raft::not_a_leader& e) {
+        // This should not happen since follower-to-leader entry forwarding is enabled in group 0.
+        // Just fail the operation by propagating the error.
+        logger.error("add_entry_unguarded: unexpected `not_a_leader` error: \"{}\". Please file an issue.", e);
+        throw;
+    }
+}
+
 static utils::UUID generate_group0_state_id(utils::UUID prev_state_id) {
     auto ts = api::new_timestamp();
     if (prev_state_id != utils::UUID{}) {
@@ -270,6 +292,24 @@ group0_command raft_group0_client::prepare_command(schema_change change, group0_
         // Here it is: the return type of `guard.observerd_group0_state_id()` is `utils::UUID`.
         .prev_state_id{guard.observed_group0_state_id()},
         .new_state_id{guard.new_group0_state_id()},
+
+        .creator_addr{utils::fb_utilities::get_broadcast_address()},
+        .creator_id{_raft_gr.group0().id()}
+    };
+
+    return group0_cmd;
+}
+
+group0_command raft_group0_client::prepare_command(broadcast_table_query query) {
+    const auto new_group0_state_id = generate_group0_state_id(utils::UUID{});
+
+    group0_command group0_cmd {
+        .change{std::move(query)},
+        .history_append{db::system_keyspace::make_group0_history_state_id_mutation(
+            new_group0_state_id, _history_gc_duration, "")},
+
+        .prev_state_id{std::nullopt},
+        .new_state_id{new_group0_state_id},
 
         .creator_addr{utils::fb_utilities::get_broadcast_address()},
         .creator_id{_raft_gr.group0().id()}

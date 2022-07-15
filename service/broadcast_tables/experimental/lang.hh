@@ -16,9 +16,11 @@
 #include "exceptions/exceptions.hh"
 #include "service/storage_proxy.hh"
 
+
 namespace service {
 
 class raft_group0_client;
+class group0_command;
 
 }
 
@@ -48,6 +50,8 @@ struct query {
 bool is_broadcast_table_statement(const sstring& keyspace, const sstring& column_family);
 
 future<> execute(service::raft_group0_client& group0_client, const query& query);
+
+future<> execute_broadcast_table_query(service::storage_proxy& proxy, const query& query, utils::UUID cmd_id);
 
 class unsupported_operation_error : public exceptions::invalid_request_exception {
 public:

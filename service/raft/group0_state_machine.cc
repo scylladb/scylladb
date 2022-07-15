@@ -6,18 +6,32 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 #include "service/raft/group0_state_machine.hh"
-#include <seastar/core/coroutine.hh>
-#include "service/migration_manager.hh"
+#include "atomic_cell.hh"
+#include "cql3/selection/selection.hh"
+#include "dht/i_partitioner.hh"
+#include "dht/token.hh"
 #include "message/messaging_service.hh"
 #include "canonical_mutation.hh"
 #include "schema_mutations.hh"
 #include "frozen_schema.hh"
+#include "serialization_visitors.hh"
+#include "serializer.hh"
+#include "serializer_impl.hh"
+#include "idl/uuid.dist.hh"
+#include "idl/uuid.dist.impl.hh"
+#include "idl/frozen_schema.dist.hh"
+#include "idl/frozen_schema.dist.impl.hh"
+#include "idl/experimental/broadcast_tables_lang.dist.hh"
+#include "idl/experimental/broadcast_tables_lang.dist.impl.hh"
 #include "idl/group0_state_machine.dist.hh"
 #include "idl/group0_state_machine.dist.impl.hh"
 #include "service/migration_manager.hh"
 #include "db/system_keyspace.hh"
 #include "service/storage_proxy.hh"
 #include "service/raft/raft_group0_client.hh"
+#include "partition_slice_builder.hh"
+#include "timestamp.hh"
+#include "utils/overloaded_functor.hh"
 
 namespace service {
 
@@ -83,6 +97,9 @@ future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
         co_await std::visit(make_visitor(
         [&] (schema_change& chng) -> future<> {
             return _mm.merge_schema_from(netw::messaging_service::msg_addr(std::move(cmd.creator_addr)), std::move(chng.mutations));
+        },
+        [&] (broadcast_table_query& query) -> future<> {
+            return service::broadcast_tables::execute_broadcast_table_query(_sp, query.query, cmd.new_state_id);
         }
         ), cmd.change);
 
