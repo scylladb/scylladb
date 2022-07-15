@@ -615,20 +615,15 @@ std::vector<const column_definition*> statement_restrictions::get_column_defs_fo
                 }
             }
         }
-        auto single_ck_restrs = dynamic_pointer_cast<single_column_clustering_key_restrictions>(_clustering_columns_restrictions);
         const bool pk_has_unrestricted_components = has_partition_key_unrestricted_components();
         if (pk_has_unrestricted_components || clustering_key_restrictions_need_filtering()) {
             column_id first_filtering_id = pk_has_unrestricted_components ? 0 : _schema->clustering_key_columns().begin()->id +
                     num_clustering_prefix_columns_that_need_not_be_filtered();
             for (auto&& cdef : expr::get_sorted_column_defs(_new_clustering_columns_restrictions)) {
                 const expr::expression* single_col_restr = nullptr;
-                if (single_ck_restrs) {
-                    auto it = single_ck_restrs->restrictions().find(cdef);
-                    if (it != single_ck_restrs->restrictions().end()) {
-                        if (is_single_column_restriction(it->second->expression)) {
-                            single_col_restr = &it->second->expression;
-                        }
-                    }
+                auto it = _single_column_partition_key_restrictions.find(cdef);
+                if (it != _single_column_partition_key_restrictions.end()) {
+                    single_col_restr = &it->second;
                 }
                 if (cdef->id >= first_filtering_id && !column_uses_indexing(cdef, single_col_restr)) {
                     column_defs_for_filtering.emplace_back(cdef);
