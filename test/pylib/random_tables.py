@@ -280,8 +280,9 @@ class RandomTables():
 
     async def drop_all_tables(self) -> None:
         """Drop all active managed tables"""
-        await asyncio.gather(*(t.drop() for t in self.tables))
-        self.removed_tables.extend(self.tables)
+        tables, self.tables = self.tables, []
+        await asyncio.gather(*(t.drop() for t in tables))
+        self.removed_tables.extend(tables)
 
     async def verify_schema(self, table: Union[RandomTable, str] = None) -> None:
         """Verify schema of all active managed random tables"""
