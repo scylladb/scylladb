@@ -7,6 +7,8 @@
  */
 
 #pragma once
+#include <iosfwd>
+#include <cstdint>
 
 #include <iostream>
 
