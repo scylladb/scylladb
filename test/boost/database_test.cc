@@ -92,7 +92,8 @@ SEASTAR_TEST_CASE(test_safety_after_truncate) {
 
         auto assert_query_result = [&] (const std::vector<size_t>& expected_sizes) {
             auto max_size = std::numeric_limits<size_t>::max();
-            auto cmd = query::read_command(s->id(), s->version(), partition_slice_builder(*s).build(), query::max_result_size(max_size), query::row_limit(1000));
+            auto cmd = query::read_command(s->id(), s->version(), partition_slice_builder(*s).build(), query::max_result_size(max_size),
+                    query::tombstone_limit::max, query::row_limit(1000));
             e.db().invoke_on_all([&] (replica::database& db) -> future<> {
                 auto shard = this_shard_id();
                 auto s = db.find_schema(uuid);
@@ -192,7 +193,8 @@ SEASTAR_TEST_CASE(test_querying_with_limits) {
 
             auto max_size = std::numeric_limits<size_t>::max();
             {
-                auto cmd = query::read_command(s->id(), s->version(), partition_slice_builder(*s).build(), query::max_result_size(max_size), query::row_limit(3));
+                auto cmd = query::read_command(s->id(), s->version(), partition_slice_builder(*s).build(), query::max_result_size(max_size),
+                        query::tombstone_limit::max, query::row_limit(3));
                 e.db().invoke_on_all([&] (replica::database& db) -> future<> {
                     auto shard = this_shard_id();
                     auto s = db.find_schema(uuid);
@@ -204,7 +206,7 @@ SEASTAR_TEST_CASE(test_querying_with_limits) {
 
             {
                 auto cmd = query::read_command(s->id(), s->version(), partition_slice_builder(*s).build(), query::max_result_size(max_size),
-                        query::row_limit(query::max_rows), query::partition_limit(5));
+                        query::tombstone_limit::max, query::row_limit(query::max_rows), query::partition_limit(5));
                 e.db().invoke_on_all([&] (replica::database& db) -> future<> {
                     auto shard = this_shard_id();
                     auto s = db.find_schema(uuid);
@@ -216,7 +218,7 @@ SEASTAR_TEST_CASE(test_querying_with_limits) {
 
             {
                 auto cmd = query::read_command(s->id(), s->version(), partition_slice_builder(*s).build(), query::max_result_size(max_size),
-                        query::row_limit(query::max_rows), query::partition_limit(3));
+                        query::tombstone_limit::max, query::row_limit(query::max_rows), query::partition_limit(3));
                 e.db().invoke_on_all([&] (replica::database& db) -> future<> {
                     auto shard = this_shard_id();
                     auto s = db.find_schema(uuid);
@@ -885,7 +887,7 @@ SEASTAR_THREAD_TEST_CASE(read_max_size) {
                     } else {
                         slice.options.remove<query::partition_slice::option::allow_short_read>();
                     }
-                    query::read_command cmd(s->id(), s->version(), slice, query::max_result_size(max_size));
+                    query::read_command cmd(s->id(), s->version(), slice, query::max_result_size(max_size), query::tombstone_limit::max);
                     try {
                         auto size = query_method(s, cmd).get0();
                         // Just to ensure we are not interpreting empty results as success.
@@ -963,7 +965,7 @@ SEASTAR_THREAD_TEST_CASE(unpaged_mutation_read_global_limit) {
             testlog.info("checking: query_method={}", query_method_name);
             auto slice = s->full_slice();
             slice.options.remove<query::partition_slice::option::allow_short_read>();
-            query::read_command cmd(s->id(), s->version(), slice, query::max_result_size(max_size));
+            query::read_command cmd(s->id(), s->version(), slice, query::max_result_size(max_size), query::tombstone_limit::max);
             try {
                 auto size = query_method(s, cmd).get0();
                 // Just to ensure we are not interpreting empty results as success.

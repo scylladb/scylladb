@@ -70,7 +70,8 @@ future<lw_shared_ptr<strings_result>> read_strings(service::storage_proxy& proxy
 
 future<lw_shared_ptr<strings_result>> query_strings(service::storage_proxy& proxy, const redis_options& options, const bytes& key, service_permit permit, schema_ptr schema, query::partition_slice ps) {
     const auto max_result_size = proxy.get_max_result_size(ps);
-    query::read_command cmd(schema->id(), schema->version(), ps, max_result_size, query::row_limit(1), query::partition_limit(1), gc_clock::now(), std::nullopt, query_id::create_null_id(), query::is_first_page::no);
+    const auto max_tombstones = proxy.get_tombstone_limit();
+    query::read_command cmd(schema->id(), schema->version(), ps, max_result_size, max_tombstones, query::row_limit(1), query::partition_limit(1), gc_clock::now(), std::nullopt, query_id::create_null_id(), query::is_first_page::no);
     auto pkey = partition_key::from_single_value(*schema, key);
     auto partition_range = dht::partition_range::make_singular(dht::decorate_key(*schema, std::move(pkey)));
     dht::partition_range_vector partition_ranges;
@@ -146,7 +147,8 @@ future<lw_shared_ptr<std::map<bytes, bytes>>> read_hashes(service::storage_proxy
 
 future<lw_shared_ptr<std::map<bytes, bytes>>> query_hashes(service::storage_proxy& proxy, const redis_options& options, const bytes& key, service_permit permit, schema_ptr schema, query::partition_slice ps) {
     const auto max_result_size = proxy.get_max_result_size(ps);
-    query::read_command cmd(schema->id(), schema->version(), ps, max_result_size, query::row_limit::max, query::partition_limit(1), gc_clock::now(), std::nullopt, query_id::create_null_id(), query::is_first_page::no);
+    const auto max_tombstones = proxy.get_tombstone_limit();
+    query::read_command cmd(schema->id(), schema->version(), ps, max_result_size, max_tombstones, query::row_limit::max, query::partition_limit(1), gc_clock::now(), std::nullopt, query_id::create_null_id(), query::is_first_page::no);
     auto pkey = partition_key::from_single_value(*schema, key);
     auto partition_range = dht::partition_range::make_singular(dht::decorate_key(*schema, std::move(pkey)));
     dht::partition_range_vector partition_ranges;
