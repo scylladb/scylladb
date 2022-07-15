@@ -9,7 +9,7 @@
 import pytest
 import time
 from cassandra.protocol import SyntaxException, InvalidRequest, Unauthorized
-from util import new_test_table, new_function, new_user, new_session, new_test_keyspace, unique_name
+from util import new_test_table, new_function, new_user, new_session, new_test_keyspace, unique_name, new_type
 
 # Test that granting permissions to various resources works for the default user.
 # This case does not include functions, because due to differences in implementation
@@ -302,3 +302,27 @@ def test_grant_revoke_uda_permissions(scylla_only, cql):
                             check_enforced(cql, username, permission='AUTHORIZE', resource=resource, function=grant_idempotent)
 
                         cql.execute(f"DROP AGGREGATE IF EXISTS {keyspace}.{custom_avg}(bigint)")
+
+# Test that permissions for user-defined functions created on top of user-defined types work
+# Fails on Scylla, because we currently don't properly support user-defined types in function permissions
+@pytest.mark.xfail(reason='user-defined types not supported in function permissions yet')
+def test_udf_permissions_with_udt(cql):
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 1 }") as keyspace:
+        with new_type(cql, keyspace, '(v int)') as udt:
+            schema = f"a frozen<{udt}> primary key"
+            with new_test_table(cql, keyspace, schema) as table:
+                fun_body_lua = f"(i {udt}) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return 42;'"
+                fun_body_java = f"(i {udt}) CALLED ON NULL INPUT RETURNS int LANGUAGE java AS 'return 42;'"
+                fun_body = fun_body_lua
+                try:
+                    with new_function(cql, keyspace, fun_body) as fun:
+                        pass
+                except:
+                    fun_body = fun_body_java
+                with new_user(cql) as username:
+                    with new_session(cql, username) as user_session:
+                        with new_function(cql, keyspace, fun_body) as fun:
+                            cql.execute(f"INSERT INTO {table}(a) VALUES ((7))")
+                            grant(cql, 'SELECT', table, username)
+                            grant(cql, 'EXECUTE', f'FUNCTION {keyspace}.{fun}({udt})', username)
+                            user_session.execute(f'SELECT {keyspace}.{fun}(a) FROM {table}')
