@@ -114,7 +114,6 @@ statement_restrictions::initial_key_restrictions<clustering_key_prefix>::merge_t
 
 statement_restrictions::statement_restrictions(schema_ptr schema, bool allow_filtering)
     : _schema(schema)
-    , _clustering_columns_restrictions(get_initial_clustering_key_restrictions(allow_filtering))
     , _nonprimary_key_restrictions(::make_shared<single_column_restrictions>(schema))
     , _partition_range_is_simple(true)
 { }
@@ -421,14 +420,12 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
             if (prepared_restriction.op != expr::oper_t::IS_NOT) {
                 const auto restriction = expr::convert_to_restriction(prepared_restriction, schema);
                 if (dynamic_pointer_cast<multi_column_restriction>(restriction)) {
-                    _clustering_columns_restrictions = _clustering_columns_restrictions->merge_to(_schema, restriction);
                 } else if (has_token(restriction->expression)) {
                 } else {
                     auto single = restriction;
                     auto& def = *get_the_only_column(single->expression).col;
                     if (def.is_partition_key()) {
                     } else if (def.is_clustering_key()) {
-                        _clustering_columns_restrictions = _clustering_columns_restrictions->merge_to(_schema, restriction);
                     } else {
                         _nonprimary_key_restrictions->add_restriction(single);
                     }

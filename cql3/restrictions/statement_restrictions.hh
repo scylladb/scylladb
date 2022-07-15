@@ -50,8 +50,6 @@ private:
     /**
      * Restrictions on clustering columns
      */
-    ::shared_ptr<clustering_key_restrictions> _clustering_columns_restrictions;
-
     expr::expression _new_clustering_columns_restrictions;
 
     expr::single_column_restrictions_map _single_column_clustering_key_restrictions;
