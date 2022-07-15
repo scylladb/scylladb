@@ -50,7 +50,7 @@ private:
     /**
      * Restrictions on clustering columns
      */
-    expr::expression _new_clustering_columns_restrictions;
+    expr::expression _clustering_columns_restrictions;
 
     expr::single_column_restrictions_map _single_column_clustering_key_restrictions;
 
@@ -154,11 +154,11 @@ public:
      * otherwise.
      */
     bool clustering_key_restrictions_has_IN() const {
-        return find(_new_clustering_columns_restrictions, expr::oper_t::IN);
+        return find(_clustering_columns_restrictions, expr::oper_t::IN);
     }
 
     bool clustering_key_restrictions_has_only_eq() const {
-        return expr::has_only_eq_binops(_new_clustering_columns_restrictions);
+        return expr::has_only_eq_binops(_clustering_columns_restrictions);
     }
 
     /**
@@ -184,7 +184,7 @@ public:
     }
 
     const expr::expression& get_clustering_columns_restrictions() const {
-        return _new_clustering_columns_restrictions;
+        return _clustering_columns_restrictions;
     }
 
     bool has_token_restrictions() const {
@@ -275,7 +275,7 @@ private:
     const expr::expression& get_restrictions(column_kind kind) const {
         switch (kind) {
         case column_kind::partition_key: return _partition_key_restrictions;
-        case column_kind::clustering_key: return _new_clustering_columns_restrictions;
+        case column_kind::clustering_key: return _clustering_columns_restrictions;
         default: return _new_nonprimary_key_restrictions;
         }
     }
@@ -452,7 +452,7 @@ public:
      * <code>false</code> otherwise.
      */
     bool has_clustering_columns_restriction() const {
-        return !expr::is_empty_restriction(_new_clustering_columns_restrictions);
+        return !expr::is_empty_restriction(_clustering_columns_restrictions);
     }
 
     /**
@@ -467,7 +467,7 @@ public:
     bool pk_restrictions_need_filtering() const;
 
     bool ck_restrictions_need_filtering() const {
-        if (expr::is_empty_restriction(_new_clustering_columns_restrictions)) {
+        if (expr::is_empty_restriction(_clustering_columns_restrictions)) {
             return false;
         }
 
