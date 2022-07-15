@@ -33,6 +33,7 @@ tests/counter_test* @jul-stas
 
 # DOCS
 docs/* @annastuchlik @tzach
+docs/alternator @annastuchlik @tzach @nyh @psarna
 
 # GOSSIP
 gms/* @tgrabiec @asias
