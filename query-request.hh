@@ -267,10 +267,12 @@ partition_slice reverse_slice(const schema& schema, partition_slice slice);
 partition_slice half_reverse_slice(const schema&, partition_slice);
 
 constexpr auto max_partitions = std::numeric_limits<uint32_t>::max();
+constexpr auto max_tombstones = std::numeric_limits<uint64_t>::max();
 
 // Tagged integers to disambiguate constructor arguments.
 enum class row_limit : uint64_t { max = max_rows };
 enum class partition_limit : uint32_t { max = max_partitions };
+enum class tombstone_limit : uint64_t { max = max_tombstones };
 
 using is_first_page = bool_class<class is_first_page_tag>;
 
