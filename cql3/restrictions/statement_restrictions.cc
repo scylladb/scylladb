@@ -1797,7 +1797,7 @@ bool statement_restrictions::need_filtering() const {
     }
     // Now we know there are no nonkey restrictions.
 
-    if (dynamic_pointer_cast<multi_column_restriction>(_clustering_columns_restrictions)) {
+    if (_has_multi_column) {
         // Multicolumn bounds mean lexicographic order, implying a continuous clustering range.  Multicolumn IN means a
         // finite set of continuous ranges.  Multicolumn restrictions cannot currently be combined with single-column
         // clustering restrictions.  Therefore, a continuous clustering range is guaranteed.
