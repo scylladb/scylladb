@@ -256,7 +256,7 @@ bool partition_key_matches(const schema& base, const view_info& view, const dht:
 }
 
 bool clustering_prefix_matches(const schema& base, const view_info& view, const partition_key& key, const clustering_key_prefix& ck) {
-    const auto r = view.select_statement().get_restrictions()->get_clustering_columns_restrictions();
+    const cql3::expr::expression& r = view.select_statement().get_restrictions()->get_clustering_columns_restrictions();
     std::vector<bytes> exploded_pk = key.explode();
     std::vector<bytes> exploded_ck = ck.explode();
     std::vector<const column_definition*> ck_columns;
@@ -269,7 +269,7 @@ bool clustering_prefix_matches(const schema& base, const view_info& view, const 
     auto dummy_options = cql3::query_options({ });
     // FIXME: pass nullptrs for some of theses dummies
     return cql3::expr::is_satisfied_by(
-            r->expression,
+            r,
             cql3::expr::evaluation_inputs{
                 .partition_key = &exploded_pk,
                 .clustering_key = &exploded_ck,

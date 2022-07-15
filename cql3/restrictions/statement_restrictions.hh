@@ -183,8 +183,8 @@ public:
         return _partition_key_restrictions;
     }
 
-    ::shared_ptr<clustering_key_restrictions> get_clustering_columns_restrictions() const {
-        return _clustering_columns_restrictions;
+    const expr::expression& get_clustering_columns_restrictions() const {
+        return _new_clustering_columns_restrictions;
     }
 
     bool has_token_restrictions() const {

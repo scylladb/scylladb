@@ -399,10 +399,10 @@ modification_statement::process_where_clause(data_dictionary::database db, std::
                                          | boost::adaptors::transformed(std::mem_fn(&column_definition::name_as_text)));
         throw exceptions::invalid_request_exception(format("Invalid where clause contains non PRIMARY KEY columns: {}", column_names));
     }
-    auto ck_restrictions = _restrictions->get_clustering_columns_restrictions();
-    if (has_slice(ck_restrictions->expression) && !allow_clustering_key_slices()) {
+    const expr::expression& ck_restrictions = _restrictions->get_clustering_columns_restrictions();
+    if (has_slice(ck_restrictions) && !allow_clustering_key_slices()) {
         throw exceptions::invalid_request_exception(
-                format("Invalid operator in where clause {}", to_string(ck_restrictions->expression)));
+                format("Invalid operator in where clause {}", to_string(ck_restrictions)));
     }
     if (_restrictions->has_unrestricted_clustering_columns() && !applies_only_to_static_columns() && !s->is_dense()) {
         // Tomek: Origin had "&& s->comparator->is_composite()" in the condition below.
@@ -415,13 +415,13 @@ modification_statement::process_where_clause(data_dictionary::database db, std::
         // Those tables don't have clustering columns so we wouldn't reach this code, thus
         // the check seems redundant.
         if (require_full_clustering_key()) {
-            auto& col = s->column_at(column_kind::clustering_key, ck_restrictions->size());
+            auto& col = s->column_at(column_kind::clustering_key, _restrictions->clustering_columns_restrictions_size());
             throw exceptions::invalid_request_exception(format("Missing mandatory PRIMARY KEY part {}", col.name_as_text()));
         }
         // In general, we can't modify specific columns if not all clustering columns have been specified.
         // However, if we modify only static columns, it's fine since we won't really use the prefix anyway.
-        if (!has_slice(ck_restrictions->expression)) {
-            auto& col = s->column_at(column_kind::clustering_key, ck_restrictions->size());
+        if (!has_slice(ck_restrictions)) {
+            auto& col = s->column_at(column_kind::clustering_key, _restrictions->clustering_columns_restrictions_size());
             for (auto&& op : _column_operations) {
                 if (!op->column.is_static()) {
                     throw exceptions::invalid_request_exception(format("Primary key column '{}' must be specified in order to modify column '{}'",
