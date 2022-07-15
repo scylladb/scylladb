@@ -747,7 +747,7 @@ void statement_restrictions::add_single_column_clustering_key_restriction(const 
 
 void statement_restrictions::add_multi_column_clustering_key_restriction(const expr::binary_operator& restr) {
     if (expr::is_empty_restriction(_new_clustering_columns_restrictions)) {
-        _new_clustering_columns_restrictions = expr::make_conjunction(_new_clustering_columns_restrictions, restr);
+        _new_clustering_columns_restrictions = restr;
         return;
     }
 
