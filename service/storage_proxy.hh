@@ -225,6 +225,7 @@ public:
     locator::token_metadata_ptr get_token_metadata_ptr() const noexcept;
 
     query::max_result_size get_max_result_size(const query::partition_slice& slice) const;
+    query::tombstone_limit get_tombstone_limit() const;
     inet_address_vector_replica_set get_live_endpoints(replica::keyspace& ks, const dht::token& token) const;
 
 private:

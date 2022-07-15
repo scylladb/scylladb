@@ -2073,6 +2073,14 @@ query::max_result_size storage_proxy::get_max_result_size(const query::partition
     }
 }
 
+query::tombstone_limit storage_proxy::get_tombstone_limit() const {
+    auto& db = _db.local();
+    if (!db.is_internal_query() && _features.empty_replica_pages) {
+        return query::tombstone_limit(db.get_config().query_tombstone_page_limit());
+    }
+    return query::tombstone_limit::max;
+}
+
 bool storage_proxy::need_throttle_writes() const {
     return get_global_stats().background_write_bytes > _background_write_throttle_threahsold || get_global_stats().queued_write_bytes > 6*1024*1024;
 }
