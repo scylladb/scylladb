@@ -16,12 +16,14 @@
 #include "streaming/stream_session_state.hh"
 #include <seastar/core/metrics.hh>
 #include <seastar/core/coroutine.hh>
+#include "db/config.hh"
 
 namespace streaming {
 
 extern logging::logger sslog;
 
-stream_manager::stream_manager(sharded<replica::database>& db,
+stream_manager::stream_manager(db::config& cfg,
+            sharded<replica::database>& db,
             sharded<db::system_distributed_keyspace>& sys_dist_ks,
             sharded<db::view::view_update_generator>& view_update_generator,
             sharded<netw::messaging_service>& ms,

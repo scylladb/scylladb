@@ -22,6 +22,7 @@
 #include <map>
 
 namespace db {
+class config;
 class system_distributed_keyspace;
 namespace view {
 class view_update_generator;
@@ -99,7 +100,7 @@ private:
     seastar::metrics::metric_groups _metrics;
 
 public:
-    stream_manager(sharded<replica::database>& db,
+    stream_manager(db::config& cfg, sharded<replica::database>& db,
             sharded<db::system_distributed_keyspace>& sys_dist_ks,
             sharded<db::view::view_update_generator>& view_update_generator,
             sharded<netw::messaging_service>& ms,
