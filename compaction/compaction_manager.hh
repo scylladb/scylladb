@@ -34,10 +34,6 @@
 #include "seastarx.hh"
 #include "sstables/exceptions.hh"
 
-namespace replica {
-class table;
-}
-
 class compacting_sstable_registration;
 
 // Compaction manager provides facilities to submit and track compaction jobs on
