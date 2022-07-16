@@ -329,7 +329,7 @@ future<sstables::compaction_result> compaction_manager::task::compact_sstables(s
     };
     descriptor.replacer = [this, &t, release_exhausted] (sstables::compaction_completion_desc desc) {
         t.get_compaction_strategy().notify_completion(desc.old_sstables, desc.new_sstables);
-        _cm.propagate_replacement(&t, desc.old_sstables, desc.new_sstables);
+        _cm.propagate_replacement(t.as_table_state(), desc.old_sstables, desc.new_sstables);
         auto old_sstables = desc.old_sstables;
         t.on_compaction_completion(std::move(desc));
         // Calls compaction manager's task for this compaction to release reference to exhausted SSTables.
@@ -1527,10 +1527,11 @@ future<> compaction_manager::stop_compaction(sstring type, replica::table* table
     return stop_ongoing_compactions("user request", table, target_type);
 }
 
-void compaction_manager::propagate_replacement(replica::table* t,
+void compaction_manager::propagate_replacement(compaction::table_state& t,
         const std::vector<sstables::shared_sstable>& removed, const std::vector<sstables::shared_sstable>& added) {
     for (auto& task : _tasks) {
-        if (task->compacting_table() == t && task->compaction_running()) {
+        // FIXME: stop using as_table_state() once compaction_manager::task switches to table_state.
+        if (&task->compacting_table()->as_table_state() == &t && task->compaction_running()) {
             task->compaction_data().pending_replacements.push_back({ removed, added });
         }
     }
