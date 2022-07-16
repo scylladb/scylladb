@@ -458,7 +458,7 @@ future<> distributed_loader::populate_column_family(distributed<replica::databas
         global_column_family_ptr global_table(db, ks, cf);
 
         sharded<sstables::sstable_directory> directory;
-        directory.start(fs::path(sstdir), service::get_local_streaming_priority(),
+        directory.start(fs::path(sstdir), default_priority_class(),
             db.local().get_config().initial_sstable_loading_concurrency(), std::ref(db.local().get_sharded_sst_dir_semaphore()),
             sstables::sstable_directory::need_mutate_level::no,
             sstables::sstable_directory::lack_of_toc_fatal::yes,
