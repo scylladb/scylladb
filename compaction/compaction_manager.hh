@@ -101,7 +101,7 @@ public:
 
     protected:
         compaction_manager& _cm;
-        replica::table* _compacting_table = nullptr;
+        compaction::table_state* _compacting_table = nullptr;
         compaction_state& _compaction_state;
         sstables::compaction_data _compaction_data;
         state _state = state::none;
@@ -115,7 +115,7 @@ public:
         sstring _description;
 
     public:
-        explicit task(compaction_manager& mgr, replica::table* t, sstables::compaction_type type, sstring desc);
+        explicit task(compaction_manager& mgr, compaction::table_state* t, sstables::compaction_type type, sstring desc);
 
         task(task&&) = delete;
         task(const task&) = delete;
@@ -156,7 +156,7 @@ public:
     public:
         future<> run() noexcept;
 
-        const replica::table* compacting_table() const noexcept {
+        const compaction::table_state* compacting_table() const noexcept {
             return _compacting_table;
         }
 
@@ -210,7 +210,7 @@ public:
         sstables::shared_sstable consume_sstable();
 
     public:
-        explicit sstables_task(compaction_manager& mgr, replica::table* t, sstables::compaction_type compaction_type, sstring desc, std::vector<sstables::shared_sstable> sstables)
+        explicit sstables_task(compaction_manager& mgr, compaction::table_state* t, sstables::compaction_type compaction_type, sstring desc, std::vector<sstables::shared_sstable> sstables)
             : task(mgr, t, compaction_type, std::move(desc))
         {
             set_sstables(std::move(sstables));
