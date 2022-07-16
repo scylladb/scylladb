@@ -1254,13 +1254,20 @@ private:
     }
 };
 
-future<> compaction_manager::perform_sstable_scrub_validate_mode(replica::table* t) {
+static std::vector<sstables::shared_sstable> get_all_sstables(compaction::table_state& t) {
+    auto s = boost::copy_range<std::vector<sstables::shared_sstable>>(*t.main_sstable_set().all());
+    auto maintenance_set = t.maintenance_sstable_set().all();
+    s.insert(s.end(), maintenance_set->begin(), maintenance_set->end());
+    return s;
+}
+
+future<> compaction_manager::perform_sstable_scrub_validate_mode(compaction::table_state& t) {
     if (_state != state::enabled) {
         return make_ready_future<>();
     }
     // All sstables must be included, even the ones being compacted, such that everything in table is validated.
-    auto all_sstables = boost::copy_range<std::vector<sstables::shared_sstable>>(*t->get_sstables());
-    return perform_task(seastar::make_shared<validate_sstables_compaction_task>(*this, &t->as_table_state(), std::move(all_sstables)));
+    auto all_sstables = get_all_sstables(t);
+    return perform_task(seastar::make_shared<validate_sstables_compaction_task>(*this, &t, std::move(all_sstables)));
 }
 
 class compaction_manager::cleanup_sstables_compaction_task : public compaction_manager::task {
@@ -1413,14 +1420,14 @@ future<> compaction_manager::perform_sstable_upgrade(replica::database& db, comp
 }
 
 // Submit a table to be scrubbed and wait for its termination.
-future<> compaction_manager::perform_sstable_scrub(replica::table* t, sstables::compaction_type_options::scrub opts) {
+future<> compaction_manager::perform_sstable_scrub(compaction::table_state& t, sstables::compaction_type_options::scrub opts) {
     auto scrub_mode = opts.operation_mode;
     if (scrub_mode == sstables::compaction_type_options::scrub::mode::validate) {
         return perform_sstable_scrub_validate_mode(t);
     }
-    return rewrite_sstables(t->as_table_state(), sstables::compaction_type_options::make_scrub(scrub_mode), [this, t, opts] {
-        auto all_sstables = t->get_sstable_set().all();
-        std::vector<sstables::shared_sstable> sstables = boost::copy_range<std::vector<sstables::shared_sstable>>(*all_sstables
+    return rewrite_sstables(t, sstables::compaction_type_options::make_scrub(scrub_mode), [this, &t, opts] {
+        auto all_sstables = get_all_sstables(t);
+        std::vector<sstables::shared_sstable> sstables = boost::copy_range<std::vector<sstables::shared_sstable>>(all_sstables
                 | boost::adaptors::filtered([&opts] (const sstables::shared_sstable& sst) {
             if (sst->requires_view_building()) {
                 return false;

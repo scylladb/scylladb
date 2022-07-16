@@ -2321,7 +2321,7 @@ SEASTAR_TEST_CASE(sstable_scrub_validate_mode_test) {
             sstables::compaction_type_options::scrub opts = {
                 .operation_mode = sstables::compaction_type_options::scrub::mode::validate,
             };
-            compaction_manager.perform_sstable_scrub(table.get(), opts).get();
+            compaction_manager.perform_sstable_scrub(table->as_table_state(), opts).get();
 
             BOOST_REQUIRE(sst->is_quarantined());
             BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).empty());
@@ -2519,7 +2519,7 @@ SEASTAR_TEST_CASE(sstable_scrub_skip_mode_test) {
             // We expect the scrub with mode=srub::mode::abort to stop on the first invalid fragment.
             sstables::compaction_type_options::scrub opts = {};
             opts.operation_mode = sstables::compaction_type_options::scrub::mode::abort;
-            compaction_manager.perform_sstable_scrub(table.get(), opts).get();
+            compaction_manager.perform_sstable_scrub(table->as_table_state(), opts).get();
 
             BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).size() == 1);
             verify_fragments(sst, corrupt_fragments);
@@ -2528,7 +2528,7 @@ SEASTAR_TEST_CASE(sstable_scrub_skip_mode_test) {
 
             // We expect the scrub with mode=srub::mode::skip to get rid of all invalid data.
             opts.operation_mode = sstables::compaction_type_options::scrub::mode::skip;
-            compaction_manager.perform_sstable_scrub(table.get(), opts).get();
+            compaction_manager.perform_sstable_scrub(table->as_table_state(), opts).get();
 
             BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).size() == 1);
             BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).front() != sst);
@@ -2616,7 +2616,7 @@ SEASTAR_TEST_CASE(sstable_scrub_segregate_mode_test) {
             // We expect the scrub with mode=srub::mode::abort to stop on the first invalid fragment.
             sstables::compaction_type_options::scrub opts = {};
             opts.operation_mode = sstables::compaction_type_options::scrub::mode::abort;
-            compaction_manager.perform_sstable_scrub(table.get(), opts).get();
+            compaction_manager.perform_sstable_scrub(table->as_table_state(), opts).get();
 
             BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).size() == 1);
             verify_fragments(sst, corrupt_fragments);
@@ -2625,7 +2625,7 @@ SEASTAR_TEST_CASE(sstable_scrub_segregate_mode_test) {
 
             // We expect the scrub with mode=srub::mode::segregate to fix all out-of-order data.
             opts.operation_mode = sstables::compaction_type_options::scrub::mode::segregate;
-            compaction_manager.perform_sstable_scrub(table.get(), opts).get();
+            compaction_manager.perform_sstable_scrub(table->as_table_state(), opts).get();
 
             testlog.info("Scrub resulted in {} sstables", in_strategy_sstables(table->as_table_state()).size());
             BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).size() > 1);
@@ -2728,7 +2728,7 @@ SEASTAR_TEST_CASE(sstable_scrub_quarantine_mode_test) {
                 // We expect the scrub with mode=scrub::mode::validate to quarantine the sstable.
                 sstables::compaction_type_options::scrub opts = {};
                 opts.operation_mode = sstables::compaction_type_options::scrub::mode::validate;
-                compaction_manager.perform_sstable_scrub(table.get(), opts).get();
+                compaction_manager.perform_sstable_scrub(table->as_table_state(), opts).get();
 
                 BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).empty());
                 BOOST_REQUIRE(sst->is_quarantined());
@@ -2739,7 +2739,7 @@ SEASTAR_TEST_CASE(sstable_scrub_quarantine_mode_test) {
                 // We expect the scrub with mode=scrub::mode::segregate to fix all out-of-order data.
                 opts.operation_mode = sstables::compaction_type_options::scrub::mode::segregate;
                 opts.quarantine_operation_mode = qmode;
-                compaction_manager.perform_sstable_scrub(table.get(), opts).get();
+                compaction_manager.perform_sstable_scrub(table->as_table_state(), opts).get();
 
                 switch (qmode) {
                 case sstables::compaction_type_options::scrub::quarantine_mode::include:

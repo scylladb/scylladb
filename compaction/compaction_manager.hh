@@ -333,7 +333,7 @@ private:
     // similar-sized compaction.
     void postpone_compaction_for_table(compaction::table_state* t);
 
-    future<> perform_sstable_scrub_validate_mode(replica::table* t);
+    future<> perform_sstable_scrub_validate_mode(compaction::table_state& t);
 
     using get_candidates_func = std::function<future<std::vector<sstables::shared_sstable>>()>;
 
@@ -396,7 +396,7 @@ public:
     future<> perform_sstable_upgrade(replica::database& db, compaction::table_state& t, bool exclude_current_version);
 
     // Submit a table to be scrubbed and wait for its termination.
-    future<> perform_sstable_scrub(replica::table* t, sstables::compaction_type_options::scrub opts);
+    future<> perform_sstable_scrub(compaction::table_state& t, sstables::compaction_type_options::scrub opts);
 
     // Submit a table for major compaction.
     future<> perform_major_compaction(replica::table* t);

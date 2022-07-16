@@ -1408,7 +1408,7 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
                 return do_for_each(column_families, [=, &db](sstring cfname) {
                     auto& cm = db.get_compaction_manager();
                     auto& cf = db.find_column_family(keyspace, cfname);
-                    return cm.perform_sstable_scrub(&cf, opts);
+                    return cm.perform_sstable_scrub(cf.as_table_state(), opts);
                 });
             });
         }).then([]{
