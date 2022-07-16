@@ -2426,6 +2426,13 @@ public:
         return db::system_keyspace::update_compaction_history(compaction_id, ks_name, cf_name, ended_at.count(),
                                                               bytes_in, bytes_out, std::unordered_map<int32_t, int64_t>{});
     }
+    future<> on_compaction_completion(sstables::compaction_completion_desc desc, sstables::offstrategy offstrategy) override {
+        if (offstrategy) {
+            return _t.update_sstable_lists_on_off_strategy_completion(std::move(desc));
+        }
+        _t.on_compaction_completion(std::move(desc));
+        return make_ready_future<>();
+    }
 };
 
 compaction::table_state& table::as_table_state() const noexcept {

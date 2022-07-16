@@ -331,7 +331,7 @@ future<sstables::compaction_result> compaction_manager::task::compact_sstables(s
         t.get_compaction_strategy().notify_completion(desc.old_sstables, desc.new_sstables);
         _cm.propagate_replacement(t.as_table_state(), desc.old_sstables, desc.new_sstables);
         auto old_sstables = desc.old_sstables;
-        t.on_compaction_completion(std::move(desc));
+        t.as_table_state().on_compaction_completion(std::move(desc), sstables::offstrategy::no).get();
         // Calls compaction manager's task for this compaction to release reference to exhausted SSTables.
         if (release_exhausted) {
             release_exhausted(old_sstables);
@@ -1052,7 +1052,7 @@ public:
             .old_sstables = std::move(old_sstables),
             .new_sstables = std::move(reshape_candidates)
         };
-        co_await t.update_sstable_lists_on_off_strategy_completion(std::move(completion_desc));
+        co_await t.as_table_state().on_compaction_completion(std::move(completion_desc), sstables::offstrategy::yes);
 
         cleanup_new_unused_sstables_on_failure.cancel();
         // By marking input sstables for deletion instead, the ones which require view building will stay in the staging

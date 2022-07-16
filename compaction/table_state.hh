@@ -11,6 +11,7 @@
 
 #include "schema_fwd.hh"
 #include "sstables/sstable_set.hh"
+#include "compaction_descriptor.hh"
 
 class reader_permit;
 
@@ -38,6 +39,7 @@ public:
     virtual sstables::sstable_writer_config configure_writer(sstring origin) const = 0;
     virtual api::timestamp_type min_memtable_timestamp() const = 0;
     virtual future<> update_compaction_history(utils::UUID compaction_id, sstring ks_name, sstring cf_name, std::chrono::milliseconds ended_at, int64_t bytes_in, int64_t bytes_out) = 0;
+    virtual future<> on_compaction_completion(sstables::compaction_completion_desc desc, sstables::offstrategy offstrategy) = 0;
 };
 
 }

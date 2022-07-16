@@ -592,7 +592,6 @@ private:
     static seastar::shard_id calculate_shard_from_sstable_generation(sstables::generation_type sstable_generation) {
         return sstables::generation_value(sstable_generation) % smp::count;
     }
-public:
     // This will update sstable lists on behalf of off-strategy compaction, where
     // input files will be removed from the maintenance set and output files will
     // be inserted into the main set.

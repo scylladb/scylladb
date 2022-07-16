@@ -170,6 +170,9 @@ public:
     future<> update_compaction_history(utils::UUID compaction_id, sstring ks_name, sstring cf_name, std::chrono::milliseconds ended_at, int64_t bytes_in, int64_t bytes_out) override {
         return make_ready_future<>();
     }
+    future<> on_compaction_completion(sstables::compaction_completion_desc desc, sstables::offstrategy offstrategy) override {
+        return _t->as_table_state().on_compaction_completion(std::move(desc), offstrategy);
+    }
 };
 
 static std::unique_ptr<table_state> make_table_state_for_test(column_family_for_tests& t, test_env& env) {
