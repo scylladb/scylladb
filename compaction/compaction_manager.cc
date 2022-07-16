@@ -159,9 +159,9 @@ unsigned compaction_manager::current_compaction_fan_in_threshold() const {
     return std::min(unsigned(32), largest_fan_in);
 }
 
-bool compaction_manager::can_register_compaction(replica::table* t, int weight, unsigned fan_in) const {
+bool compaction_manager::can_register_compaction(compaction::table_state& t, int weight, unsigned fan_in) const {
     // Only one weight is allowed if parallel compaction is disabled.
-    if (!t->get_compaction_strategy().parallel_compaction() && has_table_ongoing_compaction(t->as_table_state())) {
+    if (!t.get_compaction_strategy().parallel_compaction() && has_table_ongoing_compaction(t)) {
         return false;
     }
     // Weightless compaction doesn't have to be serialized, and won't dillute overall efficiency.
@@ -911,7 +911,7 @@ protected:
                 cmlog.debug("{}: sstables={} can_proceed={} auto_compaction={}", *this, descriptor.sstables.size(), can_proceed(), t.is_auto_compaction_disabled_by_user());
                 co_return;
             }
-            if (!_cm.can_register_compaction(&t, weight, descriptor.fan_in())) {
+            if (!_cm.can_register_compaction(t.as_table_state(), weight, descriptor.fan_in())) {
                 cmlog.debug("Refused compaction job ({} sstable(s)) of weight {} for {}.{}, postponing it...",
                     descriptor.sstables.size(), weight, t.schema()->ks_name(), t.schema()->cf_name());
                 switch_state(state::postponed);

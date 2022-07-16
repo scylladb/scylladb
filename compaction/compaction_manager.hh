@@ -304,7 +304,7 @@ private:
     unsigned current_compaction_fan_in_threshold() const;
 
     // Return true if compaction can be initiated
-    bool can_register_compaction(replica::table* t, int weight, unsigned fan_in) const;
+    bool can_register_compaction(compaction::table_state& t, int weight, unsigned fan_in) const;
     // Register weight for a table. Do that only if can_register_weight()
     // returned true.
     void register_weight(int weight);
