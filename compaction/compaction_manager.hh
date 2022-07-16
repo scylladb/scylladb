@@ -458,11 +458,7 @@ public:
     const std::vector<sstables::compaction_info> get_compactions(replica::table* t = nullptr) const;
 
     // Returns true if table has an ongoing compaction, running on its behalf
-    bool has_table_ongoing_compaction(const replica::table* t) const {
-        return std::any_of(_tasks.begin(), _tasks.end(), [t] (const shared_ptr<task>& task) {
-            return task->compacting_table() == t && task->compaction_running();
-        });
-    };
+    bool has_table_ongoing_compaction(const compaction::table_state& t) const;
 
     bool compaction_disabled(compaction::table_state& t) const;
 

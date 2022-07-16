@@ -161,7 +161,7 @@ unsigned compaction_manager::current_compaction_fan_in_threshold() const {
 
 bool compaction_manager::can_register_compaction(replica::table* t, int weight, unsigned fan_in) const {
     // Only one weight is allowed if parallel compaction is disabled.
-    if (!t->get_compaction_strategy().parallel_compaction() && has_table_ongoing_compaction(t)) {
+    if (!t->get_compaction_strategy().parallel_compaction() && has_table_ongoing_compaction(t->as_table_state())) {
         return false;
     }
     // Weightless compaction doesn't have to be serialized, and won't dillute overall efficiency.
@@ -1490,6 +1490,12 @@ const std::vector<sstables::compaction_info> compaction_manager::get_compactions
                 return (!t || task->compacting_table() == t) && task->compaction_running();
             }) | boost::adaptors::transformed(to_info));
 }
+
+bool compaction_manager::has_table_ongoing_compaction(const compaction::table_state& t) const {
+    return std::any_of(_tasks.begin(), _tasks.end(), [&t] (const shared_ptr<task>& task) {
+        return &task->compacting_table()->as_table_state() == &t && task->compaction_running();
+    });
+};
 
 bool compaction_manager::compaction_disabled(compaction::table_state& t) const {
     return _compaction_state.contains(&t) && _compaction_state.at(&t).compaction_disabled();
