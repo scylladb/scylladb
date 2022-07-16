@@ -157,6 +157,9 @@ public:
     reader_permit make_compaction_reader_permit() const override {
         return _env.make_reader_permit();
     }
+    sstables::sstables_manager& get_sstables_manager() noexcept override {
+        return _env.manager();
+    }
     sstables::shared_sstable make_sstable() const override {
         return _t->make_sstable();
     }
