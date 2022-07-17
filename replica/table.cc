@@ -816,7 +816,7 @@ void table::set_metrics() {
             _view_stats.register_stats();
         }
 
-        if (_schema->ks_name() != db::system_keyspace::NAME && _schema->ks_name() != db::schema_tables::v3::NAME && _schema->ks_name() != "system_traces") {
+        if (!is_internal_keyspace(_schema->ks_name())) {
             _metrics.add_group("column_family", {
                     ms::make_histogram("read_latency", ms::description("Read latency histogram"), [this] {return to_metrics_histogram(_stats.estimated_read);})(cf)(ks),
                     ms::make_histogram("write_latency", ms::description("Write latency histogram"), [this] {return to_metrics_histogram(_stats.estimated_write);})(cf)(ks),
