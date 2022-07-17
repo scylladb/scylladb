@@ -7,6 +7,16 @@ Introduction
 ScyllaDB was originally designed, following Apache Cassandra, to use gossip for topology and schema updates and the Paxos consensus algorithm for 
 strong data consistency (:doc:`LWT </using-scylla/lwt>`). To achieve stronger consistency without performance penalty, ScyllaDB 5.0 is  turning to Raft - a consensus algorithm designed as an alternative to both gossip and Paxos.
 
+Raft is a consensus algorithm that implements a distributed, consistent, replicated log across members (nodes). Raft implements consensus by first electing a distinguished leader, then giving the leader complete responsibility for managing the replicated log. The leader accepts log entries from clients, replicates them on other servers, and tells servers when it is safe to apply log entries to their state machines.
+
+Raft uses a heartbeat mechanism to trigger a leader election. All servers start as followers and remain in the follower state as long as they receive valid RPCs (heartbeat) from a leader or candidate. A leader sends periodic heartbeats to all followers to maintain his authority (leadership). Suppose a follower receives no communication over a period called the election timeout. In that case, it assumes no viable leader and begins an election to choose a new leader.
+
+Leader selection is described in detail in the `raft paper <https://raft.github.io/raft.pdf>`_.
+
+Scylla 5.0 uses Raft to maintain schema updates in every node (see below). Any schema update, like ALTER, CREATE or DROP TABLE, is first committed as an entry in the replicated Raft log, and, once stored on most replicas, applied to all nodes **in the same order**, even in the face of a node or network failures.
+
+Following Scylla 5.x releases will use Raft to guarantee consistent topology updates similarly.
+
 .. _raft-quorum-requirement:
 
 Quorum Requirement
