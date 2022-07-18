@@ -61,6 +61,8 @@ private:
 
     expr::expression _new_nonprimary_key_restrictions;
 
+    expr::single_column_restrictions_map _single_column_nonprimary_key_restrictions;
+
     std::unordered_set<const column_definition*> _not_null_columns;
 
     /**

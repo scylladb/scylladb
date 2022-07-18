@@ -442,6 +442,7 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
         if (!expr::contains_multi_column_restriction(_clustering_columns_restrictions)) {
             _single_column_clustering_key_restrictions = expr::get_single_column_restrictions_map(_clustering_columns_restrictions);
         }
+        _single_column_nonprimary_key_restrictions = expr::get_single_column_restrictions_map(_new_nonprimary_key_restrictions);
         _clustering_prefix_restrictions = extract_clustering_prefix_restrictions(*_where, _schema);
         _partition_range_restrictions = extract_partition_range(*_where, _schema);
     }
