@@ -568,7 +568,7 @@ result::
 Note that if you provide a subset of the UDT, for example, just the ``first`` name in the example below, **null** will be used for the missing values.
 For example::
 
-    SELECT * from superheroes WHERE name={first: 'Al', last: 'Bundy'};
+    SELECT * from superheroes WHERE name={first: 'Al'};
     
 result::
 
