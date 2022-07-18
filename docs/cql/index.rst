@@ -5,6 +5,7 @@ CQL Reference
    :maxdepth: 2
    :hidden:
    
+   cqlsh
    appendices
    compaction
    consistency
@@ -19,6 +20,7 @@ CQL Reference
    mv
    non-reserved-keywords
    reserved-keywords
+   cql-extensions.md
 
 cqlsh - The CQL Shell
 -----------------------
