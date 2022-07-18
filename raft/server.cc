@@ -843,7 +843,6 @@ future<> server_impl::io_fiber(index_t last_stable) {
             // network addresses of the joining servers).
             configuration_diff rpc_diff;
             if (batch.configuration) {
-                const server_address_set& current_rpc_config = get_rpc_config();
                 rpc_diff = diff_address_sets(get_rpc_config(), *batch.configuration);
                 for (const auto& addr: rpc_diff.joining) {
                     add_to_rpc_config(addr);
