@@ -57,8 +57,6 @@ private:
     /**
      * Restriction on non-primary key columns (i.e. secondary index restrictions)
      */
-    ::shared_ptr<single_column_restrictions> _nonprimary_key_restrictions;
-
     expr::expression _new_nonprimary_key_restrictions;
 
     expr::single_column_restrictions_map _single_column_nonprimary_key_restrictions;

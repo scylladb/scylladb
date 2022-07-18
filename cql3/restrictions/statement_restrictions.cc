@@ -114,7 +114,6 @@ statement_restrictions::initial_key_restrictions<clustering_key_prefix>::merge_t
 
 statement_restrictions::statement_restrictions(schema_ptr schema, bool allow_filtering)
     : _schema(schema)
-    , _nonprimary_key_restrictions(::make_shared<single_column_restrictions>(schema))
     , _partition_range_is_simple(true)
 { }
 #if 0
@@ -418,19 +417,6 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
             add_restriction(prepared_restriction, schema, allow_filtering, for_view);
 
             if (prepared_restriction.op != expr::oper_t::IS_NOT) {
-                const auto restriction = expr::convert_to_restriction(prepared_restriction, schema);
-                if (dynamic_pointer_cast<multi_column_restriction>(restriction)) {
-                } else if (has_token(restriction->expression)) {
-                } else {
-                    auto single = restriction;
-                    auto& def = *get_the_only_column(single->expression).col;
-                    if (def.is_partition_key()) {
-                    } else if (def.is_clustering_key()) {
-                    } else {
-                        _nonprimary_key_restrictions->add_restriction(single);
-                    }
-                }
-
                 _where = _where.has_value() ? make_conjunction(std::move(*_where), prepared_restriction) : prepared_restriction;
             }
         }
