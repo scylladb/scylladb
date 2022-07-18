@@ -409,7 +409,7 @@ Should I use RAID for replications, such as RAID1, RAID4 or higher?
 You can, but it is not recommended. Scylla :doc:`clustering architecture </architecture/ringarchitecture/index/>` already provides data replication across nodes and DCs.
 Adding another layer of replication in each node is redundant, slows down I/O operation and reduces available storage.
 Want a higher level of replication?
-Increase the Replication Factor (RF) of :doc:`relevant Keyspaces </getting-started/ddl/>`.
+Increase the Replication Factor (RF) of :doc:`relevant Keyspaces </cql/ddl/>`.
 
 Can I use JBOD and not use RAID0?
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -1,1 +1,1 @@
-:doc:`Apache Cassandra Query Language </getting-started/cql/>`
+:doc:`Apache Cassandra Query Language </cql/index>`
