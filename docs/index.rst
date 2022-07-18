@@ -174,6 +174,7 @@
   getting-started/index
   operating-scylla/index
   using-scylla/index
+  cql/index
   architecture/index
   troubleshooting/index
   kb/index

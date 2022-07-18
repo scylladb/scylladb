@@ -8,7 +8,7 @@ Getting Started
    install-scylla/index
    configure
    requirements
-   cql
+   CQL Reference </cql>
    cqlsh
    Scylla Drivers </using-scylla/drivers/index>
    Migrate to Scylla </using-scylla/migrate-scylla>
