@@ -645,7 +645,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                 // as a table can be dropped during loop below, let's find it before issuing the cleanup request.
                 for (auto& id : table_ids) {
                     replica::table& t = db.find_column_family(id);
-                    co_await cm.perform_cleanup(db, &t);
+                    co_await cm.perform_cleanup(db, t.as_table_state());
                 }
                 co_return;
             }).then([]{
@@ -672,7 +672,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
             return do_for_each(column_families, [=, &db](sstring cfname) {
                 auto& cm = db.get_compaction_manager();
                 auto& cf = db.find_column_family(keyspace, cfname);
-                return cm.perform_sstable_upgrade(db, &cf, exclude_current_version);
+                return cm.perform_sstable_upgrade(db, cf.as_table_state(), exclude_current_version);
             });
         }).then([]{
             return make_ready_future<json::json_return_type>(0);
@@ -1408,7 +1408,7 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
                 return do_for_each(column_families, [=, &db](sstring cfname) {
                     auto& cm = db.get_compaction_manager();
                     auto& cf = db.find_column_family(keyspace, cfname);
-                    return cm.perform_sstable_scrub(&cf, opts);
+                    return cm.perform_sstable_scrub(cf.as_table_state(), opts);
                 });
             });
         }).then([]{

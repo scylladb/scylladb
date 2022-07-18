@@ -592,7 +592,6 @@ private:
     static seastar::shard_id calculate_shard_from_sstable_generation(sstables::generation_type sstable_generation) {
         return sstables::generation_value(sstable_generation) % smp::count;
     }
-public:
     // This will update sstable lists on behalf of off-strategy compaction, where
     // input files will be removed from the maintenance set and output files will
     // be inserted into the main set.
@@ -902,8 +901,6 @@ public:
     lw_shared_ptr<const sstable_list> get_sstables_including_compacted_undeleted() const;
     const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const;
     std::vector<sstables::shared_sstable> select_sstables(const dht::partition_range& range) const;
-    // Return all sstables but those that are off-strategy like the ones in maintenance set and staging dir.
-    std::vector<sstables::shared_sstable> in_strategy_sstables() const;
     size_t sstables_count() const;
     std::vector<uint64_t> sstable_count_per_level() const;
     int64_t get_unleveled_sstables() const;

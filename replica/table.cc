@@ -747,7 +747,7 @@ table::stop() {
     return _async_gate.close().then([this] {
         return await_pending_ops().finally([this] {
             return _memtables->flush().finally([this] {
-                return _compaction_manager.remove(this).then([this] {
+                return _compaction_manager.remove(as_table_state()).then([this] {
                     return _sstable_deletion_gate.close().then([this] {
                         return get_row_cache().invalidate(row_cache::external_updater([this] {
                             _main_sstables = _compaction_strategy.make_sstable_set(_schema);
@@ -988,7 +988,7 @@ table::on_compaction_completion(sstables::compaction_completion_desc desc) {
 future<>
 table::compact_all_sstables() {
     co_await flush();
-    co_await _compaction_manager.perform_major_compaction(this);
+    co_await _compaction_manager.perform_major_compaction(as_table_state());
 }
 
 void table::start_compaction() {
@@ -1011,7 +1011,7 @@ void table::try_trigger_compaction() noexcept {
 void table::do_trigger_compaction() {
     // But not if we're locked out or stopping
     if (!_async_gate.is_closed()) {
-        _compaction_manager.submit(this);
+        _compaction_manager.submit(as_table_state());
     }
 }
 
@@ -1031,7 +1031,7 @@ future<bool> table::perform_offstrategy_compaction() {
     // If the user calls trigger_offstrategy_compaction() to trigger
     // off-strategy explicitly, cancel the timeout based automatic trigger.
     _off_strategy_trigger.cancel();
-    return _compaction_manager.perform_offstrategy(this);
+    return _compaction_manager.perform_offstrategy(as_table_state());
 }
 
 void table::set_compaction_strategy(sstables::compaction_strategy_type strategy) {
@@ -1118,14 +1118,6 @@ std::vector<sstables::shared_sstable> table::select_sstables(const dht::partitio
     return _sstables->select(range);
 }
 
-std::vector<sstables::shared_sstable> table::in_strategy_sstables() const {
-    auto sstables = _main_sstables->all();
-    return boost::copy_range<std::vector<sstables::shared_sstable>>(*sstables
-            | boost::adaptors::filtered([this] (auto& sst) {
-        return sstables::is_eligible_for_compaction(sst);
-    }));
-}
-
 // Gets the list of all sstables in the column family, including ones that are
 // not used for active queries because they have already been compacted, but are
 // waiting for delete_atomically() to return.
@@ -1191,7 +1183,7 @@ table::table(schema_ptr schema, config config, db::commitlog* cl, compaction_man
         tlogger.warn("Writes disabled, column family no durable.");
     }
     set_metrics();
-    _compaction_manager.add(this);
+    _compaction_manager.add(as_table_state());
 
     update_optimized_twcs_queries_flag();
 }
@@ -1521,7 +1513,7 @@ future<> table::clear() {
 // NOTE: does not need to be futurized, but might eventually, depending on
 // if we implement notifications, whatnot.
 future<db::replay_position> table::discard_sstables(db_clock::time_point truncated_at) {
-    assert(_compaction_manager.compaction_disabled(this));
+    assert(_compaction_manager.compaction_disabled(as_table_state()));
 
     struct pruner {
         column_family& cf;
@@ -2209,7 +2201,7 @@ table::disable_auto_compaction() {
     //   for new submissions
     _compaction_disabled_by_user = true;
     return with_gate(_async_gate, [this] {
-        return _compaction_manager.stop_ongoing_compactions("disable auto-compaction", this, sstables::compaction_type::Compaction);
+        return _compaction_manager.stop_ongoing_compactions("disable auto-compaction", &as_table_state(), sstables::compaction_type::Compaction);
     });
 }
 
@@ -2399,6 +2391,9 @@ public:
     const sstables::sstable_set& main_sstable_set() const override {
         return _t.get_sstable_set();
     }
+    const sstables::sstable_set& maintenance_sstable_set() const override {
+        return _t.maintenance_sstable_set();
+    }
     std::unordered_set<sstables::shared_sstable> fully_expired_sstables(const std::vector<sstables::shared_sstable>& sstables, gc_clock::time_point query_time) const override {
         return sstables::get_fully_expired_sstables(*this, sstables, query_time);
     }
@@ -2410,6 +2405,12 @@ public:
     }
     reader_permit make_compaction_reader_permit() const override {
         return _t.compaction_concurrency_semaphore().make_tracking_only_permit(schema().get(), "compaction", db::no_timeout);
+    }
+    sstables::sstables_manager& get_sstables_manager() noexcept override {
+        return _t.get_sstables_manager();
+    }
+    sstables::shared_sstable make_sstable() const override {
+        return _t.make_sstable();
     }
     sstables::sstable_writer_config configure_writer(sstring origin) const override {
         return _t.get_sstables_manager().configure_writer(std::move(origin));
@@ -2427,6 +2428,16 @@ public:
         }
         return db::system_keyspace::update_compaction_history(compaction_id, ks_name, cf_name, ended_at.count(),
                                                               bytes_in, bytes_out, std::unordered_map<int32_t, int64_t>{});
+    }
+    future<> on_compaction_completion(sstables::compaction_completion_desc desc, sstables::offstrategy offstrategy) override {
+        if (offstrategy) {
+            return _t.update_sstable_lists_on_off_strategy_completion(std::move(desc));
+        }
+        _t.on_compaction_completion(std::move(desc));
+        return make_ready_future<>();
+    }
+    bool is_auto_compaction_disabled_by_user() const noexcept override {
+        return _t.is_auto_compaction_disabled_by_user();
     }
 };
 
