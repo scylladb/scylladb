@@ -100,25 +100,26 @@ SEASTAR_TEST_CASE(test_truncate_without_snapshot_during_writes) {
     auto cfg = make_shared<db::config>();
     cfg->auto_snapshot.set(false);
     return do_with_cql_env_thread([] (cql_test_env& e) {
-        e.execute_cql("create table ks.cf (k text, v int, primary key (k));").get();
+        sstring ks_name = "ks";
+        sstring cf_name = "cf";
+        e.execute_cql(fmt::format("create table {}.{} (k text, v int, primary key (k));", ks_name, cf_name)).get();
         auto& db = e.local_db();
-        auto& ks = db.find_keyspace("ks");
-        auto& cf = db.find_column_family("ks", "cf");
-        auto s = cf.schema();
+        auto uuid = db.find_uuid(ks_name, cf_name);
+        auto s = db.find_column_family(uuid).schema();
         int count = 0;
 
         auto insert_data = [&] (uint32_t begin, uint32_t end) {
-            return parallel_for_each(boost::irange(begin, end), [&] (auto i) -> future<> {
-                auto pkey = partition_key::from_single_value(*s, to_bytes(fmt::format("key{}", i)));
+            return parallel_for_each(boost::irange(begin, end), [&] (auto i) {
+                auto pkey = partition_key::from_single_value(*s, to_bytes(fmt::format("key-{}", tests::random::get_int<uint64_t>())));
                 mutation m(s, pkey);
                 m.set_clustered_cell(clustering_key_prefix::make_empty(), "v", int32_t(42), {});
-                return do_with(freeze(m), [&] (const auto& fm) {
-                    return db.apply(s, fm, tracing::trace_state_ptr(), db::commitlog::force_sync::no, db::no_timeout).then([&] {
-                        return cf.flush();
-                    }).handle_exception([] (std::exception_ptr ex) {
-                        BOOST_FAIL(format("db.apply failed: {}", ex));
+                auto shard = m.shard_of();
+                return e.db().invoke_on(shard, [&, fm = freeze(m)] (replica::database& db) -> future<> {
+                    auto& t = db.find_column_family(uuid);
+                    return db.apply(t.schema(), fm, tracing::trace_state_ptr(), db::commitlog::force_sync::no, db::no_timeout).then([&t] {
+                        return t.flush();
                     });
-                }).then([&] {
+                }).finally([&] {
                     ++count;
                 });
             });
@@ -127,8 +128,14 @@ SEASTAR_TEST_CASE(test_truncate_without_snapshot_during_writes) {
         uint32_t num_keys = 1000;
 
         auto f0 = insert_data(0, num_keys);
-        auto f1 = do_until([&] { return count >= num_keys; }, [&] {
-            return db.truncate(ks, cf, [] { return make_ready_future<db_clock::time_point>(db_clock::now()); }, false /* with_snapshot */).then([] { return yield(); });
+        auto f1 = do_until([&] { return count >= num_keys; }, [&] () -> future<> {
+            return e.db().invoke_on_all([&, ts = db_clock::now()] (replica::database& db) {
+                auto& ks = db.find_keyspace(ks_name);
+                auto& cf = db.find_column_family(uuid);
+                return db.truncate(ks, cf, [ts] { return make_ready_future<db_clock::time_point>(ts); }, false /* with_snapshot */);
+            }).then([] {
+                return yield();
+            });
         });
         f0.get();
         f1.get();
