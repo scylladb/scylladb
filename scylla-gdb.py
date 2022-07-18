@@ -4293,6 +4293,7 @@ class scylla_smp_queues(gdb.Command):
                 return '{:2} -> {:2}'.format(*q)
 
         h = histogram(formatter=formatter, print_indicators=not args.content)
+        empty_queues = 0
 
         def add_to_histogram(a, b, key=None, count=1):
             if not sg_id is None and int(key.dereference()['_sg']['_id']) != sg_id:
@@ -4330,9 +4331,15 @@ class scylla_smp_queues(gdb.Command):
                 for i in range(pending_start, pending_end):
                     add_to_histogram(a, b, key=buf[i % self._queue_size])
             else:
-                add_to_histogram(a, b, count=(len(tx_queue) + pending_end - pending_start))
+                count = len(tx_queue) + pending_end - pending_start
+                if count != 0:
+                    add_to_histogram(a, b, count=count)
+                else:
+                    empty_queues += 1
 
         gdb.write('{}\n'.format(h))
+        if empty_queues > 0:
+            gdb.write('omitted {} empty queues\n'.format(empty_queues))
 
 
 class scylla_small_objects(gdb.Command):
