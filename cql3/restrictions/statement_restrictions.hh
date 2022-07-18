@@ -57,7 +57,7 @@ private:
     /**
      * Restriction on non-primary key columns (i.e. secondary index restrictions)
      */
-    expr::expression _new_nonprimary_key_restrictions;
+    expr::expression _nonprimary_key_restrictions;
 
     expr::single_column_restrictions_map _single_column_nonprimary_key_restrictions;
 
@@ -276,7 +276,7 @@ private:
         switch (kind) {
         case column_kind::partition_key: return _partition_key_restrictions;
         case column_kind::clustering_key: return _clustering_columns_restrictions;
-        default: return _new_nonprimary_key_restrictions;
+        default: return _nonprimary_key_restrictions;
         }
     }
 
@@ -461,7 +461,7 @@ public:
      * @return <code>true</code> if the restrictions contain any non-primary key restrictions, <code>false</code> otherwise.
      */
     bool has_non_primary_key_restriction() const {
-        return !expr::is_empty_restriction(_new_nonprimary_key_restrictions);
+        return !expr::is_empty_restriction(_nonprimary_key_restrictions);
     }
 
     bool pk_restrictions_need_filtering() const;

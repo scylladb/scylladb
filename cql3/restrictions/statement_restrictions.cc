@@ -428,7 +428,7 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
         if (!expr::contains_multi_column_restriction(_clustering_columns_restrictions)) {
             _single_column_clustering_key_restrictions = expr::get_single_column_restrictions_map(_clustering_columns_restrictions);
         }
-        _single_column_nonprimary_key_restrictions = expr::get_single_column_restrictions_map(_new_nonprimary_key_restrictions);
+        _single_column_nonprimary_key_restrictions = expr::get_single_column_restrictions_map(_nonprimary_key_restrictions);
         _clustering_prefix_restrictions = extract_clustering_prefix_restrictions(*_where, _schema);
         _partition_range_restrictions = extract_partition_range(*_where, _schema);
     }
@@ -442,7 +442,7 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
             && !type.is_delete();
     _has_queriable_pk_index = parition_key_restrictions_have_supporting_index(sim, allow_local)
             && !type.is_delete();
-    _has_queriable_regular_index = expr::index_supports_some_column(_new_nonprimary_key_restrictions, sim, allow_local)
+    _has_queriable_regular_index = expr::index_supports_some_column(_nonprimary_key_restrictions, sim, allow_local)
             && !type.is_delete();
 
     // At this point, the select statement if fully constructed, but we still have a few things to validate
@@ -512,7 +512,7 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
 #endif
     }
 
-    if (!expr::is_empty_restriction(_new_nonprimary_key_restrictions)) {
+    if (!expr::is_empty_restriction(_nonprimary_key_restrictions)) {
         if (_has_queriable_regular_index && _partition_range_is_simple) {
             _uses_secondary_indexing = true;
         } else if (!allow_filtering) {
@@ -520,7 +520,7 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
                 "thus may have unpredictable performance. If you want to execute "
                 "this query despite the performance unpredictability, use ALLOW FILTERING");
         }
-        _index_restrictions.push_back(_new_nonprimary_key_restrictions);
+        _index_restrictions.push_back(_nonprimary_key_restrictions);
     }
 
     if (_uses_secondary_indexing && !(for_view || allow_filtering)) {
@@ -782,7 +782,7 @@ void statement_restrictions::add_multi_column_clustering_key_restriction(const e
 }
 
 void statement_restrictions::add_single_column_nonprimary_key_restriction(const expr::binary_operator& restr) {
-    _new_nonprimary_key_restrictions = expr::make_conjunction(_new_nonprimary_key_restrictions, restr);
+    _nonprimary_key_restrictions = expr::make_conjunction(_nonprimary_key_restrictions, restr);
 }
 
 void statement_restrictions::process_partition_key_restrictions(bool for_view, bool allow_filtering) {
@@ -1738,7 +1738,7 @@ bool statement_restrictions::need_filtering() const {
         // If there is a token(p1, p2) restriction, no p1, p2 restrictions are allowed in the query.
         // All other restrictions must be on clustering or regular columns.
         int64_t non_pk_restrictions_count = clustering_columns_restrictions_size();
-        non_pk_restrictions_count += expr::get_sorted_column_defs(_new_nonprimary_key_restrictions).size();
+        non_pk_restrictions_count += expr::get_sorted_column_defs(_nonprimary_key_restrictions).size();
 
         // We are querying using an index, one restriction goes to the index restriction.
         // If there are some restrictions other than token() and index column then we need to do filtering.
@@ -1752,7 +1752,7 @@ bool statement_restrictions::need_filtering() const {
         // except if there's only one restriction supported by an index.
         return !(npart == 1 && _has_queriable_pk_index &&
                  expr::is_empty_restriction(_clustering_columns_restrictions) &&
-                 expr::is_empty_restriction(_new_nonprimary_key_restrictions));
+                 expr::is_empty_restriction(_nonprimary_key_restrictions));
     }
     if (pk_restrictions_need_filtering()) {
         // We most likely cannot calculate token(s).  Neither base-table nor index-table queries can avoid filtering.
@@ -1760,7 +1760,7 @@ bool statement_restrictions::need_filtering() const {
     }
     // Now we know the partition key is either unrestricted or fully restricted.
 
-    const auto nreg = expr::get_sorted_column_defs(_new_nonprimary_key_restrictions).size();
+    const auto nreg = expr::get_sorted_column_defs(_nonprimary_key_restrictions).size();
     if (nreg > 1 || (nreg == 1 && !_has_queriable_regular_index)) {
         return true; // Regular columns are unsorted in storage and no single index suffices.
     }
