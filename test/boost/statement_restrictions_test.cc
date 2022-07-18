@@ -15,7 +15,6 @@
 #include "cql3/util.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/cql_test_env.hh"
-#include "cql3/restrictions/multi_column_restriction.hh"
 
 using namespace cql3;
 

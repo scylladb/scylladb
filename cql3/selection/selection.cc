@@ -18,7 +18,6 @@
 #include "cql3/selection/selector_factories.hh"
 #include "cql3/result_set.hh"
 #include "cql3/query_options.hh"
-#include "cql3/restrictions/multi_column_restriction.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
 
 namespace cql3 {

@@ -18,7 +18,6 @@
 #include "cql3/functions/as_json_function.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/util.hh"
-#include "cql3/restrictions/single_column_primary_key_restrictions.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
 #include "cql3/selection/selector_factories.hh"
 #include "validation.hh"

@@ -6,12 +6,10 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include "restrictions.hh"
 #include "cql3/statements/request_validations.hh"
 #include "seastar/util/defer.hh"
 #include "cql3/prepare_context.hh"
-#include "cql3/restrictions/multi_column_restriction.hh"
-#include "cql3/restrictions/token_restriction.hh"
+#include "types/list.hh"
 
 namespace cql3 {
 namespace expr {

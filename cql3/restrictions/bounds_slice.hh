@@ -10,11 +10,11 @@
 
 #pragma once
 
-#include "cql3/restrictions/restriction.hh"
 #include <seastar/core/shared_ptr.hh>
 #include "to_string.hh"
 #include "exceptions/exceptions.hh"
 #include "index/secondary_index_manager.hh"
+#include "cql3/expr/expression.hh"
 
 namespace cql3 {
 

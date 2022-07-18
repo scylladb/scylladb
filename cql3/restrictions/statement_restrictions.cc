@@ -19,10 +19,9 @@
 #include "cql3/expr/expression.hh"
 #include "query-result-reader.hh"
 #include "statement_restrictions.hh"
-#include "multi_column_restriction.hh"
-#include "token_restriction.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "cartesian_product.hh"
+#include "cql3/cql_config.hh"
 
 #include "cql3/constants.hh"
 #include "cql3/lists.hh"
@@ -31,7 +30,6 @@
 #include "types/list.hh"
 #include "types/map.hh"
 #include "types/set.hh"
-#include "cql3/expr/restrictions.hh"
 
 namespace cql3 {
 namespace restrictions {
