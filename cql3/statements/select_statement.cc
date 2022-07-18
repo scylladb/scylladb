@@ -2147,7 +2147,10 @@ std::unique_ptr<cql3::statements::raw::select_statement> build_select_statement(
         out << join(", ", cols);
     }
     // Note that cf_name may need to be quoted, just like column names above.
-    out << " FROM " << util::maybe_quote(sstring(cf_name)) << " WHERE " << where_clause << " ALLOW FILTERING";
+    out << " FROM " << util::maybe_quote(sstring(cf_name));
+    if (!where_clause.empty()) {
+        out << " WHERE " << where_clause << " ALLOW FILTERING";
+    }
     return do_with_parser(out.str(), std::mem_fn(&cql3_parser::CqlParser::selectStatement));
 }
 

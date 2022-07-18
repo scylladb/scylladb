@@ -273,7 +273,12 @@ view_ptr secondary_index_manager::create_view_for_index(const index_metadata& im
             db::view::create_virtual_column(builder, def.name(), def.type);
         }
     }
-    const sstring where_clause = format("{} IS NOT NULL", index_target->name_as_cql_string());
+    // "WHERE col IS NOT NULL" is not needed (and doesn't work)
+    // when col is a collection.
+    const sstring where_clause =
+        (target_type == cql3::statements::index_target::target_type::regular_values) ?
+        format("{} IS NOT NULL", index_target->name_as_cql_string()) :
+        "";
     builder.with_view_info(*schema, false, where_clause);
     return view_ptr{builder.build()};
 }
