@@ -203,7 +203,7 @@ private:
     future<stop_iteration> stop() const;
 };
 
-future<view_update_builder> make_view_update_builder(
+view_update_builder make_view_update_builder(
         const schema_ptr& base,
         std::vector<view_and_base>&& views_to_update,
         flat_mutation_reader_v2&& updates,

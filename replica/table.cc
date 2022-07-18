@@ -1674,7 +1674,7 @@ future<> table::generate_and_propagate_view_updates(const schema_ptr& base,
         tracing::trace_state_ptr tr_state,
         gc_clock::time_point now) const {
     auto base_token = m.token();
-    db::view::view_update_builder builder = co_await db::view::make_view_update_builder(
+    db::view::view_update_builder builder = db::view::make_view_update_builder(
             base,
             std::move(views),
             make_flat_mutation_reader_from_mutations_v2(m.schema(), std::move(permit), std::move(m)),
@@ -1809,7 +1809,7 @@ future<> table::populate_views(
         flat_mutation_reader_v2&& reader,
         gc_clock::time_point now) {
     auto schema = reader.schema();
-    db::view::view_update_builder builder = co_await db::view::make_view_update_builder(
+    db::view::view_update_builder builder = db::view::make_view_update_builder(
             schema,
             std::move(views),
             std::move(reader),
