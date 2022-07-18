@@ -11,6 +11,7 @@ Upgrade Scylla Enterprise
    Scylla Enterprise 2019 <upgrade-guide-from-2019.x.y-to-2019.x.z/index>
    Scylla Enterprise 2018 <upgrade-guide-from-2018.x.y-to-2018.x.z/index>
    Scylla Enterprise 2017 <upgrade-guide-from-2017.x.y-to-2017.x.z/index>
+   Scylla Enterprise 2021.1 to Scylla Enterprise 2022.1 <upgrade-guide-from-2021.1-to-2022.1/index>
    Scylla Enterprise 2020.1 to Scylla Enterprise 2021.1 <upgrade-guide-from-2020.1-to-2021.1/index>
    Scylla Enterprise 2019.1 to Scylla Enterprise 2020.1 <upgrade-guide-from-2019.1-to-2020.1/index>
    Scylla Enterprise 2018.1 to Scylla Enterprise 2019.1 <upgrade-guide-from-2018.1-to-2019.1/index>
@@ -34,6 +35,7 @@ Upgrade Scylla Enterprise
 
   Major Release Upgrade
 
+  * `Upgrade Guide - From Scylla Enterprise 2021.1 to Scylla Enterprise 2022.1 <upgrade-guide-from-2021.1-to-2022.1/>`_
   * `Upgrade Guide - From Scylla Enterprise 2020.1 to Scylla Enterprise 2021.1 <upgrade-guide-from-2020.1-to-2021.1/>`_
   * `Upgrade Guide - From Scylla Enterprise 2019.1 to Scylla Enterprise 2020.1 <upgrade-guide-from-2019.1-to-2020.1/>`_
   * `Upgrade Guide - From Scylla Enterprise 2018.1 to Scylla Enterprise 2019.1 <upgrade-guide-from-2018.1-to-2019.1/>`_
