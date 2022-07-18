@@ -34,5 +34,5 @@ Additional References
 
 .. include:: /troubleshooting/_common/ts-return.rst
 
-:doc:`CQL Reference </getting-started/cql>`
+:doc:`CQL Reference </cql/index>`
 

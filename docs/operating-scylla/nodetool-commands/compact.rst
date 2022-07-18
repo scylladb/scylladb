@@ -59,6 +59,6 @@ See Also
 
 :doc:`Compaction Overview </kb/compaction>`
 
-:doc:`CQL compaction Reference </getting-started/compaction>`
+:doc:`CQL compaction Reference </cql/compaction>`
 
 :doc:`How to choose a Compaction Strategy </architecture/compaction/compaction-strategies>`
