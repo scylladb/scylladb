@@ -121,10 +121,10 @@ def new_aggregate(cql, keyspace, body):
 # A utility function for creating a new temporary materialized view in
 # an existing table.
 @contextmanager
-def new_materialized_view(cql, table, select, pk, where):
+def new_materialized_view(cql, table, select, pk, where, extra=""):
     keyspace = table.split('.')[0]
     mv = keyspace + "." + unique_name()
-    cql.execute(f"CREATE MATERIALIZED VIEW {mv} AS SELECT {select} FROM {table} WHERE {where} PRIMARY KEY ({pk})")
+    cql.execute(f"CREATE MATERIALIZED VIEW {mv} AS SELECT {select} FROM {table} WHERE {where} PRIMARY KEY ({pk}) {extra}")
     try:
         yield mv
     finally:
