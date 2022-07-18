@@ -59,6 +59,7 @@
 #include <seastar/core/shared_ptr_incomplete.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/util/memory_diagnostics.hh>
+#include <seastar/util/file.hh>
 
 #include "locator/abstract_replication_strategy.hh"
 #include "timeout_config.hh"
@@ -1027,6 +1028,14 @@ future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_
     auto f = co_await coroutine::as_future(truncate(ks, *cf, std::move(tsf), snapshot));
     co_await cf->stop();
     f.get(); // re-throw exception from truncate() if any
+}
+
+future<> database::drop_table_on_all_shards(sharded<database>& sharded_db, sstring ks_name, sstring cf_name, timestamp_func tsf, bool with_snapshot) {
+    auto table_dir = fs::path(sharded_db.local().find_column_family(ks_name, cf_name).dir());
+    co_await sharded_db.invoke_on_all([&] (database& db) {
+        return db.drop_column_family(ks_name, cf_name, tsf, with_snapshot);
+    });
+    co_await sstables::remove_table_directory_if_has_no_snapshots(table_dir);
 }
 
 const utils::UUID& database::find_uuid(std::string_view ks, std::string_view cf) const {
@@ -2347,7 +2356,7 @@ future<> database::truncate(sstring ksname, sstring cfname, timestamp_func tsf) 
 }
 
 future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_func tsf, bool with_snapshot) {
-    dblog.debug("Truncating {}.{}", cf.schema()->ks_name(), cf.schema()->cf_name());
+    dblog.debug("Truncating {}.{}: with_snapshot={} auto_snapshot={}", cf.schema()->ks_name(), cf.schema()->cf_name(), with_snapshot, get_config().auto_snapshot());
     auto holder = cf.async_gate().hold();
 
     const auto auto_snapshot = with_snapshot && get_config().auto_snapshot();
@@ -2444,15 +2453,15 @@ static sstring get_snapshot_table_dir_prefix(const sstring& table_name) {
     return table_name + "-";
 }
 
-static sstring extract_cf_name(const sstring& directory_name) {
+static std::pair<sstring, utils::UUID> extract_cf_name_and_uuid(const sstring& directory_name) {
     // cf directory is of the form: 'cf_name-uuid'
-    // since cf_name may contain '-' characters, look for the last occurance of '-'
-    // in the directory entry name
-    auto pos = directory_name.find_last_of('-');
-    if (pos == sstring::npos) {
-        on_internal_error(dblog, format("table directory entry name '{}' is invalid: no '-' separator found", directory_name));
+    // uuid is assumed to be exactly 32 hex characters wide.
+    constexpr size_t uuid_size = 32;
+    ssize_t pos = directory_name.size() - uuid_size - 1;
+    if (pos <= 0 || directory_name[pos] != '-') {
+        on_internal_error(dblog, format("table directory entry name '{}' is invalid: no '-' separator found at pos {}", directory_name, pos));
     }
-    return directory_name.substr(0, pos);
+    return std::make_pair(directory_name.substr(0, pos), utils::UUID(directory_name.substr(pos + 1)));
 }
 
 future<std::vector<database::snapshot_details_result>> database::get_snapshot_details() {
@@ -2476,8 +2485,8 @@ future<std::vector<database::snapshot_details_result>> database::get_snapshot_de
                     co_return;
                 }
 
-                sstring cf_name = extract_cf_name(de.name);
-                co_return co_await lister::scan_dir(cf_dir / sstables::snapshots_dir, dirs_only_entries, [this, &details, &ks_name, &cf_name, &cf_dir] (fs::path parent_dir, directory_entry de) -> future<> {
+                auto cf_name_and_uuid = extract_cf_name_and_uuid(de.name);
+                co_return co_await lister::scan_dir(cf_dir / sstables::snapshots_dir, dirs_only_entries, [this, &details, &ks_name, &cf_name = cf_name_and_uuid.first, &cf_dir] (fs::path parent_dir, directory_entry de) -> future<> {
                     database::snapshot_details_result snapshot_result = {
                         .snapshot_name = de.name,
                         .details = {0, 0, cf_name, ks_name}
@@ -2528,64 +2537,95 @@ future<std::vector<database::snapshot_details_result>> database::get_snapshot_de
 // (as we have been doing for a lot of the other operations, like the snapshot itself).
 future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_names, const sstring& table_name) {
     std::vector<sstring> data_dirs = _cfg.data_file_directories();
-    auto dirs_only_entries_ptr =
-        make_lw_shared<lister::dir_entry_types>(lister::dir_entry_types{directory_entry_type::directory});
-    lw_shared_ptr<sstring> tag_ptr = make_lw_shared<sstring>(std::move(tag));
     std::unordered_set<sstring> ks_names_set(keyspace_names.begin(), keyspace_names.end());
+    auto table_name_param = table_name;
 
-    return parallel_for_each(data_dirs, [this, tag_ptr, ks_names_set = std::move(ks_names_set), dirs_only_entries_ptr, table_name = table_name] (const sstring& parent_dir) {
-        std::unique_ptr<lister::filter_type> filter = std::make_unique<lister::filter_type>([] (const fs::path& parent_dir, const directory_entry& dir_entry) { return true; });
-
-        lister::filter_type table_filter = (table_name.empty()) ? lister::filter_type([] (const fs::path& parent_dir, const directory_entry& dir_entry) mutable { return true; }) :
-                lister::filter_type([table_name = get_snapshot_table_dir_prefix(table_name)] (const fs::path& parent_dir, const directory_entry& dir_entry) mutable {
-                    return dir_entry.name.find(table_name) == 0;
-                });
-        // if specific keyspaces names were given - filter only these keyspaces directories
-        if (!ks_names_set.empty()) {
-            filter = std::make_unique<lister::filter_type>([ks_names_set = std::move(ks_names_set)] (const fs::path& parent_dir, const directory_entry& dir_entry) {
+    // if specific keyspaces names were given - filter only these keyspaces directories
+    auto filter = ks_names_set.empty()
+            ? lister::filter_type([] (const fs::path&, const directory_entry&) { return true; })
+            : lister::filter_type([&] (const fs::path&, const directory_entry& dir_entry) {
                 return ks_names_set.contains(dir_entry.name);
             });
-        }
 
-        //
-        // The keyspace data directories and their snapshots are arranged as follows:
-        //
-        //  <data dir>
-        //  |- <keyspace name1>
-        //  |  |- <column family name1>
-        //  |     |- snapshots
-        //  |        |- <snapshot name1>
-        //  |          |- <snapshot file1>
-        //  |          |- <snapshot file2>
-        //  |          |- ...
-        //  |        |- <snapshot name2>
-        //  |        |- ...
-        //  |  |- <column family name2>
-        //  |  |- ...
-        //  |- <keyspace name2>
-        //  |- ...
-        //
-        return lister::scan_dir(parent_dir, *dirs_only_entries_ptr, [this, tag_ptr, dirs_only_entries_ptr, table_filter = std::move(table_filter)] (fs::path parent_dir, directory_entry de) mutable {
-            // KS directory
-            return lister::scan_dir(parent_dir / de.name, *dirs_only_entries_ptr, [this, tag_ptr, dirs_only_entries_ptr] (fs::path parent_dir, directory_entry de) mutable {
-                // CF directory
-                return lister::scan_dir(parent_dir / de.name, *dirs_only_entries_ptr, [this, tag_ptr, dirs_only_entries_ptr] (fs::path parent_dir, directory_entry de) mutable {
-                    // "snapshots" directory
-                    fs::path snapshots_dir(parent_dir / de.name);
-                    if (tag_ptr->empty()) {
-                        dblog.info("Removing {}", snapshots_dir.native());
-                        // kill the whole "snapshots" subdirectory
-                        return lister::rmdir(std::move(snapshots_dir));
+    // if specific table name was given - filter only these table directories
+    auto table_filter = table_name.empty()
+            ? lister::filter_type([] (const fs::path&, const directory_entry& dir_entry) { return true; })
+            : lister::filter_type([table_name = get_snapshot_table_dir_prefix(table_name)] (const fs::path&, const directory_entry& dir_entry) {
+                return dir_entry.name.find(table_name) == 0;
+            });
+
+    co_await coroutine::parallel_for_each(data_dirs, [&, this] (const sstring& parent_dir) {
+        return async([&] {
+            //
+            // The keyspace data directories and their snapshots are arranged as follows:
+            //
+            //  <data dir>
+            //  |- <keyspace name1>
+            //  |  |- <column family name1>
+            //  |     |- snapshots
+            //  |        |- <snapshot name1>
+            //  |          |- <snapshot file1>
+            //  |          |- <snapshot file2>
+            //  |          |- ...
+            //  |        |- <snapshot name2>
+            //  |        |- ...
+            //  |  |- <column family name2>
+            //  |  |- ...
+            //  |- <keyspace name2>
+            //  |- ...
+            //
+            auto data_dir = fs::path(parent_dir);
+            auto data_dir_lister = directory_lister(data_dir, {directory_entry_type::directory}, filter);
+            auto close_data_dir_lister = deferred_close(data_dir_lister);
+            dblog.debug("clear_snapshot: listing data dir {} with filter={}", data_dir, ks_names_set.empty() ? "none" : fmt::format("{}", ks_names_set));
+            while (auto ks_ent = data_dir_lister.get().get0()) {
+                auto ks_name = ks_ent->name;
+                auto ks_dir = data_dir / ks_name;
+                auto ks_dir_lister = directory_lister(ks_dir, {directory_entry_type::directory}, table_filter);
+                auto close_ks_dir_lister = deferred_close(ks_dir_lister);
+                dblog.debug("clear_snapshot: listing keyspace dir {} with filter={}", ks_dir, table_name_param.empty() ? "none" : fmt::format("{}", table_name_param));
+                while (auto table_ent = ks_dir_lister.get().get0()) {
+                    auto table_dir = ks_dir / table_ent->name;
+                    auto snapshots_dir = table_dir / sstables::snapshots_dir;
+                    auto has_snapshots = file_exists(snapshots_dir.native()).get0();
+                    if (has_snapshots) {
+                        if (tag.empty()) {
+                            dblog.info("Removing {}", snapshots_dir);
+                            recursive_remove_directory(std::move(snapshots_dir)).get();
+                            has_snapshots = false;
+                        } else {
+                            // if specific snapshots tags were given - filter only these snapshot directories
+                            auto snapshots_dir_lister = directory_lister(snapshots_dir, {directory_entry_type::directory});
+                            auto close_snapshots_dir_lister = deferred_close(snapshots_dir_lister);
+                            dblog.debug("clear_snapshot: listing snapshots dir {} with filter={}", snapshots_dir, tag);
+                            has_snapshots = false;  // unless other snapshots are found
+                            while (auto snapshot_ent = snapshots_dir_lister.get().get0()) {
+                                if (snapshot_ent->name == tag) {
+                                    auto snapshot_dir = snapshots_dir / snapshot_ent->name;
+                                    dblog.info("Removing {}", snapshot_dir);
+                                    recursive_remove_directory(std::move(snapshot_dir)).get();
+                                } else {
+                                    has_snapshots = true;
+                                }
+                            }
+                        }
                     } else {
-                        return lister::scan_dir(std::move(snapshots_dir), *dirs_only_entries_ptr, [this, tag_ptr] (fs::path parent_dir, directory_entry de) {
-                            fs::path snapshot_dir(parent_dir / de.name);
-                            dblog.info("Removing {}", snapshot_dir.native());
-                            return lister::rmdir(std::move(snapshot_dir));
-                        }, [tag_ptr] (const fs::path& parent_dir, const directory_entry& dir_entry) { return dir_entry.name == *tag_ptr; });
+                        dblog.debug("clear_snapshot: {} not found", snapshots_dir);
                     }
-                 }, [] (const fs::path& parent_dir, const directory_entry& dir_entry) { return dir_entry.name == sstables::snapshots_dir; });
-            }, table_filter);
-        }, *filter);
+                    // zap the table directory if the table is dropped
+                    // and has no remaining snapshots
+                    if (!has_snapshots) {
+                        auto [cf_name, cf_uuid] = extract_cf_name_and_uuid(table_ent->name);
+                        const auto& it = _ks_cf_to_uuid.find(std::make_pair(ks_name, cf_name));
+                        auto dropped = (it == _ks_cf_to_uuid.cend()) || (cf_uuid != it->second);
+                        if (dropped) {
+                            dblog.info("Removing dropped table dir {}", table_dir);
+                            sstables::remove_table_directory_if_has_no_snapshots(table_dir).get();
+                        }
+                    }
+                }
+            }
+        });
     });
 }
 

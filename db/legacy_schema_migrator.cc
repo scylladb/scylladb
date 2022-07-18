@@ -534,13 +534,10 @@ public:
 
     future<> drop_legacy_tables() {
         mlogger.info("Dropping legacy schema tables");
-        return parallel_for_each(legacy_schema_tables, [this](const sstring& cfname) {
-            return do_with(utils::make_joinpoint([] { return db_clock::now();}),[this, cfname](auto& tsf) {
-                auto with_snapshot = !_keyspaces.empty();
-                return _db.invoke_on_all([&tsf, cfname, with_snapshot](replica::database& db) {
-                    return db.drop_column_family(db::system_keyspace::NAME, cfname, [&tsf] { return tsf.value(); }, with_snapshot);
-                });
-            });
+        auto ts = db_clock::now();
+        auto with_snapshot = !_keyspaces.empty();
+        return parallel_for_each(legacy_schema_tables, [this, ts, with_snapshot](const sstring& cfname) {
+            return replica::database::drop_table_on_all_shards(_db, db::system_keyspace::NAME, cfname, [ts] { return make_ready_future<db_clock::time_point>(ts); }, with_snapshot);
         });
     }
 

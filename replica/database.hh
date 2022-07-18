@@ -1646,7 +1646,11 @@ public:
     future<> truncate(const keyspace& ks, column_family& cf, timestamp_func, bool with_snapshot = true);
 
     bool update_column_family(schema_ptr s);
+private:
     future<> drop_column_family(const sstring& ks_name, const sstring& cf_name, timestamp_func, bool with_snapshot = true);
+public:
+    // drops the table on all shards and removes the table directory if there are no snapshots
+    static future<> drop_table_on_all_shards(sharded<database>& db, sstring ks_name, sstring cf_name, timestamp_func, bool with_snapshot = true);
 
     const logalloc::region_group& dirty_memory_region_group() const {
         return _dirty_memory_manager.region_group();

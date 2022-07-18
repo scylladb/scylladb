@@ -396,13 +396,14 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_pending_delete) {
 }
 
 // Snapshot tests and their helpers
-future<> do_with_some_data(std::vector<sstring> cf_names, std::function<future<> (cql_test_env& env)> func, lw_shared_ptr<tmpdir> tmpdir_for_data = {}) {
-    return seastar::async([cf_names = std::move(cf_names), func = std::move(func), tmpdir_for_data = std::move(tmpdir_for_data)] () mutable {
-        if (!tmpdir_for_data) {
+future<> do_with_some_data(std::vector<sstring> cf_names, std::function<future<> (cql_test_env& env)> func, shared_ptr<db::config> db_cfg_ptr = {}) {
+    return seastar::async([cf_names = std::move(cf_names), func = std::move(func), db_cfg_ptr = std::move(db_cfg_ptr)] () mutable {
+        lw_shared_ptr<tmpdir> tmpdir_for_data;
+        if (!db_cfg_ptr) {
             tmpdir_for_data = make_lw_shared<tmpdir>();
+            db_cfg_ptr = make_shared<db::config>();
+            db_cfg_ptr->data_file_directories(std::vector<sstring>({ tmpdir_for_data->path().string() }));
         }
-        auto db_cfg_ptr = make_shared<db::config>();
-        db_cfg_ptr->data_file_directories(std::vector<sstring>({ tmpdir_for_data->path().string() }));
         do_with_cql_env_thread([cf_names = std::move(cf_names), func = std::move(func)] (cql_test_env& e) {
             for (const auto& cf_name : cf_names) {
                 e.create_table([&cf_name] (std::string_view ks_name) {
@@ -589,6 +590,79 @@ SEASTAR_TEST_CASE(clear_snapshot) {
         count = 0;
 
         BOOST_REQUIRE_EQUAL(fs::exists(fs::path(cf.dir()) / sstables::snapshots_dir / "test"), false);
+        return make_ready_future<>();
+    });
+}
+
+SEASTAR_TEST_CASE(clear_multiple_snapshots) {
+    sstring ks_name = "ks";
+    sstring table_name = "cf";
+    auto num_snapshots = 2;
+
+    auto snapshot_name = [] (int idx) {
+        return format("test-snapshot-{}", idx);
+    };
+
+    co_await do_with_some_data({table_name}, [&] (cql_test_env& e) {
+        auto& t = e.local_db().find_column_family(ks_name, table_name);
+        auto table_dir = fs::path(t.dir());
+        auto snapshots_dir = table_dir / sstables::snapshots_dir;
+
+        for (auto i = 0; i < num_snapshots; i++) {
+            testlog.debug("Taking snapshot {} on {}.{}", snapshot_name(i), ks_name, table_name);
+            take_snapshot(e, ks_name, table_name, snapshot_name(i)).get();
+        }
+
+        for (auto i = 0; i < num_snapshots; i++) {
+            unsigned count = 0;
+            testlog.debug("Verifying {}", snapshots_dir / snapshot_name(i));
+            lister::scan_dir(snapshots_dir / snapshot_name(i), { directory_entry_type::regular }, [&count] (fs::path parent_dir, directory_entry de) {
+                count++;
+                return make_ready_future<>();
+            }).get();
+            BOOST_REQUIRE_GT(count, 1); // expect more than the manifest alone
+        }
+
+        // non-existent tag
+        testlog.debug("Clearing bogus tag");
+        e.local_db().clear_snapshot("bogus", {ks_name}, table_name).get();
+        for (auto i = 0; i < num_snapshots; i++) {
+            BOOST_REQUIRE_EQUAL(fs::exists(snapshots_dir / snapshot_name(i)), true);
+        }
+
+        // clear single tag
+        testlog.debug("Clearing snapshot={} of {}.{}", snapshot_name(0), ks_name, table_name);
+        e.local_db().clear_snapshot(snapshot_name(0), {ks_name}, table_name).get();
+        BOOST_REQUIRE_EQUAL(fs::exists(snapshots_dir / snapshot_name(0)), false);
+        for (auto i = 1; i < num_snapshots; i++) {
+            BOOST_REQUIRE_EQUAL(fs::exists(snapshots_dir / snapshot_name(i)), true);
+        }
+
+        // clear all tags (all tables)
+        testlog.debug("Clearing all snapshots in {}", ks_name);
+        e.local_db().clear_snapshot("", {ks_name}, "").get();
+        for (auto i = 0; i < num_snapshots; i++) {
+            BOOST_REQUIRE_EQUAL(fs::exists(snapshots_dir / snapshot_name(i)), false);
+        }
+
+        testlog.debug("Taking an extra {} of {}.{}", snapshot_name(num_snapshots), ks_name, table_name);
+        take_snapshot(e, ks_name, table_name, snapshot_name(num_snapshots)).get();
+
+        // existing snapshots expected to remain after dropping the table
+        testlog.debug("Dropping table {}.{}", ks_name, table_name);
+        replica::database::drop_table_on_all_shards(e.db(), ks_name, table_name, [ts = db_clock::now()] { return make_ready_future<db_clock::time_point>(ts); }).get();
+        BOOST_REQUIRE_EQUAL(fs::exists(snapshots_dir / snapshot_name(num_snapshots)), true);
+
+        // clear all tags
+        testlog.debug("Clearing all snapshots in {}.{} after it had been dropped", ks_name, table_name);
+        e.local_db().clear_snapshot("", {ks_name}, table_name).get();
+
+        assert(!fs::exists(table_dir));
+
+        // after all snapshots had been cleared,
+        // the dropped table directory is expected to be removed.
+        BOOST_REQUIRE_EQUAL(fs::exists(table_dir), false);
+
         return make_ready_future<>();
     });
 }
@@ -959,6 +1033,8 @@ SEASTAR_TEST_CASE(upgrade_sstables) {
 
 SEASTAR_TEST_CASE(populate_from_quarantine_works) {
     auto tmpdir_for_data = make_lw_shared<tmpdir>();
+    auto db_cfg_ptr = make_shared<db::config>();
+    db_cfg_ptr->data_file_directories(std::vector<sstring>({ tmpdir_for_data->path().string() }));
     utils::UUID host_id;
 
     // populate tmpdir_for_data and
@@ -989,12 +1065,10 @@ SEASTAR_TEST_CASE(populate_from_quarantine_works) {
             });
         }
         BOOST_REQUIRE(found);
-    }, tmpdir_for_data);
+    }, db_cfg_ptr);
 
     // reload the table from tmpdir_for_data and
     // verify that all rows are still there
-    auto db_cfg_ptr = make_shared<db::config>();
-    db_cfg_ptr->data_file_directories(std::vector<sstring>({ tmpdir_for_data->path().string() }));
     db_cfg_ptr->host_id = host_id;
     size_t row_count = 0;
     co_await do_with_cql_env([&row_count] (cql_test_env& e) -> future<> {
@@ -1087,9 +1161,7 @@ SEASTAR_TEST_CASE(database_drop_column_family_clears_querier_cache) {
                 default_priority_class(),
                 nullptr);
 
-        auto f = e.db().invoke_on_all([ts] (replica::database& db) {
-            return db.drop_column_family("ks", "cf", [ts] { return make_ready_future<db_clock::time_point>(ts); });
-        });
+        auto f = replica::database::drop_table_on_all_shards(e.db(), "ks", "cf", [ts] { return make_ready_future<db_clock::time_point>(ts); });
 
         // we add a querier to the querier cache while the drop is ongoing
         auto& qc = db.get_querier_cache();
@@ -1101,5 +1173,70 @@ SEASTAR_TEST_CASE(database_drop_column_family_clears_querier_cache) {
 
         // the drop should have cleaned up all entries belonging to that table
         BOOST_REQUIRE_EQUAL(qc.get_stats().population, 0);
+    });
+}
+
+static future<> test_drop_table_with_auto_snapshot(bool auto_snapshot) {
+    sstring ks_name = "ks";
+    sstring table_name = format("table_with_auto_snapshot_{}", auto_snapshot ? "enabled" : "disabled");
+    auto tmpdir_for_data = make_lw_shared<tmpdir>();
+    auto db_cfg_ptr = make_shared<db::config>();
+    db_cfg_ptr->data_file_directories(std::vector<sstring>({ tmpdir_for_data->path().string() }));
+    db_cfg_ptr->auto_snapshot(auto_snapshot);
+
+    co_await do_with_some_data({table_name}, [&] (cql_test_env& e) -> future<> {
+        auto cf_dir = e.local_db().find_column_family(ks_name, table_name).dir();
+
+        // Pass `with_snapshot=true` to drop_table_on_all
+        // to allow auto_snapshot (based on the configuration above).
+        // The table directory should therefore exist after the table is dropped if auto_snapshot is disabled in the configuration.
+        co_await replica::database::drop_table_on_all_shards(e.db(), ks_name, table_name, [ts = db_clock::now()] { return make_ready_future<db_clock::time_point>(ts); }, true);
+        auto cf_dir_exists = co_await file_exists(cf_dir);
+        BOOST_REQUIRE_EQUAL(cf_dir_exists, auto_snapshot);
+        co_return;
+    }, db_cfg_ptr);
+}
+
+SEASTAR_TEST_CASE(drop_table_with_auto_snapshot_enabled) {
+    return test_drop_table_with_auto_snapshot(true);
+}
+
+SEASTAR_TEST_CASE(drop_table_with_auto_snapshot_disabled) {
+    return test_drop_table_with_auto_snapshot(false);
+}
+
+SEASTAR_TEST_CASE(drop_table_with_no_snapshot) {
+    sstring ks_name = "ks";
+    sstring table_name = "table_with_no_snapshot";
+
+    co_await do_with_some_data({table_name}, [&] (cql_test_env& e) -> future<> {
+        auto cf_dir = e.local_db().find_column_family(ks_name, table_name).dir();
+
+        // Pass `with_snapshot=false` to drop_table_on_all
+        // to disallow auto_snapshot.
+        // The table directory should therefore not exist after the table is dropped.
+        co_await replica::database::drop_table_on_all_shards(e.db(), ks_name, table_name, [ts = db_clock::now()] { return make_ready_future<db_clock::time_point>(ts); }, false);
+        auto cf_dir_exists = co_await file_exists(cf_dir);
+        BOOST_REQUIRE_EQUAL(cf_dir_exists, false);
+        co_return;
+    });
+}
+
+SEASTAR_TEST_CASE(drop_table_with_explicit_snapshot) {
+    sstring ks_name = "ks";
+    sstring table_name = "table_with_explicit_snapshot";
+
+    co_await do_with_some_data({table_name}, [&] (cql_test_env& e) -> future<> {
+        auto snapshot_tag = format("test-{}", db_clock::now().time_since_epoch().count());
+        co_await e.local_db().snapshot_on_all(ks_name, snapshot_tag, false);
+        auto cf_dir = e.local_db().find_column_family(ks_name, table_name).dir();
+
+        // With explicit snapshot and with_snapshot=false
+        // dir should still be kept, regardless of the
+        // with_snapshot parameter and auto_snapshot config.
+        co_await replica::database::drop_table_on_all_shards(e.db(), ks_name, table_name, [ts = db_clock::now()] { return make_ready_future<db_clock::time_point>(ts); }, false);
+        auto cf_dir_exists = co_await file_exists(cf_dir);
+        BOOST_REQUIRE_EQUAL(cf_dir_exists, true);
+        co_return;
     });
 }

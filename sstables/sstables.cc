@@ -3320,7 +3320,62 @@ gc_clock::time_point sstable::get_gc_before_for_fully_expire(const gc_clock::tim
     return res.knows_entire_range ? res.min_gc_before : gc_clock::time_point::min();
 }
 
+// Returns error code, 0 is success
+static future<int> remove_dir(fs::path dir, bool recursive) {
+    std::exception_ptr ex;
+    int error_code;
+    try {
+        co_await (recursive ? recursive_remove_directory(dir) : remove_file(dir.native()));
+        co_return 0;
+    } catch (const std::system_error& e) {
+        ex = std::current_exception();
+        error_code = e.code().value();
+        if (error_code == ENOENT) {
+            // Ignore missing directories
+            co_return 0;
+        }
+        if (error_code == EEXIST && !recursive) {
+            // Just return failure if the directory is not empty
+            // Let the caller decide what to do about it.
+            co_return error_code;
+        }
+    } catch (...) {
+        ex = std::current_exception();
+        error_code = -1;
+    }
+    sstlog.warn("Could not remove table directory {}: {}. Ignored.", dir, ex);
+    co_return error_code;
 }
+
+future<> remove_table_directory_if_has_no_snapshots(fs::path table_dir) {
+    // Be paranoid about risky paths
+    if (table_dir == "" || table_dir == "/") {
+        on_internal_error_noexcept(sstlog, format("Invalid table directory for removal: {}", table_dir));
+        abort();
+    }
+
+    int error = 0;
+    for (auto subdir : sstables::table_subdirectories) {
+        // Remove the snapshot directory only if empty
+        // while other subdirectories are removed recusresively.
+        auto ec = co_await remove_dir(table_dir / subdir, subdir != sstables::snapshots_dir);
+        if (subdir == sstables::snapshots_dir && ec == EEXIST) {
+            sstlog.info("Leaving table directory {} behind as it has snapshots", table_dir);
+        }
+        if (!error) {
+            error = ec;
+        }
+    }
+
+    if (!error) {
+        // Remove the table directory recursively
+        // since it may still hold leftover temporary
+        // sstable files and directories
+        co_await remove_dir(table_dir, true);
+    }
+}
+
+} // namespace sstables
 
 namespace seastar {
 

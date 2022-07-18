@@ -1289,19 +1289,20 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
         return vp;
     });
 
-    co_await proxy.local().get_db().invoke_on_all([&] (replica::database& db) -> future<> {
-        // First drop views and *only then* the tables, if interleaved it can lead
-        // to a mv not finding its schema when snapshoting since the main table
-        // was already dropped (see https://github.com/scylladb/scylla/issues/5614)
-        co_await coroutine::parallel_for_each(views_diff.dropped, [&] (schema_diff::dropped_schema& dt) -> future<> {
-            auto& s = *dt.schema.get();
-            co_await db.drop_column_family(s.ks_name(), s.cf_name(), [&] { return dt.jp.value(); });
-        });
-        co_await coroutine::parallel_for_each(tables_diff.dropped, [&] (schema_diff::dropped_schema& dt) -> future<> {
-            auto& s = *dt.schema.get();
-            co_await db.drop_column_family(s.ks_name(), s.cf_name(), [&] { return dt.jp.value(); });
-        });
+    // First drop views and *only then* the tables, if interleaved it can lead
+    // to a mv not finding its schema when snapshoting since the main table
+    // was already dropped (see https://github.com/scylladb/scylla/issues/5614)
+    auto& db = proxy.local().get_db();
+    co_await coroutine::parallel_for_each(views_diff.dropped, [&db] (schema_diff::dropped_schema& dt) {
+        auto& s = *dt.schema.get();
+        return replica::database::drop_table_on_all_shards(db, s.ks_name(), s.cf_name(), [&] { return dt.jp.value(); });
+    });
+    co_await coroutine::parallel_for_each(tables_diff.dropped, [&db] (schema_diff::dropped_schema& dt) -> future<> {
+        auto& s = *dt.schema.get();
+        return replica::database::drop_table_on_all_shards(db, s.ks_name(), s.cf_name(), [&] { return dt.jp.value(); });
+    });
 
+    co_await proxy.local().get_db().invoke_on_all([&] (replica::database& db) -> future<> {
         // In order to avoid possible races we first create the tables and only then the views.
         // That way if a view seeks information about its base table it's guarantied to find it.
         co_await coroutine::parallel_for_each(tables_diff.created, [&] (global_schema_ptr& gs) -> future<> {
