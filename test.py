@@ -339,6 +339,9 @@ class PythonTestSuite(TestSuite):
 
         def create_server(cluster_name, seed):
             cmdline_options = self.cfg.get("extra_scylla_cmdline_options", [])
+            config_options = self.cfg.get("extra_scylla_config_options",
+                                          {"authenticator": "PasswordAuthenticator",
+                                           "authorizer": "CassandraAuthorizer"})
             if type(cmdline_options) == str:
                 cmdline_options = [cmdline_options]
             server = ScyllaServer(
@@ -347,7 +350,8 @@ class PythonTestSuite(TestSuite):
                 host_registry=self.hosts,
                 cluster_name=cluster_name,
                 seed=seed,
-                cmdline_options=cmdline_options)
+                cmdline_options=cmdline_options,
+                config_options=config_options)
 
             # Suite artifacts are removed when
             # the entire suite ends successfully.

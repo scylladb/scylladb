@@ -11,7 +11,7 @@ import pathlib
 import shutil
 import time
 import uuid
-from typing import Optional, List, Callable
+from typing import Optional, Dict, List, Callable
 from cassandra import InvalidRequest                    # type: ignore
 from cassandra import OperationTimedOut                 # type: ignore
 from cassandra.auth import PlainTextAuthProvider        # type: ignore
@@ -77,8 +77,8 @@ request_timeout_in_ms: 300000
 # Set up authentication in order to allow testing this module
 # and other modules dependent on it: e.g. service levels
 
-authenticator: PasswordAuthenticator
-authorizer: CassandraAuthorizer
+authenticator: {authenticator}
+authorizer: {authorizer}
 strict_allow_filtering: true
 
 permissions_update_interval_in_ms: 100
@@ -106,7 +106,8 @@ class ScyllaServer:
     def __init__(self, exe: str, vardir: str,
                  host_registry,
                  cluster_name: str, seed: Optional[str],
-                 cmdline_options: List[str]) -> None:
+                 cmdline_options: List[str],
+                 config_options: Dict[str, str]) -> None:
         self.exe = pathlib.Path(exe).resolve()
         self.vardir = pathlib.Path(vardir)
         self.host_registry = host_registry
@@ -118,6 +119,8 @@ class ScyllaServer:
         self.log_savepoint = 0
         self.control_cluster: Optional[Cluster] = None
         self.control_connection: Optional[Session] = None
+        self.authenticator: str = config_options["authenticator"]
+        self.authorizer: str = config_options["authorizer"]
 
         async def stop_server() -> None:
             if self.is_running:
@@ -190,6 +193,8 @@ class ScyllaServer:
               "host": self.hostname,
               "seeds": self.seed,
               "workdir": self.workdir,
+              "authenticator": self.authenticator,
+              "authorizer": self.authorizer
         }
         with self.config_filename.open('w') as config_file:
             config_file.write(SCYLLA_CONF_TEMPLATE.format(**fmt))
