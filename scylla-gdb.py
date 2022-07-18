@@ -3630,7 +3630,7 @@ class scylla_fiber(gdb.Command):
 
             backwards_fiber = self._walk(self._walk_backward, this_task[0], args.max_depth, args.scanned_region_size, using_seastar_allocator, args.verbose)
 
-            for i, (tptr, vptr, name) in enumerate(backwards_fiber):
+            for i, (tptr, vptr, name) in enumerate(reversed(backwards_fiber)):
                 gdb.write("#{:<2d} (task*) 0x{:016x} 0x{:016x} {}\n".format(i - len(backwards_fiber), int(tptr), int(vptr), name))
 
             tptr, vptr, name = this_task
