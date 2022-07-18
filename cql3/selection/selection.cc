@@ -441,7 +441,7 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
 
     auto static_row_iterator = static_row.iterator();
     auto row_iterator = row ? std::optional<query::result_row_view::iterator_type>(row->iterator()) : std::nullopt;
-    auto non_pk_restrictions_map = _restrictions->get_non_pk_restriction();
+    const expr::single_column_restrictions_map& non_pk_restrictions_map = _restrictions->get_non_pk_restriction();
     for (auto&& cdef : selection.get_columns()) {
         switch (cdef->kind) {
         case column_kind::static_column:
@@ -454,11 +454,11 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
             if (restr_it == non_pk_restrictions_map.end()) {
                 continue;
             }
-            restrictions::restriction& single_col_restriction = *restr_it->second;
+            const expr::expression& single_col_restriction = restr_it->second;
             // FIXME: push to upper layer so it happens once per row
             auto static_and_regular_columns = expr::get_non_pk_values(selection, static_row, row);
             bool regular_restriction_matches = expr::is_satisfied_by(
-                    single_col_restriction.expression,
+                    single_col_restriction,
                     expr::evaluation_inputs{
                         .partition_key = &partition_key,
                         .clustering_key = &clustering_key,

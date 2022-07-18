@@ -463,7 +463,7 @@ public:
      * @return <code>true</code> if the restrictions contain any non-primary key restrictions, <code>false</code> otherwise.
      */
     bool has_non_primary_key_restriction() const {
-        return !_nonprimary_key_restrictions->empty();
+        return !expr::is_empty_restriction(_new_nonprimary_key_restrictions);
     }
 
     bool pk_restrictions_need_filtering() const;
@@ -498,8 +498,8 @@ public:
      /**
       * @return the non-primary key restrictions.
       */
-    const single_column_restrictions::restrictions_map& get_non_pk_restriction() const {
-        return _nonprimary_key_restrictions->restrictions();
+    const expr::single_column_restrictions_map& get_non_pk_restriction() const {
+        return _single_column_nonprimary_key_restrictions;
     }
 
     /**

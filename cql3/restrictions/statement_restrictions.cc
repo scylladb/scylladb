@@ -456,7 +456,7 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
             && !type.is_delete();
     _has_queriable_pk_index = parition_key_restrictions_have_supporting_index(sim, allow_local)
             && !type.is_delete();
-    _has_queriable_regular_index = _nonprimary_key_restrictions->has_supporting_index(sim, allow_local)
+    _has_queriable_regular_index = expr::index_supports_some_column(_new_nonprimary_key_restrictions, sim, allow_local)
             && !type.is_delete();
 
     // At this point, the select statement if fully constructed, but we still have a few things to validate
@@ -526,7 +526,7 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
 #endif
     }
 
-    if (!_nonprimary_key_restrictions->empty()) {
+    if (!expr::is_empty_restriction(_new_nonprimary_key_restrictions)) {
         if (_has_queriable_regular_index && _partition_range_is_simple) {
             _uses_secondary_indexing = true;
         } else if (!allow_filtering) {
@@ -628,13 +628,8 @@ std::vector<const column_definition*> statement_restrictions::get_column_defs_fo
                 }
             }
         }
-        for (auto&& cdef : _nonprimary_key_restrictions->get_column_defs()) {
-            ::shared_ptr<restriction> cur_restr = _nonprimary_key_restrictions->get_restriction(*cdef);
-            const expr::expression* single_col_restr = nullptr;
-            if (is_single_column_restriction(cur_restr->expression)) {
-                single_col_restr = &cur_restr->expression;
-            }
-            if (!column_uses_indexing(cdef, single_col_restr)) {
+        for (auto&& [cdef, cur_restr] : _single_column_nonprimary_key_restrictions) {
+            if (!column_uses_indexing(cdef, &cur_restr)) {
                 column_defs_for_filtering.emplace_back(cdef);
             }
         }
@@ -1757,7 +1752,7 @@ bool statement_restrictions::need_filtering() const {
         // If there is a token(p1, p2) restriction, no p1, p2 restrictions are allowed in the query.
         // All other restrictions must be on clustering or regular columns.
         int64_t non_pk_restrictions_count = clustering_columns_restrictions_size();
-        non_pk_restrictions_count += _nonprimary_key_restrictions->size();
+        non_pk_restrictions_count += expr::get_sorted_column_defs(_new_nonprimary_key_restrictions).size();
 
         // We are querying using an index, one restriction goes to the index restriction.
         // If there are some restrictions other than token() and index column then we need to do filtering.
@@ -1770,7 +1765,8 @@ bool statement_restrictions::need_filtering() const {
         // Can't calculate the token value, so a naive base-table query must be filtered.  Same for any index tables,
         // except if there's only one restriction supported by an index.
         return !(npart == 1 && _has_queriable_pk_index &&
-                 expr::is_empty_restriction(_clustering_columns_restrictions) && _nonprimary_key_restrictions->empty());
+                 expr::is_empty_restriction(_clustering_columns_restrictions) &&
+                 expr::is_empty_restriction(_new_nonprimary_key_restrictions));
     }
     if (pk_restrictions_need_filtering()) {
         // We most likely cannot calculate token(s).  Neither base-table nor index-table queries can avoid filtering.
@@ -1778,7 +1774,7 @@ bool statement_restrictions::need_filtering() const {
     }
     // Now we know the partition key is either unrestricted or fully restricted.
 
-    const auto nreg = _nonprimary_key_restrictions->size();
+    const auto nreg = expr::get_sorted_column_defs(_new_nonprimary_key_restrictions).size();
     if (nreg > 1 || (nreg == 1 && !_has_queriable_regular_index)) {
         return true; // Regular columns are unsorted in storage and no single index suffices.
     }

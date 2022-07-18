@@ -346,7 +346,7 @@ public:
                 // FIXME: pass dummy_options as nullptr
                 auto dummy_options = cql3::query_options({});
                 return cql3::expr::is_satisfied_by(
-                        r->expression,
+                        r,
                         cql3::expr::evaluation_inputs{
                             .partition_key = &_pk,
                             .clustering_key = &ck,
