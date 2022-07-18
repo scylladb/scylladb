@@ -34,12 +34,6 @@ class statement_restrictions {
 private:
     schema_ptr _schema;
 
-    template<typename>
-    class initial_key_restrictions;
-
-    static ::shared_ptr<partition_key_restrictions> get_initial_partition_key_restrictions(bool allow_filtering);
-    static ::shared_ptr<clustering_key_restrictions> get_initial_clustering_key_restrictions(bool allow_filtering);
-
     /**
      * Restrictions on partitioning columns
      */
