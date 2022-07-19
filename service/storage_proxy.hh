@@ -441,7 +441,6 @@ private:
                       utils::UUID schema_version, auto in, inet_address_vector_replica_set forward, gms::inet_address reply_to,
                       unsigned shard, storage_proxy::response_id_type response_id, std::optional<tracing::trace_info> trace_info,
                       auto&& apply_fn, auto&& forward_fn);
-    future<rpc::no_wait_type> handle_mutation_failed(const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id, size_t num_failed, rpc::optional<db::view::update_backlog> backlog, rpc::optional<replica::exception_variant> exception);
     future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature, replica::exception_variant>> handle_read_data(const rpc::client_info& cinfo, rpc::opt_time_point t, query::read_command cmd, ::compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> oda, rpc::optional<db::per_partition_rate_limit::info> rate_limit_info_opt);
     future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature, replica::exception_variant>> handle_read_mutation_data(const rpc::client_info& cinfo, rpc::opt_time_point t, query::read_command cmd, ::compat::wrapping_partition_range pr);
     future<rpc::tuple<query::result_digest, long, cache_temperature, replica::exception_variant>> handle_read_digest(const rpc::client_info& cinfo, rpc::opt_time_point t, query::read_command cmd, ::compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> oda, rpc::optional<db::per_partition_rate_limit::info> rate_limit_info_opt);

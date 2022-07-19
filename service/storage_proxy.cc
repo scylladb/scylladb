@@ -145,7 +145,7 @@ struct storage_proxy::remote {
         ser::storage_proxy_rpc_verbs::register_hint_mutation(&_ms, [this, sp] <typename... Args>(Args&&... args) { return receive_mutation_handler(sp->_hints_write_smp_service_group, std::forward<Args>(args)..., std::monostate()); });
         ser::storage_proxy_rpc_verbs::register_paxos_learn(&_ms, std::bind_front(&remote::handle_paxos_learn, this));
         ser::storage_proxy_rpc_verbs::register_mutation_done(&_ms, std::bind_front(&remote::handle_mutation_done, this));
-        ser::storage_proxy_rpc_verbs::register_mutation_failed(&_ms, std::bind_front(&storage_proxy::handle_mutation_failed, sp));
+        ser::storage_proxy_rpc_verbs::register_mutation_failed(&_ms, std::bind_front(&remote::handle_mutation_failed, this));
         ser::storage_proxy_rpc_verbs::register_read_data(&_ms, std::bind_front(&storage_proxy::handle_read_data, sp));
         ser::storage_proxy_rpc_verbs::register_read_mutation_data(&_ms, std::bind_front(&storage_proxy::handle_read_mutation_data, sp));
         ser::storage_proxy_rpc_verbs::register_read_digest(&_ms, std::bind_front(&storage_proxy::handle_read_digest, sp));
@@ -376,6 +376,29 @@ struct storage_proxy::remote {
         return _sp.container().invoke_on(shard, _sp._write_ack_smp_service_group,
                 [from, response_id, backlog = std::move(backlog)] (storage_proxy& sp) mutable {
             sp.got_response(response_id, from, std::move(backlog));
+            return netw::messaging_service::no_wait();
+        });
+    }
+
+    future<rpc::no_wait_type> handle_mutation_failed(
+            const rpc::client_info& cinfo,
+            unsigned shard, storage_proxy::response_id_type response_id, size_t num_failed,
+            rpc::optional<db::view::update_backlog> backlog, rpc::optional<replica::exception_variant> exception) {
+        auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+        _sp.get_stats().replica_cross_shard_ops += shard != this_shard_id();
+        return _sp.container().invoke_on(shard, _sp._write_ack_smp_service_group,
+                [from, response_id, num_failed, backlog = std::move(backlog), exception = std::move(exception)] (storage_proxy& sp) mutable {
+            error err = error::FAILURE;
+            if (exception) {
+                err = std::visit([] <typename Ex> (Ex&) {
+                    if constexpr (std::is_same_v<Ex, replica::rate_limit_exception>) {
+                        return error::RATE_LIMIT;
+                    } else if constexpr (std::is_same_v<Ex, replica::unknown_exception> || std::is_same_v<Ex, replica::no_exception>) {
+                        return error::FAILURE;
+                    }
+                }, exception->reason);
+            }
+            sp.got_failure_response(response_id, from, num_failed, std::move(backlog), err, std::nullopt);
             return netw::messaging_service::no_wait();
         });
     }
@@ -5420,26 +5443,6 @@ storage_proxy::handle_write(netw::messaging_service::msg_addr src_addr, rpc::opt
                     tracing::trace(trace_state_ptr, "Mutation handling is done");
                 });
             });
-        });
-}
-
-future<rpc::no_wait_type>
-storage_proxy::handle_mutation_failed(const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id, size_t num_failed, rpc::optional<db::view::update_backlog> backlog, rpc::optional<replica::exception_variant> exception) {
-        auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
-        get_stats().replica_cross_shard_ops += shard != this_shard_id();
-        return container().invoke_on(shard, _write_ack_smp_service_group, [from, response_id, num_failed, backlog = std::move(backlog), exception = std::move(exception)] (storage_proxy& sp) mutable {
-            error err = error::FAILURE;
-            if (exception) {
-                err = std::visit([] <typename Ex> (Ex&) {
-                    if constexpr (std::is_same_v<Ex, replica::rate_limit_exception>) {
-                        return error::RATE_LIMIT;
-                    } else if constexpr (std::is_same_v<Ex, replica::unknown_exception> || std::is_same_v<Ex, replica::no_exception>) {
-                        return error::FAILURE;
-                    }
-                }, exception->reason);
-            }
-            sp.got_failure_response(response_id, from, num_failed, std::move(backlog), err, std::nullopt);
-            return netw::messaging_service::no_wait();
         });
 }
 
