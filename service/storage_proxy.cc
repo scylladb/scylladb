@@ -143,7 +143,7 @@ struct storage_proxy::remote {
         ser::storage_proxy_rpc_verbs::register_counter_mutation(&_ms, std::bind_front(&remote::handle_counter_mutation, this));
         ser::storage_proxy_rpc_verbs::register_mutation(&_ms, std::bind_front(&remote::receive_mutation_handler, this, sp->_write_smp_service_group));
         ser::storage_proxy_rpc_verbs::register_hint_mutation(&_ms, [this, sp] <typename... Args>(Args&&... args) { return receive_mutation_handler(sp->_hints_write_smp_service_group, std::forward<Args>(args)..., std::monostate()); });
-        ser::storage_proxy_rpc_verbs::register_paxos_learn(&_ms, std::bind_front(&storage_proxy::handle_paxos_learn, sp));
+        ser::storage_proxy_rpc_verbs::register_paxos_learn(&_ms, std::bind_front(&remote::handle_paxos_learn, this));
         ser::storage_proxy_rpc_verbs::register_mutation_done(&_ms, std::bind_front(&storage_proxy::handle_mutation_done, sp));
         ser::storage_proxy_rpc_verbs::register_mutation_failed(&_ms, std::bind_front(&storage_proxy::handle_mutation_failed, sp));
         ser::storage_proxy_rpc_verbs::register_read_data(&_ms, std::bind_front(&storage_proxy::handle_read_data, sp));
@@ -345,6 +345,27 @@ struct storage_proxy::remote {
                         std::optional<tracing::trace_info> trace_info) {
                     return p->remote().send_mutation(addr, timeout, std::move(trace_info), m, {}, reply_to, shard, response_id, rate_limit_info);
                 });
+    }
+
+    future<rpc::no_wait_type> handle_paxos_learn(
+            const rpc::client_info& cinfo, rpc::opt_time_point t,
+            paxos::proposal decision, inet_address_vector_replica_set forward, gms::inet_address reply_to, unsigned shard,
+            storage_proxy::response_id_type response_id, std::optional<tracing::trace_info> trace_info) {
+        tracing::trace_state_ptr trace_state_ptr;
+        auto src_addr = netw::messaging_service::get_source(cinfo);
+
+        utils::UUID schema_version = decision.update.schema_version();
+        return _sp.handle_write(src_addr, t, schema_version, std::move(decision), std::move(forward), reply_to, shard,
+                response_id, trace_info,
+               /* apply_fn */ [] (shared_ptr<storage_proxy>& p, tracing::trace_state_ptr tr_state, schema_ptr s,
+                       const paxos::proposal& decision, clock_type::time_point timeout) {
+                     return paxos::paxos_state::learn(*p, std::move(s), decision, timeout, tr_state);
+              },
+              /* forward_fn */ [] (shared_ptr<storage_proxy>& p, netw::messaging_service::msg_addr addr, clock_type::time_point timeout, const paxos::proposal& m,
+                      gms::inet_address reply_to, unsigned shard, response_id_type response_id,
+                      std::optional<tracing::trace_info> trace_info) {
+                    return p->remote().send_paxos_learn(addr, timeout, std::move(trace_info), m, {}, reply_to, shard, response_id);
+              });
     }
 };
 
@@ -5388,27 +5409,6 @@ storage_proxy::handle_write(netw::messaging_service::msg_addr src_addr, rpc::opt
                 });
             });
         });
-}
-
-future<rpc::no_wait_type>
-storage_proxy::handle_paxos_learn(const rpc::client_info& cinfo, rpc::opt_time_point t, paxos::proposal decision,
-            inet_address_vector_replica_set forward, gms::inet_address reply_to, unsigned shard,
-            storage_proxy::response_id_type response_id, std::optional<tracing::trace_info> trace_info) {
-        tracing::trace_state_ptr trace_state_ptr;
-        auto src_addr = netw::messaging_service::get_source(cinfo);
-
-        utils::UUID schema_version = decision.update.schema_version();
-        return handle_write(src_addr, t, schema_version, std::move(decision), std::move(forward), reply_to, shard,
-                response_id, trace_info,
-               /* apply_fn */ [this] (shared_ptr<storage_proxy>& p, tracing::trace_state_ptr tr_state, schema_ptr s,
-                       const paxos::proposal& decision, clock_type::time_point timeout) {
-                     return paxos::paxos_state::learn(*this, std::move(s), decision, timeout, tr_state);
-              },
-              /* forward_fn */ [] (shared_ptr<storage_proxy>& p, netw::messaging_service::msg_addr addr, clock_type::time_point timeout, const paxos::proposal& m,
-                      gms::inet_address reply_to, unsigned shard, response_id_type response_id,
-                      std::optional<tracing::trace_info> trace_info) {
-                    return p->remote().send_paxos_learn(addr, timeout, std::move(trace_info), m, {}, reply_to, shard, response_id);
-              });
 }
 
 future<rpc::no_wait_type>
