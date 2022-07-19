@@ -147,7 +147,7 @@ struct storage_proxy::remote {
         ser::storage_proxy_rpc_verbs::register_mutation_done(&_ms, std::bind_front(&remote::handle_mutation_done, this));
         ser::storage_proxy_rpc_verbs::register_mutation_failed(&_ms, std::bind_front(&remote::handle_mutation_failed, this));
         ser::storage_proxy_rpc_verbs::register_read_data(&_ms, std::bind_front(&remote::handle_read_data, this));
-        ser::storage_proxy_rpc_verbs::register_read_mutation_data(&_ms, std::bind_front(&storage_proxy::handle_read_mutation_data, sp));
+        ser::storage_proxy_rpc_verbs::register_read_mutation_data(&_ms, std::bind_front(&remote::handle_read_mutation_data, this));
         ser::storage_proxy_rpc_verbs::register_read_digest(&_ms, std::bind_front(&storage_proxy::handle_read_digest, sp));
         ser::storage_proxy_rpc_verbs::register_truncate(&_ms, std::bind_front(&storage_proxy::handle_truncate, sp));
         // Register PAXOS verb handlers
@@ -441,6 +441,42 @@ struct storage_proxy::remote {
             }).then_wrapped([&p, &trace_state_ptr, src_ip] (future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> f) mutable {
                 tracing::trace(trace_state_ptr, "read_data handling is done, sending a response to /{}", src_ip);
                 return p->encode_replica_exception_for_rpc(std::move(f), [] { return std::make_tuple(foreign_ptr(make_lw_shared<query::result>()), cache_temperature::invalid()); });
+            });
+        });
+    }
+
+    future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature, replica::exception_variant>>
+    handle_read_mutation_data(
+            const rpc::client_info& cinfo, rpc::opt_time_point t,
+            query::read_command cmd, ::compat::wrapping_partition_range pr) {
+        tracing::trace_state_ptr trace_state_ptr;
+        auto src_addr = netw::messaging_service::get_source(cinfo);
+        if (cmd.trace_info) {
+            trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(*cmd.trace_info);
+            tracing::begin(trace_state_ptr);
+            tracing::trace(trace_state_ptr, "read_mutation_data: message received from /{}", src_addr.addr);
+        }
+        if (!cmd.max_result_size) {
+            cmd.max_result_size.emplace(cinfo.retrieve_auxiliary<uint64_t>("max_result_size"));
+        }
+        return do_with(std::move(pr),
+                       _sp.shared_from_this(),
+                       std::move(trace_state_ptr),
+                       ::compat::one_or_two_partition_ranges({}),
+                       [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr), t] (
+                               ::compat::wrapping_partition_range& pr,
+                               shared_ptr<storage_proxy>& p,
+                               tracing::trace_state_ptr& trace_state_ptr,
+                               ::compat::one_or_two_partition_ranges& unwrapped) mutable {
+            p->get_stats().replica_mutation_data_reads++;
+            auto src_ip = src_addr.addr;
+            return p->remote().get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, &pr, &p, &trace_state_ptr, &unwrapped, t] (schema_ptr s) mutable {
+                unwrapped = ::compat::unwrap(std::move(pr), *s);
+                auto timeout = t ? *t : db::no_timeout;
+                return p->query_mutations_locally(std::move(s), std::move(cmd), unwrapped, timeout, trace_state_ptr);
+            }).then_wrapped([&p, &trace_state_ptr, src_ip] (future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> f) mutable {
+                tracing::trace(trace_state_ptr, "read_mutation_data handling is done, sending a response to /{}", src_ip);
+                return p->encode_replica_exception_for_rpc(std::move(f), [] { return std::make_tuple(foreign_ptr(make_lw_shared<reconcilable_result>()), cache_temperature::invalid()); });
             });
         });
     }
@@ -5506,40 +5542,6 @@ future<rpc::tuple<Elements..., replica::exception_variant>> storage_proxy::encod
     }
 
     return make_exception_future<final_tuple_type>(std::move(eptr));
-}
-
-future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature, replica::exception_variant>>
-storage_proxy::handle_read_mutation_data(const rpc::client_info& cinfo, rpc::opt_time_point t, query::read_command cmd, ::compat::wrapping_partition_range pr) {
-        tracing::trace_state_ptr trace_state_ptr;
-        auto src_addr = netw::messaging_service::get_source(cinfo);
-        if (cmd.trace_info) {
-            trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(*cmd.trace_info);
-            tracing::begin(trace_state_ptr);
-            tracing::trace(trace_state_ptr, "read_mutation_data: message received from /{}", src_addr.addr);
-        }
-        if (!cmd.max_result_size) {
-            cmd.max_result_size.emplace(cinfo.retrieve_auxiliary<uint64_t>("max_result_size"));
-        }
-        return do_with(std::move(pr),
-                       shared_from_this(),
-                       std::move(trace_state_ptr),
-                       ::compat::one_or_two_partition_ranges({}),
-                       [this, &cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr), t] (
-                               ::compat::wrapping_partition_range& pr,
-                               shared_ptr<storage_proxy>& p,
-                               tracing::trace_state_ptr& trace_state_ptr,
-                               ::compat::one_or_two_partition_ranges& unwrapped) mutable {
-            p->get_stats().replica_mutation_data_reads++;
-            auto src_ip = src_addr.addr;
-            return remote().get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, &pr, &p, &trace_state_ptr, &unwrapped, t] (schema_ptr s) mutable {
-                unwrapped = ::compat::unwrap(std::move(pr), *s);
-                auto timeout = t ? *t : db::no_timeout;
-                return p->query_mutations_locally(std::move(s), std::move(cmd), unwrapped, timeout, trace_state_ptr);
-            }).then_wrapped([this, &trace_state_ptr, src_ip] (future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> f) mutable {
-                tracing::trace(trace_state_ptr, "read_mutation_data handling is done, sending a response to /{}", src_ip);
-                return encode_replica_exception_for_rpc(std::move(f), [] { return std::make_tuple(foreign_ptr(make_lw_shared<reconcilable_result>()), cache_temperature::invalid()); });
-            });
-        });
 }
 
 future<rpc::tuple<query::result_digest, long, cache_temperature, replica::exception_variant>>
