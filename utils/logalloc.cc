@@ -683,7 +683,7 @@ public:
     segment* segment_from_idx(size_t idx) noexcept {
         return reinterpret_cast<segment*>(_segments_base) + idx;
     }
-    size_t idx_from_segment(segment* seg) const noexcept {
+    size_t idx_from_segment(const segment* seg) const noexcept {
         return seg - reinterpret_cast<segment*>(_segments_base);
     }
     size_t new_idx_for_segment(segment* seg) noexcept {
@@ -724,9 +724,9 @@ public:
         assert(idx < _segments.size());
         return _segments[idx];
     }
-    size_t idx_from_segment(segment* seg) const noexcept {
+    size_t idx_from_segment(const segment* seg) const noexcept {
         // segment 0 is a marker for no segment
-        auto i = _segment_indexes.find(seg);
+        auto i = _segment_indexes.find(const_cast<segment*>(seg));
         if (i == _segment_indexes.end()) {
             return 0;
         }
@@ -822,7 +822,7 @@ private:
     segment* segment_from_idx(size_t idx) noexcept {
         return _store.segment_from_idx(idx);
     }
-    size_t idx_from_segment(segment* seg) {
+    size_t idx_from_segment(const segment* seg) const noexcept {
         return _store.idx_from_segment(seg);
     }
     size_t max_segments() const {
