@@ -3,8 +3,8 @@
 
 ### moving the CQL reference files to the new cql folder
 
-/stable/getting-started/ddl.html: /stable/cql/ddl.html:
-/getting-started/dml.html: /cql/dml.html
+/stable/getting-started/ddl.html: /stable/cql/ddl.html
+/stable/getting-started/dml.html: /stable/cql/dml.html
 /stable/getting-started/time-to-live.html: /stable/cql/time-to-live.html
 /stable/getting-started/types.html: /stable/cql/types.html
 /stable/getting-started/appendices.html: /stable/cql/appendices.html
