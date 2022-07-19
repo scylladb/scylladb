@@ -677,7 +677,10 @@ public:
         : _layout(memory::get_memory_layout())
         , _segments_base(align_down(_layout.start, (uintptr_t)segment::size)) {
     }
-    segment* segment_from_idx(size_t idx) const noexcept {
+    const segment* segment_from_idx(size_t idx) const noexcept {
+        return reinterpret_cast<segment*>(_segments_base) + idx;
+    }
+    segment* segment_from_idx(size_t idx) noexcept {
         return reinterpret_cast<segment*>(_segments_base) + idx;
     }
     size_t idx_from_segment(segment* seg) const noexcept {
@@ -713,7 +716,11 @@ public:
     segment_store() : _segments(max_segments()) {
         _segment_indexes.reserve(max_segments());
     }
-    segment* segment_from_idx(size_t idx) const noexcept {
+    const segment* segment_from_idx(size_t idx) const noexcept {
+        assert(idx < _segments.size());
+        return _segments[idx];
+    }
+    segment* segment_from_idx(size_t idx) noexcept {
         assert(idx < _segments.size());
         return _segments[idx];
     }
@@ -809,7 +816,10 @@ private:
 
     segment* allocate_or_fallback_to_reserve();
     void free_or_restore_to_reserve(segment* seg) noexcept;
-    segment* segment_from_idx(size_t idx) const {
+    const segment* segment_from_idx(size_t idx) const noexcept {
+        return _store.segment_from_idx(idx);
+    }
+    segment* segment_from_idx(size_t idx) noexcept {
         return _store.segment_from_idx(idx);
     }
     size_t idx_from_segment(segment* seg) {
