@@ -69,6 +69,7 @@
 #include "db/rate_limiter.hh"
 #include "db/per_partition_rate_limit_info.hh"
 #include "db/operation_type.hh"
+#include "utils/serialized_action.hh"
 
 class cell_locker;
 class cell_locker_stats;
@@ -1359,6 +1360,9 @@ private:
     utils::cross_shard_barrier _stop_barrier;
 
     db::rate_limiter _rate_limiter;
+
+    serialized_action _update_memtable_flush_static_shares_action;
+    utils::observer<float> _memtable_flush_static_shares_observer;
 
 public:
     data_dictionary::database as_data_dictionary() const;

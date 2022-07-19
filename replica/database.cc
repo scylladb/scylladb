@@ -86,10 +86,7 @@ namespace replica {
 inline
 flush_controller
 make_flush_controller(const db::config& cfg, backlog_controller::scheduling_group& sg, std::function<double()> fn) {
-    if (cfg.memtable_flush_static_shares() > 0) {
-        return flush_controller(sg, cfg.memtable_flush_static_shares());
-    }
-    return flush_controller(sg, 50ms, cfg.virtual_dirty_soft_limit(), std::move(fn));
+    return flush_controller(sg, cfg.memtable_flush_static_shares(), 50ms, cfg.virtual_dirty_soft_limit(), std::move(fn));
 }
 
 inline compaction_manager::config make_compaction_manager_config(const db::config& cfg, database_config& dbcfg) {
@@ -97,7 +94,7 @@ inline compaction_manager::config make_compaction_manager_config(const db::confi
         .compaction_sched_group = compaction_manager::scheduling_group{dbcfg.compaction_scheduling_group, service::get_local_compaction_priority()},
         .maintenance_sched_group = compaction_manager::scheduling_group{dbcfg.streaming_scheduling_group, service::get_local_streaming_priority()},
         .available_memory = dbcfg.available_memory,
-        .static_shares = cfg.compaction_static_shares(),
+        .static_shares = cfg.compaction_static_shares,
         .throughput_mb_per_sec = cfg.compaction_throughput_mb_per_sec,
     };
 }
@@ -376,6 +373,8 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _sst_dir_semaphore(sst_dir_sem)
     , _wasm_engine(std::make_unique<wasm::engine>())
     , _stop_barrier(std::move(barrier))
+    , _update_memtable_flush_static_shares_action([this, &cfg] { return _memtable_controller.update_static_shares(cfg.memtable_flush_static_shares()); })
+    , _memtable_flush_static_shares_observer(cfg.memtable_flush_static_shares.observe(_update_memtable_flush_static_shares_action.make_observer()))
 {
     assert(dbcfg.available_memory != 0); // Detect misconfigured unit tests, see #7544
 
@@ -405,6 +404,11 @@ const data_dictionary::user_types_storage& database::user_types() const noexcept
 } // namespace replica
 
 void backlog_controller::adjust() {
+    if (controller_disabled()) {
+        update_controller(_static_shares);
+        return;
+    }
+
     auto backlog = _current_backlog();
 
     if (backlog >= _control_points.back().input) {
@@ -427,8 +431,7 @@ void backlog_controller::adjust() {
 
 float backlog_controller::backlog_of_shares(float shares) const {
     size_t idx = 1;
-    // No control points means the controller is disabled.
-    if (_control_points.size() == 0) {
+    if (controller_disabled() || _control_points.size() == 0) {
             return 1.0f;
     }
     while ((idx < _control_points.size() - 1) && (_control_points[idx].output < shares)) {
@@ -2289,6 +2292,7 @@ future<> database::stop() {
     co_await _streaming_concurrency_sem.stop();
     co_await _compaction_concurrency_sem.stop();
     co_await _system_read_concurrency_sem.stop();
+    co_await _update_memtable_flush_static_shares_action.join();
 }
 
 future<> database::flush_all_memtables() {

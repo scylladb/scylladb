@@ -277,9 +277,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "max cpu usage ratio (between 0 and 1) for compaction process. Not intended for setting in normal operations. Setting it to 1 or higher will disable it, recommended operational setting is 0.5.")
     , auto_adjust_flush_quota(this, "auto_adjust_flush_quota", value_status::Unused, false,
         "true: auto-adjust memtable shares for flush processes")
-    , memtable_flush_static_shares(this, "memtable_flush_static_shares", value_status::Used, 0,
+    , memtable_flush_static_shares(this, "memtable_flush_static_shares", liveness::LiveUpdate, value_status::Used, 0,
         "If set to higher than 0, ignore the controller's output and set the memtable shares statically. Do not set this unless you know what you are doing and suspect a problem in the controller. This option will be retired when the controller reaches more maturity")
-    , compaction_static_shares(this, "compaction_static_shares", value_status::Used, 0,
+    , compaction_static_shares(this, "compaction_static_shares", liveness::LiveUpdate, value_status::Used, 0,
         "If set to higher than 0, ignore the controller's output and set the compaction shares statically. Do not set this unless you know what you are doing and suspect a problem in the controller. This option will be retired when the controller reaches more maturity")
     , compaction_enforce_min_threshold(this, "compaction_enforce_min_threshold", liveness::LiveUpdate, value_status::Used, false,
         "If set to true, enforce the min_threshold option for compactions strictly. If false (default), Scylla may decide to compact even if below min_threshold")
