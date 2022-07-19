@@ -1270,6 +1270,9 @@ bool segment::is_empty() const noexcept {
     return shard_segment_pool.descriptor(this).is_empty();
 }
 
+// Note: allocation is disallowed in this path
+// since we don't instantiate reclaiming_lock
+// while traversing _regions
 occupancy_stats
 segment::occupancy() const noexcept {
     return { shard_segment_pool.descriptor(this).free_space(), segment::size };
@@ -1806,6 +1809,9 @@ public:
         }
     }
 
+    // Note: allocation is disallowed in this path
+    // since we don't instantiate reclaiming_lock
+    // while traversing _regions
     occupancy_stats occupancy() const {
         occupancy_stats total = _non_lsa_occupancy;
         total += _closed_occupancy;
@@ -2252,8 +2258,10 @@ std::ostream& operator<<(std::ostream& out, const occupancy_stats& stats) {
         stats.used_fraction() * 100, stats.used_space(), stats.total_space());
 }
 
+// Note: allocation is disallowed in this path
+// since we don't instantiate reclaiming_lock
+// while traversing _regions
 occupancy_stats tracker::impl::region_occupancy() noexcept {
-    reclaiming_lock _(*this);
     occupancy_stats total{};
     for (auto&& r: _regions) {
         total += r->occupancy();
@@ -2262,7 +2270,6 @@ occupancy_stats tracker::impl::region_occupancy() noexcept {
 }
 
 occupancy_stats tracker::impl::occupancy() noexcept {
-    reclaiming_lock _(*this);
     auto occ = region_occupancy();
     {
         auto s = shard_segment_pool.free_segments() * segment::size;
