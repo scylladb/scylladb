@@ -151,7 +151,7 @@ struct storage_proxy::remote {
         ser::storage_proxy_rpc_verbs::register_read_digest(&_ms, std::bind_front(&remote::handle_read_digest, this));
         ser::storage_proxy_rpc_verbs::register_truncate(&_ms, std::bind_front(&remote::handle_truncate, this));
         // Register PAXOS verb handlers
-        ser::storage_proxy_rpc_verbs::register_paxos_prepare(&_ms, std::bind_front(&storage_proxy::handle_paxos_prepare, sp));
+        ser::storage_proxy_rpc_verbs::register_paxos_prepare(&_ms, std::bind_front(&remote::handle_paxos_prepare, this));
         ser::storage_proxy_rpc_verbs::register_paxos_accept(&_ms, std::bind_front(&storage_proxy::handle_paxos_accept, sp));
         ser::storage_proxy_rpc_verbs::register_paxos_prune(&_ms, std::bind_front(&storage_proxy::handle_paxos_prune, sp));
     }
@@ -522,6 +522,41 @@ struct storage_proxy::remote {
         return do_with(utils::make_joinpoint([] { return db_clock::now();}), [this, ksname, cfname] (auto& tsf) {
             return _sp.container().invoke_on_all(_sp._write_smp_service_group, [ksname, cfname, &tsf] (storage_proxy& sp) {
                 return sp._db.local().truncate(ksname, cfname, [&tsf] { return tsf.value(); });
+            });
+        });
+    }
+
+    future<foreign_ptr<std::unique_ptr<service::paxos::prepare_response>>>
+    handle_paxos_prepare(
+            const rpc::client_info& cinfo, rpc::opt_time_point timeout,
+            query::read_command cmd, partition_key key, utils::UUID ballot,
+            bool only_digest, query::digest_algorithm da, std::optional<tracing::trace_info> trace_info) {
+        auto src_addr = netw::messaging_service::get_source(cinfo);
+        auto src_ip = src_addr.addr;
+        tracing::trace_state_ptr tr_state;
+        if (trace_info) {
+            tr_state = tracing::tracing::get_local_tracing_instance().create_session(*trace_info);
+            tracing::begin(tr_state);
+            tracing::trace(tr_state, "paxos_prepare: message received from /{} ballot {}", src_ip, ballot);
+        }
+        if (!cmd.max_result_size) {
+            cmd.max_result_size.emplace(cinfo.retrieve_auxiliary<uint64_t>("max_result_size"));
+        }
+
+        return get_schema_for_read(cmd.schema_version, src_addr).then([&sp = _sp, cmd = std::move(cmd), key = std::move(key), ballot,
+                         only_digest, da, timeout, tr_state = std::move(tr_state), src_ip] (schema_ptr schema) mutable {
+            dht::token token = dht::get_token(*schema, key);
+            unsigned shard = dht::shard_of(*schema, token);
+            bool local = shard == this_shard_id();
+            sp.get_stats().replica_cross_shard_ops += !local;
+            return sp.container().invoke_on(shard, sp._write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
+                                     local, cmd = make_lw_shared<query::read_command>(std::move(cmd)), key = std::move(key),
+                                     ballot, only_digest, da, timeout, src_ip] (storage_proxy& sp) {
+                tracing::trace_state_ptr tr_state = gt;
+                return paxos::paxos_state::prepare(sp, tr_state, gs, *cmd, key, ballot, only_digest, da, *timeout).then([src_ip, tr_state] (paxos::prepare_response r) {
+                    tracing::trace(tr_state, "paxos_prepare: handling is done, sending a response to /{}", src_ip);
+                    return make_foreign(std::make_unique<paxos::prepare_response>(std::move(r)));
+                });
             });
         });
     }
@@ -5587,40 +5622,6 @@ future<rpc::tuple<Elements..., replica::exception_variant>> storage_proxy::encod
     }
 
     return make_exception_future<final_tuple_type>(std::move(eptr));
-}
-
-future<foreign_ptr<std::unique_ptr<service::paxos::prepare_response>>>
-storage_proxy::handle_paxos_prepare(const rpc::client_info& cinfo, rpc::opt_time_point timeout,
-                query::read_command cmd, partition_key key, utils::UUID ballot, bool only_digest, query::digest_algorithm da,
-                std::optional<tracing::trace_info> trace_info) {
-        auto src_addr = netw::messaging_service::get_source(cinfo);
-        auto src_ip = src_addr.addr;
-        tracing::trace_state_ptr tr_state;
-        if (trace_info) {
-            tr_state = tracing::tracing::get_local_tracing_instance().create_session(*trace_info);
-            tracing::begin(tr_state);
-            tracing::trace(tr_state, "paxos_prepare: message received from /{} ballot {}", src_ip, ballot);
-        }
-        if (!cmd.max_result_size) {
-            cmd.max_result_size.emplace(cinfo.retrieve_auxiliary<uint64_t>("max_result_size"));
-        }
-
-        return remote().get_schema_for_read(cmd.schema_version, src_addr).then([this, cmd = std::move(cmd), key = std::move(key), ballot,
-                         only_digest, da, timeout, tr_state = std::move(tr_state), src_ip] (schema_ptr schema) mutable {
-            dht::token token = dht::get_token(*schema, key);
-            unsigned shard = dht::shard_of(*schema, token);
-            bool local = shard == this_shard_id();
-            get_stats().replica_cross_shard_ops += !local;
-            return container().invoke_on(shard, _write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
-                                     local, cmd = make_lw_shared<query::read_command>(std::move(cmd)), key = std::move(key),
-                                     ballot, only_digest, da, timeout, src_ip] (storage_proxy& sp) {
-                tracing::trace_state_ptr tr_state = gt;
-                return paxos::paxos_state::prepare(sp, tr_state, gs, *cmd, key, ballot, only_digest, da, *timeout).then([src_ip, tr_state] (paxos::prepare_response r) {
-                    tracing::trace(tr_state, "paxos_prepare: handling is done, sending a response to /{}", src_ip);
-                    return make_foreign(std::make_unique<paxos::prepare_response>(std::move(r)));
-                });
-            });
-        });
 }
 
 future<bool>
