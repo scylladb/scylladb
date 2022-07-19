@@ -5261,9 +5261,8 @@ storage_proxy::handle_counter_mutation(const rpc::client_info& cinfo, rpc::opt_t
                 return remote().get_schema_for_write(schema_version, std::move(src_addr)).then([&mutations, fm = std::move(fm)] (schema_ptr s) mutable {
                     mutations.emplace_back(frozen_mutation_and_schema { std::move(fm), std::move(s) });
                 });
-            }).then([trace_state_ptr = std::move(trace_state_ptr), &mutations, cl, timeout] {
-                auto sp = get_local_shared_storage_proxy();
-                return sp->mutate_counters_on_leader(std::move(mutations), cl, timeout, std::move(trace_state_ptr), /* FIXME: rpc should also pass a permit down to callbacks */ empty_service_permit());
+            }).then([this, trace_state_ptr = std::move(trace_state_ptr), &mutations, cl, timeout] {
+                return mutate_counters_on_leader(std::move(mutations), cl, timeout, std::move(trace_state_ptr), /* FIXME: rpc should also pass a permit down to callbacks */ empty_service_permit());
             });
         });
 }
@@ -5284,7 +5283,7 @@ storage_proxy::handle_write(netw::messaging_service::msg_addr src_addr, rpc::opt
 
         storage_proxy::clock_type::time_point timeout;
         if (!t) {
-            auto timeout_in_ms = get_local_shared_storage_proxy()->_db.local().get_config().write_request_timeout_in_ms();
+            auto timeout_in_ms = _db.local().get_config().write_request_timeout_in_ms();
             timeout = clock_type::now() + std::chrono::milliseconds(timeout_in_ms);
         } else {
             timeout = *t;
@@ -5295,7 +5294,7 @@ storage_proxy::handle_write(netw::messaging_service::msg_addr src_addr, rpc::opt
             replica::exception_variant local;
         };
 
-        return do_with(std::move(in), get_local_shared_storage_proxy(), errors_info{}, [this, src_addr = std::move(src_addr),
+        return do_with(std::move(in), shared_from_this(), errors_info{}, [this, src_addr = std::move(src_addr),
                        forward = std::move(forward), reply_to, shard, response_id, trace_state_ptr, timeout,
                        schema_version, apply_fn = std::move(apply_fn), forward_fn = std::move(forward_fn)]
                        (const auto& m, shared_ptr<storage_proxy>& p, errors_info& errors) mutable {
@@ -5470,13 +5469,12 @@ storage_proxy::handle_read_data(const rpc::client_info& cinfo, rpc::opt_time_poi
             tracing::trace(trace_state_ptr, "read_data: message received from /{}", src_addr.addr);
         }
         auto da = oda.value_or(query::digest_algorithm::MD5);
-        auto sp = get_local_shared_storage_proxy();
         auto rate_limit_info = rate_limit_info_opt.value_or(std::monostate());
         if (!cmd.max_result_size) {
-            auto& cfg = sp->local_db().get_config();
+            auto& cfg = local_db().get_config();
             cmd.max_result_size.emplace(cfg.max_memory_for_unlimited_query_soft_limit(), cfg.max_memory_for_unlimited_query_hard_limit());
         }
-        return do_with(std::move(pr), std::move(sp), std::move(trace_state_ptr), [this, &cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr), da, t, rate_limit_info] (::compat::wrapping_partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
+        return do_with(std::move(pr), shared_from_this(), std::move(trace_state_ptr), [this, &cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr), da, t, rate_limit_info] (::compat::wrapping_partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
             p->get_stats().replica_data_reads++;
             auto src_ip = src_addr.addr;
             return remote().get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, da, &pr, &p, &trace_state_ptr, t, rate_limit_info] (schema_ptr s) {
@@ -5510,7 +5508,7 @@ storage_proxy::handle_read_mutation_data(const rpc::client_info& cinfo, rpc::opt
             cmd.max_result_size.emplace(cinfo.retrieve_auxiliary<uint64_t>("max_result_size"));
         }
         return do_with(std::move(pr),
-                       get_local_shared_storage_proxy(),
+                       shared_from_this(),
                        std::move(trace_state_ptr),
                        ::compat::one_or_two_partition_ranges({}),
                        [this, &cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr), t] (
@@ -5545,7 +5543,7 @@ storage_proxy::handle_read_digest(const rpc::client_info& cinfo, rpc::opt_time_p
         if (!cmd.max_result_size) {
             cmd.max_result_size.emplace(cinfo.retrieve_auxiliary<uint64_t>("max_result_size"));
         }
-        return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [this, &cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr), da, t, rate_limit_info] (::compat::wrapping_partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
+        return do_with(std::move(pr), shared_from_this(), std::move(trace_state_ptr), [this, &cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr), da, t, rate_limit_info] (::compat::wrapping_partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
             p->get_stats().replica_digest_reads++;
             auto src_ip = src_addr.addr;
             return remote().get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, &pr, &p, &trace_state_ptr, t, da, rate_limit_info] (schema_ptr s) {

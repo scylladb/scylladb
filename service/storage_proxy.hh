@@ -837,10 +837,4 @@ inline storage_proxy& get_local_storage_proxy() {
     return _the_storage_proxy.local();
 }
 
-// DEPRECATED, DON'T USE!
-// Pass references to services through constructor/function parameters. Don't use globals.
-inline shared_ptr<storage_proxy> get_local_shared_storage_proxy() {
-    return _the_storage_proxy.local_shared();
-}
-
 }
