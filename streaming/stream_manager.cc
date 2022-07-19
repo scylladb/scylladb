@@ -9,6 +9,7 @@
  */
 
 #include <seastar/core/distributed.hh>
+#include "service/priority_manager.hh"
 #include "gms/gossiper.hh"
 #include "streaming/stream_manager.hh"
 #include "streaming/stream_result_future.hh"
@@ -16,12 +17,14 @@
 #include "streaming/stream_session_state.hh"
 #include <seastar/core/metrics.hh>
 #include <seastar/core/coroutine.hh>
+#include "db/config.hh"
 
 namespace streaming {
 
 extern logging::logger sslog;
 
-stream_manager::stream_manager(sharded<replica::database>& db,
+stream_manager::stream_manager(db::config& cfg,
+            sharded<replica::database>& db,
             sharded<db::system_distributed_keyspace>& sys_dist_ks,
             sharded<db::view::view_update_generator>& view_update_generator,
             sharded<netw::messaging_service>& ms,
@@ -33,8 +36,14 @@ stream_manager::stream_manager(sharded<replica::database>& db,
         , _ms(ms)
         , _mm(mm)
         , _gossiper(gossiper)
+        , _io_throughput_mbs(cfg.stream_io_throughput_mb_per_sec)
 {
     namespace sm = seastar::metrics;
+
+    if (this_shard_id() == 0) {
+        _io_throughput_option_observer.emplace(_io_throughput_mbs.observe(_io_throughput_updater.make_observer()));
+        (void)_io_throughput_updater.trigger_later();
+    }
 
     _metrics.add_group("streaming", {
         sm::make_counter("total_incoming_bytes", [this] { return _total_incoming_bytes; },
@@ -54,6 +63,20 @@ future<> stream_manager::start() {
 future<> stream_manager::stop() {
     co_await _gossiper.unregister_(shared_from_this());
     co_await uninit_messaging_service_handler();
+    co_await _io_throughput_updater.join();
+}
+
+future<> stream_manager::update_io_throughput(uint32_t value_mbs) {
+    uint64_t bps = ((uint64_t)(value_mbs != 0 ? value_mbs : std::numeric_limits<uint32_t>::max())) << 20;
+    return service::get_local_streaming_priority().update_bandwidth(bps).then_wrapped([value_mbs] (auto f) {
+        if (f.failed()) {
+            sslog.warn("Couldn't update streaming bandwidth: {}", f.get_exception());
+        } else if (value_mbs != 0) {
+            sslog.info("Set streaming bandwidth to {}MB/s", value_mbs);
+        } else {
+            sslog.info("Set unlimited streaming bandwidth");
+        }
+    });
 }
 
 void stream_manager::register_sending(shared_ptr<stream_result_future> result) {

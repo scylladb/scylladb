@@ -70,6 +70,7 @@ private:
     std::optional<utils::phased_barrier::operation> _operation_barrier;
 
     std::filesystem::path _sstable_dir;
+    ::io_priority_class _io_priority;
 
     // We may have hundreds of thousands of files to load. To protect against OOMs we will limit
     // how many of them we process at the same time.
@@ -105,7 +106,7 @@ private:
     // the amount of data resharded per shard, so a coordinator may redistribute this.
     sstable_info_vector _shared_sstable_info;
 
-    future<> process_descriptor(sstables::entry_descriptor desc, const ::io_priority_class& iop, bool sort_sstables_according_to_owner = true);
+    future<> process_descriptor(sstables::entry_descriptor desc, bool sort_sstables_according_to_owner = true);
     void validate(sstables::shared_sstable sst) const;
     void handle_component(scan_state& state, sstables::entry_descriptor desc, std::filesystem::path filename);
     future<> remove_input_sstables_from_resharding(std::vector<sstables::shared_sstable> sstlist);
@@ -121,6 +122,7 @@ private:
     std::vector<sstables::shared_sstable> _unsorted_sstables;
 public:
     sstable_directory(std::filesystem::path sstable_dir,
+            ::io_priority_class io_prio,
             unsigned load_parallelism,
             semaphore& load_semaphore,
             need_mutate_level need_mutate,
@@ -154,7 +156,7 @@ public:
     // This function doesn't change on-storage state. If files are to be removed, a separate call
     // (commit_file_removals()) has to be issued. This is to make sure that all instances of this
     // class in a sharded service have the opportunity to validate its files.
-    future<> process_sstable_dir(const ::io_priority_class& iop, bool sort_sstables_according_to_owner = true);
+    future<> process_sstable_dir(bool sort_sstables_according_to_owner = true);
 
     // Sort the sstable according to owner
     future<> sort_sstable(sstables::shared_sstable sst);
@@ -173,8 +175,7 @@ public:
     // A creator function must be passed that will create an SSTable object in the correct shard,
     // and an I/O priority must be specified.
     future<> reshard(sstable_info_vector info, compaction_manager& cm, replica::table& table,
-                     unsigned max_sstables_per_job, sstables::compaction_sstable_creator_fn creator,
-                     const ::io_priority_class& iop);
+                     unsigned max_sstables_per_job, sstables::compaction_sstable_creator_fn creator);
 
     // Default filter will include all sstables
     using sstable_filter_func_t = std::function<bool (const sstables::shared_sstable&)>;
@@ -187,7 +188,6 @@ public:
     // reshapes a collection of SSTables, and returns the total amount of bytes reshaped.
     future<uint64_t> reshape(compaction_manager& cm, replica::table& table,
                      sstables::compaction_sstable_creator_fn creator,
-                     const ::io_priority_class& iop,
                      sstables::reshape_mode mode,
                      sstable_filter_func_t sstable_filter = default_sstable_filter());
 

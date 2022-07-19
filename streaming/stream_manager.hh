@@ -13,6 +13,8 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/distributed.hh>
 #include "utils/UUID.hh"
+#include "utils/updateable_value.hh"
+#include "utils/serialized_action.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "gms/inet_address.hh"
 #include "gms/endpoint_state.hh"
@@ -22,6 +24,7 @@
 #include <map>
 
 namespace db {
+class config;
 class system_distributed_keyspace;
 namespace view {
 class view_update_generator;
@@ -98,8 +101,12 @@ private:
     semaphore _mutation_send_limiter{256};
     seastar::metrics::metric_groups _metrics;
 
+    utils::updateable_value<uint32_t> _io_throughput_mbs;
+    serialized_action _io_throughput_updater = serialized_action([this] { return update_io_throughput(_io_throughput_mbs()); });
+    std::optional<utils::observer<uint32_t>> _io_throughput_option_observer;
+
 public:
-    stream_manager(sharded<replica::database>& db,
+    stream_manager(db::config& cfg, sharded<replica::database>& db,
             sharded<db::system_distributed_keyspace>& sys_dist_ks,
             sharded<db::view::view_update_generator>& view_update_generator,
             sharded<netw::messaging_service>& ms,
@@ -180,6 +187,7 @@ private:
 
     void init_messaging_service_handler();
     future<> uninit_messaging_service_handler();
+    future<> update_io_throughput(uint32_t value_mbs);
 };
 
 } // namespace streaming
