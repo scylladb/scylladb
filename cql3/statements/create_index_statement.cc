@@ -145,6 +145,10 @@ std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_e
 
         if (cd->type->is_multi_cell()) {
             if (cd->type->is_collection()) {
+                if (!db.features().collection_indexing) {
+                    throw exceptions::invalid_request_exception(
+                        "Indexing of collection columns not supported by some older nodes in this cluster. Please upgrade them.");
+                }
                 if (is_local_index) {
                     throw exceptions::invalid_request_exception(
                             format("Local secondary index on collection column {} is not implemented yet.", target->column_name()));
