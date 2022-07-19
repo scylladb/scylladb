@@ -441,9 +441,6 @@ private:
                       utils::UUID schema_version, auto in, inet_address_vector_replica_set forward, gms::inet_address reply_to,
                       unsigned shard, storage_proxy::response_id_type response_id, std::optional<tracing::trace_info> trace_info,
                       auto&& apply_fn, auto&& forward_fn);
-    future<foreign_ptr<std::unique_ptr<service::paxos::prepare_response>>> handle_paxos_prepare(const rpc::client_info& cinfo, rpc::opt_time_point timeout,
-                query::read_command cmd, partition_key key, utils::UUID ballot, bool only_digest, query::digest_algorithm da,
-                std::optional<tracing::trace_info> trace_info);
     future<bool> handle_paxos_accept(const rpc::client_info& cinfo, rpc::opt_time_point timeout, paxos::proposal proposal,
             std::optional<tracing::trace_info> trace_info);
     future<rpc::no_wait_type> handle_paxos_prune(const rpc::client_info& cinfo, rpc::opt_time_point timeout,
