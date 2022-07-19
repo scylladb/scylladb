@@ -606,27 +606,27 @@ table::seal_active_memtable(flush_permit&& flush_permit) noexcept {
         for (;;) {
             auto sstable_write_permit = permit.release_sstable_write_permit();
             if (co_await this->try_flush_memtable_to_sstable(old, std::move(sstable_write_permit)) == stop_iteration::yes) {
-                    break;
-                }
-                co_await sleep(10s);
-                    permit = co_await std::move(permit).reacquire_sstable_write_permit();
+                break;
+            }
+            co_await sleep(10s);
+            permit = co_await std::move(permit).reacquire_sstable_write_permit();
         }
     } catch (...) {
         ex = std::current_exception();
     }
 
-        _stats.pending_flushes--;
-        _config.cf_stats->pending_memtables_flushes_count--;
-        _config.cf_stats->pending_memtables_flushes_bytes -= memtable_size;
+    _stats.pending_flushes--;
+    _config.cf_stats->pending_memtables_flushes_count--;
+    _config.cf_stats->pending_memtables_flushes_bytes -= memtable_size;
 
-        if (ex) {
-            co_await coroutine::return_exception_ptr(std::move(ex));
-        }
+    if (ex) {
+        co_await coroutine::return_exception_ptr(std::move(ex));
+    }
 
-        if (_commitlog) {
-            _commitlog->discard_completed_segments(_schema->id(), old->get_and_discard_rp_set());
-        }
-        co_await std::move(previous_flush);
+    if (_commitlog) {
+        _commitlog->discard_completed_segments(_schema->id(), old->get_and_discard_rp_set());
+    }
+    co_await std::move(previous_flush);
     // keep `op` alive until after previous_flush resolves
 
     // FIXME: release commit log
