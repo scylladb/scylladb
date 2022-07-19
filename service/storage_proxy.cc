@@ -149,7 +149,7 @@ struct storage_proxy::remote {
         ser::storage_proxy_rpc_verbs::register_read_data(&_ms, std::bind_front(&remote::handle_read_data, this));
         ser::storage_proxy_rpc_verbs::register_read_mutation_data(&_ms, std::bind_front(&remote::handle_read_mutation_data, this));
         ser::storage_proxy_rpc_verbs::register_read_digest(&_ms, std::bind_front(&remote::handle_read_digest, this));
-        ser::storage_proxy_rpc_verbs::register_truncate(&_ms, std::bind_front(&storage_proxy::handle_truncate, sp));
+        ser::storage_proxy_rpc_verbs::register_truncate(&_ms, std::bind_front(&remote::handle_truncate, this));
         // Register PAXOS verb handlers
         ser::storage_proxy_rpc_verbs::register_paxos_prepare(&_ms, std::bind_front(&storage_proxy::handle_paxos_prepare, sp));
         ser::storage_proxy_rpc_verbs::register_paxos_accept(&_ms, std::bind_front(&storage_proxy::handle_paxos_accept, sp));
@@ -514,6 +514,14 @@ struct storage_proxy::remote {
             }).then_wrapped([&p, &trace_state_ptr, src_ip] (future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>> f) mutable {
                 tracing::trace(trace_state_ptr, "read_digest handling is done, sending a response to /{}", src_ip);
                 return p->encode_replica_exception_for_rpc(std::move(f), [] { return std::make_tuple(query::result_digest(), api::missing_timestamp, cache_temperature::invalid()); });
+            });
+        });
+    }
+
+    future<> handle_truncate(rpc::opt_time_point timeout, sstring ksname, sstring cfname) {
+        return do_with(utils::make_joinpoint([] { return db_clock::now();}), [this, ksname, cfname] (auto& tsf) {
+            return _sp.container().invoke_on_all(_sp._write_smp_service_group, [ksname, cfname, &tsf] (storage_proxy& sp) {
+                return sp._db.local().truncate(ksname, cfname, [&tsf] { return tsf.value(); });
             });
         });
     }
@@ -5579,16 +5587,6 @@ future<rpc::tuple<Elements..., replica::exception_variant>> storage_proxy::encod
     }
 
     return make_exception_future<final_tuple_type>(std::move(eptr));
-}
-
-future<>
-storage_proxy::handle_truncate(rpc::opt_time_point timeout, sstring ksname, sstring cfname) {
-        return do_with(utils::make_joinpoint([] { return db_clock::now();}),
-                        [this, ksname, cfname](auto& tsf) {
-            return container().invoke_on_all(_write_smp_service_group, [ksname, cfname, &tsf](storage_proxy& sp) {
-                return sp._db.local().truncate(ksname, cfname, [&tsf] { return tsf.value(); });
-            });
-        });
 }
 
 future<foreign_ptr<std::unique_ptr<service::paxos::prepare_response>>>
