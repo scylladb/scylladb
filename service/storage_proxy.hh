@@ -256,6 +256,10 @@ private:
     storage_proxy_stats::global_stats _global_stats;
     gms::feature_service& _features;
     netw::messaging_service& _messaging;
+
+    struct remote;
+    std::unique_ptr<remote> _remote;
+
     static constexpr float CONCURRENT_SUBREQUESTS_MARGIN = 0.10;
     // for read repair chance calculation
     std::default_random_engine _urandom;
@@ -460,6 +464,9 @@ public:
     storage_proxy(distributed<replica::database>& db, gms::gossiper& gossiper, config cfg, db::view::node_update_backlog& max_view_update_backlog,
             scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, locator::effective_replication_map_factory& erm_factory, netw::messaging_service& ms);
     ~storage_proxy();
+
+    remote& remote();
+
     const distributed<replica::database>& get_db() const {
         return _db;
     }
