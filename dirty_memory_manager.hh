@@ -428,7 +428,7 @@ public:
 class flush_permit {
     friend class dirty_memory_manager;
     dirty_memory_manager* _manager;
-    sstable_write_permit _sstable_write_permit;
+    std::optional<sstable_write_permit> _sstable_write_permit;
     semaphore_units<> _background_permit;
 
     flush_permit(dirty_memory_manager* manager, sstable_write_permit&& sstable_write_permit, semaphore_units<>&& background_permit)
@@ -441,7 +441,7 @@ public:
     flush_permit& operator=(flush_permit&&) noexcept = default;
 
     sstable_write_permit release_sstable_write_permit() {
-        return std::move(_sstable_write_permit);
+        return std::exchange(_sstable_write_permit, std::nullopt).value();
     }
 
     future<flush_permit> reacquire_sstable_write_permit() &&;
