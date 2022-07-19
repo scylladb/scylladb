@@ -137,6 +137,30 @@ struct storage_proxy::remote {
 
     remote(storage_proxy& sp, netw::messaging_service& ms, gms::gossiper& g) : _sp(sp), _ms(ms), _gossiper(g) {}
 
+    void init_messaging_service(migration_manager* mm, storage_proxy* sp) {
+        _mm = mm;
+
+        ser::storage_proxy_rpc_verbs::register_counter_mutation(&_ms, std::bind_front(&storage_proxy::handle_counter_mutation, sp));
+        ser::storage_proxy_rpc_verbs::register_mutation(&_ms, std::bind_front(&storage_proxy::receive_mutation_handler, sp, sp->_write_smp_service_group));
+        ser::storage_proxy_rpc_verbs::register_hint_mutation(&_ms, [sp] <typename... Args>(Args&&... args) { return sp->receive_mutation_handler(sp->_hints_write_smp_service_group, std::forward<Args>(args)..., std::monostate()); });
+        ser::storage_proxy_rpc_verbs::register_paxos_learn(&_ms, std::bind_front(&storage_proxy::handle_paxos_learn, sp));
+        ser::storage_proxy_rpc_verbs::register_mutation_done(&_ms, std::bind_front(&storage_proxy::handle_mutation_done, sp));
+        ser::storage_proxy_rpc_verbs::register_mutation_failed(&_ms, std::bind_front(&storage_proxy::handle_mutation_failed, sp));
+        ser::storage_proxy_rpc_verbs::register_read_data(&_ms, std::bind_front(&storage_proxy::handle_read_data, sp));
+        ser::storage_proxy_rpc_verbs::register_read_mutation_data(&_ms, std::bind_front(&storage_proxy::handle_read_mutation_data, sp));
+        ser::storage_proxy_rpc_verbs::register_read_digest(&_ms, std::bind_front(&storage_proxy::handle_read_digest, sp));
+        ser::storage_proxy_rpc_verbs::register_truncate(&_ms, std::bind_front(&storage_proxy::handle_truncate, sp));
+        // Register PAXOS verb handlers
+        ser::storage_proxy_rpc_verbs::register_paxos_prepare(&_ms, std::bind_front(&storage_proxy::handle_paxos_prepare, sp));
+        ser::storage_proxy_rpc_verbs::register_paxos_accept(&_ms, std::bind_front(&storage_proxy::handle_paxos_accept, sp));
+        ser::storage_proxy_rpc_verbs::register_paxos_prune(&_ms, std::bind_front(&storage_proxy::handle_paxos_prune, sp));
+    }
+
+    future<> uninit_messaging_service() {
+        co_await ser::storage_proxy_rpc_verbs::unregister(&_ms);
+        _mm = nullptr;
+    }
+
     future<> send_mutation(
             netw::msg_addr addr, storage_proxy::clock_type::time_point timeout, std::optional<tracing::trace_info> trace_info,
             frozen_mutation m, inet_address_vector_replica_set&& forward, gms::inet_address reply_to, unsigned shard,
@@ -5215,21 +5239,7 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname) {
 
 void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
     _mm = std::move(mm);
-    _remote->_mm = _mm.get();
-    ser::storage_proxy_rpc_verbs::register_counter_mutation(&_messaging, std::bind_front(&storage_proxy::handle_counter_mutation, this));
-    ser::storage_proxy_rpc_verbs::register_mutation(&_messaging, std::bind_front(&storage_proxy::receive_mutation_handler, this, _write_smp_service_group));
-    ser::storage_proxy_rpc_verbs::register_hint_mutation(&_messaging, [this] <typename... Args>(Args&&... args) { return receive_mutation_handler(_hints_write_smp_service_group, std::forward<Args>(args)..., std::monostate()); });
-    ser::storage_proxy_rpc_verbs::register_paxos_learn(&_messaging, std::bind_front(&storage_proxy::handle_paxos_learn, this));
-    ser::storage_proxy_rpc_verbs::register_mutation_done(&_messaging, std::bind_front(&storage_proxy::handle_mutation_done, this));
-    ser::storage_proxy_rpc_verbs::register_mutation_failed(&_messaging, std::bind_front(&storage_proxy::handle_mutation_failed, this));
-    ser::storage_proxy_rpc_verbs::register_read_data(&_messaging, std::bind_front(&storage_proxy::handle_read_data, this));
-    ser::storage_proxy_rpc_verbs::register_read_mutation_data(&_messaging, std::bind_front(&storage_proxy::handle_read_mutation_data, this));
-    ser::storage_proxy_rpc_verbs::register_read_digest(&_messaging, std::bind_front(&storage_proxy::handle_read_digest, this));
-    ser::storage_proxy_rpc_verbs::register_truncate(&_messaging, std::bind_front(&storage_proxy::handle_truncate, this));
-    // Register PAXOS verb handlers
-    ser::storage_proxy_rpc_verbs::register_paxos_prepare(&_messaging, std::bind_front(&storage_proxy::handle_paxos_prepare, this));
-    ser::storage_proxy_rpc_verbs::register_paxos_accept(&_messaging, std::bind_front(&storage_proxy::handle_paxos_accept, this));
-    ser::storage_proxy_rpc_verbs::register_paxos_prune(&_messaging, std::bind_front(&storage_proxy::handle_paxos_prune, this));
+    _remote->init_messaging_service(_mm.get(), this);
 }
 
 future<>
@@ -5670,9 +5680,7 @@ storage_proxy::handle_paxos_prune(const rpc::client_info& cinfo, rpc::opt_time_p
 }
 
 future<> storage_proxy::uninit_messaging_service() {
-    auto& ms = _messaging;
-    co_await ser::storage_proxy_rpc_verbs::unregister(&ms);
-    _remote->_mm = nullptr;
+    co_await _remote->uninit_messaging_service();
     _mm = nullptr;
 }
 
