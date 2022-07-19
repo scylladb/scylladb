@@ -437,7 +437,6 @@ private:
     template<typename... Elements>
     future<rpc::tuple<Elements..., replica::exception_variant>> encode_replica_exception_for_rpc(future<rpc::tuple<Elements...>>&& f, auto&& default_tuple_maker);
 
-    future<> handle_counter_mutation(const rpc::client_info& cinfo, rpc::opt_time_point t, std::vector<frozen_mutation> fms, db::consistency_level cl, std::optional<tracing::trace_info> trace_info);
     future<rpc::no_wait_type> handle_write(netw::msg_addr src_addr, rpc::opt_time_point t,
                       utils::UUID schema_version, auto in, inet_address_vector_replica_set forward, gms::inet_address reply_to,
                       unsigned shard, storage_proxy::response_id_type response_id, std::optional<tracing::trace_info> trace_info,

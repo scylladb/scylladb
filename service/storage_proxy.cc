@@ -140,7 +140,7 @@ struct storage_proxy::remote {
     void init_messaging_service(migration_manager* mm, storage_proxy* sp) {
         _mm = mm;
 
-        ser::storage_proxy_rpc_verbs::register_counter_mutation(&_ms, std::bind_front(&storage_proxy::handle_counter_mutation, sp));
+        ser::storage_proxy_rpc_verbs::register_counter_mutation(&_ms, std::bind_front(&remote::handle_counter_mutation, this));
         ser::storage_proxy_rpc_verbs::register_mutation(&_ms, std::bind_front(&storage_proxy::receive_mutation_handler, sp, sp->_write_smp_service_group));
         ser::storage_proxy_rpc_verbs::register_hint_mutation(&_ms, [sp] <typename... Args>(Args&&... args) { return sp->receive_mutation_handler(sp->_hints_write_smp_service_group, std::forward<Args>(args)..., std::monostate()); });
         ser::storage_proxy_rpc_verbs::register_paxos_learn(&_ms, std::bind_front(&storage_proxy::handle_paxos_learn, sp));
@@ -296,6 +296,32 @@ struct storage_proxy::remote {
             netw::msg_addr addr, storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state,
             utils::UUID schema_id, const partition_key& key, utils::UUID ballot) {
         return ser::storage_proxy_rpc_verbs::send_paxos_prune(&_ms, addr, timeout, schema_id, key, ballot, tracing::make_trace_info(tr_state));
+    }
+
+    future<> handle_counter_mutation(
+            const rpc::client_info& cinfo, rpc::opt_time_point t,
+            std::vector<frozen_mutation> fms, db::consistency_level cl, std::optional<tracing::trace_info> trace_info) {
+        auto src_addr = netw::messaging_service::get_source(cinfo);
+
+        tracing::trace_state_ptr trace_state_ptr;
+        if (trace_info) {
+            trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(*trace_info);
+            tracing::begin(trace_state_ptr);
+            tracing::trace(trace_state_ptr, "Message received from /{}", src_addr.addr);
+        }
+
+        return do_with(std::vector<frozen_mutation_and_schema>(),
+                       [this, cl, src_addr, timeout = *t, fms = std::move(fms), trace_state_ptr = std::move(trace_state_ptr)] (std::vector<frozen_mutation_and_schema>& mutations) mutable {
+            return parallel_for_each(std::move(fms), [this, &mutations, src_addr] (frozen_mutation& fm) {
+                // FIXME: optimise for cases when all fms are in the same schema
+                auto schema_version = fm.schema_version();
+                return get_schema_for_write(schema_version, std::move(src_addr)).then([&mutations, fm = std::move(fm)] (schema_ptr s) mutable {
+                    mutations.emplace_back(frozen_mutation_and_schema { std::move(fm), std::move(s) });
+                });
+            }).then([&sp = _sp, trace_state_ptr = std::move(trace_state_ptr), &mutations, cl, timeout] {
+                return sp.mutate_counters_on_leader(std::move(mutations), cl, timeout, std::move(trace_state_ptr), /* FIXME: rpc should also pass a permit down to callbacks */ empty_service_permit());
+            });
+        });
     }
 };
 
@@ -5240,31 +5266,6 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname) {
 void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
     _mm = std::move(mm);
     _remote->init_messaging_service(_mm.get(), this);
-}
-
-future<>
-storage_proxy::handle_counter_mutation(const rpc::client_info& cinfo, rpc::opt_time_point t, std::vector<frozen_mutation> fms, db::consistency_level cl, std::optional<tracing::trace_info> trace_info) {
-        auto src_addr = netw::messaging_service::get_source(cinfo);
-
-        tracing::trace_state_ptr trace_state_ptr;
-        if (trace_info) {
-            trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(*trace_info);
-            tracing::begin(trace_state_ptr);
-            tracing::trace(trace_state_ptr, "Message received from /{}", src_addr.addr);
-        }
-
-        return do_with(std::vector<frozen_mutation_and_schema>(),
-                       [this, cl, src_addr, timeout = *t, fms = std::move(fms), trace_state_ptr = std::move(trace_state_ptr)] (std::vector<frozen_mutation_and_schema>& mutations) mutable {
-            return parallel_for_each(std::move(fms), [this, &mutations, src_addr] (frozen_mutation& fm) {
-                // FIXME: optimise for cases when all fms are in the same schema
-                auto schema_version = fm.schema_version();
-                return remote().get_schema_for_write(schema_version, std::move(src_addr)).then([&mutations, fm = std::move(fm)] (schema_ptr s) mutable {
-                    mutations.emplace_back(frozen_mutation_and_schema { std::move(fm), std::move(s) });
-                });
-            }).then([this, trace_state_ptr = std::move(trace_state_ptr), &mutations, cl, timeout] {
-                return mutate_counters_on_leader(std::move(mutations), cl, timeout, std::move(trace_state_ptr), /* FIXME: rpc should also pass a permit down to callbacks */ empty_service_permit());
-            });
-        });
 }
 
 future<rpc::no_wait_type>
