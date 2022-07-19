@@ -144,7 +144,7 @@ struct storage_proxy::remote {
         ser::storage_proxy_rpc_verbs::register_mutation(&_ms, std::bind_front(&remote::receive_mutation_handler, this, sp->_write_smp_service_group));
         ser::storage_proxy_rpc_verbs::register_hint_mutation(&_ms, [this, sp] <typename... Args>(Args&&... args) { return receive_mutation_handler(sp->_hints_write_smp_service_group, std::forward<Args>(args)..., std::monostate()); });
         ser::storage_proxy_rpc_verbs::register_paxos_learn(&_ms, std::bind_front(&remote::handle_paxos_learn, this));
-        ser::storage_proxy_rpc_verbs::register_mutation_done(&_ms, std::bind_front(&storage_proxy::handle_mutation_done, sp));
+        ser::storage_proxy_rpc_verbs::register_mutation_done(&_ms, std::bind_front(&remote::handle_mutation_done, this));
         ser::storage_proxy_rpc_verbs::register_mutation_failed(&_ms, std::bind_front(&storage_proxy::handle_mutation_failed, sp));
         ser::storage_proxy_rpc_verbs::register_read_data(&_ms, std::bind_front(&storage_proxy::handle_read_data, sp));
         ser::storage_proxy_rpc_verbs::register_read_mutation_data(&_ms, std::bind_front(&storage_proxy::handle_read_mutation_data, sp));
@@ -366,6 +366,18 @@ struct storage_proxy::remote {
                       std::optional<tracing::trace_info> trace_info) {
                     return p->remote().send_paxos_learn(addr, timeout, std::move(trace_info), m, {}, reply_to, shard, response_id);
               });
+    }
+
+    future<rpc::no_wait_type> handle_mutation_done(
+            const rpc::client_info& cinfo,
+            unsigned shard, storage_proxy::response_id_type response_id, rpc::optional<db::view::update_backlog> backlog) {
+        auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+        _sp.get_stats().replica_cross_shard_ops += shard != this_shard_id();
+        return _sp.container().invoke_on(shard, _sp._write_ack_smp_service_group,
+                [from, response_id, backlog = std::move(backlog)] (storage_proxy& sp) mutable {
+            sp.got_response(response_id, from, std::move(backlog));
+            return netw::messaging_service::no_wait();
+        });
     }
 };
 
@@ -5408,16 +5420,6 @@ storage_proxy::handle_write(netw::messaging_service::msg_addr src_addr, rpc::opt
                     tracing::trace(trace_state_ptr, "Mutation handling is done");
                 });
             });
-        });
-}
-
-future<rpc::no_wait_type>
-storage_proxy::handle_mutation_done(const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id, rpc::optional<db::view::update_backlog> backlog) {
-        auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
-        get_stats().replica_cross_shard_ops += shard != this_shard_id();
-        return container().invoke_on(shard, _write_ack_smp_service_group, [from, response_id, backlog = std::move(backlog)] (storage_proxy& sp) mutable {
-            sp.got_response(response_id, from, std::move(backlog));
-            return netw::messaging_service::no_wait();
         });
 }
 
