@@ -22,7 +22,7 @@ namespace cql3 {
 
 namespace statements {
 
-shared_ptr<functions::function> create_aggregate_statement::create(query_processor& qp, functions::function* old) const {
+shared_ptr<db::functions::function> create_aggregate_statement::create(query_processor& qp, db::functions::function* old) const {
     if (!qp.proxy().features().user_defined_aggregates) {
         throw exceptions::invalid_request_exception("Cluster does not support user-defined aggregates, upgrade the whole cluster in order to use UDA");
     }
@@ -42,6 +42,17 @@ shared_ptr<functions::function> create_aggregate_statement::create(query_process
         throw exceptions::invalid_request_exception(format("State function '{}' doesn't return state", _sfunc));
     }
 
+    ::shared_ptr<cql3::functions::scalar_function> reduce_func = nullptr;
+    if (_rfunc) {
+        if (!qp.proxy().features().uda_native_parallelized_aggregation) {
+            throw exceptions::invalid_request_exception("Cluster does not support reduction function for user-defined aggregates, upgrade the whole cluster in order to define REDUCEFUNC for UDA");
+        }
+
+        reduce_func = dynamic_pointer_cast<functions::scalar_function>(functions::functions::find(functions::function_name{_name.keyspace, _rfunc.value()}, {state_type, state_type}));
+        if (!reduce_func) {
+            throw exceptions::invalid_request_exception(format("Scalar reduce function {} for state type {} not found.", _rfunc.value(), state_type->name()));
+        }
+    }
     ::shared_ptr<cql3::functions::scalar_function> final_func = nullptr;
     if (_ffunc) {
         final_func = dynamic_pointer_cast<functions::scalar_function>(functions::functions::find(functions::function_name{_name.keyspace, _ffunc.value()}, {state_type}));
@@ -58,7 +69,7 @@ shared_ptr<functions::function> create_aggregate_statement::create(query_process
         initcond = std::move(initcond_term).to_bytes();
     }
 
-    return ::make_shared<functions::user_aggregate>(_name, initcond, std::move(state_func), std::move(final_func));
+    return ::make_shared<functions::user_aggregate>(_name, initcond, std::move(state_func), std::move(reduce_func), std::move(final_func));
 }
 
 std::unique_ptr<prepared_statement> create_aggregate_statement::prepare(data_dictionary::database db, cql_stats& stats) {
@@ -80,10 +91,11 @@ create_aggregate_statement::prepare_schema_mutations(query_processor& qp, api::t
 }
 
 create_aggregate_statement::create_aggregate_statement(functions::function_name name, std::vector<shared_ptr<cql3_type::raw>> arg_types,
-            sstring sfunc, shared_ptr<cql3_type::raw> stype, std::optional<sstring> ffunc, std::optional<expr::expression> ival, bool or_replace, bool if_not_exists)
+            sstring sfunc, shared_ptr<cql3_type::raw> stype, std::optional<sstring> rfunc, std::optional<sstring> ffunc, std::optional<expr::expression> ival, bool or_replace, bool if_not_exists)
         : create_function_statement_base(std::move(name), std::move(arg_types), or_replace, if_not_exists)
         , _sfunc(std::move(sfunc))
         , _stype(std::move(stype))
+        , _rfunc(std::move(rfunc))
         , _ffunc(std::move(ffunc))
         , _ival(std::move(ival))
     {}

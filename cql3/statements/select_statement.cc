@@ -23,6 +23,7 @@
 #include "cql3/selection/selector_factories.hh"
 #include "validation.hh"
 #include "exceptions/unrecognized_entity_exception.hh"
+#include <optional>
 #include <seastar/core/shared_ptr.hh>
 #include "query-result-reader.hh"
 #include "query_ranges_to_vnodes.hh"
@@ -1353,7 +1354,6 @@ indexed_table_select_statement::find_index_clustering_rows(query_processor& qp, 
     }));
 }
 
-
 class parallelized_select_statement : public select_statement {
 public:
     static ::shared_ptr<cql3::statements::select_statement> prepare(
@@ -1501,20 +1501,22 @@ parallelized_select_statement::do_execute(
     command->slice.options.set<query::partition_slice::option::allow_short_read>();
     auto timeout_duration = get_timeout(state.get_client_state(), options);
     auto timeout = db::timeout_clock::now() + timeout_duration;
+    auto reductions = _selection->get_reductions();
 
     query::forward_request req = {
-        .reduction_types = {query::forward_request::reduction_type::count},
+        .reduction_types = reductions.types,
         .cmd = *command,
         .pr = std::move(key_ranges),
         .cl = options.get_consistency(),
         .timeout = timeout,
+        .aggregation_infos = reductions.infos,
     };
 
     // dispatch execution of this statement to other nodes
     return qp.forwarder().dispatch(req, state.get_trace_state()).then([this] (query::forward_result res) {
         auto meta = make_shared<metadata>(*_selection->get_result_metadata());
         auto rs = std::make_unique<result_set>(std::move(meta));
-        rs->add_column_value(*res.query_results[0]);
+        rs->add_row(res.query_results);
         update_stats_rows_read(rs->size());
         return shared_ptr<cql_transport::messages::result_message>(
             make_shared<cql_transport::messages::result_message::rows>(result(std::move(rs)))
@@ -1634,11 +1636,13 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     // using `forward_service`.
     auto can_be_forwarded = [&] {
         return selection->is_aggregate()        // Aggregation only
-            && selection->is_count()            // Only count(*) selection is supported.
+            && ( // SUPPORTED PARALLELIZATION
+                 // All potential intermediate coordinators must support forwarding
+                (db.features().parallelized_aggregation && selection->is_count())
+                || (db.features().uda_native_parallelized_aggregation && selection->is_reducible())
+            )
             && !restrictions->need_filtering()  // No filtering
             && group_by_cell_indices->empty()   // No GROUP BY
-            // All potential intermediate coordinators must support forwarding
-            && db.features().parallelized_aggregation
             && db.get_config().enable_parallelized_aggregation();
     };
 

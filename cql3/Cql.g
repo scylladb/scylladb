@@ -681,6 +681,7 @@ createAggregateStatement returns [std::unique_ptr<cql3::statements::create_aggre
         std::vector<shared_ptr<cql3_type::raw>> arg_types;
         std::optional<sstring> ffunc;
         std::optional<expr::expression> ival;
+        std::optional<sstring> rfunc;
     }
     : K_CREATE (K_OR K_REPLACE { or_replace = true; })?
       K_AGGREGATE
@@ -695,12 +696,15 @@ createAggregateStatement returns [std::unique_ptr<cql3::statements::create_aggre
       K_SFUNC sfunc = allowedFunctionName
       K_STYPE stype = comparatorType
       (
+        K_REDUCEFUNC reduce_name = allowedFunctionName { rfunc = reduce_name; }
+      )?
+      (
         K_FINALFUNC final_func = allowedFunctionName { ffunc = final_func; }
       )?
       (
         K_INITCOND init_val = term { ival = init_val; }
       )?
-      { $expr = std::make_unique<cql3::statements::create_aggregate_statement>(std::move(fn), std::move(arg_types), std::move(sfunc), std::move(stype), std::move(ffunc), std::move(ival), or_replace, if_not_exists); }
+      { $expr = std::make_unique<cql3::statements::create_aggregate_statement>(std::move(fn), std::move(arg_types), std::move(sfunc), std::move(stype), std::move(rfunc), std::move(ffunc), std::move(ival), or_replace, if_not_exists); }
     ;
 
 createFunctionStatement returns [std::unique_ptr<cql3::statements::create_function_statement> expr]
@@ -1899,6 +1903,7 @@ basic_unreserved_keyword returns [sstring str]
         | K_AGGREGATE
         | K_SFUNC
         | K_STYPE
+        | K_REDUCEFUNC
         | K_FINALFUNC
         | K_INITCOND
         | K_RETURNS
@@ -2077,6 +2082,7 @@ K_FUNCTION:    F U N C T I O N;
 K_AGGREGATE:   A G G R E G A T E;
 K_SFUNC:       S F U N C;
 K_STYPE:       S T Y P E;
+K_REDUCEFUNC:  R E D U C E F U N C;
 K_FINALFUNC:   F I N A L F U N C;
 K_INITCOND:    I N I T C O N D;
 K_RETURNS:     R E T U R N S;

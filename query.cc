@@ -7,16 +7,22 @@
  */
 
 #include <limits>
+#include <memory>
+#include <stdexcept>
 #include "query-request.hh"
 #include "query-result.hh"
 #include "query-result-writer.hh"
 #include "query-result-set.hh"
+#include "seastar/core/shared_ptr.hh"
+#include "seastar/core/thread.hh"
 #include "to_string.hh"
 #include "bytes.hh"
 #include "mutation_partition_serializer.hh"
 #include "query-result-reader.hh"
 #include "query_result_merger.hh"
 #include "partition_slice_builder.hh"
+#include "schema_registry.hh"
+#include "utils/overloaded_functor.hh"
 
 namespace query {
 
@@ -68,16 +74,29 @@ std::ostream& operator<<(std::ostream& out, const forward_request::reduction_typ
         case forward_request::reduction_type::count:
             out << "count";
             break;
+        case forward_request::reduction_type::aggregate:
+            out << "aggregate";
+            break;
     }
     return out << "}";
+}
+
+std::ostream& operator<<(std::ostream& out, const forward_request::aggregation_info& a) {
+    return out << "aggregation_info{"
+        << ", name=" << a.name
+        << ", column_names=[" << join(",", a.column_names) << "]"
+        << "}";
 }
 
 std::ostream& operator<<(std::ostream& out, const forward_request& r) {
     auto ms = std::chrono::time_point_cast<std::chrono::milliseconds>(r.timeout).time_since_epoch().count();
 
-    return out << "forward_request{"
-        << "reduction_types=[" << join(",", r.reduction_types) << "]"
-        << ", cmd=" << r.cmd
+    out << "forward_request{"
+        << "reductions=[" << join(",", r.reduction_types) << "]";
+    if(r.aggregation_infos) {
+        out << ", aggregation_infos=[" << join(",", r.aggregation_infos.value()) << "]";
+    }
+    return out << ", cmd=" << r.cmd
         << ", pr=" << r.pr
         << ", cl=" << r.cl
         << ", timeout(ms)=" << ms << "}";
@@ -401,54 +420,18 @@ foreign_ptr<lw_shared_ptr<query::result>> result_merger::get() {
     return make_foreign(make_lw_shared<query::result>(std::move(w), is_short_read, row_count, partition_count));
 }
 
-static bytes_opt merge_singular_results(bytes_opt r1, bytes_opt r2, forward_request::reduction_type reduction) {
-    switch (reduction) {
-        case forward_request::reduction_type::count: {
-            auto count1 = value_cast<int64_t>(long_type->deserialize(bytes_view(*r1)));
-            auto count2 = value_cast<int64_t>(long_type->deserialize(bytes_view(*r2)));
-            return data_value(count1 + count2).serialize();
-        }
-    }
-    throw std::runtime_error("unknown reduction type");
-}
-
-void forward_result::merge(const forward_result& other, const std::vector<forward_request::reduction_type>& reduction_types) {
-    if (query_results.empty()) {
-        query_results.resize(other.query_results.size());
-    }
-
-    if (query_results.size() != other.query_results.size() || query_results.size() != reduction_types.size()) {
-        on_internal_error(
-            qlogger,
-            format("forward_result::merge(): operation cannot be completed due to invalid argument sizes. "
-                    "this.query_results.size(): {} "
-                    "other.query_results.size(): {} "
-                    "reduction_types.size(): {}",
-                    query_results.size(), other.query_results.size(), reduction_types.size())
-        );
-    }
-
-    for (size_t i = 0; i < query_results.size(); i++) {
-        query_results[i] = merge_singular_results(query_results[i], other.query_results[i], reduction_types[i]);
-    }
-}
-
 std::ostream& operator<<(std::ostream& out, const query::forward_result::printer& p) {
-    if (p.types.size() != p.res.query_results.size()) {
+    if (p.functions.size() != p.res.query_results.size()) {
         return out << "[malformed forward_result (" << p.res.query_results.size()
-            << " results, " << p.types.size() << " reduction types)]";
+            << " results, " << p.functions.size() << " aggregates)]";
     }
 
     out << "[";
-    for (size_t i = 0; i < p.types.size(); i++) {
-        switch (p.types[i]) {
-            case forward_request::reduction_type::count: {
-                auto count = value_cast<int64_t>(long_type->deserialize(bytes_view(*p.res.query_results[i])));
-                out << count;
-            }
-        }
+    for (size_t i = 0; i < p.functions.size(); i++) {
+        auto& return_type = p.functions[i]->return_type();
+        out << return_type->to_string(bytes_view(*p.res.query_results[i]));
 
-        if (i + 1 < p.types.size()) {
+        if (i + 1 < p.functions.size()) {
             out << ", ";
         }
     }
