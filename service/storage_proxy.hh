@@ -437,10 +437,6 @@ private:
     template<typename... Elements>
     future<rpc::tuple<Elements..., replica::exception_variant>> encode_replica_exception_for_rpc(future<rpc::tuple<Elements...>>&& f, auto&& default_tuple_maker);
 
-    future<rpc::no_wait_type> handle_write(netw::msg_addr src_addr, rpc::opt_time_point t,
-                      utils::UUID schema_version, auto in, inet_address_vector_replica_set forward, gms::inet_address reply_to,
-                      unsigned shard, storage_proxy::response_id_type response_id, std::optional<tracing::trace_info> trace_info,
-                      auto&& apply_fn, auto&& forward_fn);
 public:
     storage_proxy(distributed<replica::database>& db, gms::gossiper& gossiper, config cfg, db::view::node_update_backlog& max_view_update_backlog,
             scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, locator::effective_replication_map_factory& erm_factory, netw::messaging_service& ms);
