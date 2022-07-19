@@ -153,7 +153,7 @@ struct storage_proxy::remote {
         // Register PAXOS verb handlers
         ser::storage_proxy_rpc_verbs::register_paxos_prepare(&_ms, std::bind_front(&remote::handle_paxos_prepare, this));
         ser::storage_proxy_rpc_verbs::register_paxos_accept(&_ms, std::bind_front(&remote::handle_paxos_accept, this));
-        ser::storage_proxy_rpc_verbs::register_paxos_prune(&_ms, std::bind_front(&storage_proxy::handle_paxos_prune, sp));
+        ser::storage_proxy_rpc_verbs::register_paxos_prune(&_ms, std::bind_front(&remote::handle_paxos_prune, this));
     }
 
     future<> uninit_messaging_service() {
@@ -592,6 +592,45 @@ struct storage_proxy::remote {
         }
 
         return f;
+    }
+
+    future<rpc::no_wait_type> handle_paxos_prune(
+            const rpc::client_info& cinfo, rpc::opt_time_point timeout,
+            utils::UUID schema_id, partition_key key, utils::UUID ballot, std::optional<tracing::trace_info> trace_info) {
+        static thread_local uint16_t pruning = 0;
+        static constexpr uint16_t pruning_limit = 1000; // since PRUNE verb is one way replica side has its own queue limit
+        auto src_addr = netw::messaging_service::get_source(cinfo);
+        auto src_ip = src_addr.addr;
+        tracing::trace_state_ptr tr_state;
+        if (trace_info) {
+            tr_state = tracing::tracing::get_local_tracing_instance().create_session(*trace_info);
+            tracing::begin(tr_state);
+            tracing::trace(tr_state, "paxos_prune: message received from /{} ballot {}", src_ip, ballot);
+        }
+
+        if (pruning >= pruning_limit) {
+            _sp.get_stats().cas_replica_dropped_prune++;
+            tracing::trace(tr_state, "paxos_prune: do not prune due to overload", src_ip);
+            return make_ready_future<seastar::rpc::no_wait_type>(netw::messaging_service::no_wait());
+        }
+
+        pruning++;
+        auto d = defer([] { pruning--; });
+        return get_schema_for_read(schema_id, src_addr).then([&sp = _sp, key = std::move(key), ballot,
+                         timeout, tr_state = std::move(tr_state), src_ip, d = std::move(d)] (schema_ptr schema) mutable {
+            dht::token token = dht::get_token(*schema, key);
+            unsigned shard = dht::shard_of(*schema, token);
+            bool local = shard == this_shard_id();
+            sp.get_stats().replica_cross_shard_ops += !local;
+            return smp::submit_to(shard, sp._write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
+                                     local,  key = std::move(key), ballot, timeout, src_ip, d = std::move(d)] () {
+                tracing::trace_state_ptr tr_state = gt;
+                return paxos::paxos_state::prune(gs, key, ballot,  *timeout, tr_state).then([src_ip, tr_state] () {
+                    tracing::trace(tr_state, "paxos_prune: handling is done, sending a response to /{}", src_ip);
+                    return netw::messaging_service::no_wait();
+                });
+            });
+        });
     }
 };
 
@@ -5655,45 +5694,6 @@ future<rpc::tuple<Elements..., replica::exception_variant>> storage_proxy::encod
     }
 
     return make_exception_future<final_tuple_type>(std::move(eptr));
-}
-
-future<rpc::no_wait_type>
-storage_proxy::handle_paxos_prune(const rpc::client_info& cinfo, rpc::opt_time_point timeout,
-                utils::UUID schema_id, partition_key key, utils::UUID ballot, std::optional<tracing::trace_info> trace_info) {
-        static thread_local uint16_t pruning = 0;
-        static constexpr uint16_t pruning_limit = 1000; // since PRUNE verb is one way replica side has its own queue limit
-        auto src_addr = netw::messaging_service::get_source(cinfo);
-        auto src_ip = src_addr.addr;
-        tracing::trace_state_ptr tr_state;
-        if (trace_info) {
-            tr_state = tracing::tracing::get_local_tracing_instance().create_session(*trace_info);
-            tracing::begin(tr_state);
-            tracing::trace(tr_state, "paxos_prune: message received from /{} ballot {}", src_ip, ballot);
-        }
-
-        if (pruning >= pruning_limit) {
-            get_stats().cas_replica_dropped_prune++;
-            tracing::trace(tr_state, "paxos_prune: do not prune due to overload", src_ip);
-            return make_ready_future<seastar::rpc::no_wait_type>(netw::messaging_service::no_wait());
-        }
-
-        pruning++;
-        auto d = defer([] { pruning--; });
-        return remote().get_schema_for_read(schema_id, src_addr).then([this, key = std::move(key), ballot,
-                         timeout, tr_state = std::move(tr_state), src_ip, d = std::move(d)] (schema_ptr schema) mutable {
-            dht::token token = dht::get_token(*schema, key);
-            unsigned shard = dht::shard_of(*schema, token);
-            bool local = shard == this_shard_id();
-            get_stats().replica_cross_shard_ops += !local;
-            return smp::submit_to(shard, _write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
-                                     local,  key = std::move(key), ballot, timeout, src_ip, d = std::move(d)] () {
-                tracing::trace_state_ptr tr_state = gt;
-                return paxos::paxos_state::prune(gs, key, ballot,  *timeout, tr_state).then([src_ip, tr_state] () {
-                    tracing::trace(tr_state, "paxos_prune: handling is done, sending a response to /{}", src_ip);
-                    return netw::messaging_service::no_wait();
-                });
-            });
-        });
 }
 
 future<> storage_proxy::uninit_messaging_service() {
