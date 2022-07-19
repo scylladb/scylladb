@@ -122,6 +122,27 @@ seastar::metrics::label_instance current_scheduling_group_label() {
 
 }
 
+template<typename... Elements>
+static future<rpc::tuple<Elements..., replica::exception_variant>> encode_replica_exception_for_rpc(
+        gms::feature_service& features, future<rpc::tuple<Elements...>>&& f, auto&& default_tuple_maker) {
+    using original_std_tuple_type = std::tuple<Elements...>;
+    using final_tuple_type = rpc::tuple<Elements..., replica::exception_variant>;
+
+    if (!f.failed()) {
+        return make_ready_future<final_tuple_type>(std::tuple_cat(original_std_tuple_type(f.get()), std::tuple<replica::exception_variant>(replica::exception_variant())));
+    }
+
+    std::exception_ptr eptr = f.get_exception();
+    if (features.typed_errors_in_read_rpc) {
+        replica::exception_variant ex = replica::try_encode_replica_exception(eptr);
+        if (ex) {
+            return make_ready_future<final_tuple_type>(std::tuple_cat(default_tuple_maker(), std::tuple<replica::exception_variant>(std::move(ex))));
+        }
+    }
+
+    return make_exception_future<final_tuple_type>(std::move(eptr));
+}
+
 // This class handles all communication with other nodes in `storage_proxy`:
 // sending and receiving RPCs, checking the state of other nodes (e.g. by accessing gossiper state), fetching schema.
 //
@@ -539,7 +560,7 @@ struct storage_proxy::remote {
                 return p->query_result_local(std::move(s), cmd, std::move(pr2.first), opts, trace_state_ptr, timeout, rate_limit_info);
             }).then_wrapped([&p, &trace_state_ptr, src_ip] (future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> f) mutable {
                 tracing::trace(trace_state_ptr, "read_data handling is done, sending a response to /{}", src_ip);
-                return p->encode_replica_exception_for_rpc(std::move(f), [] { return std::make_tuple(foreign_ptr(make_lw_shared<query::result>()), cache_temperature::invalid()); });
+                return encode_replica_exception_for_rpc(p->features(), std::move(f), [] { return std::make_tuple(foreign_ptr(make_lw_shared<query::result>()), cache_temperature::invalid()); });
             });
         });
     }
@@ -575,7 +596,7 @@ struct storage_proxy::remote {
                 return p->query_mutations_locally(std::move(s), std::move(cmd), unwrapped, timeout, trace_state_ptr);
             }).then_wrapped([&p, &trace_state_ptr, src_ip] (future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> f) mutable {
                 tracing::trace(trace_state_ptr, "read_mutation_data handling is done, sending a response to /{}", src_ip);
-                return p->encode_replica_exception_for_rpc(std::move(f), [] { return std::make_tuple(foreign_ptr(make_lw_shared<reconcilable_result>()), cache_temperature::invalid()); });
+                return encode_replica_exception_for_rpc(p->features(), std::move(f), [] { return std::make_tuple(foreign_ptr(make_lw_shared<reconcilable_result>()), cache_temperature::invalid()); });
             });
         });
     }
@@ -612,7 +633,7 @@ struct storage_proxy::remote {
                 return p->query_result_local_digest(std::move(s), cmd, std::move(pr2.first), trace_state_ptr, timeout, da, rate_limit_info);
             }).then_wrapped([&p, &trace_state_ptr, src_ip] (future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>> f) mutable {
                 tracing::trace(trace_state_ptr, "read_digest handling is done, sending a response to /{}", src_ip);
-                return p->encode_replica_exception_for_rpc(std::move(f), [] { return std::make_tuple(query::result_digest(), api::missing_timestamp, cache_temperature::invalid()); });
+                return encode_replica_exception_for_rpc(p->features(), std::move(f), [] { return std::make_tuple(query::result_digest(), api::missing_timestamp, cache_temperature::invalid()); });
             });
         });
     }
@@ -5674,26 +5695,6 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname) {
 void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
     _mm = std::move(mm);
     _remote->init_messaging_service(_mm.get(), this);
-}
-
-template<typename... Elements>
-future<rpc::tuple<Elements..., replica::exception_variant>> storage_proxy::encode_replica_exception_for_rpc(future<rpc::tuple<Elements...>>&& f, auto&& default_tuple_maker) {
-    using original_std_tuple_type = std::tuple<Elements...>;
-    using final_tuple_type = rpc::tuple<Elements..., replica::exception_variant>;
-
-    if (!f.failed()) {
-        return make_ready_future<final_tuple_type>(std::tuple_cat(original_std_tuple_type(f.get()), std::tuple<replica::exception_variant>(replica::exception_variant())));
-    }
-
-    std::exception_ptr eptr = f.get_exception();
-    if (features().typed_errors_in_read_rpc) {
-        replica::exception_variant ex = replica::try_encode_replica_exception(eptr);
-        if (ex) {
-            return make_ready_future<final_tuple_type>(std::tuple_cat(default_tuple_maker(), std::tuple<replica::exception_variant>(std::move(ex))));
-        }
-    }
-
-    return make_exception_future<final_tuple_type>(std::move(eptr));
 }
 
 future<> storage_proxy::uninit_messaging_service() {
