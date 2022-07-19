@@ -441,7 +441,6 @@ private:
                       utils::UUID schema_version, auto in, inet_address_vector_replica_set forward, gms::inet_address reply_to,
                       unsigned shard, storage_proxy::response_id_type response_id, std::optional<tracing::trace_info> trace_info,
                       auto&& apply_fn, auto&& forward_fn);
-    future<rpc::tuple<query::result_digest, long, cache_temperature, replica::exception_variant>> handle_read_digest(const rpc::client_info& cinfo, rpc::opt_time_point t, query::read_command cmd, ::compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> oda, rpc::optional<db::per_partition_rate_limit::info> rate_limit_info_opt);
     future<> handle_truncate(rpc::opt_time_point timeout, sstring ksname, sstring cfname);
     future<foreign_ptr<std::unique_ptr<service::paxos::prepare_response>>> handle_paxos_prepare(const rpc::client_info& cinfo, rpc::opt_time_point timeout,
                 query::read_command cmd, partition_key key, utils::UUID ballot, bool only_digest, query::digest_algorithm da,
