@@ -1106,7 +1106,7 @@ def lookup_type(type_names):
     raise gdb.error('none of the types found')
 
 
-def get_text_range():
+def get_text_ranges():
     try:
         vptr_type = gdb.lookup_type('uintptr_t').pointer()
         reactor_backend = gdb.parse_and_eval('seastar::local_engine->_backend')
@@ -1117,27 +1117,39 @@ def get_text_range():
             reactor_backend = gdb.parse_and_eval('&seastar::local_engine->_backend')
         known_vptr = int(reactor_backend.reinterpret_cast(vptr_type).dereference())
     except Exception as e:
-        gdb.write("get_text_range(): Falling back to locating .rodata section because lookup to reactor backend to use as known vptr failed: {}\n".format(e))
+        gdb.write("get_text_ranges(): Falling back to locating .rodata section because lookup to reactor backend to use as known vptr failed: {}\n".format(e))
         known_vptr = None
 
+    def section_bounds(line):
+        items = line.split()
+        start = int(items[0], 16)
+        end = int(items[2], 16)
+        return (start, end)
+
+    ret = []
     sections = gdb.execute('info files', False, True).split('\n')
     for line in sections:
-        if known_vptr:
-            if not " is ." in line:
-                continue
-            items = line.split()
-            start = int(items[0], 16)
-            end = int(items[2], 16)
-            if start <= known_vptr and known_vptr <= end:
-                return start, end
-        # vptrs are in .rodata section
+        # add .text for coroutines
+        if line.endswith("is .text"):
+            ret.append(section_bounds(line))
+        elif known_vptr and " is ." in line:
+            bounds = section_bounds(line)
+            if bounds[0] <= known_vptr and known_vptr <= bounds[1]:
+                ret.append(bounds)
+        # otherwise vptrs are in .rodata section
         elif line.endswith("is .rodata"):
-            items = line.split()
-            text_start = int(items[0], 16)
-            text_end = int(items[2], 16)
-            return text_start, text_end
+            ret.append(section_bounds(line))
 
-    raise Exception("Failed to find text start and end")
+    if len(ret) == 0:
+        raise Exception("Failed to find plausible text sections")
+    return ret
+
+
+def addr_in_ranges(ranges, addr):
+    for r in ranges:
+        if addr >= r[0] and addr <= r[1]:
+            return True
+    return False
 
 
 class histogram:
@@ -1405,7 +1417,7 @@ class scylla_task_histogram(gdb.Command):
         nr_pages = int(cpu_mem['nr_pages'])
         page_samples = range(0, nr_pages) if args.all else random.sample(range(0, nr_pages), nr_pages)
 
-        text_start, text_end = get_text_range()
+        text_ranges = get_text_ranges()
 
         scheduling_group_names = {int(tq['_id']): str(tq['_name']) for tq in get_local_task_queues()}
 
@@ -1435,7 +1447,7 @@ class scylla_task_histogram(gdb.Command):
             for idx2 in range(0, int(span_size / objsize)):
                 obj_addr = span.start + idx2 * objsize
                 addr = int(gdb.Value(obj_addr).reinterpret_cast(vptr_type).dereference())
-                if addr < text_start or addr > text_end:
+                if not addr_in_ranges(text_ranges, addr):
                     continue
                 if args.filter_tasks:
                     sym = resolve(addr)
@@ -1477,9 +1489,9 @@ def find_vptrs():
     pages = cpu_mem['pages']
     nr_pages = int(cpu_mem['nr_pages'])
 
-    text_start, text_end = get_text_range()
+    text_ranges = get_text_ranges()
     def is_vptr(addr):
-        return addr >= text_start and addr <= text_end
+        return addr_in_ranges(text_ranges, addr)
 
     idx = 0
     while idx < nr_pages:
@@ -4391,7 +4403,7 @@ class scylla_small_objects(gdb.Command):
             self._small_pool = small_pool
             self._resolve_symbols = resolve_symbols
 
-            self._text_start, self._text_end = get_text_range()
+            self._text_ranges = get_text_ranges()
             self._vptr_type = gdb.lookup_type('uintptr_t').pointer()
             self._free_object_ptr = gdb.lookup_type('void').pointer().pointer()
             self._page_size = int(gdb.parse_and_eval('\'seastar::memory::page_size\''))
@@ -4443,7 +4455,7 @@ class scylla_small_objects(gdb.Command):
 
             if self._resolve_symbols:
                 addr = gdb.Value(obj).reinterpret_cast(self._vptr_type).dereference()
-                if addr >= self._text_start and addr <= self._text_end:
+                if addr_in_ranges(self._text_ranges, addr):
                     return (obj, resolve(addr))
                 else:
                     return (obj, None)
