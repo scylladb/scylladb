@@ -1267,6 +1267,8 @@ class histogram:
 
 class task_symbol_matcher:
     def __init__(self):
+        self._coro_pattern = re.compile(r'\)( \[clone \.\w+\])?$')
+
         # List of whitelisted symbol names. Each symbol is a tuple, where each
         # element is a component of the name, the last element being the class
         # name itself.
@@ -1283,6 +1285,7 @@ class task_symbol_matcher:
                 ("seastar", "internal", "repeat_until_value_state"),
                 ("seastar", "internal", "repeater"),
                 ("seastar", "internal", "when_all_state_component"),
+                ("seastar", "internal", "coroutine_traits_base", "promise_type"),
                 ("seastar", "lambda_task"),
                 ("seastar", "smp_message_queue", "async_work_item"),
         ])
@@ -1307,6 +1310,10 @@ class task_symbol_matcher:
         return matches_symbol
 
     def __call__(self, name):
+        name = name.strip()
+        if re.search(self._coro_pattern, name) is not None:
+            return True
+
         for matcher in self._whitelist:
             if matcher(name):
                 return True
