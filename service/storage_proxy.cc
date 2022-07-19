@@ -141,8 +141,8 @@ struct storage_proxy::remote {
         _mm = mm;
 
         ser::storage_proxy_rpc_verbs::register_counter_mutation(&_ms, std::bind_front(&remote::handle_counter_mutation, this));
-        ser::storage_proxy_rpc_verbs::register_mutation(&_ms, std::bind_front(&storage_proxy::receive_mutation_handler, sp, sp->_write_smp_service_group));
-        ser::storage_proxy_rpc_verbs::register_hint_mutation(&_ms, [sp] <typename... Args>(Args&&... args) { return sp->receive_mutation_handler(sp->_hints_write_smp_service_group, std::forward<Args>(args)..., std::monostate()); });
+        ser::storage_proxy_rpc_verbs::register_mutation(&_ms, std::bind_front(&remote::receive_mutation_handler, this, sp->_write_smp_service_group));
+        ser::storage_proxy_rpc_verbs::register_hint_mutation(&_ms, [this, sp] <typename... Args>(Args&&... args) { return receive_mutation_handler(sp->_hints_write_smp_service_group, std::forward<Args>(args)..., std::monostate()); });
         ser::storage_proxy_rpc_verbs::register_paxos_learn(&_ms, std::bind_front(&storage_proxy::handle_paxos_learn, sp));
         ser::storage_proxy_rpc_verbs::register_mutation_done(&_ms, std::bind_front(&storage_proxy::handle_mutation_done, sp));
         ser::storage_proxy_rpc_verbs::register_mutation_failed(&_ms, std::bind_front(&storage_proxy::handle_mutation_failed, sp));
@@ -322,6 +322,29 @@ struct storage_proxy::remote {
                 return sp.mutate_counters_on_leader(std::move(mutations), cl, timeout, std::move(trace_state_ptr), /* FIXME: rpc should also pass a permit down to callbacks */ empty_service_permit());
             });
         });
+    }
+
+    future<rpc::no_wait_type> receive_mutation_handler(
+            smp_service_group smp_grp, const rpc::client_info& cinfo, rpc::opt_time_point t,
+            frozen_mutation in, inet_address_vector_replica_set forward, gms::inet_address reply_to,
+            unsigned shard, storage_proxy::response_id_type response_id,
+            rpc::optional<std::optional<tracing::trace_info>> trace_info, rpc::optional<db::per_partition_rate_limit::info> rate_limit_info_opt) {
+        tracing::trace_state_ptr trace_state_ptr;
+        auto src_addr = netw::messaging_service::get_source(cinfo);
+        auto rate_limit_info = rate_limit_info_opt.value_or(std::monostate());
+
+        utils::UUID schema_version = in.schema_version();
+        return _sp.handle_write(src_addr, t, schema_version, std::move(in), std::move(forward), reply_to, shard, response_id,
+                trace_info ? *trace_info : std::nullopt,
+                /* apply_fn */ [smp_grp, rate_limit_info] (shared_ptr<storage_proxy>& p, tracing::trace_state_ptr tr_state, schema_ptr s, const frozen_mutation& m,
+                        clock_type::time_point timeout) {
+                    return p->mutate_locally(std::move(s), m, std::move(tr_state), db::commitlog::force_sync::no, timeout, smp_grp, rate_limit_info);
+                },
+                /* forward_fn */ [rate_limit_info] (shared_ptr<storage_proxy>& p, netw::messaging_service::msg_addr addr, clock_type::time_point timeout, const frozen_mutation& m,
+                        gms::inet_address reply_to, unsigned shard, response_id_type response_id,
+                        std::optional<tracing::trace_info> trace_info) {
+                    return p->remote().send_mutation(addr, timeout, std::move(trace_info), m, {}, reply_to, shard, response_id, rate_limit_info);
+                });
     }
 };
 
@@ -5365,28 +5388,6 @@ storage_proxy::handle_write(netw::messaging_service::msg_addr src_addr, rpc::opt
                 });
             });
         });
-}
-
-future<rpc::no_wait_type>
-storage_proxy::receive_mutation_handler(smp_service_group smp_grp, const rpc::client_info& cinfo, rpc::opt_time_point t, frozen_mutation in, inet_address_vector_replica_set forward,
-            gms::inet_address reply_to, unsigned shard, storage_proxy::response_id_type response_id, rpc::optional<std::optional<tracing::trace_info>> trace_info,
-            rpc::optional<db::per_partition_rate_limit::info> rate_limit_info_opt) {
-        tracing::trace_state_ptr trace_state_ptr;
-        auto src_addr = netw::messaging_service::get_source(cinfo);
-        auto rate_limit_info = rate_limit_info_opt.value_or(std::monostate());
-
-        utils::UUID schema_version = in.schema_version();
-        return handle_write(src_addr, t, schema_version, std::move(in), std::move(forward), reply_to, shard, response_id,
-                trace_info ? *trace_info : std::nullopt,
-                /* apply_fn */ [smp_grp, rate_limit_info] (shared_ptr<storage_proxy>& p, tracing::trace_state_ptr tr_state, schema_ptr s, const frozen_mutation& m,
-                        clock_type::time_point timeout) {
-                    return p->mutate_locally(std::move(s), m, std::move(tr_state), db::commitlog::force_sync::no, timeout, smp_grp, rate_limit_info);
-                },
-                /* forward_fn */ [rate_limit_info] (shared_ptr<storage_proxy>& p, netw::messaging_service::msg_addr addr, clock_type::time_point timeout, const frozen_mutation& m,
-                        gms::inet_address reply_to, unsigned shard, response_id_type response_id,
-                        std::optional<tracing::trace_info> trace_info) {
-                    return p->remote().send_mutation(addr, timeout, std::move(trace_info), m, {}, reply_to, shard, response_id, rate_limit_info);
-                });
 }
 
 future<rpc::no_wait_type>
