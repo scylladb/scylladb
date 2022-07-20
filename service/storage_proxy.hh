@@ -335,6 +335,7 @@ private:
     db::hints::manager& hints_manager_for(db::write_type type);
     static void sort_endpoints_by_proximity(inet_address_vector_replica_set& eps);
     inet_address_vector_replica_set get_live_sorted_endpoints(replica::keyspace& ks, const dht::token& token) const;
+    bool is_alive(const gms::inet_address&) const;
     db::read_repair_decision new_read_repair_decision(const schema& s);
     result<::shared_ptr<abstract_read_executor>> get_read_executor(lw_shared_ptr<query::read_command> cmd,
             schema_ptr schema,
