@@ -2522,7 +2522,7 @@ locator::token_metadata_ptr gossiper::get_token_metadata_ptr() const noexcept {
     return _shared_token_metadata.get();
 }
 
-inet_address_vector_replica_set gossiper::endpoint_filter(const sstring& local_rack, const std::unordered_map<sstring, std::unordered_set<gms::inet_address>>& endpoints) {
+inet_address_vector_replica_set gossiper::endpoint_filter(const sstring& local_rack, const std::unordered_map<sstring, std::unordered_set<gms::inet_address>>& endpoints) const {
     // special case for single-node data centers
     if (endpoints.size() == 1 && endpoints.begin()->second.size() == 1) {
         return boost::copy_range<inet_address_vector_replica_set>(endpoints.begin()->second);
@@ -2571,8 +2571,10 @@ inet_address_vector_replica_set gossiper::endpoint_filter(const sstring& local_r
 
     std::vector<sstring> racks = boost::copy_range<std::vector<sstring>>(validated | boost::adaptors::map_keys);
 
+    static thread_local std::default_random_engine rnd_engine{std::random_device{}()};
+
     if (validated.bucket_count() > 2) {
-        std::shuffle(racks.begin(), racks.end(), _e1);
+        std::shuffle(racks.begin(), racks.end(), rnd_engine);
         racks.resize(2);
     }
 
@@ -2582,7 +2584,7 @@ inet_address_vector_replica_set gossiper::endpoint_filter(const sstring& local_r
     for (auto& rack : racks) {
         auto cpy = boost::copy_range<std::vector<gms::inet_address>>(validated.equal_range(rack) | boost::adaptors::map_values);
         std::uniform_int_distribution<size_t> rdist(0, cpy.size() - 1);
-        result.emplace_back(cpy[rdist(_e1)]);
+        result.emplace_back(cpy[rdist(rnd_engine)]);
     }
 
     return result;
