@@ -156,7 +156,14 @@ struct storage_proxy::remote {
     netw::messaging_service& _ms;
     gms::gossiper& _gossiper;
 
-    remote(storage_proxy& sp, netw::messaging_service& ms, gms::gossiper& g) : _sp(sp), _ms(ms), _gossiper(g) {}
+    netw::connection_drop_slot_t _connection_dropped;
+    netw::connection_drop_registration_t _condrop_registration;
+
+    remote(storage_proxy& sp, netw::messaging_service& ms, gms::gossiper& g)
+        : _sp(sp), _ms(ms), _gossiper(g)
+        , _connection_dropped(std::bind_front(&remote::connection_dropped, this))
+        , _condrop_registration(_ms.when_connection_drops(_connection_dropped))
+    {}
 
     void init_messaging_service(migration_manager* mm, storage_proxy* sp) {
         _mm = mm;
@@ -751,6 +758,13 @@ struct storage_proxy::remote {
                 });
             });
         });
+    }
+
+    void connection_dropped(gms::inet_address addr) {
+        slogger.debug("Drop hit rate info for {} because of disconnect", addr);
+        for (auto&& cf : _sp._db.local().get_non_system_column_families()) {
+            cf->drop_hit_rate(addr);
+        }
     }
 };
 
@@ -2511,8 +2525,6 @@ storage_proxy::storage_proxy(distributed<replica::database>& db, gms::gossiper& 
     , _remote(std::make_unique<struct remote>(*this, _messaging, _gossiper))
     , _background_write_throttle_threahsold(cfg.available_memory / 10)
     , _mutate_stage{"storage_proxy_mutate", &storage_proxy::do_mutate}
-    , _connection_dropped([this] (gms::inet_address addr) { connection_dropped(std::move(addr)); })
-    , _condrop_registration(_messaging.when_connection_drops(_connection_dropped))
     , _max_view_update_backlog(max_view_update_backlog)
     , _view_update_handlers_list(std::make_unique<view_update_handlers_list>()) {
     namespace sm = seastar::metrics;
@@ -2554,13 +2566,6 @@ storage_proxy::response_id_type storage_proxy::unique_response_handler::release(
     auto r = id;
     id = 0;
     return r;
-}
-
-void storage_proxy::connection_dropped(gms::inet_address addr) {
-    slogger.debug("Drop hit rate info for {} because of disconnect", addr);
-    for (auto&& cf : _db.local().get_non_system_column_families()) {
-        cf->drop_hit_rate(addr);
-    }
 }
 
 future<>
