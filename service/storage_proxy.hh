@@ -454,10 +454,6 @@ public:
         return _db.local();
     }
 
-    gms::gossiper& gossiper() noexcept {
-        return _gossiper;
-    }
-
     void set_cdc_service(cdc::cdc_service* cdc) {
         _cdc = cdc;
     }

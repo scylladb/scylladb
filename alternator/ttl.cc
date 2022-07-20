@@ -166,9 +166,10 @@ future<executor::request_return_type> executor::describe_time_to_live(client_sta
 // like user deletions, will also appear on the CDC log and therefore
 // Alternator Streams if enabled (FIXME: explain how we mark the
 // deletion different from user deletes. We don't do it yet.).
-expiration_service::expiration_service(data_dictionary::database db, service::storage_proxy& proxy)
+expiration_service::expiration_service(data_dictionary::database db, service::storage_proxy& proxy, gms::gossiper& g)
         : _db(db)
         , _proxy(proxy)
+        , _gossiper(g)
 {
 }
 
@@ -637,6 +638,7 @@ static future<> scan_table_ranges(
 static future<bool> scan_table(
     service::storage_proxy& proxy,
     data_dictionary::database db,
+    gms::gossiper& gossiper,
     schema_ptr s,
     abort_source& abort_source,
     named_semaphore& page_sem,
@@ -689,7 +691,7 @@ static future<bool> scan_table(
     expiration_stats.scan_table++;
     // FIXME: need to pace the scan, not do it all at once.
     scan_ranges_context scan_ctx{s, proxy, std::move(column_name), std::move(member)};
-    token_ranges_owned_by_this_shard<primary> my_ranges(db.real_database(), proxy.gossiper(), s);
+    token_ranges_owned_by_this_shard<primary> my_ranges(db.real_database(), gossiper, s);
     while (std::optional<dht::partition_range> range = my_ranges.next_partition_range()) {
         // Note that because of issue #9167 we need to run a separate
         // query on each partition range, and can't pass several of
@@ -709,7 +711,7 @@ static future<bool> scan_table(
     // by tasking another node to take over scanning of the dead node's primary
     // ranges. What we do here is that this node will also check expiration
     // on its *secondary* ranges - but only those whose primary owner is down.
-    token_ranges_owned_by_this_shard<secondary> my_secondary_ranges(db.real_database(), proxy.gossiper(), s);
+    token_ranges_owned_by_this_shard<secondary> my_secondary_ranges(db.real_database(), gossiper, s);
     while (std::optional<dht::partition_range> range = my_secondary_ranges.next_partition_range()) {
         expiration_stats.secondary_ranges_scanned++;
         dht::partition_range_vector partition_ranges;
@@ -741,7 +743,7 @@ future<> expiration_service::run() {
                 co_return;
             }
             try {
-                co_await scan_table(_proxy, _db, s, _abort_source, _page_sem, _expiration_stats);
+                co_await scan_table(_proxy, _db, _gossiper, s, _abort_source, _page_sem, _expiration_stats);
             } catch (...) {
                 // The scan of a table may fail in the middle for many
                 // reasons, including network failure and even the table
