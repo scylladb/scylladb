@@ -324,7 +324,7 @@ TWCS options
 See Also
 ^^^^^^^^^
 
-* :doc:`Apache Cassandra Query Language </getting-started/cql/>`
+* :doc:`Apache Cassandra Query Language (CQL) Reference </cql/index>`
 
 * :doc:`Compaction Strategies </architecture/compaction/compaction-strategies/>`
 

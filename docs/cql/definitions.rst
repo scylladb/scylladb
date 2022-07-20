@@ -175,8 +175,8 @@ Statements
 
 CQL consists of statements that can be divided into the following categories:
 
-- :doc:`Data Definition </getting-started/ddl/>` statements - to define and change how the data is stored (keyspaces and tables).
-- :doc:`Data Manipulation </getting-started/dml/>` statements - for selecting, inserting and deleting data.
+- :doc:`Data Definition </cql/ddl/>` statements - to define and change how the data is stored (keyspaces and tables).
+- :doc:`Data Manipulation </cql/dml/>` statements - for selecting, inserting and deleting data.
 - :ref:`cql-permissions` statements.
 - cql-triggers statements.
 

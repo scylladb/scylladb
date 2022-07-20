@@ -530,7 +530,7 @@ See also:
 
 CQLSH `lesson <https://university.scylladb.com/courses/data-modeling/lessons/basic-data-modeling-2/topic/cql-cqlsh-and-basic-cql-syntax/>`_ on Scylla University
 
-:doc:`Apache Cassandra Query Language </getting-started/cql/>`
+* :doc:`Apache Cassandra Query Language (CQL) Reference </cql/index>`
 
 :doc:`Back </getting-started/index/>`
 

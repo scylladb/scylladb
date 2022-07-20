@@ -179,6 +179,6 @@ If the materialized view does not exist, the statement will return an error unle
 the operation is a no-op.
 
 
-:doc:`Apache Cassandra Query Language </getting-started/cql/>`
+* :doc:`Apache Cassandra Query Language (CQL) Reference </cql/index>`
 
 .. include:: /rst_include/apache-copyrights.rst

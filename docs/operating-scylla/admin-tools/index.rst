@@ -6,7 +6,7 @@ Admin Tools
    :hidden:
    
    Nodetool Reference </operating-scylla/nodetool>
-   CQLSh </getting-started/cqlsh>
+   CQLSh </cql/cqlsh>
    REST </operating-scylla/rest>
    Tracing </using-scylla/tracing>
    scylla-sstable

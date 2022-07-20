@@ -6,8 +6,6 @@ Scylla for Developers
    :hidden: 
 
    learn
-   CQLSh </getting-started/cqlsh>
-   cql
    Scylla Alternator <alternator/index>
    Scylla Features <features>
    Scylla Drivers <drivers/index>
@@ -20,8 +18,8 @@ Scylla for Developers
 
   * :doc:`Scylla Drivers </using-scylla/drivers/index>` - Scylla and third-party drivers for CQL and DynamoDB
   * :doc:`Scylla Alternator </using-scylla/alternator/index>` - The Open Source DynamoDB-compatible API
-  * :doc:`Apache Cassandra Query Language (CQL) </getting-started/cql/>` - CQL Reference Guide
-
+  * :doc:`CQL Reference </cql/index>` - Reference for the Apache Cassandra Query Language (CQL) and its ScyllaDB extensions
+  
   
 .. panel-box::
   :title: Scylla Tools and Resources
@@ -29,7 +27,7 @@ Scylla for Developers
   :class: my-panel
  
   * :doc:`Scylla Tools </operating-scylla/admin-tools/index>` - Tools for testing and integrating with Scylla
-  * :doc:`CQLSh </getting-started/cqlsh>` - Reference for the CQL Shell
+  * :doc:`cqlsh </cql/cqlsh>` - A command line shell for interacting with ScyllaDB through CQL
  
  
 .. panel-box::
