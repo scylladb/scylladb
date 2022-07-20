@@ -448,8 +448,8 @@ private:
         inet_address_vector_replica_set& l2) const;
 
 public:
-    storage_proxy(distributed<replica::database>& db, gms::gossiper& gossiper, config cfg, db::view::node_update_backlog& max_view_update_backlog,
-            scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, locator::effective_replication_map_factory& erm_factory, netw::messaging_service& ms);
+    storage_proxy(distributed<replica::database>& db, config cfg, db::view::node_update_backlog& max_view_update_backlog,
+            scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, locator::effective_replication_map_factory& erm_factory);
     ~storage_proxy();
 
     const distributed<replica::database>& get_db() const {
@@ -482,7 +482,7 @@ public:
         }
         return next;
     }
-    void init_messaging_service(migration_manager*);
+    void init_messaging_service(netw::messaging_service&, gms::gossiper&, migration_manager&);
     future<> uninit_messaging_service();
 
 private:

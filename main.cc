@@ -1211,9 +1211,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_stats();
                 reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_split_metrics_local();
             };
-            proxy.start(std::ref(db), std::ref(gossiper), spcfg, std::ref(node_backlog),
+            proxy.start(std::ref(db), spcfg, std::ref(node_backlog),
                     scheduling_group_key_create(storage_proxy_stats_cfg).get0(),
-                    std::ref(feature_service), std::ref(token_metadata), std::ref(erm_factory), std::ref(messaging)).get();
+                    std::ref(feature_service), std::ref(token_metadata), std::ref(erm_factory)).get();
             supervisor::notify("starting forward service");
             forward_service.start(std::ref(messaging), std::ref(proxy), std::ref(db), std::ref(token_metadata)).get();
             auto stop_forward_service_handlers = defer_verbose_shutdown("forward service", [&forward_service] {
@@ -1452,8 +1452,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 mm.init_messaging_service();
             }).get();
             supervisor::notify("initializing storage proxy RPC verbs");
-            proxy.invoke_on_all([&mm] (service::storage_proxy& proxy) {
-                proxy.init_messaging_service(&mm.local());
+            proxy.invoke_on_all([&messaging, &gossiper, &mm] (service::storage_proxy& proxy) {
+                proxy.init_messaging_service(messaging.local(), gossiper.local(), mm.local());
             }).get();
             auto stop_proxy_handlers = defer_verbose_shutdown("storage proxy RPC verbs", [&proxy] {
                 proxy.invoke_on_all(&service::storage_proxy::uninit_messaging_service).get();

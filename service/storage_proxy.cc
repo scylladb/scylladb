@@ -155,26 +155,24 @@ static bool only_me(const inet_address_vector_replica_set& replicas) {
 // Without it only local queries are available.
 class storage_proxy::remote {
     storage_proxy& _sp;
-    migration_manager* _mm;
     netw::messaging_service& _ms;
     const gms::gossiper& _gossiper;
+    migration_manager& _mm;
 
     netw::connection_drop_slot_t _connection_dropped;
     netw::connection_drop_registration_t _condrop_registration;
 
+    bool _stopped{false};
+
 public:
-    remote(storage_proxy& sp, netw::messaging_service& ms, gms::gossiper& g)
-        : _sp(sp), _ms(ms), _gossiper(g)
+    remote(storage_proxy& sp, netw::messaging_service& ms, gms::gossiper& g, migration_manager& mm)
+        : _sp(sp), _ms(ms), _gossiper(g), _mm(mm)
         , _connection_dropped(std::bind_front(&remote::connection_dropped, this))
         , _condrop_registration(_ms.when_connection_drops(_connection_dropped))
-    {}
-
-    void init_messaging_service(migration_manager* mm, storage_proxy* sp) {
-        _mm = mm;
-
+    {
         ser::storage_proxy_rpc_verbs::register_counter_mutation(&_ms, std::bind_front(&remote::handle_counter_mutation, this));
-        ser::storage_proxy_rpc_verbs::register_mutation(&_ms, std::bind_front(&remote::receive_mutation_handler, this, sp->_write_smp_service_group));
-        ser::storage_proxy_rpc_verbs::register_hint_mutation(&_ms, [this, sp] <typename... Args>(Args&&... args) { return receive_mutation_handler(sp->_hints_write_smp_service_group, std::forward<Args>(args)..., std::monostate()); });
+        ser::storage_proxy_rpc_verbs::register_mutation(&_ms, std::bind_front(&remote::receive_mutation_handler, this, _sp._write_smp_service_group));
+        ser::storage_proxy_rpc_verbs::register_hint_mutation(&_ms, [this] <typename... Args>(Args&&... args) { return receive_mutation_handler(_sp._hints_write_smp_service_group, std::forward<Args>(args)..., std::monostate()); });
         ser::storage_proxy_rpc_verbs::register_paxos_learn(&_ms, std::bind_front(&remote::handle_paxos_learn, this));
         ser::storage_proxy_rpc_verbs::register_mutation_done(&_ms, std::bind_front(&remote::handle_mutation_done, this));
         ser::storage_proxy_rpc_verbs::register_mutation_failed(&_ms, std::bind_front(&remote::handle_mutation_failed, this));
@@ -188,10 +186,14 @@ public:
         ser::storage_proxy_rpc_verbs::register_paxos_prune(&_ms, std::bind_front(&remote::handle_paxos_prune, this));
     }
 
+    ~remote() {
+        assert(_stopped);
+    }
+
     // Must call before destroying the `remote` object.
     future<> stop() {
         co_await ser::storage_proxy_rpc_verbs::unregister(&_ms);
-        _mm = nullptr;
+        _stopped = true;
     }
 
     const gms::gossiper& gossiper() const {
@@ -373,12 +375,12 @@ public:
 private:
     future<schema_ptr> get_schema_for_read(table_schema_version v, netw::msg_addr from, clock_type::time_point timeout) {
         abort_on_expiry aoe(timeout);
-        co_return co_await _mm->get_schema_for_read(std::move(v), std::move(from), _ms, &aoe.abort_source());
+        co_return co_await _mm.get_schema_for_read(std::move(v), std::move(from), _ms, &aoe.abort_source());
     }
 
     future<schema_ptr> get_schema_for_write(table_schema_version v, netw::msg_addr from, clock_type::time_point timeout) {
         abort_on_expiry aoe(timeout);
-        co_return co_await _mm->get_schema_for_write(std::move(v), std::move(from), _ms, &aoe.abort_source());
+        co_return co_await _mm.get_schema_for_write(std::move(v), std::move(from), _ms, &aoe.abort_source());
     }
 
     future<> handle_counter_mutation(
@@ -2714,9 +2716,12 @@ inline std::ostream& operator<<(std::ostream& os, const read_repair_mutation& m)
 
 using namespace std::literals::chrono_literals;
 
-storage_proxy::~storage_proxy() {}
-storage_proxy::storage_proxy(distributed<replica::database>& db, gms::gossiper& gossiper, storage_proxy::config cfg, db::view::node_update_backlog& max_view_update_backlog,
-        scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, locator::effective_replication_map_factory& erm_factory, netw::messaging_service& ms)
+storage_proxy::~storage_proxy() {
+    assert(!_remote);
+}
+
+storage_proxy::storage_proxy(distributed<replica::database>& db, storage_proxy::config cfg, db::view::node_update_backlog& max_view_update_backlog,
+        scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, locator::effective_replication_map_factory& erm_factory)
     : _db(db)
     , _shared_token_metadata(stm)
     , _erm_factory(erm_factory)
@@ -2731,7 +2736,6 @@ storage_proxy::storage_proxy(distributed<replica::database>& db, gms::gossiper& 
     , _hints_for_views_manager(_db.local().get_config().view_hints_directory(), {}, _db.local().get_config().max_hint_window_in_ms(), _hints_resource_manager, _db)
     , _stats_key(stats_key)
     , _features(feat)
-    , _remote(std::make_unique<struct remote>(*this, ms, gossiper))
     , _background_write_throttle_threahsold(cfg.available_memory / 10)
     , _mutate_stage{"storage_proxy_mutate", &storage_proxy::do_mutate}
     , _max_view_update_backlog(max_view_update_backlog)
@@ -6124,12 +6128,13 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname, std:
     return remote().send_truncate_blocking(std::move(keyspace), std::move(cfname), timeout_in_ms);
 }
 
-void storage_proxy::init_messaging_service(migration_manager* mm) {
-    _remote->init_messaging_service(mm, this);
+void storage_proxy::init_messaging_service(netw::messaging_service& ms, gms::gossiper& g, migration_manager& mm) {
+    _remote = std::make_unique<struct remote>(*this, ms, g, mm);
 }
 
 future<> storage_proxy::uninit_messaging_service() {
-    return _remote->stop();
+    co_await _remote->stop();
+    _remote = nullptr;
 }
 
 future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>
