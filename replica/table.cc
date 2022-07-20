@@ -1853,7 +1853,7 @@ void table::set_hit_rate(gms::inet_address addr, cache_temperature rate) {
     e.last_updated = lowres_clock::now();
 }
 
-table::cache_hit_rate table::get_hit_rate(gms::gossiper* gossiper, gms::inet_address addr) {
+table::cache_hit_rate table::get_hit_rate(const gms::gossiper* gossiper, gms::inet_address addr) {
     if (utils::fb_utilities::get_broadcast_address() == addr) {
         return cache_hit_rate { _global_cache_hit_rate, lowres_clock::now()};
     }
