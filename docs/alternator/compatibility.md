@@ -54,6 +54,46 @@ other options result in significantly better write performance and should be
 considered when the workload involves pure writes (e.g., ingestion of new
 data) or if pure writes and read-modify-writes go to distinct items.
 
+## Avoiding write reordering
+
+When a DynamoDB application writes twice to the same item, it expects "last-
+write-wins" behavior: The later write should overwrite the earlier write.
+When writes use LWT (the `always_use_lwt` policy described above), this is
+indeed guaranteed. However, for other write isolation policies, Scylla
+does not guarantee that writes are not reordered. In some sense, the "last"
+write does still win, but the meaning of which write is "last" is different
+from what most users expect:
+
+In this case (write isolation policy is not `always_use_lwt`), each write
+request gets a _timestamp_ which is the current time on the server which
+received this request. If two write requests arrive at _different_ Alternator
+nodes, and if the local clocks on these two nodes are _not_ accurately
+synchronized, then the two timestamps generated independently on the two
+nodes may have the opposite order as intended - the _earlier_ write may get
+a _higher_ timestamp - and this will be the "last write" that wins.
+
+To avoid or mitigate this write reordering issue, users may consider
+one or more of the following:
+
+1. Use NTP to keep the clocks on the different Scylla nodes synchronized.
+   If the delay between the two writes is longer than NTP's accuracy,
+   they will not be reordered.
+2. If an application wants to ensure that two specific writes are not
+   reordered, it should send both requests to the same Scylla node.
+   Care should be taken when using a load balancer - which might redirect
+   two requests to two different nodes.
+3. Consider using the `always_use_lwt` write isolation policy.
+   It is slower, but has better guarantees.
+
+Another guarantee that that `always_use_lwt` can make and other write
+isolation modes do not is that writes to the same item are _serialized_:
+Even if the two write are sent at exactly the same time to two different
+nodes, the result will appear as if one write happended first, and then
+the other. But in other modes (with non-LWT writes), two writes can get
+exactly the same microsecond-resolution timestamp, the the result may be
+a mixture of both writes - some attributes from one and some from the
+other - instead of being just one or the other.
+
 ## Authorization
 
 Alternator implements the same [signature protocol](https://docs.aws.amazon.com/general/latest/gr/signature-version-4.html)
