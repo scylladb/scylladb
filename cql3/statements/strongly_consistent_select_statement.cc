@@ -12,6 +12,7 @@
 #include "cql3/statements/strongly_consistent_select_statement.hh"
 
 #include <seastar/core/future.hh>
+#include <seastar/core/on_internal_error.hh>
 
 #include "cql3/restrictions/statement_restrictions.hh"
 #include "cql3/query_processor.hh"
@@ -20,6 +21,8 @@
 namespace cql3 {
 
 namespace statements {
+
+static logging::logger logger("strongly_consistent_select_statement");
 
 static
 bytes get_key(const cql3::expr::expression& partition_key_restrictions) {
@@ -83,12 +86,31 @@ service::broadcast_tables::select_query strongly_consistent_select_statement::pr
 future<::shared_ptr<cql_transport::messages::result_message>>
 strongly_consistent_select_statement::execute_without_checking_exception_message(query_processor& qp, service::query_state& qs, const query_options& options) const {
     if (this_shard_id() != 0) {
-        return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(
-            ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(0, cql3::computed_function_values{}));
+        co_return ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(0, cql3::computed_function_values{});
     }
 
-    return service::broadcast_tables::execute(qp.get_group0_client(), { _query })
-        .then(make_ready_future<::shared_ptr<cql_transport::messages::result_message>>);
+    auto result = co_await service::broadcast_tables::execute(qp.get_group0_client(), { _query });
+    
+    auto query_result = std::get_if<service::broadcast_tables::query_result_select>(&result);
+
+    if (!query_result) {
+        on_internal_error(logger, "incorrect query result ");
+    }
+
+    auto result_set = std::make_unique<cql3::result_set>(std::vector{
+        make_lw_shared<cql3::column_specification>(
+            db::system_keyspace::NAME,
+            db::system_keyspace::BROADCAST_KV_STORE,
+            ::make_shared<cql3::column_identifier>("value", true),
+            utf8_type
+        )
+    });
+
+    if (query_result->value) {
+        result_set->add_row({ query_result->value });
+    }
+
+    co_return ::make_shared<cql_transport::messages::result_message::rows>(cql3::result{std::move(result_set)});
 }
 
 }

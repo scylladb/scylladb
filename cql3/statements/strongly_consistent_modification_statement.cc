@@ -15,6 +15,7 @@
 #include <optional>
 
 #include <seastar/core/future.hh>
+#include <seastar/util/variant_utils.hh>
 
 #include "cql3/attributes.hh"
 #include "cql3/operation.hh"
@@ -23,6 +24,8 @@
 #include "service/broadcast_tables/experimental/lang.hh"
 
 namespace cql3 {
+
+static logging::logger logger("strongly_consistent_modification_statement");
 
 namespace statements {
 
@@ -44,13 +47,41 @@ strongly_consistent_modification_statement::execute(query_processor& qp, service
     
 future<::shared_ptr<cql_transport::messages::result_message>>
 strongly_consistent_modification_statement::execute_without_checking_exception_message(query_processor& qp, service::query_state& qs, const query_options& options) const {
-    if (this_shard_id() != 0) {
-        return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(
-            ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(0, cql3::computed_function_values{}));
+        if (this_shard_id() != 0) {
+        co_return ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(0, cql3::computed_function_values{});
     }
 
-    return service::broadcast_tables::execute(qp.get_group0_client(), { _query })
-        .then(make_ready_future<::shared_ptr<cql_transport::messages::result_message>>);
+    auto result = co_await service::broadcast_tables::execute(qp.get_group0_client(), { _query });
+    
+    co_return co_await std::visit(make_visitor(
+        [] (service::broadcast_tables::query_result_conditional_update& qr) -> future<::shared_ptr<cql_transport::messages::result_message>> {
+            auto result_set = std::make_unique<cql3::result_set>(std::vector{
+                make_lw_shared<cql3::column_specification>(
+                    db::system_keyspace::NAME,
+                    db::system_keyspace::BROADCAST_KV_STORE,
+                    ::make_shared<cql3::column_identifier>("[applied]", false),
+                    boolean_type
+                ),
+                make_lw_shared<cql3::column_specification>(
+                    db::system_keyspace::NAME,
+                    db::system_keyspace::BROADCAST_KV_STORE,
+                    ::make_shared<cql3::column_identifier>("value", true),
+                    utf8_type
+                )
+            });
+
+            result_set->add_row({ boolean_type->decompose(qr.is_applied), qr.previous_value });
+
+            return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(
+                ::make_shared<cql_transport::messages::result_message::rows>(cql3::result{std::move(result_set)}));
+        },
+        [] (service::broadcast_tables::query_result_none&) -> future<::shared_ptr<cql_transport::messages::result_message>> {
+            return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>();
+        },
+        [] (service::broadcast_tables::query_result_select&) -> future<::shared_ptr<cql_transport::messages::result_message>> {
+            on_internal_error(logger, "incorrect query result ");
+        }
+    ), result);
 }
 
 uint32_t strongly_consistent_modification_statement::get_bound_terms() const {

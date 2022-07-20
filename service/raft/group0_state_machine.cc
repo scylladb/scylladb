@@ -12,6 +12,7 @@
 #include "dht/token.hh"
 #include "message/messaging_service.hh"
 #include "canonical_mutation.hh"
+#include "service/broadcast_tables/experimental/query_result.hh"
 #include "schema_mutations.hh"
 #include "frozen_schema.hh"
 #include "serialization_visitors.hh"
@@ -32,6 +33,7 @@
 #include "partition_slice_builder.hh"
 #include "timestamp.hh"
 #include "utils/overloaded_functor.hh"
+#include <optional>
 
 namespace service {
 
@@ -99,7 +101,8 @@ future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
             return _mm.merge_schema_from(netw::messaging_service::msg_addr(std::move(cmd.creator_addr)), std::move(chng.mutations));
         },
         [&] (broadcast_table_query& query) -> future<> {
-            return service::broadcast_tables::execute_broadcast_table_query(_sp, query.query, cmd.new_state_id);
+            auto result = co_await service::broadcast_tables::execute_broadcast_table_query(_sp, query.query, cmd.new_state_id);
+            _client.set_query_result(cmd.new_state_id, std::move(result));
         }
         ), cmd.change);
 

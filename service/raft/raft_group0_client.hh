@@ -16,6 +16,7 @@
 #include <seastar/core/rwlock.hh>
 #include <seastar/core/condition-variable.hh>
 
+#include "service/broadcast_tables/experimental/query_result.hh"
 #include "service/raft/raft_group_registry.hh"
 #include "service/raft/group0_upgrade.hh"
 #include "utils/UUID.hh"
@@ -76,6 +77,23 @@ class raft_group0_client {
     group0_upgrade_state _upgrade_state{group0_upgrade_state::recovery}; // loaded from disk in `init()`
     seastar::rwlock _upgrade_lock;
     seastar::condition_variable _upgraded;
+
+    std::unordered_map<utils::UUID, std::optional<service::broadcast_tables::query_result>> _results;
+
+    // Guard manages the result of a single query. If it is created for a particular query,
+    // then `group0_state_machine` will save the result of that query and it can be returned by the guard.
+    // Guard manages the lifetime of the _results entry. It creates and destroys the entry, which state machine puts the result in.
+    class query_result_guard {
+        utils::UUID _query_id;
+        raft_group0_client* _client;
+    public:
+        query_result_guard(utils::UUID query_id, raft_group0_client& client);
+        query_result_guard(query_result_guard&&);
+        ~query_result_guard();
+
+        // Preconditon: set_query_result was called with query_id=this->_query_id.
+        service::broadcast_tables::query_result get();
+    };
 
 public:
     raft_group0_client(service::raft_group_registry&, db::system_keyspace&);
@@ -150,6 +168,9 @@ public:
     // for test only
     void set_history_gc_duration(gc_clock::duration d);
     semaphore& operation_mutex();
+
+    query_result_guard create_result_guard(utils::UUID query_id);
+    void set_query_result(utils::UUID query_id, service::broadcast_tables::query_result qr);
 };
 
 }

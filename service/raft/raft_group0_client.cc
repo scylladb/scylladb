@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <optional>
 #include <seastar/core/coroutine.hh>
 #include "raft_group0_client.hh"
 
@@ -370,6 +371,46 @@ future<> raft_group0_client::wait_until_group0_upgraded(abort_source& as) {
 
 db::system_keyspace& raft_group0_client::sys_ks() {
     return _sys_ks;
+}
+
+raft_group0_client::query_result_guard::query_result_guard(utils::UUID query_id, raft_group0_client& client)
+    : _query_id{query_id}, _client{&client} {
+    auto [_, emplaced] = _client->_results.emplace(_query_id, std::nullopt);
+    if (!emplaced) {
+        on_internal_error(logger, "query_result_guard::query_result_guard: there is another query_result_guard alive with the same query_id");
+    }
+}
+
+raft_group0_client::query_result_guard::query_result_guard(raft_group0_client::query_result_guard&& other)
+    : _query_id{other._query_id}, _client{other._client} {
+    other._client = nullptr;
+}
+
+raft_group0_client::query_result_guard::~query_result_guard() {
+    if (_client != nullptr) {
+        _client->_results.erase(_query_id);
+    }
+}
+
+service::broadcast_tables::query_result raft_group0_client::query_result_guard::get() {
+    auto it = _client->_results.find(_query_id);
+
+    if (it == _client->_results.end() || !it->second.has_value()) {
+        on_internal_error(logger, "query_result_guard::get: no result");
+    }
+
+    return std::move(*it->second);
+}
+
+raft_group0_client::query_result_guard raft_group0_client::create_result_guard(utils::UUID query_id) {
+    return query_result_guard{query_id, *this};
+}
+
+void raft_group0_client::set_query_result(utils::UUID query_id, service::broadcast_tables::query_result qr) {
+    auto it = _results.find(query_id);
+    if (it != _results.end()) {
+        it->second = std::move(qr);
+    }
 }
 
 }

@@ -14,6 +14,7 @@
 #include "db/config.hh"
 #include "db/system_keyspace.hh"
 #include "exceptions/exceptions.hh"
+#include "service/broadcast_tables/experimental/query_result.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "partition_slice_builder.hh"
 #include "query-request.hh"
@@ -25,9 +26,11 @@ bool is_broadcast_table_statement(const sstring& keyspace, const sstring& column
     return keyspace == db::system_keyspace::NAME && column_family == db::system_keyspace::BROADCAST_KV_STORE;
 }
 
-future<> execute(service::raft_group0_client& group0_client, const query& query) {
+future<query_result> execute(service::raft_group0_client& group0_client, const query& query) {
     auto group0_cmd = group0_client.prepare_command(broadcast_table_query{query});
-    return group0_client.add_entry_unguarded(std::move(group0_cmd));
+    auto guard = group0_client.create_result_guard(group0_cmd.new_state_id);
+    co_await group0_client.add_entry_unguarded(std::move(group0_cmd));
+    co_return guard.get();
 }
 
 
@@ -54,13 +57,13 @@ get_atomic_cell(const schema_ptr& schema, mutation& mutation, const bytes& name)
     return mutation.partition().clustered_row(*schema, clustering_key::make_empty()).cells().cell_at(column_definition->id).as_atomic_cell(*column_definition);
 }
 
-future<> execute_broadcast_table_query(
+future<query_result> execute_broadcast_table_query(
     storage_proxy& proxy,
     const query& query,
     utils::UUID cmd_id) {
     // std::bind_front is used to avoid losing the captures in coroutines.
     return std::visit(make_visitor(
-        std::bind_front([] (storage_proxy& proxy, const service::broadcast_tables::select_query& q) -> future<> {
+        std::bind_front([] (storage_proxy& proxy, const service::broadcast_tables::select_query& q) -> future<query_result> {
             const auto schema = db::system_keyspace::broadcast_kv_store();
             const auto* column_definition = schema->get_column_definition("value");
 
@@ -69,7 +72,7 @@ future<> execute_broadcast_table_query(
             auto [rs, _] = co_await proxy.query_mutations_locally(schema, read_cmd, range, db::no_timeout);
 
             if (rs->partitions().empty()) {
-                co_return;
+                co_return query_result_select{};
             }
 
             assert(rs->partitions().size() == 1); // In this version only one value per partition key is allowed.
@@ -78,9 +81,11 @@ future<> execute_broadcast_table_query(
             auto mutation = p.mut().unfreeze(schema);
             const auto cell = get_atomic_cell(schema, mutation, "value");
 
-            // TODO return result
+            co_return query_result_select{
+                    .value = cell.value().linearize()
+                };
         }, std::ref(proxy)),
-        std::bind_front([] (storage_proxy& proxy, utils::UUID cmd_id, const broadcast_tables::update_query& q) -> future<> {
+        std::bind_front([] (storage_proxy& proxy, utils::UUID cmd_id, const broadcast_tables::update_query& q) -> future<query_result> {
             const auto schema = db::system_keyspace::broadcast_kv_store();
 
             // Read mutations
@@ -114,6 +119,15 @@ future<> execute_broadcast_table_query(
                 auto value = utf8_type->deserialize(q.new_value);
                 new_mutation.set_clustered_cell(clustering_key::make_empty(), "value", std::move(value), ts);
                 co_await proxy.mutate_locally(new_mutation, {}, {});
+            }
+
+            if (is_conditional) {
+                co_return query_result_conditional_update{
+                        .is_applied = is_applied,
+                        .previous_value = previous_value
+                    };
+            } else {
+                co_return query_result_none{};
             }
         }, std::ref(proxy), cmd_id)),
         query.q

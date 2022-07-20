@@ -15,6 +15,7 @@
 #include "bytes.hh"
 #include "exceptions/exceptions.hh"
 #include "service/storage_proxy.hh"
+#include "service/broadcast_tables/experimental/query_result.hh"
 
 
 namespace service {
@@ -49,9 +50,9 @@ struct query {
 // For now it returns true if and only if target table is system.broadcast_kv_store.
 bool is_broadcast_table_statement(const sstring& keyspace, const sstring& column_family);
 
-future<> execute(service::raft_group0_client& group0_client, const query& query);
+future<query_result> execute(service::raft_group0_client& group0_client, const query& query);
 
-future<> execute_broadcast_table_query(service::storage_proxy& proxy, const query& query, utils::UUID cmd_id);
+future<query_result> execute_broadcast_table_query(service::storage_proxy& proxy, const query& query, utils::UUID cmd_id);
 
 class unsupported_operation_error : public exceptions::invalid_request_exception {
 public:
