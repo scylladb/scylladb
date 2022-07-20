@@ -330,6 +330,40 @@ struct storage_proxy::remote {
         return ser::storage_proxy_rpc_verbs::send_paxos_prune(&_ms, addr, timeout, schema_id, key, ballot, tracing::make_trace_info(tr_state));
     }
 
+    future<> send_truncate_blocking(sstring keyspace, sstring cfname) {
+        slogger.debug("Starting a blocking truncate operation on keyspace {}, CF {}", keyspace, cfname);
+
+        if (!_gossiper.get_unreachable_token_owners().empty()) {
+            slogger.info("Cannot perform truncate, some hosts are down");
+            // Since the truncate operation is so aggressive and is typically only
+            // invoked by an admin, for simplicity we require that all nodes are up
+            // to perform the operation.
+            auto live_members = _gossiper.get_live_members().size();
+
+            return make_exception_future<>(exceptions::unavailable_exception(db::consistency_level::ALL,
+                    live_members + _gossiper.get_unreachable_members().size(),
+                    live_members));
+        }
+
+        auto all_endpoints = _gossiper.get_live_token_owners();
+        auto timeout = clock_type::now() + std::chrono::milliseconds(_sp._db.local().get_config().truncate_request_timeout_in_ms());
+
+        slogger.trace("Enqueuing truncate messages to hosts {}", all_endpoints);
+
+        return parallel_for_each(all_endpoints, [this, keyspace, cfname, timeout] (auto ep) {
+            return send_truncate(netw::messaging_service::msg_addr{ep, 0}, timeout, keyspace, cfname);
+        }).handle_exception([cfname](auto ep) {
+           try {
+               std::rethrow_exception(ep);
+           } catch (rpc::timeout_error& e) {
+               slogger.trace("Truncation of {} timed out: {}", cfname, e.what());
+               throw;
+           } catch (...) {
+               throw;
+           }
+        });
+    }
+
     future<> handle_counter_mutation(
             const rpc::client_info& cinfo, rpc::opt_time_point t,
             std::vector<frozen_mutation> fms, db::consistency_level cl, std::optional<tracing::trace_info> trace_info) {
@@ -5671,37 +5705,7 @@ db::hints::manager& storage_proxy::hints_manager_for(db::write_type type) {
 }
 
 future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname) {
-    slogger.debug("Starting a blocking truncate operation on keyspace {}, CF {}", keyspace, cfname);
-
-    if (!_gossiper.get_unreachable_token_owners().empty()) {
-        slogger.info("Cannot perform truncate, some hosts are down");
-        // Since the truncate operation is so aggressive and is typically only
-        // invoked by an admin, for simplicity we require that all nodes are up
-        // to perform the operation.
-        auto live_members = _gossiper.get_live_members().size();
-
-        return make_exception_future<>(exceptions::unavailable_exception(db::consistency_level::ALL,
-                live_members + _gossiper.get_unreachable_members().size(),
-                live_members));
-    }
-
-    auto all_endpoints = _gossiper.get_live_token_owners();
-    auto timeout = clock_type::now() + std::chrono::milliseconds(_db.local().get_config().truncate_request_timeout_in_ms());
-
-    slogger.trace("Enqueuing truncate messages to hosts {}", all_endpoints);
-
-    return parallel_for_each(all_endpoints, [this, keyspace, cfname, timeout] (auto ep) {
-        return remote().send_truncate(netw::messaging_service::msg_addr{ep, 0}, timeout, keyspace, cfname);
-    }).handle_exception([cfname](auto ep) {
-       try {
-           std::rethrow_exception(ep);
-       } catch (rpc::timeout_error& e) {
-           slogger.trace("Truncation of {} timed out: {}", cfname, e.what());
-           throw;
-       } catch (...) {
-           throw;
-       }
-    });
+    return remote().send_truncate_blocking(std::move(keyspace), std::move(cfname));
 }
 
 void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
