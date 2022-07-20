@@ -255,7 +255,6 @@ private:
     scheduling_group_key _stats_key;
     storage_proxy_stats::global_stats _global_stats;
     gms::feature_service& _features;
-    netw::messaging_service& _messaging;
 
     struct remote;
     std::unique_ptr<remote> _remote;
