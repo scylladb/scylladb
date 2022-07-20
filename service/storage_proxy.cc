@@ -2534,7 +2534,6 @@ storage_proxy::~storage_proxy() {}
 storage_proxy::storage_proxy(distributed<replica::database>& db, gms::gossiper& gossiper, storage_proxy::config cfg, db::view::node_update_backlog& max_view_update_backlog,
         scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, locator::effective_replication_map_factory& erm_factory, netw::messaging_service& ms)
     : _db(db)
-    , _gossiper(gossiper)
     , _shared_token_metadata(stm)
     , _erm_factory(erm_factory)
     , _read_smp_service_group(cfg.read_smp_service_group)
@@ -2548,7 +2547,7 @@ storage_proxy::storage_proxy(distributed<replica::database>& db, gms::gossiper& 
     , _hints_for_views_manager(_db.local().get_config().view_hints_directory(), {}, _db.local().get_config().max_hint_window_in_ms(), _hints_resource_manager, _db)
     , _stats_key(stats_key)
     , _features(feat)
-    , _remote(std::make_unique<struct remote>(*this, ms, _gossiper))
+    , _remote(std::make_unique<struct remote>(*this, ms, gossiper))
     , _background_write_throttle_threahsold(cfg.available_memory / 10)
     , _mutate_stage{"storage_proxy_mutate", &storage_proxy::do_mutate}
     , _max_view_update_backlog(max_view_update_backlog)
@@ -3223,7 +3222,8 @@ storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::con
                             auto local_dc = topology.get_datacenter();
                             auto& local_endpoints = topology.get_datacenter_racks().at(local_dc);
                             auto local_rack = topology.get_rack();
-                            auto chosen_endpoints = _p.gossiper().endpoint_filter(local_rack, local_endpoints);
+                            auto* gossiper = &_p._remote->_gossiper;
+                            auto chosen_endpoints = gossiper->endpoint_filter(local_rack, local_endpoints);
 
                             if (chosen_endpoints.empty()) {
                                 if (_cl == db::consistency_level::ANY) {
@@ -5130,12 +5130,12 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                 break;
             } else if (pcf) {
                 // check that merged set hit rate is not to low
-                auto find_min = [&g = _gossiper, pcf] (const inet_address_vector_replica_set& range) {
+                auto find_min = [g = &_remote->_gossiper, pcf] (const inet_address_vector_replica_set& range) {
                     struct {
-                        gms::gossiper& g;
+                        gms::gossiper* g;
                         replica::column_family* cf = nullptr;
                         float operator()(const gms::inet_address& ep) const {
-                            return float(cf->get_hit_rate(&g, ep).rate);
+                            return float(cf->get_hit_rate(g, ep).rate);
                         }
                     } ep_to_hr{g, pcf};
                     return *boost::range::min_element(range | boost::adaptors::transformed(ep_to_hr));
@@ -5675,7 +5675,8 @@ inet_address_vector_replica_set storage_proxy::filter_for_query(
         db::consistency_level cl, replica::keyspace& ks, inet_address_vector_replica_set& live_endpoints,
         const inet_address_vector_replica_set& preferred_endpoints, db::read_repair_decision repair_decision,
         gms::inet_address* extra_replica, replica::column_family* cf) const {
-    return db::filter_for_query(cl, ks, live_endpoints, preferred_endpoints, repair_decision, &_gossiper, extra_replica, cf);
+    auto* gossiper = &_remote->_gossiper;
+    return db::filter_for_query(cl, ks, live_endpoints, preferred_endpoints, repair_decision, gossiper, extra_replica, cf);
 }
 
 inet_address_vector_replica_set storage_proxy::filter_for_query(
@@ -5685,7 +5686,8 @@ inet_address_vector_replica_set storage_proxy::filter_for_query(
 }
 
 bool storage_proxy::is_alive(const gms::inet_address& ep) const {
-    return _gossiper.is_alive(ep);
+    auto* gossiper = &_remote->_gossiper;
+    return gossiper->is_alive(ep);
 }
 
 inet_address_vector_replica_set storage_proxy::intersection(const inet_address_vector_replica_set& l1, const inet_address_vector_replica_set& l2) {
@@ -5786,7 +5788,8 @@ future<> storage_proxy::start_hints_manager() {
     return f.then([this] {
         return _hints_resource_manager.register_manager(_hints_for_views_manager);
     }).then([this] {
-        return _hints_resource_manager.start(shared_from_this(), _gossiper.shared_from_this());
+        auto* gossiper = &_remote->_gossiper;
+        return _hints_resource_manager.start(shared_from_this(), gossiper->shared_from_this());
     });
 }
 

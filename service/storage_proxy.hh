@@ -229,7 +229,6 @@ public:
 
 private:
     distributed<replica::database>& _db;
-    gms::gossiper& _gossiper;
     const locator::shared_token_metadata& _shared_token_metadata;
     locator::effective_replication_map_factory& _erm_factory;
     // _mm is initialized late in init_messaging_service() due to circular dependency
