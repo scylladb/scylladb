@@ -281,7 +281,7 @@ static boost::posix_time::time_duration get_utc_offset(const std::string& s) {
     throw marshal_exception("Cannot get UTC offset for a timestamp");
 }
 
-static int64_t timestamp_from_string(sstring_view s) {
+int64_t timestamp_from_string(sstring_view s) {
     try {
         std::string str;
         str.resize(s.size());

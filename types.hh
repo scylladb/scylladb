@@ -203,6 +203,8 @@ bool is_prefixed_by(TypesIterator types, InputIt1 first1, InputIt1 last1,
     return first2 == last2;
 }
 
+int64_t timestamp_from_string(sstring_view s);
+
 struct runtime_exception : public std::exception {
     sstring _why;
 public:
