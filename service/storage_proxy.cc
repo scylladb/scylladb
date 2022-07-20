@@ -287,14 +287,6 @@ public:
         return ser::storage_proxy_rpc_verbs::send_truncate(&_ms, std::move(addr), timeout, std::move(ks_name), std::move(cf_name));
     }
 
-    future<schema_ptr> get_schema_for_read(table_schema_version v, netw::msg_addr from) {
-        return _mm->get_schema_for_read(std::move(v), std::move(from), _ms);
-    }
-
-    future<schema_ptr> get_schema_for_write(table_schema_version v, netw::msg_addr from) {
-        return _mm->get_schema_for_write(std::move(v), std::move(from), _ms);
-    }
-
     future<service::paxos::prepare_response> send_paxos_prepare(
             netw::msg_addr addr, storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state,
             const query::read_command& cmd, const partition_key& key, utils::UUID ballot, bool only_digest, query::digest_algorithm da) {
@@ -359,6 +351,14 @@ public:
     }
 
 private:
+    future<schema_ptr> get_schema_for_read(table_schema_version v, netw::msg_addr from) {
+        return _mm->get_schema_for_read(std::move(v), std::move(from), _ms);
+    }
+
+    future<schema_ptr> get_schema_for_write(table_schema_version v, netw::msg_addr from) {
+        return _mm->get_schema_for_write(std::move(v), std::move(from), _ms);
+    }
+
     future<> handle_counter_mutation(
             const rpc::client_info& cinfo, rpc::opt_time_point t,
             std::vector<frozen_mutation> fms, db::consistency_level cl, std::optional<tracing::trace_info> trace_info) {
