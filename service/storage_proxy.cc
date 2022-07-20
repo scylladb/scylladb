@@ -180,7 +180,8 @@ public:
         ser::storage_proxy_rpc_verbs::register_paxos_prune(&_ms, std::bind_front(&remote::handle_paxos_prune, this));
     }
 
-    future<> uninit_messaging_service() {
+    // Must call before destroying the `remote` object.
+    future<> stop() {
         co_await ser::storage_proxy_rpc_verbs::unregister(&_ms);
         _mm = nullptr;
     }
@@ -192,6 +193,13 @@ public:
     bool is_alive(const gms::inet_address& ep) const {
         return _gossiper.is_alive(ep);
     }
+
+    // Note: none of the `send_*` functions use `remote` after yielding - by the first yield,
+    // control is delegated to another service (messaging_service). Thus unfinished `send`s
+    // do not make it unsafe to destroy the `remote` object.
+    //
+    // Running handlers prevent the object from being destroyed,
+    // assuming `stop()` is called before destruction.
 
     future<> send_mutation(
             netw::msg_addr addr, storage_proxy::clock_type::time_point timeout, std::optional<tracing::trace_info> trace_info,
@@ -2574,7 +2582,24 @@ storage_proxy::storage_proxy(distributed<replica::database>& db, gms::gossiper& 
 }
 
 struct storage_proxy::remote& storage_proxy::remote() const {
-    return *_remote;
+    if (_remote) {
+        return *_remote;
+    }
+
+    // This error should not appear because the user should not be able to send queries
+    // before `remote` is initialized, and user queries should be drained before `remote`
+    // is destroyed (TODO: are they?); Scylla code should take care not to perform cluster
+    // queries outside the lifetime of `remote` (it can still perform queries to local tables
+    // during the entire lifetime of `storage_proxy`, which is larger than `remote`).
+    //
+    // If there's a bug though, fail the query instead of crashing Scylla.
+    //
+    // In the future we may want to introduce a 'recovery mode' in which Scylla starts
+    // without contacting the cluster and allows the user to perform local queries (say,
+    // to system tables), then this code path would be expected to happen if the user
+    // tries a remote query in this recovery mode.
+    slogger.error("attempted to access `remote` when it's uninitialized");
+    throw std::runtime_error{"Remote queries not available"};
 }
 
 const data_dictionary::database
@@ -5799,7 +5824,7 @@ storage_proxy::calculate_target_replicas(
 }
 
 bool storage_proxy::is_alive(const gms::inet_address& ep) const {
-    return _remote->is_alive(ep);
+    return _remote ? _remote->is_alive(ep) : (ep == utils::fb_utilities::get_broadcast_address());
 }
 
 inet_address_vector_replica_set storage_proxy::intersection(const inet_address_vector_replica_set& l1, const inet_address_vector_replica_set& l2) {
@@ -5828,7 +5853,7 @@ void storage_proxy::init_messaging_service(migration_manager* mm) {
 }
 
 future<> storage_proxy::uninit_messaging_service() {
-    return _remote->uninit_messaging_service();
+    return _remote->stop();
 }
 
 future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>

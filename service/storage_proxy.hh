@@ -436,8 +436,6 @@ public:
             scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, locator::effective_replication_map_factory& erm_factory, netw::messaging_service& ms);
     ~storage_proxy();
 
-    remote& remote() const;
-
     const distributed<replica::database>& get_db() const {
         return _db;
     }
@@ -476,6 +474,9 @@ public:
     future<> uninit_messaging_service();
 
 private:
+    // Throws an error if remote is not initialized.
+    remote& remote() const;
+
     // Applies mutation on this node.
     // Resolves with timed_out_error when timeout is reached.
     future<> mutate_locally(const mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout, smp_service_group smp_grp, db::per_partition_rate_limit::info rate_limit_info);
