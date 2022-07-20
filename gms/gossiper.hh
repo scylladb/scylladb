@@ -431,8 +431,6 @@ public:
 
     future<> apply_state_locally(std::map<inet_address, endpoint_state> map);
 
-    // filter `endpoints` by `local_rack`
-    inet_address_vector_replica_set endpoint_filter(const sstring& local_rack, const std::unordered_map<sstring, std::unordered_set<gms::inet_address>>& endpoints) const;
 private:
     future<> do_apply_state_locally(gms::inet_address node, const endpoint_state& remote_state, bool listener_notification);
     future<> apply_state_locally_without_listener_notification(std::unordered_map<inet_address, endpoint_state> map);
