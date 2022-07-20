@@ -2521,8 +2521,7 @@ storage_proxy::storage_proxy(distributed<replica::database>& db, gms::gossiper& 
     , _hints_for_views_manager(_db.local().get_config().view_hints_directory(), {}, _db.local().get_config().max_hint_window_in_ms(), _hints_resource_manager, _db)
     , _stats_key(stats_key)
     , _features(feat)
-    , _messaging(ms)
-    , _remote(std::make_unique<struct remote>(*this, _messaging, _gossiper))
+    , _remote(std::make_unique<struct remote>(*this, ms, _gossiper))
     , _background_write_throttle_threahsold(cfg.available_memory / 10)
     , _mutate_stage{"storage_proxy_mutate", &storage_proxy::do_mutate}
     , _max_view_update_backlog(max_view_update_backlog)
