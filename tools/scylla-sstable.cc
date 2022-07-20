@@ -327,7 +327,7 @@ class dumping_consumer : public sstable_consumer {
         bool _clustering_array_created;
     private:
         sstring to_string(gc_clock::time_point tp) {
-            return fmt::format("{:%F %T}", fmt::gmtime(gc_clock::to_time_t(tp)));
+            return fmt::format("{:%F %T}z", fmt::gmtime(gc_clock::to_time_t(tp)));
         }
         void write(gc_clock::duration ttl, gc_clock::time_point expiry) {
             _writer.Key("ttl");
