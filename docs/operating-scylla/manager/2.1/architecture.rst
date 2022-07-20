@@ -18,7 +18,7 @@ Scylla Manager consists of three components:
 * Agent - a small executable, installed on each Scylla node. The Server communicates with the Agent over REST HTTPS. The Agent communicates with the local Scylla node over the REST HTTP.
 
 The Server persists its data to a Scylla cluster that can run locally or run on an external cluster
-(see `Use a remote database for Scylla Manager <../use-a-remote-db>`_ for details).
+(see :doc:`Use a remote database for Scylla Manager <use-a-remote-db>` for details).
 
 Optionally (but recommended), you can add Scylla Monitoring Stack to enable reporting of Scylla Manager metrics and alerts. 
 
@@ -28,7 +28,7 @@ The diagram below presents a logical view of Scylla Manager with a remote backen
 Each node has two connections with the Scylla Manager Server:
 
 * REST API connection - used for Scylla Manager and Scylla Manager Agent activities
-* CQL connection - used for the Scylla `Health Check <../health-check>`_
+* CQL connection - used for the Scylla :doc:`Health Check <health-check>`
 
 Scylla Manager uses the following ports:
 
@@ -52,6 +52,6 @@ Port    Description                                   Protocol
 Additional Resources
 ====================
 
-* `Install Scylla Manager <../install>`_
-* `Install Scylla Manager Agent <../install-agent>`_
-* `sctool Reference <../sctool>`_
+* :doc:`Install Scylla Manager <install>`
+* :doc:`Install Scylla Manager Agent <install-agent>`
+* :doc:`sctool Reference <sctool>`

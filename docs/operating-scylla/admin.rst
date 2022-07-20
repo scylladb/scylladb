@@ -104,7 +104,7 @@ Compression between the client and the node is set by the driver that the applic
 
 For example:
 
-* `Scylla Python Driver <https://scylladb.github.io/python-driver/master/api/cassandra/cluster.html#cassandra.cluster.Cluster.compression>`_
+* `Scylla Python Driver <https://python-driver.docs.scylladb.com/master/api/cassandra/cluster.html#cassandra.cluster.Cluster.compression>`_
 * `Scylla Java Driver <https://github.com/scylladb/java-driver/tree/3.7.1-scylla/manual/compression>`_
 * `Go Driver <https://godoc.org/github.com/gocql/gocql#Compressor>`_
 
@@ -137,7 +137,7 @@ Networking
 
 .. image:: /operating-scylla/security/Scylla-Ports2.png
 
-The Scylla ports are detailed in the table below. For Scylla Manager ports, see the `Scylla Manager Documentation <https://scylladb.github.io/scylla-manager>`_.
+The Scylla ports are detailed in the table below. For Scylla Manager ports, see the `Scylla Manager Documentation <https://manager.docs.scylladb.com/>`_.
 
 .. include:: /operating-scylla/_common/networking-ports.rst
 

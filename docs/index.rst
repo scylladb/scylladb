@@ -89,7 +89,7 @@
 
 .. topic-box::
   :title: Scylla Alternator
-  :link: https://scylla.docs.scylladb.com/stable/alternator/alternator.html
+  :link: https://docs.scylladb.com/stable/alternator/alternator.html
   :image: /_static/img/mascots/scylla-alternator.svg
   :class: topic-box--product,large-3,small-6
 
@@ -113,7 +113,7 @@
 
 .. topic-box::
   :title: Scylla Drivers
-  :link: https://docs.scylladb.com/using-scylla/drivers/
+  :link: https://docs.scylladb.com/stable/using-scylla/drivers/
   :image: /_static/img/mascots/scylla-drivers.svg
   :class: topic-box--product,large-3,small-6
 

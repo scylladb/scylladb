@@ -51,5 +51,5 @@ access <http://docs.datastax.com/en//cassandra/2.0/cassandra/security/secureFire
 `How to use, monitor, and disable transparent hugepages in Red Hat
 Enterprise Linux 6 <https://access.redhat.com/solutions/46111>`__
 
-`Knowledge Base 
-</kb/>`_
+:doc:`Knowledge Base </kb/index>`
+

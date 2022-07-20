@@ -18,7 +18,7 @@ Where:
 * The ``--type`` or ``-t`` flag is used to specify the types making up the partition key of the table to which the index file belongs.
   This is needed so the tool can parse the SSTable keys found in the index. You will need to pass ``--type|-t`` for each type in the partition key.
   For the type names, the Cassandra type class notation has to be used. You can use the short form, i.e. without the org.apache.cassandra.db.marshal. prefix.
-  For a complete mapping of CQL types to their respective Cassandra type class notation, see `CQL3 Type Mapping <https://scylla.docs.scylladb.com/master/design-notes/cql3-type-mapping.html#cql3-type-mapping>`_.
+  For a complete mapping of CQL types to their respective Cassandra type class notation, see `CQL3 Type Mapping <https://github.com/scylladb/scylla/blob/master/docs/dev/cql3-type-mapping.md>`_.
 
 * The SSTable index file path can be passed both as a positional argument ``[path/to/scylla/datadir]``  or with the  ``--sstable`` flag.
 

@@ -5,7 +5,7 @@ Scylla Monitoring Stack
    :hidden:
    :maxdepth: 2 
 
-   Latest Version <https://scylladb.github.io/scylla-monitoring>
+   Latest Version <https://monitoring.docs.scylladb.com/>
    Upgrade Scylla Monitoring Stack </upgrade/upgrade-monitor/index/>
    Monitoring Support Matrix <https://monitoring.docs.scylladb.com/stable/reference/matrix.html>
 
@@ -13,7 +13,7 @@ Scylla Monitoring Stack
 
 .. note::
 
-   For the **latest** versions click `here <https://scylladb.github.io/scylla-monitoring>`_.
+   For the **latest** versions click `here <https://monitoring.docs.scylladb.com/>`_.
 
 Additional Information
 

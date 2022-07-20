@@ -7,7 +7,7 @@ Synopsis
 --------
 
 This quickstart will show you how to setup the Scylla CDC Source Connector to replicate changes made in 
-a Scylla table using `Scylla CDC <../../cdc/cdc-intro>`_.
+a Scylla table using :doc:`Scylla CDC <../cdc/cdc-intro>`.
 
 Scylla setup
 ------------
@@ -19,7 +19,7 @@ Scylla installation
 
 For the purpose of this quickstart, we will configure a Scylla instance using Docker. You can skip this 
 section if you have already installed Scylla. To learn more about installing Scylla in production
-environments, please refer to the `Install Scylla page <../../../getting-started/install-scylla/>`_.
+environments, please refer to the :doc:`Install Scylla page </getting-started/install-scylla/index>`.
 
 #. Using `Docker <https://hub.docker.com/r/scylladb/scylla/>`_, follow the instructions to launch Scylla.
 #. Start the Docker container, replacing the ``--name`` and ``--host name`` parameters with your own information. For example:
@@ -62,7 +62,7 @@ If you already have a table you wish to use, but it does not have CDC enabled, y
 
    ALTER TABLE keyspace.table_name with cdc = {'enabled': true};
 
-To learn more about Scylla CDC, visit `Change Data Capture (CDC) page <../../cdc/>`_.
+To learn more about Scylla CDC, visit :doc:`Change Data Capture (CDC) page <../cdc/index>`.
 
 Kafka setup
 -----------

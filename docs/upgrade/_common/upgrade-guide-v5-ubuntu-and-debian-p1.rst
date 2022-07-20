@@ -103,5 +103,5 @@ Answer ‘y’ to the first two questions.
 
 .. note::
 
-   Alternator users upgrading from Scylla 4.0 to 4.1 need to set `default isolation level </upgrade/upgrade-opensource/upgrade-guide-from-4.0-to-4.1/alternator>`_.
+   Alternator users upgrading from Scylla 4.0 to 4.1 need to set :doc:`default isolation level </upgrade/upgrade-opensource/upgrade-guide-from-4.0-to-4.1/alternator>`.
 

@@ -75,7 +75,7 @@ Validate the Clients
 
 In order for cqlsh to work in client to node encryption SSL mode, you need to generate cqlshrc file.
 
-For Complete instructions, see `Generate a cqlshrc File <../gen-cqlsh-file>`_
+For Complete instructions, see :doc:`Generate a cqlshrc File <gen-cqlsh-file>`
 
 **Procedure**
 

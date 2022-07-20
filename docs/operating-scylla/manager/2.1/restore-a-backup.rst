@@ -40,7 +40,7 @@ If you need help, you can check official documentation on :doc:`operational proc
 Install Scylla Manager
 ----------------------
 
-You need a working Scylla Manager setup to list backups. If you don't have it installed, please follow official instructions on `how to install Scylla Manager <../install/>`_ first.
+You need a working Scylla Manager setup to list backups. If you don't have it installed, please follow official instructions on :doc:`how to install Scylla Manager <install>` first.
 
 Nodes must have access to the locations of the backups as per instructions in the official documentation for :ref:`installing Scylla Manager Agent <manager-2.1-prepare-nodes-for-backup>`.
 
@@ -111,7 +111,7 @@ Restore the schema
 ------------------
 
 Scylla Manager 2.1 can store schema with your backup.
-To extract schema files for each keyspace from the backup, please refer to the official documentation for `extracting schema from the backup <../../2.1/extract-schema-from-backup>`_. For convenience, here is the continuation of our example with the list of steps for restoring schema:
+To extract schema files for each keyspace from the backup, please refer to the official documentation for :doc:`extracting schema from the backup <extract-schema-from-backup>`. For convenience, here is the continuation of our example with the list of steps for restoring schema:
 
 #. Download schema from the backup store to the current dir. It's in the first line of the ``backup_files.out`` output:
 

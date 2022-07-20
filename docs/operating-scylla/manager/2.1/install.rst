@@ -55,7 +55,7 @@ It can be run in non-interactive mode if you'd like to script it.
 There are three decisions you need to make:
 
 * Do you want to enable the service to start automatically? If not, you will have to start the service manually each time you want to use it.
-* Do you want to set up and enable a local Scylla backend? If not, you will need to set up a `remote DB <../use-a-remote-db>`_
+* Do you want to set up and enable a local Scylla backend? If not, you will need to set up a :doc:`remote DB <use-a-remote-db>`
 * Do you want Scylla Manager to check periodically if updates are available? If not, you will need to check yourself.
 
 .. code-block:: none
@@ -129,4 +129,4 @@ Scylla Manager integrates with ``systemd`` and can be started and stopped using 
 Install Scylla Manager Agent
 ============================
 
-Continue with `Setup Scylla Manager Agent <../install-agent>`_
+Continue with :doc:`Setup Scylla Manager Agent <install-agent>`

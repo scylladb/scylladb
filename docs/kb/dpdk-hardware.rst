@@ -33,5 +33,4 @@ Reference
 ---------
 `DPDK: Supported NICs <http://dpdk.org/doc/nics>`_
 
-`Knowledge Base 
-</kb/>`_
+:doc:`Knowledge Base </kb/index>`

@@ -178,4 +178,4 @@ Adding the cluster to Scylla Manager automatically creates a backup task. Valida
 Register a cluster
 ------------------
 
-Continue with `Add a Cluster <../add-a-cluster>`_.
+Continue with :doc:`Add a Cluster <add-a-cluster>`.
