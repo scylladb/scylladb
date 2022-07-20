@@ -178,7 +178,8 @@ public:
         ser::storage_proxy_rpc_verbs::register_paxos_prune(&_ms, std::bind_front(&remote::handle_paxos_prune, this));
     }
 
-    future<> uninit_messaging_service() {
+    // Must call before destroying the `remote` object.
+    future<> stop() {
         co_await ser::storage_proxy_rpc_verbs::unregister(&_ms);
         _mm = nullptr;
     }
@@ -186,6 +187,13 @@ public:
     const gms::gossiper& gossiper() const {
         return _gossiper;
     }
+
+    // Note: none of the `send_*` functions use `remote` after yielding - by the first yield,
+    // control is delegated to another service (messaging_service). Thus unfinished `send`s
+    // do not make it unsafe to destroy the `remote` object.
+    //
+    // Running handlers prevent the object from being destroyed,
+    // assuming `stop()` is called before destruction.
 
     future<> send_mutation(
             netw::msg_addr addr, storage_proxy::clock_type::time_point timeout, std::optional<tracing::trace_info> trace_info,
@@ -2570,7 +2578,28 @@ storage_proxy::storage_proxy(distributed<replica::database>& db, gms::gossiper& 
 }
 
 struct storage_proxy::remote& storage_proxy::remote() {
-    return *_remote;
+    if (_remote) {
+        return *_remote;
+    }
+
+    // This error should not appear because the user should not be able to send queries
+    // before `remote` is initialized, and user queries should be drained before `remote`
+    // is destroyed (TODO: are they?); Scylla code should take care not to perform cluster
+    // queries outside the lifetime of `remote` (it can still perform queries to local tables
+    // during the entire lifetime of `storage_proxy`, which is larger than `remote`).
+    //
+    // If there's a bug though, fail the query instead of crashing Scylla.
+    //
+    // In the future we may want to introduce a 'recovery mode' in which Scylla starts
+    // without contacting the cluster and allows the user to perform local queries (say,
+    // to system tables), then this code path would be expected to happen if the user
+    // tries a remote query in this recovery mode.
+    slogger.error("attempted to access `remote` when it's uninitialized");
+    throw std::runtime_error{"Remote queries not available"};
+}
+
+const gms::gossiper* storage_proxy::maybe_get_gossiper() const {
+    return _remote ? &_remote->gossiper() : nullptr;
 }
 
 const data_dictionary::database
@@ -3190,7 +3219,7 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
             .then(utils::result_into_future<result<>>);
 }
 
-static inet_address_vector_replica_set endpoint_filter(const gms::gossiper& g, const sstring& local_rack, const std::unordered_map<sstring, std::unordered_set<gms::inet_address>>& endpoints) {
+static inet_address_vector_replica_set endpoint_filter(const gms::gossiper* g, const sstring& local_rack, const std::unordered_map<sstring, std::unordered_set<gms::inet_address>>& endpoints) {
     // special case for single-node data centers
     if (endpoints.size() == 1 && endpoints.begin()->second.size() == 1) {
         return boost::copy_range<inet_address_vector_replica_set>(endpoints.begin()->second);
@@ -3199,9 +3228,9 @@ static inet_address_vector_replica_set endpoint_filter(const gms::gossiper& g, c
     // strip out dead endpoints and localhost
     std::unordered_multimap<sstring, gms::inet_address> validated;
 
-    auto is_valid = [&g] (gms::inet_address input) {
+    auto is_valid = [g] (gms::inet_address input) {
         return input != utils::fb_utilities::get_broadcast_address()
-            && g.is_alive(input);
+            && g && g->is_alive(input);
     };
 
     for (auto& e : endpoints) {
@@ -3295,8 +3324,7 @@ storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::con
                             auto local_dc = topology.get_datacenter();
                             auto& local_endpoints = topology.get_datacenter_racks().at(local_dc);
                             auto local_rack = topology.get_rack();
-                            auto* gossiper = &_p._remote->gossiper();
-                            auto chosen_endpoints = endpoint_filter(*gossiper, local_rack, local_endpoints);
+                            auto chosen_endpoints = endpoint_filter(_p.maybe_get_gossiper(), local_rack, local_endpoints);
 
                             if (chosen_endpoints.empty()) {
                                 if (_cl == db::consistency_level::ANY) {
@@ -5203,7 +5231,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                 break;
             } else if (pcf) {
                 // check that merged set hit rate is not to low
-                auto find_min = [g = &_remote->gossiper(), pcf] (const inet_address_vector_replica_set& range) {
+                auto find_min = [g = maybe_get_gossiper(), pcf] (const inet_address_vector_replica_set& range) {
                     struct {
                         const gms::gossiper* g;
                         replica::column_family* cf = nullptr;
@@ -5748,8 +5776,7 @@ inet_address_vector_replica_set storage_proxy::filter_for_query(
         db::consistency_level cl, replica::keyspace& ks, inet_address_vector_replica_set& live_endpoints,
         const inet_address_vector_replica_set& preferred_endpoints, db::read_repair_decision repair_decision,
         gms::inet_address* extra_replica, replica::column_family* cf) const {
-    auto* gossiper = &_remote->gossiper();
-    return db::filter_for_query(cl, ks, live_endpoints, preferred_endpoints, repair_decision, gossiper, extra_replica, cf);
+    return db::filter_for_query(cl, ks, live_endpoints, preferred_endpoints, repair_decision, maybe_get_gossiper(), extra_replica, cf);
 }
 
 inet_address_vector_replica_set storage_proxy::filter_for_query(
@@ -5759,8 +5786,8 @@ inet_address_vector_replica_set storage_proxy::filter_for_query(
 }
 
 bool storage_proxy::is_alive(const gms::inet_address& ep) const {
-    auto* gossiper = &_remote->gossiper();
-    return gossiper->is_alive(ep);
+    auto* gossiper = maybe_get_gossiper();
+    return gossiper ? gossiper->is_alive(ep) : (ep == utils::fb_utilities::get_broadcast_address());
 }
 
 inet_address_vector_replica_set storage_proxy::intersection(const inet_address_vector_replica_set& l1, const inet_address_vector_replica_set& l2) {
@@ -5789,7 +5816,7 @@ void storage_proxy::init_messaging_service(migration_manager* mm) {
 }
 
 future<> storage_proxy::uninit_messaging_service() {
-    return _remote->uninit_messaging_service();
+    return _remote->stop();
 }
 
 future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>
