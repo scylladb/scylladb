@@ -2680,7 +2680,7 @@ storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::tok
     live_endpoints.reserve(all.size());
     dead_endpoints.reserve(all.size());
     std::partition_copy(all.begin(), all.end(), std::back_inserter(live_endpoints),
-            std::back_inserter(dead_endpoints), std::bind_front(std::mem_fn(&gms::gossiper::is_alive), &_gossiper));
+            std::back_inserter(dead_endpoints), std::bind_front(&storage_proxy::is_alive, this));
 
     db::per_partition_rate_limit::info rate_limit_info;
     if (allow_limit && _db.local().can_apply_per_partition_rate_limit(*s, db::operation_type::write)) {
@@ -3015,7 +3015,7 @@ storage_proxy::get_paxos_participants(const sstring& ks_name, const dht::token &
     live_endpoints.reserve(participants);
 
     boost::copy(boost::range::join(natural_endpoints, pending_endpoints) |
-            boost::adaptors::filtered(std::bind_front(std::mem_fn(&gms::gossiper::is_alive), &_gossiper)), std::back_inserter(live_endpoints));
+            boost::adaptors::filtered(std::bind_front(&storage_proxy::is_alive, this)), std::back_inserter(live_endpoints));
 
     if (live_endpoints.size() < required_participants) {
         throw exceptions::unavailable_exception(cl_for_paxos, required_participants, live_endpoints.size());
@@ -3334,7 +3334,7 @@ future<> storage_proxy::send_to_endpoint(
                 boost::range::join(pending_endpoints, target),
                 std::inserter(targets, targets.begin()),
                 std::back_inserter(dead_endpoints),
-                [this] (gms::inet_address ep) { return _gossiper.is_alive(ep); });
+                std::bind_front(&storage_proxy::is_alive, this));
         auto& ks = _db.local().find_keyspace(m->schema()->ks_name());
         slogger.trace("Creating write handler with live: {}; dead: {}", targets, dead_endpoints);
         db::assure_sufficient_live_nodes(cl, ks, targets, pending_endpoints);
@@ -5617,7 +5617,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
 inet_address_vector_replica_set storage_proxy::get_live_endpoints(replica::keyspace& ks, const dht::token& token) const {
     auto erm = ks.get_effective_replication_map();
     inet_address_vector_replica_set eps = erm->get_natural_endpoints_without_node_being_replaced(token);
-    auto itend = boost::range::remove_if(eps, std::not_fn(std::bind_front(std::mem_fn(&gms::gossiper::is_alive), &_gossiper)));
+    auto itend = boost::range::remove_if(eps, std::not_fn(std::bind_front(&storage_proxy::is_alive, this)));
     eps.erase(itend, eps.end());
     return eps;
 }
@@ -5648,6 +5648,10 @@ inet_address_vector_replica_set storage_proxy::filter_for_query(
         db::consistency_level cl, replica::keyspace& ks, inet_address_vector_replica_set& live_endpoints,
         const inet_address_vector_replica_set& preferred_endpoints, replica::column_family* cf) const {
     return filter_for_query(cl, ks, live_endpoints, preferred_endpoints, db::read_repair_decision::NONE, nullptr, cf);
+}
+
+bool storage_proxy::is_alive(const gms::inet_address& ep) const {
+    return _gossiper.is_alive(ep);
 }
 
 inet_address_vector_replica_set storage_proxy::intersection(const inet_address_vector_replica_set& l1, const inet_address_vector_replica_set& l2) {
