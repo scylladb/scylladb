@@ -872,7 +872,7 @@ void consume_sstables(schema_ptr schema, reader_permit permit, std::vector<sstab
     }
 }
 
-using operation_func = void(*)(schema_ptr, reader_permit, const std::vector<sstables::shared_sstable>&, const bpo::variables_map&);
+using operation_func = void(*)(schema_ptr, reader_permit, const std::vector<sstables::shared_sstable>&, sstables::sstables_manager&, const bpo::variables_map&);
 
 class operation {
     std::string _name;
@@ -894,12 +894,17 @@ public:
     const std::string& description() const { return _description; }
     const std::vector<std::string>& available_options() const { return _available_options; }
 
-    void operator()(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map& vm) const {
-        _func(std::move(schema), std::move(permit), sstables, vm);
+    void operator()(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+            sstables::sstables_manager& sst_man, const bpo::variables_map& vm) const {
+        _func(std::move(schema), std::move(permit), sstables, sst_man, vm);
     }
 };
 
-void validate_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map& vm) {
+void validate_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+        sstables::sstables_manager& sst_man, const bpo::variables_map& vm) {
+    if (sstables.empty()) {
+        throw std::runtime_error("error: no sstables specified on the command line");
+    }
     const auto merge = vm.count("merge");
     sstables::compaction_data info;
     consume_sstables(schema, permit, sstables, merge, true, [&info] (flat_mutation_reader_v2& rd, sstables::sstable* sst) {
@@ -912,7 +917,12 @@ void validate_operation(schema_ptr schema, reader_permit permit, const std::vect
     });
 }
 
-void dump_index_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map&) {
+void dump_index_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+        sstables::sstables_manager& sst_man, const bpo::variables_map&) {
+    if (sstables.empty()) {
+        throw std::runtime_error("error: no sstables specified on the command line");
+    }
+
     json_writer writer;
     writer.StartStream();
     for (auto& sst : sstables) {
@@ -946,7 +956,12 @@ sstring disk_string_to_string(const sstables::disk_string<Integer>& ds) {
     return sstring(ds.value.begin(), ds.value.end());
 }
 
-void dump_compression_info_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map&) {
+void dump_compression_info_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+        sstables::sstables_manager& sst_man, const bpo::variables_map&) {
+    if (sstables.empty()) {
+        throw std::runtime_error("error: no sstables specified on the command line");
+    }
+
     json_writer writer;
     writer.StartStream();
 
@@ -979,7 +994,12 @@ void dump_compression_info_operation(schema_ptr schema, reader_permit permit, co
     writer.EndStream();
 }
 
-void dump_summary_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map&) {
+void dump_summary_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+        sstables::sstables_manager& sst_man, const bpo::variables_map&) {
+    if (sstables.empty()) {
+        throw std::runtime_error("error: no sstables specified on the command line");
+    }
+
     json_writer writer;
     writer.StartStream();
 
@@ -1240,7 +1260,12 @@ void dump_serialization_header(json_writer& writer, sstables::sstable_version_ty
     });
 }
 
-void dump_statistics_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map&) {
+void dump_statistics_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+        sstables::sstables_manager& sst_man, const bpo::variables_map&) {
+    if (sstables.empty()) {
+        throw std::runtime_error("error: no sstables specified on the command line");
+    }
+
     auto to_string = [] (sstables::metadata_type t) {
         switch (t) {
             case sstables::metadata_type::Validation: return "validation";
@@ -1406,7 +1431,12 @@ public:
     }
 };
 
-void dump_scylla_metadata_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map&) {
+void dump_scylla_metadata_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+        sstables::sstables_manager& sst_man, const bpo::variables_map&) {
+    if (sstables.empty()) {
+        throw std::runtime_error("error: no sstables specified on the command line");
+    }
+
     json_writer writer;
     writer.StartStream();
     for (auto& sst : sstables) {
@@ -1425,14 +1455,24 @@ void dump_scylla_metadata_operation(schema_ptr schema, reader_permit permit, con
     writer.EndStream();
 }
 
-void validate_checksums_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map&) {
+void validate_checksums_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+        sstables::sstables_manager& sst_man, const bpo::variables_map&) {
+    if (sstables.empty()) {
+        throw std::runtime_error("error: no sstables specified on the command line");
+    }
+
     for (auto& sst : sstables) {
         const auto valid = sstables::validate_checksums(sst, permit, default_priority_class()).get();
         sst_log.info("validated the checksums of {}: {}", sst->get_filename(), valid ? "valid" : "invalid");
     }
 }
 
-void decompress_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map& vm) {
+void decompress_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+        sstables::sstables_manager& sst_man, const bpo::variables_map& vm) {
+    if (sstables.empty()) {
+        throw std::runtime_error("error: no sstables specified on the command line");
+    }
+
     for (const auto& sst : sstables) {
         if (!sst->get_compression()) {
             sst_log.info("Sstable {} is not compressed, nothing to do", sst->get_filename());
@@ -1463,7 +1503,11 @@ void decompress_operation(schema_ptr schema, reader_permit permit, const std::ve
 }
 
 template <typename SstableConsumer>
-void sstable_consumer_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map& vm) {
+void sstable_consumer_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+        sstables::sstables_manager& sst_man, const bpo::variables_map& vm) {
+    if (sstables.empty()) {
+        throw std::runtime_error("error: no sstables specified on the command line");
+    }
     const auto merge = vm.count("merge");
     const auto no_skips = vm.count("no-skips");
     const auto partitions = get_partitions(schema, vm);
@@ -2037,10 +2081,9 @@ int scylla_sstable_main(int argc, char** argv) {
     const auto description_template =
 R"(scylla-sstable - a multifunctional command-line tool to examine the content of sstables.
 
-Usage: scylla sstable {{operation}} [--option1] [--option2] ... {{sstable_path1}} [{{sstable_path2}}] ...
+Usage: scylla sstable {{operation}} [--option1] [--option2] ... [{{sstable_path1}}] [{{sstable_path2}}] ...
 
-Allows examining the contents of sstables with various built-in tools
-(operations).
+Contains various tools (operations) to examine or produce sstables.
 
 # Operations
 
@@ -2055,12 +2098,12 @@ For more details on an operation, run: scylla sstable {{operation}} --help
 
 # Sstables
 
-The sstables to-be-examined are passed as positional command line
-arguments. Sstables will be processed by the selected operation
-one-by-one. Any number of sstables can be passed but mind the open file
-limits and the memory consumption. Always pass the path to the data
-component of the sstables (*-Data.db) even if you want to examine
-another component.
+Operations that read sstables, take the sstables to-be-examined
+as positional command line arguments. Sstables will be processed by the
+selected operation one-by-one. Any number of sstables can be passed but
+mind the open file limits and the memory consumption. Always pass the
+path to the data component of the sstables (*-Data.db) even if you want
+to examine another component.
 NOTE: currently you have to prefix dir local paths with `./`.
 
 # Schema
@@ -2139,9 +2182,8 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
         ("schema-file", bpo::value<sstring>()->default_value("schema.cql"), "file containing the schema description")
         ("system-schema", bpo::value<sstring>(), "table has to be a system table, name has to be in `keyspace.table` notation")
         ;
-
     app.add_positional_options({
-        {"sstables", bpo::value<std::vector<sstring>>(), "sstable(s) to process, can also be provided as positional arguments", -1},
+        {"sstables", bpo::value<std::vector<sstring>>(), "sstable(s) to process for operations that have sstable inputs, can also be provided as positional arguments", -1},
     });
 
     if (found_op) {
@@ -2186,18 +2228,17 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
             sstables::sstables_manager sst_man(large_data_handler, dbcfg, feature_service, tracker);
             auto close_sst_man = deferred_close(sst_man);
 
-            if (!app_config.count("sstables")) {
-                std::cerr << "error: no sstables specified on the command line\n";
-                return 2;
+            std::vector<sstables::shared_sstable> sstables;
+            if (app_config.count("sstables")) {
+                sstables = load_sstables(schema, sst_man, app_config["sstables"].as<std::vector<sstring>>());
             }
-            const auto sstables = load_sstables(schema, sst_man, app_config["sstables"].as<std::vector<sstring>>());
 
             reader_concurrency_semaphore rcs_sem(reader_concurrency_semaphore::no_limits{}, app_name);
             auto stop_semaphore = deferred_stop(rcs_sem);
 
             const auto permit = rcs_sem.make_tracking_only_permit(schema.get(), app_name, db::no_timeout);
 
-            operation(schema, permit, sstables, app_config);
+            operation(schema, permit, sstables, sst_man, app_config);
 
             return 0;
         });
