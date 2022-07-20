@@ -37,7 +37,7 @@ Scylla Open Source Features
     by removing a tombstone only after the range that covers the tombstone is repaired. This feature is 
     experimental in version 5.0 and needs to be explicitly enabled by configuring the ``tombstone_gc`` option.
 
-  * `Expiration service in Scylla Alternator <https://scylla.docs.scylladb.com/stable/alternator/compatibility.html>`_ - Support 
+  * :doc:`Expiration service in Scylla Alternator </alternator/compatibility>` - Support 
     for DynamoDB's TTL feature for detecting and deleting expired items in the table. This feature is experimental in version 5.0 
 
   See the `Release Notes <https://www.scylladb.com/product/release-notes/>`_ for more information. 
