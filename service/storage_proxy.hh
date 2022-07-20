@@ -469,7 +469,7 @@ public:
         }
         return next;
     }
-    void init_messaging_service(shared_ptr<migration_manager>);
+    void init_messaging_service(migration_manager*);
     future<> uninit_messaging_service();
 
 private:

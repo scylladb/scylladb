@@ -152,7 +152,7 @@ static future<rpc::tuple<Elements..., replica::exception_variant>> encode_replic
 // Without it only local queries are available.
 class storage_proxy::remote {
     storage_proxy& _sp;
-    shared_ptr<migration_manager> _mm;
+    migration_manager* _mm;
     netw::messaging_service& _ms;
     const gms::gossiper& _gossiper;
 
@@ -166,8 +166,8 @@ public:
         , _condrop_registration(_ms.when_connection_drops(_connection_dropped))
     {}
 
-    void init_messaging_service(shared_ptr<migration_manager> mm, storage_proxy* sp) {
-        _mm = std::move(mm);
+    void init_messaging_service(migration_manager* mm, storage_proxy* sp) {
+        _mm = mm;
 
         ser::storage_proxy_rpc_verbs::register_counter_mutation(&_ms, std::bind_front(&remote::handle_counter_mutation, this));
         ser::storage_proxy_rpc_verbs::register_mutation(&_ms, std::bind_front(&remote::receive_mutation_handler, this, sp->_write_smp_service_group));
@@ -5783,8 +5783,8 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname) {
     return remote().send_truncate_blocking(std::move(keyspace), std::move(cfname));
 }
 
-void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
-    _remote->init_messaging_service(std::move(mm), this);
+void storage_proxy::init_messaging_service(migration_manager* mm) {
+    _remote->init_messaging_service(mm, this);
 }
 
 future<> storage_proxy::uninit_messaging_service() {
