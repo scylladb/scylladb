@@ -5102,7 +5102,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                         gms::gossiper& g;
                         replica::column_family* cf = nullptr;
                         float operator()(const gms::inet_address& ep) const {
-                            return float(cf->get_hit_rate(g, ep).rate);
+                            return float(cf->get_hit_rate(&g, ep).rate);
                         }
                     } ep_to_hr{g, pcf};
                     return *boost::range::min_element(range | boost::adaptors::transformed(ep_to_hr));

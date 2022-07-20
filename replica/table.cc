@@ -1853,33 +1853,34 @@ void table::set_hit_rate(gms::inet_address addr, cache_temperature rate) {
     e.last_updated = lowres_clock::now();
 }
 
-table::cache_hit_rate table::get_hit_rate(gms::gossiper& gossiper, gms::inet_address addr) {
-    auto it = _cluster_cache_hit_rates.find(addr);
+table::cache_hit_rate table::get_hit_rate(gms::gossiper* gossiper, gms::inet_address addr) {
     if (utils::fb_utilities::get_broadcast_address() == addr) {
         return cache_hit_rate { _global_cache_hit_rate, lowres_clock::now()};
     }
-    if (it == _cluster_cache_hit_rates.end()) {
-        // no data yet, get it from the gossiper
-        auto* eps = gossiper.get_endpoint_state_for_endpoint_ptr(addr);
-        if (eps) {
-            auto* state = eps->get_application_state_ptr(gms::application_state::CACHE_HITRATES);
-            float f = -1.0f; // missing state means old node
-            if (state) {
-                sstring me = format("{}.{}", _schema->ks_name(), _schema->cf_name());
-                auto i = state->value.find(me);
-                if (i != sstring::npos) {
-                    f = strtof(&state->value[i + me.size() + 1], nullptr);
-                } else {
-                    f = 0.0f; // empty state means that node has rebooted
-                }
-                set_hit_rate(addr, cache_temperature(f));
-                return cache_hit_rate{cache_temperature(f), lowres_clock::now()};
-            }
-        }
-        return cache_hit_rate {cache_temperature(0.0f), lowres_clock::now()};
-    } else {
+
+    auto it = _cluster_cache_hit_rates.find(addr);
+    if (it != _cluster_cache_hit_rates.end()) {
         return it->second;
     }
+
+    // no data yet, get it from the gossiper
+    auto* eps = gossiper ? gossiper->get_endpoint_state_for_endpoint_ptr(addr) : nullptr;
+    if (eps) {
+        auto* state = eps->get_application_state_ptr(gms::application_state::CACHE_HITRATES);
+        float f = -1.0f; // missing state means old node
+        if (state) {
+            sstring me = format("{}.{}", _schema->ks_name(), _schema->cf_name());
+            auto i = state->value.find(me);
+            if (i != sstring::npos) {
+                f = strtof(&state->value[i + me.size() + 1], nullptr);
+            } else {
+                f = 0.0f; // empty state means that node has rebooted
+            }
+            set_hit_rate(addr, cache_temperature(f));
+            return cache_hit_rate{cache_temperature(f), lowres_clock::now()};
+        }
+    }
+    return cache_hit_rate {cache_temperature(0.0f), lowres_clock::now()};
 }
 
 void table::drop_hit_rate(gms::inet_address addr) {

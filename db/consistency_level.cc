@@ -311,7 +311,7 @@ filter_for_query(consistency_level cl,
             //    its miss rate is 0.05, 1/20th of the worst miss rate 1.0,
             //    so the cold node will get 1/20th the work of the hot.
             constexpr float max_hit_rate = 0.95;
-            auto ht = cf->get_hit_rate(g, ep);
+            auto ht = cf->get_hit_rate(&g, ep);
             if (float(ht.rate) < 0) {
                 return float(ht.rate);
             } else if (lowres_clock::now() - ht.last_updated > std::chrono::milliseconds(1000)) {
