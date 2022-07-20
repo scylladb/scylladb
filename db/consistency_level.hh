@@ -59,13 +59,6 @@ filter_for_query(consistency_level cl,
                  gms::inet_address* extra,
                  replica::column_family* cf);
 
-inet_address_vector_replica_set filter_for_query(consistency_level cl,
-        replica::keyspace& ks,
-        inet_address_vector_replica_set& live_endpoints,
-        const inet_address_vector_replica_set& preferred_endpoints,
-        gms::gossiper* g,
-        replica::column_family* cf);
-
 struct dc_node_count {
     size_t live = 0;
     size_t pending = 0;
