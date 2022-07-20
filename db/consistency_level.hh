@@ -55,7 +55,7 @@ filter_for_query(consistency_level cl,
                  inet_address_vector_replica_set live_endpoints,
                  const inet_address_vector_replica_set& preferred_endpoints,
                  read_repair_decision read_repair,
-                 gms::gossiper* g,
+                 const gms::gossiper* g,
                  gms::inet_address* extra,
                  replica::column_family* cf);
 
