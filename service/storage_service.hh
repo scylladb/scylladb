@@ -101,7 +101,7 @@ class node_ops_meta_data {
     std::function<void ()> _signal;
     shared_ptr<node_ops_info> _ops;
     seastar::timer<lowres_clock> _watchdog;
-    std::chrono::seconds _watchdog_interval{30};
+    std::chrono::seconds _watchdog_interval{120};
     bool _aborted = false;
 public:
     explicit node_ops_meta_data(
