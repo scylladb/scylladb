@@ -17,7 +17,7 @@ struct atomic_cell_view;
 struct tombstone;
 
 namespace db::view {
-struct bytes_with_action;
+struct view_key_and_action;
 }
 
 class column_computation;
@@ -96,6 +96,15 @@ public:
     virtual bytes compute_value(const schema& schema, const partition_key& key) const override;
 };
 
+/*
+ * collection_column_computation is used for a secondary index on a collection
+ * column. In this case we don't have a single value to compute, but rather we
+ * want to return multiple values (e.g., all the keys in the collection).
+ * So this class does not implement the base class's compute_value() -
+ * instead it implements a new method compute_collection_values(), which
+ * can return multiple values. This new method is currently called only from
+ * the materialized-view code which uses collection_column_computation.
+ */
 class collection_column_computation final : public column_computation {
     enum class kind {
         keys,
@@ -132,5 +141,5 @@ public:
         return true;
     }
 
-    std::vector<db::view::bytes_with_action> compute_values_with_action(const schema& schema, const partition_key& key, const clustering_row& row, const std::optional<clustering_row>& existing) const;
+    std::vector<db::view::view_key_and_action> compute_values_with_action(const schema& schema, const partition_key& key, const clustering_row& row, const std::optional<clustering_row>& existing) const;
 };

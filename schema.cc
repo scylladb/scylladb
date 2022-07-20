@@ -8,6 +8,7 @@
 
 #include <seastar/core/on_internal_error.hh>
 #include <map>
+#include "db/view/view.hh"
 #include "timestamp.hh"
 #include "utils/UUID_gen.hh"
 #include "cql3/column_identifier.hh"
@@ -1841,7 +1842,7 @@ bytes collection_column_computation::compute_value(const schema&, const partitio
     throw std::runtime_error(fmt::format("{}: not supported", __PRETTY_FUNCTION__));
 }
 
-std::vector<db::view::bytes_with_action> collection_column_computation::compute_values_with_action(const schema& schema, const partition_key& key, const clustering_row& update, const std::optional<clustering_row>& existing) const {
+std::vector<db::view::view_key_and_action> collection_column_computation::compute_values_with_action(const schema& schema, const partition_key& key, const clustering_row& update, const std::optional<clustering_row>& existing) const {
     using collection_kv = std::pair<bytes_view, atomic_cell_view>;
     auto serialize_cell = [_kind = _kind](const collection_kv& kv) -> bytes {
         using kind = collection_column_computation::kind;
@@ -1857,7 +1858,7 @@ std::vector<db::view::bytes_with_action> collection_column_computation::compute_
         }
     };
 
-    std::vector<db::view::bytes_with_action> ret;
+    std::vector<db::view::view_key_and_action> ret;
 
     auto compute_row_marker = [] (auto&& cell) -> row_marker {
         return cell.is_live_and_has_ttl() ? row_marker(cell.timestamp(), cell.ttl(), cell.expiry()) : row_marker(cell.timestamp());
@@ -1877,7 +1878,7 @@ std::vector<db::view::bytes_with_action> collection_column_computation::compute_
         }
         operation_ts -= 1;
         if (existing && existing->second.is_live()) {
-            db::view::bytes_with_action::shadowable_tombstone_tag tag{operation_ts};
+            db::view::view_key_and_action::shadowable_tombstone_tag tag{operation_ts};
             ret.push_back({serialize_cell(*existing), {tag}});
         }
     };

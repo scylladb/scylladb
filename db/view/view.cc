@@ -491,21 +491,23 @@ row_marker view_updates::compute_row_marker(const clustering_row& base_row) cons
 
 
 namespace {
-struct bytes_view_with_action {
-    managed_bytes_view _bytes_view;
-    bytes_with_action::action _action;
-    bytes_view_with_action(managed_bytes_view view, bytes_with_action::action action)
-        : _bytes_view(view)
+// The following struct is identical to view_key_with_action, except the key
+// is stored as a managed_bytes_view instead of bytes.
+struct view_managed_key_view_and_action {
+    managed_bytes_view _key_view;
+    view_key_and_action::action _action;
+    view_managed_key_view_and_action(managed_bytes_view key_view, view_key_and_action::action action)
+        : _key_view(key_view)
         , _action(action)
     {}
-    bytes_view_with_action(managed_bytes_view view)
-        : _bytes_view(view)
+    view_managed_key_view_and_action(managed_bytes_view key_view)
+        : _key_view(key_view)
     {}
-    bytes_view_with_action(bytes_with_action&& bwa, std::deque<bytes>& linearized_values)
-        : bytes_view_with_action(managed_bytes_view(linearized_values.emplace_back(std::move(bwa._view))), bwa._action)
+    view_managed_key_view_and_action(view_key_and_action&& bwa, std::deque<bytes>& linearized_values)
+        : view_managed_key_view_and_action(managed_bytes_view(linearized_values.emplace_back(std::move(bwa._key_bytes))), bwa._action)
     {}
-    static managed_bytes_view get_view(const bytes_view_with_action& bvwa) {
-        return bvwa._bytes_view;
+    static managed_bytes_view get_key_view(const view_managed_key_view_and_action& bvwa) {
+        return bvwa._key_view;
     }
 };
 
@@ -537,7 +539,7 @@ public:
         , _existing(existing)
     {}
 
-    using vector_type = utils::small_vector<bytes_view_with_action, 1>;
+    using vector_type = utils::small_vector<view_managed_key_view_and_action, 1>;
     vector_type operator()(const column_definition& cdef) {
         column_position++;
 
@@ -614,8 +616,8 @@ view_updates::get_view_rows(const partition_key& base_key, const clustering_row&
 
     std::vector<view_updates::view_row_entry> ret;
     auto compute_row = [&]<typename Range>(Range&& pk, Range&& ck) {
-        partition_key pkey = partition_key::from_range(boost::adaptors::transform(pk, bytes_view_with_action::get_view));
-        clustering_key ckey = clustering_key::from_range(boost::adaptors::transform(ck, bytes_view_with_action::get_view));
+        partition_key pkey = partition_key::from_range(boost::adaptors::transform(pk, view_managed_key_view_and_action::get_key_view));
+        clustering_key ckey = clustering_key::from_range(boost::adaptors::transform(ck, view_managed_key_view_and_action::get_key_view));
         auto action = (action_column < pk.size() ? pk[action_column] : ck[action_column - pk.size()])._action;
         mutation_partition& partition = partition_for(std::move(pkey));
         ret.push_back({&partition.clustered_row(*_view, std::move(ckey)), action});
@@ -623,9 +625,9 @@ view_updates::get_view_rows(const partition_key& base_key, const clustering_row&
 
     if (had_multiple_values_in_pk) {
         // cartesian_product expects std::vector<std::vector<>>, while we have std::vector<small_vector>.
-        std::vector<std::vector<bytes_view_with_action>> pk_elems_, ck_elems_;
+        std::vector<std::vector<view_managed_key_view_and_action>> pk_elems_, ck_elems_;
         auto std_vector_from_small_vector = boost::adaptors::transformed([](const auto& vector) {
-            return std::vector<bytes_view_with_action>{vector.begin(), vector.end()};
+            return std::vector<view_managed_key_view_and_action>{vector.begin(), vector.end()};
         });
         boost::copy(pk_elems | std_vector_from_small_vector, std::back_inserter(pk_elems_));
         boost::copy(ck_elems | std_vector_from_small_vector, std::back_inserter(ck_elems_));
@@ -643,7 +645,7 @@ view_updates::get_view_rows(const partition_key& base_key, const clustering_row&
                        ck_size = cartesian_product_size(ck_elems_);
                 on_internal_error(vlogger, format("Computed sizes of possible partition keys and clustering keys don't match: {} != {}", pk_size, ck_size));
             };
-            for (std::vector<bytes_view_with_action>& pk : cartesian_product_pk) {
+            for (std::vector<view_managed_key_view_and_action>& pk : cartesian_product_pk) {
                 if (ck_it == cartesian_product_ck.end()) {
                     throw_length_error();
                 }
@@ -654,8 +656,8 @@ view_updates::get_view_rows(const partition_key& base_key, const clustering_row&
                 throw_length_error();
             }
         } else {
-            for (std::vector<bytes_view_with_action>& pk : cartesian_product_pk) {
-                for (std::vector<bytes_view_with_action>& ck : cartesian_product_ck) {
+            for (std::vector<view_managed_key_view_and_action>& pk : cartesian_product_pk) {
+                for (std::vector<view_managed_key_view_and_action>& ck : cartesian_product_ck) {
                     compute_row(pk, ck);
                 }
             }
@@ -860,7 +862,7 @@ void view_updates::do_delete_old_entry(const partition_key& base_key, const clus
     for (const auto& [r, action] : view_rows) {
         const auto& col_ids = _base_info->base_non_pk_columns_in_view_pk();
         if (_view_info.has_computed_column_depending_on_base_non_primary_key()) {
-            if (auto ts_tag = std::get_if<bytes_with_action::shadowable_tombstone_tag>(&action)) {
+            if (auto ts_tag = std::get_if<view_key_and_action::shadowable_tombstone_tag>(&action)) {
                 r->apply(ts_tag->into_shadowable_tombstone(now));
             }
         } else if (!col_ids.empty()) {
@@ -1006,8 +1008,8 @@ void view_updates::update_entry_for_computed_column(
         struct visitor {
             deletable_row* row;
             gc_clock::time_point now;
-            void operator()(bytes_with_action::no_action) {}
-            void operator()(bytes_with_action::shadowable_tombstone_tag t) {
+            void operator()(view_key_and_action::no_action) {}
+            void operator()(view_key_and_action::shadowable_tombstone_tag t) {
                 row->apply(t.into_shadowable_tombstone(now));
             }
             void operator()(row_marker rm) {
