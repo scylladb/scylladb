@@ -270,7 +270,7 @@ view_ptr create_view_statement::prepare_view(data_dictionary::database db) const
     // non-pk base column + base column used in view pk)". When the filtered
     // column *is* the base column added to the view pk, we don't have this
     // problem. And this case actually works correctly.
-    auto non_pk_restrictions = restrictions->get_non_pk_restriction();
+    const expr::single_column_restrictions_map& non_pk_restrictions = restrictions->get_non_pk_restriction();
     if (non_pk_restrictions.size() == 1 && has_non_pk_column &&
             target_primary_keys.contains(non_pk_restrictions.cbegin()->first)) {
         // This case (filter by new PK column of the view) works, as explained above

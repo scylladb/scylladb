@@ -19,10 +19,9 @@
 #include "cql3/expr/expression.hh"
 #include "query-result-reader.hh"
 #include "statement_restrictions.hh"
-#include "multi_column_restriction.hh"
-#include "token_restriction.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "cartesian_product.hh"
+#include "cql3/cql_config.hh"
 
 #include "cql3/constants.hh"
 #include "cql3/lists.hh"
@@ -31,7 +30,6 @@
 #include "types/list.hh"
 #include "types/map.hh"
 #include "types/set.hh"
-#include "cql3/expr/restrictions.hh"
 
 namespace cql3 {
 namespace restrictions {
@@ -42,80 +40,8 @@ using boost::adaptors::filtered;
 using boost::adaptors::transformed;
 using statements::request_validations::invalid_request;
 
-template<typename T>
-class statement_restrictions::initial_key_restrictions : public primary_key_restrictions<T> {
-    bool _allow_filtering;
-public:
-    initial_key_restrictions(bool allow_filtering)
-        : _allow_filtering(allow_filtering) {
-        this->expression = expr::constant::make_bool(true);
-    }
-
-    ::shared_ptr<primary_key_restrictions<T>> do_merge_to(schema_ptr schema, ::shared_ptr<restriction> restriction) const {
-        return ::make_shared<single_column_primary_key_restrictions<T>>(schema, _allow_filtering)->merge_to(schema, restriction);
-    }
-    ::shared_ptr<primary_key_restrictions<T>> merge_to(schema_ptr schema, ::shared_ptr<restriction> restriction) override {
-        if (has_token(restriction->expression)) {
-            return static_pointer_cast<token_restriction>(restriction);
-        }
-        return ::make_shared<single_column_primary_key_restrictions<T>>(schema, _allow_filtering)->merge_to(restriction);
-    }
-    void merge_with(::shared_ptr<restriction> restriction) override {
-        throw exceptions::unsupported_operation_exception();
-    }
-    bytes_opt value_for(const column_definition& cdef, const query_options& options) const override {
-        return {};
-    }
-    std::vector<const column_definition*> get_column_defs() const override {
-        // throw? should not reach?
-        return {};
-    }
-    bool empty() const override {
-        return true;
-    }
-    uint32_t size() const override {
-        return 0;
-    }
-    virtual bool has_supporting_index(const secondary_index::secondary_index_manager& index_manager,
-                                      expr::allow_local_index allow_local) const override {
-        return false;
-    }
-};
-
-template<>
-::shared_ptr<primary_key_restrictions<partition_key>>
-statement_restrictions::initial_key_restrictions<partition_key>::merge_to(schema_ptr schema, ::shared_ptr<restriction> restriction) {
-    if (has_token(restriction->expression)) {
-        return static_pointer_cast<token_restriction>(restriction);
-    }
-    return do_merge_to(std::move(schema), std::move(restriction));
-}
-
-template<>
-::shared_ptr<primary_key_restrictions<clustering_key_prefix>>
-statement_restrictions::initial_key_restrictions<clustering_key_prefix>::merge_to(schema_ptr schema, ::shared_ptr<restriction> restriction) {
-    if (auto p = dynamic_pointer_cast<multi_column_restriction>(restriction)) {
-        return p;
-    }
-    return do_merge_to(std::move(schema), std::move(restriction));
-}
-
-::shared_ptr<partition_key_restrictions> statement_restrictions::get_initial_partition_key_restrictions(bool allow_filtering) {
-    static thread_local ::shared_ptr<partition_key_restrictions> initial_kr_true = ::make_shared<initial_key_restrictions<partition_key>>(true);
-    static thread_local ::shared_ptr<partition_key_restrictions> initial_kr_false = ::make_shared<initial_key_restrictions<partition_key>>(false);
-    return allow_filtering ? initial_kr_true : initial_kr_false;
-}
-
-::shared_ptr<clustering_key_restrictions> statement_restrictions::get_initial_clustering_key_restrictions(bool allow_filtering) {
-    static thread_local ::shared_ptr<clustering_key_restrictions> initial_kr_true = ::make_shared<initial_key_restrictions<clustering_key>>(true);
-    static thread_local ::shared_ptr<clustering_key_restrictions> initial_kr_false = ::make_shared<initial_key_restrictions<clustering_key>>(false);
-    return allow_filtering ? initial_kr_true : initial_kr_false;
-}
-
 statement_restrictions::statement_restrictions(schema_ptr schema, bool allow_filtering)
     : _schema(schema)
-    , _clustering_columns_restrictions(get_initial_clustering_key_restrictions(allow_filtering))
-    , _nonprimary_key_restrictions(::make_shared<single_column_restrictions>(schema))
     , _partition_range_is_simple(true)
 { }
 #if 0
@@ -419,21 +345,6 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
             add_restriction(prepared_restriction, schema, allow_filtering, for_view);
 
             if (prepared_restriction.op != expr::oper_t::IS_NOT) {
-                const auto restriction = expr::convert_to_restriction(prepared_restriction, schema);
-                if (dynamic_pointer_cast<multi_column_restriction>(restriction)) {
-                    _clustering_columns_restrictions = _clustering_columns_restrictions->merge_to(_schema, restriction);
-                } else if (has_token(restriction->expression)) {
-                } else {
-                    auto single = restriction;
-                    auto& def = *get_the_only_column(single->expression).col;
-                    if (def.is_partition_key()) {
-                    } else if (def.is_clustering_key()) {
-                        _clustering_columns_restrictions = _clustering_columns_restrictions->merge_to(_schema, restriction);
-                    } else {
-                        _nonprimary_key_restrictions->add_restriction(single);
-                    }
-                }
-
                 _where = _where.has_value() ? make_conjunction(std::move(*_where), prepared_restriction) : prepared_restriction;
             }
         }
@@ -442,6 +353,10 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
         if (!has_token(_partition_key_restrictions)) {
             _single_column_partition_key_restrictions = expr::get_single_column_restrictions_map(_partition_key_restrictions);
         }
+        if (!expr::contains_multi_column_restriction(_clustering_columns_restrictions)) {
+            _single_column_clustering_key_restrictions = expr::get_single_column_restrictions_map(_clustering_columns_restrictions);
+        }
+        _single_column_nonprimary_key_restrictions = expr::get_single_column_restrictions_map(_nonprimary_key_restrictions);
         _clustering_prefix_restrictions = extract_clustering_prefix_restrictions(*_where, _schema);
         _partition_range_restrictions = extract_partition_range(*_where, _schema);
     }
@@ -450,12 +365,12 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
     const expr::allow_local_index allow_local(
             !has_partition_key_unrestricted_components()
             && partition_key_restrictions_is_all_eq());
-    _has_multi_column = find_binop(_clustering_columns_restrictions->expression, expr::is_multi_column);
-    _has_queriable_ck_index = _clustering_columns_restrictions->has_supporting_index(sim, allow_local)
+    _has_multi_column = find_binop(_clustering_columns_restrictions, expr::is_multi_column);
+    _has_queriable_ck_index = clustering_columns_restrictions_have_supporting_index(sim, allow_local)
             && !type.is_delete();
     _has_queriable_pk_index = parition_key_restrictions_have_supporting_index(sim, allow_local)
             && !type.is_delete();
-    _has_queriable_regular_index = _nonprimary_key_restrictions->has_supporting_index(sim, allow_local)
+    _has_queriable_regular_index = expr::index_supports_some_column(_nonprimary_key_restrictions, sim, allow_local)
             && !type.is_delete();
 
     // At this point, the select statement if fully constructed, but we still have a few things to validate
@@ -495,9 +410,9 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
         _uses_secondary_indexing = true;
     }
 
-    if (_uses_secondary_indexing || _clustering_columns_restrictions->needs_filtering(*_schema)) {
-        _index_restrictions.push_back(_new_clustering_columns_restrictions);
-    } else if (find_binop(_clustering_columns_restrictions->expression, expr::is_on_collection)) {
+    if (_uses_secondary_indexing || clustering_key_restrictions_need_filtering()) {
+        _index_restrictions.push_back(_clustering_columns_restrictions);
+    } else if (find_binop(_clustering_columns_restrictions, expr::is_on_collection)) {
         fail(unimplemented::cause::INDEXES);
 #if 0
         _index_restrictions.push_back(new Forwardingprimary_key_restrictions() {
@@ -525,7 +440,7 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
 #endif
     }
 
-    if (!_nonprimary_key_restrictions->empty()) {
+    if (!expr::is_empty_restriction(_nonprimary_key_restrictions)) {
         if (_has_queriable_regular_index && _partition_range_is_simple) {
             _uses_secondary_indexing = true;
         } else if (!allow_filtering) {
@@ -533,7 +448,7 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
                 "thus may have unpredictable performance. If you want to execute "
                 "this query despite the performance unpredictability, use ALLOW FILTERING");
         }
-        _index_restrictions.push_back(_new_nonprimary_key_restrictions);
+        _index_restrictions.push_back(_nonprimary_key_restrictions);
     }
 
     if (_uses_secondary_indexing && !(for_view || allow_filtering)) {
@@ -612,33 +527,23 @@ std::vector<const column_definition*> statement_restrictions::get_column_defs_fo
                 }
             }
         }
-        auto single_ck_restrs = dynamic_pointer_cast<single_column_clustering_key_restrictions>(_clustering_columns_restrictions);
         const bool pk_has_unrestricted_components = has_partition_key_unrestricted_components();
-        if (pk_has_unrestricted_components || _clustering_columns_restrictions->needs_filtering(*_schema)) {
+        if (pk_has_unrestricted_components || clustering_key_restrictions_need_filtering()) {
             column_id first_filtering_id = pk_has_unrestricted_components ? 0 : _schema->clustering_key_columns().begin()->id +
-                    _clustering_columns_restrictions->num_prefix_columns_that_need_not_be_filtered();
-            for (auto&& cdef : _clustering_columns_restrictions->get_column_defs()) {
+                    num_clustering_prefix_columns_that_need_not_be_filtered();
+            for (auto&& cdef : expr::get_sorted_column_defs(_clustering_columns_restrictions)) {
                 const expr::expression* single_col_restr = nullptr;
-                if (single_ck_restrs) {
-                    auto it = single_ck_restrs->restrictions().find(cdef);
-                    if (it != single_ck_restrs->restrictions().end()) {
-                        if (is_single_column_restriction(it->second->expression)) {
-                            single_col_restr = &it->second->expression;
-                        }
-                    }
+                auto it = _single_column_partition_key_restrictions.find(cdef);
+                if (it != _single_column_partition_key_restrictions.end()) {
+                    single_col_restr = &it->second;
                 }
                 if (cdef->id >= first_filtering_id && !column_uses_indexing(cdef, single_col_restr)) {
                     column_defs_for_filtering.emplace_back(cdef);
                 }
             }
         }
-        for (auto&& cdef : _nonprimary_key_restrictions->get_column_defs()) {
-            ::shared_ptr<restriction> cur_restr = _nonprimary_key_restrictions->get_restriction(*cdef);
-            const expr::expression* single_col_restr = nullptr;
-            if (is_single_column_restriction(cur_restr->expression)) {
-                single_col_restr = &cur_restr->expression;
-            }
-            if (!column_uses_indexing(cdef, single_col_restr)) {
+        for (auto&& [cdef, cur_restr] : _single_column_nonprimary_key_restrictions) {
+            if (!column_uses_indexing(cdef, &cur_restr)) {
                 column_defs_for_filtering.emplace_back(cdef);
             }
         }
@@ -718,7 +623,7 @@ void statement_restrictions::add_token_partition_key_restriction(const expr::bin
 }
 
 void statement_restrictions::add_single_column_clustering_key_restriction(const expr::binary_operator& restr, schema_ptr schema, bool allow_filtering) {
-    if (find_binop(_new_clustering_columns_restrictions, [] (const expr::binary_operator& b) {
+    if (find_binop(_clustering_columns_restrictions, [] (const expr::binary_operator& b) {
                 return expr::is<expr::tuple_constructor>(b.lhs);
             })) {
         throw exceptions::invalid_request_exception(
@@ -726,10 +631,10 @@ void statement_restrictions::add_single_column_clustering_key_restriction(const 
     }
 
     const column_definition* new_column = expr::get_the_only_column(restr).col;
-    const column_definition* last_column = expr::get_last_column_def(_new_clustering_columns_restrictions);
+    const column_definition* last_column = expr::get_last_column_def(_clustering_columns_restrictions);
 
     if (last_column != nullptr && !allow_filtering) {
-        if (has_slice(_new_clustering_columns_restrictions) && schema->position(*new_column) > schema->position(*last_column)) {
+        if (has_slice(_clustering_columns_restrictions) && schema->position(*new_column) > schema->position(*last_column)) {
             throw exceptions::invalid_request_exception(format("Clustering column \"{}\" cannot be restricted (preceding column \"{}\" is restricted by a non-EQ relation)",
                 new_column->name_as_text(), last_column->name_as_text()));
         }
@@ -742,16 +647,16 @@ void statement_restrictions::add_single_column_clustering_key_restriction(const 
         }
     }
 
-    _new_clustering_columns_restrictions = expr::make_conjunction(_new_clustering_columns_restrictions, restr);
+    _clustering_columns_restrictions = expr::make_conjunction(_clustering_columns_restrictions, restr);
 }
 
 void statement_restrictions::add_multi_column_clustering_key_restriction(const expr::binary_operator& restr) {
-    if (expr::is_empty_restriction(_new_clustering_columns_restrictions)) {
-        _new_clustering_columns_restrictions = expr::make_conjunction(_new_clustering_columns_restrictions, restr);
+    if (expr::is_empty_restriction(_clustering_columns_restrictions)) {
+        _clustering_columns_restrictions = restr;
         return;
     }
 
-    if (!find_binop(_new_clustering_columns_restrictions, [] (const expr::binary_operator& b) {
+    if (!find_binop(_clustering_columns_restrictions, [] (const expr::binary_operator& b) {
                 return expr::is<expr::tuple_constructor>(b.lhs);
     })) {
         throw exceptions::invalid_request_exception("Mixing single column relations and multi column relations on clustering columns is not allowed");
@@ -759,19 +664,19 @@ void statement_restrictions::add_multi_column_clustering_key_restriction(const e
 
     if (restr.op == expr::oper_t::EQ) {
         throw exceptions::invalid_request_exception(format("{} cannot be restricted by more than one relation if it includes an Equal",
-            expr::get_columns_in_commons(_new_clustering_columns_restrictions, restr)));
+            expr::get_columns_in_commons(_clustering_columns_restrictions, restr)));
     } else if (restr.op == expr::oper_t::IN) {
         throw exceptions::invalid_request_exception(format("{} cannot be restricted by more than one relation if it includes a IN",
-                                                           expr::get_columns_in_commons(_new_clustering_columns_restrictions, restr)));
+                                                           expr::get_columns_in_commons(_clustering_columns_restrictions, restr)));
     } else if (is_slice(restr.op)) {
-        if (!expr::has_slice(_new_clustering_columns_restrictions)) {
+        if (!expr::has_slice(_clustering_columns_restrictions)) {
             throw exceptions::invalid_request_exception(format("Column \"{}\" cannot be restricted by both an equality and an inequality relation",
-                                                           expr::get_columns_in_commons(_new_clustering_columns_restrictions, restr)));
+                                                           expr::get_columns_in_commons(_clustering_columns_restrictions, restr)));
         }
 
-        const expr::binary_operator* other_slice = expr::find_in_expression<expr::binary_operator>(_new_clustering_columns_restrictions, [](const expr::binary_operator){return true;});
+        const expr::binary_operator* other_slice = expr::find_in_expression<expr::binary_operator>(_clustering_columns_restrictions, [](const expr::binary_operator){return true;});
         if (other_slice == nullptr) {
-            on_internal_error(rlogger, "add_multi_column_clustering_key_restriction: _new_clustering_columns_restrictions is empty!");
+            on_internal_error(rlogger, "add_multi_column_clustering_key_restriction: _clustering_columns_restrictions is empty!");
         }
 
         // Don't allow to mix plain and SCYLLA_CLUSTERING_BOUND bounds
@@ -798,14 +703,14 @@ void statement_restrictions::add_multi_column_clustering_key_restriction(const e
                 expr::get_columns_in_commons(restr, *other_slice)));
         }
 
-        _new_clustering_columns_restrictions = expr::make_conjunction(_new_clustering_columns_restrictions, restr);
+        _clustering_columns_restrictions = expr::make_conjunction(_clustering_columns_restrictions, restr);
     } else {
         throw exceptions::invalid_request_exception(format("Unsupported multi-column relation: ", restr));
     }
 }
 
 void statement_restrictions::add_single_column_nonprimary_key_restriction(const expr::binary_operator& restr) {
-    _new_nonprimary_key_restrictions = expr::make_conjunction(_new_nonprimary_key_restrictions, restr);
+    _nonprimary_key_restrictions = expr::make_conjunction(_nonprimary_key_restrictions, restr);
 }
 
 void statement_restrictions::process_partition_key_restrictions(bool for_view, bool allow_filtering) {
@@ -845,13 +750,7 @@ bool statement_restrictions::partition_key_restrictions_is_empty() const {
 }
 
 bool statement_restrictions::partition_key_restrictions_is_all_eq() const {
-    const expr::binary_operator* non_eq_binop = find_in_expression<expr::binary_operator>(_partition_key_restrictions,
-        [](const expr::binary_operator& binop) {
-            return binop.op != expr::oper_t::EQ;
-        }
-    );
-
-    return non_eq_binop == nullptr;
+    return expr::has_only_eq_binops(_partition_key_restrictions);
 }
 
 size_t statement_restrictions::partition_key_restrictions_size() const {
@@ -864,8 +763,95 @@ bool statement_restrictions::pk_restrictions_need_filtering() const {
          && (has_partition_key_unrestricted_components() || expr::has_slice_or_needs_filtering(_partition_key_restrictions));
 }
 
+size_t statement_restrictions::clustering_columns_restrictions_size() const {
+    return expr::get_sorted_column_defs(_clustering_columns_restrictions).size();
+}
+
+bool statement_restrictions::clustering_key_restrictions_need_filtering() const {
+    if (expr::contains_multi_column_restriction(_clustering_columns_restrictions)) {
+        return false;
+    }
+
+    return num_clustering_prefix_columns_that_need_not_be_filtered() < clustering_columns_restrictions_size();
+}
+
 bool statement_restrictions::has_unrestricted_clustering_columns() const {
-    return _clustering_columns_restrictions->has_unrestricted_components(*_schema);
+    return clustering_columns_restrictions_size() < _schema->clustering_key_size();
+}
+
+bool statement_restrictions::clustering_columns_restrictions_have_supporting_index(
+        const secondary_index::secondary_index_manager& index_manager,
+        expr::allow_local_index allow_local) const {
+    // Single column restrictions can be handled by the existing code
+    if (!expr::contains_multi_column_restriction(_clustering_columns_restrictions)) {
+        return expr::index_supports_some_column(_clustering_columns_restrictions, index_manager, allow_local);
+    }
+
+    // Multi column restrictions have to be handled separately
+    for (const auto& index : index_manager.list_indexes()) {
+        if (!allow_local && index.metadata().local()) {
+            continue;
+        }
+        if (multi_column_clustering_restrictions_are_supported_by(index)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool statement_restrictions::multi_column_clustering_restrictions_are_supported_by(
+        const secondary_index::index& index) const {
+    // Slice restrictions have to be checked depending on the clustering slice
+    if (has_slice(_clustering_columns_restrictions)) {
+        bounds_slice clustering_slice = get_clustering_slice();
+
+        const expr::column_value* supported_column =
+            find_in_expression<expr::column_value>(_clustering_columns_restrictions,
+                [&](const expr::column_value& cval) -> bool {
+                    return clustering_slice.is_supported_by(*cval.col, index);
+                }
+        );
+        return supported_column != nullptr;
+    }
+
+    // Otherwise it has to be a singe binary operator with EQ or IN.
+    // This is checked earlier during add_restriction.
+    const expr::binary_operator* single_binop =
+        expr::as_if<expr::binary_operator>(&_clustering_columns_restrictions);
+    if (single_binop == nullptr) {
+        on_internal_error(rlogger, format(
+            "multi_column_clustering_restrictions_are_supported_by more than one non-slice restriction: {}",
+            _clustering_columns_restrictions));
+    }
+
+    if (single_binop->op != expr::oper_t::IN && single_binop->op != expr::oper_t::EQ) {
+        on_internal_error(rlogger, format("Disallowed multi column restriction: {}", *single_binop));
+    }
+
+    const expr::column_value* supported_column =
+        find_in_expression<expr::column_value>(_clustering_columns_restrictions,
+            [&](const expr::column_value& cval) -> bool {
+                return index.supports_expression(*cval.col, single_binop->op);
+            }
+    );
+    return supported_column != nullptr;
+}
+
+bounds_slice statement_restrictions::get_clustering_slice() const {
+    std::optional<bounds_slice> result;
+
+    expr::for_each_expression<expr::binary_operator>(_clustering_columns_restrictions,
+        [&](const expr::binary_operator& binop) {
+            bounds_slice cur_slice = bounds_slice::from_binary_operator(binop);
+            if (!result.has_value()) {
+                result = cur_slice;
+            } else {
+                result->merge(cur_slice);
+            }
+        }
+    );
+
+    return *result;
 }
 
 bool statement_restrictions::parition_key_restrictions_have_supporting_index(const secondary_index::secondary_index_manager& index_manager,
@@ -875,20 +861,7 @@ bool statement_restrictions::parition_key_restrictions_have_supporting_index(con
         return false;
     }
 
-    // Otherwise those are single column restrictions
-    std::vector<const column_definition*> restricted_pk_columns = expr::get_sorted_column_defs(_partition_key_restrictions);
-
-    for (const column_definition* cdef : restricted_pk_columns) {
-        expr::expression col_restrictions = expr::conjunction {
-            .children = expr::extract_single_column_restrictions_for_column(_partition_key_restrictions, *cdef)
-        };
-
-        if (expr::has_supporting_index(col_restrictions, index_manager, allow_local)) {
-            return true;
-        }
-    }
-
-    return false;
+    return expr::index_supports_some_column(_partition_key_restrictions, index_manager, allow_local);
 }
 
 void statement_restrictions::process_clustering_columns_restrictions(bool for_view, bool allow_filtering) {
@@ -896,18 +869,18 @@ void statement_restrictions::process_clustering_columns_restrictions(bool for_vi
         return;
     }
 
-    if (find_binop(_clustering_columns_restrictions->expression, expr::is_on_collection)
+    if (find_binop(_clustering_columns_restrictions, expr::is_on_collection)
         && !_has_queriable_ck_index && !allow_filtering) {
         throw exceptions::invalid_request_exception(
             "Cannot restrict clustering columns by a CONTAINS relation without a secondary index or filtering");
     }
 
-    if (has_clustering_columns_restriction() && _clustering_columns_restrictions->needs_filtering(*_schema)) {
+    if (has_clustering_columns_restriction() && clustering_key_restrictions_need_filtering()) {
         if (_has_queriable_ck_index) {
             _uses_secondary_indexing = true;
         } else if (!allow_filtering && !for_view) {
             auto clustering_columns_iter = _schema->clustering_key_columns().begin();
-            for (auto&& restricted_column : _clustering_columns_restrictions->get_column_defs()) {
+            for (auto&& restricted_column : expr::get_sorted_column_defs(_clustering_columns_restrictions)) {
                 const column_definition* clustering_column = &(*clustering_columns_iter);
                 ++clustering_columns_iter;
                 if (clustering_column != restricted_column) {
@@ -1692,8 +1665,8 @@ bool statement_restrictions::need_filtering() const {
     if (_uses_secondary_indexing && has_token(_partition_key_restrictions)) {
         // If there is a token(p1, p2) restriction, no p1, p2 restrictions are allowed in the query.
         // All other restrictions must be on clustering or regular columns.
-        int64_t non_pk_restrictions_count = _clustering_columns_restrictions->size();
-        non_pk_restrictions_count += _nonprimary_key_restrictions->size();
+        int64_t non_pk_restrictions_count = clustering_columns_restrictions_size();
+        non_pk_restrictions_count += expr::get_sorted_column_defs(_nonprimary_key_restrictions).size();
 
         // We are querying using an index, one restriction goes to the index restriction.
         // If there are some restrictions other than token() and index column then we need to do filtering.
@@ -1706,7 +1679,8 @@ bool statement_restrictions::need_filtering() const {
         // Can't calculate the token value, so a naive base-table query must be filtered.  Same for any index tables,
         // except if there's only one restriction supported by an index.
         return !(npart == 1 && _has_queriable_pk_index &&
-                 _clustering_columns_restrictions->empty() && _nonprimary_key_restrictions->empty());
+                 expr::is_empty_restriction(_clustering_columns_restrictions) &&
+                 expr::is_empty_restriction(_nonprimary_key_restrictions));
     }
     if (pk_restrictions_need_filtering()) {
         // We most likely cannot calculate token(s).  Neither base-table nor index-table queries can avoid filtering.
@@ -1714,24 +1688,24 @@ bool statement_restrictions::need_filtering() const {
     }
     // Now we know the partition key is either unrestricted or fully restricted.
 
-    const auto nreg = _nonprimary_key_restrictions->size();
+    const auto nreg = expr::get_sorted_column_defs(_nonprimary_key_restrictions).size();
     if (nreg > 1 || (nreg == 1 && !_has_queriable_regular_index)) {
         return true; // Regular columns are unsorted in storage and no single index suffices.
     }
     if (nreg == 1) { // Single non-key restriction supported by an index.
         // Will the index-table query require filtering?  That depends on whether its clustering key is restricted to a
         // continuous range.  Recall that this clustering key is (token, pk, ck) of the base table.
-        if (npart == 0 && _clustering_columns_restrictions->empty()) {
+        if (npart == 0 && expr::is_empty_restriction(_clustering_columns_restrictions)) {
             return false; // No clustering key restrictions => whole partitions.
         }
-        return !token_known(*this) || _clustering_columns_restrictions->needs_filtering(*_schema)
+        return !token_known(*this) || clustering_key_restrictions_need_filtering()
                 // Multi-column restrictions don't require filtering when querying the base table, but the index
                 // table has a different clustering key and may require filtering.
                 || _has_multi_column;
     }
     // Now we know there are no nonkey restrictions.
 
-    if (dynamic_pointer_cast<multi_column_restriction>(_clustering_columns_restrictions)) {
+    if (_has_multi_column) {
         // Multicolumn bounds mean lexicographic order, implying a continuous clustering range.  Multicolumn IN means a
         // finite set of continuous ranges.  Multicolumn restrictions cannot currently be combined with single-column
         // clustering restrictions.  Therefore, a continuous clustering range is guaranteed.
@@ -1752,12 +1726,12 @@ bool statement_restrictions::need_filtering() const {
         // WHERE p = ? AND c1 = ? AND c2 LIKE ? AND c3 = ? - requires filtering
         // WHERE p = ? AND c1 = ? AND c2 = ? AND c3 = ? - doesn't use an index
         // WHERE p = ? AND c1 = ? AND c2 < ? AND c3 = ? - doesn't require filtering, but we report it does
-        return _clustering_columns_restrictions->size() > 1;
+        return clustering_columns_restrictions_size() > 1;
     }
     // Now we know that the query doesn't use an index.
 
     // The only thing that can cause filtering now are the clustering columns.
-    return _clustering_columns_restrictions->needs_filtering(*_schema);
+    return clustering_key_restrictions_need_filtering();
 }
 
 void statement_restrictions::validate_secondary_index_selections(bool selects_only_static_columns) {
@@ -1774,16 +1748,8 @@ const expr::single_column_restrictions_map& statement_restrictions::get_single_c
 /**
  * @return clustering key restrictions split into single column restrictions (e.g. for filtering support).
  */
-const single_column_restrictions::restrictions_map& statement_restrictions::get_single_column_clustering_key_restrictions() const {
-    static single_column_restrictions::restrictions_map empty;
-    auto single_restrictions = dynamic_pointer_cast<single_column_clustering_key_restrictions>(_clustering_columns_restrictions);
-    if (!single_restrictions) {
-        if (dynamic_pointer_cast<initial_key_restrictions<clustering_key>>(_clustering_columns_restrictions)) {
-            return empty;
-        }
-        throw std::runtime_error("statement restrictions for multi-column partition key restrictions are not implemented yet");
-    }
-    return single_restrictions->restrictions();
+const expr::single_column_restrictions_map& statement_restrictions::get_single_column_clustering_key_restrictions() const {
+    return _single_column_clustering_key_restrictions;
 }
 
 void statement_restrictions::prepare_indexed_global(const schema& idx_tbl_schema) {
@@ -1861,6 +1827,38 @@ void statement_restrictions::add_clustering_restrictions_to_idx_ck_prefix(const 
         const auto col = expr::as<column_value>(any_binop->lhs).col;
         _idx_tbl_ck_prefix->push_back(replace_column_def(e, idx_tbl_schema.get_column_definition(col->name())));
     }
+}
+
+// How many of the restrictions (in column order) do not need filtering
+// because they are implemented as a slice (potentially, a contiguous disk
+// read). For example, if we have the filter "c1 < 3 and c2 > 3", c1 does not
+// need filtering but c2 does so num_prefix_columns_that_need_not_be_filtered
+// will be 1.
+unsigned int statement_restrictions::num_clustering_prefix_columns_that_need_not_be_filtered() const {
+    if (expr::contains_multi_column_restriction(_clustering_columns_restrictions)) {
+        return 0;
+    }
+
+    expr::single_column_restrictions_map column_restrictions =
+        expr::get_single_column_restrictions_map(_clustering_columns_restrictions);
+
+    // Restrictions currently need filtering in three cases:
+    // 1. any of them is a CONTAINS restriction
+    // 2. restrictions do not form a contiguous prefix (i.e. there are gaps in it)
+    // 3. a SLICE restriction isn't on a last place
+    column_id position = 0;
+    unsigned int count = 0;
+    for (const auto& restriction : column_restrictions | boost::adaptors::map_values) {
+        if (find_needs_filtering(restriction)
+            || position != get_the_only_column(restriction).col->id) {
+            return count;
+        }
+        if (!has_slice(restriction)) {
+            position = get_the_only_column(restriction).col->id + 1;
+        }
+        count++;
+    }
+    return count;
 }
 
 std::vector<query::clustering_range> statement_restrictions::get_global_index_clustering_ranges(

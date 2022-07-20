@@ -1028,6 +1028,21 @@ bool has_supporting_index(
                     support);
 }
 
+bool index_supports_some_column(
+        const expression& e,
+        const secondary_index::secondary_index_manager& index_manager,
+        allow_local_index allow_local) {
+    single_column_restrictions_map single_col_restrictions = get_single_column_restrictions_map(e);
+
+    for (auto&& [col, col_restrictions] : single_col_restrictions) {
+        if (has_supporting_index(col_restrictions, index_manager, allow_local)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 std::ostream& operator<<(std::ostream& os, const column_value& cv) {
     os << cv.col->name_as_text();
     return os;
@@ -2460,6 +2475,16 @@ bool contains_multi_column_restriction(const expression& e) {
         return is<tuple_constructor>(binop.lhs);
     });
     return find_res != nullptr;
+}
+
+bool has_only_eq_binops(const expression& e) {
+    const expr::binary_operator* non_eq_binop = find_in_expression<expr::binary_operator>(e,
+        [](const expr::binary_operator& binop) {
+            return binop.op != expr::oper_t::EQ;
+        }
+    );
+
+    return non_eq_binop == nullptr;
 }
 } // namespace expr
 } // namespace cql3

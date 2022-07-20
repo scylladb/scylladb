@@ -18,7 +18,6 @@
 #include "cql3/functions/as_json_function.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/util.hh"
-#include "cql3/restrictions/single_column_primary_key_restrictions.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
 #include "cql3/selection/selector_factories.hh"
 #include "validation.hh"
@@ -1948,12 +1947,12 @@ static bool needs_allow_filtering_anyway(
     if (strict_allow_filtering == flag_t::FALSE) {
         return false;
     }
-    const auto& ck_restrictions = *restrictions.get_clustering_columns_restrictions();
+    const auto& ck_restrictions = restrictions.get_clustering_columns_restrictions();
     const auto& pk_restrictions = restrictions.get_partition_key_restrictions();
     // Even if no filtering happens on the coordinator, we still warn about poor performance when partition
     // slice is defined but in potentially unlimited number of partitions (see #7608).
     if ((expr::is_empty_restriction(pk_restrictions) || has_token(pk_restrictions)) // Potentially unlimited partitions.
-        && !ck_restrictions.empty() // Slice defined.
+        && !expr::is_empty_restriction(ck_restrictions) // Slice defined.
         && !restrictions.uses_secondary_indexing()) { // Base-table is used. (Index-table use always limits partitions.)
         if (strict_allow_filtering == flag_t::WARN) {
             warnings.emplace_back("This query should use ALLOW FILTERING and will be rejected in future versions.");

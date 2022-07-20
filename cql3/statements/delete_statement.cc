@@ -78,7 +78,7 @@ delete_statement::prepare_internal(data_dictionary::database db, schema_ptr sche
     }
     prepare_conditions(db, *schema, ctx, *stmt);
     stmt->process_where_clause(db, _where_clause, ctx);
-    if (has_slice(stmt->restrictions().get_clustering_columns_restrictions()->expression)) {
+    if (has_slice(stmt->restrictions().get_clustering_columns_restrictions())) {
         if (!schema->is_compound()) {
             throw exceptions::invalid_request_exception("Range deletions on \"compact storage\" schemas are not supported");
         }

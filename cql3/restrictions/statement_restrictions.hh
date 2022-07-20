@@ -12,14 +12,14 @@
 
 #include <vector>
 #include <list>
+#include "bounds_slice.hh"
 #include "cql3/expr/expression.hh"
+#include "cql3/expr/restrictions.hh"
 #include "to_string.hh"
 #include "schema_fwd.hh"
-#include "cql3/restrictions/restrictions.hh"
-#include "cql3/restrictions/primary_key_restrictions.hh"
-#include "cql3/restrictions/single_column_restrictions.hh"
 #include "cql3/prepare_context.hh"
 #include "cql3/statements/statement_type.hh"
+#include "query-request.hh"
 
 namespace cql3 {
 
@@ -33,12 +33,6 @@ class statement_restrictions {
 private:
     schema_ptr _schema;
 
-    template<typename>
-    class initial_key_restrictions;
-
-    static ::shared_ptr<partition_key_restrictions> get_initial_partition_key_restrictions(bool allow_filtering);
-    static ::shared_ptr<clustering_key_restrictions> get_initial_clustering_key_restrictions(bool allow_filtering);
-
     /**
      * Restrictions on partitioning columns
      */
@@ -49,16 +43,16 @@ private:
     /**
      * Restrictions on clustering columns
      */
-    ::shared_ptr<clustering_key_restrictions> _clustering_columns_restrictions;
+    expr::expression _clustering_columns_restrictions;
 
-    expr::expression _new_clustering_columns_restrictions;
+    expr::single_column_restrictions_map _single_column_clustering_key_restrictions;
 
     /**
      * Restriction on non-primary key columns (i.e. secondary index restrictions)
      */
-    ::shared_ptr<single_column_restrictions> _nonprimary_key_restrictions;
+    expr::expression _nonprimary_key_restrictions;
 
-    expr::expression _new_nonprimary_key_restrictions;
+    expr::single_column_restrictions_map _single_column_nonprimary_key_restrictions;
 
     std::unordered_set<const column_definition*> _not_null_columns;
 
@@ -153,11 +147,11 @@ public:
      * otherwise.
      */
     bool clustering_key_restrictions_has_IN() const {
-        return find(_clustering_columns_restrictions->expression, expr::oper_t::IN);
+        return find(_clustering_columns_restrictions, expr::oper_t::IN);
     }
 
     bool clustering_key_restrictions_has_only_eq() const {
-        return _clustering_columns_restrictions->empty() || _clustering_columns_restrictions->is_all_eq();
+        return expr::has_only_eq_binops(_clustering_columns_restrictions);
     }
 
     /**
@@ -182,7 +176,7 @@ public:
         return _partition_key_restrictions;
     }
 
-    ::shared_ptr<clustering_key_restrictions> get_clustering_columns_restrictions() const {
+    const expr::expression& get_clustering_columns_restrictions() const {
         return _clustering_columns_restrictions;
     }
 
@@ -231,6 +225,16 @@ public:
 
     bool parition_key_restrictions_have_supporting_index(const secondary_index::secondary_index_manager& index_manager, expr::allow_local_index allow_local) const;
 
+    size_t clustering_columns_restrictions_size() const;
+
+    bool clustering_columns_restrictions_have_supporting_index(
+        const secondary_index::secondary_index_manager& index_manager,
+        expr::allow_local_index allow_local) const;
+
+    bool multi_column_clustering_restrictions_are_supported_by(const secondary_index::index& index) const;
+
+    bounds_slice get_clustering_slice() const;
+
     /**
      * Checks if the clustering key has some unrestricted components.
      * @return <code>true</code> if the clustering key has some unrestricted components, <code>false</code> otherwise.
@@ -264,8 +268,8 @@ private:
     const expr::expression& get_restrictions(column_kind kind) const {
         switch (kind) {
         case column_kind::partition_key: return _partition_key_restrictions;
-        case column_kind::clustering_key: return _new_clustering_columns_restrictions;
-        default: return _new_nonprimary_key_restrictions;
+        case column_kind::clustering_key: return _clustering_columns_restrictions;
+        default: return _nonprimary_key_restrictions;
         }
     }
 
@@ -277,6 +281,7 @@ private:
      */
     void add_clustering_restrictions_to_idx_ck_prefix(const schema& idx_tbl_schema);
 
+    unsigned int num_clustering_prefix_columns_that_need_not_be_filtered() const;
 #if 0
     std::vector<::shared_ptr<index_expression>> get_index_expressions(const query_options& options) {
         if (!_uses_secondary_indexing || _index_restrictions.empty()) {
@@ -440,7 +445,7 @@ public:
      * <code>false</code> otherwise.
      */
     bool has_clustering_columns_restriction() const {
-        return !_clustering_columns_restrictions->empty();
+        return !expr::is_empty_restriction(_clustering_columns_restrictions);
     }
 
     /**
@@ -449,23 +454,25 @@ public:
      * @return <code>true</code> if the restrictions contain any non-primary key restrictions, <code>false</code> otherwise.
      */
     bool has_non_primary_key_restriction() const {
-        return !_nonprimary_key_restrictions->empty();
+        return !expr::is_empty_restriction(_nonprimary_key_restrictions);
     }
 
     bool pk_restrictions_need_filtering() const;
 
     bool ck_restrictions_need_filtering() const {
-        if (_clustering_columns_restrictions->empty()) {
+        if (expr::is_empty_restriction(_clustering_columns_restrictions)) {
             return false;
         }
 
         return has_partition_key_unrestricted_components()
-        || _clustering_columns_restrictions->needs_filtering(*_schema)
+        || clustering_key_restrictions_need_filtering()
         // If token restrictions are present in an indexed query, then all other restrictions need to be filtered.
         // A single token restriction can have multiple matching partition key values.
         // Because of this we can't create a clustering prefix with more than token restriction.
         || (_uses_secondary_indexing && has_token(_partition_key_restrictions));
     }
+
+    bool clustering_key_restrictions_need_filtering() const;
 
     /**
      * @return true if column is restricted by some restriction, false otherwise
@@ -482,8 +489,8 @@ public:
      /**
       * @return the non-primary key restrictions.
       */
-    const single_column_restrictions::restrictions_map& get_non_pk_restriction() const {
-        return _nonprimary_key_restrictions->restrictions();
+    const expr::single_column_restrictions_map& get_non_pk_restriction() const {
+        return _single_column_nonprimary_key_restrictions;
     }
 
     /**
@@ -494,7 +501,7 @@ public:
     /**
      * @return clustering key restrictions split into single column restrictions (e.g. for filtering support).
      */
-    const single_column_restrictions::restrictions_map& get_single_column_clustering_key_restrictions() const;
+    const expr::single_column_restrictions_map& get_single_column_clustering_key_restrictions() const;
 
     /// Prepares internal data for evaluating index-table queries.  Must be called before
     /// get_local_index_clustering_ranges().
