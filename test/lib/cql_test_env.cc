@@ -571,6 +571,21 @@ public:
 
             db.invoke_on_all(&replica::database::start).get();
 
+            smp::invoke_on_all([blocked_reactor_notify_ms] {
+                engine().update_blocked_reactor_notify_ms(blocked_reactor_notify_ms);
+            }).get();
+
+            service::storage_proxy::config spcfg {
+                .hints_directory_initializer = db::hints::directory_initializer::make_dummy(),
+            };
+            spcfg.available_memory = memory::stats().total_memory();
+            db::view::node_update_backlog b(smp::count, 10ms);
+            scheduling_group_key_config sg_conf =
+                    make_scheduling_group_key_config<service::storage_proxy_stats::stats>();
+            distributed<service::storage_proxy>& proxy = service::get_storage_proxy();
+            proxy.start(std::ref(db), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get0(), std::ref(feature_service), std::ref(token_metadata), std::ref(erm_factory)).get();
+            auto stop_proxy = defer([&proxy] { proxy.stop().get(); });
+
             sharded<service::endpoint_lifecycle_notifier> elc_notif;
             elc_notif.start().get();
             auto stop_elc_notif = defer([&elc_notif] { elc_notif.stop().get(); });
@@ -637,7 +652,6 @@ public:
             auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
             snitch.invoke_on_all(&locator::snitch_ptr::start).get();
 
-            distributed<service::storage_proxy>& proxy = service::get_storage_proxy();
             distributed<service::migration_manager> mm;
             sharded<cql3::cql_config> cql_config;
             cql_config.start(cql3::cql_config::default_tag{}).get();
@@ -674,20 +688,6 @@ public:
                     fs.enable(fs.known_feature_set());
                 });
             }).get();
-
-            smp::invoke_on_all([blocked_reactor_notify_ms] {
-                engine().update_blocked_reactor_notify_ms(blocked_reactor_notify_ms);
-            }).get();
-
-            service::storage_proxy::config spcfg {
-                .hints_directory_initializer = db::hints::directory_initializer::make_dummy(),
-            };
-            spcfg.available_memory = memory::stats().total_memory();
-            db::view::node_update_backlog b(smp::count, 10ms);
-            scheduling_group_key_config sg_conf =
-                    make_scheduling_group_key_config<service::storage_proxy_stats::stats>();
-            proxy.start(std::ref(db), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get0(), std::ref(feature_service), std::ref(token_metadata), std::ref(erm_factory)).get();
-            auto stop_proxy = defer([&proxy] { proxy.stop().get(); });
 
             forward_service.start(std::ref(ms), std::ref(proxy), std::ref(db), std::ref(token_metadata)).get();
             auto stop_forward_service =  defer([&forward_service] { forward_service.stop().get(); });
