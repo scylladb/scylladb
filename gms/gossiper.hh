@@ -256,19 +256,19 @@ public:
      */
     future<> unregister_(shared_ptr<i_endpoint_state_change_subscriber> subscriber);
 
-    std::set<inet_address> get_live_members();
+    std::set<inet_address> get_live_members() const;
 
-    std::set<inet_address> get_live_token_owners();
+    std::set<inet_address> get_live_token_owners() const;
 
     /**
      * @return a list of unreachable gossip participants, including fat clients
      */
-    std::set<inet_address> get_unreachable_members();
+    std::set<inet_address> get_unreachable_members() const;
 
     /**
      * @return a list of unreachable token owners
      */
-    std::set<inet_address> get_unreachable_token_owners();
+    std::set<inet_address> get_unreachable_token_owners() const;
 
     int64_t get_endpoint_downtime(inet_address ep) const noexcept;
 

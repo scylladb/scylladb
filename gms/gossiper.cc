@@ -1023,7 +1023,7 @@ future<> gossiper::unregister_(shared_ptr<i_endpoint_state_change_subscriber> su
     return _subscribers.remove(subscriber);
 }
 
-std::set<inet_address> gossiper::get_live_members() {
+std::set<inet_address> gossiper::get_live_members() const {
     std::set<inet_address> live_members(_live_endpoints.begin(), _live_endpoints.end());
     auto myip = get_broadcast_address();
     logger.debug("live_members before={}", live_members);
@@ -1035,7 +1035,7 @@ std::set<inet_address> gossiper::get_live_members() {
     return live_members;
 }
 
-std::set<inet_address> gossiper::get_live_token_owners() {
+std::set<inet_address> gossiper::get_live_token_owners() const {
     std::set<inet_address> token_owners;
     for (auto& member : get_live_members()) {
         auto es = get_endpoint_state_for_endpoint_ptr(member);
@@ -1046,7 +1046,7 @@ std::set<inet_address> gossiper::get_live_token_owners() {
     return token_owners;
 }
 
-std::set<inet_address> gossiper::get_unreachable_token_owners() {
+std::set<inet_address> gossiper::get_unreachable_token_owners() const {
     std::set<inet_address> token_owners;
     for (auto&& x : _unreachable_endpoints) {
         auto& endpoint = x.first;
@@ -1083,7 +1083,7 @@ future<> gossiper::convict(inet_address endpoint) {
     }
 }
 
-std::set<inet_address> gossiper::get_unreachable_members() {
+std::set<inet_address> gossiper::get_unreachable_members() const {
     std::set<inet_address> ret;
     for (auto&& x : _unreachable_endpoints) {
         ret.insert(x.first);
