@@ -951,7 +951,7 @@ public:
     }
 
     void set_hit_rate(gms::inet_address addr, cache_temperature rate);
-    cache_hit_rate get_hit_rate(gms::gossiper& g, gms::inet_address addr);
+    cache_hit_rate get_hit_rate(const gms::gossiper& g, gms::inet_address addr);
     void drop_hit_rate(gms::inet_address addr);
 
     void enable_auto_compaction();
