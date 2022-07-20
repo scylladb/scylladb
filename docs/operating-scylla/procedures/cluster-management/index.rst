@@ -47,9 +47,9 @@ Cluster Management Procedures
 
   * :doc:`Upscale a Cluster </operating-scylla/procedures/cluster-management/scale-up-cluster/>`
 
-  * `Safely Shutdown Your Cluster <safe-shutdown>`_
+  * :doc:`Safely Shutdown Your Cluster <safe-shutdown>`
 
-  * `Safely Start or Restart Your Cluster <safe-start>`_
+  * :doc:`Safely Start or Restart Your Cluster <safe-start>`
 
 .. panel-box::
   :title: Node Management

@@ -70,7 +70,7 @@ Logging settings specify log output and level.
 Database settings
 =================
 
-Database settings allow for `using a remote cluster <../use-a-remote-db>`_ to store Scylla Manager data.
+Database settings allow for :doc:`using a remote cluster <use-a-remote-db>` to store Scylla Manager data.
 
 .. code-block:: yaml
 
@@ -138,6 +138,8 @@ Backup settings let you specify backup parameters.
    # the same snapshot. If exceeded, a new run with a new snapshot will be created.
    # Zero means no limit.
    #  age_max: 12h
+
+.. _repair-settings:
 
 Repair settings
 ===============

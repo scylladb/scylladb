@@ -72,7 +72,7 @@ Stop Scylla
 
 Download and install the new release
 ------------------------------------
-Before upgrading, check what Scylla version you are currently running with ``rpm -qa | grep scylla-server``. You should use the same version as this version in case you want to `rollback <#rollback-procedure>`_ the upgrade. If you are not running a |SRC_VERSION|.x version, stop right here! This guide only covers |SRC_VERSION|.x to |NEW_VERSION|.y upgrades.
+Before upgrading, check what Scylla version you are currently running with ``rpm -qa | grep scylla-server``. You should use the same version as this version in case you want to :ref:`rollback <rollback-procedure>` the upgrade. If you are not running a |SRC_VERSION|.x version, stop right here! This guide only covers |SRC_VERSION|.x to |NEW_VERSION|.y upgrades.
 
 To upgrade:
 

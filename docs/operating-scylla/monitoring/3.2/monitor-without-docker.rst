@@ -1,7 +1,7 @@
 Deploying Scylla Monitoring Without Docker
 ==========================================
 
-The following instructions will help to deploy `Scylla Monitoring Stack <../monitoring-stack>`_ in cases where you can not use the recommended Docker version.
+The following instructions will help to deploy :doc:`Scylla Monitoring Stack <monitoring-stack>` in cases where you can not use the recommended Docker version.
 
 Please note, Scylla recommends you use the Docker version as it will provide you with the most updated, current Scylla Monitoring system.
 

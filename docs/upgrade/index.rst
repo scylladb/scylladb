@@ -25,17 +25,17 @@ Upgrade Scylla
 
 Procedures for upgrading Scylla.
 
-* `Upgrade Scylla Enterprise <upgrade-enterprise/>`_
+* :doc:`Upgrade Scylla Enterprise <upgrade-enterprise/index>`
 
-* `Upgrade Scylla Open Source <upgrade-opensource/>`_
+* :doc:`Upgrade Scylla Open Source <upgrade-opensource/index>`
 
-* `Upgrade from Scylla Open Source to Scylla Enterprise <upgrade-to-enterprise/>`_
+* :doc:`Upgrade from Scylla Open Source to Scylla Enterprise <upgrade-to-enterprise/index>`
 
-* `Upgrade Scylla Manager <upgrade-manager/>`_
+* :doc:`Upgrade Scylla Manager <upgrade-manager/index>`
 
-* `Upgrade Scylla Monitoring Stack <upgrade-monitor/>`_
+* :doc:`Upgrade Scylla Monitoring Stack <upgrade-monitor/index>`
 
-* `Upgrade Scylla AMI <ami-upgrade>`_
+* :doc:`Upgrade Scylla AMI <ami-upgrade>`
 
 
 .. raw:: html

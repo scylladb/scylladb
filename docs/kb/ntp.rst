@@ -142,7 +142,7 @@ servers are working, have a look at the `instructions for joining the
 NTP pool <http://www.pool.ntp.org/join.html>`__ yourself, so that you
 can help share the correct time with others
 
-`Knowledge Base 
-</kb/>`_
+:doc:`Knowledge Base </kb/index>`
+
 
 .. include:: /rst_include/apache-copyrights.rst

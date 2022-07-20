@@ -96,9 +96,9 @@ Create a Managed Cluster
 
    You will see 3 tasks which are created by adding the cluster:
 
-   * Healthcheck - which checks the Scylla CQL, starting immediately, repeating every 15 seconds. See `Scylla Health Check <../health-check>`_
-   * Healthcheck REST - which checks the Scylla REST API, starting immediately, repeating every hour. See `Scylla Health Check <../health-check>`_
-   * Repair - an automated repair task, starting at midnight tonight, repeating every seven days at midnight. See `Run a Repair <../repair/>`_
+   * Healthcheck - which checks the Scylla CQL, starting immediately, repeating every 15 seconds. See :doc:`Scylla Health Check <health-check>`
+   * Healthcheck REST - which checks the Scylla REST API, starting immediately, repeating every hour. See :doc:`Scylla Health Check <health-check>`
+   * Repair - an automated repair task, starting at midnight tonight, repeating every seven days at midnight. See :doc:`Run a Repair <repair>`
 
    .. note:: If you want to change the schedule for the repair, see :ref:`Reschedule a repair <manager-2.1-reschedule-a-repair>`.
 
@@ -127,7 +127,7 @@ Although Scylla Manager is aware of all topology changes made within every clust
 
 **Procedure**
 
-#. `Add Scylla Manager Agent <../install-agent>`_ to the new node. Use the **same** authentication token as you did for the other nodes in this cluster. Do not generate a new token. 
+#. :doc:`Add Scylla Manager Agent <install-agent>` to the new node. Use the **same** authentication token as you did for the other nodes in this cluster. Do not generate a new token. 
 
 #. Confirm the node / datacenter was added by checking its :ref:`status <sctool_status>`. From the node running the Scylla Manager server, run the ``sctool status`` command, using the name of the managed cluster.
  
@@ -156,7 +156,7 @@ There is no need to perform any action in Scylla Manager after removing a node o
 See Also
 ========
 
-* `sctool Reference <../sctool>`_
+* :doc:`sctool Reference <sctool>`
 * :doc:`Remove a node from a Scylla Cluster </operating-scylla/procedures/cluster-management/remove-node>` 
 * :doc:`Scylla Monitoring </operating-scylla/monitoring/index>`
 

@@ -59,7 +59,7 @@ References
 
 `Gossip protocol on Wikipedia <https://en.wikipedia.org/wiki/Gossip_protocol>`_
 
-`Knowledge Base 
-</kb/>`_
+:doc:`Knowledge Base </kb/index>`
+
 
 .. include:: /rst_include/apache-copyrights.rst

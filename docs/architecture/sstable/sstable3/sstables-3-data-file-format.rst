@@ -30,7 +30,7 @@ This document focuses on the data file format but also refers to other component
 
 Note that the file on-disk format applies both to the "mc" and "md" SSTable format versions.
 The "md" format only fixed the semantics of the (min|max)_clustering_key fields in the SSTable Statistics file, which are now valid for describing the accurate range of clustering prefixes present in the SSTable.
-See `SSTables 3.0 Statistics File Format <architecture/sstable/sstable3/sstables-3-statistics/>`_ for more details.
+See :doc:`SSTables 3.0 Statistics File Format </architecture/sstable/sstable3/sstables-3-statistics>` for more details.
 
 Overview
 ........
