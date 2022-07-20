@@ -3201,6 +3201,73 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
             .then(utils::result_into_future<result<>>);
 }
 
+static inet_address_vector_replica_set endpoint_filter(const gms::gossiper& g, const sstring& local_rack, const std::unordered_map<sstring, std::unordered_set<gms::inet_address>>& endpoints) {
+    // special case for single-node data centers
+    if (endpoints.size() == 1 && endpoints.begin()->second.size() == 1) {
+        return boost::copy_range<inet_address_vector_replica_set>(endpoints.begin()->second);
+    }
+
+    // strip out dead endpoints and localhost
+    std::unordered_multimap<sstring, gms::inet_address> validated;
+
+    auto is_valid = [&g] (gms::inet_address input) {
+        return input != utils::fb_utilities::get_broadcast_address()
+            && g.is_alive(input);
+    };
+
+    for (auto& e : endpoints) {
+        for (auto& a : e.second) {
+            if (is_valid(a)) {
+                validated.emplace(e.first, a);
+            }
+        }
+    }
+
+    typedef inet_address_vector_replica_set return_type;
+
+    if (validated.size() <= 2) {
+        return boost::copy_range<return_type>(validated | boost::adaptors::map_values);
+    }
+
+    if (validated.size() - validated.count(local_rack) >= 2) {
+        // we have enough endpoints in other racks
+        validated.erase(local_rack);
+    }
+
+    if (validated.bucket_count() == 1) {
+        // we have only 1 `other` rack
+        auto res = validated | boost::adaptors::map_values;
+        if (validated.size() > 2) {
+            return boost::copy_range<return_type>(
+                    boost::copy_range<std::vector<gms::inet_address>>(res)
+                            | boost::adaptors::sliced(0, 2));
+        }
+        return boost::copy_range<return_type>(res);
+    }
+
+    // randomize which racks we pick from if more than 2 remaining
+
+    std::vector<sstring> racks = boost::copy_range<std::vector<sstring>>(validated | boost::adaptors::map_keys);
+
+    static thread_local std::default_random_engine rnd_engine{std::random_device{}()};
+
+    if (validated.bucket_count() > 2) {
+        std::shuffle(racks.begin(), racks.end(), rnd_engine);
+        racks.resize(2);
+    }
+
+    inet_address_vector_replica_set result;
+
+    // grab a random member of up to two racks
+    for (auto& rack : racks) {
+        auto cpy = boost::copy_range<std::vector<gms::inet_address>>(validated.equal_range(rack) | boost::adaptors::map_values);
+        std::uniform_int_distribution<size_t> rdist(0, cpy.size() - 1);
+        result.emplace_back(cpy[rdist(rnd_engine)]);
+    }
+
+    return result;
+}
+
 future<result<>>
 storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit) {
     utils::latency_counter lc;
@@ -3240,7 +3307,7 @@ storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::con
                             auto& local_endpoints = topology.get_datacenter_racks().at(local_dc);
                             auto local_rack = topology.get_rack();
                             auto& gossiper = _p._remote->gossiper();
-                            auto chosen_endpoints = gossiper.endpoint_filter(local_rack, local_endpoints);
+                            auto chosen_endpoints = endpoint_filter(gossiper, local_rack, local_endpoints);
 
                             if (chosen_endpoints.empty()) {
                                 if (_cl == db::consistency_level::ANY) {
