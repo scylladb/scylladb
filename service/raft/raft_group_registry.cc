@@ -169,7 +169,7 @@ void raft_group_registry::init_rpc_verbs() {
 
     ser::raft_rpc_verbs::register_raft_modify_config(&_ms, [handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
             raft::group_id gid, raft::server_id from, raft::server_id dst,
-            std::vector<raft::server_address> add, std::vector<raft::server_id> del) mutable {
+            std::vector<raft::config_member> add, std::vector<raft::server_id> del) mutable {
         return handle_raft_rpc(cinfo, gid, from, dst,
             [from, add = std::move(add), del = std::move(del)] (raft_rpc& rpc) mutable {
 

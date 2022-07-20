@@ -92,7 +92,7 @@ struct snapshot_value {
 };
 
 struct initial_state {
-    raft::server_address address;
+    raft::config_member address{config_member_from_id({})};
     raft::term_t term = raft::term_t(1);
     raft::server_id vote;
     std::vector<raft::log_entry> log;
@@ -110,6 +110,7 @@ struct node_id {
 std::vector<raft::server_id> to_raft_id_vec(std::vector<node_id> nodes) noexcept;
 
 raft::server_address_set address_set(std::vector<node_id> nodes) noexcept;
+raft::config_member_set config_set(std::vector<node_id> nodes) noexcept;
 
 // Updates can be
 //  - Entries
@@ -176,8 +177,8 @@ struct config {
     std::vector<node_id> curr;
     std::vector<node_id> prev;
     operator raft::configuration() {
-        auto current = address_set(curr);
-        auto previous = address_set(prev);
+        auto current = config_set(curr);
+        auto previous = config_set(prev);
         return raft::configuration{current, previous};
     }
 };
@@ -723,18 +724,18 @@ public:
         return _net[id]->_client->execute_add_entry(_id, cmd, nullptr);
     }
     future<raft::add_entry_reply> send_modify_config(raft::server_id id,
-        const std::vector<raft::server_address>& add,
+        const std::vector<raft::config_member>& add,
         const std::vector<raft::server_id>& del) override {
         check_known_and_connected(id);
         return _net[id]->_client->execute_modify_config(_id, add, del, nullptr);
     }
 
-    void add_server(raft::server_id id, bytes node_info) override {
-        _known_peers.insert(raft::server_address{id});
+    void add_server(raft::server_address addr) override {
+        _known_peers.insert(addr);
         ++_servers_added;
     }
     void remove_server(raft::server_id id) override {
-        _known_peers.erase(raft::server_address{id});
+        _known_peers.erase(server_addr_from_id(id));
         ++_servers_removed;
     }
 
@@ -803,7 +804,7 @@ raft_cluster<Clock>::raft_cluster(test_case test,
     raft::configuration config;
 
     for (size_t i = 0; i < states.size(); i++) {
-        states[i].address = raft::server_address{to_raft_id(i)};
+        states[i].address = config_member_from_id(to_raft_id(i));
         config.current.emplace(states[i].address);
     }
 
@@ -814,7 +815,7 @@ raft_cluster<Clock>::raft_cluster(test_case test,
     for (size_t i = 0; i < states.size(); i++) {
         auto& s = states[i].address;
         states[i].snapshot.config = config;
-        (*_snapshots)[s.id][states[i].snapshot.id] = states[i].snp_value;
+        (*_snapshots)[s.addr.id][states[i].snapshot.id] = states[i].snp_value;
         _servers.emplace_back(create_server(i, states[i]));
     }
 }
@@ -1099,13 +1100,13 @@ future<> raft_cluster<Clock>::free_election() {
 template <typename Clock>
 future<> raft_cluster<Clock>::change_configuration(set_config sc) {
     BOOST_CHECK_MESSAGE(sc.size() > 0, "Empty configuration change not supported");
-    raft::server_address_set set;
+    raft::config_member_set set;
     std::unordered_set<size_t> new_config;
     for (auto s: sc) {
         new_config.insert(s.node_idx);
-        auto addr = to_server_address(s.node_idx);
-        addr.can_vote = s.can_vote;
-        set.insert(std::move(addr));
+        auto m = to_config_member(s.node_idx);
+        m.can_vote = s.can_vote;
+        set.insert(std::move(m));
         BOOST_CHECK_MESSAGE(s.node_idx < _servers.size(),
                 format("Configuration element {} past node limit {}", s.node_idx, _servers.size() - 1));
     }

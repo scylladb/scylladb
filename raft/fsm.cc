@@ -208,7 +208,7 @@ void fsm::become_candidate(bool is_prevote, bool is_leadership_transfer) {
     auto& votes = candidate_state().votes;
 
     const auto& voters = votes.voters();
-    if (!voters.contains(server_address{_my_id})) {
+    if (!voters.contains(_my_id)) {
         // We're not a voter in the current configuration (perhaps we completely left it).
         //
         // But sometimes, if we're transitioning between configurations
@@ -595,11 +595,11 @@ void fsm::tick() {
         // Non leaders will ignore the append reply.
         auto& cfg = get_configuration();
         // If conf is joint it means a leader will send us a non joint one eventually
-        if (!cfg.is_joint() && cfg.current.contains(raft::server_address{_my_id})) {
+        if (!cfg.is_joint() && cfg.current.contains(_my_id)) {
             for (auto s : cfg.current) {
-                if (s.can_vote && s.id != _my_id && _failure_detector.is_alive(s.id)) {
-                    logger.trace("tick[{}]: searching for a leader. Pinging {}", _my_id, s.id);
-                    send_to(s.id, append_reply{_current_term, _commit_idx, append_reply::rejected{index_t{0}, index_t{0}}});
+                if (s.can_vote && s.addr.id != _my_id && _failure_detector.is_alive(s.addr.id)) {
+                    logger.trace("tick[{}]: searching for a leader. Pinging {}", _my_id, s.addr.id);
+                    send_to(s.addr.id, append_reply{_current_term, _commit_idx, append_reply::rejected{index_t{0}, index_t{0}}});
                 }
             }
         }
@@ -845,8 +845,9 @@ static size_t entry_size(const log_entry& e) {
         size_t operator()(const configuration& c) {
             size_t size = 0;
             for (auto& s : c.current) {
-                size += sizeof(s.id);
-                size += s.info.size();
+                size += sizeof(s.addr.id);
+                size += s.addr.info.size();
+                size += sizeof(s.can_vote);
             }
             return size;
         }

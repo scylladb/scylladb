@@ -267,7 +267,7 @@ RAFT_TEST_CASE(etcd_test_leader_cycle, (test_case{
 RAFT_TEST_CASE(rpc_load_conf_from_snapshot, (test_case{
          .nodes = 1, .total_values = 0,
          .initial_snapshots = {{.snap = {
-                .config = raft::configuration{to_raft_id(0)}}}},
+                .config = config_from_ids({to_raft_id(0)})}}},
          .updates = {check_rpc_config{node_id{0},
                      rpc_address_set{node_id{0}}}
          }}));
@@ -276,7 +276,7 @@ RAFT_TEST_CASE(rpc_load_conf_from_snapshot, (test_case{
 // Initial configuration is taken from the persisted log.
 RAFT_TEST_CASE(rpc_load_conf_from_log, (test_case{
          .nodes = 1, .total_values = 0,
-         .initial_states = {{.le = {{1, raft::configuration{to_raft_id(0)}}}}},
+         .initial_states = {{.le = {{1, config_from_ids({to_raft_id(0)})}}}},
          .updates = {check_rpc_config{node_id{0},
                      rpc_address_set{node_id{0}}}
          }}));
@@ -375,7 +375,7 @@ RAFT_TEST_CASE(rpc_configuration_truncate_restore_from_snp, (test_case{
                 .log = { raft::log_entry{raft::term_t(1), raft::index_t(1),
                         config{.curr = {node_id{0},node_id{1},node_id{2},node_id{3}},
                                .prev = {node_id{0},node_id{1},node_id{2}}}}},
-                .snapshot = {.config  = raft::configuration{address_set({node_id{0},node_id{1},node_id{2}})}
+                .snapshot = {.config  = raft::configuration{config_set({node_id{0},node_id{1},node_id{2}})}
                 }
             }},
             // A should see {A, B, C, D} as RPC config since
@@ -472,7 +472,7 @@ RAFT_TEST_CASE(rpc_configuration_truncate_restore_from_log, (test_case{
                         },
                 },
                 // all nodes in snapshot config {A, B, C, D} (original)
-                .snapshot = {.config  = raft::configuration{address_set({node_id{0},node_id{1},node_id{2},node_id{3}})}
+                .snapshot = {.config  = raft::configuration{config_set({node_id{0},node_id{1},node_id{2},node_id{3}})}
                 }
             }},
 
@@ -522,7 +522,7 @@ RAFT_TEST_CASE(rpc_configuration_truncate_restore_from_log, (test_case{
                         },
                 },
                 // all nodes in snapshot config {A, B, C, D} (original)
-                .snapshot = {.config  = raft::configuration{address_set({node_id{0},node_id{1},node_id{2},node_id{3}})}
+                .snapshot = {.config  = raft::configuration{config_set({node_id{0},node_id{1},node_id{2},node_id{3}})}
                 }
             }},
 

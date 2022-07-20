@@ -56,11 +56,20 @@ using server_info = bytes;
 
 struct server_address {
     server_id id;
-    bool can_vote = true;
     server_info info;
+
+    server_address(server_id id, server_info info)
+        : id(std::move(id)), info(std::move(info)) {
+    }
+
     bool operator==(const server_address& rhs) const {
         return id == rhs.id;
     }
+
+    bool operator==(const raft::server_id& rhs) const {
+        return id == rhs;
+    }
+
     bool operator<(const server_address& rhs) const {
         return id < rhs.id;
     }
@@ -68,49 +77,77 @@ struct server_address {
     friend std::ostream& operator<<(std::ostream&, const server_address&);
 };
 
-} // end of namespace raft
+struct config_member {
+    server_address addr;
+    bool can_vote;
 
-namespace std {
+    config_member(server_address addr, bool can_vote)
+        : addr(std::move(addr)), can_vote(can_vote) {
+    }
 
-template <> struct hash<raft::server_address> {
+    bool operator==(const config_member& rhs) const {
+        return addr == rhs.addr;
+    }
+
+    bool operator==(const raft::server_id& rhs) const {
+        return addr.id == rhs;
+    }
+
+    bool operator<(const config_member& rhs) const {
+        return addr < rhs.addr;
+    }
+
+    friend std::ostream& operator<<(std::ostream&, const config_member&);
+};
+
+struct server_address_hash {
+    using is_transparent = void;
+
+    size_t operator()(const raft::server_id& id) const {
+        return std::hash<raft::server_id>{}(id);
+    }
+
     size_t operator()(const raft::server_address& address) const {
-        return std::hash<raft::server_id>{}(address.id);
+        return operator()(address.id);
     }
 };
 
-} // end of namespace std
+struct config_member_hash {
+    using is_transparent = void;
 
-namespace raft {
+    size_t operator()(const raft::server_id& id) const {
+        return std::hash<raft::server_id>{}(id);
+    }
 
-using server_address_set = std::unordered_set<server_address>;
+    size_t operator()(const raft::server_address& address) const {
+        return operator()(address.id);
+    }
+
+    size_t operator()(const raft::config_member& s) const {
+        return operator()(s.addr);
+    }
+};
+
+using server_address_set = std::unordered_set<server_address, server_address_hash, std::equal_to<>>;
+using config_member_set = std::unordered_set<config_member, config_member_hash, std::equal_to<>>;
 
 // A configuration change decomposed to joining and leaving
 // servers. Helps validate the configuration and update RPC.
 struct configuration_diff {
-    server_address_set joining, leaving;
+    config_member_set joining, leaving;
 };
 
 struct configuration {
     // Contains the current configuration. When configuration
     // change is in progress, contains the new configuration.
-    server_address_set current;
+    config_member_set current;
     // Used during the transitioning period of configuration
     // changes.
-    server_address_set previous;
+    config_member_set previous;
 
-    configuration(std::initializer_list<server_id> ids) {
-        current.reserve(ids.size());
-        for (auto&& id : ids) {
-            if (id == server_id{}) {
-                throw std::invalid_argument("raft::configuration: id zero is not supported");
-            }
-            current.emplace(server_address{std::move(id)});
-        }
-    }
-
-    explicit configuration(server_address_set current_arg = {}, server_address_set previous_arg = {})
+    explicit configuration(config_member_set current_arg = {}, config_member_set previous_arg = {})
         : current(std::move(current_arg)), previous(std::move(previous_arg)) {
-            if (current.count(server_address{server_id()}) || previous.count(server_address{server_id()})) {
+            if (current.count(server_id{}) || previous.count(server_id{})) {
                 throw std::invalid_argument("raft::configuration: id zero is not supported");
             }
         }
@@ -122,12 +159,12 @@ struct configuration {
     }
 
     // Count the number of voters in a configuration
-    static size_t voter_count(const server_address_set& c_new) {
-        return std::count_if(c_new.begin(), c_new.end(), [] (const server_address& s) { return s.can_vote; });
+    static size_t voter_count(const config_member_set& c_new) {
+        return std::count_if(c_new.begin(), c_new.end(), [] (const config_member& s) { return s.can_vote; });
     }
 
     // Check if transitioning to a proposed configuration is safe.
-    static void check(const server_address_set& c_new) {
+    static void check(const config_member_set& c_new) {
         // We must have at least one voting member in the config.
         if (c_new.empty()) {
             throw std::invalid_argument("Attempt to transition to an empty Raft configuration");
@@ -138,7 +175,7 @@ struct configuration {
     }
 
     // Compute a diff between a proposed configuration and the current one.
-    configuration_diff diff(const server_address_set& c_new) const {
+    configuration_diff diff(const config_member_set& c_new) const {
         configuration_diff diff;
         // joining
         for (const auto& s : c_new) {
@@ -161,22 +198,22 @@ struct configuration {
     // True if the current or previous configuration contains
     // this server.
     bool contains(server_id id) const {
-        auto it = current.find(server_address{.id=id});
+        auto it = current.find(id);
         if (it != current.end()) {
             return true;
         }
-        return previous.find(server_address{.id=id}) != previous.end();
+        return previous.find(id) != previous.end();
     }
 
     // Same as contains() but true only if the member can vote.
     bool can_vote(server_id id) const {
         bool can_vote = false;
-        auto it = current.find(server_address{.id=id});
+        auto it = current.find(id);
         if (it != current.end()) {
             can_vote |= it->can_vote;
         }
 
-        it = previous.find(server_address{.id=id});
+        it = previous.find(id);
         if (it != previous.end()) {
             can_vote |= it->can_vote;
         }
@@ -185,7 +222,7 @@ struct configuration {
     }
 
     // Enter a joint configuration given a new set of servers.
-    void enter_joint(server_address_set c_new) {
+    void enter_joint(config_member_set c_new) {
         if (c_new.empty()) {
             throw std::invalid_argument("Attempt to transition to an empty Raft configuration");
         }
@@ -534,12 +571,12 @@ public:
     // Send a configuration change request to the leader. Block until the
     // leader replies.
     virtual future<add_entry_reply> send_modify_config(server_id id,
-        const std::vector<server_address>& add,
+        const std::vector<config_member>& add,
         const std::vector<server_id>& del) = 0;
 
     // When a new server is learn this function is called with the
     // info about the server.
-    virtual void add_server(server_id id, server_info info) = 0;
+    virtual void add_server(server_address) = 0;
 
     // When a server is removed from local config this call is
     // executed.
@@ -595,7 +632,7 @@ public:
     // as requested by a remote follower.
     // If the future resolves successfully, a dummy entry was committed after the configuration change.
     virtual future<add_entry_reply> execute_modify_config(server_id from,
-        std::vector<server_address> add,
+        std::vector<config_member> add,
         std::vector<server_id> del, seastar::abort_source* as) = 0;
 
     // Update RPC implementation with this client as

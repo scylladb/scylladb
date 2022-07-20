@@ -13,7 +13,11 @@ namespace raft {
 seastar::logger logger("raft");
 
 std::ostream& operator<<(std::ostream& os, const raft::server_address& addr) {
-    return os << format("{{.id={} .can_vote={}}}", addr.id, addr.can_vote);
+    return os << format("{{.id={}}}", addr.id);
+}
+
+std::ostream& operator<<(std::ostream& os, const raft::config_member& s) {
+    return os << format("{{.id={} .can_vote={}}}", s.addr.id, s.can_vote);
 }
 
 std::ostream& operator<<(std::ostream& os, const raft::configuration& cfg) {

@@ -93,7 +93,7 @@ public:
     //
     // The caller may pass a pointer to an abort_source to make the operation abortable.
     // If abort is requested before the operation finishes, the future will contain `raft::request_aborted` exception.
-    virtual future<> set_configuration(server_address_set c_new, seastar::abort_source* as = nullptr) = 0;
+    virtual future<> set_configuration(config_member_set c_new, seastar::abort_source* as = nullptr) = 0;
 
     // A simplified wrapper around set_configuration() which adds
     // and deletes servers. Unlike set_configuration(),
@@ -116,7 +116,7 @@ public:
     //
     // The caller may pass a pointer to an abort_source to make the operation abortable.
     // If abort is requested before the operation finishes, the future will contain `raft::request_aborted` exception.
-    virtual future<> modify_config(std::vector<server_address> add,
+    virtual future<> modify_config(std::vector<config_member> add,
         std::vector<server_id> del, seastar::abort_source* as = nullptr) = 0;
 
     // Return the currently known configuration
