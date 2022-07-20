@@ -150,7 +150,7 @@ static future<rpc::tuple<Elements..., replica::exception_variant>> encode_replic
 //
 // The presence of this object indicates that `storage_proxy` is able to perform remote queries.
 // Without it only local queries are available.
-struct storage_proxy::remote {
+class storage_proxy::remote {
     storage_proxy& _sp;
     shared_ptr<migration_manager> _mm;
     netw::messaging_service& _ms;
@@ -159,6 +159,7 @@ struct storage_proxy::remote {
     netw::connection_drop_slot_t _connection_dropped;
     netw::connection_drop_registration_t _condrop_registration;
 
+public:
     remote(storage_proxy& sp, netw::messaging_service& ms, gms::gossiper& g)
         : _sp(sp), _ms(ms), _gossiper(g)
         , _connection_dropped(std::bind_front(&remote::connection_dropped, this))
@@ -187,6 +188,10 @@ struct storage_proxy::remote {
     future<> uninit_messaging_service() {
         co_await ser::storage_proxy_rpc_verbs::unregister(&_ms);
         _mm = nullptr;
+    }
+
+    gms::gossiper& gossiper() const {
+        return _gossiper;
     }
 
     bool is_alive(const gms::inet_address& ep) const {
@@ -293,14 +298,6 @@ struct storage_proxy::remote {
         return ser::storage_proxy_rpc_verbs::send_truncate(&_ms, std::move(addr), timeout, std::move(ks_name), std::move(cf_name));
     }
 
-    future<schema_ptr> get_schema_for_read(table_schema_version v, netw::msg_addr from) {
-        return _mm->get_schema_for_read(std::move(v), std::move(from), _ms);
-    }
-
-    future<schema_ptr> get_schema_for_write(table_schema_version v, netw::msg_addr from) {
-        return _mm->get_schema_for_write(std::move(v), std::move(from), _ms);
-    }
-
     future<service::paxos::prepare_response> send_paxos_prepare(
             netw::msg_addr addr, storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state,
             const query::read_command& cmd, const partition_key& key, utils::UUID ballot, bool only_digest, query::digest_algorithm da) {
@@ -362,6 +359,15 @@ struct storage_proxy::remote {
                throw;
            }
         });
+    }
+
+private:
+    future<schema_ptr> get_schema_for_read(table_schema_version v, netw::msg_addr from) {
+        return _mm->get_schema_for_read(std::move(v), std::move(from), _ms);
+    }
+
+    future<schema_ptr> get_schema_for_write(table_schema_version v, netw::msg_addr from) {
+        return _mm->get_schema_for_write(std::move(v), std::move(from), _ms);
     }
 
     future<> handle_counter_mutation(
@@ -3233,7 +3239,7 @@ storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::con
                             auto local_dc = topology.get_datacenter();
                             auto& local_endpoints = topology.get_datacenter_racks().at(local_dc);
                             auto local_rack = topology.get_rack();
-                            auto& gossiper = _p._remote->_gossiper;
+                            auto& gossiper = _p._remote->gossiper();
                             auto chosen_endpoints = gossiper.endpoint_filter(local_rack, local_endpoints);
 
                             if (chosen_endpoints.empty()) {
@@ -4804,7 +4810,7 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
     is_read_non_local |= !all_replicas.empty() && all_replicas.front() != utils::fb_utilities::get_broadcast_address();
 
     auto cf = _db.local().find_column_family(schema).shared_from_this();
-    auto& gossiper = _remote->_gossiper;
+    auto& gossiper = _remote->gossiper();
     inet_address_vector_replica_set target_replicas = db::filter_for_query(cl, ks, all_replicas, preferred_endpoints, repair_decision,
             gossiper,
             retry_type == speculative_retry::type::NONE ? nullptr : &extra_replica,
@@ -5075,7 +5081,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
     // get stuck on 0 and never increased too much if the number of results remains small.
     concurrency_factor = std::max(size_t(1), ranges.size());
 
-    auto& gossiper = _remote->_gossiper;
+    auto& gossiper = _remote->gossiper();
     while (i != ranges.end()) {
         dht::partition_range& range = *i;
         inet_address_vector_replica_set live_endpoints = get_live_sorted_endpoints(ks, end_token(range));
@@ -5144,7 +5150,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                 break;
             } else if (pcf) {
                 // check that merged set hit rate is not to low
-                auto find_min = [&g = _remote->_gossiper, pcf] (const inet_address_vector_replica_set& range) {
+                auto find_min = [&g = _remote->gossiper(), pcf] (const inet_address_vector_replica_set& range) {
                     struct {
                         gms::gossiper& g;
                         replica::column_family* cf = nullptr;
@@ -5785,7 +5791,7 @@ future<> storage_proxy::start_hints_manager() {
     return f.then([this] {
         return _hints_resource_manager.register_manager(_hints_for_views_manager);
     }).then([this] {
-        auto& gossiper = _remote->_gossiper;
+        auto& gossiper = _remote->gossiper();
         return _hints_resource_manager.start(shared_from_this(), gossiper.shared_from_this());
     });
 }

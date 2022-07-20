@@ -253,7 +253,7 @@ private:
     storage_proxy_stats::global_stats _global_stats;
     gms::feature_service& _features;
 
-    struct remote;
+    class remote;
     std::unique_ptr<remote> _remote;
 
     static constexpr float CONCURRENT_SUBREQUESTS_MARGIN = 0.10;
