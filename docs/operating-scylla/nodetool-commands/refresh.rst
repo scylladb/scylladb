@@ -5,7 +5,7 @@ Nodetool refresh
 
 Add the files to the upload directory, by default it is located under ``/var/lib/scylla/data/keyspace_name/table_name-UUID/upload``
 
-:doc:`Materialized Views (MV)</getting-started/mv/>` and :doc:`Secondary Indexes (SI)</getting-started/secondary-indexes/>` of the upload table, and if they exist, they are automatically updated. Uploading MV or SI SSTables is not required and will fail.
+:doc:`Materialized Views (MV)</cql/mv/>` and :doc:`Secondary Indexes (SI)</cql/secondary-indexes/>` of the upload table, and if they exist, they are automatically updated. Uploading MV or SI SSTables is not required and will fail.
 
 
 .. note:: Scylla node will ignore the partitions in the sstables which are not assigned to this node. For example, if sstable are copied from a different node.

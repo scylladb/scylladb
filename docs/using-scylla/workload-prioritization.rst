@@ -64,7 +64,7 @@ These commands set, list, and edit the level of service.
 Create a Service Level
 ----------------------
 
-When you create a service level, you allocate a percentage of resources to the service level. Remember to use the correct naming convention to name your service level. If you decide to use :doc:`Reserved Keywords </getting-started/reserved-keywords>`, enclose them in either single or double quotes (for example ``'primary'``).
+When you create a service level, you allocate a percentage of resources to the service level. Remember to use the correct naming convention to name your service level. If you decide to use :doc:`Reserved Keywords </cql/reserved-keywords>`, enclose them in either single or double quotes (for example ``'primary'``).
 
 **Syntax**
 

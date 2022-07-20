@@ -68,9 +68,9 @@ Another read repair mechanism is **probabilistic** read repair, which works as f
 
 5. If a query’s consistency level is more than 1, and a data mismatch is found before consistency level is reached, then the read repair will run in the foreground. **All replica nodes are updated before the data is returned to the client.** However, if data mismatch  is found *after* a query’s consistency level is achieved, the update happens in the background, as mentioned above.
 
-The probability of this kind of read repair occurring on a read request is based on the :code:`read_repair_chance`. This :doc:`setting </getting-started/ddl/>`, provided when a table is created, can apply across data centers.  The setting specifies the probability that extra nodes (in addition to those required by the consistency level) are queried for the purpose of read repairs.
+The probability of this kind of read repair occurring on a read request is based on the :code:`read_repair_chance`. This :doc:`setting </cql/ddl/>`, provided when a table is created, can apply across data centers.  The setting specifies the probability that extra nodes (in addition to those required by the consistency level) are queried for the purpose of read repairs.
 
-A similar :doc:`setting </getting-started/ddl/>`, :code:`dclocal_read_repair_chance`,  applies only to nodes within the local data center.  You can use this setting when conserving traffic between data centers is important.
+A similar :doc:`setting </cql/ddl/>`, :code:`dclocal_read_repair_chance`,  applies only to nodes within the local data center.  You can use this setting when conserving traffic between data centers is important.
 
 * :doc:`Scylla Anti-Entropy </architecture/anti-entropy/index/>`
 

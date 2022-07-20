@@ -143,7 +143,7 @@ You can read more about the ``TIMESTAMP`` retrieved by ``WRITETIME`` in the :ref
 
 - ``TTL`` retrieves the remaining time to live (in *seconds*) for the value of the column, if it set to expire, or ``null`` otherwise.
 
-You can read more about TTL in the :doc:`documentation </getting-started/time-to-live>` and also in `this Scylla University lesson <https://university.scylladb.com/courses/data-modeling/lessons/advanced-data-modeling/topic/expiring-data-with-ttl-time-to-live/>`. 
+You can read more about TTL in the :doc:`documentation </cql/time-to-live>` and also in `this Scylla University lesson <https://university.scylladb.com/courses/data-modeling/lessons/advanced-data-modeling/topic/expiring-data-with-ttl-time-to-live/>`. 
 
 .. _where-clause:
 
@@ -771,7 +771,7 @@ parameters:
   the columns themselves. This means that any subsequent update of the column will also reset the TTL (to whatever TTL
   is specified in that update). By default, values never expire. A TTL of 0 is equivalent to no TTL. If the table has a
   default_time_to_live, a TTL of 0 will remove the TTL for the inserted or updated values. A TTL of ``null`` is equivalent
-  to inserting with a TTL of 0. You can read more about TTL in the :doc:`documentation </getting-started/time-to-live>` and also in `this Scylla University lesson <https://university.scylladb.com/courses/data-modeling/lessons/advanced-data-modeling/topic/expiring-data-with-ttl-time-to-live/>`.
+  to inserting with a TTL of 0. You can read more about TTL in the :doc:`documentation </cql/time-to-live>` and also in `this Scylla University lesson <https://university.scylladb.com/courses/data-modeling/lessons/advanced-data-modeling/topic/expiring-data-with-ttl-time-to-live/>`.
 - ``TIMEOUT``: specifies a timeout duration for the specific request.
   Please refer to the :ref:`SELECT <using-timeout>` section for more information.
 
@@ -952,7 +952,7 @@ Use the ``COUNTER`` option for batched counter updates. Unlike other
 updates in Scylla, counter updates are not idempotent.
 
 
-:doc:`Apache Cassandra Query Language </getting-started/cql/>`
+:doc:`Apache Cassandra Query Language (CQL) Reference </cql/index>`
 
 .. include:: /rst_include/apache-copyrights.rst
 

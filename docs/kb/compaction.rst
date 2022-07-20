@@ -2,7 +2,7 @@ Compaction
 ==========
 
 
-This document gives a high level overview of Compaction, focusing on what compaction is, and how it works. There is a different document that covers the :doc:`CQL syntax </getting-started/compaction>` for setting a compaction strategy. There is also another document, :doc:`Compaction Strategy Matrix </architecture/compaction/compaction-strategies>`, that covers how to decide which strategy works best.
+This document gives a high level overview of Compaction, focusing on what compaction is, and how it works. There is a different document that covers the :doc:`CQL syntax </cql/compaction>` for setting a compaction strategy. There is also another document, :doc:`Compaction Strategy Matrix </architecture/compaction/compaction-strategies>`, that covers how to decide which strategy works best.
 
 How Scylla Writes Data
 ----------------------
@@ -50,7 +50,7 @@ A compaction strategy is what determines which of the SSTables will be compacted
 How to Set a Compaction Strategy
 ................................
 
-Compaction strategies are set as part of the ``CREATE`` or ``ALTER`` statement when creating or altering tables. Refer to the :doc:`CQL syntax </getting-started/compaction>` for details. 
+Compaction strategies are set as part of the ``CREATE`` or ``ALTER`` statement when creating or altering tables. Refer to the :doc:`CQL syntax </cql/compaction>` for details. 
 
 .. caution:: Changing the parameters for compaction strategies or changing from one strategy to another (using the ``ALTER`` statement) can create issues. See `Changing Compaction Strategies or Properties`_ for more information. 
 
@@ -238,7 +238,7 @@ Use the table in :ref:`Which strategy is best <which-strategy-is-best>` to deter
 
 References
 ----------
-* :doc:`CQL Reference for Compaction </getting-started/compaction>`
+* :doc:`CQL Reference for Compaction </cql/compaction>`
 
 * :doc:`How to Choose a Compaction Strategy </architecture/compaction/compaction-strategies>`.
 

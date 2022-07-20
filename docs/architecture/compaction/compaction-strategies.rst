@@ -11,7 +11,7 @@ Scylla implements the following compaction strategies in order to reduce :term:`
 * `Time-window compaction strategy (TWCS)`_ - designed for time series data; replaced Date-tiered compaction. 
 * `Date-tiered compaction strategy (DTCS)`_ - designed for time series data.
 
-This document covers how to choose a compaction strategy and presents the benefits and disadvantages of each one. If you want more information on compaction in general or on any of these strategies, refer to the :doc:`Compaction Overview </kb/compaction>`. If you want an explanation of the CQL commands used to create a compaction strategy, refer to :doc:`Compaction CQL Reference </getting-started/compaction>` .
+This document covers how to choose a compaction strategy and presents the benefits and disadvantages of each one. If you want more information on compaction in general or on any of these strategies, refer to the :doc:`Compaction Overview </kb/compaction>`. If you want an explanation of the CQL commands used to create a compaction strategy, refer to :doc:`Compaction CQL Reference </cql/compaction>` .
 
 Learn more in the `Compaction Strategies lesson <https://university.scylladb.com/courses/scylla-operations/lessons/compaction-strategies/>`_ on Scylla University
 
@@ -238,7 +238,7 @@ The comments below describe the type of amplification each compaction strategy 
 References
 ----------
 * :doc:`Compaction Overview </kb/compaction>` - contains in depth information on all of the strategies
-* :doc:`Compaction CQL Reference </getting-started/compaction>` - covers the CQL parameters used for implementing compaction
+* :doc:`Compaction CQL Reference </cql/compaction>` - covers the CQL parameters used for implementing compaction
 * Scylla Summit Tech Talk: `How to Ruin Performance by Choosing the Wrong Compaction Strategy <https://www.scylladb.com/tech-talk/ruin-performance-choosing-wrong-compaction-strategy-scylla-summit-2017/>`_
 
 

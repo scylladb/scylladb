@@ -45,7 +45,7 @@ In the example above:
 Example
 .......
 
-The following is an example and does not contain all of the options available. To see all of the options available, refer to the :doc:`CQL Reference </getting-started/secondary-indexes>`.
+The following is an example and does not contain all of the options available. To see all of the options available, refer to the :doc:`CQL Reference </cql/secondary-indexes>`.
 
 Given the following schema:
 
@@ -134,7 +134,7 @@ More information
 ................
 
 * :doc:`Local Secondary Indexes </using-scylla/local-secondary-indexes/>`
-* :doc:`CQL Reference </getting-started/secondary-indexes/>` - CQL Reference for Secondary Indexes
+* :doc:`CQL Reference </cql/secondary-indexes/>` - CQL Reference for Secondary Indexes
 
 The following courses are available from Scylla University:
 

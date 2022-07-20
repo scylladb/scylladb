@@ -32,10 +32,10 @@ Glossary
       Determines which of the SSTables will be compacted, and when. See :doc:`Compaction Strategies</architecture/compaction/compaction-strategies/>`.
 
     Consistency Level (CL)
-      A dynamic value which dictates the number of replicas (in a cluster) that must acknowledge a read or write operation. This value is set by the client on a per operation basis. For the CQL Shell, the consistency level defaults to ONE for read and write operations. See :doc:`Consistency Levels </getting-started/consistency>`.
+      A dynamic value which dictates the number of replicas (in a cluster) that must acknowledge a read or write operation. This value is set by the client on a per operation basis. For the CQL Shell, the consistency level defaults to ONE for read and write operations. See :doc:`Consistency Levels </cql/consistency>`.
 
     Quorum
-      Quorum is a *global* consistency level setting across the entire cluster including all data centers. See :doc:`Consistency Levels </getting-started/consistency>`.
+      Quorum is a *global* consistency level setting across the entire cluster including all data centers. See :doc:`Consistency Levels </cql/consistency>`.
 
     Date-tiered compaction strategy (DTCS)
       :abbr:`DTCS (Date-tiered compaction strategy)` is designed for time series data, but should not be used. Use :term:`Time-Window Compaction Strategy`. See :doc:`Compaction Strategies</architecture/compaction/compaction-strategies/>`.

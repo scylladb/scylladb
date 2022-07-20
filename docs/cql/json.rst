@@ -119,6 +119,6 @@ The ``toJson()`` function may be used similarly to ``SELECT JSON``, but for a si
 in the selection clause of a ``SELECT`` statement.
 
 
-:doc:`Apache Cassandra Query Language </getting-started/cql/>`
+* :doc:`Apache Cassandra Query Language (CQL) Reference </cql/index>`
 
 .. include:: /rst_include/apache-copyrights.rst

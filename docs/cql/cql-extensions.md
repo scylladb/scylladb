@@ -1,4 +1,4 @@
-# Scylla CQL extensions
+# ScyllaDB CQL Extensions
 
 Scylla extends the CQL language to provide a few extra features. This document
 lists those extensions.
@@ -219,5 +219,5 @@ If the driver doesn't support it, `Config_error` will be sent instead.
 
 For more details, see:
 
-- Detailed [`design notes`](./per-partition-rate-limit.md)
-- Description of the [rate limit exceeded](./protocol-extensions.md#rate-limit-error) error
+- Detailed [design notes](https://github.com/scylladb/scylla/blob/master/docs/dev/per-partition-rate-limit.md)
+- Description of the [rate limit exceeded](https://github.com/scylladb/scylla/blob/master/docs/dev/protocol-extensions.md#rate-limit-error) error

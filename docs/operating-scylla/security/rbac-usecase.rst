@@ -212,5 +212,5 @@ Additional References
 ---------------------
 
 * :doc:`Authorization</operating-scylla/security/authorization/>`
-* :doc:`CQLSh the CQL shell</getting-started/cqlsh>`
+* :doc:`CQLSh the CQL shell</cql/cqlsh>`
 * :doc:`Workload Prioritization </using-scylla/workload-prioritization/>` - to attach a service level to a role
