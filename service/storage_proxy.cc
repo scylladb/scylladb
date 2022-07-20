@@ -154,7 +154,7 @@ class storage_proxy::remote {
     storage_proxy& _sp;
     shared_ptr<migration_manager> _mm;
     netw::messaging_service& _ms;
-    gms::gossiper& _gossiper;
+    const gms::gossiper& _gossiper;
 
     netw::connection_drop_slot_t _connection_dropped;
     netw::connection_drop_registration_t _condrop_registration;
@@ -190,7 +190,7 @@ public:
         _mm = nullptr;
     }
 
-    gms::gossiper& gossiper() const {
+    const gms::gossiper& gossiper() const {
         return _gossiper;
     }
 
@@ -5219,7 +5219,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                 // check that merged set hit rate is not to low
                 auto find_min = [&g = _remote->gossiper(), pcf] (const inet_address_vector_replica_set& range) {
                     struct {
-                        gms::gossiper& g;
+                        const gms::gossiper& g;
                         replica::column_family* cf = nullptr;
                         float operator()(const gms::inet_address& ep) const {
                             return float(cf->get_hit_rate(g, ep).rate);
