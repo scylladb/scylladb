@@ -661,6 +661,11 @@ inline auto find_clustering_order(const expression& e) {
     return find_binop(e, is_clustering_order);
 }
 
+/// Given a Boolean expression, compute its factors such as e=f1 AND f2 AND f3 ...
+/// If the expression is TRUE, may return no factors (happens today for an
+/// empty conjunction).
+std::vector<expression> boolean_factors(expression e);
+
 /// True iff binary_operator involves a collection.
 extern bool is_on_collection(const binary_operator&);
 

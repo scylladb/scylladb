@@ -741,6 +741,25 @@ expression make_conjunction(expression a, expression b) {
     return conjunction{std::move(children)};
 }
 
+static
+void
+do_factorize(std::vector<expression>& factors, expression e) {
+    if (auto c = expr::as_if<conjunction>(&e)) {
+        for (auto&& element : c->children) {
+            do_factorize(factors, std::move(element));
+        }
+    } else {
+        factors.push_back(std::move(e));
+    }
+}
+
+std::vector<expression>
+boolean_factors(expression e) {
+    std::vector<expression> ret;
+    do_factorize(ret, std::move(e));
+    return ret;
+}
+
 template<typename T>
 nonwrapping_range<std::remove_cvref_t<T>> to_range(oper_t op, T&& val) {
     using U = std::remove_cvref_t<T>;

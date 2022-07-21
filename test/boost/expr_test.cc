@@ -342,3 +342,37 @@ BOOST_AUTO_TEST_CASE(expr_printer_parse_and_print_test) {
         BOOST_REQUIRE_EQUAL(sstring(test), printed_where);
     }
 }
+
+BOOST_AUTO_TEST_CASE(boolean_factors_test) {
+    BOOST_REQUIRE_EQUAL(boolean_factors(constant::make_bool(true)), std::vector<expression>({constant::make_bool(true)}));
+
+    BOOST_REQUIRE_EQUAL(boolean_factors(constant::make_null(boolean_type)), std::vector<expression>({constant::make_null(boolean_type)}));
+
+    bind_variable bv1{0};
+    bind_variable bv2{1};
+    bind_variable bv3{2};
+    bind_variable bv4{3};
+
+    BOOST_REQUIRE_EQUAL(
+        boolean_factors(
+            conjunction{std::vector<expression>({bv1, bv2, bv3, bv4})}
+        ),
+        std::vector<expression>(
+            {bv1, bv2, bv3, bv4}
+        )
+    );
+
+    BOOST_REQUIRE_EQUAL(
+        boolean_factors(
+            conjunction{
+                std::vector<expression>({
+                    make_conjunction(bv1, bv2),
+                    make_conjunction(bv3, bv4)
+                })
+            }
+        ),
+        std::vector<expression>(
+            {bv1, bv2, bv3, bv4}
+        )
+    );
+}
