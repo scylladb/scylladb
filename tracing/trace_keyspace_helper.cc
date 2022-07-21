@@ -210,7 +210,8 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
 
 future<> trace_keyspace_helper::start(cql3::query_processor& qp) {
     _qp_anchor = &qp;
-    return table_helper::setup_keyspace(qp, KEYSPACE_NAME, "2", _dummy_query_state, { &_sessions, &_sessions_time_idx, &_events, &_slow_query_log, &_slow_query_log_time_idx });
+    auto& mm = qp.get_migration_manager();
+    return table_helper::setup_keyspace(qp, mm, KEYSPACE_NAME, "2", _dummy_query_state, { &_sessions, &_sessions_time_idx, &_events, &_slow_query_log, &_slow_query_log_time_idx });
 }
 
 void trace_keyspace_helper::write_one_session_records(lw_shared_ptr<one_session_records> records) {
@@ -383,12 +384,12 @@ std::vector<cql3::raw_value> trace_keyspace_helper::make_event_mutation_data(one
     return values;
 }
 
-future<> trace_keyspace_helper::apply_events_mutation(cql3::query_processor& qp, lw_shared_ptr<one_session_records> records, std::deque<event_record>& events_records) {
+future<> trace_keyspace_helper::apply_events_mutation(cql3::query_processor& qp, service::migration_manager& mm, lw_shared_ptr<one_session_records> records, std::deque<event_record>& events_records) {
     if (events_records.empty()) {
         return now();
     }
 
-    return _events.cache_table_info(qp, _dummy_query_state).then([this, &qp, records, &events_records] {
+    return _events.cache_table_info(qp, mm, _dummy_query_state).then([this, &qp, records, &events_records] {
         tlogger.trace("{}: storing {} events records: parent_id {} span_id {}", records->session_id, events_records.size(), records->parent_id, records->my_span_id);
 
         std::vector<cql3::statements::batch_statement::single_statement> modifications(events_records.size(), cql3::statements::batch_statement::single_statement(_events.insert_stmt(), false));
@@ -433,15 +434,16 @@ future<> trace_keyspace_helper::flush_one_session_mutations(lw_shared_ptr<one_se
             // is cleared on ::stop() after the gate is closed.
             assert(_qp_anchor != nullptr);
             cql3::query_processor& qp = *_qp_anchor;
-            return apply_events_mutation(qp, records, events_records).then([this, &qp, session_record_is_ready, records] {
+            auto& mm = qp.get_migration_manager();
+            return apply_events_mutation(qp, mm, records, events_records).then([this, &qp, &mm, session_record_is_ready, records] {
                 if (session_record_is_ready) {
 
                     // if session is finished - store a session and a session time index entries
                     tlogger.trace("{}: going to store a session event", records->session_id);
-                    return _sessions.insert(qp, _dummy_query_state, make_session_mutation_data, std::ref(*records)).then([this, &qp, records] {
+                    return _sessions.insert(qp, mm, _dummy_query_state, make_session_mutation_data, std::ref(*records)).then([this, &qp, &mm, records] {
                         tlogger.trace("{}: going to store a {} entry", records->session_id, _sessions_time_idx.name());
-                        return _sessions_time_idx.insert(qp, _dummy_query_state, make_session_time_idx_mutation_data, std::ref(*records));
-                    }).then([this, &qp, records] {
+                        return _sessions_time_idx.insert(qp, mm, _dummy_query_state, make_session_time_idx_mutation_data, std::ref(*records));
+                    }).then([this, &qp, &mm, records] {
                         if (!records->do_log_slow_query) {
                             return now();
                         }
@@ -449,9 +451,9 @@ future<> trace_keyspace_helper::flush_one_session_mutations(lw_shared_ptr<one_se
                         // if slow query log is requested - store a slow query log and a slow query log time index entries
                         auto start_time_id = utils::UUID_gen::get_time_UUID(table_helper::make_monotonic_UUID_tp(_slow_query_last_nanos, records->session_rec.started_at));
                         tlogger.trace("{}: going to store a slow query event", records->session_id);
-                        return _slow_query_log.insert(qp, _dummy_query_state, make_slow_query_mutation_data, std::ref(*records), start_time_id).then([this, &qp, records, start_time_id] {
+                        return _slow_query_log.insert(qp, mm, _dummy_query_state, make_slow_query_mutation_data, std::ref(*records), start_time_id).then([this, &qp, &mm, records, start_time_id] {
                             tlogger.trace("{}: going to store a {} entry", records->session_id, _slow_query_log_time_idx.name());
-                            return _slow_query_log_time_idx.insert(qp, _dummy_query_state, make_slow_query_time_idx_mutation_data, std::ref(*records), start_time_id);
+                            return _slow_query_log_time_idx.insert(qp, mm, _dummy_query_state, make_slow_query_time_idx_mutation_data, std::ref(*records), start_time_id);
                         });
                     });
                 } else {
