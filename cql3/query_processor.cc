@@ -42,6 +42,15 @@ const sstring query_processor::CQL_VERSION = "3.3.1";
 
 const std::chrono::minutes prepared_statements_cache::entry_expiry = std::chrono::minutes(60);
 
+struct query_processor::remote {
+    remote(service::migration_manager& mm, service::forward_service& fwd, service::raft_group0_client& group0_client)
+            : mm(mm), forwarder(fwd), group0_client(group0_client) {}
+
+    service::migration_manager& mm;
+    service::forward_service& forwarder;
+    service::raft_group0_client& group0_client;
+};
+
 class query_processor::internal_state {
     service::query_state _qs;
 public:
@@ -64,13 +73,11 @@ public:
 query_processor::query_processor(service::storage_proxy& proxy, service::forward_service& forwarder, data_dictionary::database db, service::migration_notifier& mn, service::migration_manager& mm, query_processor::memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg, service::raft_group0_client& group0_client, std::optional<wasm::startup_context> wasm_ctx)
         : _migration_subscriber{std::make_unique<migration_subscriber>(this)}
         , _proxy(proxy)
-        , _forwarder(forwarder)
         , _db(db)
         , _mnotifier(mn)
-        , _mm(mm)
         , _mcfg(mcfg)
         , _cql_config(cql_cfg)
-        , _group0_client(group0_client)
+        , _remote(std::make_unique<struct remote>(mm, forwarder, group0_client))
         , _internal_state(new internal_state())
         , _prepared_cache(prep_cache_log, _mcfg.prepared_statment_cache_size)
         , _authorized_prepared_cache(std::move(auth_prep_cache_cfg), authorized_prepared_statements_cache_log)
@@ -657,6 +664,11 @@ query_processor::parse_statements(std::string_view queries) {
     }
 }
 
+query_processor::remote& query_processor::remote() {
+    assert(_remote);
+    return _remote;
+}
+
 query_options query_processor::make_internal_options(
         const statements::prepared_statement::checked_weak_ptr& p,
         const std::initializer_list<data_value>& values,
@@ -854,12 +866,12 @@ query_processor::execute_batch_without_checking_exception_message(
 
 future<service::broadcast_tables::query_result>
 query_processor::execute_broadcast_table_query(const service::broadcast_tables::query& query) {
-    return service::broadcast_tables::execute(get_group0_client(), query);
+    return service::broadcast_tables::execute(remote().group0_client, query);
 }
 
 future<query::forward_result>
 query_processor::forward(query::forward_request req, tracing::trace_state_ptr tr_state) {
-    return forwarder().dispatch(std::move(req), std::move(tr_state));
+    return remote().forwarder.dispatch(std::move(req), std::move(tr_state));
 }
 
 future<::shared_ptr<messages::result_message>>
@@ -874,7 +886,7 @@ query_processor::execute_schema_statement(const statements::schema_altering_stat
 
     cql3::cql_warnings_vec warnings;
 
-    auto& mm = get_migration_manager();
+    auto& mm = remote().mm;
     auto retries = mm.get_concurrent_ddl_retries();
     while (true) {
         try {
@@ -923,7 +935,7 @@ query_processor::execute_thrift_schema_command(
         > prepare_schema_mutations) {
     assert(this_shard_id() == 0);
 
-    auto& mm = get_migration_manager();
+    auto& mm = remote().mm;
     auto group0_guard = co_await mm.start_group0_operation();
     auto ts = group0_guard.write_timestamp();
 

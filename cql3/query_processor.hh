@@ -100,13 +100,13 @@ public:
 private:
     std::unique_ptr<migration_subscriber> _migration_subscriber;
     service::storage_proxy& _proxy;
-    service::forward_service& _forwarder;
     data_dictionary::database _db;
     service::migration_notifier& _mnotifier;
-    service::migration_manager& _mm;
     memory_config _mcfg;
     const cql_config& _cql_config;
-    service::raft_group0_client& _group0_client;
+
+    struct remote;
+    std::unique_ptr<remote> _remote;
 
     struct stats {
         uint64_t prepare_invocations = 0;
@@ -424,9 +424,7 @@ public:
     void reset_cache();
 
 private:
-    service::migration_manager& get_migration_manager() noexcept { return _mm; }
-    service::raft_group0_client& get_group0_client() { return _group0_client; }
-    service::forward_service& forwarder() { return _forwarder; }
+    remote& remote();
 
     query_options make_internal_options(
             const statements::prepared_statement::checked_weak_ptr& p,
