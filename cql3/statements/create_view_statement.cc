@@ -312,7 +312,7 @@ view_ptr create_view_statement::prepare_view(data_dictionary::database db) const
                 "the corresponding data in the parent table.");
     }
 
-    auto where_clause_text = util::relations_to_where_clause(_where_clause);
+    auto where_clause_text = util::relations_to_where_clause(expr::conjunction{_where_clause});
     builder.with_view_info(schema->id(), schema->cf_name(), included.empty(), std::move(where_clause_text));
 
     return view_ptr(builder.build());

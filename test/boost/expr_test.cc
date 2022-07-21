@@ -336,7 +336,7 @@ BOOST_AUTO_TEST_CASE(expr_printer_parse_and_print_test) {
     };
 
     for(const char* test : tests) {
-        std::vector<expression> parsed_where = cql3::util::where_clause_to_relations(test);
+        expression parsed_where = cql3::util::where_clause_to_relations(test);
         sstring printed_where = cql3::util::relations_to_where_clause(parsed_where);
 
         BOOST_REQUIRE_EQUAL(sstring(test), printed_where);
