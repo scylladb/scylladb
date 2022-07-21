@@ -1,0 +1,2 @@
+type: Python
+extra_scylla_cmdline_options: ["--experimental-features=raft", "--experimental-features=broadcast-tables"]
