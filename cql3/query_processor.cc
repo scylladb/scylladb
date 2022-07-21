@@ -864,17 +864,18 @@ query_processor::execute_schema_statement(const statements::schema_altering_stat
 
     cql3::cql_warnings_vec warnings;
 
-    auto retries = _mm.get_concurrent_ddl_retries();
+    auto& mm = get_migration_manager();
+    auto retries = mm.get_concurrent_ddl_retries();
     while (true) {
         try {
-            auto group0_guard = co_await _mm.start_group0_operation();
+            auto group0_guard = co_await mm.start_group0_operation();
 
-            auto [ret, m, cql_warnings] = co_await stmt.prepare_schema_mutations(*this, _mm, group0_guard.write_timestamp());
+            auto [ret, m, cql_warnings] = co_await stmt.prepare_schema_mutations(*this, mm, group0_guard.write_timestamp());
             warnings = std::move(cql_warnings);
 
             if (!m.empty()) {
                 auto description = format("CQL DDL statement: \"{}\"", stmt.raw_cql_statement);
-                co_await _mm.announce(std::move(m), std::move(group0_guard), description);
+                co_await mm.announce(std::move(m), std::move(group0_guard), description);
             }
 
             ce = std::move(ret);
@@ -912,10 +913,11 @@ query_processor::execute_thrift_schema_command(
         > prepare_schema_mutations) {
     assert(this_shard_id() == 0);
 
-    auto group0_guard = co_await _mm.start_group0_operation();
+    auto& mm = get_migration_manager();
+    auto group0_guard = co_await mm.start_group0_operation();
     auto ts = group0_guard.write_timestamp();
 
-    co_await _mm.announce(co_await prepare_schema_mutations(_mm, db(), ts), std::move(group0_guard));
+    co_await mm.announce(co_await prepare_schema_mutations(mm, db(), ts), std::move(group0_guard));
 
     co_return std::string(db().get_version().to_sstring());
 }

@@ -164,9 +164,6 @@ public:
         return _forwarder;
     }
 
-    const service::migration_manager& get_migration_manager() const noexcept { return _mm; }
-    service::migration_manager& get_migration_manager() noexcept { return _mm; }
-
     cql_stats& get_cql_stats() {
         return _cql_stats;
     }
@@ -423,6 +420,8 @@ public:
     void reset_cache();
 
 private:
+    service::migration_manager& get_migration_manager() noexcept { return _mm; }
+
     query_options make_internal_options(
             const statements::prepared_statement::checked_weak_ptr& p,
             const std::initializer_list<data_value>&,
