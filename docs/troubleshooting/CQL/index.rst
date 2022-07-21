@@ -22,7 +22,6 @@ CQL
 * :doc:`Time Range Queries Do Not Return Some or All of the Data </troubleshooting/time-zone>`
 * :doc:`COPY FROM fails - field larger than the field limit </troubleshooting/copy-from-failed/>`
 * :doc:`CQL active connection table </troubleshooting/clients-table>`
-* :doc:`Reverse queries fail </troubleshooting/reverse-queries>`
 
 .. raw:: html
 
