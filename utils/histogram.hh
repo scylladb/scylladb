@@ -200,6 +200,25 @@ inline basic_ihistogram<Unit> operator +(basic_ihistogram<Unit> a, const basic_i
 
 using ihistogram = basic_ihistogram<std::chrono::microseconds>;
 
+/*!
+ * \brief a helper timer class for the metering functionality
+ *
+ * To make an object use a timer, include an instance of this
+ * class and set a handler at its constructor.
+ */
+class meter_timer {
+    std::function<void()> _fun;
+    timer<> _timer;
+public:
+    static constexpr latency_counter::duration tick_interval() {
+        return std::chrono::seconds(10);
+    }
+
+    meter_timer(std::function<void()>&& fun) : _fun(std::move(fun)), _timer(_fun) {
+        _timer.arm_periodic(tick_interval());
+    }
+};
+
 struct rate_moving_average {
     uint64_t count = 0;
     double rates[3] = {0};
@@ -220,22 +239,14 @@ inline rate_moving_average operator+ (rate_moving_average a, const rate_moving_a
     return a;
 }
 
-class timed_rate_moving_average {
-    static constexpr latency_counter::duration tick_interval() {
-        return std::chrono::seconds(10);
-    }
-    moving_average rates[3] = {{std::chrono::minutes(1), tick_interval()}, {std::chrono::minutes(5), tick_interval()}, {std::chrono::minutes(15), tick_interval()}};
+class rates_moving_average {
     latency_counter::time_point start_time;
-    timer<> _timer;
-
+    moving_average rates[3] = {{std::chrono::minutes(1), meter_timer::tick_interval()}, {std::chrono::minutes(5), meter_timer::tick_interval()}, {std::chrono::minutes(15), meter_timer::tick_interval()}};
 public:
     // _count is public so the collectd will be able to use it.
     // for all other cases use the count() method
     uint64_t _count = 0;
-    timed_rate_moving_average() : start_time(latency_counter::now()), _timer([this] {
-        update();
-    }) {
-        _timer.arm_periodic(tick_interval());
+    rates_moving_average() : start_time(latency_counter::now()) {
     }
 
     void mark(uint64_t n = 1) {
@@ -264,7 +275,7 @@ public:
         return res;
     }
 
-    void update() {
+    void update() noexcept {
         for (int i = 0; i < 3; i++) {
             rates[i].update();
         }
@@ -275,6 +286,37 @@ public:
     }
 };
 
+/*!
+ * \brief A timed wrapper for the rates moving average.
+ *
+ * This is a wrapper for the rates_moving_average class. It uses a meter_timer
+ * to update the rates_moving_average periodically.
+ */
+class timed_rate_moving_average {
+    rates_moving_average _rates;
+    meter_timer _timer;
+public:
+    timed_rate_moving_average() : _timer([this]{_rates.update();}) {
+
+    }
+    rates_moving_average& operator()() noexcept {
+        return _rates;
+    }
+    const rates_moving_average& operator()() const noexcept {
+        return _rates;
+    }
+    void mark(uint64_t n = 1) noexcept {
+        _rates.mark(n);
+    }
+
+    uint64_t count() const noexcept {
+        return _rates.count();
+    }
+
+    rate_moving_average rate() const noexcept {
+        return _rates.rate();
+    }
+};
 
 struct rate_moving_average_and_histogram {
     ihistogram hist;
@@ -311,13 +353,13 @@ public:
     void mark(std::chrono::duration<Rep, Ratio> dur) {
         if (std::chrono::duration_cast<ihistogram::duration_unit>(dur).count() >= 0) {
             hist.mark(dur);
-            met.mark();
+            met().mark();
         }
     }
 
     void mark(latency_counter& lc) {
         hist.mark(lc);
-        met.mark();
+        met().mark();
     }
 
     void set_latency(latency_counter& lc) {
@@ -327,7 +369,7 @@ public:
     rate_moving_average_and_histogram rate() const {
         rate_moving_average_and_histogram res;
         res.hist = hist;
-        res.rate = met.rate();
+        res.rate = met().rate();
         return res;
     }
 };
