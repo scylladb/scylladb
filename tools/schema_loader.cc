@@ -94,6 +94,9 @@ public:
     }
 
 private:
+    virtual const table_schema_version& get_version(data_dictionary::database) const override {
+        throw std::bad_function_call();
+    }
     virtual std::optional<data_dictionary::keyspace> try_find_keyspace(data_dictionary::database db, std::string_view name) const override {
         auto& keyspaces = unwrap(db).keyspaces;
         auto it = std::find_if(keyspaces.begin(), keyspaces.end(), [name] (const keyspace& ks) { return ks.metadata->name() == name; });
