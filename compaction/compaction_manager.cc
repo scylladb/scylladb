@@ -673,8 +673,8 @@ compaction_manager::compaction_manager(config cfg, abort_source& as)
 }
 
 compaction_manager::compaction_manager()
-    : _compaction_sg(scheduling_group{default_scheduling_group(), default_priority_class()})
-    , _maintenance_sg(scheduling_group{default_scheduling_group(), default_priority_class()})
+    : _compaction_sg()
+    , _maintenance_sg()
     , _compaction_controller(make_compaction_controller(_compaction_sg, 1, [] () -> float { return 1.0; }))
     , _backlog_manager(_compaction_controller)
     , _available_memory(1)
