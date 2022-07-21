@@ -1459,7 +1459,7 @@ future<> compaction_manager::perform_cleanup(replica::database& db, compaction::
             t.schema()->ks_name(), t.schema()->cf_name()));
     }
 
-    auto sorted_owned_ranges = db.get_keyspace_local_ranges(t.schema()->ks_name());
+    auto sorted_owned_ranges = make_owned_ranges_ptr(db.get_keyspace_local_ranges(t.schema()->ks_name()));
     auto get_sstables = [this, &db, &t, sorted_owned_ranges] () -> future<std::vector<sstables::shared_sstable>> {
         return seastar::async([this, &db, &t, sorted_owned_ranges = std::move(sorted_owned_ranges)] {
             auto schema = t.schema();
@@ -1467,7 +1467,7 @@ future<> compaction_manager::perform_cleanup(replica::database& db, compaction::
             const auto candidates = get_candidates(t);
             std::copy_if(candidates.begin(), candidates.end(), std::back_inserter(sstables), [&sorted_owned_ranges, schema] (const sstables::shared_sstable& sst) {
                 seastar::thread::maybe_yield();
-                return sorted_owned_ranges.empty() || needs_cleanup(sst, sorted_owned_ranges, schema);
+                return sorted_owned_ranges->empty() || needs_cleanup(sst, *sorted_owned_ranges, schema);
             });
             return sstables;
         });
@@ -1502,7 +1502,8 @@ future<> compaction_manager::perform_sstable_upgrade(replica::database& db, comp
     // Note that we potentially could be doing multiple
     // upgrades here in parallel, but that is really the users
     // problem.
-    return rewrite_sstables(t, sstables::compaction_type_options::make_upgrade(db.get_keyspace_local_ranges(t.schema()->ks_name())), std::move(get_sstables)).discard_result();
+    auto sorted_owned_ranges = make_owned_ranges_ptr(db.get_keyspace_local_ranges(t.schema()->ks_name()));
+    return rewrite_sstables(t, sstables::compaction_type_options::make_upgrade(std::move(sorted_owned_ranges)), std::move(get_sstables)).discard_result();
 }
 
 // Submit a table to be scrubbed and wait for its termination.

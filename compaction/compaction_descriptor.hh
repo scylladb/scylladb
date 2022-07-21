@@ -20,6 +20,16 @@
 #include "dht/i_partitioner.hh"
 #include "compaction_weight_registration.hh"
 
+namespace compaction {
+
+using owned_ranges_ptr = lw_shared_ptr<const dht::token_range_vector>;
+
+inline owned_ranges_ptr make_owned_ranges_ptr(dht::token_range_vector&& ranges) {
+    return make_lw_shared<const dht::token_range_vector>(std::move(ranges));
+}
+
+} // namespace compaction
+
 namespace sstables {
 
 enum class compaction_type {
@@ -54,10 +64,10 @@ public:
     struct regular {
     };
     struct cleanup {
-        dht::token_range_vector owned_ranges;
+        compaction::owned_ranges_ptr owned_ranges;
     };
     struct upgrade {
-        dht::token_range_vector owned_ranges;
+        compaction::owned_ranges_ptr owned_ranges;
     };
     struct scrub {
         enum class mode {
@@ -102,11 +112,11 @@ public:
         return compaction_type_options(regular{});
     }
 
-    static compaction_type_options make_cleanup(dht::token_range_vector&& owned_ranges) {
+    static compaction_type_options make_cleanup(compaction::owned_ranges_ptr owned_ranges) {
         return compaction_type_options(cleanup{std::move(owned_ranges)});
     }
 
-    static compaction_type_options make_upgrade(dht::token_range_vector&& owned_ranges) {
+    static compaction_type_options make_upgrade(compaction::owned_ranges_ptr owned_ranges) {
         return compaction_type_options(upgrade{std::move(owned_ranges)});
     }
 
