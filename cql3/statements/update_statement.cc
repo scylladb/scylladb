@@ -310,7 +310,7 @@ insert_statement::prepare_internal(data_dictionary::database db, schema_ptr sche
         };
     }
     prepare_conditions(db, *schema, ctx, *stmt);
-    stmt->process_where_clause(db, relations, ctx);
+    stmt->process_where_clause(db, expr::conjunction{relations}, ctx);
     return stmt;
 }
 
@@ -343,7 +343,7 @@ insert_json_statement::prepare_internal(data_dictionary::database db, schema_ptr
 update_statement::update_statement(cf_name name,
                                    std::unique_ptr<attributes::raw> attrs,
                                    std::vector<std::pair<::shared_ptr<column_identifier::raw>, std::unique_ptr<operation::raw_update>>> updates,
-                                   std::vector<expr::expression> where_clause,
+                                   expr::expression where_clause,
                                    conditions_vector conditions, bool if_exists)
     : raw::modification_statement(std::move(name), std::move(attrs), std::move(conditions), false, if_exists)
     , _updates(std::move(updates))

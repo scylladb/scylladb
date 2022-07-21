@@ -82,7 +82,7 @@ private:
 private:
     lw_shared_ptr<const parameters> _parameters;
     std::vector<::shared_ptr<selection::raw_selector>> _select_clause;
-    std::vector<expr::expression> _where_clause;
+    expr::expression _where_clause;
     std::optional<expr::expression> _limit;
     std::optional<expr::expression> _per_partition_limit;
     std::vector<::shared_ptr<cql3::column_identifier::raw>> _group_by_columns;
@@ -91,7 +91,7 @@ public:
     select_statement(cf_name cf_name,
             lw_shared_ptr<const parameters> parameters,
             std::vector<::shared_ptr<selection::raw_selector>> select_clause,
-            std::vector<expr::expression> where_clause,
+            expr::expression where_clause,
             std::optional<expr::expression> limit,
             std::optional<expr::expression> per_partition_limit,
             std::vector<::shared_ptr<cql3::column_identifier::raw>> group_by_columns,

@@ -134,7 +134,7 @@ sstring relations_to_where_clause(const expr::expression& e) {
 }
 
 expr::expression where_clause_to_relations(const sstring_view& where_clause) {
-    return expr::conjunction{do_with_parser(where_clause, std::mem_fn(&cql3_parser::CqlParser::whereClause))};
+    return do_with_parser(where_clause, std::mem_fn(&cql3_parser::CqlParser::whereClause));
 }
 
 sstring rename_column_in_where_clause(const sstring_view& where_clause, column_identifier::raw from, column_identifier::raw to) {

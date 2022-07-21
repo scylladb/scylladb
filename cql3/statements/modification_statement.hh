@@ -162,7 +162,7 @@ public:
         return _is_raw_counter_shard_write.value_or(false);
     }
 
-    void process_where_clause(data_dictionary::database db, std::vector<expr::expression> where_clause, prepare_context& ctx);
+    void process_where_clause(data_dictionary::database db, expr::expression where_clause, prepare_context& ctx);
 
     // CAS statement returns a result set. Prepare result set metadata
     // so that get_result_metadata() returns a meaningful value.
