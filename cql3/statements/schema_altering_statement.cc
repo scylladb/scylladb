@@ -77,7 +77,7 @@ schema_altering_statement::execute0(query_processor& qp, service::query_state& s
         try {
             auto group0_guard = co_await mm.start_group0_operation();
 
-            auto [ret, m, cql_warnings] = co_await prepare_schema_mutations(qp, group0_guard.write_timestamp());
+            auto [ret, m, cql_warnings] = co_await prepare_schema_mutations(qp, mm, group0_guard.write_timestamp());
             warnings = std::move(cql_warnings);
 
             if (!m.empty()) {
