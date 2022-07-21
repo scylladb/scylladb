@@ -2,6 +2,9 @@
 Reverse Queries fail when the partition is larger than the maximum safe size
 =============================================================================
 
+.. note::
+  The problem described on this page may occur in ScyllaDB Enterprise 2021.1 or earlier and ScyllaDB Open Source 4.6 or earlier. In later versions, reverse queries that read too much data are aborted (see https://github.com/scylladb/scylla/issues/5804).
+
 This troubleshooting article describes what to do when queries that return results in a different order than the data model start failing.
 
 It is highly recommended that when using the CQL **ORDER BY** clause, the order in the query is the same as the data model.
