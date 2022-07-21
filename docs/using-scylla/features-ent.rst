@@ -33,13 +33,12 @@ Scylla Enterprise Features
   :id: "getting-started"
   :class: my-panel
 
-  The following are **new features** for Scylla Scylla Enterprise 2022.1.x:
+  The following are **new features** in ScyllaDB Enterprise 2022.1.x:
 
-  * `Virtual Tables <https://github.com/scylladb/scylla/blob/branch-5.0/docs/guides/virtual-tables.md>`_ - tables that generate their content on-the-fly when queried.
+  * :doc:`Virtual Tables </operating-scylla/admin-tools/virtual-tables/>` - Tables that retrieve system-level information by generating their contents on-the-fly when queried.
 
 		* Virtual table for configuration - ``system.config``, allows you to query and update configuration over CQL.
-		* Virtual tables for retrieving information allow you to retrieve typically obtained via nodetool. Unlike nodetool, which is blocked for remote access by default, virtual tables permit remote access over CQL, including Scylla Cloud users. 
-		  See `Virtual tables in the system keyspace <https://github.com/scylladb/scylla/blob/branch-5.0/docs/design-notes/system_keyspace.md#virtual-tables-in-the-system-keyspace>`_ for the list of available virtual tables 
+		* Virtual tables for exposing system-level information, such as cluster status, version-related information, etc.
 	
   See the `Release Notes <https://www.scylladb.com/product/release-notes/>`_ for more information. 
 
