@@ -11,7 +11,6 @@
 #include "compaction_backlog_manager.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
-#include "replica/database.hh"
 #include <seastar/core/metrics.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/switch_to.hh>
@@ -1448,7 +1447,7 @@ bool needs_cleanup(const sstables::shared_sstable& sst,
     return true;
 }
 
-future<> compaction_manager::perform_cleanup(replica::database& db, compaction::table_state& t) {
+future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction::table_state& t) {
     auto check_for_cleanup = [this, &t] {
         return boost::algorithm::any_of(_tasks, [&t] (auto& task) {
             return task->compacting_table() == &t && task->type() == sstables::compaction_type::Cleanup;
@@ -1459,9 +1458,8 @@ future<> compaction_manager::perform_cleanup(replica::database& db, compaction::
             t.schema()->ks_name(), t.schema()->cf_name()));
     }
 
-    auto sorted_owned_ranges = make_owned_ranges_ptr(db.get_keyspace_local_ranges(t.schema()->ks_name()));
-    auto get_sstables = [this, &db, &t, sorted_owned_ranges] () -> future<std::vector<sstables::shared_sstable>> {
-        return seastar::async([this, &db, &t, sorted_owned_ranges = std::move(sorted_owned_ranges)] {
+    auto get_sstables = [this, &t, sorted_owned_ranges] () -> future<std::vector<sstables::shared_sstable>> {
+        return seastar::async([this, &t, sorted_owned_ranges = std::move(sorted_owned_ranges)] {
             auto schema = t.schema();
             auto sstables = std::vector<sstables::shared_sstable>{};
             const auto candidates = get_candidates(t);
@@ -1478,8 +1476,8 @@ future<> compaction_manager::perform_cleanup(replica::database& db, compaction::
 }
 
 // Submit a table to be upgraded and wait for its termination.
-future<> compaction_manager::perform_sstable_upgrade(replica::database& db, compaction::table_state& t, bool exclude_current_version) {
-    auto get_sstables = [this, &db, &t, exclude_current_version] {
+future<> compaction_manager::perform_sstable_upgrade(owned_ranges_ptr sorted_owned_ranges, compaction::table_state& t, bool exclude_current_version) {
+    auto get_sstables = [this, &t, exclude_current_version] {
         std::vector<sstables::shared_sstable> tables;
 
         auto last_version = t.get_sstables_manager().get_highest_supported_format();
@@ -1502,7 +1500,6 @@ future<> compaction_manager::perform_sstable_upgrade(replica::database& db, comp
     // Note that we potentially could be doing multiple
     // upgrades here in parallel, but that is really the users
     // problem.
-    auto sorted_owned_ranges = make_owned_ranges_ptr(db.get_keyspace_local_ranges(t.schema()->ks_name()));
     return rewrite_sstables(t, sstables::compaction_type_options::make_upgrade(std::move(sorted_owned_ranges)), std::move(get_sstables)).discard_result();
 }
 

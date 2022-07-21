@@ -410,3 +410,64 @@ def test_describe_ring(cql, this_dc, rest_api):
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
         resp = rest_api.send("GET", f"storage_service/describe_ring/{keyspace}")
         resp.raise_for_status()
+
+def test_storage_service_keyspace_cleanup(cql, this_dc, rest_api):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
+        schema = 'p int, v text, primary key (p)'
+        with new_test_table(cql, keyspace, schema) as t0:
+            stmt = cql.prepare(f"INSERT INTO {t0} (p, v) VALUES (?, ?)")
+            cql.execute(stmt, [0, 'hello'])
+
+            with new_test_table(cql, keyspace, schema) as t1:
+                stmt = cql.prepare(f"INSERT INTO {t1} (p, v) VALUES (?, ?)")
+                cql.execute(stmt, [1, 'world'])
+
+                test_tables = [t0.split('.')[1], t1.split('.')[1]]
+
+                resp = rest_api.send("POST", f"storage_service/keyspace_flush/{keyspace}")
+                resp.raise_for_status()
+
+                resp = rest_api.send("POST", f"storage_service/keyspace_cleanup/{keyspace}")
+                resp.raise_for_status()
+
+                resp = rest_api.send("POST", f"storage_service/keyspace_cleanup/{keyspace}", { "cf": f"{test_tables[1]}" })
+                resp.raise_for_status()
+
+                resp = rest_api.send("POST", f"storage_service/keyspace_cleanup/{keyspace}", { "cf": f"{test_tables[0]},{test_tables[1]}" })
+                resp.raise_for_status()
+
+                # non-existing table
+                resp = rest_api.send("POST", f"storage_service/keyspace_cleanup/{keyspace}", { "cf": f"{test_tables[0]},XXX" })
+                assert resp.status_code == requests.codes.bad_request
+
+def test_storage_service_keyspace_upgrade_sstables(cql, this_dc, rest_api):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
+        schema = 'p int, v text, primary key (p)'
+        with new_test_table(cql, keyspace, schema) as t0:
+            stmt = cql.prepare(f"INSERT INTO {t0} (p, v) VALUES (?, ?)")
+            cql.execute(stmt, [0, 'hello'])
+
+            with new_test_table(cql, keyspace, schema) as t1:
+                stmt = cql.prepare(f"INSERT INTO {t1} (p, v) VALUES (?, ?)")
+                cql.execute(stmt, [1, 'world'])
+
+                test_tables = [t0.split('.')[1], t1.split('.')[1]]
+
+                resp = rest_api.send("POST", f"storage_service/keyspace_flush/{keyspace}")
+                resp.raise_for_status()
+
+                resp = rest_api.send("GET", f"storage_service/keyspace_upgrade_sstables/{keyspace}")
+                resp.raise_for_status()
+
+                resp = rest_api.send("GET", f"storage_service/keyspace_upgrade_sstables/{keyspace}", { "exclude_current_version": "true" })
+                resp.raise_for_status()
+
+                resp = rest_api.send("GET", f"storage_service/keyspace_upgrade_sstables/{keyspace}", { "cf": f"{test_tables[1]}" })
+                resp.raise_for_status()
+
+                resp = rest_api.send("GET", f"storage_service/keyspace_upgrade_sstables/{keyspace}", { "cf": f"{test_tables[0]},{test_tables[1]}" })
+                resp.raise_for_status()
+
+                # non-existing table
+                resp = rest_api.send("GET", f"storage_service/keyspace_upgrade_sstables/{keyspace}", { "cf": f"{test_tables[0]},XXX" })
+                assert resp.status_code == requests.codes.bad_request
