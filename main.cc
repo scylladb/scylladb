@@ -1100,6 +1100,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             scfg.streaming = dbcfg.streaming_scheduling_group;
             scfg.gossip = dbcfg.gossip_scheduling_group;
 
+            supervisor::notify("starting messaging service");
             debug::the_messaging_service = &messaging;
 
             std::shared_ptr<seastar::tls::credentials_builder> creds;
