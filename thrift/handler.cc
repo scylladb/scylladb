@@ -872,18 +872,9 @@ public:
     }
 
     future<std::string> execute_schema_command(std::function<future<std::vector<mutation>>(service::migration_manager&, data_dictionary::database, api::timestamp_type)> ddl) {
-        distributed<service::migration_manager>& dmm = _query_processor.local().get_migration_manager().container();
-        auto func = [ddl, &dmm] (cql3::query_processor& qp) -> future<std::string> {
-            auto& mm = dmm.local();
-
-            auto group0_guard = co_await mm.start_group0_operation();
-            auto ts = group0_guard.write_timestamp();
-
-            co_await mm.announce(co_await ddl(mm, qp.db(), ts), std::move(group0_guard));
-
-            co_return std::string(qp.db().real_database().get_version().to_sstring());
-        };
-        co_return co_await _query_processor.invoke_on(0, func);
+        return _query_processor.invoke_on(0, [ddl = std::move(ddl)] (cql3::query_processor& qp) mutable {
+            return qp.execute_thrift_schema_command(std::move(ddl));
+        });
     }
 
     void system_add_column_family(thrift_fn::function<void(std::string const& _return)> cob, thrift_fn::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const CfDef& cf_def) {

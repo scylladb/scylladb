@@ -404,6 +404,12 @@ public:
     future<::shared_ptr<cql_transport::messages::result_message>>
     execute_schema_statement(const statements::schema_altering_statement&, service::query_state& state, const query_options& options);
 
+    future<std::string>
+    execute_thrift_schema_command(
+            std::function<future<std::vector<mutation>>(
+                service::migration_manager&, data_dictionary::database, api::timestamp_type)
+            > prepare_schema_mutations);
+
     std::unique_ptr<statements::prepared_statement> get_statement(
             const std::string_view& query,
             const service::client_state& client_state);

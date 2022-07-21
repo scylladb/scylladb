@@ -905,6 +905,21 @@ query_processor::execute_schema_statement(const statements::schema_altering_stat
     co_return result;
 }
 
+future<std::string>
+query_processor::execute_thrift_schema_command(
+        std::function<future<std::vector<mutation>>(
+            service::migration_manager&, data_dictionary::database, api::timestamp_type)
+        > prepare_schema_mutations) {
+    assert(this_shard_id() == 0);
+
+    auto group0_guard = co_await _mm.start_group0_operation();
+    auto ts = group0_guard.write_timestamp();
+
+    co_await _mm.announce(co_await prepare_schema_mutations(_mm, db(), ts), std::move(group0_guard));
+
+    co_return std::string(db().get_version().to_sstring());
+}
+
 query_processor::migration_subscriber::migration_subscriber(query_processor* qp) : _qp{qp} {
 }
 
