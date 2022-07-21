@@ -1257,7 +1257,16 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                                                      std::chrono::duration_cast<std::chrono::milliseconds>(cql3::prepared_statements_cache::entry_expiry));
             auth_prep_cache_config.refresh = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
 
-            qp.start(std::ref(proxy), std::ref(forward_service), std::move(local_data_dict), std::ref(mm_notifier), std::ref(mm), qp_mcfg, std::ref(cql_config), std::move(auth_prep_cache_config), std::ref(group0_client), std::move(wasm_ctx)).get();
+            qp.start(std::ref(proxy), std::move(local_data_dict), std::ref(mm_notifier), qp_mcfg, std::ref(cql_config), std::move(auth_prep_cache_config), std::move(wasm_ctx)).get();
+
+            supervisor::notify("initializing query processor remote part");
+            // TODO: do this together with proxy.start_remote(...)
+            qp.invoke_on_all([&mm, &forward_service, &group0_client] (cql3::query_processor& qp) {
+                qp.start_remote(mm.local(), forward_service.local(), group0_client);
+            }).get();
+            auto stop_qp_remote = defer_verbose_shutdown("query processor remote part", [&qp] {
+                qp.invoke_on_all(&cql3::query_processor::stop_remote).get();
+            });
 
             ss.invoke_on_all([&] (service::storage_service& ss) {
                 ss.set_query_processor(qp.local());

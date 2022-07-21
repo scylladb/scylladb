@@ -804,8 +804,15 @@ public:
                 wasm_ctx.emplace(*cfg, dbcfg);
             }
 
-            qp.start(std::ref(proxy), std::ref(forward_service), std::move(local_data_dict), std::ref(mm_notif), std::ref(mm), qp_mcfg, std::ref(cql_config), auth_prep_cache_config, std::ref(group0_client), wasm_ctx).get();
+            qp.start(std::ref(proxy), std::move(local_data_dict), std::ref(mm_notif), qp_mcfg, std::ref(cql_config), auth_prep_cache_config, wasm_ctx).get();
             auto stop_qp = defer([&qp] { qp.stop().get(); });
+
+            qp.invoke_on_all([&mm, &forward_service, &group0_client] (cql3::query_processor& qp) {
+                qp.start_remote(mm.local(), forward_service.local(), group0_client);
+            }).get();
+            auto stop_qp_remote = defer([&qp] {
+                qp.invoke_on_all(&cql3::query_processor::stop_remote).get();
+            });
 
             sys_ks.invoke_on_all([&snitch] (auto& sys_ks) {
                 return sys_ks.start(snitch.local());
