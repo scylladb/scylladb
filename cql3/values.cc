@@ -58,4 +58,24 @@ raw_value_view::raw_value_view(managed_bytes&& tmp) {
     _data = managed_bytes_view(*_temporary_storage);
 }
 
+bool operator==(const raw_value& v1, const raw_value& v2) {
+    if (v1.is_unset_value() && v2.is_unset_value()) {
+        return true;
+    }
+
+    if (v1.is_null() && v2.is_null()) {
+        return true; // note: this is not CQL comparison which would return NULL here
+    }
+
+    if (v1.is_value() && v2.is_value()) {
+        return v1.view().with_value([&] (const FragmentedView auto& v1v) {
+            return v2.view().with_value([&] (const FragmentedView auto& v2v) {
+                return compare_unsigned(v1v, v2v) == 0;
+            });
+        });
+    }
+
+    return false;
+}
+
 }
