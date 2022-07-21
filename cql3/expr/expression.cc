@@ -46,6 +46,20 @@ logging::logger expr_logger("cql_expression");
 using boost::adaptors::filtered;
 using boost::adaptors::transformed;
 
+bool operator==(const expression& e1, const expression& e2) {
+    if (e1._v->v.index() != e2._v->v.index()) {
+        return false;
+    }
+    return expr::visit([&] <typename T> (const T& e1_element) {
+        const T& e2_element = expr::as<T>(e2);
+        return e1_element == e2_element;
+    }, e1);
+}
+
+bool operator!=(const expression& e1, const expression& e2) {
+    return !(e1 == e2);
+}
+
 expression::expression(const expression& o)
         : _v(std::make_unique<impl>(*o._v)) {
 }
