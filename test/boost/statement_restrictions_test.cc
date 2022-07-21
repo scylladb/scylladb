@@ -30,7 +30,7 @@ query::clustering_row_ranges slice(
             env.data_dictionary(),
             env.local_db().find_schema(keyspace_name, table_name),
             statements::statement_type::SELECT,
-            where_clause,
+            expr::conjunction{where_clause},
             ctx,
             /*contains_only_static_columns=*/false,
             /*for_view=*/false,

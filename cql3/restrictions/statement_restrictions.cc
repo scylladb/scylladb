@@ -326,14 +326,14 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
 statement_restrictions::statement_restrictions(data_dictionary::database db,
         schema_ptr schema,
         statements::statement_type type,
-        const std::vector<expr::expression>& where_clause,
+        const expr::expression& where_clause,
         prepare_context& ctx,
         bool selects_only_static_columns,
         bool for_view,
         bool allow_filtering)
     : statement_restrictions(schema, allow_filtering)
 {
-    for (auto&& relation_expr : where_clause) {
+    for (auto&& relation_expr : boolean_factors(where_clause)) {
         const expr::binary_operator* relation_binop = expr::as_if<expr::binary_operator>(&relation_expr);
 
         if (relation_binop == nullptr) {
