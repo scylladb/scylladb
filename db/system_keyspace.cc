@@ -2941,7 +2941,10 @@ static bool maybe_write_in_user_memory(schema_ptr s) {
             || s == system_keyspace::raft();
 }
 
-future<> system_keyspace_make(db::system_keyspace& sys_ks, distributed<replica::database>& dist_db, distributed<service::storage_service>& dist_ss, sharded<gms::gossiper>& dist_gossiper, distributed<service::raft_group_registry>& dist_raft_gr, db::config& cfg, system_table_load_phase phase) {
+future<> system_keyspace::make(
+        distributed<replica::database>& dist_db, distributed<service::storage_service>& dist_ss,
+        sharded<gms::gossiper>& dist_gossiper, distributed<service::raft_group_registry>& dist_raft_gr,
+        db::config& cfg, system_table_load_phase phase) {
     if (phase == system_table_load_phase::phase1) {
         register_virtual_tables(dist_db, dist_ss, dist_gossiper, dist_raft_gr, cfg);
     }
@@ -2957,12 +2960,8 @@ future<> system_keyspace_make(db::system_keyspace& sys_ks, distributed<replica::
     }
 
     if (phase == system_table_load_phase::phase1) {
-        install_virtual_readers(sys_ks, db);
+        install_virtual_readers(*this, db);
     }
-}
-
-future<> system_keyspace::make(distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, distributed<service::raft_group_registry>& raft_gr, db::config& cfg, system_table_load_phase phase) {
-    return system_keyspace_make(*this, db, ss, g, raft_gr, cfg, phase);
 }
 
 future<locator::host_id> system_keyspace::load_local_host_id() {
