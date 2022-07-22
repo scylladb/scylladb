@@ -1231,7 +1231,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // done only by shard 0, so we'll no longer face race conditions as
             // described here: https://github.com/scylladb/scylla/issues/1014
             supervisor::notify("loading system sstables");
-            replica::distributed_loader::init_system_keyspace(sys_ks, db, ss, gossiper, raft_gr, *cfg, system_table_load_phase::phase1).get();
+            replica::distributed_loader::init_system_keyspace(sys_ks, erm_factory, db, *cfg, system_table_load_phase::phase1).get();
             supervisor::notify("initializing virtual tables");
             sys_ks.invoke_on_all([&db, &ss, &gossiper, &raft_gr, &cfg] (db::system_keyspace& sys_ks) {
                 return sys_ks.initialize_virtual_tables(db, ss, gossiper, raft_gr, *cfg);
@@ -1319,7 +1319,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // because table construction consults enabled features.
             // Needs to be before system_keyspace::setup(), which writes to schema tables.
             supervisor::notify("loading system_schema sstables");
-            replica::distributed_loader::init_system_keyspace(sys_ks, db, ss, gossiper, raft_gr, *cfg, system_table_load_phase::phase2).get();
+            replica::distributed_loader::init_system_keyspace(sys_ks, erm_factory, db, *cfg, system_table_load_phase::phase2).get();
 
             if (raft_gr.local().is_enabled()) {
                 if (!db.local().uses_schema_commitlog()) {

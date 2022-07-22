@@ -2948,17 +2948,14 @@ static bool maybe_write_in_user_memory(schema_ptr s) {
 }
 
 future<> system_keyspace::make(
-        distributed<replica::database>& dist_db, distributed<service::storage_service>& dist_ss,
-        sharded<gms::gossiper>& dist_gossiper, distributed<service::raft_group_registry>& dist_raft_gr,
-        db::config& cfg, system_table_load_phase phase) {
-    auto& db = dist_db.local();
+        locator::effective_replication_map_factory& erm_factory,
+        replica::database& db, db::config& cfg, system_table_load_phase phase) {
     for (auto&& table : system_keyspace::all_tables(db.get_config())) {
         if (table->static_props().load_phase != phase) {
             continue;
         }
 
-        co_await db.create_local_system_table(
-            table, maybe_write_in_user_memory(table), dist_ss.local().get_erm_factory());
+        co_await db.create_local_system_table(table, maybe_write_in_user_memory(table), erm_factory);
     }
 }
 

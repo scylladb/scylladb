@@ -59,6 +59,7 @@ namespace gms {
 }
 
 namespace locator {
+    class effective_replication_map_factory;
     class endpoint_dc_rack;
     class snitch_ptr;
 } // namespace locator
@@ -269,12 +270,11 @@ public:
     static future<std::optional<sstring>> get_scylla_local_param(const sstring& key);
 
     static std::vector<schema_ptr> all_tables(const db::config& cfg);
-    future<> make(distributed<replica::database>& db,
-                         distributed<service::storage_service>& ss,
-                         sharded<gms::gossiper>& g,
-                         sharded<service::raft_group_registry>& raft_gr,
-                         db::config& cfg,
-                         system_table_load_phase phase);
+    future<> make(
+            locator::effective_replication_map_factory&,
+            replica::database&,
+            db::config&,
+            system_table_load_phase phase);
 
     future<> initialize_virtual_tables(
                          distributed<replica::database>&,

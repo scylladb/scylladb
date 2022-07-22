@@ -847,7 +847,7 @@ public:
             }).get();
 
             for (const auto p: all_system_table_load_phases) {
-                replica::distributed_loader::init_system_keyspace(sys_ks, db, ss, gossiper, raft_gr, *cfg, p).get();
+                replica::distributed_loader::init_system_keyspace(sys_ks, erm_factory, db, *cfg, p).get();
             }
             sys_ks.invoke_on_all([&db, &ss, &gossiper, &raft_gr, &cfg] (db::system_keyspace& sys_ks) {
                 return sys_ks.initialize_virtual_tables(db, ss, gossiper, raft_gr, *cfg);
