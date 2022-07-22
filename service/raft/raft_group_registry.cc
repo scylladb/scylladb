@@ -60,7 +60,13 @@ public:
     }
 
     bool is_alive(raft::server_id srv) override {
-        return _alive_set.contains(_address_map.get_inet_address(srv));
+        // We could yield between updating the list of servers in raft/fsm
+        // and updating the raft_address_map, e.g. in case of a set_configuration.
+        // If tick_leader happens before the raft_address_map is updated,
+        // is_alive will be called with server_id that is not in the map yet.
+
+        const auto address = _address_map.find(srv);
+        return address && _alive_set.contains(*address);
     }
 };
 
