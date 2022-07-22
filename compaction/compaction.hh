@@ -90,6 +90,7 @@ struct compaction_result {
     std::chrono::time_point<db_clock> ended_at;
     uint64_t start_size = 0;
     uint64_t end_size = 0;
+    uint64_t validation_errors = 0;
 };
 
 // Compact a list of N sstables into M sstables.
@@ -108,9 +109,9 @@ std::unordered_set<sstables::shared_sstable>
 get_fully_expired_sstables(const table_state& table_s, const std::vector<sstables::shared_sstable>& compacting, gc_clock::time_point gc_before);
 
 // For tests, can drop after we virtualize sstables.
-flat_mutation_reader_v2 make_scrubbing_reader(flat_mutation_reader_v2 rd, compaction_type_options::scrub::mode scrub_mode);
+flat_mutation_reader_v2 make_scrubbing_reader(flat_mutation_reader_v2 rd, compaction_type_options::scrub::mode scrub_mode, uint64_t& validation_errors);
 
 // For tests, can drop after we virtualize sstables.
-future<bool> scrub_validate_mode_validate_reader(flat_mutation_reader_v2 rd, const compaction_data& info);
+future<uint64_t> scrub_validate_mode_validate_reader(flat_mutation_reader_v2 rd, const compaction_data& info);
 
 }

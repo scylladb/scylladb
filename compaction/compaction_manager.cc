@@ -305,10 +305,10 @@ future<> compaction_manager::perform_task(shared_ptr<compaction_manager::task> t
     }
 }
 
-future<> compaction_manager::task::compact_sstables_and_update_history(sstables::compaction_descriptor descriptor, sstables::compaction_data& cdata, release_exhausted_func_t release_exhausted, can_purge_tombstones can_purge) {
+future<sstables::compaction_result> compaction_manager::task::compact_sstables_and_update_history(sstables::compaction_descriptor descriptor, sstables::compaction_data& cdata, release_exhausted_func_t release_exhausted, can_purge_tombstones can_purge) {
     if (!descriptor.sstables.size()) {
         // if there is nothing to compact, just return.
-        co_return;
+        co_return sstables::compaction_result{};
     }
 
     bool should_update_history = this->should_update_history(descriptor.options.type());
@@ -317,6 +317,8 @@ future<> compaction_manager::task::compact_sstables_and_update_history(sstables:
     if (should_update_history) {
         co_await update_history(*_compacting_table, res, cdata);
     }
+
+    co_return res;
 }
 future<sstables::compaction_result> compaction_manager::task::compact_sstables(sstables::compaction_descriptor descriptor, sstables::compaction_data& cdata, release_exhausted_func_t release_exhausted, can_purge_tombstones can_purge) {
     compaction::table_state& t = *_compacting_table;
@@ -1192,7 +1194,7 @@ protected:
     }
 
 private:
-    future<> rewrite_sstable(const sstables::shared_sstable sst) {
+    future<sstables::compaction_result> rewrite_sstable(const sstables::shared_sstable sst) {
         co_await coroutine::switch_to(_cm._compaction_sg.cpu);
 
         for (;;) {
@@ -1215,10 +1217,10 @@ private:
 
             std::exception_ptr ex;
             try {
-                co_await compact_sstables_and_update_history(std::move(descriptor), _compaction_data, std::move(release_exhausted), _can_purge);
+                sstables::compaction_result res = co_await compact_sstables_and_update_history(std::move(descriptor), _compaction_data, std::move(release_exhausted), _can_purge);
                 finish_compaction();
                 _cm.reevaluate_postponed_compactions();
-                co_return;  // done with current sstable
+                co_return res;  // done with current sstable
             } catch (...) {
                 ex = std::current_exception();
             }
@@ -1226,7 +1228,7 @@ private:
             finish_compaction(state::failed);
             // retry current sstable or rethrows exception
             if ((co_await maybe_retry(std::move(ex))) == stop_iteration::yes) {
-                co_return;
+                co_return sstables::compaction_result{};
             }
         }
     }
@@ -1280,7 +1282,7 @@ protected:
     }
 
 private:
-    future<> validate_sstable(const sstables::shared_sstable& sst) {
+    future<sstables::compaction_result> validate_sstable(const sstables::shared_sstable& sst) {
         co_await coroutine::switch_to(_cm._maintenance_sg.cpu);
 
         switch_state(state::active);
@@ -1293,7 +1295,7 @@ private:
                     sstables::compaction_descriptor::default_max_sstable_bytes,
                     sst->run_identifier(),
                     sstables::compaction_type_options::make_scrub(sstables::compaction_type_options::scrub::mode::validate));
-            co_await sstables::compact_sstables(std::move(desc), _compaction_data, *_compacting_table);
+            co_return co_await sstables::compact_sstables(std::move(desc), _compaction_data, *_compacting_table);
         } catch (sstables::compaction_stopped_exception&) {
             // ignore, will be handled by can_proceed()
         } catch (storage_io_error& e) {
@@ -1308,6 +1310,8 @@ private:
             _cm._stats.errors++;
             cmlog.error("Scrubbing in validate mode {} failed due to {}, continuing.", sst->get_filename(), std::current_exception());
         }
+
+        co_return sstables::compaction_result{};
     }
 };
 
@@ -1473,7 +1477,7 @@ future<> compaction_manager::perform_sstable_upgrade(replica::database& db, comp
     // Note that we potentially could be doing multiple
     // upgrades here in parallel, but that is really the users
     // problem.
-    return rewrite_sstables(t, sstables::compaction_type_options::make_upgrade(db.get_keyspace_local_ranges(t.schema()->ks_name())), std::move(get_sstables));
+    return rewrite_sstables(t, sstables::compaction_type_options::make_upgrade(db.get_keyspace_local_ranges(t.schema()->ks_name())), std::move(get_sstables)).discard_result();
 }
 
 // Submit a table to be scrubbed and wait for its termination.
