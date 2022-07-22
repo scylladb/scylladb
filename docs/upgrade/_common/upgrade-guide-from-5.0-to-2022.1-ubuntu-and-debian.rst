@@ -2,7 +2,7 @@
 Upgrade Guide - ScyllaDB 5.0 to ScyllaDB Enterprise 2022.1 for |OS|
 =============================================================================
 
-This document is a step-by-step procedure for upgrading from ScyllaDB Open Source 5.0 to ScyllaDB Enterprise 2022.1, and rollback to 5.0 if required.
+This document is a step-by-step procedure for upgrading from ScyllaDB Open Source 5.0 to ScyllaDB Enterprise 2022.1 and rollback to 5.0 if required.
 
 
 Applicable Versions
@@ -14,7 +14,7 @@ This guide covers upgrading ScyllaDB from version 5.0.x to ScyllaDB Enterprise v
 Upgrade Procedure
 =================
 
-A ScyllaDB upgrade is a rolling procedure which does **not** require a full cluster shutdown.
+A ScyllaDB upgrade is a rolling procedure that does **not** require a full cluster shutdown.
 For each of the nodes in the cluster, you will:
 
 * Check the cluster schema
@@ -27,7 +27,7 @@ For each of the nodes in the cluster, you will:
 
 Apply the following procedure **serially** on each node. Do not move to the next node before validating that the node you upgraded the node is up and running the new version.
 
-**During** the rolling upgrade it is highly recommended:
+**During** the rolling upgrade, it is highly recommended:
 
 * Not to use new 2022.1 features.
 * Not to run administration functions, like repairs, refresh, rebuild or add or remove nodes. See :doc:`here </operating-scylla/manager/2.1/sctool>` for suspending Scylla Manager's scheduled or running repairs.
@@ -41,7 +41,7 @@ Upgrade Steps
 
 Check the cluster schema
 --------------------------
-Make sure that all nodes have the schema synched prior to upgrade. The upgrade will fail if there is a schema disagreement between nodes.
+Make sure that all nodes have the schema synched before the upgrade. The upgrade will fail if there is a schema disagreement between nodes.
 
 .. code:: sh
 
@@ -119,7 +119,7 @@ Validate
 
 Once you are sure the node upgrade is successful, move to the next node in the cluster.
 
-* More on :doc:`ScyllaDB Metrics Update - ScyllaDB 5.0 to 2022.1<metric-update-5.0-to-2022.1>`
+More on :doc:`ScyllaDB Metrics Update - ScyllaDB 5.0 to 2022.1<metric-update-5.0-to-2022.1>`
 
 Rollback Procedure
 ==================
@@ -129,7 +129,7 @@ Rollback Procedure
 The following procedure describes a rollback from ScyllaDB Enterprise release 2022.1.x to ScyllaDB 5.0.y. Apply this procedure if an upgrade from 5.0 to 2022.1 failed before completing on all nodes. Use this procedure only for nodes you upgraded to 2022.1.
 
 ScyllaDB rollback is a rolling procedure that does **not** require a full cluster shutdown.
-For each of the nodes rollback to 5.0, you will:
+For each of the nodes to rollback to 5.0, you will:
 
 * Drain the node and stop ScyllaDB
 * Retrieve the old ScyllaDB packages
@@ -137,7 +137,7 @@ For each of the nodes rollback to 5.0, you will:
 * Restart ScyllaDB
 * Validate the rollback success
 
-Apply the following procedure **serially** on each node. Do not move to the next node before validating the node is up and running the new version.
+Apply the following procedure **serially** on each node. Do not move to the next node before validating that the node is up and running the new version.
 
 Rollback Steps
 ==============
@@ -187,4 +187,4 @@ Start the node
 
 Validate
 --------
-Check upgrade instruction above for validation. Once you are sure the node rollback is successful, move to the next node in the cluster.
+Check the upgrade instruction above for validation. Once you are sure the node rollback is successful, move to the next node in the cluster.
