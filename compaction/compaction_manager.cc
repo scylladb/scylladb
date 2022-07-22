@@ -717,6 +717,8 @@ void compaction_manager::register_metrics() {
                        sm::description("Holds the sum of compaction backlog for all tables in the system.")),
         sm::make_gauge("normalized_backlog", [this] { return _last_backlog / _available_memory; },
                        sm::description("Holds the sum of normalized compaction backlog for all tables in the system. Backlog is normalized by dividing backlog by shard's available memory.")),
+        sm::make_counter("validation_errors", [this] { return _validation_errors; },
+                       sm::description("Holds the number of encountered validation errors.")),
     });
 }
 
@@ -1189,7 +1191,8 @@ protected:
 
         while (!_sstables.empty() && can_proceed()) {
             auto sst = consume_sstable();
-            co_await rewrite_sstable(std::move(sst));
+            auto res = co_await rewrite_sstable(std::move(sst));
+            _cm._validation_errors += res.validation_errors;
         }
     }
 
@@ -1277,7 +1280,8 @@ protected:
     virtual future<> do_run() override {
         while (!_sstables.empty() && can_proceed()) {
             auto sst = consume_sstable();
-            co_await validate_sstable(std::move(sst));
+            auto res = co_await validate_sstable(std::move(sst));
+            _cm._validation_errors += res.validation_errors;
         }
     }
 

@@ -293,6 +293,7 @@ private:
     utils::updateable_value<float> _static_shares;
     serialized_action _update_compaction_static_shares_action;
     utils::observer<float> _compaction_static_shares_observer;
+    uint64_t _validation_errors = 0;
 
     class strategy_control;
     std::unique_ptr<strategy_control> _strategy_control;
