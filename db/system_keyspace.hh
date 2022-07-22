@@ -276,6 +276,14 @@ public:
                          db::config& cfg,
                          system_table_load_phase phase);
 
+    future<> initialize_virtual_tables(
+                         distributed<replica::database>&,
+                         distributed<service::storage_service>&,
+                         sharded<gms::gossiper>&,
+                         sharded<service::raft_group_registry>&,
+                         db::config&);
+
+
     /// overloads
 
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>

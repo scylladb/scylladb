@@ -2875,6 +2875,7 @@ void register_virtual_tables(distributed<replica::database>& dist_db, distribute
     add_table(std::make_unique<raft_state_table>(dist_raft_gr));
 }
 
+// Does not include virtual tables.
 std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
     std::vector<schema_ptr> r;
     auto schema_tables = db::schema_tables::all_tables(schema_features::full());
@@ -2916,10 +2917,15 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
                     legacy::columns(), legacy::triggers(), legacy::usertypes(),
                     legacy::functions(), legacy::aggregates(), });
 
-    for (auto&& [id, vt] : virtual_tables) {
+    return r;
+}
+
+// Precondition: `register_virtual_tables` has finished.
+static std::vector<schema_ptr> all_virtual_tables() {
+    std::vector<schema_ptr> r;
+    for (auto&& [_, vt] : virtual_tables) {
         r.push_back(vt->schema());
     }
-
     return r;
 }
 
@@ -2945,10 +2951,6 @@ future<> system_keyspace::make(
         distributed<replica::database>& dist_db, distributed<service::storage_service>& dist_ss,
         sharded<gms::gossiper>& dist_gossiper, distributed<service::raft_group_registry>& dist_raft_gr,
         db::config& cfg, system_table_load_phase phase) {
-    if (phase == system_table_load_phase::phase1) {
-        register_virtual_tables(dist_db, dist_ss, dist_gossiper, dist_raft_gr, cfg);
-    }
-
     auto& db = dist_db.local();
     for (auto&& table : system_keyspace::all_tables(db.get_config())) {
         if (table->static_props().load_phase != phase) {
@@ -2960,8 +2962,22 @@ future<> system_keyspace::make(
     }
 
     if (phase == system_table_load_phase::phase1) {
-        install_virtual_readers(*this, db);
+        co_await initialize_virtual_tables(dist_db, dist_ss, dist_gossiper, dist_raft_gr, cfg);
     }
+}
+
+future<> system_keyspace::initialize_virtual_tables(
+        distributed<replica::database>& dist_db, distributed<service::storage_service>& dist_ss,
+        sharded<gms::gossiper>& dist_gossiper, distributed<service::raft_group_registry>& dist_raft_gr,
+        db::config& cfg) {
+    register_virtual_tables(dist_db, dist_ss, dist_gossiper, dist_raft_gr, cfg);
+
+    auto& db = dist_db.local();
+    for (auto&& table: all_virtual_tables()) {
+        co_await db.create_local_system_table(table, false, dist_ss.local().get_erm_factory());
+    }
+
+    install_virtual_readers(*this, db);
 }
 
 future<locator::host_id> system_keyspace::load_local_host_id() {
