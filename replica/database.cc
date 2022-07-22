@@ -797,7 +797,7 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
     co_await do_parse_schema_tables(proxy, db::schema_tables::KEYSPACES, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
         auto scylla_specific_rs = co_await db::schema_tables::extract_scylla_specific_keyspace_info(proxy, v);
         auto ksm = create_keyspace_from_schema_partition(v, scylla_specific_rs);
-        co_return co_await create_keyspace(ksm, proxy.local().get_erm_factory(), true /* bootstrap. do not mark populated yet */, system_keyspace::no);
+        co_return co_await create_keyspace(ksm, proxy.local().get_erm_factory(), system_keyspace::no);
     }));
     co_await do_parse_schema_tables(proxy, db::schema_tables::TYPES, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
         auto& ks = this->find_keyspace(v.first);
@@ -1383,11 +1383,11 @@ future<> database::create_in_memory_keyspace(const lw_shared_ptr<keyspace_metada
 
 future<>
 database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory) {
-    return create_keyspace(ksm, erm_factory, false, system_keyspace::no);
+    return create_keyspace(ksm, erm_factory, system_keyspace::no);
 }
 
 future<>
-database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory, bool is_bootstrap, system_keyspace system) {
+database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory, system_keyspace system) {
     if (_keyspaces.contains(ksm->name())) {
         co_return;
     }

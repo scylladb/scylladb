@@ -2960,7 +2960,7 @@ future<> system_keyspace_make(db::system_keyspace& sys_ks, distributed<replica::
                     std::map<sstring, sstring>{},
                     durable
                     );
-            co_await db.create_keyspace(ksm, dist_ss.local().get_erm_factory(), true, replica::database::system_keyspace::yes);
+            co_await db.create_keyspace(ksm, dist_ss.local().get_erm_factory(), replica::database::system_keyspace::yes);
         }
         auto& ks = db.find_keyspace(ks_name);
         auto cfg = ks.make_column_family_config(*table, db);
