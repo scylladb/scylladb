@@ -1180,14 +1180,6 @@ private:
     config _config;
     locator::effective_replication_map_factory& _erm_factory;
 
-    locator::effective_replication_map_factory& get_erm_factory() noexcept {
-        return _erm_factory;
-    }
-
-    const locator::effective_replication_map_factory& get_erm_factory() const noexcept {
-        return _erm_factory;
-    }
-
 public:
     explicit keyspace(lw_shared_ptr<keyspace_metadata> metadata, config cfg, locator::effective_replication_map_factory& erm_factory);
 
