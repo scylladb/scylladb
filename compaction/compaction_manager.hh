@@ -282,16 +282,12 @@ private:
     timer<lowres_clock> _compaction_submission_timer = timer<lowres_clock>(compaction_submission_callback());
     static constexpr std::chrono::seconds periodic_compaction_submission_interval() { return std::chrono::seconds(3600); }
 
-    scheduling_group _compaction_sg;
-    scheduling_group _maintenance_sg;
+    config _cfg;
     compaction_controller _compaction_controller;
     compaction_backlog_manager _backlog_manager;
-    size_t _available_memory;
     optimized_optional<abort_source::subscription> _early_abort_subscription;
-    utils::updateable_value<uint32_t> _throughput_mbs;
-    serialized_action _throughput_updater = serialized_action([this] { return update_throughput(_throughput_mbs()); });
+    serialized_action _throughput_updater;
     std::optional<utils::observer<uint32_t>> _throughput_option_observer;
-    utils::updateable_value<float> _static_shares;
     serialized_action _update_compaction_static_shares_action;
     utils::observer<float> _compaction_static_shares_observer;
     uint64_t _validation_errors = 0;
@@ -369,6 +365,26 @@ public:
     class for_testing_tag{};
     // An inline constructor for testing
     compaction_manager(for_testing_tag) : compaction_manager() {}
+
+    const scheduling_group& compaction_sg() const noexcept {
+        return _cfg.compaction_sched_group;
+    }
+
+    const scheduling_group& maintenance_sg() const noexcept {
+        return _cfg.maintenance_sched_group;
+    }
+
+    size_t available_memory() const noexcept {
+        return _cfg.available_memory;
+    }
+
+    float static_shares() const noexcept {
+        return _cfg.static_shares.get();
+    }
+
+    uint32_t throughput_mbs() const noexcept {
+        return _cfg.throughput_mb_per_sec.get();
+    }
 
     void register_metrics();
 

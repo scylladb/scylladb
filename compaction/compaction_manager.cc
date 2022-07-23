@@ -363,7 +363,7 @@ protected:
     // it cannot be the other way around, or minor compaction for this table would be
     // prevented while an ongoing major compaction doesn't release the semaphore.
     virtual future<compaction_stats_opt> do_run() override {
-        co_await coroutine::switch_to(_cm._maintenance_sg.cpu);
+        co_await coroutine::switch_to(_cm.maintenance_sg().cpu);
 
         switch_state(state::pending);
         auto units = co_await acquire_semaphore(_cm._maintenance_ops_sem);
@@ -384,7 +384,7 @@ protected:
         setup_new_compaction(descriptor.run_identifier);
 
         cmlog.info0("User initiated compaction started on behalf of {}.{}", t->schema()->ks_name(), t->schema()->cf_name());
-        compaction_backlog_tracker bt(std::make_unique<user_initiated_backlog_tracker>(_cm._compaction_controller.backlog_of_shares(200), _cm._available_memory));
+        compaction_backlog_tracker bt(std::make_unique<user_initiated_backlog_tracker>(_cm._compaction_controller.backlog_of_shares(200), _cm.available_memory()));
         _cm.register_backlog_tracker(bt);
 
         // Now that the sstables for major compaction are registered
@@ -518,7 +518,7 @@ std::ostream& operator<<(std::ostream& os, const compaction_manager::task& task)
     return os << task.describe();
 }
 
-inline compaction_controller make_compaction_controller(compaction_manager::scheduling_group& csg, uint64_t static_shares, std::function<double()> fn) {
+inline compaction_controller make_compaction_controller(const compaction_manager::scheduling_group& csg, uint64_t static_shares, std::function<double()> fn) {
     return compaction_controller(csg, static_shares, 250ms, std::move(fn));
 }
 
@@ -637,11 +637,10 @@ sstables::compaction_stopped_exception compaction_manager::task::make_compaction
 }
 
 compaction_manager::compaction_manager(config cfg, abort_source& as)
-    : _compaction_sg(cfg.compaction_sched_group)
-    , _maintenance_sg(cfg.maintenance_sched_group)
-    , _compaction_controller(make_compaction_controller(_compaction_sg, cfg.static_shares, [this, available_memory = cfg.available_memory] () -> float {
+    : _cfg(std::move(cfg))
+    , _compaction_controller(make_compaction_controller(compaction_sg(), static_shares(), [this] () -> float {
         _last_backlog = backlog();
-        auto b = _last_backlog / available_memory;
+        auto b = _last_backlog / available_memory();
         // This means we are using an unimplemented strategy
         if (compaction_controller::backlog_disabled(b)) {
             // returning the normalization factor means that we'll return the maximum
@@ -652,20 +651,18 @@ compaction_manager::compaction_manager(config cfg, abort_source& as)
         return b;
     }))
     , _backlog_manager(_compaction_controller)
-    , _available_memory(cfg.available_memory)
     , _early_abort_subscription(as.subscribe([this] () noexcept {
         do_stop();
     }))
-    , _throughput_mbs(std::move(cfg.throughput_mb_per_sec))
-    , _static_shares(std::move(cfg.static_shares))
-    , _update_compaction_static_shares_action([this] { return update_static_shares(_static_shares); })
-    , _compaction_static_shares_observer(_static_shares.observe(_update_compaction_static_shares_action.make_observer()))
+    , _throughput_updater(serialized_action([this] { return update_throughput(throughput_mbs()); }))
+    , _update_compaction_static_shares_action([this] { return update_static_shares(static_shares()); })
+    , _compaction_static_shares_observer(_cfg.static_shares.observe(_update_compaction_static_shares_action.make_observer()))
     , _strategy_control(std::make_unique<strategy_control>(*this))
 {
     register_metrics();
     // Bandwidth throttling is node-wide, updater is needed on single shard
     if (this_shard_id() == 0) {
-        _throughput_option_observer.emplace(_throughput_mbs.observe(_throughput_updater.make_observer()));
+        _throughput_option_observer.emplace(_cfg.throughput_mb_per_sec.observe(_throughput_updater.make_observer()));
         // Start throttling (if configured) right at once. Any boot-time compaction
         // jobs (reshape/reshard) run in unlimited streaming group
         (void)_throughput_updater.trigger_later();
@@ -673,14 +670,12 @@ compaction_manager::compaction_manager(config cfg, abort_source& as)
 }
 
 compaction_manager::compaction_manager()
-    : _compaction_sg()
-    , _maintenance_sg()
-    , _compaction_controller(make_compaction_controller(_compaction_sg, 1, [] () -> float { return 1.0; }))
+    : _cfg(config{ .available_memory = 1 })
+    , _compaction_controller(make_compaction_controller(compaction_sg(), 1, [] () -> float { return 1.0; }))
     , _backlog_manager(_compaction_controller)
-    , _available_memory(1)
-    , _static_shares(utils::updateable_value<float>(0))
+    , _throughput_updater(serialized_action([this] { return update_throughput(throughput_mbs()); }))
     , _update_compaction_static_shares_action([] { return make_ready_future<>(); })
-    , _compaction_static_shares_observer(_static_shares.observe(_update_compaction_static_shares_action.make_observer()))
+    , _compaction_static_shares_observer(_cfg.static_shares.observe(_update_compaction_static_shares_action.make_observer()))
     , _strategy_control(std::make_unique<strategy_control>(*this))
 {
     // No metric registration because this constructor is supposed to be used only by the testing
@@ -695,7 +690,7 @@ compaction_manager::~compaction_manager() {
 
 future<> compaction_manager::update_throughput(uint32_t value_mbs) {
     uint64_t bps = ((uint64_t)(value_mbs != 0 ? value_mbs : std::numeric_limits<uint32_t>::max())) << 20;
-    return _compaction_sg.io.update_bandwidth(bps).then_wrapped([value_mbs] (auto f) {
+    return compaction_sg().io.update_bandwidth(bps).then_wrapped([value_mbs] (auto f) {
         if (f.failed()) {
             cmlog.warn("Couldn't update compaction bandwidth: {}", f.get_exception());
         } else if (value_mbs != 0) {
@@ -722,7 +717,7 @@ void compaction_manager::register_metrics() {
                        sm::description("Holds the number of tables with postponed compaction.")),
         sm::make_gauge("backlog", [this] { return _last_backlog; },
                        sm::description("Holds the sum of compaction backlog for all tables in the system.")),
-        sm::make_gauge("normalized_backlog", [this] { return _last_backlog / _available_memory; },
+        sm::make_gauge("normalized_backlog", [this] { return _last_backlog / available_memory(); },
                        sm::description("Holds the sum of normalized compaction backlog for all tables in the system. Backlog is normalized by dividing backlog by shard's available memory.")),
         sm::make_counter("validation_errors", [this] { return _validation_errors; },
                        sm::description("Holds the number of encountered validation errors.")),
@@ -916,7 +911,7 @@ public:
     {}
 protected:
     virtual future<compaction_stats_opt> do_run() override {
-        co_await coroutine::switch_to(_cm._compaction_sg.cpu);
+        co_await coroutine::switch_to(_cm.compaction_sg().cpu);
 
         for (;;) {
             if (!can_proceed()) {
@@ -1137,7 +1132,7 @@ public:
     }
 protected:
     virtual future<compaction_stats_opt> do_run() override {
-        co_await coroutine::switch_to(_cm._maintenance_sg.cpu);
+        co_await coroutine::switch_to(_cm.maintenance_sg().cpu);
 
         for (;;) {
             if (!can_proceed()) {
@@ -1217,7 +1212,7 @@ protected:
 
 private:
     future<sstables::compaction_result> rewrite_sstable(const sstables::shared_sstable sst) {
-        co_await coroutine::switch_to(_cm._compaction_sg.cpu);
+        co_await coroutine::switch_to(_cm.compaction_sg().cpu);
 
         for (;;) {
             switch_state(state::active);
@@ -1234,7 +1229,7 @@ private:
 
             setup_new_compaction(descriptor.run_identifier);
 
-            compaction_backlog_tracker user_initiated(std::make_unique<user_initiated_backlog_tracker>(_cm._compaction_controller.backlog_of_shares(200), _cm._available_memory));
+            compaction_backlog_tracker user_initiated(std::make_unique<user_initiated_backlog_tracker>(_cm._compaction_controller.backlog_of_shares(200), _cm.available_memory()));
             _cm.register_backlog_tracker(user_initiated);
 
             std::exception_ptr ex;
@@ -1311,14 +1306,14 @@ protected:
 
 private:
     future<sstables::compaction_result> validate_sstable(const sstables::shared_sstable& sst) {
-        co_await coroutine::switch_to(_cm._maintenance_sg.cpu);
+        co_await coroutine::switch_to(_cm.maintenance_sg().cpu);
 
         switch_state(state::active);
         std::exception_ptr ex;
         try {
             auto desc = sstables::compaction_descriptor(
                     { sst },
-                    _cm._maintenance_sg.io,
+                    _cm.maintenance_sg().io,
                     sst->get_sstable_level(),
                     sstables::compaction_descriptor::default_max_sstable_bytes,
                     sst->run_identifier(),
@@ -1402,10 +1397,10 @@ private:
     }
 
     future<> run_cleanup_job(sstables::compaction_descriptor descriptor) {
-        co_await coroutine::switch_to(_cm._compaction_sg.cpu);
+        co_await coroutine::switch_to(_cm.compaction_sg().cpu);
 
         for (;;) {
-            compaction_backlog_tracker user_initiated(std::make_unique<user_initiated_backlog_tracker>(_cm._compaction_controller.backlog_of_shares(200), _cm._available_memory));
+            compaction_backlog_tracker user_initiated(std::make_unique<user_initiated_backlog_tracker>(_cm._compaction_controller.backlog_of_shares(200), _cm.available_memory()));
             _cm.register_backlog_tracker(user_initiated);
 
             std::exception_ptr ex;
