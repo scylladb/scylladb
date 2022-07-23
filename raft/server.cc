@@ -19,6 +19,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/pipe.hh>
 #include <seastar/core/metrics.hh>
+#include <seastar/rpc/rpc_types.hh>
 #include <absl/container/flat_hash_map.h>
 
 #include "fsm.hh"
@@ -1142,7 +1143,14 @@ future<> server_impl::read_barrier(seastar::abort_source* as) {
             leader = _fsm->current_leader();
         } else {
             auto applied = _applied_idx;
-            auto res = co_await get_read_idx(leader, as);
+            read_barrier_reply res;
+            try {
+                res = co_await get_read_idx(leader, as);
+            } catch (const seastar::rpc::closed_error& e) {
+                logger.trace("[{}] read_barrier on {} resulted in seastar::rpc::closed_error; retrying", _id, leader);
+                leader = server_id{};
+                continue;
+            }
             if (std::holds_alternative<std::monostate>(res)) {
                 // the leader is not ready to answer because it did not
                 // committed any entries yet, so wait for any entry to be

@@ -507,9 +507,11 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
                 ss << msg << ": " << std::current_exception();
                 msg = ss.str();
             }
+            clogger.error("Request processing ended with a server error [{}], message [{}]", ex, msg);
             return make_error(stream, exceptions::exception_code::SERVER_ERROR, msg, trace_state);
         }), utils::result_catch_dots([&] () {
             try { ++_server._stats.errors[exceptions::exception_code::SERVER_ERROR]; } catch(...) {}
+            clogger.error("Request processing ended with an unknown error");
             return make_error(stream, exceptions::exception_code::SERVER_ERROR, "unknown error", trace_state);
         })));
     });
