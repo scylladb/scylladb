@@ -1640,7 +1640,7 @@ public:
     typedef std::function<future<db_clock::time_point>()> timestamp_func;
 
 private:
-    future<> truncate(const keyspace& ks, column_family& cf, timestamp_func, bool with_snapshot, std::optional<sstring> snapshot_name_opt);
+    future<> truncate(column_family& cf, timestamp_func, bool with_snapshot, std::optional<sstring> snapshot_name_opt);
 public:
     bool update_column_family(schema_ptr s);
 private:

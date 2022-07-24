@@ -1005,7 +1005,6 @@ void database::remove(const table& cf) noexcept {
 }
 
 future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_name, timestamp_func tsf, std::optional<sstring> snapshot_name_opt) {
-    auto& ks = find_keyspace(ks_name);
     auto uuid = find_uuid(ks_name, cf_name);
     lw_shared_ptr<table> cf;
     try {
@@ -1019,7 +1018,7 @@ future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_
     cf->clear_views();
     co_await cf->await_pending_ops();
     co_await _querier_cache.evict_all_for_table(cf->schema()->id());
-    auto f = co_await coroutine::as_future(truncate(ks, *cf, std::move(tsf), snapshot_name_opt.has_value(), std::move(snapshot_name_opt)));
+    auto f = co_await coroutine::as_future(truncate(*cf, std::move(tsf), snapshot_name_opt.has_value(), std::move(snapshot_name_opt)));
     co_await cf->stop();
     f.get(); // re-throw exception from truncate() if any
 }
@@ -2335,13 +2334,12 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
     dblog.info("Truncating {}.{} {}snapshot", ks_name, cf_name, with_snapshot && auto_snapshot ? "with auto-" : "without ");
 
     co_await sharded_db.invoke_on_all([&, tsf = std::move(tsf)] (database& db) {
-        auto& ks = db.find_keyspace(ks_name);
         auto& cf = db.find_column_family(ks_name, cf_name);
-        return db.truncate(ks, cf, tsf, with_snapshot, snapshot_name_opt);
+        return db.truncate(cf, tsf, with_snapshot, snapshot_name_opt);
     });
 }
 
-future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_func tsf, bool with_snapshot, std::optional<sstring> snapshot_name_opt) {
+future<> database::truncate(column_family& cf, timestamp_func tsf, bool with_snapshot, std::optional<sstring> snapshot_name_opt) {
     dblog.trace("Truncating {}.{} on shard: with_snapshot={} auto_snapshot={}", cf.schema()->ks_name(), cf.schema()->cf_name(), with_snapshot, get_config().auto_snapshot());
     auto holder = cf.async_gate().hold();
 
