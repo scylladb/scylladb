@@ -760,6 +760,7 @@ storage_service::get_range_to_address_map_in_local_dc(
         locator::effective_replication_map_ptr erm) const {
     auto orig_map = co_await get_range_to_address_map(erm, co_await get_tokens_in_local_dc(*erm->get_token_metadata_ptr()));
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> filtered_map;
+    filtered_map.reserve(orig_map.size());
     for (auto entry : orig_map) {
         auto& addresses = filtered_map[entry.first];
         addresses.reserve(entry.second.size());
@@ -3110,6 +3111,7 @@ storage_service::construct_range_to_endpoint_map(
         locator::effective_replication_map_ptr erm,
         const dht::token_range_vector& ranges) const {
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> res;
+    res.reserve(ranges.size());
     for (auto r : ranges) {
         res[r] = erm->get_natural_endpoints(
                 r.end() ? r.end()->value() : dht::maximum_token());
@@ -3374,6 +3376,7 @@ storage_service::get_all_ranges(const std::vector<token>& sorted_tokens) const {
         co_return dht::token_range_vector();
     int size = sorted_tokens.size();
     dht::token_range_vector ranges;
+    ranges.reserve(size);
     ranges.push_back(dht::token_range::make_ending_with(range_bound<token>(sorted_tokens[0], true)));
     co_await coroutine::maybe_yield();
     for (int i = 1; i < size; ++i) {
