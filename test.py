@@ -390,6 +390,12 @@ class CQLApprovalTestSuite(PythonTestSuite):
     def __init__(self, path, cfg, options: argparse.Namespace, mode) -> None:
         super().__init__(path, cfg, options, mode)
 
+    def build_test_list(self) -> List[str]:
+        """For CQL tests, search for directories recursively"""
+        path = self.suite_path
+        cqltests = itertools.chain(path.rglob("*_test.cql"), path.rglob("test_*.cql"))
+        return [os.path.splitext(t.relative_to(self.suite_path))[0] for t in cqltests]
+
     async def add_test(self, shortname: str) -> None:
         test = CQLApprovalTest(self.next_id, shortname, self)
         self.tests.append(test)
