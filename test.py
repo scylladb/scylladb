@@ -591,6 +591,8 @@ class CQLApprovalTest(Test):
         self.result = suite.suite_path / (self.shortname + ".result")
         self.tmpfile = os.path.join(suite.options.tmpdir, self.mode, self.uname + ".reject")
         self.reject = suite.suite_path / (self.shortname + ".reject")
+        self.server_log: Optional[str] = None
+        self.server_log_filename: Optional[str] = None
         CQLApprovalTest._reset(self)
 
     def _reset(self) -> None:
@@ -603,6 +605,7 @@ class CQLApprovalTest(Test):
         self.summary = "not run"
         self.unidiff: Optional[str] = None
         self.server_log = None
+        self.server_log_filename = None
         self.env: Dict[str, str] = dict()
         old_tmpfile = pathlib.Path(self.tmpfile)
         if old_tmpfile.exists():
@@ -621,7 +624,7 @@ class CQLApprovalTest(Test):
         def set_summary(summary):
             self.summary = summary
             logging.info("Test %s %s", self.uname, summary)
-            if self.server_log:
+            if self.server_log is not None:
                 logging.info("Server log:\n%s", self.server_log)
 
         async with self.suite.clusters.instance() as cluster:
@@ -662,6 +665,7 @@ Check test log at {}.""".format(self.log_filename))
                 # 2) failed test execution.
                 if self.is_executed_ok is False:
                     self.server_log = cluster[0].read_log()
+                    self.server_log_filename = cluster[0].log_filename
                     if self.is_before_test_ok is False:
                         set_summary("pre-check failed: {}".format(e))
                         print("Test {} {}".format(self.name, self.summary))
@@ -686,7 +690,7 @@ Check test log at {}.""".format(self.log_filename))
                                        self.summary))
         if self.is_executed_ok is False:
             print(read_log(self.log_filename))
-            if self.server_log:
+            if self.server_log is not None:
                 print("Server log of the first server:")
                 print(self.server_log)
         elif self.is_equal_result is False and self.unidiff:
@@ -700,9 +704,9 @@ Check test log at {}.""".format(self.log_filename))
             if self.log_filename.exists():
                 system_out = ET.SubElement(xml_res, 'system-out')
                 system_out.text = read_log(self.log_filename)
-            if self.server_log:
+            if self.server_log_filename:
                 system_err = ET.SubElement(xml_res, 'system-err')
-                system_err.text = read_log(self.server_log)
+                system_err.text = read_log(self.server_log_filename)
         elif self.unidiff:
             system_out = ET.SubElement(xml_res, 'system-out')
             system_out.text = palette.nocolor(self.unidiff)
@@ -740,11 +744,14 @@ class PythonTest(Test):
         super().__init__(test_no, shortname, suite)
         self.path = "pytest"
         self.xmlout = os.path.join(self.suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
+        self.server_log: Optional[str] = None
+        self.server_log_filename: Optional[str] = None
         PythonTest._reset(self)
 
     def _reset(self) -> None:
         """Reset the test before a retry, if it is retried as flaky"""
         self.server_log = None
+        self.server_log_filename = None
         self.is_before_test_ok = False
         self.is_after_test_ok = False
         self.args = [
@@ -757,7 +764,7 @@ class PythonTest(Test):
     def print_summary(self) -> None:
         print("Output of {} {}:".format(self.path, " ".join(self.args)))
         print(read_log(self.log_filename))
-        if self.server_log:
+        if self.server_log is not None:
             print("Server log of the first server:")
             print(self.server_log)
 
@@ -776,6 +783,7 @@ class PythonTest(Test):
                 self.success = status
             except Exception as e:
                 self.server_log = cluster[0].read_log()
+                self.server_log_filename = cluster[0].log_filename
                 if self.is_before_test_ok is False:
                     print("Test {} pre-check failed: {}".format(self.name, str(e)))
                     print("Server log of the first server:\n{}".format(self.server_log))
@@ -786,9 +794,9 @@ class PythonTest(Test):
 
     def write_junit_failure_report(self, xml_res: ET.Element) -> None:
         super().write_junit_failure_report(xml_res)
-        if self.server_log:
+        if self.server_log_filename is not None:
             system_err = ET.SubElement(xml_res, 'system-err')
-            system_err.text = read_log(self.server_log)
+            system_err.text = read_log(self.server_log_filename)
 
 
 class TabularConsoleOutput:
