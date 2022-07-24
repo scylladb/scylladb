@@ -27,8 +27,36 @@
 
 namespace sstables {
 
-void sstable_run::insert(shared_sstable sst) {
+extern logging::logger sstlog;
+
+bool
+sstable_first_key_less_comparator::operator()(const shared_sstable& s1, const shared_sstable& s2) const {
+    return s1->compare_by_first_key(*s2) < 0;
+}
+
+bool sstable_run::will_introduce_overlapping(const shared_sstable& sst) const {
+    // checks if s1 is *all* before s2, meaning their bounds don't overlap.
+    auto completely_ordered_before = [] (const shared_sstable& s1, const shared_sstable& s2) {
+        auto less_cmp = [s = s1->get_schema()] (const dht::decorated_key& k1, const dht::decorated_key& k2) {
+            return k1.less_compare(*s, k2);
+        };
+        return less_cmp(s1->get_first_decorated_key(), s2->get_first_decorated_key()) &&
+               less_cmp(s1->get_last_decorated_key(), s2->get_first_decorated_key());
+    };
+    // lower bound will be the 1st element which is not *all* before the candidate sstable.
+    // upper bound will be the 1st element which the candidate sstable is *all* before.
+    // if there's overlapping, lower bound will be 1st element which overlaps, whereas upper bound the 1st one which doesn't (or end iterator)
+    // if there's not overlapping, lower and upper bound will both point to 1st element which the candidate sstable is *all* before (or end iterator).
+    auto p = std::equal_range(_all.begin(), _all.end(), sst, completely_ordered_before);
+    return p.first != p.second;
+};
+
+bool sstable_run::insert(shared_sstable sst) {
+    if (will_introduce_overlapping(sst)) {
+        return false;
+    }
     _all.insert(std::move(sst));
+    return true;
 }
 
 void sstable_run::erase(shared_sstable sst) {
@@ -271,7 +299,12 @@ void partitioned_sstable_set::insert(shared_sstable sst) {
     _all->insert(sst);
     auto undo_all_insert = defer([&] () { _all->erase(sst); });
 
-    _all_runs[sst->run_identifier()].insert(sst);
+    // If sstable doesn't satisfy disjoint invariant, then place it in a new sstable run.
+    while (!_all_runs[sst->run_identifier()].insert(sst)) {
+        sstlog.warn("Generating a new run identifier for SSTable {} as overlapping was detected when inserting it into SSTable run {}",
+                    sst->get_filename(), sst->run_identifier());
+        sst->generate_new_run_identifier();
+    }
     auto undo_all_runs_insert = defer([&] () { _all_runs[sst->run_identifier()].erase(sst); });
 
     if (store_as_unleveled(sst)) {
