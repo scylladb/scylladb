@@ -1016,7 +1016,7 @@ future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_
     remove(*cf);
     cf->clear_views();
     co_await cf->await_pending_ops();
-    co_await _querier_cache.evict_all_for_table(cf->schema()->id());
+    co_await _querier_cache.evict_all_for_table(uuid);
     auto f = co_await coroutine::as_future(truncate(*cf, std::move(tsf), snapshot_name_opt.has_value(), std::move(snapshot_name_opt)));
     co_await cf->stop();
     f.get(); // re-throw exception from truncate() if any
