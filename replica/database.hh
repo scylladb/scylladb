@@ -1644,7 +1644,7 @@ private:
 public:
     bool update_column_family(schema_ptr s);
 private:
-    future<> drop_column_family(table& cf, timestamp_func, std::optional<sstring> snapshot_name_opt);
+    future<> detach_column_family(table& cf);
 
     static future<std::vector<foreign_ptr<lw_shared_ptr<table>>>> get_table_on_all_shards(sharded<database>& db, utils::UUID uuid);
 
