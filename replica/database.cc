@@ -1006,19 +1006,20 @@ void database::remove(const table& cf) noexcept {
 
 future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_name, timestamp_func tsf, std::optional<sstring> snapshot_name_opt) {
     auto uuid = find_uuid(ks_name, cf_name);
-    lw_shared_ptr<table> cf;
+    lw_shared_ptr<table> cfptr;
     try {
-        cf = _column_families.at(uuid);
+        cfptr = _column_families.at(uuid);
         drop_repair_history_map_for_table(uuid);
     } catch (std::out_of_range&) {
         on_internal_error(dblog, fmt::format("drop_column_family {}.{}: UUID={} not found", ks_name, cf_name, uuid));
     }
-    remove(*cf);
-    cf->clear_views();
-    co_await cf->await_pending_ops();
+    table& cf = *cfptr;
+    remove(cf);
+    cf.clear_views();
+    co_await cf.await_pending_ops();
     co_await _querier_cache.evict_all_for_table(uuid);
-    auto f = co_await coroutine::as_future(truncate(*cf, std::move(tsf), snapshot_name_opt.has_value(), std::move(snapshot_name_opt)));
-    co_await cf->stop();
+    auto f = co_await coroutine::as_future(truncate(cf, std::move(tsf), snapshot_name_opt.has_value(), std::move(snapshot_name_opt)));
+    co_await cf.stop();
     f.get(); // re-throw exception from truncate() if any
 }
 
