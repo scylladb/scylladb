@@ -10,8 +10,10 @@ import asyncio
 import pathlib
 import ssl
 import sys
+from typing import List
 from test.pylib.random_tables import RandomTables                        # type: ignore
 from test.pylib.util import unique_name                                  # type: ignore
+from test.pylib.manager_client import ManagerClient
 import pytest
 from cassandra.cluster import Session, ResponseFuture                    # type: ignore
 from cassandra.cluster import Cluster, ConsistencyLevel                  # type: ignore
@@ -20,6 +22,19 @@ from cassandra.policies import RoundRobinPolicy                          # type:
 
 # Add test.pylib to the search path
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
+
+def pytest_addoption(parser):
+    parser.addoption('--manager-api', action='store', required=True,
+                     help='Manager unix socket path')
+
+# Change default pytest-asyncio event_loop fixture scope to session to
+# allow async fixtures with scope larger than function. (e.g. manager fixture)
+# See https://github.com/pytest-dev/pytest-asyncio/issues/68
+@pytest.fixture(scope="session")
+def event_loop(request):
+    loop = asyncio.get_event_loop_policy().new_event_loop()
+    yield loop
+    loop.close()
 
 
 def _wrap_future(f: ResponseFuture) -> asyncio.Future:
@@ -53,11 +68,10 @@ Session.run_async = run_async
 
 
 # cluster_con helper: set up client object for communicating with the CQL API.
-# The host/port combination of the server are determined by the --host and
-# --port options, and defaults to localhost and 9042, respectively.
-def cluster_con(request):
+def cluster_con(hosts: List[str], port: int, ssl: bool):
     """Create a CQL Cluster connection object according to configuration.
        It does not .connect() yet."""
+    assert len(hosts) > 0, "python driver connection needs at least one host to connect to"
     profile = ExecutionProfile(
         load_balancing_policy=RoundRobinPolicy(),
         consistency_level=ConsistencyLevel.LOCAL_QUORUM,
@@ -68,7 +82,7 @@ def cluster_con(request):
         # request (e.g., a DROP KEYSPACE needing to drop multiple tables)
         # 10 seconds may not be enough, so let's increase it. See issue #7838.
         request_timeout=120)
-    if request.config.getoption('ssl'):
+    if ssl:
         # Scylla does not support any earlier TLS protocol. If you try,
         # you will get mysterious EOF errors (see issue #6971) :-(
         ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
@@ -76,8 +90,8 @@ def cluster_con(request):
         ssl_context = None
 
     return Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},
-                   contact_points=[request.config.getoption('host')],
-                   port=int(request.config.getoption('port')),
+                   contact_points=hosts,
+                   port=port,
                    # TODO: make the protocol version an option, to allow testing with
                    # different versions. If we drop this setting completely, it will
                    # mean pick the latest version supported by the client and the server.
@@ -89,11 +103,24 @@ def cluster_con(request):
                    )
 
 
+@pytest.mark.asyncio
+@pytest.fixture(scope="session")
+async def manager(event_loop, request):
+    """Session fixture to set up client object for communicating with the Cluster API.
+       Pass the Unix socket path where the Manager server API is listening.
+       Test cases (functions) should not use this fixture.
+    """
+    manager_int = ManagerClient(request.config.getoption('manager_api'))
+    await manager_int.start()
+    yield manager_int
+
 # "cql" fixture: set up client object for communicating with the CQL API.
 # We use scope="session" so that all tests will reuse the same client object.
+@pytest.mark.asyncio
 @pytest.fixture(scope="session")
-def cql(request):
-    cluster = cluster_con(request)
+async def cql(request, manager):
+    cluster = cluster_con(await manager.servers(), int(request.config.getoption('port')),
+                          request.config.getoption('ssl'))
     yield cluster.connect()
     cluster.shutdown()
 
