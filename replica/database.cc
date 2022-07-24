@@ -1004,16 +1004,9 @@ void database::remove(const table& cf) noexcept {
     }
 }
 
-future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_name, timestamp_func tsf, std::optional<sstring> snapshot_name_opt) {
-    auto uuid = find_uuid(ks_name, cf_name);
-    lw_shared_ptr<table> cfptr;
-    try {
-        cfptr = _column_families.at(uuid);
-        drop_repair_history_map_for_table(uuid);
-    } catch (std::out_of_range&) {
-        on_internal_error(dblog, fmt::format("drop_column_family {}.{}: UUID={} not found", ks_name, cf_name, uuid));
-    }
-    table& cf = *cfptr;
+future<> database::drop_column_family(table& cf, timestamp_func tsf, std::optional<sstring> snapshot_name_opt) {
+    auto uuid = cf.schema()->id();
+    drop_repair_history_map_for_table(uuid);
     remove(cf);
     cf.clear_views();
     co_await cf.await_pending_ops();
@@ -1023,11 +1016,28 @@ future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_
     f.get(); // re-throw exception from truncate() if any
 }
 
+future<std::vector<foreign_ptr<lw_shared_ptr<table>>>> database::get_table_on_all_shards(sharded<database>& sharded_db, utils::UUID uuid) {
+    std::vector<foreign_ptr<lw_shared_ptr<table>>> table_shards;
+    table_shards.resize(smp::count);
+    co_await coroutine::parallel_for_each(boost::irange(0u, smp::count), [&] (unsigned shard) -> future<> {
+        table_shards[shard] = co_await smp::submit_to(shard, [&] {
+            try {
+                return make_foreign(sharded_db.local()._column_families.at(uuid));
+            } catch (std::out_of_range&) {
+                on_internal_error(dblog, fmt::format("Table UUID={} not found", uuid));
+            }
+        });
+    });
+    co_return table_shards;
+}
+
 future<> database::drop_table_on_all_shards(sharded<database>& sharded_db, sstring ks_name, sstring cf_name, bool with_snapshot) {
     auto auto_snapshot = sharded_db.local().get_config().auto_snapshot();
     dblog.info("Dropping {}.{} {}snapshot", ks_name, cf_name, with_snapshot && auto_snapshot ? "with auto-" : "without ");
 
-    auto table_dir = fs::path(sharded_db.local().find_column_family(ks_name, cf_name).dir());
+    auto uuid = sharded_db.local().find_uuid(ks_name, cf_name);
+    auto table_shards = co_await get_table_on_all_shards(sharded_db, uuid);
+    auto table_dir = fs::path(table_shards[this_shard_id()]->dir());
     utils::joinpoint<db_clock::time_point> jp{[] {
         return make_ready_future<db_clock::time_point>(db_clock::time_point::max());
     }};
@@ -1037,7 +1047,7 @@ future<> database::drop_table_on_all_shards(sharded<database>& sharded_db, sstri
         snapshot_name_opt = format("pre-drop-{}", db_clock::now().time_since_epoch().count());
     }
     co_await sharded_db.invoke_on_all([&] (database& db) {
-        return db.drop_column_family(ks_name, cf_name, tsf, snapshot_name_opt);
+        return db.drop_column_family(*table_shards[this_shard_id()], tsf, snapshot_name_opt);
     });
     co_await sstables::remove_table_directory_if_has_no_snapshots(table_dir);
 }
@@ -2333,11 +2343,20 @@ future<> database::snapshot_on_all(std::string_view ks_name, sstring tag, bool s
 }
 
 future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, sstring ks_name, sstring cf_name, timestamp_func tsf, bool with_snapshot, std::optional<sstring> snapshot_name_opt) {
+    auto uuid = sharded_db.local().find_uuid(ks_name, cf_name);
+    auto table_shards = co_await get_table_on_all_shards(sharded_db, uuid);
+    co_return co_await truncate_table_on_all_shards(sharded_db, table_shards, std::move(tsf), with_snapshot, std::move(snapshot_name_opt));
+}
+
+future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, const std::vector<foreign_ptr<lw_shared_ptr<table>>>& table_shards, timestamp_func tsf, bool with_snapshot, std::optional<sstring> snapshot_name_opt) {
+    auto& cf = *table_shards[this_shard_id()];
+    auto s = cf.schema();
     auto auto_snapshot = sharded_db.local().get_config().auto_snapshot();
-    dblog.info("Truncating {}.{} {}snapshot", ks_name, cf_name, with_snapshot && auto_snapshot ? "with auto-" : "without ");
+    dblog.info("Truncating {}.{} {}snapshot", s->ks_name(), s->cf_name(), with_snapshot && auto_snapshot ? "with auto-" : "without ");
 
     co_await sharded_db.invoke_on_all([&, tsf = std::move(tsf)] (database& db) {
-        auto& cf = db.find_column_family(ks_name, cf_name);
+        auto shard = this_shard_id();
+        auto& cf = *table_shards[shard];
         return db.truncate(cf, tsf, with_snapshot, snapshot_name_opt);
     });
 }
