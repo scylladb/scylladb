@@ -3,7 +3,6 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-import aiohttp
 import asyncio
 from contextlib import asynccontextmanager
 import itertools
@@ -11,6 +10,7 @@ import logging
 import os
 import pathlib
 import shutil
+import tempfile
 import time
 import uuid
 from typing import Optional, Dict, List, Set, Callable, AsyncIterator, NamedTuple
@@ -24,6 +24,8 @@ from cassandra.cluster import Cluster, NoHostAvailable  # type: ignore
 from cassandra.cluster import Session                   # type: ignore
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT     # type: ignore
 from cassandra.policies import WhiteListRoundRobinPolicy  # type: ignore
+import aiohttp
+import aiohttp.web
 
 #
 # Put all Scylla options in a template file. Sic: if you make a typo in the
@@ -598,21 +600,40 @@ class ScyllaCluster:
 
 
 class ScyllaClusterManager:
-    """Manages a Scylla cluster for running test cases"""
+    """Manages a Scylla cluster for running test cases
+       Provides an async API for tests to request changes in the Cluster.
+       Parallel requests are not supported.
+    """
     cluster: ScyllaCluster
+    site: aiohttp.web.UnixSite
 
-    def __init__(self, test_name: str, clusters: Pool[ScyllaCluster]) -> None:
+    def __init__(self, test_name: str, clusters: Pool[ScyllaCluster], base_dir: str) -> None:
         self.test_name: str = test_name
         self.clusters: Pool[ScyllaCluster] = clusters
+        self.is_running: bool = False
+        # API
+        # NOTE: need to make a safe temp dir as tempfile can't make a safe temp sock name
+        self.manager_dir: str = tempfile.mkdtemp(prefix="manager-", dir=base_dir)
+        self.sock_path: str = f"{self.manager_dir}/api"
+        self.app = aiohttp.web.Application()
+        self._setup_routes()
+        self.runner = aiohttp.web.AppRunner(self.app)
 
     async def start(self) -> None:
-        """Start, start first cluster"""
+        """Get first cluster, setup API"""
         await self._get_cluster()
+        await self.runner.setup()
+        self.site = aiohttp.web.UnixSite(self.runner, path=self.sock_path)
+        await self.site.start()
+        self.is_running = True
 
     async def stop(self) -> None:
         """Stop, cycle last cluster if not dirty and present"""
+        await self.site.stop()
         self.cluster.after_test(self.test_name)
         await self._return_cluster()
+        if os.path.exists(self.manager_dir):
+            shutil.rmtree(self.manager_dir)
 
     async def _get_cluster(self) -> None:
         self.cluster = await self.clusters.get()
@@ -623,13 +644,42 @@ class ScyllaClusterManager:
         await self.clusters.put(self.cluster)
         del self.cluster
 
+    def _setup_routes(self) -> None:
+        self.app.router.add_get('/up', self._manager_up)
+        self.app.router.add_get('/cluster/up', self._cluster_up)
+        self.app.router.add_get('/cluster/is-dirty', self._is_dirty)
+        self.app.router.add_get('/cluster/replicas', self._cluster_replicas)
+        self.app.router.add_get('/cluster/servers', self._cluster_servers)
+
+    async def _manager_up(self, request) -> aiohttp.web.Response:
+        return aiohttp.web.Response(text=f"{self.is_running}")
+
+    async def _cluster_up(self, request) -> aiohttp.web.Response:
+        """Is cluster running"""
+        return aiohttp.web.Response(text=f"{self.cluster is not None and self.cluster.is_running}")
+
+    async def _is_dirty(self, request) -> aiohttp.web.Response:
+        """Report if current cluster is dirty"""
+        if self.cluster is None:
+            return aiohttp.web.Response(status=500, text="No cluster active")
+        return aiohttp.web.Response(text=f"{self.cluster.is_dirty}")
+
+    async def _cluster_replicas(self, request) -> aiohttp.web.Response:
+        """Return cluster's configured number of replicas (replication factor)"""
+        if self.cluster is None:
+            return aiohttp.web.Response(status=500, text="No cluster active")
+        return aiohttp.web.Response(text=f"{self.cluster.replicas}")
+
+    async def _cluster_servers(self, request) -> aiohttp.web.Response:
+        """Return a list of active server ids (IPs)"""
+        return aiohttp.web.Response(text=f"{','.join(sorted(self.cluster.running.keys()))}")
 
 @asynccontextmanager
-async def get_cluster_manager(test_name: str, clusters: Pool[ScyllaCluster]) \
+async def get_cluster_manager(test_name: str, clusters: Pool[ScyllaCluster], test_path: str) \
         -> AsyncIterator[ScyllaClusterManager]:
     """Create a temporary manager for the active cluster used in a test
        and provide the cluster to the caller."""
-    manager = ScyllaClusterManager(test_name, clusters)
+    manager = ScyllaClusterManager(test_name, clusters, test_path)
     await manager.start()
     try:
         yield manager

@@ -848,9 +848,10 @@ class TopologyTest(PythonTest):
 
     async def run(self, options: argparse.Namespace) -> Test:
 
-        async with get_cluster_manager(self.shortname, self.suite.clusters) as manager:
-            self.args.insert(0, "--host={}".format(manager.cluster[0].host))
+        test_path = os.path.join(self.suite.options.tmpdir, self.mode)
+        async with get_cluster_manager(self.shortname, self.suite.clusters, test_path) as manager:
             logging.info("Leasing Scylla cluster %s for test %s", manager.cluster, self.uname)
+            self.args.insert(0, "--manager-api={}".format(manager.sock_path))
 
             try:
                 manager.cluster.before_test(self.uname)
