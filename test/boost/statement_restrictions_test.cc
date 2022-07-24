@@ -30,7 +30,7 @@ query::clustering_row_ranges slice(
             env.data_dictionary(),
             env.local_db().find_schema(keyspace_name, table_name),
             statements::statement_type::SELECT,
-            where_clause,
+            expr::conjunction{where_clause},
             ctx,
             /*contains_only_static_columns=*/false,
             /*for_view=*/false,
@@ -43,7 +43,7 @@ query::clustering_row_ranges slice(
 query::clustering_row_ranges slice_parse(
         sstring_view where_clause, cql_test_env& env,
         const sstring& table_name = "t", const sstring& keyspace_name = "ks") {
-    return slice(cql3::util::where_clause_to_relations(where_clause), env, table_name, keyspace_name);
+    return slice(boolean_factors(cql3::util::where_clause_to_relations(where_clause)), env, table_name, keyspace_name);
 }
 
 auto I(int32_t x) { return int32_type->decompose(x); }

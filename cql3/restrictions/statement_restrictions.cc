@@ -326,27 +326,25 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
 statement_restrictions::statement_restrictions(data_dictionary::database db,
         schema_ptr schema,
         statements::statement_type type,
-        const std::vector<expr::expression>& where_clause,
+        const expr::expression& where_clause,
         prepare_context& ctx,
         bool selects_only_static_columns,
         bool for_view,
         bool allow_filtering)
     : statement_restrictions(schema, allow_filtering)
 {
-    if (!where_clause.empty()) {
-        for (auto&& relation_expr : where_clause) {
-            const expr::binary_operator* relation_binop = expr::as_if<expr::binary_operator>(&relation_expr);
+    for (auto&& relation_expr : boolean_factors(where_clause)) {
+        const expr::binary_operator* relation_binop = expr::as_if<expr::binary_operator>(&relation_expr);
 
-            if (relation_binop == nullptr) {
-                on_internal_error(rlogger, format("statement_restrictions: where clause has non-binop element: {}", relation_expr));
-            }
+        if (relation_binop == nullptr) {
+            on_internal_error(rlogger, format("statement_restrictions: where clause has non-binop element: {}", relation_expr));
+        }
 
-            expr::binary_operator prepared_restriction = expr::validate_and_prepare_new_restriction(*relation_binop, db, schema, ctx);
-            add_restriction(prepared_restriction, schema, allow_filtering, for_view);
+        expr::binary_operator prepared_restriction = expr::validate_and_prepare_new_restriction(*relation_binop, db, schema, ctx);
+        add_restriction(prepared_restriction, schema, allow_filtering, for_view);
 
-            if (prepared_restriction.op != expr::oper_t::IS_NOT) {
-                _where = _where.has_value() ? make_conjunction(std::move(*_where), prepared_restriction) : prepared_restriction;
-            }
+        if (prepared_restriction.op != expr::oper_t::IS_NOT) {
+            _where = _where.has_value() ? make_conjunction(std::move(*_where), prepared_restriction) : prepared_restriction;
         }
     }
     if (_where.has_value()) {

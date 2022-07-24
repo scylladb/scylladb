@@ -120,5 +120,46 @@ void validate_timestamp(const query_options& options, const std::unique_ptr<attr
     }
 }
 
+sstring relations_to_where_clause(const expr::expression& e) {
+    auto expr_to_pretty_string = [](const expr::expression& e) -> sstring {
+        expr::expression::printer p {
+            .expr_to_print = e,
+            .debug_mode = false,
+        };
+        return fmt::format("{}", p);
+    };
+    auto relations = expr::boolean_factors(e);
+    auto expressions = relations | boost::adaptors::transformed(expr_to_pretty_string);
+    return boost::algorithm::join(expressions, " AND ");
+}
+
+expr::expression where_clause_to_relations(const sstring_view& where_clause) {
+    return do_with_parser(where_clause, std::mem_fn(&cql3_parser::CqlParser::whereClause));
+}
+
+sstring rename_column_in_where_clause(const sstring_view& where_clause, column_identifier::raw from, column_identifier::raw to) {
+    std::vector<expr::expression> relations = boolean_factors(where_clause_to_relations(where_clause));
+    std::vector<expr::expression> new_relations;
+    new_relations.reserve(relations.size());
+
+    for (const expr::expression& old_relation : relations) {
+        expr::expression new_relation = expr::search_and_replace(old_relation,
+            [&](const expr::expression& e) -> std::optional<expr::expression> {
+                if (auto ident = expr::as_if<expr::unresolved_identifier>(&e)) {
+                    if (*ident->ident == from) {
+                        return expr::unresolved_identifier{
+                            ::make_shared<column_identifier::raw>(to)
+                        };
+                    }
+                }
+                return std::nullopt;
+            }
+        );
+
+        new_relations.emplace_back(std::move(new_relation));
+    }
+
+    return relations_to_where_clause(expr::conjunction{std::move(new_relations)});
+}
 
 }

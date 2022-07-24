@@ -186,7 +186,14 @@ public:
         const expression& expr_to_print;
         bool debug_mode = true;
     };
+
+    friend bool operator==(const expression& e1, const expression& e2);
 };
+
+/// Checks if two expressions are equal. If they are, they definitely
+/// perform the same computation. If they are unequal, they may perform
+/// the same computation or different computations.
+bool operator==(const expression& e1, const expression& e2);
 
 // An expression that doesn't contain subexpressions
 template <typename E>
@@ -207,6 +214,8 @@ struct column_value {
     const column_definition* col;
 
     column_value(const column_definition* col) : col(col) {}
+
+    friend bool operator==(const column_value&, const column_value&) = default;
 };
 
 /// A subscripted value, eg list_colum[2], val[sub]
@@ -214,6 +223,8 @@ struct subscript {
     expression val;
     expression sub;
     data_type type; // may be null before prepare
+
+    friend bool operator==(const subscript&, const subscript&) = default;
 };
 
 /// Gets the subscripted column_value out of the subscript.
@@ -232,6 +243,8 @@ struct token {
     explicit token(std::vector<expression>);
     explicit token(const std::vector<const column_definition*>&);
     explicit token(const std::vector<::shared_ptr<column_identifier_raw>>&);
+
+    friend bool operator==(const token&, const token&) = default;
 };
 
 enum class oper_t { EQ, NEQ, LT, LTE, GTE, GT, IN, CONTAINS, CONTAINS_KEY, IS_NOT, LIKE };
@@ -250,11 +263,15 @@ struct binary_operator {
     comparison_order order;
 
     binary_operator(expression lhs, oper_t op, expression rhs, comparison_order order = comparison_order::cql);
+
+    friend bool operator==(const binary_operator&, const binary_operator&) = default;
 };
 
 /// A conjunction of restrictions.
 struct conjunction {
     std::vector<expression> children;
+
+    friend bool operator==(const conjunction&, const conjunction&) = default;
 };
 
 // Gets resolved eventually into a column_value.
@@ -262,6 +279,8 @@ struct unresolved_identifier {
     ::shared_ptr<column_identifier_raw> ident;
 
     ~unresolved_identifier();
+
+    friend bool operator==(const unresolved_identifier&, const unresolved_identifier&) = default;
 };
 
 // An attribute attached to a column mutation: writetime or ttl
@@ -272,6 +291,8 @@ struct column_mutation_attribute {
     // note: only unresolved_identifier is legal here now. One day, when prepare()
     // on expressions yields expressions, column_value will also be legal here.
     expression column;
+
+    friend bool operator==(const column_mutation_attribute&, const column_mutation_attribute&) = default;
 };
 
 struct function_call {
@@ -306,21 +327,29 @@ struct function_call {
     //
     // This field can be nullptr, it means that there is no cache id set.
     ::shared_ptr<std::optional<uint8_t>> lwt_cache_id;
+
+    friend bool operator==(const function_call&, const function_call&) = default;
 };
 
 struct cast {
     expression arg;
     std::variant<data_type, shared_ptr<cql3_type::raw>> type;
+
+    friend bool operator==(const cast&, const cast&) = default;
 };
 
 struct field_selection {
     expression structure;
     shared_ptr<column_identifier_raw> field;
     data_type type; // may be null before prepare
+
+    friend bool operator==(const field_selection&, const field_selection&) = default;
 };
 
 struct null {
     data_type type; // may be null before prepare
+
+    friend bool operator==(const null&, const null&) = default;
 };
 
 struct bind_variable {
@@ -329,6 +358,8 @@ struct bind_variable {
     // Describes where this bound value will be assigned.
     // Contains value type and other useful information.
     ::lw_shared_ptr<column_specification> receiver;
+
+    friend bool operator==(const bind_variable&, const bind_variable&) = default;
 };
 
 // A constant which does not yet have a date type. It is partially typed
@@ -337,6 +368,8 @@ struct untyped_constant {
     enum type_class { integer, floating_point, string, boolean, duration, uuid, hex };
     type_class partial_type;
     sstring raw_text;
+
+    friend bool operator==(const untyped_constant&, const untyped_constant&) = default;
 };
 
 // Represents a constant value with known value and type
@@ -359,6 +392,8 @@ struct constant {
     bool has_empty_value_bytes() const;
 
     cql3::raw_value_view view() const;
+
+    friend bool operator==(const constant&, const constant&) = default;
 };
 
 // Denotes construction of a tuple from its elements, e.g.  ('a', ?, some_column) in CQL.
@@ -368,6 +403,8 @@ struct tuple_constructor {
     // Might be nullptr before prepare.
     // After prepare always holds a valid type, although it might be reversed_type(tuple_type).
     data_type type;
+
+    friend bool operator==(const tuple_constructor&, const tuple_constructor&) = default;
 };
 
 // Constructs a collection of same-typed elements
@@ -379,6 +416,8 @@ struct collection_constructor {
     // Might be nullptr before prepare.
     // After prepare always holds a valid type, although it might be reversed_type(collection_type).
     data_type type;
+
+    friend bool operator==(const collection_constructor&, const collection_constructor&) = default;
 };
 
 // Constructs an object of a user-defined type
@@ -389,6 +428,8 @@ struct usertype_constructor {
     // Might be nullptr before prepare.
     // After prepare always holds a valid type, although it might be reversed_type(user_type).
     data_type type;
+
+    friend bool operator==(const usertype_constructor&, const usertype_constructor&) = default;
 };
 
 // now that all expression types are fully defined, we can define expression::impl
@@ -619,6 +660,11 @@ inline bool is_clustering_order(const binary_operator& op) {
 inline auto find_clustering_order(const expression& e) {
     return find_binop(e, is_clustering_order);
 }
+
+/// Given a Boolean expression, compute its factors such as e=f1 AND f2 AND f3 ...
+/// If the expression is TRUE, may return no factors (happens today for an
+/// empty conjunction).
+std::vector<expression> boolean_factors(expression e);
 
 /// True iff binary_operator involves a collection.
 extern bool is_on_collection(const binary_operator&);

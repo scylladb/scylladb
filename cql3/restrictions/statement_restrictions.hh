@@ -122,7 +122,7 @@ public:
     statement_restrictions(data_dictionary::database db,
         schema_ptr schema,
         statements::statement_type type,
-        const std::vector<expr::expression>& where_clause,
+        const expr::expression& where_clause,
         prepare_context& ctx,
         bool selects_only_static_columns,
         bool for_view = false,

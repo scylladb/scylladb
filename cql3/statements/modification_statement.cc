@@ -372,7 +372,7 @@ void modification_statement::build_cas_result_set_metadata() {
 }
 
 void
-modification_statement::process_where_clause(data_dictionary::database db, std::vector<expr::expression> where_clause, prepare_context& ctx) {
+modification_statement::process_where_clause(data_dictionary::database db, expr::expression where_clause, prepare_context& ctx) {
     _restrictions = restrictions::statement_restrictions(db, s, type, where_clause, ctx,
             applies_only_to_static_columns(), _selects_a_collection, false);
     /*

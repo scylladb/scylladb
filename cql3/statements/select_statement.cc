@@ -1537,7 +1537,7 @@ static void validate_attrs(const cql3::attributes::raw& attrs) {
 select_statement::select_statement(cf_name cf_name,
                                    lw_shared_ptr<const parameters> parameters,
                                    std::vector<::shared_ptr<selection::raw_selector>> select_clause,
-                                   std::vector<expr::expression> where_clause,
+                                   expr::expression where_clause,
                                    std::optional<expr::expression> limit,
                                    std::optional<expr::expression> per_partition_limit,
                                    std::vector<::shared_ptr<cql3::column_identifier::raw>> group_by_columns,
@@ -1719,7 +1719,7 @@ select_statement::prepare_restrictions(data_dictionary::database db,
                                        bool allow_filtering)
 {
     try {
-        return ::make_shared<restrictions::statement_restrictions>(db, schema, statement_type::SELECT, std::move(_where_clause), ctx,
+        return ::make_shared<restrictions::statement_restrictions>(db, schema, statement_type::SELECT, _where_clause, ctx,
             selection->contains_only_static_columns(), for_view, allow_filtering);
     } catch (const exceptions::unrecognized_entity_exception& e) {
         if (contains_alias(e.entity)) {
@@ -2013,8 +2013,8 @@ namespace {
 
 /// True iff one of \p relations is a single-column EQ involving \p def.
 bool equality_restricted(
-        const column_definition& def, const schema& schema, const std::vector<expr::expression>& relations) {
-    for (const auto& relation : relations) {
+        const column_definition& def, const schema& schema, const expr::expression& relations) {
+    for (const auto& relation : boolean_factors(relations)) {
         if (auto binop = expr::as_if<expr::binary_operator>(&relation)) {
             if (binop->op != expr::oper_t::EQ) {
                 continue;

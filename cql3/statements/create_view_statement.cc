@@ -46,7 +46,7 @@ create_view_statement::create_view_statement(
         cf_name view_name,
         cf_name base_name,
         std::vector<::shared_ptr<selection::raw_selector>> select_clause,
-        std::vector<expr::expression> where_clause,
+        expr::expression where_clause,
         std::vector<::shared_ptr<cql3::column_identifier::raw>> partition_keys,
         std::vector<::shared_ptr<cql3::column_identifier::raw>> clustering_keys,
         bool if_not_exists)
