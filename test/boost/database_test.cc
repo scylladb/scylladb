@@ -102,9 +102,7 @@ SEASTAR_TEST_CASE(test_safety_after_truncate) {
         };
         assert_query_result(keys_per_shard);
 
-        e.db().invoke_on_all([&, ts = db_clock::now()] (replica::database& db) {
-            return db.truncate(ks_name, cf_name, [ts] { return make_ready_future<db_clock::time_point>(ts); });
-        }).get();
+        replica::database::truncate_table_on_all_shards(e.db(), "ks", "cf", [ts = db_clock::now()] { return make_ready_future<db_clock::time_point>(ts); }).get();
 
         for (auto it = keys_per_shard.begin(); it < keys_per_shard.end(); ++it) {
             *it = 0;
@@ -153,12 +151,8 @@ SEASTAR_TEST_CASE(test_truncate_without_snapshot_during_writes) {
         uint32_t num_keys = 1000;
 
         auto f0 = insert_data(0, num_keys);
-        auto f1 = do_until([&] { return count >= num_keys; }, [&] () -> future<> {
-            return e.db().invoke_on_all([&, ts = db_clock::now()] (replica::database& db) {
-                auto& ks = db.find_keyspace(ks_name);
-                auto& cf = db.find_column_family(uuid);
-                return db.truncate(ks, cf, [ts] { return make_ready_future<db_clock::time_point>(ts); }, false /* with_snapshot */);
-            }).then([] {
+        auto f1 = do_until([&] { return count >= num_keys; }, [&, ts = db_clock::now()] {
+            return replica::database::truncate_table_on_all_shards(e.db(), "ks", "cf", [ts] { return make_ready_future<db_clock::time_point>(ts); }, false /* with_snapshot */).then([] {
                 return yield();
             });
         });

@@ -2330,14 +2330,19 @@ future<> database::snapshot_on_all(std::string_view ks_name, sstring tag, bool s
     });
 }
 
-future<> database::truncate(sstring ksname, sstring cfname, timestamp_func tsf, std::optional<sstring> snapshot_name_opt) {
-    auto& ks = find_keyspace(ksname);
-    auto& cf = find_column_family(ksname, cfname);
-    return truncate(ks, cf, std::move(tsf), true, std::move(snapshot_name_opt));
+future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, sstring ks_name, sstring cf_name, timestamp_func tsf, bool with_snapshot, std::optional<sstring> snapshot_name_opt) {
+    auto auto_snapshot = sharded_db.local().get_config().auto_snapshot();
+    dblog.info("Truncating {}.{} {}snapshot", ks_name, cf_name, with_snapshot && auto_snapshot ? "with auto-" : "without ");
+
+    co_await sharded_db.invoke_on_all([&, tsf = std::move(tsf)] (database& db) {
+        auto& ks = db.find_keyspace(ks_name);
+        auto& cf = db.find_column_family(ks_name, cf_name);
+        return db.truncate(ks, cf, tsf, with_snapshot, snapshot_name_opt);
+    });
 }
 
 future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_func tsf, bool with_snapshot, std::optional<sstring> snapshot_name_opt) {
-    dblog.debug("Truncating {}.{}: with_snapshot={} auto_snapshot={}", cf.schema()->ks_name(), cf.schema()->cf_name(), with_snapshot, get_config().auto_snapshot());
+    dblog.trace("Truncating {}.{} on shard: with_snapshot={} auto_snapshot={}", cf.schema()->ks_name(), cf.schema()->cf_name(), with_snapshot, get_config().auto_snapshot());
     auto holder = cf.async_gate().hold();
 
     const auto auto_snapshot = with_snapshot && get_config().auto_snapshot();

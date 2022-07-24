@@ -691,9 +691,7 @@ private:
 
     future<> handle_truncate(rpc::opt_time_point timeout, sstring ksname, sstring cfname) {
         return do_with(utils::make_joinpoint([] { return db_clock::now();}), [this, ksname, cfname] (auto& tsf) {
-            return _sp.container().invoke_on_all(_sp._write_smp_service_group, [ksname, cfname, &tsf] (storage_proxy& sp) {
-                return sp._db.local().truncate(ksname, cfname, [&tsf] { return tsf.value(); });
-            });
+            return replica::database::truncate_table_on_all_shards(_sp._db, ksname, cfname, [&tsf] { return tsf.value(); });
         });
     }
 
