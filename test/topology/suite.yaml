@@ -1,4 +1,4 @@
-type: Python
+type: Topology
 pool_size: 4
 topology:
     class: Simple
