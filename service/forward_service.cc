@@ -504,12 +504,12 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
     tracing::trace(tr_state, "Dispatching forward_request to {} endpoints", vnodes_per_addr.size());
 
     retrying_dispatcher dispatcher(*this, tr_state);
-    std::optional<query::forward_result> result;
+    query::forward_result result;
     
     return do_with(std::move(dispatcher), std::move(result), std::move(vnodes_per_addr), std::move(req), std::move(tr_state),
         [] (
             retrying_dispatcher& dispatcher,
-            std::optional<query::forward_result>& result,
+            query::forward_result& result,
             std::map<netw::messaging_service::msg_addr, dht::partition_range_vector>& vnodes_per_addr,
             query::forward_request& req,
             tracing::trace_state_ptr& tr_state
@@ -519,7 +519,7 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
                     std::pair<netw::messaging_service::msg_addr, dht::partition_range_vector> vnodes_with_addr
                 ) {
                     netw::messaging_service::msg_addr addr = vnodes_with_addr.first;
-                    std::optional<query::forward_result>& result_ = result;
+                    query::forward_result& result_ = result;
                     tracing::trace_state_ptr& tr_state_ = tr_state;
                     retrying_dispatcher& dispatcher_ = dispatcher;
 
@@ -542,11 +542,7 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
                             flogger.debug("received forward_result={} from {}", partial_result_printer, addr);
                             
                             return aggrs.with_thread_if_needed([&result_, &aggrs, partial_result = std::move(partial_result)] () mutable {
-                                if (result_) {
-                                    aggrs.merge(*result_, std::move(partial_result));
-                                } else {
-                                    result_ = partial_result;
-                                }
+                                aggrs.merge(result_, std::move(partial_result));
                             });
                     });       
                 }
@@ -558,13 +554,13 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
                     auto merge_result = [&result, &req, &tr_state, aggrs = std::move(aggrs)] () mutable {
                         query::forward_result::printer result_printer{
                             .functions = get_functions(req),
-                            .res = *result
+                            .res = result
                         };
                         tracing::trace(tr_state, "Merged result is {}", result_printer);
                         flogger.debug("merged result is {}", result_printer);
 
-                        aggrs.finalize(*result);
-                        return *result;
+                        aggrs.finalize(result);
+                        return result;
                     };
                     if (requires_thread) {
                         return seastar::async(std::move(merge_result));
