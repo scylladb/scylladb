@@ -666,6 +666,13 @@ class ScyllaClusterManager:
         self.app.router.add_get('/cluster/before-test/{test_name}', self._before_test_req)
         self.app.router.add_get('/cluster/after-test/{test_name}', self._after_test)
         self.app.router.add_get('/cluster/mark-dirty', self._mark_dirty)
+        self.app.router.add_get('/cluster/server/{id}/stop', self._cluster_server_stop)
+        self.app.router.add_get('/cluster/server/{id}/stop_gracefully',
+                                self._cluster_server_stop_gracefully)
+        self.app.router.add_get('/cluster/server/{id}/start', self._cluster_server_start)
+        self.app.router.add_get('/cluster/server/{id}/restart', self._cluster_server_restart)
+        self.app.router.add_get('/cluster/addserver', self._cluster_server_add)
+        self.app.router.add_get('/cluster/removeserver/{id}', self._cluster_server_remove)
 
     async def _manager_up(self, request) -> aiohttp.web.Response:
         return aiohttp.web.Response(text=f"{self.is_running}")
@@ -705,6 +712,49 @@ class ScyllaClusterManager:
         """Mark current cluster dirty"""
         assert self.cluster
         self.cluster.is_dirty = True
+        return aiohttp.web.Response(text="OK")
+
+    async def _server_stop(self, request: aiohttp.web.Request, gracefully: bool) \
+                        -> aiohttp.web.Response:
+        """Stop a server. No-op if already stopped."""
+        assert self.cluster
+        ret = await self.cluster.server_stop(request.match_info['id'], gracefully)
+        return aiohttp.web.Response(status=200 if ret[0] else 500, text=ret[1])
+
+    async def _cluster_server_stop(self, request) -> aiohttp.web.Response:
+        """Stop a specified server"""
+        assert self.cluster
+        return await self._server_stop(request, gracefully = False)
+
+    async def _cluster_server_stop_gracefully(self, request) -> aiohttp.web.Response:
+        """Stop a specified server gracefully"""
+        assert self.cluster
+        return await self._server_stop(request, gracefully = True)
+
+    async def _cluster_server_start(self, request) -> aiohttp.web.Response:
+        """Start a specified server (must be stopped)"""
+        assert self.cluster
+        ret = await self.cluster.server_start(request.match_info['id'])
+        return aiohttp.web.Response(status=200 if ret[0] else 500, text=ret[1])
+
+    async def _cluster_server_restart(self, request) -> aiohttp.web.Response:
+        """Restart a specified server (must be already started)"""
+        assert self.cluster
+        ret = await self.cluster.server_restart(request.match_info['id'])
+        return aiohttp.web.Response(status=200 if ret[0] else 500, text=ret[1])
+
+    async def _cluster_server_add(self, request) -> aiohttp.web.Response:
+        """Add a new server"""
+        assert self.cluster
+        server_id = await self.cluster.add_server()
+        return aiohttp.web.Response(text=server_id)
+
+    async def _cluster_server_remove(self, request) -> aiohttp.web.Response:
+        """Remove a specified server"""
+        assert self.cluster
+        server_id = request.match_info['id']
+        if not await self.cluster.server_remove(server_id):
+            return aiohttp.web.Response(status=500, text=f"Host {server_id} not found")
         return aiohttp.web.Response(text="OK")
 
 @asynccontextmanager
