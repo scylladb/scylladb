@@ -389,6 +389,10 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     auto broadcast_rpc_address = utils::fb_utilities::get_broadcast_rpc_address();
     // Ensure we know our own actual Schema UUID in preparation for updates
     co_await db::schema_tables::recalculate_schema_version(_sys_ks, proxy, _feature_service);
+
+    assert(_group0);
+    co_await _group0->setup_group0(_sys_ks.local(), initial_contact_nodes);
+
     app_states.emplace(gms::application_state::NET_VERSION, versioned_value::network_version());
     app_states.emplace(gms::application_state::HOST_ID, versioned_value::host_id(local_host_id));
     app_states.emplace(gms::application_state::RPC_ADDRESS, versioned_value::rpcaddress(broadcast_rpc_address));
@@ -424,18 +428,6 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     auto advertise = gms::advertise_myself(!replacing_a_node_with_same_ip);
     co_await _gossiper.start_gossiping(generation_number, app_states, advertise);
 
-    // Raft group0 can be joined before we wait for gossip to settle
-    // if one of the following applies:
-    //  - it's a fresh node start (in a fresh cluster)
-    //  - it's a restart of an existing node, which have already joined some group0
-    const bool can_join_with_raft =
-        _db.local().get_config().check_experimental(db::experimental_features_t::feature::RAFT) && (
-            _sys_ks.local().bootstrap_needed() ||
-            !(co_await _sys_ks.local().get_raft_group0_id()).is_null());
-    if (can_join_with_raft) {
-        co_await _group0->join_group0();
-    }
-
     auto schema_change_announce = _db.local().observable_schema_version().observe([this] (utils::UUID schema_version) mutable {
         _migration_manager.local().passive_announce(std::move(schema_version));
     });
@@ -443,8 +435,6 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     co_await _gossiper.wait_for_gossip_to_settle();
 
     set_mode(mode::JOINING);
-
-    co_await _group0->join_group0();
 
     // We bootstrap if we haven't successfully bootstrapped before, as long as we are not a seed.
     // If we are a seed, or if the user manually sets auto_bootstrap to false,
@@ -487,9 +477,11 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
             }
         } else {
             auto replace_addr = get_replace_address();
+            assert(replace_addr);
             if (*replace_addr != get_broadcast_address()) {
                 // Sleep additionally to make sure that the server actually is not alive
                 // and giving it more time to gossip if alive.
+                slogger.info("Sleeping before replacing {}...", *replace_addr);
                 co_await sleep_abortable(service::load_broadcaster::BROADCAST_INTERVAL, _abort_source);
 
                 // check for operator errors...
@@ -506,6 +498,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
                     }
                 }
             } else {
+                slogger.info("Sleeping before replacing {}...", *replace_addr);
                 co_await sleep_abortable(get_ring_delay(), _abort_source);
             }
             slogger.info("Replacing a node with token(s): {}", bootstrap_tokens);
@@ -586,6 +579,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     co_await _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED);
     // At this point our local tokens and CDC streams timestamp are chosen (bootstrap_tokens, cdc_gen_id) and will not be changed.
 
+    assert(_group0);
     co_await _group0->become_voter();
 
     // start participating in the ring.
@@ -717,9 +711,16 @@ future<> storage_service::bootstrap(cdc::generation_service& cdc_gen_service, st
             }
         } else {
             auto replace_addr = get_replace_address();
+            assert(replace_addr);
+
             slogger.debug("Removing replaced endpoint {} from system.peers", *replace_addr);
             _sys_ks.local().remove_endpoint(*replace_addr).get();
-            _group0->leave_group0(replace_addr).get();
+
+            slogger.info("Replace: removing {} from group 0...", *replace_addr);
+            assert(_group0);
+            _group0->remove_from_group0(*replace_addr).get();
+            slogger.info("Replace: {} removed from group 0.", *replace_addr);
+
             slogger.info("Starting to bootstrap...");
             run_replace_ops(bootstrap_tokens);
         }
@@ -1953,7 +1954,9 @@ future<> storage_service::decommission() {
             }
 
             slogger.info("DECOMMISSIONING: leaving Raft group 0");
+            assert(ss._group0);
             ss._group0->leave_group0().get();
+
             slogger.info("DECOMMISSIONING: left Raft group 0");
 
             ss.stop_transport().get();
@@ -2313,7 +2316,12 @@ future<> storage_service::removenode(sstring host_id_string, std::list<gms::inet
                         return make_ready_future<>();
                     });
                 }).get();
-                ss._group0->leave_group0(endpoint).get();
+
+                slogger.info("removenode[{}]: removing node {} from group 0", uuid, endpoint);
+                assert(ss._group0);
+                ss._group0->remove_from_group0(endpoint).get();
+                slogger.info("removenode[{}]: node {} removed from group 0", uuid, endpoint);
+
                 slogger.info("removenode[{}]: Finished removenode operation, removing node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
             } catch (...) {
                 // we need to revert the effect of prepare verb the removenode ops is failed
@@ -3286,7 +3294,10 @@ future<> storage_service::force_remove_completion() {
                     co_await ss._gossiper.advertise_token_removed(endpoint, host_id);
                     std::unordered_set<token> tokens_set(tokens.begin(), tokens.end());
                     co_await ss.excise(tokens_set, endpoint);
-                    co_await ss._group0->leave_group0(endpoint);
+
+                    slogger.info("force_remove_completion: removing endpoint {} from group 0", endpoint);
+                    assert(ss._group0);
+                    co_await ss._group0->remove_from_group0(endpoint);
                 }
                 ss._replicating_nodes.clear();
                 ss._removing_node = std::nullopt;

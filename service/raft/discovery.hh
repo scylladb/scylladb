@@ -101,6 +101,7 @@ public:
     // is sent back to the requester, or before a new request is sent
     // based on the output of `tick`).
     //
+    // `seeds` may contain `self` but doesn't have to.
     discovery(raft::server_address self, const peer_list& seeds);
 
     // To be used on the receiving peer to generate a reply
