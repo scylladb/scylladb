@@ -69,15 +69,17 @@ public:
 
     template<typename Func>
     auto with_thread_if_needed(Func&& func) const {
-        bool required = std::any_of(_funcs.cbegin(), _funcs.cend(), [](const ::shared_ptr<db::functions::aggregate_function>& f) { 
-            return f->requires_thread(); 
-        });
-
-        if (required) {
+        if (requires_thread()) {
             return async(std::move(func));
         } else {
             return futurize_invoke(std::move(func));
         }
+    }
+
+    bool requires_thread() const {
+        return std::any_of(_funcs.cbegin(), _funcs.cend(), [](const ::shared_ptr<db::functions::aggregate_function>& f) {
+            return f->requires_thread();
+        });
     }
 };
 
