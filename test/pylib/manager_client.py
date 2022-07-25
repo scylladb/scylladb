@@ -9,26 +9,54 @@
    Manages driver refresh when cluster is cycled.
 """
 
-from typing import List
+from typing import List, Optional, Callable
 import aiohttp                                                             # type: ignore
 import aiohttp.web                                                         # type: ignore
+from cassandra.cluster import Session as CassandraSession                  # type: ignore
+from cassandra.cluster import Cluster as CassandraCluster                  # type: ignore
 
 
 class ManagerClient():
     """Helper Manager API client
     Args:
         sock_path (str): path to an AF_UNIX socket where Manager server is listening
+        con_gen (Callable): generator function for CQL driver connection to a cluster
     """
     conn: aiohttp.UnixConnector
     session: aiohttp.ClientSession
 
-    def __init__(self, sock_path: str) -> None:
+    def __init__(self, sock_path: str, port: int, ssl: bool,
+                 con_gen: Optional[Callable[[List[str], int, bool], CassandraSession]]) -> None:
+        self.port = port
+        self.ssl = ssl
+        self.con_gen = con_gen
+        self.ccluster: Optional[CassandraCluster] = None
+        self.cql: Optional[CassandraSession] = None
+        # API
         self.sock_path = sock_path
 
     async def start(self):
         """Setup connection to Manager server"""
         self.conn = aiohttp.UnixConnector(path=self.sock_path)
         self.session = aiohttp.ClientSession(connector=self.conn)
+
+    async def driver_connect(self) -> None:
+        """Connect to cluster"""
+        if self.con_gen is not None:
+            self.ccluster = self.con_gen(await self.servers(), self.port, self.ssl)
+            self.cql = self.ccluster.connect()
+
+    def driver_close(self) -> None:
+        """Disconnect from cluster"""
+        if self.ccluster is not None:
+            self.ccluster.shutdown()
+            self.ccluster = None
+        self.cql = None
+
+    # Make driver update endpoints from remote connection
+    def _driver_update(self) -> None:
+        if self.ccluster is not None:
+            self.ccluster.control_connection.refresh_node_list_and_token_map()
 
     async def _request(self, url: str) -> str:
         # Can raise exception. See https://docs.aiohttp.org/en/latest/web_exceptions.html
