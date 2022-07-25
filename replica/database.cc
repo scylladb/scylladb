@@ -2321,10 +2321,9 @@ future<> database::flush_keyspace_on_all_shards(sharded<database>& sharded_db, s
 }
 
 future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, sstring table_name, sstring tag, bool skip_flush) {
-    // FIXME: indentation
-        if (!skip_flush) {
-            co_await flush_table_on_all_shards(sharded_db, ks_name, table_name);
-        }
+    if (!skip_flush) {
+        co_await flush_table_on_all_shards(sharded_db, ks_name, table_name);
+    }
     auto uuid = sharded_db.local().find_uuid(ks_name, table_name);
     auto table_shards = co_await get_table_on_all_shards(sharded_db, uuid);
     co_await table::snapshot_on_all_shards(sharded_db, table_shards, tag);
