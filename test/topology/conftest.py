@@ -105,7 +105,7 @@ def cluster_con(hosts: List[str], port: int, ssl: bool):
 
 @pytest.mark.asyncio
 @pytest.fixture(scope="session")
-async def manager(event_loop, request):
+async def manager_internal(event_loop, request):
     """Session fixture to set up client object for communicating with the Cluster API.
        Pass the Unix socket path where the Manager server API is listening.
        Pass a function to create driver connections.
@@ -115,13 +115,21 @@ async def manager(event_loop, request):
     ssl = bool(request.config.getoption('ssl'))
     manager_int = ManagerClient(request.config.getoption('manager_api'), port, ssl, cluster_con)
     await manager_int.start()
-    await manager_int.driver_connect()
     yield manager_int
     manager_int.driver_close()   # Close after last test case
 
+@pytest.fixture(scope="function")
+async def manager(request, manager_internal):
+    """Per test fixture to notify Manager client object when tests begin so it can
+    perform checks for cluster state.
+    """
+    await manager_internal.before_test(request.node.name)
+    yield manager_internal
+    await manager_internal.after_test(request.node.name)
+
 # "cql" fixture: set up client object for communicating with the CQL API.
-# We use scope="session" so that all tests will reuse the same client object.
-@pytest.fixture(scope="session")
+# Since connection is managed by manager just return that object
+@pytest.fixture(scope="function")
 def cql(manager):
     yield manager.cql
 
@@ -130,7 +138,7 @@ def cql(manager):
 # option enabled, and pass with it enabled (and also pass on Cassandra).
 # These tests should use the "fails_without_raft" fixture. When Raft mode
 # becomes the default, this fixture can be removed.
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="function")
 def check_pre_raft(cql):
     # If not running on Scylla, return false.
     names = [row.table_name for row in cql.execute("SELECT * FROM system_schema.tables WHERE keyspace_name = 'system'")]
