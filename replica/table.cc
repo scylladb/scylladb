@@ -1418,9 +1418,27 @@ future<> table::write_schema_as_cql(database& db, sstring dir) const {
 
 }
 
+// Runs the orchestration code on an arbitrary shard to balance the load.
+future<> table::snapshot_on_all_shards(sharded<database>& sharded_db, const std::vector<foreign_ptr<lw_shared_ptr<table>>>& table_shards, sstring name) {
+    auto jsondir = table_shards[this_shard_id()]->_config.datadir + "/snapshots/" + name;
+    auto orchestrator = std::hash<sstring>()(jsondir) % smp::count;
+
+    co_await smp::submit_to(orchestrator, [&] () -> future<> {
+        auto s = table_shards[this_shard_id()]->schema();
+        tlogger.debug("Taking snapshot of {}.{}: directory={}", s->ks_name(), s->cf_name(), jsondir);
+
+        // FIXME: refactor per-shard snapshot and
+        // run the centralized code here
+
+        co_await sharded_db.invoke_on_all([&] (replica::database& db) {
+            return table_shards[this_shard_id()]->snapshot(db, name);
+        });
+    });
+}
+
 future<> table::snapshot(database& db, sstring name) {
     auto jsondir = _config.datadir + "/snapshots/" + name;
-    tlogger.debug("snapshot {}", jsondir);
+    tlogger.trace("snapshot {}", jsondir);
 
     auto sstable_deletion_guard = co_await get_units(_sstable_deletion_sem, 1);
     std::exception_ptr ex;

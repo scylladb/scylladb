@@ -855,6 +855,8 @@ private:
 
     friend class database;
 public:
+    static future<> snapshot_on_all_shards(sharded<database>& sharded_db, const std::vector<foreign_ptr<lw_shared_ptr<table>>>& table_shards, sstring name);
+
     future<std::unordered_map<sstring, snapshot_details>> get_snapshot_details();
 
     /*!

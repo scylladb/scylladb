@@ -2325,10 +2325,9 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, s
         if (!skip_flush) {
             co_await flush_table_on_all_shards(sharded_db, ks_name, table_name);
         }
-        co_await sharded_db.invoke_on_all([ks_name, &table_name, tag, skip_flush] (replica::database& db) {
-            auto& t = db.find_column_family(ks_name, table_name);
-            return t.snapshot(db, tag);
-        });
+    auto uuid = sharded_db.local().find_uuid(ks_name, table_name);
+    auto table_shards = co_await get_table_on_all_shards(sharded_db, uuid);
+    co_await table::snapshot_on_all_shards(sharded_db, table_shards, tag);
 }
 
 future<> database::snapshot_tables_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, std::vector<sstring> table_names, sstring tag, bool skip_flush) {
@@ -2340,13 +2339,12 @@ future<> database::snapshot_tables_on_all_shards(sharded<database>& sharded_db, 
 future<> database::snapshot_keyspace_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, sstring tag, bool skip_flush) {
     auto& ks = sharded_db.local().find_keyspace(ks_name);
     co_await coroutine::parallel_for_each(ks.metadata()->cf_meta_data(), [&, tag = std::move(tag), skip_flush] (const auto& pair) -> future<> {
+        auto uuid = pair.second->id();
         if (!skip_flush) {
-            co_await flush_table_on_all_shards(sharded_db, pair.second->id());
+            co_await flush_table_on_all_shards(sharded_db, uuid);
         }
-        co_await sharded_db.invoke_on_all([id = pair.second, tag, skip_flush] (replica::database& db) {
-            auto& t = db.find_column_family(id);
-            return t.snapshot(db, tag);
-        });
+        auto table_shards = co_await get_table_on_all_shards(sharded_db, uuid);
+        co_await table::snapshot_on_all_shards(sharded_db, table_shards, tag);
     });
 }
 
