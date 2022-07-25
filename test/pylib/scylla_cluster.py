@@ -611,6 +611,8 @@ class ScyllaClusterManager:
         self.test_name: str = test_name
         self.clusters: Pool[ScyllaCluster] = clusters
         self.is_running: bool = False
+        self.is_before_test_ok: bool = False
+        self.is_after_test_ok: bool = False
         # API
         # NOTE: need to make a safe temp dir as tempfile can't make a safe temp sock name
         self.manager_dir: str = tempfile.mkdtemp(prefix="manager-", dir=base_dir)
@@ -627,11 +629,26 @@ class ScyllaClusterManager:
         await self.site.start()
         self.is_running = True
 
+    async def _before_test(self, test_name: str) -> None:
+        if self.cluster.is_dirty:
+            await self.cluster.stop()
+            await self._get_cluster()
+        logging.info("Leasing Scylla cluster %s for test %s", self.cluster, test_name)
+        self.cluster.before_test(self.test_name)
+        self.is_before_test_ok = True
+        # FIXME: savepoint for all servers
+        self.cluster[0].take_log_savepoint()
+
     async def stop(self) -> None:
         """Stop, cycle last cluster if not dirty and present"""
         await self.site.stop()
         self.cluster.after_test(self.test_name)
-        await self._return_cluster()
+        if not self.cluster.is_dirty:
+            logging.info("Returning Scylla cluster %s", self.cluster)
+            await self.clusters.put(self.cluster)
+        else:
+            await self.cluster.stop()
+        del self.cluster
         if os.path.exists(self.manager_dir):
             shutil.rmtree(self.manager_dir)
 
@@ -639,10 +656,6 @@ class ScyllaClusterManager:
         self.cluster = await self.clusters.get()
         logging.info("Getting new Scylla cluster %s", self.cluster)
 
-    async def _return_cluster(self) -> None:
-        logging.info("Returning Scylla cluster %s", self.cluster)
-        await self.clusters.put(self.cluster)
-        del self.cluster
 
     def _setup_routes(self) -> None:
         self.app.router.add_get('/up', self._manager_up)
@@ -650,6 +663,8 @@ class ScyllaClusterManager:
         self.app.router.add_get('/cluster/is-dirty', self._is_dirty)
         self.app.router.add_get('/cluster/replicas', self._cluster_replicas)
         self.app.router.add_get('/cluster/servers', self._cluster_servers)
+        self.app.router.add_get('/cluster/before-test/{test_name}', self._before_test_req)
+        self.app.router.add_get('/cluster/after-test/{test_name}', self._after_test)
 
     async def _manager_up(self, request) -> aiohttp.web.Response:
         return aiohttp.web.Response(text=f"{self.is_running}")
@@ -673,6 +688,18 @@ class ScyllaClusterManager:
     async def _cluster_servers(self, request) -> aiohttp.web.Response:
         """Return a list of active server ids (IPs)"""
         return aiohttp.web.Response(text=f"{','.join(sorted(self.cluster.running.keys()))}")
+
+    async def _before_test_req(self, request) -> aiohttp.web.Response:
+        await self._before_test(request.match_info['test_name'])
+        return aiohttp.web.Response(text="OK")
+
+    async def _after_test(self, request) -> aiohttp.web.Response:
+        test_name = request.match_info['test_name']
+        assert self.cluster is not None
+        self.cluster.after_test(test_name)
+        self.is_after_test_ok = True
+        return aiohttp.web.Response(text="True")
+
 
 @asynccontextmanager
 async def get_cluster_manager(test_name: str, clusters: Pool[ScyllaCluster], test_path: str) \
