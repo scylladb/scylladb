@@ -553,19 +553,24 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
             ).then(
                 [&result, &req, &tr_state] () -> future<query::forward_result> {
                     forward_aggregates aggrs(req);
-                    return do_with(std::move(aggrs), [&result, &req, &tr_state] (forward_aggregates& aggrs) {
-                        return aggrs.with_thread_if_needed([&result, &req, &tr_state, &aggrs] () mutable {
-                            query::forward_result::printer result_printer{
-                                .functions = get_functions(req),
-                                .res = *result
-                            };
-                            tracing::trace(tr_state, "Merged result is {}", result_printer);
-                            flogger.debug("merged result is {}", result_printer);
+                    const bool requires_thread = aggrs.requires_thread();
 
-                            aggrs.finalize(*result);
-                            return *result;
-                        });
-                    });
+                    auto merge_result = [&result, &req, &tr_state, aggrs = std::move(aggrs)] () mutable {
+                        query::forward_result::printer result_printer{
+                            .functions = get_functions(req),
+                            .res = *result
+                        };
+                        tracing::trace(tr_state, "Merged result is {}", result_printer);
+                        flogger.debug("merged result is {}", result_printer);
+
+                        aggrs.finalize(*result);
+                        return *result;
+                    };
+                    if (requires_thread) {
+                        return seastar::async(std::move(merge_result));
+                    } else {
+                        return make_ready_future<query::forward_result>(merge_result());
+                    }
                 }
             );
         }
