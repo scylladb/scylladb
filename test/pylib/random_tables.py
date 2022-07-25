@@ -41,7 +41,6 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger('random_tables')
-new_keyspace_id = itertools.count(start=1).__next__
 
 
 class ColumnNotFound(Exception):
