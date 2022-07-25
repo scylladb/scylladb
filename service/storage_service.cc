@@ -747,13 +747,18 @@ storage_service::get_rpc_address(const inet_address& endpoint) const {
 
 std::unordered_map<dht::token_range, inet_address_vector_replica_set>
 storage_service::get_range_to_address_map(const sstring& keyspace) const {
-    return get_range_to_address_map(keyspace, get_token_metadata().sorted_tokens());
+    return get_range_to_address_map(_db.local().find_keyspace(keyspace).get_effective_replication_map());
+}
+
+std::unordered_map<dht::token_range, inet_address_vector_replica_set>
+storage_service::get_range_to_address_map(locator::effective_replication_map_ptr erm) const {
+    return get_range_to_address_map(erm, erm->get_token_metadata_ptr()->sorted_tokens());
 }
 
 std::unordered_map<dht::token_range, inet_address_vector_replica_set>
 storage_service::get_range_to_address_map_in_local_dc(
-        const sstring& keyspace) const {
-    auto orig_map = get_range_to_address_map(keyspace, get_tokens_in_local_dc());
+        locator::effective_replication_map_ptr erm) const {
+    auto orig_map = get_range_to_address_map(erm, get_tokens_in_local_dc(*erm->get_token_metadata_ptr()));
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> filtered_map;
     for (auto entry : orig_map) {
         auto& addresses = filtered_map[entry.first];
@@ -765,9 +770,8 @@ storage_service::get_range_to_address_map_in_local_dc(
 }
 
 std::vector<token>
-storage_service::get_tokens_in_local_dc() const {
+storage_service::get_tokens_in_local_dc(const locator::token_metadata& tm) const {
     std::vector<token> filtered_tokens;
-    const auto& tm = get_token_metadata();
     for (auto token : tm.sorted_tokens()) {
         auto endpoint = tm.get_endpoint(token);
         if (db::is_local(*endpoint))
@@ -777,10 +781,9 @@ storage_service::get_tokens_in_local_dc() const {
 }
 
 std::unordered_map<dht::token_range, inet_address_vector_replica_set>
-storage_service::get_range_to_address_map(const sstring& keyspace,
+storage_service::get_range_to_address_map(locator::effective_replication_map_ptr erm,
         const std::vector<token>& sorted_tokens) const {
-    sstring ks = keyspace;
-    return construct_range_to_endpoint_map(ks, get_all_ranges(sorted_tokens));
+    return construct_range_to_endpoint_map(erm, get_all_ranges(sorted_tokens));
 }
 
 future<> storage_service::handle_state_replacing_update_pending_ranges(mutable_token_metadata_ptr tmptr, inet_address replacing_node) {
@@ -3049,11 +3052,12 @@ storage_service::describe_ring(const sstring& keyspace, bool include_only_local_
     std::vector<token_range_endpoints> ranges;
     //Token.TokenFactory tf = getPartitioner().getTokenFactory();
 
+    auto erm = _db.local().find_keyspace(keyspace).get_effective_replication_map();
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> range_to_address_map =
             include_only_local_dc
-                    ? get_range_to_address_map_in_local_dc(keyspace)
-                    : get_range_to_address_map(keyspace);
-    auto tmptr = get_token_metadata_ptr();
+                    ? get_range_to_address_map_in_local_dc(erm)
+                    : get_range_to_address_map(erm);
+    auto tmptr = erm->get_token_metadata_ptr();
     for (auto entry : range_to_address_map) {
         const auto& topology = tmptr->get_topology();
         auto range = entry.first;
@@ -3098,10 +3102,9 @@ storage_service::describe_ring(const sstring& keyspace, bool include_only_local_
 
 std::unordered_map<dht::token_range, inet_address_vector_replica_set>
 storage_service::construct_range_to_endpoint_map(
-        const sstring& keyspace,
+        locator::effective_replication_map_ptr erm,
         const dht::token_range_vector& ranges) const {
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> res;
-    auto erm = _db.local().find_keyspace(keyspace).get_effective_replication_map();
     for (auto r : ranges) {
         res[r] = erm->get_natural_endpoints(
                 r.end() ? r.end()->value() : dht::maximum_token());
