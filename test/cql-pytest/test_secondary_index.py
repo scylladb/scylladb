@@ -701,6 +701,56 @@ def test_index_map_values(cql, test_keyspace):
         cql.execute(f'UPDATE {table} set m = m - {{4}} WHERE pk=1 AND ck=2')
         assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 6'))
 
+# In the previous test (test_index_map_values) we noted that if one map has
+# several keys with the same value, then the "values(m)" index must store
+# all all them, so that we can still match this value even after removing one
+# of those keys. We tested in the previous test that although the same value
+# appears more than once, when we search for it, we only get the same item
+# once. Under the hood, Scylla does find the same value multiple times, but
+# then eliminates the duplicate matched raw and returns it only once.
+# There is a complication, that this de-duplication does not easily span
+# *paging*. So the purpose of this test is to check that paging does not
+# cause the same row to be returned more than once.
+@pytest.mark.xfail(reason="duplicates in map value index + paging")
+def test_index_map_values_paging(cql, test_keyspace):
+    schema = 'pk int, ck int, m map<int,int>, PRIMARY KEY (pk, ck)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        # index m (same as values(m)). Will allow "CONTAINS".
+        cql.execute(f'CREATE INDEX ON {table}(m)')
+        # Insert a map where 10 out of the 12 elements have the same value 3
+        cql.execute(f'INSERT INTO {table} (pk, ck, m) VALUES (1, 2, {{0:4, 1:3, 2:3, 3:3, 4:3, 5:3, 6:3, 7:3, 8:3, 9:3, 10:3, 11:7}})')
+        # But looking for "m CONTAINS 3" should return the row (1,2) only once:
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 3'))
+        # Try exactly the same with paging with small page sizes. If Scylla
+        # doesn't de-duplicate the results between pages, the same row will
+        # be returned multiple times.
+        for page_size in [1, 2, 3, 7]:
+            stmt = SimpleStatement(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 3', fetch_size=page_size)
+            assert [(1,2)] == list(cql.execute(stmt))
+
+# In the previous test (test_index_map_values*) all tests involved a single
+# row, which could match a search, or not. In this test we verify that the
+# case of multiple matching rows also works.
+@pytest.mark.xfail(reason="duplicates in map value index + paging")
+def test_index_map_values_multiple_matching_rows(cql, test_keyspace):
+    schema = 'pk int, ck int, m map<int,int>, PRIMARY KEY (pk, ck)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        # index m (same as values(m)). Will allow "CONTAINS".
+        cql.execute(f'CREATE INDEX ON {table}(m)')
+        # Insert several rows with several different maps, some of them have
+        # the value 3 in them somewhere, others don't. One of the maps has
+        # multiple occurances of the value 3, so we also reproduce here the
+        # same bug that test_index_map_values_paging() reproduces.
+        cql.execute(f'INSERT INTO {table} (pk, ck, m) VALUES (1, 2, {{1:2, 3:4}})')
+        cql.execute(f'INSERT INTO {table} (pk, ck, m) VALUES (1, 3, {{1:3, 3:4}})')
+        cql.execute(f'INSERT INTO {table} (pk, ck, m) VALUES (1, 4, {{7:3}})')
+        cql.execute(f'INSERT INTO {table} (pk, ck, m) VALUES (2, 2, {{1:3, 2:3, 3:4}})')
+        cql.execute(f'INSERT INTO {table} (pk, ck, m) VALUES (2, 4, {{}})')
+        assert [(1,3),(1,4),(2,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 3'))
+        for page_size in [1, 2, 3, 7]:
+            stmt = SimpleStatement(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 3', fetch_size=page_size)
+            assert [(1,3),(1,4),(2,2)] == list(cql.execute(stmt))
+
 def test_index_map_keys(cql, test_keyspace):
     schema = 'pk int, ck int, m map<int,int>, PRIMARY KEY (pk, ck)'
     with new_test_table(cql, test_keyspace, schema) as table:
