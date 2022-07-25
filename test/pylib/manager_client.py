@@ -102,3 +102,8 @@ class ManagerClient():
         """Get list of running servers"""
         host_list = await self._request("http://localhost/cluster/servers")
         return host_list.split(',')
+
+    async def mark_dirty(self) -> None:
+        """Manually mark current cluster dirty.
+           To be used when a server was modified outside of this API."""
+        await self._request("http://localhost/cluster/mark-dirty", "Could not mark cluster dirty")
