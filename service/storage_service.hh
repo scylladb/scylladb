@@ -385,13 +385,14 @@ public:
     sstring get_rpc_address(const inet_address& endpoint) const;
 
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> get_range_to_address_map(const sstring& keyspace) const;
+    std::unordered_map<dht::token_range, inet_address_vector_replica_set> get_range_to_address_map(locator::effective_replication_map_ptr erm) const;
 
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> get_range_to_address_map_in_local_dc(
-            const sstring& keyspace) const;
+            locator::effective_replication_map_ptr erm) const;
 
-    std::vector<token> get_tokens_in_local_dc() const;
+    std::vector<token> get_tokens_in_local_dc(const locator::token_metadata&) const;
 
-    std::unordered_map<dht::token_range, inet_address_vector_replica_set> get_range_to_address_map(const sstring& keyspace,
+    std::unordered_map<dht::token_range, inet_address_vector_replica_set> get_range_to_address_map(locator::effective_replication_map_ptr erm,
             const std::vector<token>& sorted_tokens) const;
 
     /**
@@ -425,7 +426,7 @@ public:
      * @return mapping of ranges to the replicas responsible for them.
     */
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> construct_range_to_endpoint_map(
-            const sstring& keyspace,
+            locator::effective_replication_map_ptr erm,
             const dht::token_range_vector& ranges) const;
 public:
     virtual future<> on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) override;
