@@ -1624,16 +1624,16 @@ public:
     future<> flush_all_memtables();
     future<> flush(const sstring& ks, const sstring& cf);
     // flush a table identified by the given id on all shards.
-    future<> flush_on_all(utils::UUID id);
+    static future<> flush_table_on_all_shards(sharded<database>& sharded_db, utils::UUID id);
     // flush a single table in a keyspace on all shards.
-    future<> flush_on_all(std::string_view ks_name, std::string_view table_name);
+    static future<> flush_table_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, std::string_view table_name);
     // flush a list of tables in a keyspace on all shards.
-    future<> flush_on_all(std::string_view ks_name, std::vector<sstring> table_names);
+    static future<> flush_tables_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, std::vector<sstring> table_names);
     // flush all tables in a keyspace on all shards.
-    future<> flush_on_all(std::string_view ks_name);
+    static future<> flush_keyspace_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name);
 
-    future<> snapshot_on_all(std::string_view ks_name, std::vector<sstring> table_names, sstring tag, bool skip_flush);
-    future<> snapshot_on_all(std::string_view ks_name, sstring tag, bool skip_flush);
+    static future<> snapshot_tables_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, std::vector<sstring> table_names, sstring tag, bool skip_flush);
+    static future<> snapshot_keyspace_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, sstring tag, bool skip_flush);
 
     // See #937. Truncation now requires a callback to get a time stamp
     // that must be guaranteed to be the same for all shards.

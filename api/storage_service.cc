@@ -691,11 +691,11 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::force_keyspace_flush.set(r, [&ctx](std::unique_ptr<request> req) -> future<json::json_return_type> {
         auto keyspace = validate_keyspace(ctx, req->param);
         auto column_families = parse_tables(keyspace, ctx, req->query_parameters, "cf");
-        auto &db = ctx.db.local();
+        auto& db = ctx.db;
         if (column_families.empty()) {
-            co_await db.flush_on_all(keyspace);
+            co_await replica::database::flush_keyspace_on_all_shards(db, keyspace);
         } else {
-            co_await db.flush_on_all(keyspace, std::move(column_families));
+            co_await replica::database::flush_tables_on_all_shards(db, keyspace, std::move(column_families));
         }
         co_return json_void();
     });

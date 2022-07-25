@@ -1113,9 +1113,9 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std:
         co_await proxy.local().mutate_locally(std::move(mutations), tracing::trace_state_ptr());
 
         if (do_flush) {
-            auto& db = proxy.local().local_db();
+            auto& db = proxy.local().get_db();
             co_await coroutine::parallel_for_each(column_families, [&db] (const utils::UUID& id) -> future<> {
-                return db.flush_on_all(id);
+                return replica::database::flush_table_on_all_shards(db, id);
             });
         }
     }
