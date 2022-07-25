@@ -847,10 +847,8 @@ class TopologyTest(PythonTest):
             self.args.insert(0, "--manager-api={}".format(manager.sock_path))
 
             try:
-                manager.cluster.before_test(self.uname)
                 manager.cluster[0].take_log_savepoint()
                 status = await run_test(self, options)
-                manager.cluster.after_test(self.uname)
                 self.success = status
             except Exception as e:
                 self.server_log = manager.cluster[0].read_log()
