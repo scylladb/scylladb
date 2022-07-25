@@ -866,6 +866,35 @@ public:
         uint64_t memory_freed;
         uint64_t memory_compacted;
         uint64_t memory_evicted;
+
+        friend stats operator+(const stats& s1, const stats& s2) {
+            stats result(s1);
+            result += s2;
+            return result;
+        }
+        friend stats operator-(const stats& s1, const stats& s2) {
+            stats result(s1);
+            result -= s2;
+            return result;
+        }
+        stats& operator+=(const stats& other) {
+            segments_compacted += other.segments_compacted;
+            lsa_buffer_segments += other.lsa_buffer_segments;
+            memory_allocated += other.memory_allocated;
+            memory_freed += other.memory_freed;
+            memory_compacted += other.memory_compacted;
+            memory_evicted += other.memory_evicted;
+            return *this;
+        }
+        stats& operator-=(const stats& other) {
+            segments_compacted -= other.segments_compacted;
+            lsa_buffer_segments -= other.lsa_buffer_segments;
+            memory_allocated -= other.memory_allocated;
+            memory_freed -= other.memory_freed;
+            memory_compacted -= other.memory_compacted;
+            memory_evicted -= other.memory_evicted;
+            return *this;
+        }
     };
 private:
     stats _stats{};
@@ -879,14 +908,105 @@ public:
     size_t free_segments() const { return _free_segments; }
 };
 
+struct reclaim_timer {
+    using extra_logger = noncopyable_function<void(log_level)>;
+private:
+    using clock = utils::coarse_steady_clock;
+    struct stats {
+        occupancy_stats region_occupancy;
+        segment_pool::stats pool_stats;
+
+        friend stats operator+(const stats& s1, const stats& s2) {
+            stats result(s1);
+            result += s2;
+            return result;
+        }
+        friend stats operator-(const stats& s1, const stats& s2) {
+            stats result(s1);
+            result -= s2;
+            return result;
+        }
+        stats& operator+=(const stats& other) {
+            region_occupancy += other.region_occupancy;
+            pool_stats += other.pool_stats;
+            return *this;
+        }
+        stats& operator-=(const stats& other) {
+            region_occupancy -= other.region_occupancy;
+            pool_stats -= other.pool_stats;
+            return *this;
+        }
+    };
+
+    static thread_local reclaim_timer* _active_timer;
+    static thread_local clock::duration _duration_threshold;
+
+    const char* _name;
+
+    const is_preemptible _preemptible;
+    const size_t _memory_to_release;
+    const size_t _segments_to_release;
+    const size_t _reserve_goal, _reserve_max;
+    tracker::impl* _tracker;
+    extra_logger _extra_logs;
+
+    const bool _debug_enabled;
+    bool _stall_detected = false;
+
+    size_t _memory_released = 0;
+
+    clock::time_point _start;
+    stats _start_stats, _end_stats, _stat_diff;
+
+    clock::duration _duration;
+
+public:
+    inline reclaim_timer(const char* name, is_preemptible preemptible, size_t memory_to_release, size_t segments_to_release, tracker::impl* tracker, extra_logger extra_logs = [](log_level){});
+    inline reclaim_timer(const char* name, is_preemptible preemptible, size_t memory_to_release, size_t segments_to_release, extra_logger extra_logs = [](log_level){})
+        : reclaim_timer(name, preemptible, memory_to_release, segments_to_release, nullptr, std::move(extra_logs))
+    {}
+
+    inline ~reclaim_timer();
+
+    size_t set_memory_released(size_t memory_released) noexcept {
+        return this->_memory_released = memory_released;
+    }
+
+private:
+    void sample_stats(stats& data);
+    template <typename T>
+    void log_if_changed(log_level level, const char* name, T before, T now) const noexcept {
+        if (now != before) {
+            timing_logger.log(level, "- {}: {:.3f} -> {:.3f}", name, before, now);
+        }
+    }
+    template <typename T>
+    void log_if_any(log_level level, const char* name, T value) const noexcept {
+        if (value != 0) {
+            timing_logger.log(level, "- {}: {}", name, value);
+        }
+    }
+    template <typename T>
+    void log_if_any_mem(log_level level, const char* name, T value) const noexcept {
+        if (value != 0) {
+            timing_logger.log(level, "- {}: {:.3f} MiB", name, (float)value / (1024*1024));
+        }
+    }
+
+    void report() const noexcept;
+};
+
 size_t segment_pool::reclaim_segments(size_t target, is_preemptible preempt) {
     // Reclaimer tries to release segments occupying lower parts of the address
     // space.
-
     llogger.debug("Trying to reclaim {} segments", target);
 
     // Reclamation. Migrate segments to higher addresses and shrink segment pool.
     size_t reclaimed_segments = 0;
+
+    reclaim_timer timing_guard("reclaim_segments", preempt, target * segment::size, target, [&] (log_level level) {
+        timing_logger.log(level, "- reclaimed {} out of requested {} segments", reclaimed_segments, target);
+    });
 
     // We may fail to reclaim because a region has reclaim disabled (usually because
     // it is in an allocating_section. Failed reclaims can cause high CPU usage
@@ -928,6 +1048,7 @@ size_t segment_pool::reclaim_segments(size_t target, is_preemptible preempt) {
     }
 
     llogger.debug("Reclaimed {} segments (requested {})", reclaimed_segments, target);
+    timing_guard.set_memory_released(reclaimed_segments * segment::size);
     return reclaimed_segments;
 }
 
@@ -1133,6 +1254,86 @@ bool segment::is_empty() {
 occupancy_stats
 segment::occupancy() {
     return { shard_segment_pool.descriptor(this).free_space(), segment::size };
+}
+
+thread_local reclaim_timer* reclaim_timer::_active_timer;
+thread_local clock::duration reclaim_timer::_duration_threshold = clock::duration::zero();
+
+reclaim_timer::reclaim_timer(const char* name, is_preemptible preemptible, size_t memory_to_release, size_t segments_to_release, tracker::impl* tracker, extra_logger extra_logs)
+    : _name(name)
+    , _preemptible(preemptible)
+    , _memory_to_release(memory_to_release)
+    , _segments_to_release(segments_to_release)
+    , _reserve_goal(shard_segment_pool.current_emergency_reserve_goal())
+    , _reserve_max(shard_segment_pool.emergency_reserve_max())
+    , _tracker(tracker)
+    , _extra_logs(std::move(extra_logs))
+    , _debug_enabled(timing_logger.is_enabled(logging::log_level::debug))
+{
+    if (_active_timer) {
+        return;
+    }
+    _active_timer = this;
+
+    _start = clock::now();
+    sample_stats(_start_stats);
+
+    if (_duration_threshold == clock::duration::zero()) {
+        _duration_threshold = engine().get_blocked_reactor_notify_ms();
+    }
+}
+
+reclaim_timer::~reclaim_timer() {
+    if (_active_timer != this) {
+        return;
+    }
+
+    _duration = clock::now() - _start;
+    _stall_detected = _duration >= _duration_threshold;
+    if (_debug_enabled || _stall_detected) {
+        sample_stats(_end_stats);
+        _stat_diff = _end_stats - _start_stats;
+        report();
+    }
+
+    _active_timer = nullptr;
+}
+
+void reclaim_timer::sample_stats(stats& data) {
+    if (_debug_enabled && _tracker) {
+        data.region_occupancy = _tracker->region_occupancy();
+    }
+    data.pool_stats = shard_segment_pool.statistics();
+}
+
+void reclaim_timer::report() const noexcept {
+    auto time_level = _stall_detected ? log_level::warn : log_level::debug;
+    auto info_level = _stall_detected ? log_level::info : log_level::debug;
+    auto MiB = 1024*1024;
+    auto msg_extra = _stall_detected ? fmt::format(", at {}", current_backtrace()) : "";
+
+    timing_logger.log(time_level, "{} took {} us, trying to release {:.3f} MiB {}preemptibly, reserve: {{goal: {}, max: {}}}{}",
+                        _name, (_duration + 500ns) / 1us, (float)_memory_to_release / MiB, _preemptible ? "" : "non-",
+                        _reserve_goal, _reserve_max,
+                        msg_extra);
+    log_if_any(info_level, "segments to release", _segments_to_release);
+    _extra_logs(info_level);
+    if (_memory_released > 0) {
+        auto bytes_per_second =
+            static_cast<float>(_memory_released) / std::chrono::duration_cast<std::chrono::duration<float>>(_duration).count();
+        timing_logger.log(info_level, "- reclamation rate = {} MiB/s", format("{:.3f}", bytes_per_second / MiB));
+    }
+
+    if (_debug_enabled && _tracker) {
+        log_if_changed(info_level, "occupancy of regions",
+                        _start_stats.region_occupancy.used_fraction(), _end_stats.region_occupancy.used_fraction());
+    }
+
+    auto pool_diff = _stat_diff.pool_stats;
+    log_if_any_mem(info_level, "evicted memory", pool_diff.memory_evicted);
+    log_if_any(info_level, "compacted segments", pool_diff.segments_compacted);
+    log_if_any_mem(info_level, "compacted memory", pool_diff.memory_compacted);
+    log_if_any_mem(info_level, "allocated memory", pool_diff.memory_allocated);
 }
 
 //
@@ -2122,97 +2323,6 @@ static void reclaim_from_evictable(region::impl& r, size_t target_mem_in_use, is
     }
 }
 
-class reclaim_timer {
-    using clock = utils::coarse_steady_clock;
-
-    const is_preemptible _preemptible;
-    const size_t _memory_to_release;
-    const size_t _reserve_segments;
-    tracker::impl& _tracker;
-
-    const bool _debug_enabled;
-    bool _stall_detected = false;
-
-    size_t _memory_released = 0;
-
-    clock::time_point _start;
-    clock::duration _duration;
-    occupancy_stats _old_region_occupancy;
-    segment_pool::stats _old_pool_stats;
-
-public:
-    reclaim_timer(is_preemptible preemptible, size_t memory_to_release, size_t reserve_segments, tracker::impl& tracker)
-        : _preemptible(preemptible)
-        , _memory_to_release(memory_to_release)
-        , _reserve_segments(reserve_segments)
-        , _tracker(tracker)
-        , _debug_enabled(timing_logger.is_enabled(logging::log_level::debug))
-    {
-        _start = clock::now();
-        if (_debug_enabled) {
-            _old_region_occupancy = tracker.region_occupancy();
-        }
-        _old_pool_stats = shard_segment_pool.statistics();
-    }
-
-    size_t set_result(size_t memory_released) noexcept {
-        return this->_memory_released = memory_released;
-    }
-
-    ~reclaim_timer() {
-        _duration = clock::now() - _start;
-        _stall_detected = _duration >= engine().get_blocked_reactor_notify_ms();
-        if (_debug_enabled || _stall_detected) {
-            report();
-        }
-    }
-
-private:
-    template <typename T>
-    void log_if_changed(log_level level, const char* name, T before, T now) const noexcept {
-        if (now != before) {
-            timing_logger.log(level, "- {}: {:.3f} -> {:.3f}", name, before, now);
-        }
-    }
-    template <typename T>
-    void log_if_any(log_level level, const char* name, T value) const noexcept {
-        if (value != 0) {
-            timing_logger.log(level, "- {}: {}", name, value);
-        }
-    }
-    template <typename T>
-    void log_if_any_mem(log_level level, const char* name, T value) const noexcept {
-        if (value != 0) {
-            timing_logger.log(level, "- {}: {:.3f} MiB", name, (float)value / (1024*1024));
-        }
-    }
-
-    void report() const noexcept {
-        auto time_level = _stall_detected ? log_level::warn : log_level::debug;
-        auto info_level = _stall_detected ? log_level::info : log_level::debug;
-        auto MiB = 1024*1024;
-
-        timing_logger.log(time_level, "Reclamation cycle took {} us, trying to release {:.3f} MiB {}preemptibly",
-                          _duration / 1us, (float)_memory_to_release / MiB, _preemptible ? "" : "non-");
-        log_if_any(info_level, "reserved segments", _reserve_segments);
-        if (_memory_released > 0) {
-            auto bytes_per_second =
-                static_cast<float>(_memory_released) / std::chrono::duration_cast<std::chrono::duration<float>>(_duration).count();
-            timing_logger.log(info_level, "- reclamation rate = {} MiB/s", format("{:.3f}", bytes_per_second / MiB));
-        }
-        if (_debug_enabled) {
-            log_if_changed(info_level, "occupancy of regions",
-                           _old_region_occupancy.used_fraction(), _tracker.region_occupancy().used_fraction());
-        }
-
-        auto pool_stats = shard_segment_pool.statistics();
-        log_if_any_mem(info_level, "evicted memory", pool_stats.memory_evicted - _old_pool_stats.memory_evicted);
-        log_if_any(info_level, "compacted segments", pool_stats.segments_compacted - _old_pool_stats.segments_compacted);
-        log_if_any_mem(info_level, "compacted memory", pool_stats.memory_compacted - _old_pool_stats.memory_compacted);
-        log_if_any_mem(info_level, "allocated memory", pool_stats.memory_allocated - _old_pool_stats.memory_allocated);
-    }
-};
-
 idle_cpu_handler_result tracker::impl::compact_on_idle(work_waiting_on_reactor check_for_work) {
     if (!_reclaiming_enabled) {
         return idle_cpu_handler_result::no_more_work;
@@ -2252,8 +2362,8 @@ size_t tracker::impl::reclaim(size_t memory_to_release, is_preemptible preempt) 
         return 0;
     }
     reclaiming_lock rl(*this);
-    reclaim_timer timing_guard(preempt, memory_to_release, 0, *this);
-    return timing_guard.set_result(reclaim_locked(memory_to_release, preempt));
+    reclaim_timer timing_guard("reclaim", preempt, memory_to_release, 0, this);
+    return timing_guard.set_memory_released(reclaim_locked(memory_to_release, preempt));
 }
 
 size_t tracker::impl::reclaim_locked(size_t memory_to_release, is_preemptible preempt) {
@@ -2295,8 +2405,7 @@ size_t tracker::impl::compact_and_evict(size_t reserve_segments, size_t memory_t
         return 0;
     }
     reclaiming_lock rl(*this);
-    reclaim_timer timing_guard(preempt, memory_to_release, reserve_segments, *this);
-    return timing_guard.set_result(compact_and_evict_locked(reserve_segments, memory_to_release, preempt));
+    return compact_and_evict_locked(reserve_segments, memory_to_release, preempt);
 }
 
 size_t tracker::impl::compact_and_evict_locked(size_t reserve_segments, size_t memory_to_release, is_preemptible preempt) {
@@ -2348,42 +2457,57 @@ size_t tracker::impl::compact_and_evict_locked(size_t reserve_segments, size_t m
         }
     }
 
-    while (shard_segment_pool.total_memory_in_use() > target_mem) {
-        boost::range::pop_heap(_regions, cmp);
-        region::impl* r = _regions.back();
+    {
+        int regions = 0, evictable_regions = 0;
+        reclaim_timer timing_guard("compact", preempt, memory_to_release, reserve_segments, this, [&] (log_level level) {
+            timing_logger.log(level, "- processed {} regions: reclaimed from {}, compacted {}",
+                              regions, evictable_regions, regions - evictable_regions);
+        });
+        while (shard_segment_pool.total_memory_in_use() > target_mem) {
+            boost::range::pop_heap(_regions, cmp);
+            region::impl* r = _regions.back();
 
-        if (!r->is_compactible()) {
-            llogger.trace("Unable to release segments, no compactible pools.");
-            break;
-        }
+            if (!r->is_compactible()) {
+                llogger.trace("Unable to release segments, no compactible pools.");
+                break;
+            }
+            ++regions;
 
-        // Prefer evicting if average occupancy ratio is above the compaction threshold to avoid
-        // overhead of compaction in workloads where allocation order matches eviction order, where
-        // we can reclaim memory by eviction only. In some cases the cost of compaction on allocation
-        // would be higher than the cost of repopulating the region with evicted items.
-        if (r->is_evictable() && r->occupancy().used_space() >= max_used_space_ratio_for_compaction * r->occupancy().total_space()) {
-            reclaim_from_evictable(*r, target_mem, preempt);
-        } else {
-            r->compact();
-        }
+            // Prefer evicting if average occupancy ratio is above the compaction threshold to avoid
+            // overhead of compaction in workloads where allocation order matches eviction order, where
+            // we can reclaim memory by eviction only. In some cases the cost of compaction on allocation
+            // would be higher than the cost of repopulating the region with evicted items.
+            if (r->is_evictable() && r->occupancy().used_space() >= max_used_space_ratio_for_compaction * r->occupancy().total_space()) {
+                reclaim_from_evictable(*r, target_mem, preempt);
+                ++evictable_regions;
+            } else {
+                r->compact();
+            }
 
-        boost::range::push_heap(_regions, cmp);
+            boost::range::push_heap(_regions, cmp);
 
-        if (preempt && need_preempt()) {
-            break;
+            if (preempt && need_preempt()) {
+                break;
+            }
         }
     }
 
     auto released_during_compaction = mem_in_use - shard_segment_pool.total_memory_in_use();
 
     if (shard_segment_pool.total_memory_in_use() > target_mem) {
+        int regions = 0, evictable_regions = 0;
+        reclaim_timer timing_guard("evict", preempt, memory_to_release, reserve_segments, this, [&] (log_level level) {
+            timing_logger.log(level, "- processed {} regions, reclaimed from {}", regions, evictable_regions);
+        });
         llogger.debug("Considering evictable regions.");
         // FIXME: Fair eviction
         for (region::impl* r : _regions) {
             if (preempt && need_preempt()) {
                 break;
             }
+            ++regions;
             if (r->is_evictable()) {
+                ++evictable_regions;
                 reclaim_from_evictable(*r, target_mem, preempt);
                 if (shard_segment_pool.total_memory_in_use() <= target_mem) {
                     break;
