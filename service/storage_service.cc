@@ -746,51 +746,50 @@ storage_service::get_rpc_address(const inet_address& endpoint) const {
     return boost::lexical_cast<std::string>(endpoint);
 }
 
-std::unordered_map<dht::token_range, inet_address_vector_replica_set>
+future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
 storage_service::get_range_to_address_map(const sstring& keyspace) const {
-    return get_range_to_address_map(keyspace, get_token_metadata().sorted_tokens());
+    return get_range_to_address_map(_db.local().find_keyspace(keyspace).get_effective_replication_map());
 }
 
-std::unordered_map<dht::token_range, inet_address_vector_replica_set>
+future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
+storage_service::get_range_to_address_map(locator::effective_replication_map_ptr erm) const {
+    return get_range_to_address_map(erm, erm->get_token_metadata_ptr()->sorted_tokens());
+}
+
+future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
 storage_service::get_range_to_address_map_in_local_dc(
-        const sstring& keyspace) const {
-    auto orig_map = get_range_to_address_map(keyspace, get_tokens_in_local_dc());
+        locator::effective_replication_map_ptr erm) const {
+    auto orig_map = co_await get_range_to_address_map(erm, co_await get_tokens_in_local_dc(*erm->get_token_metadata_ptr()));
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> filtered_map;
+    filtered_map.reserve(orig_map.size());
     for (auto entry : orig_map) {
         auto& addresses = filtered_map[entry.first];
         addresses.reserve(entry.second.size());
         std::copy_if(entry.second.begin(), entry.second.end(), std::back_inserter(addresses), db::is_local);
+        co_await coroutine::maybe_yield();
     }
 
-    return filtered_map;
+    co_return filtered_map;
 }
 
-std::vector<token>
-storage_service::get_tokens_in_local_dc() const {
+// Caller is responsible to hold token_metadata valid until the returned future is resolved
+future<std::vector<token>>
+storage_service::get_tokens_in_local_dc(const locator::token_metadata& tm) const {
     std::vector<token> filtered_tokens;
-    const auto& tm = get_token_metadata();
     for (auto token : tm.sorted_tokens()) {
         auto endpoint = tm.get_endpoint(token);
         if (db::is_local(*endpoint))
             filtered_tokens.push_back(token);
+        co_await coroutine::maybe_yield();
     }
-    return filtered_tokens;
+    co_return filtered_tokens;
 }
 
-std::unordered_map<dht::token_range, inet_address_vector_replica_set>
-storage_service::get_range_to_address_map(const sstring& keyspace,
+// Caller is responsible to hold token_metadata valid until the returned future is resolved
+future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
+storage_service::get_range_to_address_map(locator::effective_replication_map_ptr erm,
         const std::vector<token>& sorted_tokens) const {
-    sstring ks = keyspace;
-    // some people just want to get a visual representation of things. Allow null and set it to the first
-    // non-system keyspace.
-    if (keyspace == "") {
-        auto keyspaces = _db.local().get_non_system_keyspaces();
-        if (keyspaces.empty()) {
-            throw std::runtime_error("No keyspace provided and no non system kespace exist");
-        }
-        ks = keyspaces[0];
-    }
-    return construct_range_to_endpoint_map(ks, get_all_ranges(sorted_tokens));
+    co_return co_await construct_range_to_endpoint_map(erm, co_await get_all_ranges(sorted_tokens));
 }
 
 future<> storage_service::handle_state_replacing_update_pending_ranges(mutable_token_metadata_ptr tmptr, inet_address replacing_node) {
@@ -3066,11 +3065,13 @@ storage_service::describe_ring(const sstring& keyspace, bool include_only_local_
     std::vector<token_range_endpoints> ranges;
     //Token.TokenFactory tf = getPartitioner().getTokenFactory();
 
-    std::unordered_map<dht::token_range, inet_address_vector_replica_set> range_to_address_map =
+    auto erm = _db.local().find_keyspace(keyspace).get_effective_replication_map();
+    std::unordered_map<dht::token_range, inet_address_vector_replica_set> range_to_address_map = co_await (
             include_only_local_dc
-                    ? get_range_to_address_map_in_local_dc(keyspace)
-                    : get_range_to_address_map(keyspace);
-    auto tmptr = get_token_metadata_ptr();
+                    ? get_range_to_address_map_in_local_dc(erm)
+                    : get_range_to_address_map(erm)
+    );
+    auto tmptr = erm->get_token_metadata_ptr();
     for (auto entry : range_to_address_map) {
         const auto& topology = tmptr->get_topology();
         auto range = entry.first;
@@ -3113,17 +3114,18 @@ storage_service::describe_ring(const sstring& keyspace, bool include_only_local_
     co_return ranges;
 }
 
-std::unordered_map<dht::token_range, inet_address_vector_replica_set>
+future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
 storage_service::construct_range_to_endpoint_map(
-        const sstring& keyspace,
+        locator::effective_replication_map_ptr erm,
         const dht::token_range_vector& ranges) const {
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> res;
-    auto erm = _db.local().find_keyspace(keyspace).get_effective_replication_map();
+    res.reserve(ranges.size());
     for (auto r : ranges) {
         res[r] = erm->get_natural_endpoints(
                 r.end() ? r.end()->value() : dht::maximum_token());
+        co_await coroutine::maybe_yield();
     }
-    return res;
+    co_return res;
 }
 
 
@@ -3378,20 +3380,24 @@ storage_service::get_ranges_for_endpoint(const sstring& name, const gms::inet_ad
     return _db.local().find_keyspace(name).get_effective_replication_map()->get_ranges(ep);
 }
 
-dht::token_range_vector
+// Caller is responsible to hold token_metadata valid until the returned future is resolved
+future<dht::token_range_vector>
 storage_service::get_all_ranges(const std::vector<token>& sorted_tokens) const {
     if (sorted_tokens.empty())
-        return dht::token_range_vector();
+        co_return dht::token_range_vector();
     int size = sorted_tokens.size();
     dht::token_range_vector ranges;
+    ranges.reserve(size);
     ranges.push_back(dht::token_range::make_ending_with(range_bound<token>(sorted_tokens[0], true)));
+    co_await coroutine::maybe_yield();
     for (int i = 1; i < size; ++i) {
         dht::token_range r(range<token>::bound(sorted_tokens[i - 1], false), range<token>::bound(sorted_tokens[i], true));
         ranges.push_back(r);
+        co_await coroutine::maybe_yield();
     }
     ranges.push_back(dht::token_range::make_starting_with(range_bound<token>(sorted_tokens[size-1], false)));
 
-    return ranges;
+    co_return ranges;
 }
 
 inet_address_vector_replica_set

@@ -514,10 +514,10 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         return ctx.db.local().get_config().saved_caches_directory();
     });
 
-    ss::get_range_to_endpoint_map.set(r, [&ctx, &ss](std::unique_ptr<request> req) {
+    ss::get_range_to_endpoint_map.set(r, [&ctx, &ss](std::unique_ptr<request> req) -> future<json::json_return_type> {
         auto keyspace = validate_keyspace(ctx, req->param);
         std::vector<ss::maplist_mapper> res;
-        return make_ready_future<json::json_return_type>(stream_range_as_array(ss.local().get_range_to_address_map(keyspace),
+        co_return stream_range_as_array(co_await ss.local().get_range_to_address_map(keyspace),
                 [](const std::pair<dht::token_range, inet_address_vector_replica_set>& entry){
             ss::maplist_mapper m;
             if (entry.first.start()) {
@@ -534,7 +534,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                 m.value.push(address.to_sstring());
             }
             return m;
-        }));
+        });
     });
 
     ss::get_pending_range_to_endpoint_map.set(r, [&ctx](std::unique_ptr<request> req) {
@@ -546,7 +546,13 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::describe_any_ring.set(r, [&ctx, &ss](std::unique_ptr<request> req) {
-        return describe_ring_as_json(ss, "");
+        // Find an arbitrary non-system keyspace.
+        auto keyspaces = ctx.db.local().get_non_system_keyspaces();
+        if (keyspaces.empty()) {
+            throw std::runtime_error("No keyspace provided and no non system kespace exist");
+        }
+        auto ks = keyspaces[0];
+        return describe_ring_as_json(ss, ks);
     });
 
     ss::describe_ring.set(r, [&ctx, &ss](std::unique_ptr<request> req) {

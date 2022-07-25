@@ -384,14 +384,15 @@ public:
      */
     sstring get_rpc_address(const inet_address& endpoint) const;
 
-    std::unordered_map<dht::token_range, inet_address_vector_replica_set> get_range_to_address_map(const sstring& keyspace) const;
+    future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>> get_range_to_address_map(const sstring& keyspace) const;
+    future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>> get_range_to_address_map(locator::effective_replication_map_ptr erm) const;
 
-    std::unordered_map<dht::token_range, inet_address_vector_replica_set> get_range_to_address_map_in_local_dc(
-            const sstring& keyspace) const;
+    future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>> get_range_to_address_map_in_local_dc(
+            locator::effective_replication_map_ptr erm) const;
 
-    std::vector<token> get_tokens_in_local_dc() const;
+    future<std::vector<token>> get_tokens_in_local_dc(const locator::token_metadata&) const;
 
-    std::unordered_map<dht::token_range, inet_address_vector_replica_set> get_range_to_address_map(const sstring& keyspace,
+    future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>> get_range_to_address_map(locator::effective_replication_map_ptr erm,
             const std::vector<token>& sorted_tokens) const;
 
     /**
@@ -424,8 +425,8 @@ public:
      * @param ranges
      * @return mapping of ranges to the replicas responsible for them.
     */
-    std::unordered_map<dht::token_range, inet_address_vector_replica_set> construct_range_to_endpoint_map(
-            const sstring& keyspace,
+    future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>> construct_range_to_endpoint_map(
+            locator::effective_replication_map_ptr erm,
             const dht::token_range_vector& ranges) const;
 public:
     virtual future<> on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) override;
@@ -633,7 +634,7 @@ public:
      * ranges.
      * @return ranges in sorted order
     */
-    dht::token_range_vector get_all_ranges(const std::vector<token>& sorted_tokens) const;
+    future<dht::token_range_vector> get_all_ranges(const std::vector<token>& sorted_tokens) const;
     /**
      * This method returns the N endpoints that are responsible for storing the
      * specified key i.e for replication.
