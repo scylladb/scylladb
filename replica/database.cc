@@ -2320,8 +2320,8 @@ future<> database::flush_keyspace_on_all_shards(sharded<database>& sharded_db, s
     });
 }
 
-future<> database::snapshot_tables_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, std::vector<sstring> table_names, sstring tag, bool skip_flush) {
-    co_await coroutine::parallel_for_each(table_names, [&, ks_name, tag = std::move(tag), skip_flush] (const auto& table_name) -> future<> {
+future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, sstring table_name, sstring tag, bool skip_flush) {
+    // FIXME: indentation
         if (!skip_flush) {
             co_await flush_table_on_all_shards(sharded_db, ks_name, table_name);
         }
@@ -2329,6 +2329,11 @@ future<> database::snapshot_tables_on_all_shards(sharded<database>& sharded_db, 
             auto& t = db.find_column_family(ks_name, table_name);
             return t.snapshot(db, tag);
         });
+}
+
+future<> database::snapshot_tables_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, std::vector<sstring> table_names, sstring tag, bool skip_flush) {
+    return parallel_for_each(table_names, [&sharded_db, ks_name, tag = std::move(tag), skip_flush] (auto& table_name) {
+        return snapshot_table_on_all_shards(sharded_db, ks_name, std::move(table_name), tag, skip_flush);
     });
 }
 
