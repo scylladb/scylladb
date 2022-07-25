@@ -49,6 +49,7 @@
 #include "cql3/selection/selection.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/functions/user_aggregate.hh"
+
 namespace service {
 
 static constexpr int DEFAULT_INTERNAL_PAGING_SIZE = 10000;
@@ -63,7 +64,7 @@ private:
 
 public:
     forward_aggregates(const query::forward_request& request);
-    void merge(query::forward_result& result, const query::forward_result& other);
+    void merge(query::forward_result& result, query::forward_result&& other);
     void finalize(query::forward_result& result);
 
     template<typename Func>
@@ -90,9 +91,12 @@ forward_aggregates::forward_aggregates(const query::forward_request& request) {
     _aggrs = std::move(aggrs);
 }
 
-void forward_aggregates::merge(query::forward_result &result, const query::forward_result &other) {
+void forward_aggregates::merge(query::forward_result &result, query::forward_result&& other) {
     if (result.query_results.empty()) {
-        result.query_results.resize(other.query_results.size());
+        result.query_results = std::move(other.query_results);
+        return;
+    } else if (other.query_results.empty()) {
+        return;
     }
 
     if (result.query_results.size() != other.query_results.size() || result.query_results.size() != _aggrs.size()) {
@@ -108,7 +112,7 @@ void forward_aggregates::merge(query::forward_result &result, const query::forwa
 
     for (size_t i = 0; i < _aggrs.size(); i++) {
         _aggrs[i]->set_accumulator(result.query_results[i]);
-        _aggrs[i]->reduce(cql_serialization_format::internal(), other.query_results[i]);
+        _aggrs[i]->reduce(cql_serialization_format::internal(), std::move(other.query_results[i]));
         result.query_results[i] = _aggrs[i]->get_accumulator();
     }
 }
@@ -358,9 +362,9 @@ future<query::forward_result> forward_service::dispatch_to_shards(
 
     forward_aggregates aggrs(req);
     co_return co_await aggrs.with_thread_if_needed([&aggrs, results = std::move(results), result = std::move(result)] () mutable {
-        for (auto& r : results) {
+        for (auto&& r : results) {
             if (result) {
-                aggrs.merge(*result, r);
+                aggrs.merge(*result, std::move(r));
             }
             else {
                 result = r;
@@ -537,7 +541,7 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
                             
                             return aggrs.with_thread_if_needed([&result_, &aggrs, partial_result = std::move(partial_result)] () mutable {
                                 if (result_) {
-                                    aggrs.merge(*result_, partial_result);
+                                    aggrs.merge(*result_, std::move(partial_result));
                                 } else {
                                     result_ = partial_result;
                                 }
