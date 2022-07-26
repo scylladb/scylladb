@@ -1454,10 +1454,12 @@ future<std::unordered_set<sstring>> table::take_snapshot(database& db, sstring j
     co_await io_check(sync_directory, jsondir);
 
     std::unordered_set<sstring> table_names;
+    table_names.reserve(tables.size());
     for (auto& sst : tables) {
         auto f = sst->get_filename();
         auto rf = f.substr(sst->get_dir().size() + 1);
         table_names.insert(std::move(rf));
+        co_await coroutine::maybe_yield();
     }
 
     co_return table_names;
