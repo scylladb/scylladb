@@ -1651,6 +1651,10 @@ private:
 
     static future<std::vector<foreign_ptr<lw_shared_ptr<table>>>> get_table_on_all_shards(sharded<database>& db, utils::UUID uuid);
 
+    struct table_truncate_state {
+        gate::holder holder;
+    };
+
     static future<> truncate_table_on_all_shards(sharded<database>& db, const std::vector<foreign_ptr<lw_shared_ptr<table>>>&, timestamp_func, bool with_snapshot, std::optional<sstring> snapshot_name_opt);
 public:
     /** Truncates the given column family */

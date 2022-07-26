@@ -2367,6 +2367,20 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, c
     auto auto_snapshot = sharded_db.local().get_config().auto_snapshot();
     dblog.info("Truncating {}.{} {}snapshot", s->ks_name(), s->cf_name(), with_snapshot && auto_snapshot ? "with auto-" : "without ");
 
+    std::vector<foreign_ptr<std::unique_ptr<table_truncate_state>>> table_states;
+    table_states.resize(smp::count);
+
+    co_await coroutine::parallel_for_each(boost::irange(0u, smp::count), [&] (unsigned shard) -> future<> {
+        table_states[shard] = co_await smp::submit_to(shard, [&] () -> future<foreign_ptr<std::unique_ptr<table_truncate_state>>> {
+            auto& cf = *table_shards[this_shard_id()];
+            auto st = std::make_unique<table_truncate_state>();
+
+            st->holder = cf.async_gate().hold();
+
+            co_return make_foreign(std::move(st));
+        });
+    });
+
     co_await sharded_db.invoke_on_all([&, tsf = std::move(tsf)] (database& db) {
         auto shard = this_shard_id();
         auto& cf = *table_shards[shard];
@@ -2376,7 +2390,6 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, c
 
 future<> database::truncate(column_family& cf, timestamp_func tsf, bool with_snapshot, std::optional<sstring> snapshot_name_opt) {
     dblog.trace("Truncating {}.{} on shard: with_snapshot={} auto_snapshot={}", cf.schema()->ks_name(), cf.schema()->cf_name(), with_snapshot, get_config().auto_snapshot());
-    auto holder = cf.async_gate().hold();
 
     const auto auto_snapshot = with_snapshot && get_config().auto_snapshot();
     const auto should_flush = auto_snapshot;
