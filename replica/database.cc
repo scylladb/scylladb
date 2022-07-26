@@ -2356,6 +2356,14 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
 future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, const std::vector<foreign_ptr<lw_shared_ptr<table>>>& table_shards, timestamp_func tsf, bool with_snapshot, std::optional<sstring> snapshot_name_opt) {
     auto& cf = *table_shards[this_shard_id()];
     auto s = cf.schema();
+
+    // Schema tables changed commitlog domain at some point and this node will refuse to boot with
+    // truncation record present for schema tables to protect against misinterpreting of replay positions.
+    // Also, the replay_position returned by discard_sstables() may refer to old commit log domain.
+    if (s->ks_name() == db::schema_tables::NAME) {
+        throw std::runtime_error(format("Truncating of {}.{} is not allowed.", s->ks_name(), s->cf_name()));
+    }
+
     auto auto_snapshot = sharded_db.local().get_config().auto_snapshot();
     dblog.info("Truncating {}.{} {}snapshot", s->ks_name(), s->cf_name(), with_snapshot && auto_snapshot ? "with auto-" : "without ");
 
@@ -2372,13 +2380,6 @@ future<> database::truncate(column_family& cf, timestamp_func tsf, bool with_sna
 
     const auto auto_snapshot = with_snapshot && get_config().auto_snapshot();
     const auto should_flush = auto_snapshot;
-
-    // Schema tables changed commitlog domain at some point and this node will refuse to boot with
-    // truncation record present for schema tables to protect against misinterpreting of replay positions.
-    // Also, the replay_position returned by discard_sstables() may refer to old commit log domain.
-    if (cf.schema()->ks_name() == db::schema_tables::NAME) {
-        throw std::runtime_error(format("Truncating of {}.{} is not allowed.", cf.schema()->ks_name(), cf.schema()->cf_name()));
-    }
 
     // Force mutations coming in to re-acquire higher rp:s
     // This creates a "soft" ordering, in that we will guarantee that
