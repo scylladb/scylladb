@@ -1436,7 +1436,7 @@ future<> table::snapshot_on_all_shards(sharded<database>& sharded_db, const std:
     });
 }
 
-future<std::unordered_set<sstring>> table::take_snapshot(database& db, sstring jsondir) {
+future<table::snapshot_file_set> table::take_snapshot(database& db, sstring jsondir) {
     tlogger.trace("take_snapshot {}", jsondir);
 
     auto sstable_deletion_guard = co_await get_units(_sstable_deletion_sem, 1);
@@ -1453,16 +1453,16 @@ future<std::unordered_set<sstring>> table::take_snapshot(database& db, sstring j
     });
     co_await io_check(sync_directory, jsondir);
 
-    std::unordered_set<sstring> table_names;
-    table_names.reserve(tables.size());
+    auto table_names = std::make_unique<std::unordered_set<sstring>>();
+    table_names->reserve(tables.size());
     for (auto& sst : tables) {
         auto f = sst->get_filename();
         auto rf = f.substr(sst->get_dir().size() + 1);
-        table_names.insert(std::move(rf));
+        table_names->insert(std::move(rf));
         co_await coroutine::maybe_yield();
     }
 
-    co_return table_names;
+    co_return make_foreign(std::move(table_names));
 }
 
 future<> table::snapshot(database& db, sstring name) {
@@ -1472,7 +1472,7 @@ future<> table::snapshot(database& db, sstring name) {
     std::exception_ptr ex;
 
     auto shard = std::hash<sstring>()(jsondir) % smp::count;
-    std::unordered_set<sstring> table_names;
+    snapshot_file_set table_names;
     try {
         table_names = co_await take_snapshot(db, jsondir);
     } catch (...) {
@@ -1492,8 +1492,8 @@ future<> table::snapshot(database& db, sstring name) {
         }
         auto snapshot = pending_snapshots.at(jsondir);
         try {
-            for (auto&& sst: tables) {
-                snapshot->files.insert(std::move(sst));
+            for (const auto& sst: *tables) {
+                snapshot->files.insert(sst);
             }
         } catch (...) {
             ex = std::current_exception();
