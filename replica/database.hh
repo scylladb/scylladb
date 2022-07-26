@@ -1636,10 +1636,6 @@ public:
     static future<> snapshot_tables_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, std::vector<sstring> table_names, sstring tag, bool skip_flush);
     static future<> snapshot_keyspace_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, sstring tag, bool skip_flush);
 
-    // See #937. Truncation now requires a callback to get a time stamp
-    // that must be guaranteed to be the same for all shards.
-    typedef std::function<future<db_clock::time_point>()> timestamp_func;
-
 public:
     bool update_column_family(schema_ptr s);
 private:
@@ -1655,12 +1651,12 @@ private:
         bool did_flush;
     };
 
-    static future<> truncate_table_on_all_shards(sharded<database>& db, const std::vector<foreign_ptr<lw_shared_ptr<table>>>&, timestamp_func, bool with_snapshot, std::optional<sstring> snapshot_name_opt);
+    static future<> truncate_table_on_all_shards(sharded<database>& db, const std::vector<foreign_ptr<lw_shared_ptr<table>>>&, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt);
     future<> truncate(column_family& cf, const table_truncate_state&, db_clock::time_point truncated_at);
 public:
     /** Truncates the given column family */
-    // If snapshot_name_opt is disengaged, the snapshot name is formatted as "{timestamp}-<table-name>"
-    static future<> truncate_table_on_all_shards(sharded<database>& db, sstring ks_name, sstring cf_name, timestamp_func, bool with_snapshot = true, std::optional<sstring> snapshot_name_opt = {});
+    // If truncated_at_opt is not given, it is set to db_clock::now right after flush/clear.
+    static future<> truncate_table_on_all_shards(sharded<database>& db, sstring ks_name, sstring cf_name, std::optional<db_clock::time_point> truncated_at_opt = {}, bool with_snapshot = true, std::optional<sstring> snapshot_name_opt = {});
 
     // drops the table on all shards and removes the table directory if there are no snapshots
     static future<> drop_table_on_all_shards(sharded<database>& db, sstring ks_name, sstring cf_name, bool with_snapshot = true);
