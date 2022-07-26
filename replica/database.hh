@@ -1653,6 +1653,7 @@ private:
         db_clock::time_point low_mark_at;
         db::replay_position low_mark;
         std::vector<compaction_manager::compaction_reenabler> cres;
+        bool did_flush;
     };
 
     static future<> truncate_table_on_all_shards(sharded<database>& db, const std::vector<foreign_ptr<lw_shared_ptr<table>>>&, timestamp_func, bool with_snapshot, std::optional<sstring> snapshot_name_opt);
