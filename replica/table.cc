@@ -1469,63 +1469,6 @@ future<table::snapshot_file_set> table::take_snapshot(database& db, sstring json
     co_return make_foreign(std::move(table_names));
 }
 
-// FIXME: delete function
-future<> table::_unused_snapshot(database& db, sstring name) {
-    auto jsondir = _config.datadir + "/snapshots/" + name;
-    tlogger.trace("snapshot {}", jsondir);
-
-    std::exception_ptr ex;
-
-    auto shard = std::hash<sstring>()(jsondir) % smp::count;
-    snapshot_file_set table_names;
-    try {
-        table_names = co_await take_snapshot(db, jsondir);
-    } catch (...) {
-        ex = std::current_exception();
-    }
-    co_await smp::submit_to(shard, [requester = this_shard_id(), &jsondir, this, &db,
-            tables = std::move(table_names), datadir = _config.datadir, ex = std::move(ex)] () mutable -> future<> {
-        if (!pending_snapshots.contains(jsondir)) {
-            try {
-                pending_snapshots.emplace(jsondir, make_lw_shared<snapshot_manager>());
-            } catch (...) {
-                // abort since the process will hang if we can't coordinate
-                // snapshot across shards, similar to failing to allocation a continuation.
-                tlogger.error("Failed allocating snapshot_manager: {}. Aborting.", std::current_exception());
-                abort();
-            }
-        }
-        auto snapshot = pending_snapshots.at(jsondir);
-        try {
-            snapshot->file_sets.emplace_back(std::move(tables));
-        } catch (...) {
-            ex = std::current_exception();
-        }
-
-        tlogger.debug("snapshot {}: signal requests", jsondir);
-        snapshot->requests.signal(1);
-        if (requester == this_shard_id()) {
-            tlogger.debug("snapshot {}: waiting for all shards", jsondir);
-            co_await snapshot->requests.wait(smp::count);
-            // this_shard_id() here == requester == this_shard_id() before submit_to() above,
-            // so the db reference is still local
-            try {
-                co_await finalize_snapshot(db, jsondir, std::move(snapshot->file_sets));
-            } catch (...) {
-                ex = std::current_exception();
-            }
-            pending_snapshots.erase(jsondir);
-            snapshot->manifest_write.signal(smp::count);
-        }
-        tlogger.debug("snapshot {}: waiting for manifest on behalf of shard {}", jsondir, requester);
-        co_await snapshot->manifest_write.wait(1);
-        tlogger.debug("snapshot {}: done: error={}", jsondir, ex);
-        if (ex) {
-            co_await coroutine::return_exception_ptr(std::move(ex));
-        }
-    });
-}
-
 future<> table::finalize_snapshot(database& db, sstring jsondir, std::vector<snapshot_file_set> file_sets) {
     std::exception_ptr ex;
 
