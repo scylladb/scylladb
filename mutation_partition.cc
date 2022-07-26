@@ -2066,6 +2066,9 @@ query_result_builder::query_result_builder(const schema& s, query::result::build
 { }
 
 void query_result_builder::consume_new_partition(const dht::decorated_key& dk) {
+    if (_mutation_consumer) {
+        on_internal_error(mplog, "query_result_builder::consume_new_partition(): missing partition-end between partitions");
+    }
     _mutation_consumer.emplace(mutation_querier(_schema, _rb.add_partition(_schema, dk.key()), _rb.memory_accounter()));
 }
 
@@ -2098,10 +2101,14 @@ stop_iteration query_result_builder::consume_end_of_partition() {
     if (_stop) {
         _rb.mark_as_short_read();
     }
+    _mutation_consumer.reset();
     return _stop;
 }
 
 void query_result_builder::consume_end_of_stream() {
+    if (_mutation_consumer) {
+        on_internal_error(mplog, "query_result_builder::consume_end_of_stream(): missing partition-end at end-of-stream");
+    }
 }
 
 stop_iteration query::result_memory_accounter::check_local_limit() const {
