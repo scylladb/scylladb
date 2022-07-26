@@ -1350,7 +1350,7 @@ logalloc::occupancy_stats table::occupancy() const {
 // far this is a safe assumption, but if we ever want to take snapshots from a
 // group of shards only, this code will have to be updated to account for that.
 struct snapshot_manager {
-    std::unordered_set<sstring> files;
+    std::vector<table::snapshot_file_set> file_sets;
     named_semaphore requests = {0, named_semaphore_exception_factory{"snapshot manager requests"}};
     named_semaphore manifest_write = {0, named_semaphore_exception_factory{"snapshot manager manifest write"}};
     snapshot_manager() {}
@@ -1362,11 +1362,13 @@ seal_snapshot(sstring jsondir) {
     std::ostringstream ss;
     int n = 0;
     ss << "{" << std::endl << "\t\"files\" : [ ";
-    for (auto&& rf: pending_snapshots.at(jsondir)->files) {
+    for (const auto& fsp : pending_snapshots.at(jsondir)->file_sets) {
+      for (const auto& rf : *fsp) {
         if (n++ > 0) {
             ss << ", ";
         }
         ss << "\"" << rf << "\"";
+      }
     }
     ss << " ]" << std::endl << "}" << std::endl;
 
@@ -1492,9 +1494,7 @@ future<> table::snapshot(database& db, sstring name) {
         }
         auto snapshot = pending_snapshots.at(jsondir);
         try {
-            for (const auto& sst: *tables) {
-                snapshot->files.insert(sst);
-            }
+            snapshot->file_sets.emplace_back(std::move(tables));
         } catch (...) {
             ex = std::current_exception();
         }
