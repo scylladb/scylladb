@@ -420,8 +420,7 @@ public:
             _last_pos = rtc.position();
         }
         ++_stats.range_tombstones;
-        do_consume(std::move(rtc), consumer, gc_consumer);
-        return stop_iteration::no;
+        return do_consume(std::move(rtc), consumer, gc_consumer);
     }
 
     template <typename Consumer, typename GCConsumer>
