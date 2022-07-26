@@ -90,7 +90,13 @@ public:
     // Differs from submit_migration_task() in that all errors are propagated.
     // Coalesces requests.
     future<> merge_schema_from(netw::msg_addr);
-    future<> do_merge_schema_from(netw::msg_addr);
+
+    // As above, but does not coalesce requests.
+    //
+    // If an abort_source is passed, it can be used to cancel the RPC call that fetches schema mutations from `addr`.
+    // Note however that once mutations are fetched and the process of applying them to our local schema tables starts,
+    // requesting abort through `as` won't have an effect.
+    future<> do_merge_schema_from(netw::msg_addr addr, abort_source* as = nullptr);
 
     // Merge mutations received from src.
     // Keep mutations alive around whole async operation.
