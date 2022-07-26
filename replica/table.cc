@@ -1346,21 +1346,24 @@ table::seal_snapshot(sstring jsondir, std::vector<snapshot_file_set> file_sets) 
 
     tlogger.debug("Storing manifest {}", jsonfile);
 
-    return io_check([jsondir] { return recursive_touch_directory(jsondir); }).then([jsonfile, json = std::move(json)] {
-        return open_checked_file_dma(general_disk_error_handler, jsonfile, open_flags::wo | open_flags::create | open_flags::truncate).then([json](file f) {
-            return make_file_output_stream(std::move(f)).then([json](output_stream<char>&& out) {
-                return do_with(std::move(out), [json] (output_stream<char>& out) {
-                    return out.write(json.c_str(), json.size()).then([&out] {
-                       return out.flush();
-                    }).then([&out] {
-                       return out.close();
-                    });
-                });
-            });
-        });
-    }).then([jsondir] {
-        return io_check(sync_directory, std::move(jsondir));
-    });
+    // FIXME: indentation
+    co_await io_check([jsondir] { return recursive_touch_directory(jsondir); });
+    auto f = co_await open_checked_file_dma(general_disk_error_handler, jsonfile, open_flags::wo | open_flags::create | open_flags::truncate);
+    auto out = co_await make_file_output_stream(std::move(f));
+    std::exception_ptr ex;
+    try {
+                    co_await out.write(json.c_str(), json.size());
+                       co_await out.flush();
+    } catch (...) {
+        ex = std::current_exception();
+    }
+                       co_await out.close();
+
+    if (ex) {
+        co_await coroutine::return_exception_ptr(std::move(ex));
+    }
+
+        co_await io_check(sync_directory, std::move(jsondir));
 }
 
 future<> table::write_schema_as_cql(database& db, sstring dir) const {
