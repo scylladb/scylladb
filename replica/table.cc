@@ -1443,7 +1443,7 @@ future<std::unordered_set<sstring>> table::take_snapshot(database& db, sstring j
     std::exception_ptr ex;
 
     std::vector<sstables::shared_sstable> tables;
-    try {
+    // FIXME: indentation
         tables = boost::copy_range<std::vector<sstables::shared_sstable>>(*_sstables->all());
         co_await io_check([&jsondir] { return recursive_touch_directory(jsondir); });
         co_await max_concurrent_for_each(tables, db.get_config().initial_sstable_loading_concurrency(), [&db, &jsondir] (sstables::shared_sstable sstable) {
@@ -1454,25 +1454,13 @@ future<std::unordered_set<sstring>> table::take_snapshot(database& db, sstring j
             });
         });
         co_await io_check(sync_directory, jsondir);
-    } catch (...) {
-        ex = std::current_exception();
-    }
 
     std::unordered_set<sstring> table_names;
-    try {
         for (auto& sst : tables) {
             auto f = sst->get_filename();
             auto rf = f.substr(sst->get_dir().size() + 1);
             table_names.insert(std::move(rf));
         }
-    } catch (...) {
-        ex = std::current_exception();
-    }
-
-    // FIXME: simplify by not catching exceptions above
-    if (ex) {
-        co_return coroutine::exception(std::move(ex));
-    }
 
     co_return table_names;
 }
