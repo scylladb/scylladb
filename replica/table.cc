@@ -1357,8 +1357,8 @@ struct snapshot_manager {
 };
 static thread_local std::unordered_map<sstring, lw_shared_ptr<snapshot_manager>> pending_snapshots;
 
-static future<>
-seal_snapshot(sstring jsondir) {
+future<>
+table::seal_snapshot(sstring jsondir) {
     std::ostringstream ss;
     int n = 0;
     ss << "{" << std::endl << "\t\"files\" : [ ";
