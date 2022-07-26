@@ -1442,8 +1442,7 @@ future<std::unordered_set<sstring>> table::take_snapshot(database& db, sstring j
     auto sstable_deletion_guard = co_await get_units(_sstable_deletion_sem, 1);
     std::exception_ptr ex;
 
-    std::vector<sstables::shared_sstable> tables;
-    tables = boost::copy_range<std::vector<sstables::shared_sstable>>(*_sstables->all());
+    auto tables = boost::copy_range<std::vector<sstables::shared_sstable>>(*_sstables->all());
     co_await io_check([&jsondir] { return recursive_touch_directory(jsondir); });
     co_await max_concurrent_for_each(tables, db.get_config().initial_sstable_loading_concurrency(), [&db, &jsondir] (sstables::shared_sstable sstable) {
         return with_semaphore(db.get_sharded_sst_dir_semaphore().local(), 1, [&jsondir, sstable] {
