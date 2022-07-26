@@ -27,7 +27,7 @@ future<> ec2_multi_region_snitch::start() {
     _state = snitch_state::initializing;
 
     return seastar::async([this] {
-        ec2_snitch::load_config().get();
+        ec2_snitch::load_config(true).get();
         if (this_shard_id() == io_cpu_id()) {
             inet_address local_public_address;
 

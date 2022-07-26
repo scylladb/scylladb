@@ -54,6 +54,10 @@ private:
     virtual void set_prefer_local(bool prefer_local) override;
     void parse_property_file();
 
+    virtual bool prefer_local() const noexcept override {
+        return _prefer_local;
+    }
+
 protected:
     /**
      * Loads the contents of the property file into the map
@@ -95,5 +99,7 @@ protected:
 private:
     size_t _prop_file_size;
     snitch_ptr* _backreference = nullptr;
+protected:
+    bool _prefer_local = false;
 };
 } // namespace locator
