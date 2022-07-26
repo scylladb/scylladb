@@ -1642,8 +1642,6 @@ public:
     // that must be guaranteed to be the same for all shards.
     typedef std::function<future<db_clock::time_point>()> timestamp_func;
 
-private:
-    future<> truncate(column_family& cf, timestamp_func, bool with_snapshot, std::optional<sstring> snapshot_name_opt);
 public:
     bool update_column_family(schema_ptr s);
 private:
@@ -1653,9 +1651,12 @@ private:
 
     struct table_truncate_state {
         gate::holder holder;
+        db_clock::time_point low_mark_at;
+        db::replay_position low_mark;
     };
 
     static future<> truncate_table_on_all_shards(sharded<database>& db, const std::vector<foreign_ptr<lw_shared_ptr<table>>>&, timestamp_func, bool with_snapshot, std::optional<sstring> snapshot_name_opt);
+    future<> truncate(column_family& cf, const table_truncate_state&, timestamp_func, bool with_snapshot, std::optional<sstring> snapshot_name_opt);
 public:
     /** Truncates the given column family */
     // If snapshot_name_opt is disengaged, the snapshot name is formatted as "{timestamp}-<table-name>"

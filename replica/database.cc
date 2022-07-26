@@ -2377,6 +2377,14 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, c
 
             st->holder = cf.async_gate().hold();
 
+            // Force mutations coming in to re-acquire higher rp:s
+            // This creates a "soft" ordering, in that we will guarantee that
+            // any sstable written _after_ we issue the flush below will
+            // only have higher rp:s than we will get from the discard_sstable
+            // call.
+            st->low_mark_at = db_clock::now();
+            st->low_mark = cf.set_low_replay_position_mark();
+
             co_return make_foreign(std::move(st));
         });
     });
@@ -2384,23 +2392,17 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, c
     co_await sharded_db.invoke_on_all([&, tsf = std::move(tsf)] (database& db) {
         auto shard = this_shard_id();
         auto& cf = *table_shards[shard];
-        return db.truncate(cf, tsf, with_snapshot, snapshot_name_opt);
+        auto& st = *table_states[shard];
+
+        return db.truncate(cf, st, tsf, with_snapshot, snapshot_name_opt);
     });
 }
 
-future<> database::truncate(column_family& cf, timestamp_func tsf, bool with_snapshot, std::optional<sstring> snapshot_name_opt) {
+future<> database::truncate(column_family& cf, const table_truncate_state& st, timestamp_func tsf, bool with_snapshot, std::optional<sstring> snapshot_name_opt) {
     dblog.trace("Truncating {}.{} on shard: with_snapshot={} auto_snapshot={}", cf.schema()->ks_name(), cf.schema()->cf_name(), with_snapshot, get_config().auto_snapshot());
 
     const auto auto_snapshot = with_snapshot && get_config().auto_snapshot();
     const auto should_flush = auto_snapshot;
-
-    // Force mutations coming in to re-acquire higher rp:s
-    // This creates a "soft" ordering, in that we will guarantee that
-    // any sstable written _after_ we issue the flush below will
-    // only have higher rp:s than we will get from the discard_sstable
-    // call.
-    auto low_mark_at = db_clock::now();
-    auto low_mark = cf.set_low_replay_position_mark();
 
     const auto uuid = cf.schema()->id();
 
@@ -2446,9 +2448,9 @@ future<> database::truncate(column_family& cf, timestamp_func tsf, bool with_sna
     // If truncated_at is earlier than the time low_mark was taken
     // then the replay_position returned by discard_sstables may be
     // smaller than low_mark.
-    assert(!did_flush || rp == db::replay_position() || (truncated_at <= low_mark_at ? rp <= low_mark : low_mark <= rp));
+    assert(!did_flush || rp == db::replay_position() || (truncated_at <= st.low_mark_at ? rp <= st.low_mark : st.low_mark <= rp));
     if (rp == db::replay_position()) {
-        rp = low_mark;
+        rp = st.low_mark;
     }
     co_await coroutine::parallel_for_each(cf.views(), [this, truncated_at, should_flush] (view_ptr v) -> future<> {
         auto& vcf = find_column_family(v);
