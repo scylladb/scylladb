@@ -1369,7 +1369,7 @@ table::seal_snapshot(sstring jsondir, std::vector<snapshot_file_set> file_sets) 
 future<> table::write_schema_as_cql(database& db, sstring dir) const {
     std::ostringstream ss;
 
-        this->schema()->describe(db, ss);
+    this->schema()->describe(db, ss);
 
     auto schema_description = ss.str();
     auto schema_file_name = dir + "/schema.cql";
@@ -1377,10 +1377,9 @@ future<> table::write_schema_as_cql(database& db, sstring dir) const {
     auto out = co_await make_file_output_stream(std::move(f));
     std::exception_ptr ex;
 
-    // FIXME: indentation
     try {
-                co_await out.write(schema_description.c_str(), schema_description.size());
-                   co_await out.flush();
+        co_await out.write(schema_description.c_str(), schema_description.size());
+        co_await out.flush();
     } catch (...) {
         ex = std::current_exception();
     }
