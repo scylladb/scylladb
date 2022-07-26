@@ -43,6 +43,6 @@ and that your NIC is ``eth5``.
      nodetool drain
      sudo systemctl restart scylla-server
 
-#. Wait for the service to become up and running (similarly to how it is done during a :doc:`rolling restart </operating-scylla/procedures/config-change/rolling-restart>`).
+#. Wait for the service to become up and running (similarly to how it is done during a :doc:`rolling restart </operating-scylla/procedures/config-change/rolling-restart>`). It may take a considerable amount of time before the node is in the UN state due to resharding.
 
 #. Continue to the next node.
