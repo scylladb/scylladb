@@ -855,6 +855,8 @@ private:
 
     future<snapshot_file_set> take_snapshot(database& db, sstring jsondir);
     future<> snapshot(database& db, sstring name);
+    // Writes the table schema and the manifest of all files in the snapshot directory.
+    future<> finalize_snapshot(database& db, sstring jsondir);
 
 public:
     static future<> snapshot_on_all_shards(sharded<database>& sharded_db, const std::vector<foreign_ptr<lw_shared_ptr<table>>>& table_shards, sstring name);

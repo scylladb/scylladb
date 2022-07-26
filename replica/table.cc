@@ -1506,6 +1506,26 @@ future<> table::snapshot(database& db, sstring name) {
             co_await snapshot->requests.wait(smp::count);
             // this_shard_id() here == requester == this_shard_id() before submit_to() above,
             // so the db reference is still local
+            try {
+                co_await finalize_snapshot(db, jsondir);
+            } catch (...) {
+                ex = std::current_exception();
+            }
+            snapshot->manifest_write.signal(smp::count);
+        }
+        tlogger.debug("snapshot {}: waiting for manifest on behalf of shard {}", jsondir, requester);
+        co_await snapshot->manifest_write.wait(1);
+        tlogger.debug("snapshot {}: done: error={}", jsondir, ex);
+        if (ex) {
+            co_await coroutine::return_exception_ptr(std::move(ex));
+        }
+    });
+}
+
+future<> table::finalize_snapshot(database& db, sstring jsondir) {
+    std::exception_ptr ex;
+
+    // FIXME: indentation
             tlogger.debug("snapshot {}: writing schema.cql", jsondir);
             co_await write_schema_as_cql(db, jsondir).handle_exception([&] (std::exception_ptr ptr) {
                 tlogger.error("Failed writing schema file in snapshot in {} with exception {}", jsondir, ptr);
@@ -1516,15 +1536,10 @@ future<> table::snapshot(database& db, sstring name) {
                 tlogger.error("Failed to seal snapshot in {}: {}.", jsondir, ptr);
                 ex = std::move(ptr);
             });
-            snapshot->manifest_write.signal(smp::count);
-        }
-        tlogger.debug("snapshot {}: waiting for manifest on behalf of shard {}", jsondir, requester);
-        co_await snapshot->manifest_write.wait(1);
-        tlogger.debug("snapshot {}: done: error={}", jsondir, ex);
-        if (ex) {
-            co_await coroutine::return_exception_ptr(std::move(ex));
-        }
-    });
+
+    if (ex) {
+        co_await coroutine::return_exception_ptr(std::move(ex));
+    }
 }
 
 future<bool> table::snapshot_exists(sstring tag) {
