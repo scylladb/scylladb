@@ -476,8 +476,10 @@ public:
     void register_migration_request(std::function<future<rpc::tuple<std::vector<frozen_mutation>, std::vector<canonical_mutation>>> (
                 const rpc::client_info&, rpc::optional<schema_pull_options>)>&& func);
     future<> unregister_migration_request();
-    future<rpc::tuple<std::vector<frozen_mutation>, rpc::optional<std::vector<canonical_mutation>>>> send_migration_request(msg_addr id,
-            schema_pull_options options);
+    future<rpc::tuple<std::vector<frozen_mutation>, rpc::optional<std::vector<canonical_mutation>>>> send_migration_request(
+            msg_addr id, schema_pull_options options);
+    future<rpc::tuple<std::vector<frozen_mutation>, rpc::optional<std::vector<canonical_mutation>>>> send_migration_request(
+            msg_addr id, schema_pull_options options, abort_source&);
 
     // Wrapper for GET_SCHEMA_VERSION
     void register_get_schema_version(std::function<future<frozen_schema>(unsigned, table_schema_version)>&& func);
