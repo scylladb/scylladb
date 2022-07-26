@@ -1346,24 +1346,23 @@ table::seal_snapshot(sstring jsondir, std::vector<snapshot_file_set> file_sets) 
 
     tlogger.debug("Storing manifest {}", jsonfile);
 
-    // FIXME: indentation
     co_await io_check([jsondir] { return recursive_touch_directory(jsondir); });
     auto f = co_await open_checked_file_dma(general_disk_error_handler, jsonfile, open_flags::wo | open_flags::create | open_flags::truncate);
     auto out = co_await make_file_output_stream(std::move(f));
     std::exception_ptr ex;
     try {
-                    co_await out.write(json.c_str(), json.size());
-                       co_await out.flush();
+        co_await out.write(json.c_str(), json.size());
+        co_await out.flush();
     } catch (...) {
         ex = std::current_exception();
     }
-                       co_await out.close();
+    co_await out.close();
 
     if (ex) {
         co_await coroutine::return_exception_ptr(std::move(ex));
     }
 
-        co_await io_check(sync_directory, std::move(jsondir));
+    co_await io_check(sync_directory, std::move(jsondir));
 }
 
 future<> table::write_schema_as_cql(database& db, sstring dir) const {
