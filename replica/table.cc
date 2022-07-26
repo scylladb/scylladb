@@ -1423,15 +1423,20 @@ future<> table::snapshot_on_all_shards(sharded<database>& sharded_db, const std:
     auto orchestrator = std::hash<sstring>()(jsondir) % smp::count;
 
     co_await smp::submit_to(orchestrator, [&] () -> future<> {
-        auto s = table_shards[this_shard_id()]->schema();
+        auto& t = *table_shards[this_shard_id()];
+        auto s = t.schema();
         tlogger.debug("Taking snapshot of {}.{}: directory={}", s->ks_name(), s->cf_name(), jsondir);
 
-        // FIXME: refactor per-shard snapshot and
-        // run the centralized code here
+        std::vector<table::snapshot_file_set> file_sets;
+        file_sets.reserve(smp::count);
 
-        co_await sharded_db.invoke_on_all([&] (replica::database& db) {
-            return table_shards[this_shard_id()]->snapshot(db, name);
+        co_await coroutine::parallel_for_each(boost::irange(0u, smp::count), [&] (unsigned shard) -> future<> {
+            file_sets.emplace_back(co_await smp::submit_to(shard, [&] {
+                return table_shards[this_shard_id()]->take_snapshot(sharded_db.local(), jsondir);
+            }));
         });
+
+        co_await t.finalize_snapshot(sharded_db.local(), std::move(jsondir), std::move(file_sets));
     });
 }
 
@@ -1464,7 +1469,8 @@ future<table::snapshot_file_set> table::take_snapshot(database& db, sstring json
     co_return make_foreign(std::move(table_names));
 }
 
-future<> table::snapshot(database& db, sstring name) {
+// FIXME: delete function
+future<> table::_unused_snapshot(database& db, sstring name) {
     auto jsondir = _config.datadir + "/snapshots/" + name;
     tlogger.trace("snapshot {}", jsondir);
 
