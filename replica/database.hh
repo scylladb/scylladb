@@ -850,6 +850,7 @@ public:
     db::replay_position set_low_replay_position_mark();
 
 private:
+    future<std::unordered_set<sstring>> take_snapshot(database& db, sstring jsondir);
     future<> snapshot(database& db, sstring name);
 
 public:
