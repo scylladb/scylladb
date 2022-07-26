@@ -33,7 +33,6 @@
 #include "gms/feature_service.hh"
 
 #include "executor.hh"
-#include "tags_extension.hh"
 #include "rmw_operation.hh"
 
 /**

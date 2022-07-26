@@ -5535,3 +5535,34 @@ SEASTAR_TEST_CASE(test_bind_variable_type_checking) {
         e.prepare("SELECT * FROM tab1 WHERE a = :var AND c = :var ALLOW FILTERING").get();
     });
 }
+
+SEASTAR_TEST_CASE(test_setting_synchronous_updates_property) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("create table base (k int, v int, primary key (k));").get();
+
+        // Check if setting synchronous_updates property works with CREATE
+        // MATERIALIZED VIEW and ALTER MATERIALIZED VIEW statements.
+        e.execute_cql("create materialized view mv as select * from base "
+                       "where k is not null and v is not null primary key (v, k)"
+                       "with synchronous_updates = true").get();
+        e.execute_cql("alter materialized view mv with synchronous_updates = true").get();
+        e.execute_cql("alter materialized view mv with synchronous_updates = false").get();
+
+        // Check if index can be altered
+        e.execute_cql("create index on base (v)").get();
+        e.execute_cql("alter materialized view base_v_idx_index with synchronous_updates = true").get();
+
+        // Setting synchronous_updates in CREATE TABLE or ALTER TABLE is
+        // invalid
+        BOOST_REQUIRE_THROW(
+            e.execute_cql(
+                "create table t (k int, v int, primary key (k)) with synchronous_updates = true"
+            ).get(),
+            exceptions::invalid_request_exception
+        );
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("alter table base with synchronous_updates = true").get(),
+            exceptions::invalid_request_exception
+        );
+    });
+}
