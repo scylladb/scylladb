@@ -1525,17 +1525,16 @@ future<> table::snapshot(database& db, sstring name) {
 future<> table::finalize_snapshot(database& db, sstring jsondir) {
     std::exception_ptr ex;
 
-    // FIXME: indentation
-            tlogger.debug("snapshot {}: writing schema.cql", jsondir);
-            co_await write_schema_as_cql(db, jsondir).handle_exception([&] (std::exception_ptr ptr) {
-                tlogger.error("Failed writing schema file in snapshot in {} with exception {}", jsondir, ptr);
-                ex = std::move(ptr);
-            });
-            tlogger.debug("snapshot {}: seal_snapshot", jsondir);
-            co_await seal_snapshot(jsondir).handle_exception([&] (std::exception_ptr ptr) {
-                tlogger.error("Failed to seal snapshot in {}: {}.", jsondir, ptr);
-                ex = std::move(ptr);
-            });
+    tlogger.debug("snapshot {}: writing schema.cql", jsondir);
+    co_await write_schema_as_cql(db, jsondir).handle_exception([&] (std::exception_ptr ptr) {
+        tlogger.error("Failed writing schema file in snapshot in {} with exception {}", jsondir, ptr);
+        ex = std::move(ptr);
+    });
+    tlogger.debug("snapshot {}: seal_snapshot", jsondir);
+    co_await seal_snapshot(jsondir).handle_exception([&] (std::exception_ptr ptr) {
+        tlogger.error("Failed to seal snapshot in {}: {}.", jsondir, ptr);
+        ex = std::move(ptr);
+    });
 
     if (ex) {
         co_await coroutine::return_exception_ptr(std::move(ex));
