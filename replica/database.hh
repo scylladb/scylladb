@@ -70,6 +70,7 @@
 #include "db/per_partition_rate_limit_info.hh"
 #include "db/operation_type.hh"
 #include "utils/serialized_action.hh"
+#include "compaction/compaction_manager.hh"
 
 class cell_locker;
 class cell_locker_stats;
@@ -98,8 +99,6 @@ class sstables_manager;
 class compaction_data;
 
 }
-
-class compaction_manager;
 
 namespace compaction {
 class table_state;
@@ -1653,6 +1652,7 @@ private:
         gate::holder holder;
         db_clock::time_point low_mark_at;
         db::replay_position low_mark;
+        std::vector<compaction_manager::compaction_reenabler> cres;
     };
 
     static future<> truncate_table_on_all_shards(sharded<database>& db, const std::vector<foreign_ptr<lw_shared_ptr<table>>>&, timestamp_func, bool with_snapshot, std::optional<sstring> snapshot_name_opt);

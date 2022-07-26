@@ -2385,6 +2385,15 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, c
             st->low_mark_at = db_clock::now();
             st->low_mark = cf.set_low_replay_position_mark();
 
+            st->cres.reserve(1 + cf.views().size());
+            auto& db = sharded_db.local();
+            auto& cm = db.get_compaction_manager();
+            st->cres.emplace_back(co_await cm.stop_and_disable_compaction(cf.as_table_state()));
+            co_await coroutine::parallel_for_each(cf.views(), [&] (view_ptr v) -> future<> {
+                auto& vcf = db.find_column_family(v);
+                st->cres.emplace_back(co_await cm.stop_and_disable_compaction(vcf.as_table_state()));
+            });
+
             co_return make_foreign(std::move(st));
         });
     });
@@ -2405,15 +2414,6 @@ future<> database::truncate(column_family& cf, const table_truncate_state& st, t
     const auto should_flush = auto_snapshot;
 
     const auto uuid = cf.schema()->id();
-
-    std::vector<compaction_manager::compaction_reenabler> cres;
-    cres.reserve(1 + cf.views().size());
-
-    cres.emplace_back(co_await _compaction_manager.stop_and_disable_compaction(cf.as_table_state()));
-    co_await coroutine::parallel_for_each(cf.views(), [&, this] (view_ptr v) -> future<> {
-        auto& vcf = find_column_family(v);
-        cres.emplace_back(co_await _compaction_manager.stop_and_disable_compaction(vcf.as_table_state()));
-    });
 
     bool did_flush = false;
     if (should_flush && cf.can_flush()) {
