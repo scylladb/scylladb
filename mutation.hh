@@ -267,6 +267,12 @@ std::optional<stop_iteration> consume_clustering_fragments(schema_ptr s, mutatio
     position_in_partition::tri_compare cmp(*s);
 
     while (!stop && (crs_it != crs_end || rts_it != rts_end)) {
+        // Dummy rows are part of the in-memory representation but should be
+        // invisible to reads.
+        if (crs_it != crs_end && crs_it->dummy()) {
+            ++crs_it;
+            continue;
+        }
         bool emit_rt;
         if (crs_it != crs_end && rts_it != rts_end) {
             const auto cmp_res = cmp(rts_it->position(), crs_it->position());
@@ -283,12 +289,8 @@ std::optional<stop_iteration> consume_clustering_fragments(schema_ptr s, mutatio
             cookie.iterators->rt_gen.consume(std::move(rts_it->tombstone()));
             ++rts_it;
         } else {
-            // Dummy rows are part of the in-memory representation but should be
-            // invisible to reads.
-            if (!crs_it->dummy()) {
-                flush_tombstones(crs_it->position());
-                stop = consumer.consume(clustering_row(std::move(*crs_it)));
-            }
+            flush_tombstones(crs_it->position());
+            stop = consumer.consume(clustering_row(std::move(*crs_it)));
             ++crs_it;
         }
         if (preempt && need_preempt()) {
