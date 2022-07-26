@@ -850,7 +850,6 @@ public:
     db::replay_position set_low_replay_position_mark();
 
 private:
-    friend struct snapshot_manager;
     using snapshot_file_set = foreign_ptr<std::unique_ptr<std::unordered_set<sstring>>>;
 
     future<snapshot_file_set> take_snapshot(database& db, sstring jsondir);

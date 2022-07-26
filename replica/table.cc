@@ -1326,37 +1326,6 @@ logalloc::occupancy_stats table::occupancy() const {
 }
 
 
-// Snapshots: snapshotting the files themselves is easy: if more than one CF
-// happens to link an SSTable twice, all but one will fail, and we will end up
-// with one copy.
-//
-// The problem for us, is that the snapshot procedure is supposed to leave a
-// manifest file inside its directory.  So if we just call snapshot() from
-// multiple shards, only the last one will succeed, writing its own SSTables to
-// the manifest leaving all other shards' SSTables unaccounted for.
-//
-// Moreover, for things like drop table, the operation should only proceed when the
-// snapshot is complete. That includes the manifest file being correctly written,
-// and for this reason we need to wait for all shards to finish their snapshotting
-// before we can move on.
-//
-// To know which files we must account for in the manifest, we will keep an
-// SSTable set.  Theoretically, we could just rescan the snapshot directory and
-// see what's in there. But we would need to wait for all shards to finish
-// before we can do that anyway. That is the hard part, and once that is done
-// keeping the files set is not really a big deal.
-//
-// This code assumes that all shards will be snapshotting at the same time. So
-// far this is a safe assumption, but if we ever want to take snapshots from a
-// group of shards only, this code will have to be updated to account for that.
-struct snapshot_manager {
-    std::vector<table::snapshot_file_set> file_sets;
-    named_semaphore requests = {0, named_semaphore_exception_factory{"snapshot manager requests"}};
-    named_semaphore manifest_write = {0, named_semaphore_exception_factory{"snapshot manager manifest write"}};
-    snapshot_manager() {}
-};
-static thread_local std::unordered_map<sstring, lw_shared_ptr<snapshot_manager>> pending_snapshots;
-
 future<>
 table::seal_snapshot(sstring jsondir, std::vector<snapshot_file_set> file_sets) {
     std::ostringstream ss;
