@@ -1494,7 +1494,7 @@ SEASTAR_TEST_CASE(compaction_with_fully_expired_table) {
 
         auto ret = compact_sstables(cf.get_compaction_manager(), sstables::compaction_descriptor(ssts, default_priority_class()), *cf, sst_gen).get0();
         BOOST_REQUIRE(ret.new_sstables.empty());
-        BOOST_REQUIRE(ret.end_size == 0);
+        BOOST_REQUIRE(ret.stats.end_size == 0);
     });
 }
 

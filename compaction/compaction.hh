@@ -85,12 +85,29 @@ struct compaction_data {
     }
 };
 
-struct compaction_result {
-    std::vector<sstables::shared_sstable> new_sstables;
+struct compaction_stats {
     std::chrono::time_point<db_clock> ended_at;
     uint64_t start_size = 0;
     uint64_t end_size = 0;
     uint64_t validation_errors = 0;
+
+    compaction_stats& operator+=(const compaction_stats& r) {
+        ended_at = std::max(ended_at, r.ended_at);
+        start_size += r.start_size;
+        end_size += r.end_size;
+        validation_errors += r.validation_errors;
+        return *this;
+    }
+    friend compaction_stats operator+(const compaction_stats& l, const compaction_stats& r) {
+        auto tmp = l;
+        tmp += r;
+        return tmp;
+    }
+};
+
+struct compaction_result {
+    std::vector<sstables::shared_sstable> new_sstables;
+    compaction_stats stats;
 };
 
 // Compact a list of N sstables into M sstables.

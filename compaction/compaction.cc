@@ -731,9 +731,11 @@ protected:
     virtual compaction_result finish(std::chrono::time_point<db_clock> started_at, std::chrono::time_point<db_clock> ended_at) {
         compaction_result ret {
             .new_sstables = std::move(_all_new_sstables),
-            .ended_at = ended_at,
-            .start_size = _start_size,
-            .end_size = _end_size,
+            .stats {
+                .ended_at = ended_at,
+                .start_size = _start_size,
+                .end_size = _end_size,
+            },
         };
 
         auto ratio = double(_end_size) / double(_start_size);
@@ -1479,7 +1481,7 @@ public:
 
     compaction_result finish(std::chrono::time_point<db_clock> started_at, std::chrono::time_point<db_clock> ended_at) override {
         auto ret = compaction::finish(started_at, ended_at);
-        ret.validation_errors = _validation_errors;
+        ret.stats.validation_errors = _validation_errors;
         return ret;
     }
 
@@ -1726,8 +1728,10 @@ static future<compaction_result> scrub_sstables_validate_mode(sstables::compacti
 
     co_return compaction_result {
         .new_sstables = {},
-        .ended_at = db_clock::now(),
-        .validation_errors = validation_errors,
+        .stats = {
+            .ended_at = db_clock::now(),
+            .validation_errors = validation_errors,
+        },
     };
 }
 

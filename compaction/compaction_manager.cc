@@ -343,10 +343,10 @@ future<sstables::compaction_result> compaction_manager::task::compact_sstables(s
     co_return co_await sstables::compact_sstables(std::move(descriptor), cdata, t);
 }
 future<> compaction_manager::task::update_history(compaction::table_state& t, const sstables::compaction_result& res, const sstables::compaction_data& cdata) {
-    auto ended_at = std::chrono::duration_cast<std::chrono::milliseconds>(res.ended_at.time_since_epoch());
+    auto ended_at = std::chrono::duration_cast<std::chrono::milliseconds>(res.stats.ended_at.time_since_epoch());
 
     co_return co_await t.update_compaction_history(cdata.compaction_uuid, t.schema()->ks_name(), t.schema()->cf_name(), ended_at,
-                                                                    res.start_size, res.end_size);
+                                                                    res.stats.start_size, res.stats.end_size);
 }
 
 class compaction_manager::major_compaction_task : public compaction_manager::task {
@@ -1192,7 +1192,7 @@ protected:
         while (!_sstables.empty() && can_proceed()) {
             auto sst = consume_sstable();
             auto res = co_await rewrite_sstable(std::move(sst));
-            _cm._validation_errors += res.validation_errors;
+            _cm._validation_errors += res.stats.validation_errors;
         }
     }
 
@@ -1281,7 +1281,7 @@ protected:
         while (!_sstables.empty() && can_proceed()) {
             auto sst = consume_sstable();
             auto res = co_await validate_sstable(std::move(sst));
-            _cm._validation_errors += res.validation_errors;
+            _cm._validation_errors += res.stats.validation_errors;
         }
     }
 
