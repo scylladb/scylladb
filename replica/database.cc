@@ -2424,32 +2424,40 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, c
         st.did_flush = should_flush;
     });
 
-    co_await sharded_db.invoke_on_all([&, tsf = std::move(tsf)] (database& db) {
+    // FIXME: up until now, we needed to call tsf on all shards since it
+    // may use utils::joinpoint to synchronize truncation on all shards;
+    // This is not needed any more.
+    db_clock::time_point truncated_at;
+    auto coordinator = this_shard_id();
+    co_await smp::invoke_on_all([&] () -> future<> {
+        auto local_truncated_at = co_await tsf();
+        if (this_shard_id() == coordinator) {
+            truncated_at = local_truncated_at;
+        }
+    });
+
+    if (should_snapshot) {
+        auto name = snapshot_name_opt.value_or(
+            format("{:d}-{}", truncated_at.time_since_epoch().count(), cf.schema()->cf_name()));
+        co_await table::snapshot_on_all_shards(sharded_db, table_shards, name);
+    }
+
+    co_await sharded_db.invoke_on_all([&] (database& db) {
         auto shard = this_shard_id();
         auto& cf = *table_shards[shard];
         auto& st = *table_states[shard];
 
-        return db.truncate(cf, st, tsf, with_snapshot, snapshot_name_opt);
+        return db.truncate(cf, st, truncated_at);
     });
 }
 
-future<> database::truncate(column_family& cf, const table_truncate_state& st, timestamp_func tsf, bool with_snapshot, std::optional<sstring> snapshot_name_opt) {
-    dblog.trace("Truncating {}.{} on shard: with_snapshot={} auto_snapshot={}", cf.schema()->ks_name(), cf.schema()->cf_name(), with_snapshot, get_config().auto_snapshot());
+future<> database::truncate(column_family& cf, const table_truncate_state& st, db_clock::time_point truncated_at) {
+    dblog.trace("Truncating {}.{} on shard", cf.schema()->ks_name(), cf.schema()->cf_name());
 
     const auto uuid = cf.schema()->id();
 
-    const auto auto_snapshot = with_snapshot && get_config().auto_snapshot();
-
     dblog.debug("Discarding sstable data for truncated CF + indexes");
     // TODO: notify truncation
-
-    db_clock::time_point truncated_at = co_await tsf();
-
-    if (auto_snapshot) {
-        auto name = snapshot_name_opt.value_or(
-            format("{:d}-{}", truncated_at.time_since_epoch().count(), cf.schema()->cf_name()));
-        co_await cf.snapshot(*this, name);
-    }
 
     db::replay_position rp = co_await cf.discard_sstables(truncated_at);
     // TODO: indexes.

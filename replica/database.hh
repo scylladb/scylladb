@@ -852,7 +852,6 @@ public:
 private:
     future<> snapshot(database& db, sstring name);
 
-    friend class database;
 public:
     static future<> snapshot_on_all_shards(sharded<database>& sharded_db, const std::vector<foreign_ptr<lw_shared_ptr<table>>>& table_shards, sstring name);
 
@@ -1657,7 +1656,7 @@ private:
     };
 
     static future<> truncate_table_on_all_shards(sharded<database>& db, const std::vector<foreign_ptr<lw_shared_ptr<table>>>&, timestamp_func, bool with_snapshot, std::optional<sstring> snapshot_name_opt);
-    future<> truncate(column_family& cf, const table_truncate_state&, timestamp_func, bool with_snapshot, std::optional<sstring> snapshot_name_opt);
+    future<> truncate(column_family& cf, const table_truncate_state&, db_clock::time_point truncated_at);
 public:
     /** Truncates the given column family */
     // If snapshot_name_opt is disengaged, the snapshot name is formatted as "{timestamp}-<table-name>"
