@@ -28,6 +28,52 @@
 
 #include "idl/group0.dist.hh"
 
+// Used to implement 'wait for any task to finish'.
+//
+// Pass a copy of this object to each task in a set of tasks.
+// Once a task finishes, it should call `set_value` or `set_exception`.
+//
+// Call `get()` to wait for the result of the first task that finishes.
+// Note that the results of all other tasks will be lost.
+//
+// There can be at most one `get()` call.
+//
+// Make sure that there is at least one task that reaches `set_value` or `set_exception`;
+// otherwise `get()` would hang indefinitely.
+template <typename T>
+requires std::is_nothrow_move_constructible_v<T>
+class tracker {
+    struct shared {
+        bool is_set{false};
+        promise<T> p{};
+    };
+
+    lw_shared_ptr<shared> _shared{make_lw_shared<shared>()};
+
+public:
+    bool finished() {
+        return _shared->is_set;
+    }
+
+    void set_value(T&& v) {
+        if (!_shared->is_set) {
+            _shared->p.set_value(std::move(v));
+            _shared->is_set = true;
+        }
+    }
+
+    void set_exception(std::exception_ptr ep) {
+        if (!_shared->is_set) {
+            _shared->p.set_exception(std::move(ep));
+            _shared->is_set = true;
+        }
+    }
+
+    future<T> get() {
+        return _shared->p.get_future();
+    }
+};
+
 namespace service {
 
 static logging::logger group0_log("raft_group0");
@@ -157,24 +203,6 @@ future<group0_info> persistent_discovery::run(
         gate::holder pause_shutdown,
         abort_source& as,
         raft::server_address my_addr) {
-    struct tracker {
-        bool is_set = false;
-        promise<std::optional<group0_info>> g0_info;
-
-        void set_value(std::optional<group0_info> opt_g0_info) {
-            if (!is_set) {
-                is_set = true;
-                g0_info.set_value(std::move(opt_g0_info));
-            }
-        }
-        void set_exception() {
-            if (!is_set) {
-                is_set = true;
-                g0_info.set_exception(std::current_exception());
-            }
-        }
-    };
-
     // Send peer information to all known peers. If replies
     // discover new peers, send peer information to them as well.
     // As soon as we get a Raft Group 0 member information from
@@ -203,9 +231,9 @@ future<group0_info> persistent_discovery::run(
             continue;
         }
 
-        auto tracker = make_lw_shared<struct tracker>();
+        ::tracker<std::optional<group0_info>> tracker;
         (void)[] (persistent_discovery& self, netw::messaging_service& ms, gate::holder pause_shutdown,
-                  discovery::request_list request_list, lw_shared_ptr<struct tracker> tracker) -> future<> {
+                  discovery::request_list request_list, ::tracker<std::optional<group0_info>> tracker) -> future<> {
             auto timeout = db::timeout_clock::now() + std::chrono::milliseconds{1000};
             co_await parallel_for_each(request_list, [&] (std::pair<raft::server_address, discovery::peer_list>& req) -> future<> {
                 netw::msg_addr peer(raft_addr_to_inet_addr(req.first));
@@ -213,31 +241,31 @@ future<group0_info> persistent_discovery::run(
                 try {
                     auto reply = co_await ser::group0_rpc_verbs::send_group0_peer_exchange(&ms, peer, timeout, std::move(req.second));
 
-                    if (tracker->is_set) {
+                    if (tracker.finished()) {
                         // Another peer was used to discover group 0 before us.
                         co_return;
                     }
 
                     if (auto peer_list = std::get_if<discovery::peer_list>(&reply.info)) {
-                        // `tracker->is_set` is false so `run_discovery` hasn't exited yet, still safe to access `self`.
+                        // `tracker.finished()` is false so `run_discovery` hasn't exited yet, still safe to access `self`.
                         self.response(req.first, std::move(*peer_list));
                     } else if (auto g0_info = std::get_if<group0_info>(&reply.info)) {
-                        tracker->set_value(std::move(*g0_info));
+                        tracker.set_value(std::move(*g0_info));
                     }
                 } catch (std::exception& e) {
                     if (dynamic_cast<std::runtime_error*>(&e)) {
                         group0_log.trace("failed to send message: {}", e);
                     } else {
-                        tracker->set_exception();
+                        tracker.set_exception(std::current_exception());
                     }
                 }
             });
 
             // In case we haven't discovered group 0 yet - need to run another iteration.
-            tracker->set_value(std::nullopt);
+            tracker.set_value(std::nullopt);
         }(std::ref(*this), ms, pause_shutdown, std::move(std::get<discovery::request_list>(output)), tracker);
 
-        if (auto g0_info = co_await tracker->g0_info.get_future()) {
+        if (auto g0_info = co_await tracker.get()) {
             co_return *g0_info;
         }
     }
