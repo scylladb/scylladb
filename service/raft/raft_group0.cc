@@ -30,6 +30,9 @@
 
 namespace service {
 
+static logging::logger group0_log("raft_group0");
+static logging::logger upgrade_log("raft_group0_upgrade");
+
 raft_group0::raft_group0(seastar::abort_source& abort_source,
         raft_group_registry& raft_gr,
         netw::messaging_service& ms,
@@ -70,7 +73,7 @@ future<> raft_group0::uninit_rpc_verbs() {
     auto state = co_await ser::group0_rpc_verbs::send_get_group0_upgrade_state(&ms, netw::msg_addr(addr), as);
     auto state_int = static_cast<int8_t>(state);
     if (state_int > 3) {
-        on_internal_error(rslog, format(
+        on_internal_error(upgrade_log, format(
             "send_get_group0_upgrade_state: unknown value for `group0_upgrade_state` received from node {}: {}",
             addr, state_int));
     }
@@ -82,7 +85,7 @@ future<raft::server_address> raft_group0::load_my_addr() {
 
     auto id = raft::server_id{co_await db::system_keyspace::get_raft_server_id()};
     if (!id) {
-        on_internal_error(rslog, "raft_group0::load_my_addr(): server ID for group 0 missing");
+        on_internal_error(group0_log, "load_my_addr(): server ID for group 0 missing");
     }
 
     co_return raft::server_address{id, inet_addr_to_raft_addr(_gossiper.get_broadcast_address())};
@@ -107,10 +110,10 @@ raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, 
                 // See #6403.
                 auto fd_id = _gossiper.get_direct_fd_pinger().allocate_id(addr);
                 if (added) {
-                    rslog.info("Added {} (address: {}) to group 0 RPC map", raft_id, addr);
+                    group0_log.info("Added {} (address: {}) to group 0 RPC map", raft_id, addr);
                     _raft_gr.direct_fd().add_endpoint(fd_id);
                 } else {
-                    rslog.info("Removed {} (address: {}) from group 0 RPC map", raft_id, addr);
+                    group0_log.info("Removed {} (address: {}) from group 0 RPC map", raft_id, addr);
                     _raft_gr.direct_fd().remove_endpoint(fd_id);
                 }
             });
@@ -195,7 +198,7 @@ future<group0_info> persistent_discovery::run(
         }
 
         if (std::holds_alternative<discovery::pause>(output)) {
-            rslog.trace("server {} pausing discovery...", my_addr.id);
+            group0_log.trace("server {} pausing discovery...", my_addr.id);
             co_await seastar::sleep_abortable(std::chrono::milliseconds{1000}, as);
             continue;
         }
@@ -206,7 +209,7 @@ future<group0_info> persistent_discovery::run(
             auto timeout = db::timeout_clock::now() + std::chrono::milliseconds{1000};
             co_await parallel_for_each(request_list, [&] (std::pair<raft::server_address, discovery::peer_list>& req) -> future<> {
                 netw::msg_addr peer(raft_addr_to_inet_addr(req.first));
-                rslog.trace("sending discovery message to {}", peer);
+                group0_log.trace("sending discovery message to {}", peer);
                 try {
                     auto reply = co_await ser::group0_rpc_verbs::send_group0_peer_exchange(&ms, peer, timeout, std::move(req.second));
 
@@ -223,7 +226,7 @@ future<group0_info> persistent_discovery::run(
                     }
                 } catch (std::exception& e) {
                     if (dynamic_cast<std::runtime_error*>(&e)) {
-                        rslog.trace("failed to send message: {}", e);
+                        group0_log.trace("failed to send message: {}", e);
                     } else {
                         tracker->set_exception();
                     }
@@ -250,7 +253,7 @@ future<> raft_group0::start_server_for_group0(raft::group_id group0_id) {
 
     auto my_addr = co_await load_my_addr();
 
-    rslog.info("Server {} is starting group 0 with id {}", my_addr.id, group0_id);
+    group0_log.info("Server {} is starting group 0 with id {}", my_addr.id, group0_id);
     co_await _raft_gr.start_server_for_group(create_server_for_group0(group0_id, my_addr));
     _group0.emplace<raft::group_id>(group0_id);
 }
@@ -267,15 +270,15 @@ future<> raft_group0::join_group0(std::vector<raft::server_info> seeds, bool as_
 
     raft::server* server = nullptr;
     auto my_addr = co_await load_or_create_my_addr();
-    rslog.info("{} found no local group 0. Discovering...", my_addr.id);
+    group0_log.info("{} found no local group 0. Discovering...", my_addr.id);
     while (true) {
         auto g0_info = co_await discover_group0(my_addr, seeds);
-        rslog.info("server {} found group 0 with id {}, leader {}", my_addr.id, g0_info.group0_id, g0_info.addr.id);
+        group0_log.info("server {} found group 0 with id {}, leader {}", my_addr.id, g0_info.group0_id, g0_info.addr.id);
 
         if (server && group0_id != g0_info.group0_id) {
             // `server` is not `nullptr` so we finished discovery in an earlier iteration and found a group 0 ID.
             // But in this iteration it's different. That shouldn't be possible.
-            on_internal_error(rslog, format(
+            on_internal_error(group0_log, format(
                 "The Raft discovery algorithm returned two different group IDs on subsequent runs: {} and {}."
                 " Cannot proceed due to possible inconsistency problems."
                 " If you're bootstrapping a fresh cluster, make sure that every node uses the same seeds configuration, then retry."
@@ -291,7 +294,7 @@ future<> raft_group0::join_group0(std::vector<raft::server_info> seeds, bool as_
             if (g0_info.addr.id == my_addr.id) {
                 // We were chosen as the discovery leader.
                 // We should start a new group with this node as voter.
-                rslog.info("Server {} chosen as discovery leader; bootstrapping group 0 from scratch", my_addr.id);
+                group0_log.info("Server {} chosen as discovery leader; bootstrapping group 0 from scratch", my_addr.id);
                 initial_configuration.current.emplace(my_addr, true);
             }
             auto grp = create_server_for_group0(group0_id, my_addr);
@@ -308,7 +311,7 @@ future<> raft_group0::join_group0(std::vector<raft::server_info> seeds, bool as_
         assert(server);
         if (server->get_configuration().contains(my_addr.id)) {
             // True if we started a new group or completed a configuration change initiated earlier.
-            rslog.info("server {} already in group 0 (id {}) as {}", group0_id, my_addr.id,
+            group0_log.info("server {} already in group 0 (id {}) as {}", group0_id, my_addr.id,
                     server->get_configuration().can_vote(my_addr.id)? "voter" : "non-voter");
             break;
         }
@@ -321,7 +324,7 @@ future<> raft_group0::join_group0(std::vector<raft::server_info> seeds, bool as_
             break;
         } catch (std::runtime_error& e) {
             // Retry
-            rslog.error("failed to modify config at peer {}: {}", g0_info.addr.id, e);
+            group0_log.error("failed to modify config at peer {}: {}", g0_info.addr.id, e);
         }
 
         // Try again after a pause
@@ -331,14 +334,14 @@ future<> raft_group0::join_group0(std::vector<raft::server_info> seeds, bool as_
     // Allow peer_exchange() RPC to access group 0 only after group0_id is persisted.
 
     _group0 = group0_id;
-    rslog.info("{} joined group 0 with id {}", my_addr.id, group0_id);
+    group0_log.info("{} joined group 0 with id {}", my_addr.id, group0_id);
 }
 
 future<> raft_group0::setup_group0(db::system_keyspace& sys_ks, const std::unordered_set<gms::inet_address>& initial_contact_nodes) {
     assert(this_shard_id() == 0);
 
     if (!_raft_gr.is_enabled()) {
-        rslog.info("raft_group0::setup_group0(): local RAFT feature disabled, skipping group 0 setup.");
+        group0_log.info("setup_group0: local RAFT feature disabled, skipping group 0 setup.");
         // Note: if the local feature was enabled by every node earlier, that would enable the cluster
         // SUPPORTS_RAFT feature, and the node should then refuse to start during feature check
         // (because if the local feature is disabled, then the cluster feature - enabled in the cluster - is 'unknown' to us).
@@ -349,7 +352,7 @@ future<> raft_group0::setup_group0(db::system_keyspace& sys_ks, const std::unord
         auto group0_id = raft::group_id{co_await db::system_keyspace::get_raft_group0_id()};
         if (group0_id) {
             // Group 0 ID is present => we've already joined group 0 earlier.
-            rslog.info("raft_group0::setup_group0(): group 0 ID present. Starting existing Raft server.");
+            group0_log.info("setup_group0: group 0 ID present. Starting existing Raft server.");
             co_await start_server_for_group0(group0_id);
         } else {
             // Scylla has bootstrapped earlier but group 0 ID not present. This means we're upgrading.
@@ -366,9 +369,9 @@ future<> raft_group0::setup_group0(db::system_keyspace& sys_ks, const std::unord
         }
     }
 
-    rslog.info("raft_group0::setup_group0(): joining group 0...");
+    group0_log.info("setup_group0: joining group 0...");
     co_await join_group0(std::move(initial_contacts_as_raft_addrs), false /* non-voter */);
-    rslog.info("raft_group0::setup_group0(): successfully joined group 0.");
+    group0_log.info("setup_group0: successfully joined group 0.");
 }
 
 future<> raft_group0::become_voter() {
@@ -389,7 +392,7 @@ future<> raft_group0::leave_group0() {
     assert(this_shard_id() == 0);
 
     if (!_raft_gr.is_enabled()) {
-        rslog.info("leave_group0: local RAFT feature disabled, skipping.");
+        group0_log.info("leave_group0: local RAFT feature disabled, skipping.");
         co_return;
     }
 
@@ -400,7 +403,7 @@ future<> raft_group0::leave_group0() {
 
     auto my_id = raft::server_id{co_await db::system_keyspace::get_raft_server_id()};
     if (!my_id) {
-        on_internal_error(rslog,
+        on_internal_error(group0_log,
             "leave_group0: we're fully upgraded to use Raft and group 0 ID is present but Raft server ID is not."
             " Please report a bug.");
     }
@@ -414,7 +417,7 @@ future<> raft_group0::remove_from_group0(gms::inet_address node) {
     assert(this_shard_id() == 0);
 
     if (!_raft_gr.is_enabled()) {
-        rslog.info("remove_from_group0({}): local RAFT feature disabled, skipping.", node);
+        group0_log.info("remove_from_group0({}): local RAFT feature disabled, skipping.", node);
         co_return;
     }
 
@@ -425,7 +428,7 @@ future<> raft_group0::remove_from_group0(gms::inet_address node) {
 
     auto my_id = raft::server_id{co_await db::system_keyspace::get_raft_server_id()};
     if (!my_id) {
-        on_internal_error(rslog, format(
+        on_internal_error(group0_log, format(
             "remove_from_group0({}): we're fully upgraded to use Raft and group 0 ID is present but Raft server ID is not."
             " Please report a bug.", node));
     }
@@ -444,17 +447,17 @@ future<> raft_group0::remove_from_group0(gms::inet_address node) {
         //
         // To handle the second case we perform a read barrier now and check the address again.
         // Ignore the returned guard, we don't need it.
-        rslog.info("remove_from_group0({}): did not find them in group 0 configuration, synchronizing Raft before retrying...", node);
+        group0_log.info("remove_from_group0({}): did not find them in group 0 configuration, synchronizing Raft before retrying...", node);
         (void)co_await _client.start_operation(&_abort_source);
 
         their_id = _raft_gr.address_map().find_replace_id(node, my_id);
         if (!their_id) {
-            rslog.info("remove_from_group0({}): did not find them in group 0 configuration. Skipping.", node);
+            group0_log.info("remove_from_group0({}): did not find them in group 0 configuration. Skipping.", node);
             co_return;
         }
     }
 
-    rslog.info(
+    group0_log.info(
         "remove_from_group0({}): found the node in group 0 configuration, Raft ID: {}. Proceeding with the remove...",
         node, *their_id);
 
@@ -542,7 +545,7 @@ future<persistent_discovery> persistent_discovery::make(raft::server_address sel
 
 future<std::optional<discovery::peer_list>> persistent_discovery::request(peer_list peers) {
     for (auto& p: peers) {
-        rslog.debug("discovery: request peer: id={}, info={}", p.id, p.info);
+        group0_log.debug("discovery: request peer: id={}, info={}", p.id, p.info);
     }
 
     if (_gate.is_closed()) {
@@ -560,7 +563,7 @@ future<std::optional<discovery::peer_list>> persistent_discovery::request(peer_l
 void persistent_discovery::response(raft::server_address from, const peer_list& peers) {
     // The peers discovered here will be persisted on the next `request` or `tick`.
     for (auto& p: peers) {
-        rslog.debug("discovery: response peer: id={}, info={}", p.id, p.info);
+        group0_log.debug("discovery: response peer: id={}, info={}", p.id, p.info);
     }
     _discovery.response(std::move(from), peers);
 }
@@ -583,7 +586,7 @@ persistent_discovery::persistent_discovery(raft::server_address self, const peer
     , _qp{qp}
 {
     for (auto& addr: seeds) {
-        rslog.debug("discovery: seed peer: id={}, info={}", addr.id, addr.info);
+        group0_log.debug("discovery: seed peer: id={}, info={}", addr.id, addr.info);
     }
 }
 
