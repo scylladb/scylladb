@@ -711,7 +711,6 @@ def test_index_map_values(cql, test_keyspace):
 # There is a complication, that this de-duplication does not easily span
 # *paging*. So the purpose of this test is to check that paging does not
 # cause the same row to be returned more than once.
-@pytest.mark.xfail(reason="duplicates in map value index + paging")
 def test_index_map_values_paging(cql, test_keyspace):
     schema = 'pk int, ck int, m map<int,int>, PRIMARY KEY (pk, ck)'
     with new_test_table(cql, test_keyspace, schema) as table:
@@ -731,8 +730,7 @@ def test_index_map_values_paging(cql, test_keyspace):
 # In the previous test (test_index_map_values*) all tests involved a single
 # row, which could match a search, or not. In this test we verify that the
 # case of multiple matching rows also works.
-@pytest.mark.xfail(reason="duplicates in map value index + paging")
-def test_index_map_values_multiple_matching_rows(cql, test_keyspace):
+def test_index_map_values_multiple_matching_rows(cql, test_keyspace, driver_bug_1):
     schema = 'pk int, ck int, m map<int,int>, PRIMARY KEY (pk, ck)'
     with new_test_table(cql, test_keyspace, schema) as table:
         # index m (same as values(m)). Will allow "CONTAINS".
@@ -741,15 +739,47 @@ def test_index_map_values_multiple_matching_rows(cql, test_keyspace):
         # the value 3 in them somewhere, others don't. One of the maps has
         # multiple occurances of the value 3, so we also reproduce here the
         # same bug that test_index_map_values_paging() reproduces.
+        # Note: Scylla needs to skip a duplicate 3 value in (2,4) which
+        # results in an empty page in the result set when page_size=1. We
+        # need the driver to correctly support this, hence the "driver_bug_1".
         cql.execute(f'INSERT INTO {table} (pk, ck, m) VALUES (1, 2, {{1:2, 3:4}})')
         cql.execute(f'INSERT INTO {table} (pk, ck, m) VALUES (1, 3, {{1:3, 3:4}})')
         cql.execute(f'INSERT INTO {table} (pk, ck, m) VALUES (1, 4, {{7:3}})')
         cql.execute(f'INSERT INTO {table} (pk, ck, m) VALUES (2, 2, {{1:3, 2:3, 3:4}})')
         cql.execute(f'INSERT INTO {table} (pk, ck, m) VALUES (2, 4, {{}})')
-        assert [(1,3),(1,4),(2,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 3'))
+        cql.execute(f'INSERT INTO {table} (pk, ck, m) VALUES (2, 5, {{7:3}})')
+        assert [(1,3),(1,4),(2,2),(2,5)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 3'))
         for page_size in [1, 2, 3, 7]:
             stmt = SimpleStatement(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 3', fetch_size=page_size)
-            assert [(1,3),(1,4),(2,2)] == list(cql.execute(stmt))
+            assert [(1,3),(1,4),(2,2),(2,5)] == list(cql.execute(stmt))
+
+# In the previous tests (test_index_map_values*) all tests involved a base
+# table with both partition keys and clustering keys. Because some of the
+# implementation is different depending the schema has clustering keys,
+# let's also write a similar test with just a partition key:
+def test_index_map_values_partition_key_only(cql, test_keyspace, driver_bug_1):
+    schema = 'pk int, m map<int,int>, PRIMARY KEY (pk)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        # index m (same as values(m)). Will allow "CONTAINS".
+        cql.execute(f'CREATE INDEX ON {table}(m)')
+        # Insert several rows with several different maps, some of them have
+        # the value 3 in them somewhere, others don't. One of the maps has
+        # multiple occurances of the value 3, so we also reproduce here the
+        # same bug that test_index_map_values_paging() reproduces (and here
+        # test its intersection with the case of no clustering key).
+        cql.execute(f'INSERT INTO {table} (pk, m) VALUES (1, {{1:2, 3:4}})')
+        cql.execute(f'INSERT INTO {table} (pk, m) VALUES (2, {{1:3, 3:4}})')
+        cql.execute(f'INSERT INTO {table} (pk, m) VALUES (3, {{7:3}})')
+        cql.execute(f'INSERT INTO {table} (pk, m) VALUES (4, {{1:3, 2:3, 3:4}})')
+        cql.execute(f'INSERT INTO {table} (pk, m) VALUES (5, {{}})')
+        assert [(2,), (3,), (4,)] == sorted(cql.execute(f'SELECT pk FROM {table} WHERE m CONTAINS 3'))
+        for page_size in [1, 2, 3, 7]:
+            stmt = SimpleStatement(f'SELECT pk FROM {table} WHERE m CONTAINS 3', fetch_size=page_size)
+            assert [(2,), (3,), (4,)] == sorted(cql.execute(stmt))
+            # I wanted to check here that page_size is actually obeyed,
+            # but we can't - when Scylla skips one of the duplicate values
+            # it can result in a smaller page, and while not great (Cassandra
+            # doesn't do it, all its pages are full size), it's legal.
 
 def test_index_map_keys(cql, test_keyspace):
     schema = 'pk int, ck int, m map<int,int>, PRIMARY KEY (pk, ck)'
@@ -1096,3 +1126,55 @@ def test_secondary_collection_index(cql, test_keyspace):
             for tab in [tab1, tab2]:
                 op(tab, **args)
             test_all_possible_selects()
+
+# Test that paging through a select using a secondary index works as
+# expected, returning pages of the requested size.
+# We have several tests here, for different schemas, that exercises
+# different code paths and may expose different bugs.
+
+def test_index_paging_pk_ck(cql, test_keyspace):
+    schema = 'p int, c int, x int, primary key (p,c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE INDEX ON {table}(x)")
+        insert = cql.prepare(f"INSERT INTO {table}(p,c,x) VALUES (?,?,?)")
+        for i in range(10):
+            cql.execute(insert, [i, i, 3])
+        cql.execute(insert, [17, 17, 2])
+        for page_size in [1, 2, 3, 100]:
+            stmt = SimpleStatement(f"SELECT p FROM {table} WHERE x = 3", fetch_size=page_size)
+            # Check that:
+            # 1. Each page of results has the expected page_size, or less in
+            #    the last page. Although partial pages are theoretically
+            #    allowed (and happen in other tests), in this test we don't
+            #    expect Scylla or Cassandra to generate them.
+            # 2. Check that all the results read over all pages are the
+            #    expected ones (0...9)
+            all_rows = []
+            results = cql.execute(stmt)
+            while len(results.current_rows) == page_size:
+                all_rows.extend(results.current_rows)
+                results = cql.execute(stmt, paging_state=results.paging_state)
+            # After pages of page_size, the last page should be partial
+            assert len(results.current_rows) < page_size
+            all_rows.extend(results.current_rows)
+            # Finally check that altogether, we read the right rows.
+            assert sorted(all_rows) == [(i,) for i in range(10)]
+
+def test_index_paging_pk_only(cql, test_keyspace):
+    schema = 'p int, x int, primary key (p)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE INDEX ON {table}(x)")
+        insert = cql.prepare(f"INSERT INTO {table}(p,x) VALUES (?,?)")
+        for i in range(10):
+            cql.execute(insert, [i, 3])
+        cql.execute(insert, [17, 2])
+        for page_size in [1, 2, 3, 100]:
+            stmt = SimpleStatement(f"SELECT p FROM {table} WHERE x = 3", fetch_size=page_size)
+            all_rows = []
+            results = cql.execute(stmt)
+            while len(results.current_rows) == page_size:
+                all_rows.extend(results.current_rows)
+                results = cql.execute(stmt, paging_state=results.paging_state)
+            assert len(results.current_rows) < page_size
+            all_rows.extend(results.current_rows)
+            assert sorted(all_rows) == [(i,) for i in range(10)]

@@ -1300,6 +1300,12 @@ indexed_table_select_statement::find_index_partition_ranges(query_processor& qp,
         // to avoid outputting the same partition key twice, but luckily in
         // the sorted order, these will be adjacent.
         std::optional<dht::decorated_key> last_dk;
+        if (options.get_paging_state()) {
+            auto paging_state = options.get_paging_state();
+            auto base_pk = generate_base_key_from_index_pk<partition_key>(paging_state->get_partition_key(),
+                paging_state->get_clustering_key(), *_schema, *_view_schema);
+            last_dk = dht::decorate_key(*_schema, base_pk);
+        }
         for (size_t i = 0; i < rs.size(); i++) {
             const auto& row = rs.at(i);
             std::vector<bytes> pk_columns;
@@ -1338,6 +1344,22 @@ indexed_table_select_statement::find_index_clustering_rows(query_processor& qp, 
         primary_keys.reserve(rs.size());
 
         std::optional<std::reference_wrapper<primary_key>> last_primary_key;
+        // Set last_primary_key if indexing map values and not in the first
+        // query page. See comment below why last_primary_key is needed for
+        // indexing map values. We have a test for this with paging:
+        // test_secondary_index.py::test_index_map_values_paging.
+        std::optional<primary_key> page_start_primary_key;
+        if (_index.target_type() == cql3::statements::index_target::target_type::collection_values &&
+            options.get_paging_state()) {
+            auto paging_state = options.get_paging_state();
+            auto base_pk = generate_base_key_from_index_pk<partition_key>(paging_state->get_partition_key(),
+                paging_state->get_clustering_key(), *_schema, *_view_schema);
+            auto base_dk = dht::decorate_key(*_schema, base_pk);
+            auto base_ck = generate_base_key_from_index_pk<clustering_key>(paging_state->get_partition_key(),
+                paging_state->get_clustering_key(), *_schema, *_view_schema);
+            page_start_primary_key = primary_key{std::move(base_dk), std::move(base_ck)};
+            last_primary_key = *page_start_primary_key;
+        }
         for (size_t i = 0; i < rs.size(); i++) {
             const auto& row = rs.at(i);
             auto pk_columns = _schema->partition_key_columns() | boost::adaptors::transformed([&] (auto& cdef) {
