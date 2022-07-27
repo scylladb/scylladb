@@ -11,15 +11,9 @@ To contribute to the documentation, open a GitHub pull request.
 
 ## Key Guidelines for Contributors
 
-- You need to fork this repository.
-- Work on your fork's task branches, not the `master` branch.
-- Send pull requests to the `master` branch in this repository.
-- If you want to submit a knowledge base article, see [Submitting a KB Article](#submitting-a-kb-article).
 - Follow the [ScyllaDB Style Guide](https://docs.google.com/document/d/1lyHp1MKdyj0Hh3NprNFvEczA4dFSZIFoukGUvFJb9yE/edit?usp=sharing).
-
-The user documentation is written in reStructuredText (RST) - a plaintext markup language similar to Markdown. If you're not familiar with RST, see [ScyllaDB RST Examples](https://sphinx-theme.scylladb.com/stable/examples/index.html).
-
-The developer documentation is written in Markdown. See [Basic Markdown Syntax](https://www.markdownguide.org/basic-syntax/) for reference.
+- The user documentation is written in reStructuredText (RST) - a plaintext markup language similar to Markdown. If you're not familiar with RST, see [ScyllaDB RST Examples](https://sphinx-theme.scylladb.com/stable/examples/index.html).
+- The developer documentation is written in Markdown. See [Basic Markdown Syntax](https://www.markdownguide.org/basic-syntax/) for reference.
 
 
 ## Submitting a KB Article
