@@ -1,12 +1,25 @@
-# Scylla documentation
+# ScyllaDB Documentation
 
-This is the repository for [Scylla documentation site](http://docs.scylladb.com/)
+This repository contains the source files for ScyllaDB Open Source documentation.
 
-To report an issue with the documentation, please use GitHub issues.
+- The `dev` folder contains developer-oriented documentation related to the ScyllaDB code base. It is not published and is only available via GitHub.
+- All other folders and files contain user-oriented documentation related to ScyllaDB Open Source and are sources for [docs.scylladb.com](https://docs.scylladb.com/).
 
-This repository accepts GitHub pull requests.
+To report a documentation bug or suggest an improvement, open an issue in [GitHub issues](https://github.com/scylladb/scylla/issues) for this project.
 
-**Send pull requests to the master branch, not gh-pages.  gh-pages will be overwritten by deploy without warning.**
+To contribute to the documentation, open a GitHub pull request.
+
+## Key Guidelines for Contributors
+
+- You need to fork this repository.
+- Work on your fork's task branches, not the `master` branch.
+- Send pull requests to the `master` branch in this repository.
+- Run `make preview` to build the documentation and preview it locally at http://127.0.0.1:5500/.
+- If you want to submit a knowledge base article, see [Submitting a KB Article](#submitting-a-kb-article).
+
+The user documentation is written in reStructuredText (RST) - a plaintext markup language similar to Markdown. If you're not familiar with RST, see [ScyllaDB RST Examples](https://sphinx-theme.scylladb.com/stable/examples/index.html).
+
+The developer documentation is written in Markdown. See [Basic Markdown Syntax](https://www.markdownguide.org/basic-syntax/) for reference.
 
 
 ## Prerequisites
