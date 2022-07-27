@@ -238,8 +238,8 @@ public:
     // at the time the call to run_when_memory_available() was made.
     region_group(sstring name = "(unnamed region_group)",
             region_group_reclaimer& reclaimer = no_reclaimer,
-            scheduling_group deferred_work_sg = default_scheduling_group())
-        : region_group(name, nullptr, reclaimer, deferred_work_sg) {}
+            scheduling_group deferred_work_sg = default_scheduling_group()) noexcept
+        : region_group(std::move(name), nullptr, reclaimer, deferred_work_sg) {}
     region_group(sstring name, region_group* parent, region_group_reclaimer& reclaimer = no_reclaimer,
             scheduling_group deferred_work_sg = default_scheduling_group());
     region_group(region_group&& o) = delete;
