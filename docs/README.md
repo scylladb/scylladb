@@ -16,15 +16,19 @@ To contribute to the documentation, open a GitHub pull request.
 - The developer documentation is written in Markdown. See [Basic Markdown Syntax](https://www.markdownguide.org/basic-syntax/) for reference.
 
 
-## Submitting a KB Article
+## Creating Knowledge Base Articles
 
-If you are submitting a knowledgebase article (KB), use the following guidelines:
-* In the `/kb_common` directory, there is a template for KBs. It is called `kb-article-template.rst`.
-* Make a copy of the KB template in the `/kb` directory and rename it with a unique name.
-* Open the new file and fill in the required information. 
-* Remove what is not needed. 
-* Run `make preview` to build the docs and preview them locally.
-* Send a PR with "KB" in its title. 
+The `kb/` directory holds source files for knowledge base articles in the [Knowledge Base section](https://docs.scylladb.com/stable/kb/index.html) of the ScyllaDB documentation. 
+
+The `kb/kb_common` subdirectory contains a template for knowledge base articles to help you create new articles.
+
+To create a new knowledge base article (KB):
+
+1. Copy the `kb-article-template.rst` file from `/kb/kb_common` to `/kb` and rename it with a unique name.
+1. Open the new file and fill in the required information. 
+1. Remove what is not needed. 
+1. Run `make preview` to build the docs and preview them locally.
+1. Send a PR with "KB" in its title. 
 
 
 ## Building User Documentation
