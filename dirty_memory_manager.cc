@@ -46,11 +46,11 @@ region_evictable_occupancy_ascending_less_comparator::operator()(size_tracked_re
 
 region_group_reclaimer region_group::no_reclaimer;
 
-uint64_t region_group::top_region_evictable_space() const {
+uint64_t region_group::top_region_evictable_space() const noexcept {
     return _regions.empty() ? 0 : _regions.top()->evictable_occupancy().total_space();
 }
 
-dirty_memory_manager_logalloc::size_tracked_region* region_group::get_largest_region() {
+dirty_memory_manager_logalloc::size_tracked_region* region_group::get_largest_region() noexcept {
     if (!_maximal_rg || _maximal_rg->_regions.empty()) {
         return nullptr;
     }
@@ -91,7 +91,7 @@ region_group::moved(region* old_address, region* new_address) {
 
 bool
 region_group::execution_permitted() noexcept {
-    return do_for_each_parent(this, [] (auto rg) {
+    return do_for_each_parent(this, [] (auto rg) noexcept {
         return rg->under_pressure() ? stop_iteration::yes : stop_iteration::no;
     }) == nullptr;
 }

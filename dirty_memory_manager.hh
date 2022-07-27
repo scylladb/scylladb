@@ -256,7 +256,7 @@ public:
     }
     region_group& operator=(const region_group&) = delete;
     region_group& operator=(region_group&&) = delete;
-    size_t memory_used() const {
+    size_t memory_used() const noexcept {
         return _total_memory;
     }
     void update(ssize_t delta);
@@ -325,21 +325,21 @@ public:
     // returns a pointer to the largest region (in terms of memory usage) that sits below this
     // region group. This includes the regions owned by this region group as well as all of its
     // children.
-    size_tracked_region* get_largest_region();
+    size_tracked_region* get_largest_region() noexcept;
 
     // Shutdown is mandatory for every user who has set a threshold
     // Can be called at most once.
-    future<> shutdown() {
+    future<> shutdown() noexcept {
         _shutdown_requested = true;
         _relief.signal();
         return std::move(_releaser);
     }
 
-    size_t blocked_requests() {
+    size_t blocked_requests() const noexcept {
         return _blocked_requests.size();
     }
 
-    uint64_t blocked_requests_counter() const {
+    uint64_t blocked_requests_counter() const noexcept {
         return _blocked_requests_counter;
     }
 private:
@@ -355,7 +355,7 @@ private:
     // This method returns a pointer to the region_group that was processed last, or nullptr if the
     // root was reached.
     template <typename Func>
-    static region_group* do_for_each_parent(region_group *node, Func&& func) {
+    static region_group* do_for_each_parent(region_group *node, Func&& func) noexcept(noexcept(func(node))) {
         auto rg = node;
         while (rg) {
             if (func(rg) == stop_iteration::yes) {
@@ -366,13 +366,13 @@ private:
         return nullptr;
     }
 
-    inline bool under_pressure() const {
+    inline bool under_pressure() const noexcept {
         return _reclaimer.under_pressure();
     }
 
-    uint64_t top_region_evictable_space() const;
+    uint64_t top_region_evictable_space() const noexcept;
 
-    uint64_t maximal_score() const {
+    uint64_t maximal_score() const noexcept {
         return _maximal_score;
     }
 
