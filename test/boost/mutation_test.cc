@@ -2567,6 +2567,49 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_consume_position_monotonicity) {
     }
 }
 
+SEASTAR_TEST_CASE(mutation_with_dummy_clustering_row_is_consumed_monotonically) {
+    return seastar::async([] {
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+        schema_ptr s = schema_builder{"ks", "cf"}
+            .with_column("pk", bytes_type, column_kind::partition_key)
+            .with_column("ck1", bytes_type, column_kind::clustering_key)
+            .build();
+
+        clustering_key ck_e{std::vector<bytes>{}};
+        clustering_key ck_0{{serialized((int32_t)0)}};
+        clustering_key ck_1{{serialized((int32_t)1)}};
+        clustering_key ck_2{{serialized((int32_t)2)}};
+        clustering_key ck_3{{serialized((int32_t)3)}};
+        mutation m{s, dht::decorate_key(*s, partition_key{{"pk"}})};
+        reader_permit p = semaphore.make_permit();
+        api::timestamp_type ts = api::min_timestamp;
+        gc_clock::time_point tp{};
+        m.partition().apply(tombstone{api::min_timestamp + 2, gc_clock::time_point{}});
+        range_tombstone rt1{ck_e, bound_kind::incl_start, ck_1, bound_kind::incl_end, tombstone{ts + 0, tp}};
+        range_tombstone rt2{ck_1, bound_kind::excl_start, ck_e, bound_kind::incl_end, tombstone{ts + 1, tp}};
+        clustering_row cr1{*s, rows_entry{*s, position_in_partition{partition_region::clustered, bound_weight::equal, ck_0}, is_dummy::no, is_continuous::no}};
+        clustering_row cr2{*s, rows_entry{*s, position_in_partition{partition_region::clustered, bound_weight::equal, ck_2}, is_dummy::no, is_continuous::no}};
+        clustering_row cr3{*s, rows_entry{*s, position_in_partition{partition_region::clustered, bound_weight::equal, ck_3}, is_dummy::no, is_continuous::no}};
+        m.apply(mutation_fragment(*s, p, std::move(rt1)));
+        m.apply(mutation_fragment(*s, p, std::move(rt2)));
+        m.apply(mutation_fragment(*s, p, std::move(cr1)));
+        m.apply(mutation_fragment(*s, p, std::move(cr2)));
+        m.apply(mutation_fragment(*s, p, std::move(cr3)));
+        m.partition().ensure_last_dummy(*s);
+        mutation m1{m};
+        {
+            schema_ptr reverse_schema = s->make_reversed();
+            validating_consumer consumer{*reverse_schema};
+            std::move(m).consume(consumer, consume_in_reverse::yes);
+        }
+        {
+            validating_consumer consumer{*s};
+            std::move(m1).consume(consumer, consume_in_reverse::no);
+        }
+    });
+}
+
+
 SEASTAR_THREAD_TEST_CASE(test_position_in_partition_reversal) {
     using p_i_p = position_in_partition;
 
