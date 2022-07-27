@@ -299,7 +299,7 @@ private:
     class strategy_control;
     std::unique_ptr<strategy_control> _strategy_control;
 private:
-    future<> perform_task(shared_ptr<task>);
+    future<compaction_stats_opt> perform_task(shared_ptr<task>);
 
     future<> stop_tasks(std::vector<shared_ptr<task>> tasks, sstring reason);
     future<> update_throughput(uint32_t value_mbs);
@@ -340,7 +340,7 @@ private:
     // similar-sized compaction.
     void postpone_compaction_for_table(compaction::table_state* t);
 
-    future<> perform_sstable_scrub_validate_mode(compaction::table_state& t);
+    future<compaction_stats_opt> perform_sstable_scrub_validate_mode(compaction::table_state& t);
     future<> update_static_shares(float shares);
 
     using get_candidates_func = std::function<future<std::vector<sstables::shared_sstable>>()>;
@@ -349,9 +349,9 @@ private:
     // by retrieving set of candidates only after all compactions for table T were stopped, if any.
     template<typename TaskType, typename... Args>
     requires std::derived_from<TaskType, task>
-    future<> perform_task_on_all_files(compaction::table_state& t, sstables::compaction_type_options options, get_candidates_func, Args... args);
+    future<compaction_stats_opt> perform_task_on_all_files(compaction::table_state& t, sstables::compaction_type_options options, get_candidates_func, Args... args);
 
-    future<> rewrite_sstables(compaction::table_state& t, sstables::compaction_type_options options, get_candidates_func, can_purge_tombstones can_purge = can_purge_tombstones::yes);
+    future<compaction_stats_opt> rewrite_sstables(compaction::table_state& t, sstables::compaction_type_options options, get_candidates_func, can_purge_tombstones can_purge = can_purge_tombstones::yes);
 
     // Stop all fibers, without waiting. Safe to be called multiple times.
     void do_stop() noexcept;
@@ -411,7 +411,7 @@ public:
     future<> perform_sstable_upgrade(replica::database& db, compaction::table_state& t, bool exclude_current_version);
 
     // Submit a table to be scrubbed and wait for its termination.
-    future<> perform_sstable_scrub(compaction::table_state& t, sstables::compaction_type_options::scrub opts);
+    future<compaction_stats_opt> perform_sstable_scrub(compaction::table_state& t, sstables::compaction_type_options::scrub opts);
 
     // Submit a table for major compaction.
     future<> perform_major_compaction(compaction::table_state& t);
