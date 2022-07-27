@@ -234,7 +234,21 @@ abstract_replication_strategy::get_address_ranges(const token_metadata& tm) cons
 future<std::unordered_multimap<inet_address, dht::token_range>>
 abstract_replication_strategy::get_address_ranges(const token_metadata& tm, inet_address endpoint) const {
     std::unordered_multimap<inet_address, dht::token_range> ret;
+    if (!tm.is_member(endpoint)) {
+        co_return ret;
+    }
+    bool is_everywhere_topology = get_type() == replication_strategy_type::everywhere_topology;
     for (auto& t : tm.sorted_tokens()) {
+        // This is a fast path for everywhere_topology to avoid calculating
+        // natural endpoints, since any node that is part of the the ring
+        // will be responsible for all tokens.
+        if (is_everywhere_topology) {
+            dht::token_range_vector r = tm.get_primary_ranges_for(t);
+            for (auto&& rng : r) {
+                ret.emplace(endpoint, rng);
+            }
+            continue;
+        }
         auto eps = co_await calculate_natural_endpoints(t, tm);
         bool found = false;
         for (auto ep : eps) {
