@@ -47,13 +47,13 @@ brew help
 make -h
 ```
 
-#### Fedora 29/Debian-based Linux Distributions
+#### Linux Distributions
 
-Building the user docs should work out of the box.
+Building the user docs should work out of the box  on most Linux distributions.
 
 #### Windows
 
-Use "Bash on Ubuntu on Windows" for the same tools and capabilities as on a debian-based Linux.
+Use "Bash on Ubuntu on Windows" for the same tools and capabilities as on Linux distributions.
 
 Note: livereload seems not to be working on Windows.
 
