@@ -22,16 +22,16 @@ The user documentation is written in reStructuredText (RST) - a plaintext markup
 The developer documentation is written in Markdown. See [Basic Markdown Syntax](https://www.markdownguide.org/basic-syntax/) for reference.
 
 
-## Prerequisites
+## Prerequisites for Building User Documentation
 
 * Python 3. Check your version with `$ python --version`
 * Vale CLI (optional to lint docs). [Install Vale](https://docs.errata.ai/vale/install) for your operative system.
 
-### Prerequisites: Mac OS X
+### Mac OS X
 
 You must have a working [Homebrew](http://brew.sh/) in order to install the needed tools.
 
-You also need the standard utility `make`.  (I don't know if this comes with Mac OS X.)
+You also need the standard utility `make`.
 
 Check if you have these two items with
 
@@ -40,18 +40,14 @@ brew help
 make -h
 ```
 
-### Prerequisites: Fedora 29/Debian-based Linux Distributions
+### Fedora 29/Debian-based Linux Distributions
 
-This should work out of the box with Fedora 29.
+Building the user docs should work out of the box on Fedora 29.
 
-### Prerequisites: Windows
+### Windows
 
-Use "Bash on Ubuntu on Windows", everything should be same as on a debian-based Linux.
+Use "Bash on Ubuntu on Windows" for the same tools and capabilites as on a debian-based Linux.
 Note: livereload seems not working on Windows.
-
-## Prerequisites: other systems
-
-FIXME
 
 # Lint
 
