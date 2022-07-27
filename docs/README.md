@@ -15,6 +15,7 @@ To contribute to the documentation, open a GitHub pull request.
 - Work on your fork's task branches, not the `master` branch.
 - Send pull requests to the `master` branch in this repository.
 - If you want to submit a knowledge base article, see [Submitting a KB Article](#submitting-a-kb-article).
+- Follow the [ScyllaDB Style Guide](https://docs.google.com/document/d/1lyHp1MKdyj0Hh3NprNFvEczA4dFSZIFoukGUvFJb9yE/edit?usp=sharing).
 
 The user documentation is written in reStructuredText (RST) - a plaintext markup language similar to Markdown. If you're not familiar with RST, see [ScyllaDB RST Examples](https://sphinx-theme.scylladb.com/stable/examples/index.html).
 
@@ -23,13 +24,13 @@ The developer documentation is written in Markdown. See [Basic Markdown Syntax](
 
 ## Submitting a KB Article
 
-If you are submitting a Knowledgebase Article (KBA), use the following guidelines:
-* In the `/kb_common` directory there is a template for KBAs. It is called `kb-article-template.rst`.
-* Make a copy of this file in the `/kb directory`, saving it with a unique name.
-* Open the template and fill in the required inforation. 
+If you are submitting a knowledgebase article (KB), use the following guidelines:
+* In the `/kb_common` directory, there is a template for KBs. It is called `kb-article-template.rst`.
+* Make a copy of the KB template in the `/kb` directory and rename it with a unique name.
+* Open the new file and fill in the required information. 
 * Remove what is not needed. 
-* Run`make preview` to make the docs and preview locally.
-* Send a PR - add KBA in the title. 
+* Run `make preview` to build the docs and preview them locally.
+* Send a PR with "KB" in its title. 
 
 
 ## Building User Documentation
@@ -37,7 +38,7 @@ If you are submitting a Knowledgebase Article (KBA), use the following guideline
 ### Prerequisites
 
 * Python 3. Check your version with `$ python --version`
-* Vale CLI (optional to lint docs). [Install Vale](https://docs.errata.ai/vale/install) for your operative system.
+* Vale CLI (optional to lint docs). [Install Vale](https://docs.errata.ai/vale/install) for your OS.
 
 #### Mac OS X
 
@@ -45,7 +46,7 @@ You must have a working [Homebrew](http://brew.sh/) in order to install the need
 
 You also need the standard utility `make`.
 
-Check if you have these two items with
+Check if you have these two items with the following commands:
 
 ```sh
 brew help
@@ -54,13 +55,13 @@ make -h
 
 #### Fedora 29/Debian-based Linux Distributions
 
-Building the user docs should work out of the box on Fedora 29.
+Building the user docs should work out of the box.
 
 #### Windows
 
-Use "Bash on Ubuntu on Windows" for the same tools and capabilites as on a debian-based Linux.
+Use "Bash on Ubuntu on Windows" for the same tools and capabilities as on a debian-based Linux.
 
-Note: livereload seems not working on Windows.
+Note: livereload seems not to be working on Windows.
 
 ### Building the Docs 
 
@@ -95,21 +96,21 @@ Lint one folder (e.g. getting-started):
 make proofread path=getting-started
 ```
 
-# Information for Contributors
+## Information for Contributors
 
 If you are interested in contributing to Scylla
 docs, please read the Scylla open source page at
 http://www.scylladb.com/opensource/ and complete
 a Scylla contributor agreement if needed.  We can
 only accept documentation pull requests if we have
-a contributor agreement on file for you
+a contributor agreement on file for you.
 
 
-# Third-party Documentation
+## Third-party Documentation
 
  * Do any copying as a separate commit.  Always commit an unmodified version first and then do any editing in a separate commit.
 
- * We already have a copy of the Apache license in our tree so you do not need to commit a copy of the license.
+ * We already have a copy of the Apache license in our tree, so you do not need to commit a copy of the license.
 
  * Include the copyright header from the source file in the edited version.  If you are copying an Apache Cassandra document with no copyright header, use:
 
