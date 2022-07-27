@@ -342,6 +342,18 @@ SEASTAR_TEST_CASE(test_merging) {
     });
 }
 
+SEASTAR_THREAD_TEST_CASE(test_region_move) {
+    logalloc::region r0;
+    logalloc::region r1(std::move(r0)); // simple move
+    logalloc::region r2(std::move(r1)); // transitive move
+    logalloc::region r3(std::move(r0)); // moving a moved-from region (with disengaged impl)
+
+    logalloc::region r4;
+    r4 = std::move(r2); // simple move
+    r4 = std::move(r3); // moving a moved-from region (with disengaged impl)
+    auto r5 = std::move(r4);
+}
+
 #ifndef SEASTAR_DEFAULT_ALLOCATOR
 SEASTAR_TEST_CASE(test_region_lock) {
     return seastar::async([] {

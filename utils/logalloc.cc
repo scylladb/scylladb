@@ -2156,9 +2156,9 @@ const region_impl& region::get_impl() const noexcept {
 
 region::region(region&& other) noexcept {
     this->_impl = std::move(other._impl);
-    get_impl()._region = this;
     if (_impl) {
         auto r_impl = static_cast<region_impl*>(_impl.get());
+        r_impl->_region = this;
         if (r_impl->_listener) {
             r_impl->_listener->moved(&other, this);
         }
@@ -2180,11 +2180,11 @@ region& region::operator=(region&& other) noexcept {
     this->_impl = std::move(other._impl);
     if (_impl) {
         auto r_impl = static_cast<region_impl*>(_impl.get());
+        r_impl->_region = this;
         if (r_impl->_listener) {
             r_impl->_listener->moved(&other, this);
         }
     }
-    get_impl()._region = this;
     return *this;
 }
 
