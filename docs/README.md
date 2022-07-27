@@ -53,18 +53,6 @@ Note: livereload seems not working on Windows.
 
 FIXME
 
-# Working on the docs
-
-Work on a task branch and send pull requests for
-master.  Master is the default branch.
-
-Run `make preview` to make the docs and preview locally.
-
-
-# Deploy
-
-If you have the rights to push to the live site, run `make deploy` to deploy.
-
 # Lint
 
 Lint all:
