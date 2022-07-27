@@ -35,8 +35,7 @@ To create a new knowledge base article (KB):
 
 ### Prerequisites
 
-* Python 3. Check your version with `$ python --version`
-* Vale CLI (optional to lint docs). [Install Vale](https://docs.errata.ai/vale/install) for your OS.
+* Python 3. Check your version with `$ python --version`.
 
 #### Mac OS X
 
@@ -59,8 +58,6 @@ Building the user docs should work out of the box  on most Linux distributions.
 
 Use "Bash on Ubuntu on Windows" for the same tools and capabilities as on Linux distributions.
 
-Note: livereload seems not to be working on Windows.
-
 ### Building the Docs 
 
 1. Run `make preview` to build the documentation.
@@ -72,26 +69,6 @@ You can clean up all the build products and auto-installed Python stuff with:
 
 ```sh
 make pristine
-```
-
-### Lint
-
-Lint all:
-
-```sh
-make proofread
-```
-
-Lint one file (e.g. README.md):
-
-```sh
-make proofread path=README.md
-```
-
-Lint one folder (e.g. getting-started):
-
-```sh
-make proofread path=getting-started
 ```
 
 ## Information for Contributors
