@@ -40,6 +40,7 @@ class compacting_sstable_registration;
 // behalf of existing tables.
 class compaction_manager {
 public:
+    using compaction_stats_opt = std::optional<sstables::compaction_stats>;
     struct stats {
         int64_t pending_tasks = 0;
         int64_t completed_tasks = 0;
@@ -106,7 +107,7 @@ public:
         state _state = state::none;
 
     private:
-        shared_future<> _compaction_done = make_ready_future<>();
+        shared_future<compaction_stats_opt> _compaction_done = make_ready_future<compaction_stats_opt>();
         exponential_backoff_retry _compaction_retry = exponential_backoff_retry(std::chrono::seconds(5), std::chrono::seconds(300));
         sstables::compaction_type _type;
         utils::UUID _output_run_identifier;
@@ -122,7 +123,7 @@ public:
         virtual ~task();
 
     protected:
-        virtual future<> do_run() = 0;
+        virtual future<compaction_stats_opt> do_run() = 0;
 
         using throw_if_stopping = bool_class<struct throw_if_stopping_tag>;
 
@@ -153,7 +154,7 @@ public:
             return ct == sstables::compaction_type::Compaction;
         }
     public:
-        future<> run() noexcept;
+        future<compaction_stats_opt> run() noexcept;
 
         const compaction::table_state* compacting_table() const noexcept {
             return _compacting_table;
@@ -186,7 +187,7 @@ public:
             return _description;
         }
 
-        future<> compaction_done() noexcept {
+        future<compaction_stats_opt> compaction_done() noexcept {
             return _compaction_done.get_future();
         }
 

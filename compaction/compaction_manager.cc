@@ -359,14 +359,14 @@ protected:
     // first take major compaction semaphore, then exclusely take compaction lock for table.
     // it cannot be the other way around, or minor compaction for this table would be
     // prevented while an ongoing major compaction doesn't release the semaphore.
-    virtual future<> do_run() override {
+    virtual future<compaction_stats_opt> do_run() override {
         co_await coroutine::switch_to(_cm._maintenance_sg.cpu);
 
         switch_state(state::pending);
         auto units = co_await acquire_semaphore(_cm._maintenance_ops_sem);
         auto lock_holder = co_await _compaction_state.lock.hold_write_lock();
         if (!can_proceed()) {
-            co_return;
+            co_return std::nullopt;
         }
 
         // candidates are sstables that aren't being operated on by other compaction types.
@@ -392,6 +392,8 @@ protected:
         co_await compact_sstables_and_update_history(std::move(descriptor), _compaction_data, std::move(release_exhausted));
 
         finish_compaction();
+
+        co_return std::nullopt;
     }
 };
 
@@ -412,15 +414,15 @@ public:
     {}
 
 protected:
-    virtual future<> do_run() override {
+    virtual future<compaction_stats_opt> do_run() override {
         if (!can_proceed(throw_if_stopping::yes)) {
-            co_return;
+            co_return std::nullopt;
         }
         switch_state(state::pending);
         auto units = co_await acquire_semaphore(_cm._maintenance_ops_sem);
 
         if (!can_proceed(throw_if_stopping::yes)) {
-            co_return;
+            co_return std::nullopt;
         }
         setup_new_compaction();
 
@@ -429,6 +431,8 @@ protected:
         // compaction and some of them may not even belong to current shard.
         co_await _job(compaction_data());
         finish_compaction();
+
+        co_return std::nullopt;
     }
 };
 
@@ -533,12 +537,12 @@ compaction_manager::sstables_task::~sstables_task() {
     _cm._stats.pending_tasks -= _sstables.size() - (_state == state::pending);
 }
 
-future<> compaction_manager::task::run() noexcept {
+future<compaction_manager::compaction_stats_opt> compaction_manager::task::run() noexcept {
     try {
         _compaction_done = do_run();
         return compaction_done();
     } catch (...) {
-        return current_exception_as_future();
+        return current_exception_as_future<compaction_stats_opt>();
     }
 }
 
@@ -905,18 +909,18 @@ public:
         : task(mgr, &t, sstables::compaction_type::Compaction, "Compaction")
     {}
 protected:
-    virtual future<> do_run() override {
+    virtual future<compaction_stats_opt> do_run() override {
         co_await coroutine::switch_to(_cm._compaction_sg.cpu);
 
         for (;;) {
             if (!can_proceed()) {
-                co_return;
+                co_return std::nullopt;
             }
             switch_state(state::pending);
             // take read lock for table, so major and regular compaction can't proceed in parallel.
             auto lock_holder = co_await _compaction_state.lock.hold_read_lock();
             if (!can_proceed()) {
-                co_return;
+                co_return std::nullopt;
             }
 
             compaction::table_state& t = *_compacting_table;
@@ -926,14 +930,14 @@ protected:
 
             if (descriptor.sstables.empty() || !can_proceed() || t.is_auto_compaction_disabled_by_user()) {
                 cmlog.debug("{}: sstables={} can_proceed={} auto_compaction={}", *this, descriptor.sstables.size(), can_proceed(), t.is_auto_compaction_disabled_by_user());
-                co_return;
+                co_return std::nullopt;
             }
             if (!_cm.can_register_compaction(t, weight, descriptor.fan_in())) {
                 cmlog.debug("Refused compaction job ({} sstable(s)) of weight {} for {}.{}, postponing it...",
                     descriptor.sstables.size(), weight, t.schema()->ks_name(), t.schema()->cf_name());
                 switch_state(state::postponed);
                 _cm.postpone_compaction_for_table(&t);
-                co_return;
+                co_return std::nullopt;
             }
             auto compacting = compacting_sstable_registration(_cm, descriptor.sstables);
             auto weight_r = compaction_weight_registration(&_cm, weight);
@@ -974,9 +978,11 @@ protected:
 
             finish_compaction(state::failed);
             if ((co_await maybe_retry(std::move(ex))) == stop_iteration::yes) {
-                co_return;
+                co_return std::nullopt;
             }
         }
+
+        co_return std::nullopt;
     }
 };
 
@@ -1124,17 +1130,17 @@ public:
         }
     }
 protected:
-    virtual future<> do_run() override {
+    virtual future<compaction_stats_opt> do_run() override {
         co_await coroutine::switch_to(_cm._maintenance_sg.cpu);
 
         for (;;) {
             if (!can_proceed()) {
-                co_return;
+                co_return std::nullopt;
             }
             switch_state(state::pending);
             auto units = co_await acquire_semaphore(_cm._off_strategy_sem);
             if (!can_proceed()) {
-                co_return;
+                co_return std::nullopt;
             }
             setup_new_compaction();
 
@@ -1147,16 +1153,18 @@ protected:
                 co_await run_offstrategy_compaction(_compaction_data);
                 finish_compaction();
                 cmlog.info("Done with off-strategy compaction for {}.{}", t.schema()->ks_name(), t.schema()->cf_name());
-                co_return;
+                co_return std::nullopt;
             } catch (...) {
                 ex = std::current_exception();
             }
 
             finish_compaction(state::failed);
             if ((co_await maybe_retry(std::move(ex))) == stop_iteration::yes) {
-                co_return;
+                co_return std::nullopt;
             }
         }
+
+        co_return std::nullopt;
     }
 };
 
@@ -1185,7 +1193,9 @@ public:
     {}
 
 protected:
-    virtual future<> do_run() override {
+    virtual future<compaction_stats_opt> do_run() override {
+        sstables::compaction_stats stats{};
+
         switch_state(state::pending);
         auto maintenance_permit = co_await acquire_semaphore(_cm._maintenance_ops_sem);
 
@@ -1193,7 +1203,10 @@ protected:
             auto sst = consume_sstable();
             auto res = co_await rewrite_sstable(std::move(sst));
             _cm._validation_errors += res.stats.validation_errors;
+            stats += res.stats;
         }
+
+        co_return stats;
     }
 
 private:
@@ -1277,12 +1290,17 @@ public:
     {}
 
 protected:
-    virtual future<> do_run() override {
+    virtual future<compaction_stats_opt> do_run() override {
+        sstables::compaction_stats stats{};
+
         while (!_sstables.empty() && can_proceed()) {
             auto sst = consume_sstable();
             auto res = co_await validate_sstable(std::move(sst));
             _cm._validation_errors += res.stats.validation_errors;
+            stats += res.stats;
         }
+
+        co_return stats;
     }
 
 private:
@@ -1357,7 +1375,7 @@ public:
         _cm._stats.pending_tasks -= _pending_cleanup_jobs.size();
     }
 protected:
-    virtual future<> do_run() override {
+    virtual future<compaction_stats_opt>  do_run() override {
         switch_state(state::pending);
         auto maintenance_permit = co_await acquire_semaphore(_cm._maintenance_ops_sem);
 
@@ -1368,6 +1386,8 @@ protected:
             _pending_cleanup_jobs.pop_back();
             _cm._stats.pending_tasks--;
         }
+
+        co_return std::nullopt;
     }
 private:
     // Releases reference to cleaned files such that respective used disk space can be freed.
