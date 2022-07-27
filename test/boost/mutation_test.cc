@@ -43,6 +43,7 @@
 #include "cell_locking.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
 #include "service/storage_proxy.hh"
+#include "test/lib/mutation_assertions.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/simple_schema.hh"
 #include "test/lib/log.hh"
@@ -2551,37 +2552,6 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_consume_position_monotonicity) {
             tests::default_timestamp_generator(),
             tests::no_expiry_expiry_generator(),
             std::uniform_int_distribution<size_t>(1, 1)).get();
-
-    class validating_consumer {
-        mutation_fragment_stream_validator _validator;
-
-    public:
-        explicit validating_consumer(const schema& s) : _validator(s) { }
-
-        void consume_new_partition(const dht::decorated_key&) {
-            BOOST_REQUIRE(_validator(mutation_fragment_v2::kind::partition_start, position_in_partition_view(position_in_partition_view::partition_start_tag_t{})));
-        }
-        void consume(tombstone) { }
-        stop_iteration consume(static_row&& sr) {
-            BOOST_REQUIRE(_validator(mutation_fragment_v2::kind::static_row, sr.position()));
-            return stop_iteration::no;
-        }
-        stop_iteration consume(clustering_row&& cr) {
-            BOOST_REQUIRE(_validator(mutation_fragment_v2::kind::clustering_row, cr.position()));
-            return stop_iteration::no;
-        }
-        stop_iteration consume(range_tombstone_change&& rtc) {
-            BOOST_REQUIRE(_validator(mutation_fragment_v2::kind::range_tombstone_change, rtc.position()));
-            return stop_iteration::no;
-        }
-        stop_iteration consume_end_of_partition() {
-            BOOST_REQUIRE(_validator(mutation_fragment_v2::kind::partition_end, position_in_partition_view(position_in_partition_view::end_of_partition_tag_t{})));
-            return stop_iteration::no;
-        }
-        void consume_end_of_stream() {
-            BOOST_REQUIRE(_validator.on_end_of_stream());
-        }
-    };
 
     BOOST_TEST_MESSAGE("Forward");
     {
