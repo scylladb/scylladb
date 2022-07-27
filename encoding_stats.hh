@@ -46,31 +46,31 @@ private:
     min_tracker<gc_clock::duration> min_ttl;
 
 public:
-    encoding_stats_collector()
+    encoding_stats_collector() noexcept
         : min_timestamp(api::max_timestamp)
         , min_local_deletion_time(gc_clock::time_point::max())
         , min_ttl(gc_clock::duration::max())
     {}
 
-    void update_timestamp(api::timestamp_type ts) {
+    void update_timestamp(api::timestamp_type ts) noexcept {
         min_timestamp.update(ts);
     }
 
-    void update_local_deletion_time(gc_clock::time_point local_deletion_time) {
+    void update_local_deletion_time(gc_clock::time_point local_deletion_time) noexcept {
         min_local_deletion_time.update(local_deletion_time);
     }
 
-    void update_ttl(gc_clock::duration ttl) {
+    void update_ttl(gc_clock::duration ttl) noexcept {
         min_ttl.update(ttl);
     }
 
-    void update(const encoding_stats& other) {
+    void update(const encoding_stats& other) noexcept {
         update_timestamp(other.min_timestamp);
         update_local_deletion_time(other.min_local_deletion_time);
         update_ttl(other.min_ttl);
     }
 
-    encoding_stats get() const {
+    encoding_stats get() const noexcept {
         return { min_timestamp.get(), min_local_deletion_time.get(), min_ttl.get() };
     }
 };

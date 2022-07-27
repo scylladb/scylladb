@@ -97,30 +97,30 @@ public:
     void reclaim_all_free_segments();
 
     // Returns aggregate statistics for all pools.
-    occupancy_stats region_occupancy();
+    occupancy_stats region_occupancy() const noexcept;
 
     // Returns statistics for all segments allocated by LSA on this shard.
-    occupancy_stats occupancy();
+    occupancy_stats occupancy() const noexcept;
 
     // Returns amount of allocated memory not managed by LSA
-    size_t non_lsa_used_space() const;
+    size_t non_lsa_used_space() const noexcept;
 
-    impl& get_impl() { return *_impl; }
+    impl& get_impl() noexcept { return *_impl; }
 
     // Returns the minimum number of segments reclaimed during single reclamation cycle.
-    size_t reclamation_step() const;
+    size_t reclamation_step() const noexcept;
 
-    bool should_abort_on_bad_alloc();
+    bool should_abort_on_bad_alloc() const noexcept;
 };
 
 class tracker_reclaimer_lock {
     tracker::impl& _tracker_impl;
 public:
-    tracker_reclaimer_lock();
+    tracker_reclaimer_lock() noexcept;
     ~tracker_reclaimer_lock();
 };
 
-tracker& shard_tracker();
+tracker& shard_tracker() noexcept;
 
 class segment_descriptor;
 
@@ -174,11 +174,11 @@ public:
 
     /// Returns a pointer to the first element of the buffer.
     /// Valid only when engaged.
-    char_type* get() { return _buf; }
-    const char_type* get() const { return _buf; }
+    char_type* get() noexcept { return _buf; }
+    const char_type* get() const noexcept { return _buf; }
 
     /// Returns the number of bytes in the buffer.
-    size_t size() const { return _size; }
+    size_t size() const noexcept { return _size; }
 
     /// Returns true iff the pointer is engaged.
     explicit operator bool() const noexcept { return bool(_link); }
@@ -191,56 +191,56 @@ class occupancy_stats {
     size_t _free_space;
     size_t _total_space;
 public:
-    occupancy_stats() : _free_space(0), _total_space(0) {}
+    occupancy_stats() noexcept : _free_space(0), _total_space(0) {}
 
-    occupancy_stats(size_t free_space, size_t total_space)
+    occupancy_stats(size_t free_space, size_t total_space) noexcept
         : _free_space(free_space), _total_space(total_space) { }
 
-    bool operator<(const occupancy_stats& other) const {
+    bool operator<(const occupancy_stats& other) const noexcept {
         return used_fraction() < other.used_fraction();
     }
 
-    friend occupancy_stats operator+(const occupancy_stats& s1, const occupancy_stats& s2) {
+    friend occupancy_stats operator+(const occupancy_stats& s1, const occupancy_stats& s2) noexcept {
         occupancy_stats result(s1);
         result += s2;
         return result;
     }
 
-    friend occupancy_stats operator-(const occupancy_stats& s1, const occupancy_stats& s2) {
+    friend occupancy_stats operator-(const occupancy_stats& s1, const occupancy_stats& s2) noexcept {
         occupancy_stats result(s1);
         result -= s2;
         return result;
     }
 
-    occupancy_stats& operator+=(const occupancy_stats& other) {
+    occupancy_stats& operator+=(const occupancy_stats& other) noexcept {
         _total_space += other._total_space;
         _free_space += other._free_space;
         return *this;
     }
 
-    occupancy_stats& operator-=(const occupancy_stats& other) {
+    occupancy_stats& operator-=(const occupancy_stats& other) noexcept {
         _total_space -= other._total_space;
         _free_space -= other._free_space;
         return *this;
     }
 
-    size_t used_space() const {
+    size_t used_space() const noexcept {
         return _total_space - _free_space;
     }
 
-    size_t free_space() const {
+    size_t free_space() const noexcept {
         return _free_space;
     }
 
-    size_t total_space() const {
+    size_t total_space() const noexcept {
         return _total_space;
     }
 
-    float used_fraction() const {
+    float used_fraction() const noexcept {
         return _total_space ? float(used_space()) / total_space() : 0;
     }
 
-    explicit operator bool() const {
+    explicit operator bool() const noexcept {
         return _total_space > 0;
     }
 
@@ -252,12 +252,12 @@ protected:
     bool _reclaiming_enabled = true;
     seastar::shard_id _cpu = this_shard_id();
 public:
-    void set_reclaiming_enabled(bool enabled) {
+    void set_reclaiming_enabled(bool enabled) noexcept {
         assert(this_shard_id() == _cpu);
         _reclaiming_enabled = enabled;
     }
 
-    bool reclaiming_enabled() const {
+    bool reclaiming_enabled() const noexcept {
         return _reclaiming_enabled;
     }
 };
@@ -283,19 +283,19 @@ public:
 private:
     shared_ptr<basic_region_impl> _impl;
 private:
-    region_impl& get_impl();
-    const region_impl& get_impl() const;
+    region_impl& get_impl() noexcept;
+    const region_impl& get_impl() const noexcept;
 public:
     region();
     ~region();
-    region(region&& other);
-    region& operator=(region&& other);
+    region(region&& other) noexcept;
+    region& operator=(region&& other) noexcept;
     region(const region& other) = delete;
 
     void listen(region_listener* listener);
     void unlisten();
 
-    occupancy_stats occupancy() const;
+    occupancy_stats occupancy() const noexcept;
 
     allocation_strategy& allocator() noexcept {
         return *_impl;
@@ -323,15 +323,15 @@ public:
     // Changes the reclaimability state of this region. When region is not
     // reclaimable, it won't be considered by tracker::reclaim(). By default region is
     // reclaimable after construction.
-    void set_reclaiming_enabled(bool e) { _impl->set_reclaiming_enabled(e); }
+    void set_reclaiming_enabled(bool e) noexcept { _impl->set_reclaiming_enabled(e); }
 
     // Returns the reclaimability state of this region.
-    bool reclaiming_enabled() const { return _impl->reclaiming_enabled(); }
+    bool reclaiming_enabled() const noexcept { return _impl->reclaiming_enabled(); }
 
     // Returns a value which is increased when this region is either compacted or
     // evicted from, which invalidates references into the region.
     // When the value returned by this method doesn't change, references remain valid.
-    uint64_t reclaim_counter() const {
+    uint64_t reclaim_counter() const noexcept {
         return allocator().invalidate_counter();
     }
 
@@ -340,16 +340,16 @@ public:
 
     // Follows region's occupancy in the parent region group. Less fine-grained than occupancy().
     // After ground_evictable_occupancy() is called returns 0.
-    occupancy_stats evictable_occupancy();
+    occupancy_stats evictable_occupancy() const noexcept;
 
     // Makes this region an evictable region. Supplied function will be called
     // when data from this region needs to be evicted in order to reclaim space.
     // The function should free some space from this region.
-    void make_evictable(eviction_fn);
+    void make_evictable(eviction_fn) noexcept;
 
-    const eviction_fn& evictor() const;
+    const eviction_fn& evictor() const noexcept;
 
-    uint64_t id() const;
+    uint64_t id() const noexcept;
 
     friend class allocating_section;
 };
@@ -360,7 +360,7 @@ public:
 struct reclaim_lock {
     region& _region;
     bool _prev;
-    reclaim_lock(region& r)
+    reclaim_lock(region& r) noexcept
         : _region(r)
         , _prev(r.reclaiming_enabled())
     {
@@ -388,16 +388,16 @@ class allocating_section {
 private:
     struct guard {
         size_t _prev;
-        guard();
+        guard() noexcept;
         ~guard();
     };
     void reserve();
-    void maybe_decay_reserve();
+    void maybe_decay_reserve() noexcept;
     void on_alloc_failure(logalloc::region&);
 public:
 
-    void set_lsa_reserve(size_t);
-    void set_std_reserve(size_t);
+    void set_lsa_reserve(size_t) noexcept;
+    void set_std_reserve(size_t) noexcept;
 
     //
     // Reserves standard allocator and LSA memory for subsequent operations that
@@ -471,11 +471,11 @@ public:
 
 future<> prime_segment_pool(size_t available_memory, size_t min_free_memory);
 
-uint64_t memory_allocated();
-uint64_t memory_freed();
-uint64_t memory_compacted();
-uint64_t memory_evicted();
+uint64_t memory_allocated() noexcept;
+uint64_t memory_freed() noexcept;
+uint64_t memory_compacted() noexcept;
+uint64_t memory_evicted() noexcept;
 
-occupancy_stats lsa_global_occupancy_stats();
+occupancy_stats lsa_global_occupancy_stats() noexcept;
 
 }

@@ -1740,7 +1740,7 @@ future<flush_permit> flush_permit::reacquire_sstable_write_permit() && {
     return _manager->get_flush_permit(std::move(_background_permit));
 }
 
-future<> dirty_memory_manager::flush_one(replica::memtable_list& mtlist, flush_permit&& permit) {
+future<> dirty_memory_manager::flush_one(replica::memtable_list& mtlist, flush_permit&& permit) noexcept {
     return mtlist.seal_active_memtable(std::move(permit)).handle_exception([this, schema = mtlist.back()->schema()] (std::exception_ptr ep) {
         dblog.error("Failed to flush memtable, {}:{} - {}", schema->ks_name(), schema->cf_name(), ep);
         return make_exception_future<>(ep);
@@ -1752,12 +1752,11 @@ future<> dirty_memory_manager::flush_when_needed() {
     if (!_db) {
         return make_ready_future<>();
     }
-    auto r = make_lw_shared<exponential_backoff_retry>(100ms, 10s);
     // If there are explicit flushes requested, we must wait for them to finish before we stop.
-    return do_until([this] { return _db_shutdown_requested; }, [this, r] {
+    return do_until([this] { return _db_shutdown_requested; }, [this] {
         auto has_work = [this] { return has_pressure() || _db_shutdown_requested; };
-        return _should_flush.wait(std::move(has_work)).then([this, r] {
-            return get_flush_permit().then([this, r] (auto permit) {
+        return _should_flush.wait(std::move(has_work)).then([this] {
+            return get_flush_permit().then([this] (auto permit) {
                 // We give priority to explicit flushes. They are mainly user-initiated flushes,
                 // flushes coming from a DROP statement, or commitlog flushes.
                 if (_flush_serializer.waiters()) {
@@ -1788,31 +1787,11 @@ future<> dirty_memory_manager::flush_when_needed() {
                 // Do not wait. The semaphore will protect us against a concurrent flush. But we
                 // want to start a new one as soon as the permits are destroyed and the semaphore is
                 // made ready again, not when we are done with the current one.
-                (void)this->flush_one(mtlist, std::move(permit)).then([r]() {
-                    // Clear the retry timer if the flush succeeds
-                    r->reset();
+                (void)this->flush_one(mtlist, std::move(permit)).handle_exception([this] (std::exception_ptr ex) {
+                    dblog.error("Flushing memtable returned unexpected error: {}", ex);
                 });
                 return make_ready_future<>();
             });
-        }).handle_exception([this, r](std::exception_ptr e) {
-            _db->cf_stats()->failed_memtables_flushes_count++;
-            try {
-                std::rethrow_exception(e);
-            } catch (const std::bad_alloc& e) {
-                // There is a chance something else will free the memory, so we can try again
-                dblog.error("Flush failed due to low memory. Retrying again in {}ms", r->sleep_time().count());
-            } catch (...) {
-                try {
-                    // At this point we don't know what has happened and it's better to potentially
-                    // take the node down and rely on commitlog to replay.
-                    on_internal_error(dblog, e);
-                } catch (const std::exception& ex) {
-                    // If the node is configured to not abort on internal error,
-                    // but propagate it up the chain, we can't do anything reasonable
-                    // at this point. The error is logged and we can try again later
-                }
-            }
-            return r->retry();
         });
     }).finally([this] {
         // We'll try to acquire the permit here to make sure we only really stop when there are no

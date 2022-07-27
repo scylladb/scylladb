@@ -4093,8 +4093,7 @@ SEASTAR_TEST_CASE(test_twcs_interposer_on_memtable_flush) {
             }
         }
 
-        auto ret = column_family_test(cf).try_flush_memtable_to_sstable(mt).get0();
-        BOOST_REQUIRE(ret == stop_iteration::yes);
+        column_family_test(cf).try_flush_memtable_to_sstable(mt).get();
 
         auto expected_ssts = (split_during_flush) ? target_windows_span : 1;
         testlog.info("split_during_flush={}, actual={}, expected={}", split_during_flush, cf->get_sstables()->size(), expected_ssts);

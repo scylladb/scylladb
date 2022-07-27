@@ -980,25 +980,26 @@ SEASTAR_TEST_CASE(failed_flush_prevents_writes) {
         }
         t.apply(mt);
 
-        utils::get_local_injector().enable("table_seal_active_memtable_pre_flush");
+        auto failed_memtables_flushes_count = db.cf_stats()->failed_memtables_flushes_count;
+
+        utils::get_local_injector().enable("table_seal_active_memtable_add_memtable", true /* oneshot */);
+        utils::get_local_injector().enable("table_seal_active_memtable_start_op", true /* oneshot */);
+        utils::get_local_injector().enable("table_seal_active_memtable_try_flush", true /* oneshot */);
+        utils::get_local_injector().enable("table_seal_active_memtable_reacquire_write_permit");
 
         BOOST_ASSERT(eventually_true([&] {
             // Trigger flush
             dmm.notify_soft_pressure();
-            return db.cf_stats()->failed_memtables_flushes_count != 0;
+            return db.cf_stats()->failed_memtables_flushes_count - failed_memtables_flushes_count >= 4;
         }));
 
         // The flush failed, make sure there is still data in memtable.
         BOOST_ASSERT(t.min_memtable_timestamp() < api::max_timestamp);
-        utils::get_local_injector().disable("table_seal_active_memtable_pre_flush");
-
-        // Release pressure, so that we can trigger flush again
-        dmm.notify_soft_relief();
+        utils::get_local_injector().disable("table_seal_active_memtable_reacquire_write_permit");
 
         BOOST_ASSERT(eventually_true([&] {
-            // Trigger pressure, the error above is no longer being injected, so flush
-            // should be triggerred and succeed
-            dmm.notify_soft_pressure();
+            // The error above is no longer being injected, so
+            // seal_active_memtable retry loop should eventually succeed
             return t.min_memtable_timestamp() == api::max_timestamp;
         }));
     });
