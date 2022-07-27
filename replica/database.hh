@@ -69,6 +69,7 @@
 #include "db/rate_limiter.hh"
 #include "db/per_partition_rate_limit_info.hh"
 #include "db/operation_type.hh"
+#include "utils/serialized_action.hh"
 
 class cell_locker;
 class cell_locker_stats;
@@ -261,7 +262,7 @@ public:
         _memtables.emplace_back(new_memtable());
     }
 
-    logalloc::region_group& region_group() {
+    dirty_memory_manager_logalloc::region_group& region_group() {
         return _dirty_memory_manager->region_group();
     }
     // This is used for explicit flushes. Will queue the memtable for flushing and proceed when the
@@ -592,16 +593,14 @@ private:
     static seastar::shard_id calculate_shard_from_sstable_generation(sstables::generation_type sstable_generation) {
         return sstables::generation_value(sstable_generation) % smp::count;
     }
-public:
     // This will update sstable lists on behalf of off-strategy compaction, where
     // input files will be removed from the maintenance set and output files will
     // be inserted into the main set.
     future<>
-    update_sstable_lists_on_off_strategy_completion(const std::vector<sstables::shared_sstable>& old_maintenance_sstables,
-                                                    const std::vector<sstables::shared_sstable>& new_main_sstables);
+    update_sstable_lists_on_off_strategy_completion(sstables::compaction_completion_desc desc);
 
     // Rebuild sstable set, delete input sstables right away, and update row cache and statistics.
-    void on_compaction_completion(sstables::compaction_completion_desc& desc);
+    void on_compaction_completion(sstables::compaction_completion_desc desc);
 private:
     void rebuild_statistics();
 
@@ -635,7 +634,7 @@ private:
     std::chrono::steady_clock::time_point _sstable_writes_disabled_at;
     void do_trigger_compaction();
 
-    logalloc::region_group& dirty_memory_region_group() const {
+    dirty_memory_manager_logalloc::region_group& dirty_memory_region_group() const {
         return _config.dirty_memory_manager->region_group();
     }
 
@@ -903,8 +902,6 @@ public:
     lw_shared_ptr<const sstable_list> get_sstables_including_compacted_undeleted() const;
     const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const;
     std::vector<sstables::shared_sstable> select_sstables(const dht::partition_range& range) const;
-    // Return all sstables but those that are off-strategy like the ones in maintenance set and staging dir.
-    std::vector<sstables::shared_sstable> in_strategy_sstables() const;
     size_t sstables_count() const;
     std::vector<uint64_t> sstable_count_per_level() const;
     int64_t get_unleveled_sstables() const;
@@ -1364,6 +1361,9 @@ private:
 
     db::rate_limiter _rate_limiter;
 
+    serialized_action _update_memtable_flush_static_shares_action;
+    utils::observer<float> _memtable_flush_static_shares_observer;
+
 public:
     data_dictionary::database as_data_dictionary() const;
     std::shared_ptr<data_dictionary::user_types_storage> as_user_types_storage() const noexcept;
@@ -1496,6 +1496,7 @@ public:
     future<> update_keyspace(sharded<service::storage_proxy>& proxy, const sstring& name);
     void drop_keyspace(const sstring& name);
     std::vector<sstring> get_non_system_keyspaces() const;
+    std::vector<sstring> get_user_keyspaces() const;
     std::vector<sstring> get_all_keyspaces() const;
     column_family& find_column_family(std::string_view ks, std::string_view name);
     const column_family& find_column_family(std::string_view ks, std::string_view name) const;
@@ -1646,9 +1647,13 @@ public:
     future<> truncate(const keyspace& ks, column_family& cf, timestamp_func, bool with_snapshot = true);
 
     bool update_column_family(schema_ptr s);
+private:
     future<> drop_column_family(const sstring& ks_name, const sstring& cf_name, timestamp_func, bool with_snapshot = true);
+public:
+    // drops the table on all shards and removes the table directory if there are no snapshots
+    static future<> drop_table_on_all_shards(sharded<database>& db, sstring ks_name, sstring cf_name, timestamp_func, bool with_snapshot = true);
 
-    const logalloc::region_group& dirty_memory_region_group() const {
+    const dirty_memory_manager_logalloc::region_group& dirty_memory_region_group() const {
         return _dirty_memory_manager.region_group();
     }
 

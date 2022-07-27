@@ -184,14 +184,38 @@ future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() 
     }).then([this] {
         _slen = _gstate.size();
         using namespace std::chrono_literals;
-        return _gossiper.add_local_application_state(gms::application_state::CACHE_HITRATES, gms::versioned_value::cache_hitrates(_gstate)).then([this] {
-            // if max difference during this round is big schedule next recalculate earlier
-            if (_diff < 0.01) {
-                return lowres_clock::duration(2000ms);
-            } else {
-                return lowres_clock::duration(500ms);
-            }
-        });
+        auto now = lowres_clock::now();
+        // Publish CACHE_HITRATES in case:
+        //
+        // - We haven't published it at all
+        // - The diff is bigger than 1% and we haven't published in the last 5 seconds
+        // - The diff is really big 10%
+        //
+        // Note: A peer node can know the cache hitrate through read_data
+        // read_mutation_data and read_digest RPC verbs which have
+        // cache_temperature in the response. So there is no need to update
+        // CACHE_HITRATES through gossip in high frequency.
+        bool do_publish = (_published_nr == 0) ||
+                          (_diff > 0.1) ||
+                          ( _diff > 0.01 && (now - _published_time) > 5000ms);
+
+        // We do the recalculation faster if the diff is bigger than 0.01. It
+        // is useful to do the calculation even if we do not publish the
+        // CACHE_HITRATES though gossip, since the recalculation will call the
+        // table->set_global_cache_hit_rate to set the hitrate.
+        auto recalculate_duration = _diff > 0.01 ? lowres_clock::duration(500ms) : lowres_clock::duration(2000ms);
+        if (do_publish) {
+            llogger.debug("Send CACHE_HITRATES update max_diff={}, published_nr={}", _diff, _published_nr);
+            ++_published_nr;
+            _published_time = now;
+            return _gossiper.add_local_application_state(gms::application_state::CACHE_HITRATES,
+                    gms::versioned_value::cache_hitrates(_gstate)).then([this, recalculate_duration] {
+                return recalculate_duration;
+            });
+        } else {
+            llogger.debug("Skip CACHE_HITRATES update max_diff={}, published_nr={}", _diff, _published_nr);
+            return make_ready_future<lowres_clock::duration>(recalculate_duration);
+        }
     }).finally([this] {
         _gstate = std::string(); // free memory, do not trust clear() to do that for string
         _rates.clear();

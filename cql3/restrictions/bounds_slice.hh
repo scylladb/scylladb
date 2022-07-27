@@ -10,11 +10,11 @@
 
 #pragma once
 
-#include "cql3/restrictions/restriction.hh"
 #include <seastar/core/shared_ptr.hh>
 #include "to_string.hh"
 #include "exceptions/exceptions.hh"
 #include "index/secondary_index_manager.hh"
+#include "cql3/expr/expression.hh"
 
 namespace cql3 {
 
@@ -39,6 +39,26 @@ public:
         } else {
             return bounds_slice(std::nullopt, false, std::move(value), include);
         }
+    }
+
+    static bounds_slice from_binary_operator(const expr::binary_operator& binop) {
+        if (binop.op == expr::oper_t::LT) {
+            return new_instance(statements::bound::END, false, binop.rhs);
+        }
+
+        if (binop.op == expr::oper_t::LTE) {
+            return new_instance(statements::bound::END, true, binop.rhs);
+        }
+
+        if (binop.op == expr::oper_t::GT) {
+            return new_instance(statements::bound::START, false, binop.rhs);
+        }
+
+        if (binop.op == expr::oper_t::GTE) {
+            return new_instance(statements::bound::START, true, binop.rhs);
+        }
+
+        throw std::runtime_error(format("bounds_slice::from_binary_operator - invalid operator: {}", binop.op));
     }
 
     /**

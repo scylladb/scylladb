@@ -10,5 +10,5 @@
 
 **Additional Information**:
 
-* `Scylla Monitoring Stack Support Matrix <matrix>`_
+* :doc:`Scylla Monitoring Stack Support Matrix <matrix>`
 * :doc:`Upgrade Scylla Monitoring Stack </upgrade/upgrade-monitor>`

@@ -18,7 +18,6 @@
 #include "cql3/selection/selector_factories.hh"
 #include "cql3/result_set.hh"
 #include "cql3/query_options.hh"
-#include "cql3/restrictions/multi_column_restriction.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
 
 namespace cql3 {
@@ -180,6 +179,14 @@ public:
 
     virtual bool is_count() const override {
         return _factories->does_count();
+    }
+
+    virtual bool is_reducible() const override {
+        return _factories->does_reduction();
+    }
+
+    virtual query::forward_request::reductions_info get_reductions() const override {
+        return _factories->get_reductions();
     }
 
 protected:
@@ -423,13 +430,13 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
         return false;
     }
 
-    auto clustering_columns_restrictions = _restrictions->get_clustering_columns_restrictions();
-    if (dynamic_pointer_cast<cql3::restrictions::multi_column_restriction>(clustering_columns_restrictions)) {
+    const expr::expression& clustering_columns_restrictions = _restrictions->get_clustering_columns_restrictions();
+    if (expr::contains_multi_column_restriction(clustering_columns_restrictions)) {
         clustering_key_prefix ckey = clustering_key_prefix::from_exploded(clustering_key);
         // FIXME: push to upper layer so it happens once per row
         auto static_and_regular_columns = expr::get_non_pk_values(selection, static_row, row);
         return expr::is_satisfied_by(
-                clustering_columns_restrictions->expression,
+                clustering_columns_restrictions,
                 expr::evaluation_inputs{
                     .partition_key = &partition_key,
                     .clustering_key = &clustering_key,
@@ -441,7 +448,7 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
 
     auto static_row_iterator = static_row.iterator();
     auto row_iterator = row ? std::optional<query::result_row_view::iterator_type>(row->iterator()) : std::nullopt;
-    auto non_pk_restrictions_map = _restrictions->get_non_pk_restriction();
+    const expr::single_column_restrictions_map& non_pk_restrictions_map = _restrictions->get_non_pk_restriction();
     for (auto&& cdef : selection.get_columns()) {
         switch (cdef->kind) {
         case column_kind::static_column:
@@ -454,11 +461,11 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
             if (restr_it == non_pk_restrictions_map.end()) {
                 continue;
             }
-            restrictions::restriction& single_col_restriction = *restr_it->second;
+            const expr::expression& single_col_restriction = restr_it->second;
             // FIXME: push to upper layer so it happens once per row
             auto static_and_regular_columns = expr::get_non_pk_values(selection, static_row, row);
             bool regular_restriction_matches = expr::is_satisfied_by(
-                    single_col_restriction.expression,
+                    single_col_restriction,
                     expr::evaluation_inputs{
                         .partition_key = &partition_key,
                         .clustering_key = &clustering_key,
@@ -500,7 +507,8 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
             if (_skip_ck_restrictions) {
                 continue;
             }
-            auto clustering_key_restrictions_map = _restrictions->get_single_column_clustering_key_restrictions();
+            const expr::single_column_restrictions_map& clustering_key_restrictions_map =
+                _restrictions->get_single_column_clustering_key_restrictions();
             auto restr_it = clustering_key_restrictions_map.find(cdef);
             if (restr_it == clustering_key_restrictions_map.end()) {
                 continue;
@@ -508,9 +516,9 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
             if (clustering_key.empty()) {
                 return false;
             }
-            restrictions::restriction& single_col_restriction = *restr_it->second;
+            const expr::expression& single_col_restriction = restr_it->second;
             if (!expr::is_satisfied_by(
-                        single_col_restriction.expression,
+                        single_col_restriction,
                         expr::evaluation_inputs{
                             .partition_key = &partition_key,
                             .clustering_key = &clustering_key,

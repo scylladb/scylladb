@@ -677,7 +677,7 @@ def testFunctionsWithClusteringDesc(cql, test_keyspace):
 def testSelectWithAlias(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(id int PRIMARY KEY, name text)") as table:
         for id in range(5):
-            execute(cql, table, "INSERT INTO %s (id, name) VALUES (?, ?) USING TTL 100 AND TIMESTAMP 0", id, "name" + str(id))
+            execute(cql, table, "INSERT INTO %s (id, name) VALUES (?, ?) USING TTL 1000 AND TIMESTAMP 0", id, "name" + str(id))
 
         # test aliasing count( *)
         rs = execute(cql, table, "SELECT count(*) AS user_count FROM %s")
@@ -693,7 +693,7 @@ def testSelectWithAlias(cql, test_keyspace):
 
         # test aliasing ttl
         rs = execute(cql, table, "SELECT ttl(name) AS name_ttl FROM %s WHERE id = 0")
-        assert rs.one().name_ttl >= 70 and rs.one().name_ttl <= 100
+        assert rs.one().name_ttl >= 100 and rs.one().name_ttl <= 1000
 
         # test aliasing a regular function
         rs = execute(cql, table, "SELECT intAsBlob(id) AS id_blob FROM %s WHERE id = 0")

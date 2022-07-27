@@ -45,6 +45,12 @@ public:
         _update_timer.cancel();
         return std::move(_inflight_update);
     }
+
+    future<> update_static_shares(float static_shares) {
+        _static_shares = static_shares;
+        return make_ready_future<>();
+    }
+
 protected:
     struct control_point {
         float input;
@@ -61,30 +67,31 @@ protected:
     // updating shares for an I/O class may contact another shard and returns a future.
     future<> _inflight_update;
 
+    // Used when the controllers are disabled and a static share is used
+    // When that option is deprecated we should remove this.
+    float _static_shares;
+
     virtual void update_controller(float quota);
+
+    bool controller_disabled() const noexcept {
+        return _static_shares > 0;
+    }
 
     void adjust();
 
     backlog_controller(scheduling_group& sg, std::chrono::milliseconds interval,
-                       std::vector<control_point> control_points, std::function<float()> backlog)
+                       std::vector<control_point> control_points, std::function<float()> backlog,
+                       float static_shares = 0)
         : _scheduling_group(sg)
         , _interval(interval)
         , _update_timer([this] { adjust(); })
         , _control_points()
         , _current_backlog(std::move(backlog))
         , _inflight_update(make_ready_future<>())
+        , _static_shares(static_shares)
     {
         _control_points.insert(_control_points.end(), control_points.begin(), control_points.end());
-         _update_timer.arm_periodic(_interval);
-    }
-
-    // Used when the controllers are disabled and a static share is used
-    // When that option is deprecated we should remove this.
-    backlog_controller(scheduling_group& sg, float static_shares)
-        : _scheduling_group(sg)
-        , _inflight_update(make_ready_future<>())
-    {
-        update_controller(static_shares);
+        _update_timer.arm_periodic(_interval);
     }
 
     virtual ~backlog_controller() {}
@@ -111,11 +118,11 @@ public:
 class flush_controller : public backlog_controller {
     static constexpr float hard_dirty_limit = 1.0f;
 public:
-    flush_controller(backlog_controller::scheduling_group& sg, float static_shares) : backlog_controller(sg, static_shares) {}
-    flush_controller(backlog_controller::scheduling_group& sg, std::chrono::milliseconds interval, float soft_limit, std::function<float()> current_dirty)
+    flush_controller(backlog_controller::scheduling_group& sg, float static_shares, std::chrono::milliseconds interval, float soft_limit, std::function<float()> current_dirty)
         : backlog_controller(sg, std::move(interval),
           std::vector<backlog_controller::control_point>({{0.0, 0.0}, {soft_limit, 10}, {soft_limit + (hard_dirty_limit - soft_limit) / 2, 200} , {hard_dirty_limit, 1000}}),
-          std::move(current_dirty)
+          std::move(current_dirty),
+          static_shares
         )
     {}
 };
@@ -125,11 +132,11 @@ public:
     static constexpr unsigned normalization_factor = 30;
     static constexpr float disable_backlog = std::numeric_limits<double>::infinity();
     static constexpr float backlog_disabled(float backlog) { return std::isinf(backlog); }
-    compaction_controller(backlog_controller::scheduling_group& sg, float static_shares) : backlog_controller(sg, static_shares) {}
-    compaction_controller(backlog_controller::scheduling_group& sg, std::chrono::milliseconds interval, std::function<float()> current_backlog)
+    compaction_controller(backlog_controller::scheduling_group& sg, float static_shares, std::chrono::milliseconds interval, std::function<float()> current_backlog)
         : backlog_controller(sg, std::move(interval),
           std::vector<backlog_controller::control_point>({{0.0, 50}, {1.5, 100} , {normalization_factor, 1000}}),
-          std::move(current_backlog)
+          std::move(current_backlog),
+          static_shares
         )
     {}
 };

@@ -88,7 +88,7 @@ You can verify that Raft is enabled on your cluster in one of the following ways
 
 Safe Schema Changes with Raft
 -------------------------------
-In ScyllaDB, schema is based on :doc:`Data Definition Language (DDL) <../getting-started/ddl>`. In earlier ScyllaDB versions, schema changes were tracked via the gossip protocol, which might lead to schema conflicts if the updates are happening concurrently.
+In ScyllaDB, schema is based on :doc:`Data Definition Language (DDL) </cql/ddl>`. In earlier ScyllaDB versions, schema changes were tracked via the gossip protocol, which might lead to schema conflicts if the updates are happening concurrently.
 
 Implementing Raft eliminates schema conflicts and allows full automation of DDL changes under any conditions, as long as a quorum 
 of nodes in the cluster is available. The following examples illustrate how Raft provides the solution to problems with schema changes.

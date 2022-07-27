@@ -30,7 +30,7 @@ struct fsm_output {
     std::optional<applied_snapshot> snp;
     // Latest configuration obtained from the log in case it has changed
     // since last fsm output poll.
-    std::optional<server_address_set> configuration;
+    std::optional<config_member_set> configuration;
     std::optional<read_id> max_read_id_with_quorum;
     // Set to true if a leadership transfer was aborted since the last output
     bool abort_leadership_transfer;

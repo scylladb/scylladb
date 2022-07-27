@@ -14,7 +14,7 @@ For evaluation, you can run the Scylla Monitoring stack on any server (or laptop
 Prerequisites
 -------------
 
-* Follow the Installation Guide and install `docker`_ on the Scylla Monitoring Server. This server can be the same server that is running the Scylla Manager. Alternatively, you can `Deploy Scylla Monitoring Without Docker <../monitor-without-docker>`_ .
+* Follow the Installation Guide and install `docker`_ on the Scylla Monitoring Server. This server can be the same server that is running the Scylla Manager. Alternatively, you can :doc:`Deploy Scylla Monitoring Without Docker <monitor-without-docker>`.
 
 .. _`docker`: https://docs.docker.com/install/
 

@@ -19,7 +19,7 @@ During a :term:`read operation<Read Operation>`, the client sends a request to t
 
 The :term:`Consistency Level (CL)<Consistency Level (CL)>` determines how many replicas in a cluster must acknowledge read or :term:`write operations<Write Operation>` before it is considered successful.
 
-For the CQL Shell (:doc:`CQLsh </getting-started/cqlsh>`), the consistency level defaults to ONE for read and write operations.
+For the CQL Shell (:doc:`CQLsh </cql/cqlsh>`), the consistency level defaults to ONE for read and write operations.
 
 
 .. note::
@@ -74,5 +74,5 @@ Additional Resources
 --------------------
 
 * :doc:`Consistency Level Console Demo </architecture/console-CL-full-demo>`
-* :doc:`Consistency Levels </getting-started/consistency/>`
+* :doc:`Consistency Levels </cql/consistency/>`
 * From Scylla Univeristy: take the `Consistency Level lesson <https://university.scylladb.com/courses/scylla-essentials-overview/lessons/architecture/topic/consistency-level-cl/>`_

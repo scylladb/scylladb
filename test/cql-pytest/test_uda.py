@@ -123,3 +123,17 @@ def test_no_initcond(scylla_only, cql, test_keyspace):
             with new_aggregate(cql, test_keyspace, aggr_body) as aggr_func:
                 result = cql.execute(f"SELECT {aggr_func}(id) AS result FROM {table}").one()
                 assert result.result == (1000 - rows)
+
+# Test if reduce function is assigned to UDA
+def test_reduce_function(scylla_only, cql, test_keyspace):
+    row_body = "(acc bigint, val int) RETURNS NULL ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return acc+val'"
+    reduce_body = "(acc1 bigint, acc2 bigint) RETURNS NULL ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return acc1+acc2'"
+    final_body = "(acc bigint) RETURNS NULL ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return -acc'"
+
+    with new_function(cql, test_keyspace, row_body) as row_f:
+        with new_function(cql, test_keyspace, reduce_body) as reduce_f:
+            with new_function(cql, test_keyspace, final_body) as final_f:
+                aggr_body = f"(int) SFUNC {row_f} STYPE bigint REDUCEFUNC {reduce_f} FINALFUNC {final_f} INITCOND 0"
+                with new_aggregate(cql, test_keyspace, aggr_body) as aggr_f:
+                    result = cql.execute(f"SELECT aggregate_name, reduce_func, state_type FROM system_schema.scylla_aggregates WHERE keyspace_name = '{test_keyspace}' AND aggregate_name = '{aggr_f}' AND argument_types = ['int']").one()
+                    assert result == (aggr_f, reduce_f, 'bigint')

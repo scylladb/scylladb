@@ -84,8 +84,8 @@ class TestSuite(ABC):
     _next_id = 0
 
     def __init__(self, path: str, cfg: dict, options: argparse.Namespace, mode: str) -> None:
-        self.path = path
-        self.name = os.path.basename(self.path)
+        self.suite_path = pathlib.Path(path)
+        self.name = str(self.suite_path.name)
         self.cfg = cfg
         self.options = options
         self.mode = mode
@@ -198,9 +198,13 @@ class TestSuite(ABC):
         """Tests which participate in a consolidated junit report"""
         return self.tests
 
-    async def add_test_list(self):
+    def build_test_list(self) -> List[str]:
+        return [os.path.splitext(t.relative_to(self.suite_path))[0] for t in
+                self.suite_path.glob(self.pattern)]
+
+    async def add_test_list(self) -> None:
         options = self.options
-        lst = [os.path.splitext(os.path.basename(t))[0] for t in glob.glob(os.path.join(self.path, self.pattern))]
+        lst = self.build_test_list()
         if lst:
             # Some tests are long and are better to be started earlier,
             # so pop them up while sorting the list
@@ -365,13 +369,19 @@ class PythonTestSuite(TestSuite):
         else:
             raise RuntimeError("Unsupported topology name")
 
-    async def add_test(self, shortname) -> None:
-        test = PythonTest(self.next_id, shortname, self)
-        self.tests.append(test)
+    def build_test_list(self) -> List[str]:
+        """For pytest, search for directories recursively"""
+        path = self.suite_path
+        pytests = itertools.chain(path.rglob("*_test.py"), path.rglob("test_*.py"))
+        return [os.path.splitext(t.relative_to(self.suite_path))[0] for t in pytests]
 
     @property
     def pattern(self) -> str:
-        return "test_*.py"
+        assert False
+
+    async def add_test(self, shortname) -> None:
+        test = PythonTest(self.next_id, shortname, self)
+        self.tests.append(test)
 
 
 class CQLApprovalTestSuite(PythonTestSuite):
@@ -379,6 +389,12 @@ class CQLApprovalTestSuite(PythonTestSuite):
 
     def __init__(self, path, cfg, options: argparse.Namespace, mode) -> None:
         super().__init__(path, cfg, options, mode)
+
+    def build_test_list(self) -> List[str]:
+        """For CQL tests, search for directories recursively"""
+        path = self.suite_path
+        cqltests = itertools.chain(path.rglob("*_test.cql"), path.rglob("test_*.cql"))
+        return [os.path.splitext(t.relative_to(self.suite_path))[0] for t in cqltests]
 
     async def add_test(self, shortname: str) -> None:
         test = CQLApprovalTest(self.next_id, shortname, self)
@@ -425,6 +441,7 @@ class Test:
         # Unique file name, which is also readable by human, as filename prefix
         self.uname = "{}.{}".format(self.shortname, self.id)
         self.log_filename = pathlib.Path(suite.options.tmpdir) / self.mode / (self.uname + ".log")
+        self.log_filename.parent.mkdir(parents=True, exist_ok=True)
         self.is_flaky = self.shortname in suite.flaky_tests
         # True if the test was retried after it failed
         self.is_flaky_failure = False
@@ -576,10 +593,12 @@ class CQLApprovalTest(Test):
         super().__init__(test_no, shortname, suite)
         # Path to cql_repl driver, in the given build mode
         self.path = "pytest"
-        self.cql = os.path.join(suite.path, self.shortname + ".cql")
-        self.result = os.path.join(suite.path, self.shortname + ".result")
+        self.cql = suite.suite_path / (self.shortname + ".cql")
+        self.result = suite.suite_path / (self.shortname + ".result")
         self.tmpfile = os.path.join(suite.options.tmpdir, self.mode, self.uname + ".reject")
-        self.reject = os.path.join(suite.path, self.shortname + ".reject")
+        self.reject = suite.suite_path / (self.shortname + ".reject")
+        self.server_log: Optional[str] = None
+        self.server_log_filename: Optional[str] = None
         CQLApprovalTest._reset(self)
 
     def _reset(self) -> None:
@@ -592,6 +611,7 @@ class CQLApprovalTest(Test):
         self.summary = "not run"
         self.unidiff: Optional[str] = None
         self.server_log = None
+        self.server_log_filename = None
         self.env: Dict[str, str] = dict()
         old_tmpfile = pathlib.Path(self.tmpfile)
         if old_tmpfile.exists():
@@ -610,7 +630,7 @@ class CQLApprovalTest(Test):
         def set_summary(summary):
             self.summary = summary
             logging.info("Test %s %s", self.uname, summary)
-            if self.server_log:
+            if self.server_log is not None:
                 logging.info("Server log:\n%s", self.server_log)
 
         async with self.suite.clusters.instance() as cluster:
@@ -651,6 +671,7 @@ Check test log at {}.""".format(self.log_filename))
                 # 2) failed test execution.
                 if self.is_executed_ok is False:
                     self.server_log = cluster[0].read_log()
+                    self.server_log_filename = cluster[0].log_filename
                     if self.is_before_test_ok is False:
                         set_summary("pre-check failed: {}".format(e))
                         print("Test {} {}".format(self.name, self.summary))
@@ -675,7 +696,7 @@ Check test log at {}.""".format(self.log_filename))
                                        self.summary))
         if self.is_executed_ok is False:
             print(read_log(self.log_filename))
-            if self.server_log:
+            if self.server_log is not None:
                 print("Server log of the first server:")
                 print(self.server_log)
         elif self.is_equal_result is False and self.unidiff:
@@ -689,9 +710,9 @@ Check test log at {}.""".format(self.log_filename))
             if self.log_filename.exists():
                 system_out = ET.SubElement(xml_res, 'system-out')
                 system_out.text = read_log(self.log_filename)
-            if self.server_log:
+            if self.server_log_filename:
                 system_err = ET.SubElement(xml_res, 'system-err')
-                system_err.text = read_log(self.server_log)
+                system_err.text = read_log(self.server_log_filename)
         elif self.unidiff:
             system_out = ET.SubElement(xml_res, 'system-out')
             system_out.text = palette.nocolor(self.unidiff)
@@ -702,7 +723,7 @@ class RunTest(Test):
 
     def __init__(self, test_no: int, shortname: str, suite) -> None:
         super().__init__(test_no, shortname, suite)
-        self.path = os.path.join(suite.path, shortname)
+        self.path = suite.suite_path / shortname
         self.xmlout = os.path.join(suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
         self.args = ["--junit-xml={}".format(self.xmlout)]
         RunTest._reset(self)
@@ -729,11 +750,14 @@ class PythonTest(Test):
         super().__init__(test_no, shortname, suite)
         self.path = "pytest"
         self.xmlout = os.path.join(self.suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
+        self.server_log: Optional[str] = None
+        self.server_log_filename: Optional[str] = None
         PythonTest._reset(self)
 
     def _reset(self) -> None:
         """Reset the test before a retry, if it is retried as flaky"""
         self.server_log = None
+        self.server_log_filename = None
         self.is_before_test_ok = False
         self.is_after_test_ok = False
         self.args = [
@@ -741,12 +765,12 @@ class PythonTest(Test):
             "-o",
             "junit_family=xunit2",
             "--junit-xml={}".format(self.xmlout),
-            os.path.join(self.suite.path, self.shortname + ".py")]
+            str(self.suite.suite_path / (self.shortname + ".py"))]
 
     def print_summary(self) -> None:
         print("Output of {} {}:".format(self.path, " ".join(self.args)))
         print(read_log(self.log_filename))
-        if self.server_log:
+        if self.server_log is not None:
             print("Server log of the first server:")
             print(self.server_log)
 
@@ -765,6 +789,7 @@ class PythonTest(Test):
                 self.success = status
             except Exception as e:
                 self.server_log = cluster[0].read_log()
+                self.server_log_filename = cluster[0].log_filename
                 if self.is_before_test_ok is False:
                     print("Test {} pre-check failed: {}".format(self.name, str(e)))
                     print("Server log of the first server:\n{}".format(self.server_log))
@@ -775,9 +800,9 @@ class PythonTest(Test):
 
     def write_junit_failure_report(self, xml_res: ET.Element) -> None:
         super().write_junit_failure_report(xml_res)
-        if self.server_log:
+        if self.server_log_filename is not None:
             system_err = ET.SubElement(xml_res, 'system-err')
-            system_err.text = read_log(self.server_log)
+            system_err.text = read_log(self.server_log_filename)
 
 
 class TabularConsoleOutput:

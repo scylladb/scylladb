@@ -46,6 +46,20 @@ logging::logger expr_logger("cql_expression");
 using boost::adaptors::filtered;
 using boost::adaptors::transformed;
 
+bool operator==(const expression& e1, const expression& e2) {
+    if (e1._v->v.index() != e2._v->v.index()) {
+        return false;
+    }
+    return expr::visit([&] <typename T> (const T& e1_element) {
+        const T& e2_element = expr::as<T>(e2);
+        return e1_element == e2_element;
+    }, e1);
+}
+
+bool operator!=(const expression& e1, const expression& e2) {
+    return !(e1 == e2);
+}
+
 expression::expression(const expression& o)
         : _v(std::make_unique<impl>(*o._v)) {
 }
@@ -727,6 +741,25 @@ expression make_conjunction(expression a, expression b) {
     return conjunction{std::move(children)};
 }
 
+static
+void
+do_factorize(std::vector<expression>& factors, expression e) {
+    if (auto c = expr::as_if<conjunction>(&e)) {
+        for (auto&& element : c->children) {
+            do_factorize(factors, std::move(element));
+        }
+    } else {
+        factors.push_back(std::move(e));
+    }
+}
+
+std::vector<expression>
+boolean_factors(expression e) {
+    std::vector<expression> ret;
+    do_factorize(ret, std::move(e));
+    return ret;
+}
+
 template<typename T>
 nonwrapping_range<std::remove_cvref_t<T>> to_range(oper_t op, T&& val) {
     using U = std::remove_cvref_t<T>;
@@ -1026,6 +1059,21 @@ bool has_supporting_index(
             : boost::algorithm::any_of(
                     indexes | filtered([] (const secondary_index::index& i) { return !i.metadata().local(); }),
                     support);
+}
+
+bool index_supports_some_column(
+        const expression& e,
+        const secondary_index::secondary_index_manager& index_manager,
+        allow_local_index allow_local) {
+    single_column_restrictions_map single_col_restrictions = get_single_column_restrictions_map(e);
+
+    for (auto&& [col, col_restrictions] : single_col_restrictions) {
+        if (has_supporting_index(col_restrictions, index_manager, allow_local)) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 std::ostream& operator<<(std::ostream& os, const column_value& cv) {
@@ -2460,6 +2508,16 @@ bool contains_multi_column_restriction(const expression& e) {
         return is<tuple_constructor>(binop.lhs);
     });
     return find_res != nullptr;
+}
+
+bool has_only_eq_binops(const expression& e) {
+    const expr::binary_operator* non_eq_binop = find_in_expression<expr::binary_operator>(e,
+        [](const expr::binary_operator& binop) {
+            return binop.op != expr::oper_t::EQ;
+        }
+    );
+
+    return non_eq_binop == nullptr;
 }
 } // namespace expr
 } // namespace cql3

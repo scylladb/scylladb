@@ -66,13 +66,13 @@ public:
     future<read_barrier_reply> execute_read_barrier(server_id, seastar::abort_source* as) override;
     future<add_entry_reply> execute_add_entry(server_id from, command cmd, seastar::abort_source* as) override;
     future<add_entry_reply> execute_modify_config(server_id from,
-        std::vector<server_address> add, std::vector<server_id> del, seastar::abort_source* as) override;
+        std::vector<config_member> add, std::vector<server_id> del, seastar::abort_source* as) override;
     future<snapshot_reply> apply_snapshot(server_id from, install_snapshot snp) override;
 
 
     // server interface
     future<> add_entry(command command, wait_type type, seastar::abort_source* as = nullptr) override;
-    future<> set_configuration(server_address_set c_new, seastar::abort_source* as = nullptr) override;
+    future<> set_configuration(config_member_set c_new, seastar::abort_source* as = nullptr) override;
     raft::configuration get_configuration() const override;
     future<> start() override;
     future<> abort() override;
@@ -87,7 +87,7 @@ public:
     void tick() override;
     raft::server_id id() const override;
     future<> stepdown(logical_clock::duration timeout) override;
-    future<> modify_config(std::vector<server_address> add, std::vector<server_id> del, seastar::abort_source* as = nullptr) override;
+    future<> modify_config(std::vector<config_member> add, std::vector<server_id> del, seastar::abort_source* as = nullptr) override;
     future<entry_id> add_entry_on_leader(command command, seastar::abort_source* as);
     void register_metrics() override;
 private:
@@ -308,9 +308,9 @@ future<> server_impl::start() {
         // Account both for current and previous configurations since
         // the last configuration idx can point to the joint configuration entry.
         rpc_config.current.merge(rpc_config.previous);
-        for (const auto& addr: rpc_config.current) {
-            add_to_rpc_config(addr);
-            _rpc->add_server(addr.id, addr.info);
+        for (const auto& s: rpc_config.current) {
+            add_to_rpc_config(s.addr);
+            _rpc->add_server(s.addr);
         }
     }
 
@@ -516,7 +516,7 @@ future<> server_impl::add_entry(command command, wait_type type, seastar::abort_
 }
 
 future<add_entry_reply> server_impl::execute_modify_config(server_id from,
-    std::vector<server_address> add, std::vector<server_id> del, seastar::abort_source* as) {
+    std::vector<config_member> add, std::vector<server_id> del, seastar::abort_source* as) {
 
     if (from != _id && !_fsm->get_configuration().contains(from)) {
         // Do not accept entries from servers removed from the
@@ -526,25 +526,29 @@ future<add_entry_reply> server_impl::execute_modify_config(server_id from,
     try {
         // Wait for a new slot to become available
         auto cfg = get_configuration().current;
-        for (auto& addr : add) {
-            logger.trace("[{}] adding server {} as {}", id(), addr.id,
-                    addr.can_vote? "voter" : "non-voter");
-            auto it = cfg.find(addr);
+        for (auto& s : add) {
+            logger.trace("[{}] adding server {} as {}", id(), s.addr.id,
+                    s.can_vote? "voter" : "non-voter");
+            auto it = cfg.find(s);
             if (it == cfg.end()) {
-                cfg.insert(addr);
-            } else if (it->can_vote != addr.can_vote) {
-                cfg.erase(addr);
-                cfg.insert(addr);
+                cfg.insert(s);
+            } else if (it->can_vote != s.can_vote) {
+                cfg.erase(s);
+                cfg.insert(s);
                 logger.trace("[{}] server {} already in configuration now {}",
-                        id(), addr.id, addr.can_vote? "voter" : "non-voter");
+                        id(), s.addr.id, s.can_vote? "voter" : "non-voter");
             } else {
                 logger.warn("[{}] the server {} already exists in configuration as {}",
-                        id(), addr.id, addr.can_vote? "voter" : "non-voter");
+                        id(), s.addr.id, s.can_vote? "voter" : "non-voter");
             }
         }
         for (auto& to_remove: del) {
             logger.trace("[{}] removing server {}", id(), to_remove);
-            cfg.erase(server_address{.id = to_remove});
+            // erase(to_remove) only available from C++23
+            auto it = cfg.find(to_remove);
+            if (it != cfg.end()) {
+                cfg.erase(it);
+            }
         }
         co_await set_configuration(cfg, as);
 
@@ -564,7 +568,7 @@ future<add_entry_reply> server_impl::execute_modify_config(server_id from,
     co_return add_entry_reply{not_a_leader{_fsm->current_leader()}};
 }
 
-future<> server_impl::modify_config(std::vector<server_address> add, std::vector<server_id> del, seastar::abort_source* as) {
+future<> server_impl::modify_config(std::vector<config_member> add, std::vector<server_id> del, seastar::abort_source* as) {
     server_id leader = _fsm->current_leader();
     if (!_config.enable_forwarding) {
         if (leader != _id) {
@@ -773,15 +777,20 @@ void server_impl::send_message(server_id id, Message m) {
     }, std::move(m));
 }
 
-static configuration_diff diff_address_sets(const server_address_set& prev, const server_address_set& current) {
-    configuration_diff result;
+// Like `configuration_diff` but with `can_vote` information forgotten.
+struct rpc_config_diff {
+    server_address_set joining, leaving;
+};
+
+static rpc_config_diff diff_address_sets(const server_address_set& prev, const config_member_set& current) {
+    rpc_config_diff result;
     for (const auto& s : current) {
-        if (!prev.contains(s)) {
-            result.joining.insert(s);
+        if (!prev.contains(s.addr)) {
+            result.joining.insert(s.addr);
         }
     }
     for (const auto& s : prev) {
-        if (!current.contains(s)) {
+        if (!current.contains(s.id)) {
             result.leaving.insert(s);
         }
     }
@@ -842,13 +851,12 @@ future<> server_impl::io_fiber(index_t last_stable) {
             // It should be done prior to sending the messages since the RPC
             // module needs to know who should it send the messages to (actual
             // network addresses of the joining servers).
-            configuration_diff rpc_diff;
+            rpc_config_diff rpc_diff;
             if (batch.configuration) {
-                const server_address_set& current_rpc_config = get_rpc_config();
                 rpc_diff = diff_address_sets(get_rpc_config(), *batch.configuration);
                 for (const auto& addr: rpc_diff.joining) {
                     add_to_rpc_config(addr);
-                    _rpc->add_server(addr.id, addr.info);
+                    _rpc->add_server(addr);
                 }
             }
 
@@ -896,7 +904,7 @@ future<> server_impl::io_fiber(index_t last_stable) {
                 if (_stepdown_promise) {
                     std::exchange(_stepdown_promise, std::nullopt)->set_value();
                 }
-                if (!_current_rpc_config.contains(server_address{_id})) {
+                if (!_current_rpc_config.contains(_id)) {
                     // If the node is no longer part of a config and no longer the leader
                     // it will never know the status of entries it submitted
                     drop_waiters();
@@ -1256,7 +1264,7 @@ future<> server_impl::abort() {
     co_await seastar::when_all_succeed(all_futures.begin(), all_futures.end()).discard_result();
 }
 
-future<> server_impl::set_configuration(server_address_set c_new, seastar::abort_source* as) {
+future<> server_impl::set_configuration(config_member_set c_new, seastar::abort_source* as) {
     const auto& cfg = _fsm->get_configuration();
     // 4.1 Cluster membership changes. Safety.
     // When the leader receives a request to add or remove a server
@@ -1272,8 +1280,8 @@ future<> server_impl::set_configuration(server_address_set c_new, seastar::abort
     const auto& e = _fsm->add_entry(raft::configuration{std::move(c_new)});
 
     // We've just submitted a joint configuration to be committed.
-    // Immediately, without yield, once the FSM discovers
-    // joint configuration, it appends a corresponding non-joint entry.
+    // Once the FSM discovers a committed joint configuration,
+    // it appends a corresponding non-joint entry.
     // By waiting for the joint configuration first we ensure
     // that the next non-joint configuration we get from fsm in io_fiber
     // would be the one corresponding to our joint configuration,

@@ -225,7 +225,7 @@ Example: backup
 This example backs up the entire cluster named prod-cluster.
 The backup begins on December 9, 2019 at 16:05 and will repeat at this time every 24 hours.
 The backup is stored in s3 in a directory named ``my-backups``.
-Additional examples are available in `Backup Scylla Clusters <../backup/>`_
+Additional examples are available in :doc:`Backup Scylla Clusters <backup>`
 
 .. code-block:: none
 
@@ -433,7 +433,7 @@ From this information we know the following:
 * Delimiter - whitespace character (ie '  ')
 * Keyspace / table name - system_sec/table
 
-See `Restore <restore>`_ on information how to use these files to restore a backup.
+See :doc:`Restore </operating-scylla/procedures/backup-restore/restore>` on information how to use these files to restore a backup.
 
 backup delete
 =============
@@ -516,7 +516,7 @@ This command adds the specified cluster to the manager.
 Once a Scylla cluster is added, a weekly repair task is also added.
 
 Before continuing, make sure the cluster that you want to add is prepared for it,
-see `Add a cluster to Scylla Manager <../add-a-cluster>`_ for instructions.
+see :doc:`Add a cluster to Scylla Manager <add-a-cluster>` for instructions.
 
 **Syntax:**
 
@@ -539,7 +539,7 @@ Example: cluster add
 ....................
 
 This example is only the command that you use to add the cluster to Scylla Manager, not the entire procedure for adding a cluster.
-The procedure is detailed in `Add a cluster to Scylla Manager <../add-a-cluster>`_.
+The procedure is detailed in :doc:`Add a cluster to Scylla Manager <add-a-cluster>`.
 
 .. code-block:: none
 

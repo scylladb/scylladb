@@ -29,6 +29,10 @@ public:
         , _type(type)
     { }
 
+    virtual bool is_simple_selector_factory() const override {
+        return true;
+    }
+
     virtual sstring column_name() const override {
         return _column_name;
     }

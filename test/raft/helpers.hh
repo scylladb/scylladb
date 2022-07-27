@@ -129,6 +129,7 @@ raft::fsm* select_leader(Args&&... args) {
 
 raft::server_id id();
 raft::server_address_set address_set(std::vector<raft::server_id> ids);
+raft::config_member_set config_set(std::vector<raft::server_id> ids);
 fsm_debug create_follower(raft::server_id id, raft::log log,
         raft::failure_detector& fd = trivial_failure_detector);
 
@@ -138,8 +139,10 @@ fsm_debug create_follower(raft::server_id id, raft::log log,
 utils::UUID to_raft_uuid(size_t int_id);
 raft::server_id to_raft_id(size_t int_id);
 
-// NOTE: can_vote = true
 raft::server_address to_server_address(size_t int_id);
+// NOTE: can_vote = true
+raft::config_member to_config_member(size_t int_id);
+
 size_t to_int_id(utils::UUID uuid);
 // Return true upon a random event with given probability
 bool rolladice(float probability = 1.0/2.0);
@@ -148,3 +151,11 @@ bool rolladice(float probability = 1.0/2.0);
 // It's not safe to use `as` directly on a different shard. This function routes the abort requests
 // from `as` to the other shard.
 future<> invoke_abortable_on(unsigned shard, noncopyable_function<future<>(abort_source&)> f, abort_source& as);
+
+// Server address with given ID and empty `info`.
+raft::server_address server_addr_from_id(raft::server_id);
+// Config member with given ID, empty `info`, a voter.
+raft::config_member config_member_from_id(raft::server_id);
+
+// Make a non-joint configuration from a given set of IDs by setting empty `server_info`s and `can_vote = true`.
+raft::configuration config_from_ids(std::vector<raft::server_id>);

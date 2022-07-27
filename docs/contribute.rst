@@ -22,7 +22,7 @@ The basic steps are:
 * Send a PR or use ``git format-patch`` and ``git send-email`` to send to the list
 
 
-The entire process is `documented here <https://scylla.docs.scylladb.com/master/contribute/index>`_.
+The entire process is `documented here <https://github.com/scylladb/scylla/blob/master/CONTRIBUTING.md>`_.
 
 Contribute to Scylla Docs
 -------------------------

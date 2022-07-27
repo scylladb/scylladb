@@ -202,4 +202,4 @@ Advanced settings
 Additional resources
 ====================
 
-Scylla Manager `Configuration file <../configuration-file>`_
+Scylla Manager :doc:`Configuration file <configuration-file>`

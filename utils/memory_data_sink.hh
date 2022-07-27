@@ -55,4 +55,7 @@ public:
     virtual future<> close() override {
         return make_ready_future<>();
     }
+    size_t buffer_size() const noexcept override {
+        return 128*1024;
+    }
 };

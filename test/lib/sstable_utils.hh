@@ -377,7 +377,7 @@ public:
     future<> run(utils::UUID output_run_id, replica::column_family* cf, noncopyable_function<future<> (sstables::compaction_data&)> job);
 
     void propagate_replacement(replica::table* t, const std::vector<sstables::shared_sstable>& removed, const std::vector<sstables::shared_sstable>& added) {
-        _cm.propagate_replacement(t, removed, added);
+        _cm.propagate_replacement(t->as_table_state(), removed, added);
     }
 private:
     sstables::compaction_data& register_compaction(shared_ptr<compaction_manager::task> task);

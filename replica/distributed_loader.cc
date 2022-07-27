@@ -96,7 +96,7 @@ distributed_loader::process_sstable_dir(sharded<sstables::sstable_directory>& di
     co_await dir.invoke_on_all([&dir, sort_sstables_according_to_owner] (sstables::sstable_directory& d) -> future<> {
         // Supposed to be called with the node either down or on behalf of maintenance tasks
         // like nodetool refresh
-        co_await d.process_sstable_dir(service::get_local_streaming_priority(), sort_sstables_according_to_owner);
+        co_await d.process_sstable_dir(sort_sstables_according_to_owner);
         co_await d.move_foreign_sstables(dir);
     });
 
@@ -198,8 +198,7 @@ future<> run_resharding_jobs(sharded<sstables::sstable_directory>& dir, std::vec
         auto info_vec = std::move(reshard_jobs[this_shard_id()].info_vec);
         auto& cm = db.local().get_compaction_manager();
         auto max_threshold = table.schema()->max_compaction_threshold();
-        auto& iop = service::get_local_streaming_priority();
-        co_await d.reshard(std::move(info_vec), cm, table, max_threshold, creator, iop);
+        co_await d.reshard(std::move(info_vec), cm, table, max_threshold, creator);
         co_await d.move_foreign_sstables(dir);
     });
 
@@ -243,8 +242,7 @@ distributed_loader::reshape(sharded<sstables::sstable_directory>& dir, sharded<r
     auto total_size = co_await dir.map_reduce0([&dir, &db, ks_name = std::move(ks_name), table_name = std::move(table_name), creator = std::move(creator), mode, filter] (sstables::sstable_directory& d) {
         auto& table = db.local().find_column_family(ks_name, table_name);
         auto& cm = db.local().get_compaction_manager();
-        auto& iop = service::get_local_streaming_priority();
-        return d.reshape(cm, table, creator, iop, mode, filter);
+        return d.reshape(cm, table, creator, mode, filter);
     }, uint64_t(0), std::plus<uint64_t>());
 
     if (total_size > 0) {
@@ -300,7 +298,8 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
 
         sharded<sstables::sstable_directory> directory;
         auto upload = fs::path(global_table->dir()) / sstables::upload_dir;
-        directory.start(upload, db.local().get_config().initial_sstable_loading_concurrency(), std::ref(db.local().get_sharded_sst_dir_semaphore()),
+        directory.start(upload, service::get_local_streaming_priority(),
+            db.local().get_config().initial_sstable_loading_concurrency(), std::ref(db.local().get_sharded_sst_dir_semaphore()),
             sstables::sstable_directory::need_mutate_level::yes,
             sstables::sstable_directory::lack_of_toc_fatal::no,
             sstables::sstable_directory::enable_dangerous_direct_import_of_cassandra_counters(db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters()),
@@ -366,7 +365,8 @@ distributed_loader::get_sstables_from_upload_dir(distributed<replica::database>&
         auto table_id = global_table->schema()->id();
         auto upload = fs::path(global_table->dir()) / sstables::upload_dir;
 
-        directory.start(upload, db.local().get_config().initial_sstable_loading_concurrency(), std::ref(db.local().get_sharded_sst_dir_semaphore()),
+        directory.start(upload, service::get_local_streaming_priority(),
+            db.local().get_config().initial_sstable_loading_concurrency(), std::ref(db.local().get_sharded_sst_dir_semaphore()),
             sstables::sstable_directory::need_mutate_level::yes,
             sstables::sstable_directory::lack_of_toc_fatal::no,
             sstables::sstable_directory::enable_dangerous_direct_import_of_cassandra_counters(db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters()),
@@ -458,7 +458,8 @@ future<> distributed_loader::populate_column_family(distributed<replica::databas
         global_column_family_ptr global_table(db, ks, cf);
 
         sharded<sstables::sstable_directory> directory;
-        directory.start(fs::path(sstdir), db.local().get_config().initial_sstable_loading_concurrency(), std::ref(db.local().get_sharded_sst_dir_semaphore()),
+        directory.start(fs::path(sstdir), default_priority_class(),
+            db.local().get_config().initial_sstable_loading_concurrency(), std::ref(db.local().get_sharded_sst_dir_semaphore()),
             sstables::sstable_directory::need_mutate_level::no,
             sstables::sstable_directory::lack_of_toc_fatal::yes,
             sstables::sstable_directory::enable_dangerous_direct_import_of_cassandra_counters(db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters()),

@@ -70,6 +70,10 @@ abstract_function_selector::new_factory(shared_ptr<functions::function> fun, sha
             return _fun->is_aggregate() || _factories->contains_only_aggregate_functions();
         }
 
+        virtual bool contains_only_simple_arguments() const override {
+            return _factories->contains_only_simple_selection();
+        }
+
         virtual bool is_count_selector_factory() const override {
             auto p = dynamic_cast<functions::abstract_function*>(_fun.get());
             if (!p) {
@@ -77,6 +81,31 @@ abstract_function_selector::new_factory(shared_ptr<functions::function> fun, sha
             }
             return p->name().name == "countRows";
         }
+
+        virtual bool is_reducible_selector_factory() const override {
+            auto p = dynamic_cast<functions::aggregate_function*>(_fun.get());
+            if (!p) {
+                return false;
+            }
+            return p->is_reducible();
+        }
+
+        virtual std::optional<std::pair<query::forward_request::reduction_type, query::forward_request::aggregation_info>> 
+        get_reduction() const override {
+            auto p = dynamic_cast<functions::aggregate_function*>(_fun.get());
+            if (!p) {
+                return std::nullopt;
+            }
+
+            auto type = (p->name().name == "countRows") ? query::forward_request::reduction_type::count : query::forward_request::reduction_type::aggregate;
+            auto info = query::forward_request::aggregation_info {
+                .name = p->name(),
+                .column_names = _factories->get_column_names()
+            };
+
+            return {{type, info}};
+        }
+
     };
 
     return make_shared<fun_selector_factory>(std::move(fun), std::move(factories));

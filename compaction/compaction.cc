@@ -181,7 +181,7 @@ static api::timestamp_type get_max_purgeable_timestamp(const table_state& table_
 }
 
 static std::vector<shared_sstable> get_uncompacting_sstables(const table_state& table_s, std::vector<shared_sstable> sstables) {
-    auto all_sstables = boost::copy_range<std::vector<shared_sstable>>(*table_s.get_sstable_set().all());
+    auto all_sstables = boost::copy_range<std::vector<shared_sstable>>(*table_s.main_sstable_set().all());
     auto& compacted_undeleted = table_s.compacted_undeleted_sstables();
     all_sstables.insert(all_sstables.end(), compacted_undeleted.begin(), compacted_undeleted.end());
     boost::sort(all_sstables, [] (const shared_sstable& x, const shared_sstable& y) {

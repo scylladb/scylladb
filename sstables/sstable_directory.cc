@@ -30,6 +30,7 @@ bool manifest_json_filter(const fs::path&, const directory_entry& entry) {
 }
 
 sstable_directory::sstable_directory(fs::path sstable_dir,
+        ::io_priority_class io_prio,
         unsigned load_parallelism,
         semaphore& load_semaphore,
         need_mutate_level need_mutate_level,
@@ -38,6 +39,7 @@ sstable_directory::sstable_directory(fs::path sstable_dir,
         allow_loading_materialized_view allow_mv,
         sstable_object_from_existing_fn sstable_from_existing)
     : _sstable_dir(std::move(sstable_dir))
+    , _io_priority(std::move(io_prio))
     , _load_parallelism(load_parallelism)
     , _load_semaphore(load_semaphore)
     , _need_mutate_level(need_mutate_level)
@@ -97,13 +99,13 @@ void sstable_directory::validate(sstables::shared_sstable sst) const {
 }
 
 future<>
-sstable_directory::process_descriptor(sstables::entry_descriptor desc, const ::io_priority_class& iop, bool sort_sstables_according_to_owner) {
+sstable_directory::process_descriptor(sstables::entry_descriptor desc, bool sort_sstables_according_to_owner) {
     if (desc.version > _max_version_seen) {
         _max_version_seen = desc.version;
     }
 
     auto sst = _sstable_object_from_existing_sstable(_sstable_dir, desc.generation, desc.version, desc.format);
-    return sst->load(iop).then([this, sst] {
+    return sst->load(_io_priority).then([this, sst] {
         validate(sst);
         if (_need_mutate_level) {
             dirlog.trace("Mutating {} to level 0\n", sst->get_filename());
@@ -153,7 +155,7 @@ sstable_directory::highest_version_seen() const {
 }
 
 future<>
-sstable_directory::process_sstable_dir(const ::io_priority_class& iop, bool sort_sstables_according_to_owner) {
+sstable_directory::process_sstable_dir(bool sort_sstables_according_to_owner) {
     dirlog.debug("Start processing directory {} for SSTables", _sstable_dir);
 
     // It seems wasteful that each shard is repeating this scan, and to some extent it is.
@@ -211,11 +213,11 @@ sstable_directory::process_sstable_dir(const ::io_priority_class& iop, bool sort
 
     // _descriptors is everything with a TOC. So after we remove this, what's left is
     // SSTables for which a TOC was not found.
-    co_await parallel_for_each_restricted(state.descriptors, [this, sort_sstables_according_to_owner, &state, &iop] (std::tuple<generation_type, sstables::entry_descriptor>&& t) {
+    co_await parallel_for_each_restricted(state.descriptors, [this, sort_sstables_according_to_owner, &state] (std::tuple<generation_type, sstables::entry_descriptor>&& t) {
         auto& desc = std::get<1>(t);
         state.generations_found.erase(desc.generation);
         // This will try to pre-load this file and throw an exception if it is invalid
-        return process_descriptor(std::move(desc), iop, sort_sstables_according_to_owner);
+        return process_descriptor(std::move(desc), sort_sstables_according_to_owner);
     });
 
     // For files missing TOC, it depends on where this is coming from.
@@ -337,16 +339,16 @@ sstable_directory::collect_output_sstables_from_reshaping(std::vector<sstables::
     });
 }
 
-future<uint64_t> sstable_directory::reshape(compaction_manager& cm, replica::table& table, sstables::compaction_sstable_creator_fn creator, const ::io_priority_class& iop,
+future<uint64_t> sstable_directory::reshape(compaction_manager& cm, replica::table& table, sstables::compaction_sstable_creator_fn creator,
                                             sstables::reshape_mode mode, sstable_filter_func_t sstable_filter)
 {
-    return do_with(uint64_t(0), std::move(sstable_filter), [this, &cm, &table, creator = std::move(creator), iop, mode] (uint64_t& reshaped_size, sstable_filter_func_t& filter) mutable {
-        return repeat([this, &cm, &table, creator = std::move(creator), iop, &reshaped_size, mode, &filter] () mutable {
+    return do_with(uint64_t(0), std::move(sstable_filter), [this, &cm, &table, creator = std::move(creator), mode] (uint64_t& reshaped_size, sstable_filter_func_t& filter) mutable {
+        return repeat([this, &cm, &table, creator = std::move(creator), &reshaped_size, mode, &filter] () mutable {
             auto reshape_candidates = boost::copy_range<std::vector<shared_sstable>>(_unshared_local_sstables
                     | boost::adaptors::filtered([this, &filter] (const auto& sst) {
                 return filter(sst);
             }));
-            auto desc = table.get_compaction_strategy().get_reshaping_job(std::move(reshape_candidates), table.schema(), iop, mode);
+            auto desc = table.get_compaction_strategy().get_reshaping_job(std::move(reshape_candidates), table.schema(), _io_priority, mode);
             if (desc.sstables.empty()) {
                 return make_ready_future<stop_iteration>(stop_iteration::yes);
             }
@@ -363,7 +365,7 @@ future<uint64_t> sstable_directory::reshape(compaction_manager& cm, replica::tab
 
             desc.creator = creator;
 
-            return cm.run_custom_job(&table, compaction_type::Reshape, "Reshape compaction", [this, &table, sstlist = std::move(sstlist), desc = std::move(desc)] (sstables::compaction_data& info) mutable {
+            return cm.run_custom_job(table.as_table_state(), compaction_type::Reshape, "Reshape compaction", [this, &table, sstlist = std::move(sstlist), desc = std::move(desc)] (sstables::compaction_data& info) mutable {
                 return sstables::compact_sstables(std::move(desc), info, table.as_table_state()).then([this, sstlist = std::move(sstlist)] (sstables::compaction_result result) mutable {
                     return remove_input_sstables_from_reshaping(std::move(sstlist)).then([this, new_sstables = std::move(result.new_sstables)] () mutable {
                         return collect_output_sstables_from_reshaping(std::move(new_sstables));
@@ -389,7 +391,7 @@ future<uint64_t> sstable_directory::reshape(compaction_manager& cm, replica::tab
 
 future<>
 sstable_directory::reshard(sstable_info_vector shared_info, compaction_manager& cm, replica::table& table,
-                           unsigned max_sstables_per_job, sstables::compaction_sstable_creator_fn creator, const ::io_priority_class& iop)
+                           unsigned max_sstables_per_job, sstables::compaction_sstable_creator_fn creator)
 {
     // Resharding doesn't like empty sstable sets, so bail early. There is nothing
     // to reshard in this shard.
@@ -403,7 +405,7 @@ sstable_directory::reshard(sstable_info_vector shared_info, compaction_manager& 
     auto sstables_per_job = shared_info.size() / num_jobs;
 
     using reshard_buckets = std::vector<std::vector<sstables::shared_sstable>>;
-    return do_with(reshard_buckets(1), [this, &cm, &table, sstables_per_job, iop, num_jobs, creator = std::move(creator), shared_info = std::move(shared_info)] (reshard_buckets& buckets) mutable {
+    return do_with(reshard_buckets(1), [this, &cm, &table, sstables_per_job, num_jobs, creator = std::move(creator), shared_info = std::move(shared_info)] (reshard_buckets& buckets) mutable {
         return parallel_for_each(shared_info, [this, sstables_per_job, num_jobs, &buckets] (sstables::foreign_sstable_open_info& info) {
             auto sst = _sstable_object_from_existing_sstable(_sstable_dir, info.generation, info.version, info.format);
             return sst->load(std::move(info)).then([this, &buckets, sstables_per_job, num_jobs, sst = std::move(sst)] () mutable {
@@ -413,13 +415,13 @@ sstable_directory::reshard(sstable_info_vector shared_info, compaction_manager& 
                 }
                 buckets.back().push_back(std::move(sst));
             });
-        }).then([this, &cm, &table, &buckets, iop, creator = std::move(creator)] () mutable {
+        }).then([this, &cm, &table, &buckets, creator = std::move(creator)] () mutable {
             // There is a semaphore inside the compaction manager in run_resharding_jobs. So we
             // parallel_for_each so the statistics about pending jobs are updated to reflect all
             // jobs. But only one will run in parallel at a time
-            return parallel_for_each(buckets, [this, iop, &cm, &table, creator = std::move(creator)] (std::vector<sstables::shared_sstable>& sstlist) mutable {
-                return cm.run_custom_job(&table, compaction_type::Reshard, "Reshard compaction", [this, iop, &cm, &table, creator, &sstlist] (sstables::compaction_data& info) {
-                    sstables::compaction_descriptor desc(sstlist, iop);
+            return parallel_for_each(buckets, [this, &cm, &table, creator = std::move(creator)] (std::vector<sstables::shared_sstable>& sstlist) mutable {
+                return cm.run_custom_job(table.as_table_state(), compaction_type::Reshard, "Reshard compaction", [this, &cm, &table, creator, &sstlist] (sstables::compaction_data& info) {
+                    sstables::compaction_descriptor desc(sstlist, _io_priority);
                     desc.options = sstables::compaction_type_options::make_reshard();
                     desc.creator = std::move(creator);
 

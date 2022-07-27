@@ -103,7 +103,7 @@ class raft_address_map {
     public:
         // Base type for LRU list of expiring entries.
         //
-        // When an entry is created with or promoted to expiring state, an
+        // When an entry is created with state, an
         // entry in this list is created, holding a pointer to the base entry
         // which contains the data.
         //
@@ -196,7 +196,6 @@ class raft_address_map {
     //
     // Rearmed automatically in the following cases:
     // * A new expiring entry is created
-    // * Regular entry is promoted to expiring
     // * If there are still some expiring entries left in the LRU list after
     //   the cleanup is finished.
     seastar::timer<Clock> _timer;
@@ -280,6 +279,7 @@ public:
         return {};
     }
     // Inserts a new mapping or updates the existing one.
+    // An entry can be changed from expiring to non expiring one, but not the other way.
     // The function verifies that if the mapping exists, then its inet_address
     // and the provided one match.
     //
@@ -307,23 +307,14 @@ public:
                 set_it->_addr, id, addr));
         }
 
-        if (set_it->expiring() && !expiring) {
-            // Change the mapping from expiring to regular
-            unlink_and_dispose(to_list_iterator(set_it));
-        } else if (!set_it->expiring() && expiring) {
-            // Promote regular mapping to expiring
-            //
-            // Insert a pointer to the entry into lru list of expiring entries
-            auto ts_ptr = new expiring_entry_ptr(_expiring_list, &*set_it);
-            // Update last access timestamp and add to LRU list
-            ts_ptr->touch();
-            // Rearm the timer since we are inserting an expiring entry
-            if (!_timer.armed()) {
-                _timer.arm(_expiry_period);
+        if (set_it->expiring()) {
+            if (!expiring) {
+                // Change the mapping from expiring to regular
+                unlink_and_dispose(to_list_iterator(set_it));
+            } else {
+                // Update timestamp of expiring entry
+                to_list_iterator(set_it)->touch(); // Re-insert in the front of _expiring_list
             }
-        } else if (set_it->expiring() && expiring) {
-            // Update timestamp of expiring entry
-            to_list_iterator(set_it)->touch(); // Re-insert in the front of _expiring_list
         }
         // No action needed when a regular entry is updated
     }
@@ -357,9 +348,7 @@ public:
         return *it;
     }
     raft::server_address get_server_address(raft::server_id id) const {
-        return raft::server_address{.id = id,
-                .info = ser::serialize_to_buffer<bytes>(get_inet_address(id))
-        };
+        return raft::server_address{id, ser::serialize_to_buffer<bytes>(get_inet_address(id))};
     }
 };
 

@@ -11,6 +11,7 @@
 #include "bytes_ostream.hh"
 #include "digest_algorithm.hh"
 #include "query-request.hh"
+#include "full_position.hh"
 #include <optional>
 #include <seastar/util/bool_class.hh>
 #include "seastarx.hh"
@@ -320,6 +321,7 @@ class result {
     query::result_memory_tracker _memory_tracker;
     std::optional<uint32_t> _partition_count;
     std::optional<uint32_t> _row_count_high_bits;
+    std::optional<full_position> _last_position;
 public:
     class builder;
     class partition_writer;
@@ -327,18 +329,20 @@ public:
 
     result();
     result(bytes_ostream&& w, short_read sr, std::optional<uint32_t> c_low_bits, std::optional<uint32_t> pc,
-           std::optional<uint32_t> c_high_bits, result_memory_tracker memory_tracker = { })
+           std::optional<uint32_t> c_high_bits, std::optional<full_position> last_position, result_memory_tracker memory_tracker = { })
         : _w(std::move(w))
         , _row_count_low_bits(c_low_bits)
         , _short_read(sr)
         , _memory_tracker(std::move(memory_tracker))
         , _partition_count(pc)
         , _row_count_high_bits(c_high_bits)
+        , _last_position(std::move(last_position))
     {
         w.reduce_chunk_count();
     }
     result(bytes_ostream&& w, std::optional<result_digest> d, api::timestamp_type last_modified,
-           short_read sr, std::optional<uint32_t> c_low_bits, std::optional<uint32_t> pc, std::optional<uint32_t> c_high_bits, result_memory_tracker memory_tracker = { })
+           short_read sr, std::optional<uint32_t> c_low_bits, std::optional<uint32_t> pc, std::optional<uint32_t> c_high_bits,
+           std::optional<full_position> last_position, result_memory_tracker memory_tracker = { })
         : _w(std::move(w))
         , _digest(d)
         , _row_count_low_bits(c_low_bits)
@@ -347,22 +351,24 @@ public:
         , _memory_tracker(std::move(memory_tracker))
         , _partition_count(pc)
         , _row_count_high_bits(c_high_bits)
+        , _last_position(std::move(last_position))
     {
         w.reduce_chunk_count();
     }
     result(bytes_ostream&& w, short_read sr, uint64_t c, std::optional<uint32_t> pc,
-           result_memory_tracker memory_tracker = { })
+           std::optional<full_position> last_position, result_memory_tracker memory_tracker = { })
         : _w(std::move(w))
         , _row_count_low_bits(static_cast<uint32_t>(c))
         , _short_read(sr)
         , _memory_tracker(std::move(memory_tracker))
         , _partition_count(pc)
         , _row_count_high_bits(static_cast<uint32_t>(c >> 32))
+        , _last_position(std::move(last_position))
     {
         w.reduce_chunk_count();
     }
     result(bytes_ostream&& w, std::optional<result_digest> d, api::timestamp_type last_modified,
-           short_read sr, uint64_t c, std::optional<uint32_t> pc, result_memory_tracker memory_tracker = { })
+           short_read sr, uint64_t c, std::optional<uint32_t> pc, std::optional<full_position> last_position, result_memory_tracker memory_tracker = { })
         : _w(std::move(w))
         , _digest(d)
         , _row_count_low_bits(static_cast<uint32_t>(c))
@@ -371,6 +377,7 @@ public:
         , _memory_tracker(std::move(memory_tracker))
         , _partition_count(pc)
         , _row_count_high_bits(static_cast<uint32_t>(c >> 32))
+        , _last_position(std::move(last_position))
     {
         w.reduce_chunk_count();
     }
@@ -425,6 +432,14 @@ public:
     }
 
     void ensure_counts();
+
+    const std::optional<full_position>& last_position() const {
+        return _last_position;
+    }
+
+    // Return _last_position if replica filled it, otherwise calculate it based
+    // on the content (by looking up the last row in the last partition).
+    full_position get_or_calculate_last_position() const;
 
     struct printer {
         schema_ptr s;

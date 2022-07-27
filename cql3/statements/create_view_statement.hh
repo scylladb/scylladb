@@ -33,7 +33,7 @@ class create_view_statement : public schema_altering_statement {
 private:
     mutable cf_name _base_name;
     std::vector<::shared_ptr<selection::raw_selector>> _select_clause;
-    std::vector<expr::expression> _where_clause;
+    expr::expression _where_clause;
     std::vector<::shared_ptr<cql3::column_identifier::raw>> _partition_keys;
     std::vector<::shared_ptr<cql3::column_identifier::raw>> _clustering_keys;
     cf_properties _properties;
@@ -46,7 +46,7 @@ public:
             cf_name view_name,
             cf_name base_name,
             std::vector<::shared_ptr<selection::raw_selector>> select_clause,
-            std::vector<expr::expression> where_clause,
+            expr::expression where_clause,
             std::vector<::shared_ptr<cql3::column_identifier::raw>> partition_keys,
             std::vector<::shared_ptr<cql3::column_identifier::raw>> clustering_keys,
             bool if_not_exists);

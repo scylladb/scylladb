@@ -155,7 +155,7 @@ static future<user_types_to_drop> merge_types(distributed<service::storage_proxy
     schema_result after);
 
 static future<> merge_functions(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after);
-static future<> merge_aggregates(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after);
+static future<> merge_aggregates(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after, schema_result scylla_before, schema_result scylla_after);
 
 static future<> do_merge_schema(distributed<service::storage_proxy>&, std::vector<mutation>, bool do_flush);
 
@@ -647,6 +647,37 @@ schema_ptr aggregates() {
     return schema;
 }
 
+schema_ptr scylla_aggregates() {
+    static thread_local auto schema = [] {
+        schema_builder builder(generate_legacy_id(NAME, SCYLLA_AGGREGATES), NAME, SCYLLA_AGGREGATES,
+        // partition key
+        {{"keyspace_name", utf8_type}},
+        // clustering key
+        {
+            {"aggregate_name", utf8_type}, 
+            {"argument_types", list_type_impl::get_instance(utf8_type, false)}
+        },
+        //regular columns
+        {
+            {"reduce_func", utf8_type},
+            {"state_type", utf8_type},
+        },
+        //static columns,
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "scylla-specific information for user defined aggregates"
+        );
+        
+        builder.set_gc_grace_seconds(schema_gc_grace);
+        builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
+        builder.with_null_sharder();
+        return builder.build();
+    }();
+    return schema;
+}
+
 schema_ptr scylla_table_schema_history() {
     static thread_local auto s = [] {
         schema_builder builder(db::system_keyspace::NAME, SCYLLA_TABLE_SCHEMA_HISTORY, generate_legacy_id(db::system_keyspace::NAME, SCYLLA_TABLE_SCHEMA_HISTORY));
@@ -1075,6 +1106,7 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std:
     auto&& old_views = co_await read_tables_for_keyspaces(proxy, keyspaces, views());
     auto old_functions = co_await read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces);
     auto old_aggregates = co_await read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces);
+    auto old_scylla_aggregates = co_await read_schema_for_keyspaces(proxy, SCYLLA_AGGREGATES, keyspaces);
 
     if (proxy.local().get_db().local().uses_schema_commitlog()) {
         co_await proxy.local().get_db().local().apply(freeze(mutations), db::no_timeout);
@@ -1096,6 +1128,7 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std:
     auto&& new_views = co_await read_tables_for_keyspaces(proxy, keyspaces, views());
     auto new_functions = co_await read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces);
     auto new_aggregates = co_await read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces);
+    auto new_scylla_aggregates = co_await read_schema_for_keyspaces(proxy, SCYLLA_AGGREGATES, keyspaces);
 
     std::set<sstring> keyspaces_to_drop = co_await merge_keyspaces(proxy, std::move(old_keyspaces), std::move(new_keyspaces));
     auto types_to_drop = co_await merge_types(proxy, std::move(old_types), std::move(new_types));
@@ -1103,7 +1136,7 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std:
         std::move(old_column_families), std::move(new_column_families),
         std::move(old_views), std::move(new_views));
     co_await merge_functions(proxy, std::move(old_functions), std::move(new_functions));
-    co_await merge_aggregates(proxy, std::move(old_aggregates), std::move(new_aggregates));
+    co_await merge_aggregates(proxy, std::move(old_aggregates), std::move(new_aggregates), std::move(old_scylla_aggregates), std::move(new_scylla_aggregates));
     co_await types_to_drop.drop();
 
     co_await proxy.local().get_db().invoke_on_all([&] (replica::database& db) -> future<> {
@@ -1289,19 +1322,20 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
         return vp;
     });
 
-    co_await proxy.local().get_db().invoke_on_all([&] (replica::database& db) -> future<> {
-        // First drop views and *only then* the tables, if interleaved it can lead
-        // to a mv not finding its schema when snapshoting since the main table
-        // was already dropped (see https://github.com/scylladb/scylla/issues/5614)
-        co_await coroutine::parallel_for_each(views_diff.dropped, [&] (schema_diff::dropped_schema& dt) -> future<> {
-            auto& s = *dt.schema.get();
-            co_await db.drop_column_family(s.ks_name(), s.cf_name(), [&] { return dt.jp.value(); });
-        });
-        co_await coroutine::parallel_for_each(tables_diff.dropped, [&] (schema_diff::dropped_schema& dt) -> future<> {
-            auto& s = *dt.schema.get();
-            co_await db.drop_column_family(s.ks_name(), s.cf_name(), [&] { return dt.jp.value(); });
-        });
+    // First drop views and *only then* the tables, if interleaved it can lead
+    // to a mv not finding its schema when snapshoting since the main table
+    // was already dropped (see https://github.com/scylladb/scylla/issues/5614)
+    auto& db = proxy.local().get_db();
+    co_await coroutine::parallel_for_each(views_diff.dropped, [&db] (schema_diff::dropped_schema& dt) {
+        auto& s = *dt.schema.get();
+        return replica::database::drop_table_on_all_shards(db, s.ks_name(), s.cf_name(), [&] { return dt.jp.value(); });
+    });
+    co_await coroutine::parallel_for_each(tables_diff.dropped, [&db] (schema_diff::dropped_schema& dt) -> future<> {
+        auto& s = *dt.schema.get();
+        return replica::database::drop_table_on_all_shards(db, s.ks_name(), s.cf_name(), [&] { return dt.jp.value(); });
+    });
 
+    co_await proxy.local().get_db().invoke_on_all([&] (replica::database& db) -> future<> {
         // In order to avoid possible races we first create the tables and only then the views.
         // That way if a view seeks information about its base table it's guarantied to find it.
         co_await coroutine::parallel_for_each(tables_diff.created, [&] (global_schema_ptr& gs) -> future<> {
@@ -1371,10 +1405,7 @@ static std::vector<const query::result_set_row*> collect_rows(const std::set<sst
     return ret;
 }
 
-// Build a map from primary keys to rows.
-static std::map<std::vector<bytes>, const query::result_set_row*> build_row_map(const query::result_set& result) {
-    const std::vector<query::result_set_row>& rows = result.rows();
-    const schema_ptr& schema = result.schema();
+static std::vector<column_definition> get_primary_key_definition(const schema_ptr& schema) {
     std::vector<column_definition> primary_key;
     for (const auto& column : schema->partition_key_columns()) {
         primary_key.push_back(column);
@@ -1382,13 +1413,26 @@ static std::map<std::vector<bytes>, const query::result_set_row*> build_row_map(
     for (const auto& column : schema->clustering_key_columns()) {
         primary_key.push_back(column);
     }
+    
+    return primary_key;
+}
+
+static std::vector<bytes> get_primary_key(const std::vector<column_definition>& primary_key, const query::result_set_row* row) {
+    std::vector<bytes> key;
+    for (const auto& column : primary_key) {
+        const data_value *val = row->get_data_value(column.name_as_text());
+        key.push_back(val->serialize_nonnull());
+    }
+    return key;
+}
+
+// Build a map from primary keys to rows.
+static std::map<std::vector<bytes>, const query::result_set_row*> build_row_map(const query::result_set& result) {
+    const std::vector<query::result_set_row>& rows = result.rows();
+    auto primary_key = get_primary_key_definition(result.schema());
     std::map<std::vector<bytes>, const query::result_set_row*> ret;
     for (const auto& row: rows) {
-        std::vector<bytes> key;
-        for (const auto& column : primary_key) {
-            const data_value *val = row.get_data_value(column.name_as_text());
-            key.push_back(val->serialize_nonnull());
-        }
+        auto key = get_primary_key(primary_key, &row);
         ret.insert(std::pair(std::move(key), &row));
     }
     return ret;
@@ -1428,6 +1472,76 @@ static row_diff diff_rows(const schema_result& before, const schema_result& afte
         }
     }
     return {std::move(altered), std::move(created), std::move(dropped)};
+}
+
+// User-defined aggregate stores its information in two tables: aggregates and scylla_aggregates
+// The difference has to be joined to properly create an UDA.
+//
+// FIXME: Since UDA cannot be altered now, set of differing rows should be empty and those rows are
+// ignored in calculating the diff.
+struct aggregate_diff {
+    std::vector<std::pair<const query::result_set_row*, const query::result_set_row*>> created;
+    std::vector<std::pair<const query::result_set_row*, const query::result_set_row*>> dropped;
+};
+
+static aggregate_diff diff_aggregates_rows(const schema_result& aggr_before, const schema_result& aggr_after, 
+        const schema_result& scylla_aggr_before, const schema_result& scylla_aggr_after) {
+    using map = std::map<std::vector<bytes>, const query::result_set_row*>;
+    auto aggr_diff = difference(aggr_before, aggr_after, indirect_equal_to<lw_shared_ptr<query::result_set>>());
+
+    std::vector<std::pair<const query::result_set_row*, const query::result_set_row*>> created;
+    std::vector<std::pair<const query::result_set_row*, const query::result_set_row*>> dropped;
+
+    // Primary key for `aggregates` and `scylla_aggregates` tables
+    auto primary_key = get_primary_key_definition(aggregates());
+
+    // DROPPED
+    for (const auto& key : aggr_diff.entries_only_on_left) {
+        auto scylla_entry = scylla_aggr_before.find(key);
+        auto scylla_aggr_rows = (scylla_entry != scylla_aggr_before.end()) ? build_row_map(*scylla_entry->second) : map();
+
+        for (const auto& row : aggr_before.find(key)->second->rows()) {
+            auto pk = get_primary_key(primary_key, &row);
+            auto entry = scylla_aggr_rows.find(pk);
+            dropped.push_back({&row, (entry != scylla_aggr_rows.end()) ? entry->second : nullptr});
+        }
+    }
+    // CREATED
+    for (const auto& key : aggr_diff.entries_only_on_right) {
+        auto scylla_entry = scylla_aggr_after.find(key);
+        auto scylla_aggr_rows = (scylla_entry != scylla_aggr_after.end()) ? build_row_map(*scylla_entry->second) : map();
+
+        for (const auto& row : aggr_after.find(key)->second->rows()) {
+            auto pk = get_primary_key(primary_key, &row);
+            auto entry = scylla_aggr_rows.find(pk);
+            created.push_back({&row, (entry != scylla_aggr_rows.end()) ? entry->second : nullptr});
+        }
+    }
+    for (const auto& key : aggr_diff.entries_differing) {
+        auto aggr_before_rows = build_row_map(*aggr_before.find(key)->second);
+        auto aggr_after_rows = build_row_map(*aggr_after.find(key)->second);
+        auto diff = difference(aggr_before_rows, aggr_after_rows, indirect_equal_to<const query::result_set_row*>());
+        
+        auto scylla_entry_before = scylla_aggr_before.find(key);
+        auto scylla_aggr_rows_before = (scylla_entry_before != scylla_aggr_before.end()) ? build_row_map(*scylla_entry_before->second) : map();
+        auto scylla_entry_after = scylla_aggr_after.find(key);
+        auto scylla_aggr_rows_after = (scylla_entry_after != scylla_aggr_after.end()) ? build_row_map(*scylla_entry_after->second) : map();
+
+        for (const auto& k : diff.entries_only_on_left) {
+            auto entry = scylla_aggr_rows_before.find(k);
+            dropped.push_back({
+                aggr_before_rows.find(k)->second, (entry != scylla_aggr_rows_before.end()) ? entry->second : nullptr
+            });
+        }
+        for (const auto& k : diff.entries_only_on_right) {
+            auto entry = scylla_aggr_rows_after.find(k);
+            created.push_back({
+                aggr_after_rows.find(k)->second, (entry != scylla_aggr_rows_after.end()) ? entry->second : nullptr
+            });
+        }
+    }
+
+    return {std::move(created), std::move(dropped)};
 }
 
 template<typename V>
@@ -1523,6 +1637,11 @@ static std::vector<data_type> read_arg_types(replica::database& db, const query:
     return arg_types;
 }
 
+static std::vector<data_value> read_arg_values(const query::result_set_row& row) {
+    auto args = get_list<sstring>(row, "argument_types");
+    return std::vector<data_value>(args.begin(), args.end());
+}
+
 #if 0
     // see the comments for mergeKeyspaces()
     private static void mergeAggregates(Map<DecoratedKey, ColumnFamily> before, Map<DecoratedKey, ColumnFamily> after)
@@ -1616,7 +1735,7 @@ static shared_ptr<cql3::functions::user_function> create_func(replica::database&
     }
 }
 
-static shared_ptr<cql3::functions::user_aggregate> create_aggregate(replica::database& db, const query::result_set_row& row) {
+static shared_ptr<cql3::functions::user_aggregate> create_aggregate(replica::database& db, const query::result_set_row& row, const query::result_set_row* scylla_row) {
     cql3::functions::function_name name{
             row.get_nonnull<sstring>("keyspace_name"), row.get_nonnull<sstring>("aggregate_name")};
     auto arg_types = read_arg_types(db, row, name.keyspace);
@@ -1635,6 +1754,19 @@ static shared_ptr<cql3::functions::user_aggregate> create_aggregate(replica::dat
     if (state_func->return_type() != state_type) {
         throw std::runtime_error(format("State function {} needed by aggregate {} doesn't return state", sfunc, name.name));
     }
+
+    ::shared_ptr<cql3::functions::scalar_function> reduce_func = nullptr;
+    if (scylla_row) {
+        auto rfunc_name = scylla_row->get<sstring>("reduce_func");
+        auto rfunc = cql3::functions::functions::find(cql3::functions::function_name{name.keyspace, rfunc_name.value()}, {state_type, state_type});
+        if (!rfunc) {
+            throw std::runtime_error(format("Reduce function {} needed by aggregate {} not found", rfunc_name.value(), name.name));
+        }
+        reduce_func = dynamic_pointer_cast<cql3::functions::scalar_function>(rfunc);
+        if (!reduce_func) {
+            throw std::runtime_error(format("Reduce function {} needed by aggregate {} is not a scalar function", rfunc_name.value(), name.name));
+        }
+    }
     
     ::shared_ptr<cql3::functions::scalar_function> final_func = nullptr;
     if (ffunc) {
@@ -1649,9 +1781,7 @@ static shared_ptr<cql3::functions::user_aggregate> create_aggregate(replica::dat
     if (initcond_str) {
         initcond = state_type->from_string(initcond_str.value());
     }
-
-    return ::make_shared<cql3::functions::user_aggregate>(name, initcond, std::move(state_func), std::move(final_func));
-
+    return ::make_shared<cql3::functions::user_aggregate>(name, initcond, std::move(state_func), std::move(reduce_func), std::move(final_func));
 }
 
 static future<> merge_functions(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after,
@@ -1676,8 +1806,19 @@ static future<> merge_functions(distributed<service::storage_proxy>& proxy, sche
     co_await merge_functions(proxy, before, after, create_func);
 }
 
-static future<> merge_aggregates(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after) {
-    co_await merge_functions(proxy, before, after, create_aggregate);
+static future<> merge_aggregates(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after, 
+        schema_result scylla_before, schema_result scylla_after) {
+    auto diff = diff_aggregates_rows(before, after, scylla_before, scylla_after);
+
+    co_await proxy.local().get_db().invoke_on_all([&] (replica::database& db) {
+        for (const auto& val : diff.created) {
+            cql3::functions::functions::add_function(create_aggregate(db, *val.first, val.second));
+        }
+        for (const auto& val : diff.dropped) {
+            auto func = create_aggregate(db, *val.first, val.second);
+            cql3::functions::functions::remove_function(func->name(), func->arg_types());
+        }
+    });
 }
 
 template<typename... Args>
@@ -2019,7 +2160,7 @@ static std::pair<mutation, clustering_key> get_mutation(schema_ptr s, const cql3
     return {std::move(m), std::move(ckey)};
 }
 
-std::vector<mutation> make_create_aggregate_mutations(shared_ptr<cql3::functions::user_aggregate> aggregate, api::timestamp_type timestamp) {
+std::vector<mutation> make_create_aggregate_mutations(schema_features features, shared_ptr<cql3::functions::user_aggregate> aggregate, api::timestamp_type timestamp) {
     schema_ptr s = aggregates();
     auto p = get_mutation(s, *aggregate);
     mutation& m = p.first;
@@ -2035,11 +2176,30 @@ std::vector<mutation> make_create_aggregate_mutations(shared_ptr<cql3::functions
     m.set_clustered_cell(ckey, "return_type", aggregate->return_type()->as_cql3_type().to_string(), timestamp);
     m.set_clustered_cell(ckey, "state_func", aggregate->sfunc().name().name, timestamp);
     m.set_clustered_cell(ckey, "state_type", state_type->as_cql3_type().to_string(), timestamp);
-    return {m};
+    std::vector<mutation> muts = {m};
+
+    if (features.contains<schema_feature::SCYLLA_AGGREGATES>() && aggregate->is_reducible()) {
+        schema_ptr sa_schema = scylla_aggregates();
+        auto sa_p = get_mutation(sa_schema, *aggregate);
+        mutation& sa_mut = sa_p.first;
+        clustering_key& sa_ckey = sa_p.second;
+        sa_mut.set_clustered_cell(sa_ckey, "reduce_func", aggregate->reducefunc().name().name, timestamp);
+        sa_mut.set_clustered_cell(sa_ckey, "state_type", state_type->as_cql3_type().to_string(), timestamp);
+
+        muts.emplace_back(sa_mut);
+    }
+
+    return muts;
 }
 
-std::vector<mutation> make_drop_aggregate_mutations(shared_ptr<cql3::functions::user_aggregate> aggregate, api::timestamp_type timestamp) {
-    return make_drop_function_mutations(aggregates(), *aggregate, timestamp);
+std::vector<mutation> make_drop_aggregate_mutations(schema_features features, shared_ptr<cql3::functions::user_aggregate> aggregate, api::timestamp_type timestamp) {
+    auto muts = make_drop_function_mutations(aggregates(), *aggregate, timestamp);
+    if (features.contains<schema_feature::SCYLLA_AGGREGATES>() && aggregate->is_reducible()) {
+        auto scylla_muts = make_drop_function_mutations(scylla_aggregates(), *aggregate, timestamp);
+        muts.insert(muts.end(), scylla_muts.begin(), scylla_muts.end());
+    }
+
+    return muts;
 }
 
 /*
@@ -3238,6 +3398,9 @@ std::vector<schema_ptr> all_tables(schema_features features) {
     }
     if (features.contains<schema_feature::SCYLLA_KEYSPACES>()) {
         result.emplace_back(scylla_keyspaces());
+    }
+    if (features.contains<schema_feature::SCYLLA_AGGREGATES>()) {
+        result.emplace_back(scylla_aggregates());
     }
     return result;
 }

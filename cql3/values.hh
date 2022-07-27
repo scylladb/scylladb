@@ -23,9 +23,11 @@
 namespace cql3 {
 
 struct null_value {
+    friend bool operator==(const null_value&, const null_value) { return true; }
 };
 
 struct unset_value {
+    friend bool operator==(const unset_value&, const unset_value) { return true; }
 };
 
 class raw_value;
@@ -269,6 +271,8 @@ public:
     }
     raw_value_view view() const;
     friend class raw_value_view;
+
+    friend bool operator==(const raw_value& v1, const raw_value& v2);
 };
 
 }

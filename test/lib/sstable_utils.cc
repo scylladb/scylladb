@@ -212,7 +212,7 @@ class compaction_manager::compaction_manager_test_task : public compaction_manag
 
 public:
     compaction_manager_test_task(compaction_manager& cm, replica::column_family* cf, utils::UUID run_id, noncopyable_function<future<> (sstables::compaction_data&)> job)
-        : compaction_manager::task(cm, cf, sstables::compaction_type::Compaction, "Test compaction")
+        : compaction_manager::task(cm, &cf->as_table_state(), sstables::compaction_type::Compaction, "Test compaction")
         , _run_id(run_id)
         , _job(std::move(job))
     { }

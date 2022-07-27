@@ -205,6 +205,7 @@ db::schema_features feature_service::cluster_schema_features() const {
     f.set_if<db::schema_feature::CDC_OPTIONS>(cdc);
     f.set_if<db::schema_feature::PER_TABLE_PARTITIONERS>(per_table_partitioners);
     f.set_if<db::schema_feature::SCYLLA_KEYSPACES>(keyspace_storage_options);
+    f.set_if<db::schema_feature::SCYLLA_AGGREGATES>(aggregate_storage_options);
     return f;
 }
 

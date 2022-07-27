@@ -27,7 +27,7 @@ compaction_descriptor leveled_compaction_strategy::get_sstables_for_compaction(t
     auto candidate = manifest.get_compaction_candidates(*_last_compacted_keys, _compaction_counter);
 
     if (!candidate.sstables.empty()) {
-        leveled_manifest::logger.debug("leveled: Compacting {} out of {} sstables", candidate.sstables.size(), table_s.get_sstable_set().all()->size());
+        leveled_manifest::logger.debug("leveled: Compacting {} out of {} sstables", candidate.sstables.size(), table_s.main_sstable_set().all()->size());
         return candidate;
     }
 
@@ -125,7 +125,7 @@ void leveled_compaction_strategy::generate_last_compacted_keys(leveled_manifest&
 
 int64_t leveled_compaction_strategy::estimated_pending_compactions(table_state& table_s) const {
     std::vector<sstables::shared_sstable> sstables;
-    auto all_sstables = table_s.get_sstable_set().all();
+    auto all_sstables = table_s.main_sstable_set().all();
     sstables.reserve(all_sstables->size());
     for (auto& entry : *all_sstables) {
         sstables.push_back(entry);

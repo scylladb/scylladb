@@ -116,7 +116,7 @@ void memtable::memtable_encoding_stats_collector::update(const ::schema& s, cons
 
 memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm, replica::table_stats& table_stats,
     memtable_list* memtable_list, seastar::scheduling_group compaction_scheduling_group)
-        : logalloc::region(dmm.region_group())
+        : dirty_memory_manager_logalloc::size_tracked_region()
         , _dirty_mgr(dmm)
         , _cleaner(*this, no_cache_tracker, table_stats.memtable_app_stats, compaction_scheduling_group,
                    [this] (size_t freed) { remove_flushed_memory(freed); })
@@ -124,6 +124,7 @@ memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm, replica::table_
         , _schema(std::move(schema))
         , partitions(dht::raw_token_less_comparator{})
         , _table_stats(table_stats) {
+    logalloc::region::listen(&dmm.region_group());
 }
 
 static thread_local dirty_memory_manager mgr_for_tests;
@@ -136,6 +137,7 @@ memtable::memtable(schema_ptr schema)
 memtable::~memtable() {
     revert_flushed_memory();
     clear();
+    logalloc::region::unlisten();
 }
 
 uint64_t memtable::dirty_size() const {
@@ -527,6 +529,7 @@ void memtable::remove_flushed_memory(uint64_t delta) {
 }
 
 void memtable::on_detach_from_region_group() noexcept {
+    _merged_into_cache = true;
     revert_flushed_memory();
 }
 
@@ -742,7 +745,7 @@ memtable::make_flat_reader_opt(schema_ptr s,
 
 flat_mutation_reader_v2
 memtable::make_flush_reader(schema_ptr s, reader_permit permit, const io_priority_class& pc) {
-    if (group()) {
+    if (!_merged_into_cache) {
         return make_flat_mutation_reader_v2<flush_reader>(std::move(s), std::move(permit), shared_from_this());
     } else {
         auto& full_slice = s->full_slice();

@@ -160,7 +160,7 @@ Repair
 ......
 
 Run repairs preferably once a week and run them exclusively from Scylla Manager.
-Refer to `Repair a Cluster <https://scylladb.github.io/scylla-manager/2.2/repair/index.html>`_
+Refer to `Repair a Cluster <https://manager.docs.scylladb.com/branch-2.2/repair/index.html>`_
 
 Backup and Restore
 ..................
@@ -169,13 +169,13 @@ We recommend the following:
 
 * Run a full weekly backup from Scylla Manager
 * Run a daily backup from Scylla Manager
-* Check the bucket used for restore. This can be done by performing a `restore <https://scylladb.github.io/scylla-manager/2.2/restore/index.html>`_ and making sure the data is valid. This action should be done once a month, or more frequently if needed. Ask our Support team to help you with this.
+* Check the bucket used for restore. This can be done by performing a `restore <https://manager.docs.scylladb.com/branch-2.2/restore/index.html>`_ and making sure the data is valid. This action should be done once a month, or more frequently if needed. Ask our Support team to help you with this.
 * Save backup to a bucket supported by Scylla Manager.
 
 For additional information:
 
-* `Backup <https://scylladb.github.io/scylla-manager/2.2/backup/index.html>`_
-* `Restore a Backup <https://scylladb.github.io/scylla-manager/2.2/restore/index.html>`_
+* `Backup <https://manager.docs.scylladb.com/branch-2.2/backup/index.html>`_
+* `Restore a Backup <https://manager.docs.scylladb.com/branch-2.2/restore/index.html>`_
 
 Scylla Monitor
 ==============
@@ -224,6 +224,6 @@ HA testing in multi DC - for example:
 Additional Topics
 -----------------
 * :doc:`Add a Node </operating-scylla/procedures/cluster-management/add-node-to-cluster/>`
-* `Repair <https://scylladb.github.io/scylla-manager/2.2/repair/index.html>`_
+* `Repair <https://manager.docs.scylladb.com/branch-2.2/repair/index.html>`_
 * :doc:`Cleanup </operating-scylla/nodetool-commands/cleanup/>`
 * Tech Talk: `How to be successful with Scylla <https://www.scylladb.com/tech-talk/how-to-be-successful-with-scylla/>`_

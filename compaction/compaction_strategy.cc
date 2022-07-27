@@ -501,7 +501,7 @@ time_window_compaction_strategy::time_window_compaction_strategy(const std::map<
 
 std::vector<sstables::shared_sstable>
 date_tiered_manifest::get_next_sstables(table_state& table_s, std::vector<sstables::shared_sstable>& uncompacting, gc_clock::time_point compaction_time) {
-    if (table_s.get_sstable_set().all()->empty()) {
+    if (table_s.main_sstable_set().all()->empty()) {
         return {};
     }
 
@@ -522,11 +522,11 @@ date_tiered_manifest::get_next_sstables(table_state& table_s, std::vector<sstabl
 
 int64_t date_tiered_manifest::get_estimated_tasks(table_state& table_s) const {
     int base = table_s.schema()->min_compaction_threshold();
-    int64_t now = get_now(table_s.get_sstable_set().all());
+    int64_t now = get_now(table_s.main_sstable_set().all());
     std::vector<sstables::shared_sstable> sstables;
     int64_t n = 0;
 
-    auto all_sstables = table_s.get_sstable_set().all();
+    auto all_sstables = table_s.main_sstable_set().all();
     sstables.reserve(all_sstables->size());
     for (auto& entry : *all_sstables) {
         sstables.push_back(entry);
@@ -545,7 +545,7 @@ int64_t date_tiered_manifest::get_estimated_tasks(table_state& table_s) const {
 std::vector<sstables::shared_sstable>
 date_tiered_manifest::get_next_non_expired_sstables(table_state& table_s, std::vector<sstables::shared_sstable>& non_expiring_sstables, gc_clock::time_point compaction_time) {
     int base = table_s.schema()->min_compaction_threshold();
-    int64_t now = get_now(table_s.get_sstable_set().all());
+    int64_t now = get_now(table_s.main_sstable_set().all());
     auto most_interesting = get_compaction_candidates(table_s, non_expiring_sstables, now, base);
 
     return most_interesting;

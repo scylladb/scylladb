@@ -116,7 +116,7 @@ When scheduling repair, you may specify ``--intensity`` flag, the intensity mean
 * For values > 1 intensity specifies the number of segments repaired by Scylla in a single repair command. Higher values result in higher speed and may increase cluster load.
 * For values < 1 intensity specifies what percent of node's shards repaired in parallel.
 * For intensity equal to 1 it will repair one segment in each repair command on all shards in parallel.
-* For zero intensity it uses limits specified in Scylla Manager `configuration <../configuration-file#repair-settings>`_.
+* For zero intensity it uses limits specified in Scylla Manager :ref:`configuration <repair-settings>`.
 
   Please note that this only works with versions that are **not** :doc:`row-level-repair enabled </upgrade/upgrade-manager/upgrade-guide-from-2.x.a-to-2.y.b/upgrade-row-level-repair>`.
 

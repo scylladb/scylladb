@@ -29,7 +29,7 @@ Install Scylla
   * :doc:`Create a Scylla Cluster - Multi Data Center (DC) </operating-scylla/procedures/cluster-management/create-cluster-multidc/>`
   * :doc:`Scylla Developer Mode </getting-started/install-scylla/dev-mod>`
   * :doc:`Scylla Configuration Command Reference </getting-started/install-scylla/config-commands>`
-  * `Scylla Housekeeping and how to disable it <disable-housekeeping>`_
+  * :doc:`Scylla Housekeeping and how to disable it <disable-housekeeping>`
 
 
   

@@ -17,5 +17,5 @@ Upgrade Scylla Manager 2.x.a to 2.y.b
 
   Procedures for upgrading to a new version of Scylla Manager.
 
-  * `Scylla Manager Upgrade - Scylla Manager 2.x.a to 2.y.b <upgrade-2.x.a-to-2.y.b/>`_
-  * `Fix for row-level repairs <upgrade-row-level-repair/>`_
+  * :doc:`Scylla Manager Upgrade - Scylla Manager 2.x.a to 2.y.b <upgrade-2.x.a-to-2.y.b/>`
+  * :doc:`Fix for row-level repairs <upgrade-row-level-repair/>`

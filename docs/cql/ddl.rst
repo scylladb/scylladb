@@ -85,7 +85,7 @@ We also define the notion of statement options for use in the following section:
 
 .. _create-keyspace-statement:
 
-In all cases, for creating keyspaces and tables, if you are using :doc:`Reserved Keywords </getting-started/reserved-keywords>`, enclose them in single or double-quotes.
+In all cases, for creating keyspaces and tables, if you are using :doc:`Reserved Keywords </cql/reserved-keywords>`, enclose them in single or double-quotes.
 
 CREATE KEYSPACE
 ^^^^^^^^^^^^^^^
@@ -942,12 +942,14 @@ Dropping a table uses the ``DROP TABLE`` statement:
    
    drop_table_statement: DROP TABLE [ IF EXISTS ] `table_name`
 
-Dropping a table results in the immediate removal of the table, including all data it contains.
+Dropping a table results in the immediate removal of the table, including all data it contains and any associated secondary indexes.
 
 .. include:: /getting-started/_common/note-reclaim-space.rst
 
 If the table does not exist, the statement will return an error unless ``IF EXISTS`` is used, in which case the
 operation is a no-op.
+
+.. note:: Dropping a table that has materialized views is disallowed and will return an error. To do so, the materialized views that depend on the table must first be explicitly dropped. Refer to :doc:`Materialized Views </cql/mv>` for details.
 
 .. _truncate-statement:
 
@@ -967,7 +969,7 @@ Truncating a table permanently removes all existing data from the table, but wit
 
 .. caution:: Do not run any operation on a table that is being truncated. Truncate operation is an administrative operation, and running any other operation on the same table in parallel may cause the truncating table's data to end up in an undefined state.
 
-:doc:`Apache Cassandra Query Language </getting-started/cql/>`
+* :doc:`Apache Cassandra Query Language (CQL) Reference </cql/index>`
 
 .. include:: /rst_include/apache-copyrights.rst
 

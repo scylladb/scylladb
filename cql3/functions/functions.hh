@@ -60,6 +60,7 @@ public:
     static boost::iterator_range<declared_t::iterator> find(const function_name& name);
     static declared_t::iterator find_iter(const function_name& name, const std::vector<data_type>& arg_types);
     static shared_ptr<function> find(const function_name& name, const std::vector<data_type>& arg_types);
+    static shared_ptr<function> mock_get(const function_name& name, const std::vector<data_type>& arg_types);
     static void clear_functions() noexcept;
     static void add_function(shared_ptr<function>);
     static void replace_function(shared_ptr<function>);

@@ -46,6 +46,7 @@
 #include "alternator/serialization.hh"
 #include "dht/sharder.hh"
 #include "db/config.hh"
+#include "db/tags/utils.hh"
 
 #include "ttl.hh"
 
@@ -91,7 +92,7 @@ future<executor::request_return_type> executor::update_time_to_live(client_state
     }
     sstring attribute_name(v->GetString(), v->GetStringLength());
 
-    std::map<sstring, sstring> tags_map = get_tags_of_table(schema);
+    std::map<sstring, sstring> tags_map = get_tags_of_table_or_throw(schema);
     if (enabled) {
         if (tags_map.contains(TTL_TAG_KEY)) {
             co_return api_error::validation("TTL is already enabled");
@@ -108,7 +109,7 @@ future<executor::request_return_type> executor::update_time_to_live(client_state
         }
         tags_map.erase(TTL_TAG_KEY);
     }
-    co_await update_tags(_mm, schema, std::move(tags_map));
+    co_await db::update_tags(_mm, schema, std::move(tags_map));
     // Prepare the response, which contains a TimeToLiveSpecification
     // basically identical to the request's
     rjson::value response = rjson::empty_object();
@@ -119,7 +120,7 @@ future<executor::request_return_type> executor::update_time_to_live(client_state
 future<executor::request_return_type> executor::describe_time_to_live(client_state& client_state, service_permit permit, rjson::value request) {
     _stats.api_operations.describe_time_to_live++;
     schema_ptr schema = get_table(_proxy, request);
-    std::map<sstring, sstring> tags_map = get_tags_of_table(schema);
+    std::map<sstring, sstring> tags_map = get_tags_of_table_or_throw(schema);
     rjson::value desc = rjson::empty_object();
     auto i = tags_map.find(TTL_TAG_KEY);
     if (i == tags_map.end()) {
@@ -644,7 +645,7 @@ static future<bool> scan_table(
     // Check if an expiration-time attribute is enabled for this table.
     // If not, just return false immediately.
     // FIXME: the setting of the TTL may change in the middle of a long scan!
-    std::optional<std::string> attribute_name = find_tag(*s, TTL_TAG_KEY);
+    std::optional<std::string> attribute_name = db::find_tag(*s, TTL_TAG_KEY);
     if (!attribute_name) {
         co_return false;
     }

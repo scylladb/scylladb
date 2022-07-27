@@ -11,6 +11,7 @@
 #include "cql3/statements/cf_prop_defs.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "db/extensions.hh"
+#include "db/tags/extension.hh"
 #include "cdc/log.hh"
 #include "cdc/cdc_extension.hh"
 #include "gms/feature.hh"
@@ -40,6 +41,7 @@ const sstring cf_prop_defs::KW_MAX_INDEX_INTERVAL = "max_index_interval";
 const sstring cf_prop_defs::KW_SPECULATIVE_RETRY = "speculative_retry";
 const sstring cf_prop_defs::KW_BF_FP_CHANCE = "bloom_filter_fp_chance";
 const sstring cf_prop_defs::KW_MEMTABLE_FLUSH_PERIOD = "memtable_flush_period_in_ms";
+const sstring cf_prop_defs::KW_SYNCHRONOUS_UPDATES = "synchronous_updates";
 
 const sstring cf_prop_defs::KW_COMPACTION = "compaction";
 const sstring cf_prop_defs::KW_COMPRESSION = "compression";
@@ -79,7 +81,8 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
         KW_GCGRACESECONDS, KW_CACHING, KW_DEFAULT_TIME_TO_LIVE,
         KW_MIN_INDEX_INTERVAL, KW_MAX_INDEX_INTERVAL, KW_SPECULATIVE_RETRY,
         KW_BF_FP_CHANCE, KW_MEMTABLE_FLUSH_PERIOD, KW_COMPACTION,
-        KW_COMPRESSION, KW_CRC_CHECK_CHANCE, KW_ID, KW_PAXOSGRACESECONDS
+        KW_COMPRESSION, KW_CRC_CHECK_CHANCE,  KW_ID, KW_PAXOSGRACESECONDS,
+        KW_SYNCHRONOUS_UPDATES
     });
     static std::set<sstring> obsolete_keywords({
         sstring("index_interval"),
@@ -176,6 +179,10 @@ int32_t cf_prop_defs::get_default_time_to_live() const
 int32_t cf_prop_defs::get_gc_grace_seconds() const
 {
     return get_int(KW_GCGRACESECONDS, DEFAULT_GC_GRACE_SECONDS);
+}
+
+bool cf_prop_defs::get_synchronous_updates_flag() const {
+    return get_boolean(KW_SYNCHRONOUS_UPDATES, false);
 }
 
 int32_t cf_prop_defs::get_paxos_grace_seconds() const {
@@ -330,6 +337,15 @@ void cf_prop_defs::apply_to_builder(schema_builder& builder, schema::extensions_
     }
 
     builder.set_extensions(std::move(schema_extensions));
+
+    if (has_property(KW_SYNCHRONOUS_UPDATES)) {
+        bool is_synchronous = get_synchronous_updates_flag();
+        std::map<sstring, sstring> tags_map = {
+            {db::SYNCHRONOUS_VIEW_UPDATES_TAG_KEY, is_synchronous ? "true" : "false"}
+        };
+
+        builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(tags_map));
+    }
 }
 
 void cf_prop_defs::validate_minimum_int(const sstring& field, int32_t minimum_value, int32_t default_value) const
