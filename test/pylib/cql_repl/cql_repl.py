@@ -7,9 +7,11 @@ from cassandra import ConsistencyLevel                  # type: ignore
 from cassandra.query import SimpleStatement             # type: ignore
 import re
 from tabulate import tabulate                           # type: ignore
+import pytest
 
 
-def test_cql(request, cql, keyspace):
+@pytest.mark.asyncio
+async def test_cql(request, cql, keyspace):
     # Comments allowed by CQL - -- and //
     comment_re = re.compile(r"^\s*((--|//).*)?$")
     # A comment is not a delimiter even if ends with one

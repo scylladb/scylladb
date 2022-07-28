@@ -18,6 +18,7 @@ from cassandra.cluster import Session, ResponseFuture                    # type:
 from cassandra.policies import RoundRobinPolicy                          # type: ignore
 from test.pylib.util import unique_name                                  # type: ignore
 import pytest
+import pytest_asyncio
 import ssl
 from typing import AsyncGenerator
 from test.pylib.random_tables import RandomTables                        # type: ignore
@@ -142,7 +143,7 @@ def this_dc(cql):
 # option enabled, and pass with it enabled (and also pass on Cassandra).
 # These tests should use the "fails_without_raft" fixture. When Raft mode
 # becomes the default, this fixture can be removed.
-@pytest.fixture(scope="session")
+@pytest_asyncio.fixture(scope="session")
 async def check_pre_raft(cql):
     # If not running on Scylla, return false.
     names = [row.table_name for row in await cql.run_async("SELECT * FROM system_schema.tables WHERE keyspace_name = 'system'")]
@@ -163,7 +164,7 @@ async def fails_without_raft(request, check_pre_raft):
 # used in tests that need a keyspace. The keyspace is created with RF=1,
 # and automatically deleted at the end. We use scope="session" so that all
 # tests will reuse the same keyspace.
-@pytest.fixture(scope="session")
+@pytest_asyncio.fixture(scope="session")
 async def keyspace(cql, this_dc):
     name = unique_name()
     await cql.run_async("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" +
@@ -174,7 +175,7 @@ async def keyspace(cql, this_dc):
 
 # "random_tables" fixture: Creates and returns a temporary RandomTables object
 # used in tests to make schema changes. Tables are dropped after finished.
-@pytest.fixture(scope="function")
+@pytest_asyncio.fixture(scope="function")
 async def random_tables(request, cql, keyspace) -> AsyncGenerator:
     tables = RandomTables(request.node.name, cql, keyspace)
     yield tables
