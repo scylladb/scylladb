@@ -2201,13 +2201,10 @@ lsa_buffer region::alloc_buf(size_t buffer_size) {
 void region::merge(region& other) noexcept {
     if (_impl != other._impl) {
         auto other_impl = static_cast<region_impl*>(other._impl.get());
-        if (other_impl->_listener) {
-            // Not very generic, but we know that post-merge the caller
-            // (row_cache) isn't interested in listening, and one region
-            // can't have many listeners.
-            other_impl->_listener->del(&other);
-            other_impl->_listener = nullptr;
-        }
+        // Not very generic, but we know that post-merge the caller
+        // (row_cache) isn't interested in listening, and one region
+        // can't have many listeners.
+        other_impl->unlisten();
         get_impl().merge(other.get_impl());
         other._impl = _impl;
     }
