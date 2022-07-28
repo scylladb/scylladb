@@ -193,8 +193,7 @@ public:
 /// considered to be the same as that of the query.
 class shard_mutation_querier : public querier_base {
     std::unique_ptr<const dht::partition_range_vector> _query_ranges;
-    dht::decorated_key _nominal_pkey;
-    position_in_partition _nominal_pos;
+    full_position _nominal_pos;
 
 private:
     shard_mutation_querier(
@@ -203,11 +202,9 @@ private:
             std::unique_ptr<const query::partition_slice> reader_slice,
             flat_mutation_reader_v2 reader,
             reader_permit permit,
-            dht::decorated_key nominal_pkey,
-            position_in_partition nominal_pos)
+            full_position nominal_pos)
         : querier_base(permit, std::move(reader_range), std::move(reader_slice), std::move(reader), *query_ranges)
         , _query_ranges(std::move(query_ranges))
-        , _nominal_pkey(std::move(nominal_pkey))
         , _nominal_pos(std::move(nominal_pos)) {
     }
 
@@ -219,14 +216,13 @@ public:
             std::unique_ptr<const query::partition_slice> reader_slice,
             flat_mutation_reader_v2 reader,
             reader_permit permit,
-            dht::decorated_key nominal_pkey,
-            position_in_partition nominal_pos)
+            full_position nominal_pos)
         : shard_mutation_querier(std::make_unique<const dht::partition_range_vector>(std::move(query_ranges)), std::move(reader_range),
-                std::move(reader_slice), std::move(reader), std::move(permit), std::move(nominal_pkey), std::move(nominal_pos)) {
+                std::move(reader_slice), std::move(reader), std::move(permit), std::move(nominal_pos)) {
     }
 
     virtual std::optional<full_position_view> current_position() const override {
-        return full_position_view(_nominal_pkey.key(), _nominal_pos);
+        return _nominal_pos;
     }
 
     lw_shared_ptr<const dht::partition_range> reader_range() && {
