@@ -123,10 +123,38 @@ managed_bytes_opt get_value(const column_value& col, const column_value_eval_bag
                     format("Column definition {} does not match any column in the query selection",
                     cdef->name_as_text()));
         }
-        const auto deserialized = cdef->type->deserialize(managed_bytes_view(*data.other_columns[index]));
+        const managed_bytes_opt& serialized = data.other_columns[index];
+        if (!serialized) {
+            // For null[i] we return null.
+            return std::nullopt;
+        }
+        const auto deserialized = cdef->type->deserialize(managed_bytes_view(*serialized));
         const auto& data_map = value_cast<map_type_impl::native_type>(deserialized);
         const auto key = evaluate_to_raw_view(col.sub, options);
         auto&& key_type = col_type->name_comparator();
+        if (key.is_null()) {
+            // For m[null] return null.
+            // This is different from Cassandra - which treats m[null]
+            // as an invalid request error. But m[null] -> null is more
+            // consistent with our usual null treatement (e.g., both
+            // null[2] and null < 2 return null). It will also allow us
+            // to support non-constant subscripts (e.g., m[a]) where "a"
+            // may be null in some rows and non-null in others, and it's
+            // not an error.
+            return std::nullopt;
+        }
+        if (key.is_unset_value()) {
+            // An m[?] with ? bound to UNSET_VALUE is a invalid query.
+            // We could have detected it earlier while binding, but since
+            // we currently don't, we must protect the following code
+            // which can't work with an UNSET_VALUE. Note that the
+            // placement of this check here means that in an empty table,
+            // where we never need to evaluate the filter expression, this
+            // error will not be detected.
+            throw exceptions::invalid_request_exception(
+                format("Unsupported unset map key for column {}",
+                    cdef->name_as_text()));
+        }
         const auto found = key.with_linearized([&] (bytes_view key_bv) {
             using entry = std::pair<data_value, data_value>;
             return std::find_if(data_map.cbegin(), data_map.cend(), [&] (const entry& element) {

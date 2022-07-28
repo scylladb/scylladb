@@ -28,7 +28,7 @@ from util import unique_name, random_string, new_test_table
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
     table = test_keyspace + "." + unique_name()
-    cql.execute(f"CREATE TABLE {table} (p text, c text, v text, primary key (p, c))")
+    cql.execute(f"CREATE TABLE {table} (p text, c text, v text, i int, s set<int>, m map<int, int>, primary key (p, c))")
     yield table
     cql.execute("DROP TABLE " + table)
 
@@ -188,3 +188,65 @@ def test_empty_string_key2(cql, test_keyspace):
         cql.execute(f"INSERT INTO {table} (p1,p2,c,v) VALUES ('', '', '', 'cat')")
         cql.execute(f"INSERT INTO {table} (p1,p2,c,v) VALUES ('x', 'y', 'z', 'dog')")
         assert list(cql.execute(f"SELECT v FROM {table} WHERE p1='' AND p2='' AND c=''")) == [('cat',)]
+
+# Cassandra considers the null subscript 'm[null]' to be an invalid request.
+# In Scylla we decided to it differently (we think better): m[null] is simply
+# a null, so the filter 'WHERE m[null] = 3' is not an error - it just doesn't
+# match anything. This is more consistent with our usual null handling (null[2]
+# and null < 2 are both defined as returning null), and will also allow us
+# in the future to support non-constant subscript - for example m[a] where
+# the column a can be null for some rows and non-null for other rows.
+# Before we implemented the above decision, we had multiple bugs in this case,
+# resulting in bizarre errors and even crashes (see #10361, #10399 and #10417).
+#
+# Because this test uses a shared table (table1), then depending on how it's
+# run, it sometimes sees an empty table and sometimes a table with data
+# (and null values for the map m...), so this test mixes several different
+# concerns and problems. The same problems are better covered separately
+# by test_filtering.py::test_filtering_with_subscript and
+# test_filtering.py::test_filtering_null_map_with_subscript so this test
+# should eventually be deleted.
+def test_map_subscript_null(cql, table1, cassandra_bug):
+    assert list(cql.execute(f"SELECT p FROM {table1} WHERE m[null] = 3 ALLOW FILTERING")) == []
+    assert list(cql.execute(cql.prepare(f"SELECT p FROM {table1} WHERE m[?] = 3 ALLOW FILTERING"), [None])) == []
+
+# Similarly, CONTAINS restriction with NULL should also match nothing.
+# Reproduces #10359.
+@pytest.mark.xfail(reason="Issue #10359")
+def test_filtering_contains_null(cassandra_bug, cql, table1):
+    p = unique_key_string()
+    cql.execute(f"INSERT INTO {table1} (p,c,s) VALUES ('{p}', '1', {{1, 2}})")
+    cql.execute(f"INSERT INTO {table1} (p,c,s) VALUES ('{p}', '2', {{3, 4}})")
+    cql.execute(f"INSERT INTO {table1} (p,c) VALUES ('{p}', '3')")
+    assert list(cql.execute(f"SELECT c FROM {table1} WHERE p='{p}' AND s CONTAINS NULL ALLOW FILTERING")) == []
+
+# Similarly, CONTAINS KEY restriction with NULL should also match nothing.
+# Reproduces #10359.
+@pytest.mark.xfail(reason="Issue #10359")
+def test_filtering_contains_key_null(cassandra_bug, cql, table1):
+    p = unique_key_string()
+    cql.execute(f"INSERT INTO {table1} (p,c,m) VALUES ('{p}', '1', {{1: 2}})")
+    cql.execute(f"INSERT INTO {table1} (p,c,m) VALUES ('{p}', '2', {{3: 4}})")
+    cql.execute(f"INSERT INTO {table1} (p,c) VALUES ('{p}', '3')")
+    assert list(cql.execute(f"SELECT c FROM {table1} WHERE p='{p}' AND m CONTAINS KEY NULL ALLOW FILTERING")) == []
+
+# The above tests test_filtering_eq_null and test_filtering_inequality_null
+# have WHERE x=NULL or x>NULL where "x" is a regular column. Such a
+# comparison requires ALLOW FILTERING for non-NULL parameters, so we also
+# require it for NULL. Unlike the previous tests, this one also passed on
+# Cassandra.
+def test_filtering_null_comparison_no_filtering(cql, table1):
+    with pytest.raises(InvalidRequest, match='ALLOW FILTERING'):
+        cql.execute(f"SELECT c FROM {table1} WHERE p='x' AND i=NULL")
+    with pytest.raises(InvalidRequest, match='ALLOW FILTERING'):
+        cql.execute(f"SELECT c FROM {table1} WHERE p='x' AND i>NULL")
+    with pytest.raises(InvalidRequest, match='ALLOW FILTERING'):
+        cql.execute(f"SELECT c FROM {table1} WHERE p='x' AND i>=NULL")
+    with pytest.raises(InvalidRequest, match='ALLOW FILTERING'):
+        cql.execute(f"SELECT c FROM {table1} WHERE p='x' AND i<NULL")
+    with pytest.raises(InvalidRequest, match='ALLOW FILTERING'):
+        cql.execute(f"SELECT c FROM {table1} WHERE p='x' AND i<=NULL")
+    with pytest.raises(InvalidRequest, match='ALLOW FILTERING'):
+        cql.execute(f"SELECT c FROM {table1} WHERE p='x' AND s CONTAINS NULL")
+    with pytest.raises(InvalidRequest, match='ALLOW FILTERING'):
+        cql.execute(f"SELECT c FROM {table1} WHERE p='x' AND m CONTAINS KEY NULL")
