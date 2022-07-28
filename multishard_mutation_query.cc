@@ -283,8 +283,8 @@ public:
 
     future<> lookup_readers(db::timeout_clock::time_point timeout);
 
-    future<> save_readers(flat_mutation_reader::tracked_buffer unconsumed_buffer, detached_compaction_state compaction_state,
-            std::optional<clustering_key_prefix> last_ckey);
+    future<> save_readers(flat_mutation_reader::tracked_buffer unconsumed_buffer, std::optional<detached_compaction_state> compaction_state,
+            dht::decorated_key last_pkey, std::optional<clustering_key_prefix> last_ckey);
 
     future<> stop();
 };
@@ -583,19 +583,22 @@ future<> read_context::lookup_readers(db::timeout_clock::time_point timeout) {
     });
 }
 
-future<> read_context::save_readers(flat_mutation_reader::tracked_buffer unconsumed_buffer, detached_compaction_state compaction_state,
-            std::optional<clustering_key_prefix> last_ckey) {
+future<> read_context::save_readers(flat_mutation_reader::tracked_buffer unconsumed_buffer, std::optional<detached_compaction_state> compaction_state,
+            dht::decorated_key last_pkey, std::optional<clustering_key_prefix> last_ckey) {
     if (_cmd.query_uuid == utils::UUID{}) {
         return make_ready_future<>();
     }
 
-    auto last_pkey = compaction_state.partition_start.key();
-
     const auto cb_stats = dismantle_combined_buffer(std::move(unconsumed_buffer), last_pkey);
     tracing::trace(_trace_state, "Dismantled combined buffer: {}", cb_stats);
 
-    const auto cs_stats = dismantle_compaction_state(std::move(compaction_state));
-    tracing::trace(_trace_state, "Dismantled compaction state: {}", cs_stats);
+    auto cs_stats = dismantle_buffer_stats{};
+    if (compaction_state) {
+        cs_stats = dismantle_compaction_state(std::move(*compaction_state));
+        tracing::trace(_trace_state, "Dismantled compaction state: {}", cs_stats);
+    } else {
+        tracing::trace(_trace_state, "No compaction state to dismantle, partition exhausted", cs_stats);
+    }
 
     return do_with(std::move(last_pkey), std::move(last_ckey), [this] (const dht::decorated_key& last_pkey,
             const std::optional<clustering_key_prefix>& last_ckey) {
@@ -703,7 +706,9 @@ future<typename ResultBuilder::result_type> do_query(
                 std::move(result_builder));
 
         if (compaction_state->are_limits_reached() || result.is_short_read()) {
-            co_await ctx->save_readers(std::move(unconsumed_buffer), std::move(*compaction_state).detach_state(), std::move(last_ckey));
+            // Must call before calling 'detached_state()`.
+            auto last_pkey = *compaction_state->current_partition();
+            co_await ctx->save_readers(std::move(unconsumed_buffer), std::move(*compaction_state).detach_state(), std::move(last_pkey), std::move(last_ckey));
         }
 
         co_await ctx->stop();
