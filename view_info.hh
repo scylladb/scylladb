@@ -50,7 +50,7 @@ public:
 
     cql3::statements::select_statement& select_statement() const;
     const query::partition_slice& partition_slice() const;
-    const column_definition* view_column(const schema& base, column_id base_id) const;
+    const column_definition* view_column(const schema& base, column_kind kind, column_id base_id) const;
     const column_definition* view_column(const column_definition& base_def) const;
     bool has_base_non_pk_columns_in_view_pk() const;
     bool has_computed_column_depending_on_base_non_primary_key() const {

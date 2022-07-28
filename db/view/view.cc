@@ -116,11 +116,11 @@ const query::partition_slice& view_info::partition_slice() const {
     return *_partition_slice;
 }
 
-const column_definition* view_info::view_column(const schema& base, column_id base_id) const {
+const column_definition* view_info::view_column(const schema& base, column_kind kind, column_id base_id) const {
     // FIXME: Map base column_ids to view_column_ids, which can be something like
     // a boost::small_vector where the position is the base column_id, and the
     // value is either empty or the view's column_id.
-    return view_column(base.regular_column_at(base_id));
+    return view_column(base.column_at(kind, base_id));
 }
 
 const column_definition* view_info::view_column(const column_definition& base_def) const {
@@ -690,11 +690,11 @@ view_updates::get_view_rows(const partition_key& base_key, const clustering_row&
     return ret;
 }
 
-static const column_definition* view_column(const schema& base, const schema& view, column_id base_id) {
+static const column_definition* view_column(const schema& base, const schema& view, column_kind kind, column_id base_id) {
     // FIXME: Map base column_ids to view_column_ids, which can be something like
     // a boost::small_vector where the position is the base column_id, and the
     // value is either empty or the view's column_id.
-    return view.get_column_definition(base.regular_column_at(base_id).name());
+    return view.get_column_definition(base.column_at(kind, base_id).name());
 }
 
 // Utility function for taking an existing cell, and creating a copy with an
@@ -833,7 +833,7 @@ void create_virtual_column(schema_builder& builder, const bytes& name, const dat
 
 static void add_cells_to_view(const schema& base, const schema& view, row base_cells, row& view_cells) {
     base_cells.for_each_cell([&] (column_id id, atomic_cell_or_collection& c) {
-        auto* view_col = view_column(base, view, id);
+        auto* view_col = view_column(base, view, column_kind::regular_column, id);
         if (view_col && !view_col->is_primary_key()) {
             maybe_make_virtual(c, view_col);
             view_cells.append_cell(view_col->id, std::move(c));
