@@ -274,7 +274,7 @@ public:
 
     future<> lookup_readers(db::timeout_clock::time_point timeout) noexcept;
 
-    future<> save_readers(flat_mutation_reader_v2::tracked_buffer unconsumed_buffer, detached_compaction_state compaction_state,
+    future<> save_readers(flat_mutation_reader_v2::tracked_buffer unconsumed_buffer, std::optional<detached_compaction_state> compaction_state,
             full_position last_pos) noexcept;
 
     future<> stop();
@@ -582,7 +582,7 @@ future<> read_context::lookup_readers(db::timeout_clock::time_point timeout) noe
     }
 }
 
-future<> read_context::save_readers(flat_mutation_reader_v2::tracked_buffer unconsumed_buffer, detached_compaction_state compaction_state,
+future<> read_context::save_readers(flat_mutation_reader_v2::tracked_buffer unconsumed_buffer, std::optional<detached_compaction_state> compaction_state,
             full_position last_pos) noexcept {
     if (_cmd.query_uuid == utils::UUID{}) {
         co_return;
@@ -591,8 +591,13 @@ future<> read_context::save_readers(flat_mutation_reader_v2::tracked_buffer unco
     const auto cb_stats = dismantle_combined_buffer(std::move(unconsumed_buffer), dht::decorate_key(*_schema, last_pos.partition));
     tracing::trace(_trace_state, "Dismantled combined buffer: {}", cb_stats);
 
-    const auto cs_stats = dismantle_compaction_state(std::move(compaction_state));
-    tracing::trace(_trace_state, "Dismantled compaction state: {}", cs_stats);
+    auto cs_stats = dismantle_buffer_stats{};
+    if (compaction_state) {
+        cs_stats = dismantle_compaction_state(std::move(*compaction_state));
+        tracing::trace(_trace_state, "Dismantled compaction state: {}", cs_stats);
+    } else {
+        tracing::trace(_trace_state, "No compaction state to dismantle, partition exhausted", cs_stats);
+    }
 
     co_await parallel_for_each(boost::irange(0u, smp::count), [this, &last_pos] (shard_id shard) {
         auto& rm = _readers[shard];
