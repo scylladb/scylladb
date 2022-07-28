@@ -92,9 +92,8 @@ To upgrade:
 
    CentOS only:
    
-   If you first installed an earlier version of ScyllaDB Open Source using a ScyllaDB image (for example, AMI) and 
-   then upgraded to version 5.0, you need to run an additional command ``sudo yum install scylla-enterprise-machine-image``
-   to upgrade to ScyllaDB Enterprise 2022.1:
+   If you use a cloud image with a preinstalled version of ScyllaDB (for example, AMI), you need to install an additional 
+   package ``scylla-enterprise-machine-image`` with the ``sudo yum install scylla-enterprise-machine-image`` command:
 
     .. code:: sh
 
