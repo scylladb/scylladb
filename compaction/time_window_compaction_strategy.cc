@@ -221,23 +221,26 @@ time_window_compaction_strategy::get_sstables_for_compaction(table_state& table_
         return compaction_descriptor();
     }
 
-    // Find fully expired SSTables. Those will be included no matter what.
-    std::unordered_set<shared_sstable> expired;
+    auto now = db_clock::now();
+    if (now - _last_expired_check > _options.expired_sstable_check_frequency) {
+        clogger.debug("[{}] TWCS expired check sufficiently far in the past, checking for fully expired SSTables", fmt::ptr(this));
 
-    if (db_clock::now() - _last_expired_check > _options.expired_sstable_check_frequency) {
-        clogger.debug("TWCS expired check sufficiently far in the past, checking for fully expired SSTables");
-        expired = table_s.fully_expired_sstables(candidates, compaction_time);
-        _last_expired_check = db_clock::now();
+        // Find fully expired SSTables. Those will be included no matter what.
+        auto expired = table_s.fully_expired_sstables(candidates, compaction_time);
+        if (!expired.empty()) {
+            clogger.debug("[{}] Going to compact {} expired sstables", fmt::ptr(this), expired.size());
+            return compaction_descriptor(has_only_fully_expired::yes, std::vector<shared_sstable>(expired.begin(), expired.end()), service::get_local_compaction_priority());
+        }
+        // Keep checking for fully_expired_sstables until we don't find
+        // any among the candidates, meaning they are either already compacted
+        // or registered for compaction.
+        _last_expired_check = now;
     } else {
-        clogger.debug("TWCS skipping check for fully expired SSTables");
-    }
-
-    if (!expired.empty()) {
-        clogger.debug("Going to compact {} expired sstables", expired.size());
-        return compaction_descriptor(has_only_fully_expired::yes, std::vector<shared_sstable>(expired.begin(), expired.end()), service::get_local_compaction_priority());
+        clogger.debug("[{}] TWCS skipping check for fully expired SSTables", fmt::ptr(this));
     }
 
     auto compaction_candidates = get_next_non_expired_sstables(table_s, control, std::move(candidates), compaction_time);
+    clogger.debug("[{}] Going to compact {} non-expired sstables", fmt::ptr(this), compaction_candidates.size());
     return compaction_descriptor(std::move(compaction_candidates), service::get_local_compaction_priority());
 }
 

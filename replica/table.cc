@@ -761,6 +761,9 @@ table::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_
                 _memtables->erase(old);
                 co_return;
             }
+            if (!_async_gate.is_closed()) {
+                co_await _compaction_manager.maybe_wait_for_sstable_count_reduction(as_table_state());
+            }
         } catch (...) {
             err = std::current_exception();
         }
