@@ -305,6 +305,8 @@ future<query::clustering_row_ranges> calculate_affected_clustering_ranges(
         const mutation_partition& mp,
         const std::vector<view_and_base>& views);
 
+bool needs_static_row(const mutation_partition& mp, const std::vector<view_and_base>& views);
+
 struct wait_for_all_updates_tag {};
 using wait_for_all_updates = bool_class<wait_for_all_updates_tag>;
 future<> mutate_MV(

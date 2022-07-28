@@ -1510,6 +1510,12 @@ future<query::clustering_row_ranges> calculate_affected_clustering_ranges(const 
 
 }
 
+bool needs_static_row(const mutation_partition& mp, const std::vector<view_and_base>& views) {
+    // TODO: We could also check whether any of the views need static rows
+    // and return false if none of them do
+    return mp.partition_tombstone() || !mp.static_row().empty();
+}
+
 // Calculate the node ("natural endpoint") to which this node should send
 // a view update.
 //
