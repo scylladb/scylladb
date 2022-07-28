@@ -35,7 +35,7 @@ Scylla for Administrators
   * :doc:`Scylla Tools </operating-scylla/admin-tools/index>` - Tools for Administrating and integrating with Scylla
   * :doc:`Scylla Manager </operating-scylla/manager/index>` - Tool for cluster administration and automation
   * :doc:`Scylla Monitoring Stack </operating-scylla/monitoring/index>` - Tool for cluster monitoring and alerting
-  *  `ScyllaDB Operator <https://operator.docs.scylladb.com/stable/>`_ - Tool to run Scylla on Kubernetes
+  *  `ScyllaDB Operator <https://operator.docs.scylladb.com>`_ - Tool to run Scylla on Kubernetes
   * :doc:`Scylla Logs </getting-started/logging/>`
 
 .. panel-box::
