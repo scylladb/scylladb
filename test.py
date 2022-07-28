@@ -34,7 +34,7 @@ from scripts import coverage    # type: ignore
 from test.pylib.artifact_registry import ArtifactRegistry
 from test.pylib.host_registry import HostRegistry
 from test.pylib.pool import Pool
-from test.pylib.scylla_server import ScyllaServer, ScyllaCluster
+from test.pylib.scylla_cluster import ScyllaServer, ScyllaCluster
 from typing import Dict, List, Callable, Any, Iterable, Optional, Awaitable
 
 output_is_a_tty = sys.stdout.isatty()
