@@ -10,7 +10,7 @@ Scylla for Administrators
    security/index
    admin-tools/index
    manager/index
-   ScyllaDB Monitoring Stack <https://monitoring.docs.scylladb.com/stable/>
+   ScyllaDB Monitoring Stack <https://monitoring.docs.scylladb.com/>
    Scylla Operator <scylla-operator/index>
    Upgrade Procedures </upgrade/index>
    System Configuration <system-configuration/index>
