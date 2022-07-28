@@ -2154,8 +2154,9 @@ const region_impl& region::get_impl() const noexcept {
     return *static_cast<const region_impl*>(_impl.get());
 }
 
-region::region(region&& other) noexcept {
-    this->_impl = std::move(other._impl);
+region::region(region&& other) noexcept
+    : _impl(std::move(other._impl))
+{
     if (_impl) {
         auto r_impl = static_cast<region_impl*>(_impl.get());
         r_impl->_region = this;
