@@ -1809,6 +1809,13 @@ public:
         }
     }
 
+    void moved(region* new_region) {
+        if (_listener) {
+            _listener->moved(_region, new_region);
+        }
+        _region = new_region;
+    }
+
     // Note: allocation is disallowed in this path
     // since we don't instantiate reclaiming_lock
     // while traversing _regions
@@ -2159,10 +2166,7 @@ region::region(region&& other) noexcept
 {
     if (_impl) {
         auto r_impl = static_cast<region_impl*>(_impl.get());
-        r_impl->_region = this;
-        if (r_impl->_listener) {
-            r_impl->_listener->moved(&other, this);
-        }
+        r_impl->moved(this);
     }
 }
 
@@ -2176,10 +2180,7 @@ region& region::operator=(region&& other) noexcept {
     this->_impl = std::move(other._impl);
     if (_impl) {
         auto r_impl = static_cast<region_impl*>(_impl.get());
-        r_impl->_region = this;
-        if (r_impl->_listener) {
-            r_impl->_listener->moved(&other, this);
-        }
+        r_impl->moved(this);
     }
     return *this;
 }
