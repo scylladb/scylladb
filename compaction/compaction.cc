@@ -48,6 +48,7 @@
 #include "utils/UUID_gen.hh"
 #include "utils/utf8.hh"
 #include "utils/fmt-compat.hh"
+#include "utils/error_injection.hh"
 #include "readers/filtering.hh"
 #include "readers/compacting.hh"
 #include "tombstone_gc.hh"
@@ -1333,6 +1334,7 @@ private:
         }
 
         void fill_buffer_from_underlying() {
+            utils::get_local_injector().inject("rest_api_keyspace_scrub_abort", [] { throw compaction_aborted_exception("", "", "scrub compaction found invalid data"); });
             while (!_reader.is_buffer_empty() && !is_buffer_full()) {
                 auto mf = _reader.pop_mutation_fragment();
                 if (mf.is_partition_start()) {

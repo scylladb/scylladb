@@ -1433,8 +1433,15 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
                     return cm.perform_sstable_scrub(cf.as_table_state(), opts);
                 }, std::make_optional(sstables::compaction_stats{}), reduce_compaction_stats);
             }, std::make_optional(sstables::compaction_stats{}), reduce_compaction_stats);
-        }).then([] (auto f) {
-            if (f->validation_errors) {
+        }).then_wrapped([] (auto f) {
+            if (f.failed()) {
+                auto ex = f.get_exception();
+                if (try_catch<sstables::compaction_aborted_exception>(ex)) {
+                    return make_ready_future<json::json_return_type>(static_cast<int>(scrub_status::aborted));
+                } else {
+                    return make_exception_future<json::json_return_type>(std::move(ex));
+                }
+            } else if (f.get()->validation_errors) {
                 return make_ready_future<json::json_return_type>(static_cast<int>(scrub_status::validation_errors));
             } else {
                 return make_ready_future<json::json_return_type>(static_cast<int>(scrub_status::successful));

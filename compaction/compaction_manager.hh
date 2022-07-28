@@ -141,7 +141,7 @@ public:
         // stop of transportation services. It cannot make progress anyway.
         // Returns exception if error is judged fatal, and compaction task must be stopped,
         // otherwise, returns stop_iteration::no after sleep for exponential retry.
-        future<stop_iteration> maybe_retry(std::exception_ptr err);
+        future<stop_iteration> maybe_retry(std::exception_ptr err, bool throw_on_abort = false);
 
         // Compacts set of SSTables according to the descriptor.
         using release_exhausted_func_t = std::function<void(const std::vector<sstables::shared_sstable>& exhausted_sstables)>;

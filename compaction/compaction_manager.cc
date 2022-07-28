@@ -876,7 +876,7 @@ inline bool compaction_manager::task::can_proceed(throw_if_stopping do_throw_if_
     return _cm.can_proceed(_compacting_table);
 }
 
-future<stop_iteration> compaction_manager::task::maybe_retry(std::exception_ptr err) {
+future<stop_iteration> compaction_manager::task::maybe_retry(std::exception_ptr err, bool throw_on_abort) {
     try {
         std::rethrow_exception(err);
     } catch (sstables::compaction_stopped_exception& e) {
@@ -884,6 +884,9 @@ future<stop_iteration> compaction_manager::task::maybe_retry(std::exception_ptr 
     } catch (sstables::compaction_aborted_exception& e) {
         cmlog.error("{}: {}: stopping", *this, e.what());
         _cm._stats.errors++;
+        if (throw_on_abort) {
+            throw;
+        }
     } catch (storage_io_error& e) {
         cmlog.error("{}: failed due to storage io error: {}: stopping", *this, e.what());
         _cm._stats.errors++;
@@ -1246,7 +1249,7 @@ private:
 
             finish_compaction(state::failed);
             // retry current sstable or rethrows exception
-            if ((co_await maybe_retry(std::move(ex))) == stop_iteration::yes) {
+            if ((co_await maybe_retry(std::move(ex), true)) == stop_iteration::yes) {
                 co_return sstables::compaction_result{};
             }
         }

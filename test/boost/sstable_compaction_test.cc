@@ -2555,7 +2555,7 @@ SEASTAR_TEST_CASE(sstable_scrub_skip_mode_test) {
             // We expect the scrub with mode=srub::mode::abort to stop on the first invalid fragment.
             sstables::compaction_type_options::scrub opts = {};
             opts.operation_mode = sstables::compaction_type_options::scrub::mode::abort;
-            compaction_manager.perform_sstable_scrub(table->as_table_state(), opts).get();
+            BOOST_REQUIRE_THROW(compaction_manager.perform_sstable_scrub(table->as_table_state(), opts).get(), sstables::compaction_aborted_exception);
 
             BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).size() == 1);
             verify_fragments(sst, corrupt_fragments);
@@ -2652,7 +2652,7 @@ SEASTAR_TEST_CASE(sstable_scrub_segregate_mode_test) {
             // We expect the scrub with mode=srub::mode::abort to stop on the first invalid fragment.
             sstables::compaction_type_options::scrub opts = {};
             opts.operation_mode = sstables::compaction_type_options::scrub::mode::abort;
-            compaction_manager.perform_sstable_scrub(table->as_table_state(), opts).get();
+            BOOST_REQUIRE_THROW(compaction_manager.perform_sstable_scrub(table->as_table_state(), opts).get(), sstables::compaction_aborted_exception);
 
             BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).size() == 1);
             verify_fragments(sst, corrupt_fragments);
