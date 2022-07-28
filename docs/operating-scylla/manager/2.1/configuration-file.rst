@@ -33,7 +33,7 @@ Prometheus settings
    # of ip and port.
    prometheus: ':56090'
 
-If changing prometheus IP or port, please remember to adjust rules in :doc:`prometheus server </operating-scylla/monitoring/2.2/monitoring-stack>`.
+If changing prometheus IP or port, please remember to adjust rules in `prometheus server <https://monitoring.docs.scylladb.com/stable/>`_.
 
 .. code-block:: yaml
 
