@@ -95,7 +95,21 @@ To upgrade:
        for conf in $(cat /var/lib/dpkg/info/scylla-*server.conffiles /var/lib/dpkg/info/scylla-*conf.conffiles /var/lib/dpkg/info/scylla-*jmx.conffiles | grep -v init ) /etc/systemd/system/{var-lib-scylla,var-lib-systemd-coredump}.mount; do sudo cp -v $conf.backup-5.0 $conf; done
        sudo systemctl daemon-reload
 
-Answer ‘y’ to the first two questions.
+    Answer ‘y’ to the first two questions.
+
+    If you installed version 5.0 using a ScyllaDB image (for example, AMI) or first installed an earlier version of ScyllaDB 
+    Open Source using an image and then upgraded to version 5.0, you need to run an additional command 
+    ``sudo yum install scylla-enterprise-machine-image`` to upgrade to ScyllDB Enterprise 2022.1:
+
+    .. code:: sh
+
+       sudo apt-get clean all
+       sudo apt-get update
+       sudo apt-get remove scylla\*
+       sudo yum install scylla-enterprise-machine-image
+       sudo apt-get install scylla-enterprise
+       for conf in $(cat /var/lib/dpkg/info/scylla-*server.conffiles /var/lib/dpkg/info/scylla-*conf.conffiles /var/lib/dpkg/info/scylla-*jmx.conffiles | grep -v init ) /etc/systemd/system/{var-lib-scylla,var-lib-systemd-coredump}.mount; do sudo cp -v $conf.backup-5.0 $conf; done
+       sudo systemctl daemon-reload
 
 Start the node
 --------------

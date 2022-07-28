@@ -90,6 +90,22 @@ To upgrade:
        sudo yum install scylla-enterprise 
        for conf in $( rpm -qc $(rpm -qa | grep scylla) | grep -v contains ) /etc/systemd/system/{var-lib-scylla,var-lib-systemd-coredump}.mount; do sudo cp -v $conf.backup-5.0 $conf; done
 
+   CentOS only:
+   
+   If you first installed an earlier version of ScyllaDB Open Source using a ScyllaDB image (for example, AMI) and 
+   then upgraded to version 5.0, you need to run an additional command ``sudo yum install scylla-enterprise-machine-image``
+   to upgrade to ScyllaDB Enterprise 2022.1:
+
+    .. code:: sh
+
+       sudo yum clean all
+       sudo rm -rf /var/cache/yum
+       sudo yum remove scylla\*
+       sudo yum install scylla-enterprise-machine-image
+       sudo yum install scylla-enterprise 
+       for conf in $( rpm -qc $(rpm -qa | grep scylla) | grep -v contains ) /etc/systemd/system/{var-lib-scylla,var-lib-systemd-coredump}.mount; do sudo cp -v $conf.backup-5.0 $conf; done
+
+
 Start the node
 --------------
 
