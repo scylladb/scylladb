@@ -10,7 +10,7 @@ What Should Make You Want To Start Looking For A Large Partition?
 
 Any of the following:
 
-* Latencies on a single shard become very long (look at the "Scylla Overview Metrics" :doc:`Scylla Monitoring </operating-scylla/monitoring/index>` dashboard)
+* Latencies on a single shard become very long (look at the "Scylla Overview Metrics" dashboard of `ScyllaDB Monitoring Stack <https://monitoring.docs.scylladb.com/stable/>`_).
 * Oversized allocation warning messages in the log:
 
   .. code-block:: none

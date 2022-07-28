@@ -2,7 +2,7 @@
 Integrate Scylla with DataDog
 ==============================
 
-Datadog is a popular SaaS monitoring service. The default :doc:`Monitoring Stack </operating-scylla/monitoring/index>` for Scylla is based on Prometheus and Grafana. You can export metrics from this stack and into DataDog, using it to monitor Scylla.
+Datadog is a popular SaaS monitoring service. The default `ScyllaDB Monitoring Stack <https://monitoring.docs.scylladb.com/stable/>`_ for Scylla is based on Prometheus and Grafana. You can export metrics from this stack and into DataDog, using it to monitor Scylla.
 
 The way to do so is running a DataDog Agent to pull metrics from Prometheus and push it to DataDog as follows:
 
