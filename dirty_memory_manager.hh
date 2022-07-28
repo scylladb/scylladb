@@ -36,7 +36,7 @@ using region_heap = boost::heap::binomial_heap<size_tracked_region*,
 
 class size_tracked_region : public logalloc::region {
 public:
-    region_heap::handle_type _heap_handle;
+    std::optional<region_heap::handle_type> _heap_handle;
 };
 
 //
@@ -272,12 +272,12 @@ public:
     //    evictable / non-evictable. Because the evictable occupancy changes, we would like to call
     //    the full update cycle even then.
     virtual void increase_usage(region* r, ssize_t delta) override { // From region_listener
-        _regions.increase(static_cast<size_tracked_region*>(r)->_heap_handle);
+        _regions.increase(*static_cast<size_tracked_region*>(r)->_heap_handle);
         update(delta);
     }
 
     virtual void decrease_evictable_usage(region* r) override { // From region_listener
-        _regions.decrease(static_cast<size_tracked_region*>(r)->_heap_handle);
+        _regions.decrease(*static_cast<size_tracked_region*>(r)->_heap_handle);
     }
 
     virtual void decrease_usage(region* r, ssize_t delta) override { // From region_listener
@@ -401,6 +401,8 @@ private:
     void del(region_group* child);
     virtual void add(region* child) override; // from region_listener
     virtual void del(region* child) override; // from region_listener
+
+    friend class test_region_group;
 };
 
 }

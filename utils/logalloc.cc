@@ -1809,6 +1809,13 @@ public:
         }
     }
 
+    void moved(region* new_region) {
+        if (_listener) {
+            _listener->moved(_region, new_region);
+        }
+        _region = new_region;
+    }
+
     // Note: allocation is disallowed in this path
     // since we don't instantiate reclaiming_lock
     // while traversing _regions
@@ -2154,14 +2161,12 @@ const region_impl& region::get_impl() const noexcept {
     return *static_cast<const region_impl*>(_impl.get());
 }
 
-region::region(region&& other) noexcept {
-    this->_impl = std::move(other._impl);
-    get_impl()._region = this;
+region::region(region&& other) noexcept
+    : _impl(std::move(other._impl))
+{
     if (_impl) {
         auto r_impl = static_cast<region_impl*>(_impl.get());
-        if (r_impl->_listener) {
-            r_impl->_listener->moved(&other, this);
-        }
+        r_impl->moved(this);
     }
 }
 
@@ -2170,32 +2175,19 @@ region& region::operator=(region&& other) noexcept {
         return *this;
     }
     if (_impl) {
-        auto r_impl = static_cast<region_impl*>(_impl.get());
-        if (r_impl->_listener) {
-            r_impl->_listener->del(this);
-            // Clear before region_impl destructor tries to access removed region
-            r_impl->_listener = nullptr;
-        }
+        unlisten();
     }
     this->_impl = std::move(other._impl);
     if (_impl) {
         auto r_impl = static_cast<region_impl*>(_impl.get());
-        if (r_impl->_listener) {
-            r_impl->_listener->moved(&other, this);
-        }
+        r_impl->moved(this);
     }
-    get_impl()._region = this;
     return *this;
 }
 
 region::~region() {
     if (_impl) {
-        auto impl = static_cast<region_impl*>(_impl.get());
-        if (impl->_listener) {
-            impl->_listener->del(this);
-            // Clear before region_impl destructor tries to access removed region
-            impl->_listener = nullptr;
-        }
+        unlisten();
     }
 }
 
@@ -2209,15 +2201,12 @@ lsa_buffer region::alloc_buf(size_t buffer_size) {
 
 void region::merge(region& other) noexcept {
     if (_impl != other._impl) {
-        auto other_impl = static_cast<region_impl*>(other._impl.get());
-        if (other_impl->_listener) {
-            // Not very generic, but we know that post-merge the caller
-            // (row_cache) isn't interested in listening, and one region
-            // can't have many listeners.
-            other_impl->_listener->del(&other);
-            other_impl->_listener = nullptr;
-        }
-        get_impl().merge(other.get_impl());
+        auto& other_impl = other.get_impl();
+        // Not very generic, but we know that post-merge the caller
+        // (row_cache) isn't interested in listening, and one region
+        // can't have many listeners.
+        other_impl.unlisten();
+        get_impl().merge(other_impl);
         other._impl = _impl;
     }
 }
