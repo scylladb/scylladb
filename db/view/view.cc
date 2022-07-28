@@ -135,10 +135,13 @@ void view_info::set_base_info(db::view::base_info_ptr base_info) {
 }
 
 // A constructor for a base info that can facilitate reads and writes from the materialized view.
-db::view::base_dependent_view_info::base_dependent_view_info(schema_ptr base_schema, std::vector<column_id>&& base_non_pk_columns_in_view_pk)
+db::view::base_dependent_view_info::base_dependent_view_info(schema_ptr base_schema,
+        std::vector<column_id>&& base_regular_columns_in_view_pk,
+        std::vector<column_id>&& base_static_columns_in_view_pk)
         : _base_schema{std::move(base_schema)}
-        , _base_non_pk_columns_in_view_pk{std::move(base_non_pk_columns_in_view_pk)}
-        , has_base_non_pk_columns_in_view_pk{!_base_non_pk_columns_in_view_pk.empty()}
+        , _base_regular_columns_in_view_pk{std::move(base_regular_columns_in_view_pk)}
+        , _base_static_columns_in_view_pk{std::move(base_static_columns_in_view_pk)}
+        , has_base_non_pk_columns_in_view_pk{!_base_regular_columns_in_view_pk.empty() || !_base_static_columns_in_view_pk.empty()}
         , use_only_for_reads{false} {
 
 }
@@ -151,13 +154,22 @@ db::view::base_dependent_view_info::base_dependent_view_info(bool has_base_non_p
         , use_only_for_reads{true} {
 }
 
-const std::vector<column_id>& db::view::base_dependent_view_info::base_non_pk_columns_in_view_pk() const {
+const std::vector<column_id>& db::view::base_dependent_view_info::base_regular_columns_in_view_pk() const {
     if (use_only_for_reads) {
         on_internal_error(vlogger,
-                format("base_non_pk_columns_in_view_pk(): operation unsupported when initialized only for view reads. "
+                format("base_regular_columns_in_view_pk(): operation unsupported when initialized only for view reads. "
                 "Missing column in the base table: {}", to_sstring_view(_column_missing_in_base.value_or(bytes()))));
     }
-    return _base_non_pk_columns_in_view_pk;
+    return _base_regular_columns_in_view_pk;
+}
+
+const std::vector<column_id>& db::view::base_dependent_view_info::base_static_columns_in_view_pk() const {
+    if (use_only_for_reads) {
+        on_internal_error(vlogger,
+                format("base_static_columns_in_view_pk(): operation unsupported when initialized only for view reads. "
+                "Missing column in the base table: {}", to_sstring_view(_column_missing_in_base.value_or(bytes()))));
+    }
+    return _base_static_columns_in_view_pk;
 }
 
 const schema_ptr& db::view::base_dependent_view_info::base_schema() const {
@@ -170,7 +182,8 @@ const schema_ptr& db::view::base_dependent_view_info::base_schema() const {
 }
 
 db::view::base_info_ptr view_info::make_base_dependent_view_info(const schema& base) const {
-    std::vector<column_id> base_non_pk_columns_in_view_pk;
+    std::vector<column_id> base_regular_columns_in_view_pk;
+    std::vector<column_id> base_static_columns_in_view_pk;
 
     for (auto&& view_col : boost::range::join(_schema.partition_key_columns(), _schema.clustering_key_columns())) {
         if (view_col.is_computed()) {
@@ -182,8 +195,10 @@ db::view::base_info_ptr view_info::make_base_dependent_view_info(const schema& b
         }
         const bytes& view_col_name = view_col.name();
         auto* base_col = base.get_column_definition(view_col_name);
-        if (base_col && !base_col->is_primary_key()) {
-            base_non_pk_columns_in_view_pk.push_back(base_col->id);
+        if (base_col && base_col->is_regular()) {
+            base_regular_columns_in_view_pk.push_back(base_col->id);
+        } else if (base_col && base_col->is_static()) {
+            base_static_columns_in_view_pk.push_back(base_col->id);
         } else if (!base_col) {
             vlogger.error("Column {} in view {}.{} was not found in the base table {}.{}",
                     to_sstring_view(view_col_name), _schema.ks_name(), _schema.cf_name(), base.ks_name(), base.cf_name());
@@ -202,7 +217,7 @@ db::view::base_info_ptr view_info::make_base_dependent_view_info(const schema& b
         }
     }
 
-    return make_lw_shared<db::view::base_dependent_view_info>(base.shared_from_this(), std::move(base_non_pk_columns_in_view_pk));
+    return make_lw_shared<db::view::base_dependent_view_info>(base.shared_from_this(), std::move(base_regular_columns_in_view_pk), std::move(base_static_columns_in_view_pk));
 }
 
 bool view_info::has_base_non_pk_columns_in_view_pk() const {
@@ -482,7 +497,7 @@ row_marker view_updates::compute_row_marker(const clustering_row& base_row) cons
     // they share liveness information. It's true especially in the only case currently allowed by CQL,
     // which assumes there's up to one non-pk column in the view key. It's also true in alternator,
     // which does not carry TTL information.
-    const auto& col_ids = _base_info->base_non_pk_columns_in_view_pk();
+    const auto& col_ids = _base_info->base_regular_columns_in_view_pk();
     if (!col_ids.empty()) {
         auto& def = _base->regular_column_at(col_ids[0]);
         // Note: multi-cell columns can't be part of the primary key.
@@ -864,7 +879,7 @@ void view_updates::delete_old_entry(const partition_key& base_key, const cluster
 void view_updates::do_delete_old_entry(const partition_key& base_key, const clustering_row& existing, const clustering_row& update, gc_clock::time_point now) {
     auto view_rows = get_view_rows(base_key, existing, std::nullopt);
     for (const auto& [r, action] : view_rows) {
-        const auto& col_ids = _base_info->base_non_pk_columns_in_view_pk();
+        const auto& col_ids = _base_info->base_regular_columns_in_view_pk();
         if (_view_info.has_computed_column_depending_on_base_non_primary_key()) {
             if (auto ts_tag = std::get_if<view_key_and_action::shadowable_tombstone_tag>(&action)) {
                 r->apply(ts_tag->into_shadowable_tombstone(now));
@@ -1040,7 +1055,7 @@ void view_updates::generate_update(
         return;
     }
 
-    const auto& col_ids = _base_info->base_non_pk_columns_in_view_pk();
+    const auto& col_ids = _base_info->base_regular_columns_in_view_pk();
     if (_view_info.has_computed_column_depending_on_base_non_primary_key()) {
         return update_entry_for_computed_column(base_key, update, existing, now);
     }
