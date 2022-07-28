@@ -43,6 +43,8 @@
         </form>
         <div class="results"></div>
     </div>
+    <br/>
+    <br/>
 
     <script>
         function consistency(c, rf) {
@@ -79,17 +81,19 @@
                 resultsDiv.classList.add("warning", "admonition");
             } else {
                 const msg = [];
+                msg.push("<ul>")
                 if (writeConsistencyN + readConsistencyN > replicationFactor) {
-                    msg.push("Your reads are <b>consistent</b>");
+                    msg.push("<li>Your reads are <b>consistent</b></li>");
                 } else {
-                    msg.push("Your reads are <b>eventually consistent</b>");
+                    msg.push("<li>Your reads are <b>eventually consistent</b></li>");
                 }
-                msg.push(`You can lose ${replicationFactor - readConsistencyN} nodes without failing reads`);
-                msg.push(`You can lose ${writeConsistencyN - 1} nodes without data loss`);
-                msg.push(`Each node holds ~ ${Math.round(replicationFactor / nodes * 100)}% of your data`);
+                msg.push(`<li>You can lose ${replicationFactor - readConsistencyN} nodes without failing reads</li>`);
+                msg.push(`<li>You can lose ${writeConsistencyN - 1} nodes without data loss</li>`);
+                msg.push(`<li>Each node holds ~ ${Math.round(replicationFactor / nodes * 100)}% of your data</li>`);
+                msg.push("</ul>")
                 
                 resultsDiv.classList.remove("warning", "admonition");
-                resultsDiv.innerHTML = msg.join("<br/>");
+                resultsDiv.innerHTML = msg.join("<br/>"); 
             }
         }
 
