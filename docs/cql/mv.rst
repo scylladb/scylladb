@@ -146,6 +146,20 @@ MV Options
 A materialized view is internally implemented by a table, and as such, creating a MV allows the :ref:`same options than
 creating a table <create-table-options>`.
 
+Additionally, the following Scylla-specific options are supported:
+
+.. list-table::
+   :widths: 20 10 10 60
+   :header-rows: 1
+
+   * - Option
+     - Kind
+     - Default
+     - Description
+   * - ``synchronous_updates``
+     - simple
+     - false
+     - When true, view updates are applied synchronously; otherwise, view updates may be applied in the background
 
 .. _alter-materialized-view-statement:
 
