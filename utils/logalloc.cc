@@ -2171,12 +2171,7 @@ region& region::operator=(region&& other) noexcept {
         return *this;
     }
     if (_impl) {
-        auto r_impl = static_cast<region_impl*>(_impl.get());
-        if (r_impl->_listener) {
-            r_impl->_listener->del(this);
-            // Clear before region_impl destructor tries to access removed region
-            r_impl->_listener = nullptr;
-        }
+        unlisten();
     }
     this->_impl = std::move(other._impl);
     if (_impl) {
@@ -2191,12 +2186,7 @@ region& region::operator=(region&& other) noexcept {
 
 region::~region() {
     if (_impl) {
-        auto impl = static_cast<region_impl*>(_impl.get());
-        if (impl->_listener) {
-            impl->_listener->del(this);
-            // Clear before region_impl destructor tries to access removed region
-            impl->_listener = nullptr;
-        }
+        unlisten();
     }
 }
 
