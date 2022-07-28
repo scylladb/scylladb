@@ -290,7 +290,7 @@ auto frozen_mutation::consume(schema_ptr s, frozen_mutation_consumer_adaptor<Con
     check_schema_version(schema_version(), *s);
     try {
         adaptor.on_new_partition(_pk);
-        partition().accept(s->get_column_mapping(), adaptor);
+        partition().accept_ordered(*s, adaptor);
         return adaptor.on_end_of_partition();
     } catch (...) {
         std::throw_with_nested(std::runtime_error(format(
@@ -309,13 +309,9 @@ auto frozen_mutation::consume_gently(schema_ptr s, frozen_mutation_consumer_adap
     check_schema_version(schema_version(), *s);
     try {
         adaptor.on_new_partition(_pk);
-        return partition().accept_gently(s->get_column_mapping(), adaptor).then_wrapped([this, s, &adaptor] (future<> f) {
-            if (f.failed()) {
-                std::throw_with_nested(std::runtime_error(format(
-                        "frozen_mutation::consume_gently(): failed consuming mutation {} of {}.{}", key(), s->ks_name(), s->cf_name())));
-            }
-            return adaptor.on_end_of_partition();
-        });
+        auto p = partition();
+        co_await p.accept_gently_ordered(*s, adaptor);
+        co_return adaptor.on_end_of_partition();
     } catch (...) {
         std::throw_with_nested(std::runtime_error(format(
                 "frozen_mutation::consume_gently(): failed consuming mutation {} of {}.{}", key(), s->ks_name(), s->cf_name())));
