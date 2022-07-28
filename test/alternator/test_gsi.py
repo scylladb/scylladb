@@ -11,7 +11,7 @@
 import pytest
 import time
 from botocore.exceptions import ClientError
-from util import create_test_table, random_string, full_scan, full_query, multiset, list_tables, new_test_table
+from alternator_util import create_test_table, random_string, full_scan, full_query, multiset, list_tables, new_test_table
 
 # GSIs only support eventually consistent reads, so tests that involve
 # writing to a table and then expect to read something from it cannot be

@@ -12,6 +12,8 @@ import time
 import socket
 import os
 import collections
+import requests
+import pytest
 from contextlib import contextmanager
 
 from cassandra.auth import PlainTextAuthProvider
@@ -248,3 +250,19 @@ def local_process_id(cql):
 # The number of arguments is assumed to be even.
 def user_type(*args):
     return collections.namedtuple('user_type', args[::2])(*args[1::2])
+
+# Tries to inject an error via Scylla REST API. It only works on Scylla,
+# and only in specific build modes (dev, debug, sanitize), so this function
+# will trigger a test to be skipped if it cannot be executed.
+@contextmanager
+def scylla_inject_error(rest_api, err, one_shot=False):
+    response = requests.post(f'{rest_api}/v2/error_injection/injection/{err}?one_shot={one_shot}')
+    response = requests.get(f'{rest_api}/v2/error_injection/injection')
+    print("Enabled error injections:", response.content.decode('utf-8'))
+    if response.content.decode('utf-8') == "[]":
+        pytest.skip("Error injection not enabled in Scylla - try compiling in dev/debug/sanitize mode")
+    try:
+        yield
+    finally:
+        print("Disabling error injection", err)
+        response = requests.delete(f'{rest_api}/v2/error_injection/injection/{err}')

@@ -28,7 +28,7 @@ import re
 from contextlib import contextmanager
 from botocore.exceptions import ClientError
 
-from util import random_string, new_test_table
+from alternator_util import random_string, new_test_table
 
 # Fixture for checking if we are able to test Scylla metrics. Scylla metrics
 # are not available on AWS (of course), but may also not be available for

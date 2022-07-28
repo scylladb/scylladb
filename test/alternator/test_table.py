@@ -11,7 +11,7 @@ import pytest
 import time
 import threading
 from botocore.exceptions import ClientError
-from util import list_tables, unique_table_name, create_test_table, random_string
+from alternator_util import list_tables, unique_table_name, create_test_table, random_string
 
 # Utility function for create a table with a given name and some valid
 # schema.. This function initiates the table's creation, but doesn't
@@ -326,7 +326,7 @@ def test_update_table_non_existent(dynamodb, test_table):
 # default, this fixture can be removed.
 @pytest.fixture(scope="session")
 def check_pre_raft(dynamodb):
-    from util import is_aws
+    from alternator_util import is_aws
     # If not running on Scylla, return false.
     if is_aws(dynamodb):
         return false
