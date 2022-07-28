@@ -1221,11 +1221,9 @@ token_metadata::get_predecessor(token t) const {
     return _impl->get_predecessor(t);
 }
 
-std::vector<inet_address>
+const std::unordered_set<inet_address>&
 token_metadata::get_all_endpoints() const {
-    const auto& eps = _impl->get_all_endpoints();
-    // FIXME: for now, transform the unordered_set into a vector
-    return boost::copy_range<std::vector<inet_address>>(eps);
+    return _impl->get_all_endpoints();
 }
 
 size_t
