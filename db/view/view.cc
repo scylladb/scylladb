@@ -233,6 +233,20 @@ bool view_info::has_base_non_pk_columns_in_view_pk() const {
     return _base_info->has_base_non_pk_columns_in_view_pk;
 }
 
+clustering_row db::view::clustering_or_static_row::as_clustering_row(const schema& s) const {
+    if (!is_clustering_row()) {
+        on_internal_error(vlogger, "Tried to interpret a static row as a clustering row");
+    }
+    return clustering_row(*_key, tomb(), marker(), row(s, column_kind::regular_column, cells()));
+}
+
+static_row db::view::clustering_or_static_row::as_static_row(const schema& s) const {
+    if (!is_static_row()) {
+        on_internal_error(vlogger, "Tried to interpret a clustering row as a static row");
+    }
+    return static_row(s, cells());
+}
+
 namespace db {
 
 namespace view {

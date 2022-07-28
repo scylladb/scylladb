@@ -80,6 +80,46 @@ struct view_and_base {
     base_info_ptr base;
 };
 
+// An immutable representation of a clustering or static row of the base table.
+struct clustering_or_static_row {
+private:
+    std::optional<clustering_key_prefix> _key;
+    deletable_row _row;
+
+public:
+    explicit clustering_or_static_row(clustering_row&& cr)
+            : _key(std::move(cr.key()))
+            , _row(std::move(cr).as_deletable_row())
+    {}
+
+    explicit clustering_or_static_row(static_row&& sr)
+            : _key()
+            , _row(row_tombstone(), row_marker(), std::move(sr.cells()))
+    {}
+
+    bool is_static_row() const { return !_key.has_value(); }
+    bool is_clustering_row() const { return _key.has_value(); }
+
+    const std::optional<clustering_key_prefix>& key() const { return _key; }
+
+    row_tombstone tomb() const { return _row.deleted_at(); }
+    const row_marker& marker() const { return _row.marker(); }
+    const row& cells() const { return _row.cells(); }
+
+    bool empty() const { return _row.empty(); }
+    bool is_live(const schema& s, tombstone base_tombstone = tombstone(), gc_clock::time_point now = gc_clock::time_point::min()) const {
+        return _row.is_live(s, column_kind(), base_tombstone, now);
+    }
+
+    column_kind column_kind() const {
+        return _key.has_value()
+                ? column_kind::regular_column : column_kind::static_column;
+    }
+
+    clustering_row as_clustering_row(const schema& s) const;
+    static_row as_static_row(const schema& s) const;
+};
+
 /**
  * Whether the view filter considers the specified partition key.
  *
