@@ -169,3 +169,15 @@ SEASTAR_TEST_CASE(test_deserialization_using_wrong_schema_throws) {
         }
     });
 }
+SEASTAR_TEST_CASE(frozen_mutation_is_consumed_in_order) {
+    return seastar::async([] {
+        random_mutation_generator gen{random_mutation_generator::generate_counters::no};
+        for (int i : boost::irange<int>(1)) {
+            mutation m = gen();
+            frozen_mutation fm{m};
+            validating_consumer consumer{*gen.schema()};
+            fm.consume(gen.schema(), consumer);
+            seastar::thread::maybe_yield();
+        }
+    });
+}
