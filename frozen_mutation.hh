@@ -285,7 +285,7 @@ auto frozen_mutation::consume(schema_ptr s, frozen_mutation_consumer_adaptor<Con
     check_schema_version(schema_version(), *s);
     try {
         adaptor.on_new_partition(_pk);
-        partition().accept(s->get_column_mapping(), adaptor);
+        partition().accept_ordered(*s, adaptor);
         return adaptor.on_end_of_partition();
     } catch (...) {
         std::throw_with_nested(std::runtime_error(format(

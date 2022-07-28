@@ -72,6 +72,7 @@ public:
     void accept(const column_mapping&, converting_mutation_partition_applier& visitor) const;
     future<> accept_gently(const column_mapping&, converting_mutation_partition_applier& visitor) const;
     void accept(const column_mapping&, mutation_partition_view_virtual_visitor& mpvvv) const;
+    void accept_ordered(const schema& schema, mutation_partition_view_virtual_visitor& mpvvv) const;
     future<> accept_gently(const column_mapping&, mutation_partition_view_virtual_visitor& mpvvv) const;
 
     std::optional<clustering_key> first_row_key() const;

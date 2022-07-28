@@ -238,6 +238,105 @@ void mutation_partition_view::do_accept(const column_mapping& cm, Visitor& visit
     }
 }
 
+void mutation_partition_view::accept_ordered(const schema& s, mutation_partition_view_virtual_visitor& visitor) const {
+    const column_mapping& cm = s.get_column_mapping();
+    auto in = _in;
+    auto mpv = ser::deserialize(in, boost::type<ser::mutation_partition_view>());
+
+    visitor.accept_partition_tombstone(mpv.tomb());
+
+    struct static_row_cell_visitor {
+        mutation_partition_view_virtual_visitor& _visitor;
+
+        void accept_atomic_cell(column_id id, atomic_cell ac) const {
+           _visitor.accept_static_cell(id, std::move(ac));
+        }
+        void accept_collection(column_id id, const collection_mutation& cm) const {
+           _visitor.accept_static_cell(id, cm);
+        }
+    };
+    read_and_visit_row(mpv.static_row(), cm, column_kind::static_column, static_row_cell_visitor{visitor});
+
+    auto rt_b = mpv.range_tombstones().begin();
+    auto rt_e = mpv.range_tombstones().end();
+    auto cr_b = mpv.rows().begin();
+    auto cr_e = mpv.rows().end();
+    position_in_partition::tri_compare cmp{s};
+
+    int consumed_range_tombstones{0};
+    int consumed_clustering_rows{0};
+    auto consume_rt = [&] (range_tombstone&& rt) {
+        visitor.accept_row_tombstone(rt);
+        ++consumed_range_tombstones;
+    };
+    auto consume_cr = [&] (ser::deletable_row_view&& cr) {
+        ++consumed_clustering_rows;
+        auto t = row_tombstone(cr.deleted_at(), shadowable_tombstone(cr.shadowable_deleted_at()));
+        visitor.accept_row(position_in_partition_view::for_key(cr.key()), t, read_row_marker(cr.marker()), is_dummy::no, is_continuous::yes);
+
+        struct cell_visitor {
+            mutation_partition_view_virtual_visitor& _visitor;
+
+            void accept_atomic_cell(column_id id, atomic_cell ac) const {
+               _visitor.accept_row_cell(id, std::move(ac));
+            }
+            void accept_collection(column_id id, const collection_mutation& cm) const {
+               _visitor.accept_row_cell(id, cm);
+            }
+        };
+        read_and_visit_row(cr.cells(), cm, column_kind::regular_column, cell_visitor{visitor});
+    };
+
+    auto rt_it = rt_b;
+    auto cr_it = cr_b;
+    std::optional<range_tombstone> rt;
+    std::optional<ser::deletable_row_view> cr;
+    while ((rt_it != rt_e) && (cr_it != cr_e)) {
+        if (!rt) {
+            rt = *rt_it;
+        }
+        if (!cr) {
+            cr = *cr_it;
+            if (cr->key() == clustering_key(std::vector<bytes>{})) {
+                cr = {};
+                continue;
+            }
+        }
+        position_in_partition_view rt_pos = rt->position();
+        position_in_partition_view cr_pos = position_in_partition_view::for_key(cr->key());
+        auto res = cmp(rt_pos, cr_pos);
+        if (cmp(rt_pos, cr_pos) < 0) {
+            consume_rt(std::move(*rt));
+            rt = {};
+        } else {
+            consume_cr(std::move(*cr));
+            cr = {};
+        }
+    }
+    if (rt_it != rt_e && !rt) {
+        rt = *rt_it;
+    }
+    if (cr_it != cr_e && !cr) {
+        cr = *cr_it;
+    }
+    while (rt) {
+        consume_rt(std::move(*rt));
+        if (rt_it != rt_e) {
+            rt = *rt_it;
+        } else {
+            rt = {};
+        }
+    }
+    while (cr) {
+        consume_cr(std::move(*cr));
+        if (cr_it != cr_e) {
+            cr = *cr_it;
+        } else {
+            cr = {};
+        }
+    }
+}
+
 template<typename Visitor>
 requires MutationViewVisitor<Visitor>
 future<> mutation_partition_view::do_accept_gently(const column_mapping& cm, Visitor& visitor) const {
