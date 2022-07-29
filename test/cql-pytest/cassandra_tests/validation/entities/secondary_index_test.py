@@ -856,7 +856,6 @@ def testAllowFilteringOnPartitionKeyWithIndexForContains(cql, test_keyspace):
                        [1, 1, {4, 5, 6}])
             assert_empty(execute(cql, table, "SELECT * FROM %s WHERE k2 < ? AND v CONTAINS ? ALLOW FILTERING", 0, 7))
 
-@pytest.mark.xfail(reason="issues #2963")
 def testIndexOnStaticColumnWithPartitionWithoutRows(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(pk int, c int, s int static, v int, PRIMARY KEY (pk, c))") as table:
         execute(cql, table, "CREATE INDEX ON %s (s)")

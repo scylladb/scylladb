@@ -8,7 +8,6 @@
 from cassandra_tests.porting import *
 
 
-@pytest.mark.xfail(reason="issues #2963")
 def testSimpleStaticColumn(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(id int, name text, age int static, PRIMARY KEY (id, name))") as table:
         cql.execute(f"CREATE INDEX static_age on {table}(age)")
@@ -39,7 +38,6 @@ def testSimpleStaticColumn(cql, test_keyspace):
         assert_empty(execute(cql, table, "SELECT id, name, age FROM %s WHERE age=?", age2))
 
 
-@pytest.mark.xfail(reason="issues #2963")
 def testIndexOnCompoundRowKey(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(interval text, seq int, id int, severity int static, PRIMARY KEY ((interval, seq), id) ) WITH CLUSTERING ORDER BY (id DESC)") as table:
         execute(cql, table, "CREATE INDEX ON %s (severity)")
@@ -56,7 +54,6 @@ def testIndexOnCompoundRowKey(cql, test_keyspace):
         assert_rows(execute(cql, table, "select * from %s where severity = 10 and interval = 't' and seq = 1"),
                    ["t", 1, 4, 10], ["t", 1, 3, 10])
 
-@pytest.mark.xfail(reason="issues #2963")
 def testIndexOnCollections(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int, v int, l list<int> static, s set<text> static, m map<text, int> static, PRIMARY KEY (k, v))") as table:
         execute(cql, table, "CREATE INDEX ON %s (l)")
@@ -108,7 +105,6 @@ def testIndexOnCollections(cql, test_keyspace):
         execute(cql, table, "DELETE m['a'] FROM %s WHERE k = 0")
         assert_empty(execute(cql, table, "SELECT k, v FROM %s  WHERE m CONTAINS KEY 'a'"))
 
-@pytest.mark.xfail(reason="issues #2963")
 def testIndexOnFrozenCollections(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int, v int, l frozen<list<int>> static, s frozen<set<text>> static, m frozen<map<text, int>> static, PRIMARY KEY (k, v))") as table:
         execute(cql, table, "CREATE INDEX ON %s (FULL(l))")
@@ -154,7 +150,6 @@ def testIndexOnFrozenCollections(cql, test_keyspace):
         assert_empty(execute(cql, table, "SELECT k, v FROM %s WHERE m = {'a': 1, 'b': 2}"))
         assert_rows(execute(cql, table, "SELECT k, v FROM %s WHERE m = {'a': 2, 'b': 3}"), [0, 0], [0, 1])
 
-@pytest.mark.xfail(reason="issues #2963")
 def testStaticIndexAndNonStaticIndex(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(id int, company text, age int static, salary int, PRIMARY KEY(id, company))") as table:
         execute(cql, table, "CREATE INDEX on %s(age)")
@@ -170,7 +165,6 @@ def testStaticIndexAndNonStaticIndex(cql, test_keyspace):
         assert_rows(execute(cql, table, "SELECT id, company, age, salary FROM %s WHERE age = 20 AND salary = 2000 ALLOW FILTERING"),
                    [1, company2, 20, 2000])
 
-@pytest.mark.xfail(reason="issues #2963")
 def testIndexOnUDT(cql, test_keyspace):
     with create_type(cql, test_keyspace, "(street text, city text)") as type_name:
         with create_table(cql, test_keyspace, f"(id int, company text, home frozen<{type_name}> static, price int, PRIMARY KEY(id, company))") as table:
