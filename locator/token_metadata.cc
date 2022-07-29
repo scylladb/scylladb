@@ -279,7 +279,7 @@ public:
      * Bootstrapping tokens are not taken into account. */
     size_t count_normal_token_owners() const;
 private:
-    void update_normal_token_owners();
+    future<> update_normal_token_owners();
 
 public:
     // returns empty vector if keyspace_name not found.
@@ -481,7 +481,7 @@ future<> token_metadata_impl::update_normal_tokens(const std::unordered_map<inet
             }
         }
     }
-    update_normal_token_owners();
+    co_await update_normal_token_owners();
 
     // New tokens were added to _token_to_endpoint_map
     // so re-sort all tokens.
@@ -915,10 +915,11 @@ size_t token_metadata_impl::count_normal_token_owners() const {
     return _normal_token_owners.size();
 }
 
-void token_metadata_impl::update_normal_token_owners() {
+future<> token_metadata_impl::update_normal_token_owners() {
     std::unordered_set<inet_address> eps;
     for (auto [t, ep]: _token_to_endpoint_map) {
         eps.insert(ep);
+        co_await coroutine::maybe_yield();
     }
     _normal_token_owners = std::move(eps);
 }
