@@ -37,6 +37,21 @@
 /stable/upgrade/upgrade-manager/upgrade-guide-from-2.x.a-to-2.y.b/index.html: https://manager.docs.scylladb.com/stable/upgrade/index.html
 /stable/upgrade/upgrade-manager/upgrade-guide-from-2.x.a-to-2.y.b/upgrade-2.x.a-to-2.y.b.html: https://manager.docs.scylladb.com/stable/upgrade/index.html
 /stable/upgrade/upgrade-manager/upgrade-guide-from-2.x.a-to-2.y.b/upgrade-row-level-repair.html: https://www.scylladb.com/2019/08/13/scylla-open-source-3-1-efficiently-maintaining-consistency-with-row-level-repair/
+stable/operating-scylla/manager/2.1/index.html: https://manager.docs.scylladb.com/
+/stable/operating-scylla/manager/2.1/architecture.html: https://manager.docs.scylladb.com/
+/stable/operating-scylla/manager/2.1/install.html: https://manager.docs.scylladb.com/stable/install-scylla-manager.html
+/stable/operating-scylla/manager/2.1/install-agent.html: https://manager.docs.scylladb.com/stable/install-scylla-manager-agent.html
+/stable/operating-scylla/manager/2.1/add-a-cluster.html: https://manager.docs.scylladb.com/stable/add-a-cluster.html
+/stable/operating-scylla/manager/2.1/repair.html: https://manager.docs.scylladb.com/stable/repair/index.html
+/stable/operating-scylla/manager/2.1/backup.html: https://manager.docs.scylladb.com/stable/backup/index.html
+/stable/operating-scylla/manager/2.1/extract-schema-from-backup.html: https://manager.docs.scylladb.com/stable/sctool/backup.html
+/stable/operating-scylla/manager/2.1/restore-a-backup.html: https://manager.docs.scylladb.com/stable/restore/index.html
+/stable/operating-scylla/manager/2.1/health-check.html: https://manager.docs.scylladb.com/stable/health-check.html
+/stable/operating-scylla/manager/2.1/sctool.html: https://manager.docs.scylladb.com/stable/sctool/index.html
+/stable/operating-scylla/manager/2.1/monitoring-manager-integration.html: https://manager.docs.scylladb.com/stable/scylla-monitoring.html
+/stable/operating-scylla/manager/2.1/use-a-remote-db.html: https://manager.docs.scylladb.com/
+/stable/operating-scylla/manager/2.1/configuration-file.html: https://manager.docs.scylladb.com/stable/config/scylla-manager-config.html
+/stable/operating-scylla/manager/2.1/agent-configuration-file.html: https://manager.docs.scylladb.com/stable/config/scylla-manager-agent-config.html
 
 ### moving the CQL reference files to the new cql folder
 
