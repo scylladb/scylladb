@@ -60,22 +60,20 @@ void production_snitch_base::set_backreference(snitch_ptr& d) {
 }
 
 std::optional<sstring> production_snitch_base::get_endpoint_info(inet_address endpoint, gms::application_state key) {
-    gms::gossiper& local_gossiper = local().get_local_gossiper();
-    auto* ep_state = local_gossiper.get_application_state_ptr(endpoint, key);
+    auto* ep_state = _gossiper.get_application_state_ptr(endpoint, key);
     return ep_state ? std::optional(ep_state->value) : std::nullopt;
 }
 
 sstring production_snitch_base::get_endpoint_info(inet_address endpoint, gms::application_state key,
                                                   const sstring& default_val) {
     auto val = get_endpoint_info(endpoint, key);
-    auto& gossiper = local().get_local_gossiper();
 
     if (val) {
         return *val;
     }
     // ...if not found - look in the SystemTable...
     if (!_saved_endpoints) {
-        _saved_endpoints = gossiper.get_system_keyspace().local().load_dc_rack_info();
+        _saved_endpoints = _gossiper.get_system_keyspace().local().load_dc_rack_info();
     }
 
     auto it = _saved_endpoints->find(endpoint);
@@ -88,7 +86,7 @@ sstring production_snitch_base::get_endpoint_info(inet_address endpoint, gms::ap
         }
     }
 
-    auto resolved = gossiper.get_local_messaging().get_public_endpoint_for(endpoint);
+    auto resolved = _gossiper.get_local_messaging().get_public_endpoint_for(endpoint);
     if (resolved != endpoint) {
         return get_endpoint_info(resolved, key, default_val);
     }
