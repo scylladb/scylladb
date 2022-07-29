@@ -209,6 +209,12 @@ void create_index_statement::validate_for_local_index(const schema& schema) cons
         for (unsigned i = 1; i < _raw_targets.size(); ++i) {
             if (std::holds_alternative<index_target::raw::multiple_columns>(_raw_targets[i]->value)) {
                 throw exceptions::invalid_request_exception(format("Multi-column index targets are currently only supported for partition key"));
+            } else if (auto* raw_ident = std::get_if<index_target::raw::single_column>(&_raw_targets[i]->value)) {
+                auto ident = (*raw_ident)->prepare_column_identifier(schema);
+                auto it = schema.columns_by_name().find(ident->name());
+                if (it != schema.columns_by_name().end() && it->second->is_static()) {
+                    throw exceptions::invalid_request_exception("Local indexes containing static columns are not supported.");
+                }
             }
         }
 }
