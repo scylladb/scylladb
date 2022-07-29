@@ -249,11 +249,13 @@ view_ptr secondary_index_manager::create_view_for_index(const index_metadata& im
         }
     }
 
-    for (auto& col : schema->clustering_key_columns()) {
-        if (col == *index_target) {
-            continue;
+    if (!index_target->is_static()) {
+        for (auto& col : schema->clustering_key_columns()) {
+            if (col == *index_target) {
+                continue;
+            }
+            builder.with_column(col.name(), col.type, column_kind::clustering_key);
         }
-        builder.with_column(col.name(), col.type, column_kind::clustering_key);
     }
 
     // This column needs to be after the base clustering key.
