@@ -54,6 +54,7 @@ public:
         });
     }
 
+private:
     /**
      * This function register a Gossiper subscriber to reconnect according to
      * the new "prefer_local" value, namely use either an internal or extenal IP
@@ -73,9 +74,8 @@ public:
      *
      * This is currently relevant to EC2/GCE(?) only.
      */
-    virtual future<> reload_gossiper_state() override;
+    future<> reload_gossiper_state();
 
-private:
     void periodic_reader_callback();
 
     /**

@@ -159,11 +159,6 @@ public:
         //noop by default
     }
 
-    virtual future<> reload_gossiper_state() {
-        // noop by default
-        return make_ready_future<>();
-    }
-
     virtual snitch_signal_connection_t when_reconfigured(snitch_signal_slot_t& slot) {
         // no updates by default
         return snitch_signal_connection_t();
@@ -207,6 +202,10 @@ struct snitch_ptr : public peering_sharded_service<snitch_ptr> {
         } else {
             return make_ready_future<>();
         }
+    }
+
+    i_endpoint_snitch& get() {
+        return *_ptr;
     }
 
     i_endpoint_snitch* operator->() {

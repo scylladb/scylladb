@@ -179,7 +179,8 @@ future<> gossiping_property_file_snitch::reload_configuration() {
             return seastar::async([this] {
                 // reload Gossiper state (executed on CPU0 only)
                 container().invoke_on(0, [] (snitch_ptr& local_snitch_ptr) {
-                    return local_snitch_ptr->reload_gossiper_state();
+                    auto& self = dynamic_cast<gossiping_property_file_snitch&>(local_snitch_ptr.get());
+                    return self.reload_gossiper_state();
                 }).get();
 
                 _reconfigured();
