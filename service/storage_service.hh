@@ -263,8 +263,6 @@ public:
     std::chrono::milliseconds get_ring_delay();
 private:
 
-    std::unordered_set<inet_address> _replicating_nodes;
-
     std::optional<inet_address> _removing_node;
 
 public:

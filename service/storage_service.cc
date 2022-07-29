@@ -1100,9 +1100,7 @@ future<> storage_service::handle_state_removing(inet_address endpoint, std::vect
             // restore_replica_count to complete which can take a long time,
             // since when it completes, this node will send notification to
             // tell the removal_coordinator with IP address notify_endpoint
-            // that the restore process is finished on this node. This node
-            // will be removed from _replicating_nodes on the
-            // removal_coordinator.
+            // that the restore process is finished on this node.
             auto notify_endpoint = ep.value();
             // OK to discard future since _async_gate is closed on stop()
             (void)with_gate(_async_gate, [this, endpoint, notify_endpoint] {
@@ -2933,14 +2931,6 @@ future<> storage_service::confirm_replication(inet_address node) {
     return run_with_no_api_lock([node] (storage_service& ss) {
         auto removing_node = bool(ss._removing_node) ? format("{}", *ss._removing_node) : "NONE";
         slogger.info("Got confirm_replication from {}, removing_node {}", node, removing_node);
-        // replicatingNodes can be empty in the case where this node used to be a removal coordinator,
-        // but restarted before all 'replication finished' messages arrived. In that case, we'll
-        // still go ahead and acknowledge it.
-        if (!ss._replicating_nodes.empty()) {
-            ss._replicating_nodes.erase(node);
-        } else {
-            slogger.info("Received unexpected REPLICATION_FINISHED message from {}. Was this node recently a removal coordinator?", node);
-        }
     });
 }
 
@@ -3259,8 +3249,7 @@ future<sstring> storage_service::get_removal_status() {
         if (tokens.empty()) {
             return make_ready_future<sstring>(sstring("Node has no token"));
         }
-        auto status = format("Removing token ({}). Waiting for replication confirmation from [{}].",
-                tokens.front(), join(",", ss._replicating_nodes));
+        auto status = format("Removing token ({}).", tokens.front());
         return make_ready_future<sstring>(status);
     });
 }
@@ -3281,9 +3270,9 @@ future<> storage_service::force_remove_completion() {
 
         try {
             const auto& tm = ss.get_token_metadata();
-            if (!ss._replicating_nodes.empty() || !tm.get_leaving_endpoints().empty()) {
+            if (!tm.get_leaving_endpoints().empty()) {
                 auto leaving = tm.get_leaving_endpoints();
-                slogger.warn("Removal not confirmed for {}, Leaving={}", join(",", ss._replicating_nodes), leaving);
+                slogger.warn("Removal not confirmed, Leaving={}", leaving);
                 for (auto endpoint : leaving) {
                     utils::UUID host_id;
                     auto tokens = tm.get_tokens(endpoint);
@@ -3301,7 +3290,6 @@ future<> storage_service::force_remove_completion() {
                     assert(ss._group0);
                     co_await ss._group0->remove_from_group0(endpoint);
                 }
-                ss._replicating_nodes.clear();
                 ss._removing_node = std::nullopt;
             } else {
                 slogger.warn("No tokens to force removal on, call 'removenode' first");
