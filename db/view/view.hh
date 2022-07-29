@@ -281,6 +281,7 @@ public:
 
 private:
     void generate_update(clustering_row&& update, std::optional<clustering_row>&& existing);
+    void generate_update(static_row&& update, const tombstone& update_tomb, std::optional<static_row>&& existing, const tombstone& existing_tomb);
     future<stop_iteration> on_results();
 
     future<stop_iteration> advance_all();
