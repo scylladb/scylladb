@@ -261,11 +261,6 @@ private:
 
 public:
     std::chrono::milliseconds get_ring_delay();
-private:
-
-    std::optional<inet_address> _removing_node;
-
-public:
     enum class mode { NONE, STARTING, JOINING, BOOTSTRAP, NORMAL, LEAVING, DECOMMISSIONED, MOVING, DRAINING, DRAINED };
 private:
     mode _operation_mode = mode::NONE;

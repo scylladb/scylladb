@@ -2929,8 +2929,7 @@ future<> storage_service::send_replication_notification(inet_address remote) {
 
 future<> storage_service::confirm_replication(inet_address node) {
     return run_with_no_api_lock([node] (storage_service& ss) {
-        auto removing_node = bool(ss._removing_node) ? format("{}", *ss._removing_node) : "NONE";
-        slogger.info("Got confirm_replication from {}, removing_node {}", node, removing_node);
+        slogger.info("Got confirm_replication from {}", node);
     });
 }
 
@@ -3242,15 +3241,7 @@ future<> storage_service::isolate() {
 
 future<sstring> storage_service::get_removal_status() {
     return run_with_no_api_lock([] (storage_service& ss) {
-        if (!ss._removing_node) {
-            return make_ready_future<sstring>(sstring("No token removals in process."));
-        }
-        auto tokens = ss.get_token_metadata().get_tokens(*ss._removing_node);
-        if (tokens.empty()) {
-            return make_ready_future<sstring>(sstring("Node has no token"));
-        }
-        auto status = format("Removing token ({}).", tokens.front());
-        return make_ready_future<sstring>(status);
+        return make_ready_future<sstring>(sstring("No token removals in process."));
     });
 }
 
@@ -3290,7 +3281,6 @@ future<> storage_service::force_remove_completion() {
                     assert(ss._group0);
                     co_await ss._group0->remove_from_group0(endpoint);
                 }
-                ss._removing_node = std::nullopt;
             } else {
                 slogger.warn("No tokens to force removal on, call 'removenode' first");
             }
