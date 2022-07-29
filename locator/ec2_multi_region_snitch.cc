@@ -85,7 +85,9 @@ future<> ec2_multi_region_snitch::start() {
                 // this invoke_on() was done from the io_cpu_id() which had
                 // already passed through ec2_snitch::load_config() which, in
                 // turn, had already spread the _my_dc accross shards
-                local_s.get_local_gossiper().register_(::make_shared<reconnectable_snitch_helper>(my_dc));
+                auto& self = dynamic_cast<ec2_multi_region_snitch&>(local_s.get());
+                self._reconnectable_helper = ::make_shared<reconnectable_snitch_helper>(my_dc);
+                local_s.get_local_gossiper().register_(self._reconnectable_helper);
             }).get();
 
             set_snitch_ready();
@@ -94,6 +96,13 @@ future<> ec2_multi_region_snitch::start() {
 
         set_snitch_ready();
     });
+}
+
+future<> ec2_multi_region_snitch::stop() {
+    if (_reconnectable_helper) {
+        return local().get_local_gossiper().unregister_(_reconnectable_helper);
+    }
+    return make_ready_future<>();
 }
 
 void ec2_multi_region_snitch::set_local_private_addr(const sstring& addr_str) {
