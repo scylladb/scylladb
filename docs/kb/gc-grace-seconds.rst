@@ -23,11 +23,11 @@ In addition, you should follow the procedure below in order to avoid data resurr
 
 Resolution
 ----------
-#. Run a :doc:`full repair </operating-scylla/manager/2.1/repair>` for the table in question.
+#. Run a `full repair <https://manager.docs.scylladb.com/stable/repair/index.html>`_ for the table in question.
 #. Change the ``gc_grace_seconds`` value for the table using the :ref:`ALTER table <alter-table-statement>` command.
 #. Verify that the schema is in sync after the change by issuing :doc:`nodetool describecluster </operating-scylla/nodetool-commands/describecluster>` command from all nodes.
    Verify that only a single schema version is reported. Read the :doc:`Schema Mismatch Troubleshooting Guide </troubleshooting/error-messages/schema-mismatch>` if it's not the case.
-#. Make sure that you run at least one :doc:`full repair </operating-scylla/manager/2.1/repair>` for the table in question during the ``gc_grace_seconds`` time window.
+#. Make sure that you run at least one `full repair <https://manager.docs.scylladb.com/stable/repair/index.html>`_ for the table in question during the ``gc_grace_seconds`` time window.
    For example, if the ``gc_grace_seconds`` is set to 10 days, you should run a full repair on your tables every 8-9 days to make sure your tables are repaired before the ``gc_grace_seconds`` threshold is reached.
 
 
