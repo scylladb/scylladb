@@ -58,7 +58,7 @@ public:
         return replica::column_family::calculate_shard_from_sstable_generation(generation_from_value(generation));
     }
 
-    future<stop_iteration> try_flush_memtable_to_sstable(lw_shared_ptr<replica::memtable> mt) {
+    auto try_flush_memtable_to_sstable(lw_shared_ptr<replica::memtable> mt) {
         return _cf->try_flush_memtable_to_sstable(mt, sstable_write_permit::unconditional());
     }
 };

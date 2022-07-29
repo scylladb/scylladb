@@ -1056,6 +1056,42 @@ SEASTAR_TEST_CASE(check_overlapping) {
   });
 }
 
+SEASTAR_TEST_CASE(sstable_run_disjoint_invariant_test) {
+    return test_env::do_with([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+
+        auto key_and_token_pair = token_generation_for_current_shard(6);
+        auto next_gen = [gen = make_lw_shared<unsigned>(1)] { return (*gen)++; };
+
+        sstables::sstable_run run;
+
+        auto insert = [&] (int first_key_idx, int last_key_idx) {
+            auto sst = sstable_for_overlapping_test(env, s, next_gen(),
+                key_and_token_pair[first_key_idx].first, key_and_token_pair[last_key_idx].first);
+            return run.insert(sst);
+        };
+
+        // insert ranges [0, 0], [1, 1], [3, 4]
+        BOOST_REQUIRE(insert(0, 0) == true);
+        BOOST_REQUIRE(insert(1, 1) == true);
+        BOOST_REQUIRE(insert(3, 4) == true);
+        BOOST_REQUIRE(run.all().size() == 3);
+
+        // check overlapping candidates won't be inserted
+        BOOST_REQUIRE(insert(0, 4) == false);
+        BOOST_REQUIRE(insert(4, 5) == false);
+        BOOST_REQUIRE(run.all().size() == 3);
+
+        // check non-overlapping candidates will be inserted
+        BOOST_REQUIRE(insert(2, 2) == true);
+        BOOST_REQUIRE(insert(5, 5) == true);
+        BOOST_REQUIRE(run.all().size() == 5);
+
+        return make_ready_future<>();
+    });
+}
+
 SEASTAR_TEST_CASE(tombstone_purge_test) {
     BOOST_REQUIRE(smp::count == 1);
     return test_env::do_with_async([] (test_env& env) {
@@ -3514,10 +3550,6 @@ SEASTAR_TEST_CASE(incremental_compaction_data_resurrection_test) {
 
         auto non_expired_sst = make_sstable_containing(sst_gen, {mut1, mut2, mut3});
         auto expired_sst = make_sstable_containing(sst_gen, {mut1_deletion});
-        // make ssts belong to same run for compaction to enable incremental approach
-        utils::UUID run_id = utils::make_random_uuid();
-        sstables::test(non_expired_sst).set_run_identifier(run_id);
-        sstables::test(expired_sst).set_run_identifier(run_id);
 
         std::vector<shared_sstable> sstables = {
                 non_expired_sst,
@@ -3570,6 +3602,12 @@ SEASTAR_TEST_CASE(incremental_compaction_data_resurrection_test) {
             // force compaction failure after sstable containing expired tombstone is removed from set.
             throw std::runtime_error("forcing compaction failure on early replacement");
         };
+
+        // make ssts belong to same run for compaction to enable incremental approach.
+        // That needs to happen after fragments were inserted into sstable_set, as they'll placed into different runs due to detected overlapping.
+        utils::UUID run_id = utils::make_random_uuid();
+        sstables::test(non_expired_sst).set_run_identifier(run_id);
+        sstables::test(expired_sst).set_run_identifier(run_id);
 
         bool swallowed = false;
         try {
@@ -4055,8 +4093,7 @@ SEASTAR_TEST_CASE(test_twcs_interposer_on_memtable_flush) {
             }
         }
 
-        auto ret = column_family_test(cf).try_flush_memtable_to_sstable(mt).get0();
-        BOOST_REQUIRE(ret == stop_iteration::yes);
+        column_family_test(cf).try_flush_memtable_to_sstable(mt).get();
 
         auto expected_ssts = (split_during_flush) ? target_windows_span : 1;
         testlog.info("split_during_flush={}, actual={}, expected={}", split_during_flush, cf->get_sstables()->size(), expected_ssts);

@@ -513,6 +513,10 @@ inline compaction_controller make_compaction_controller(compaction_manager::sche
     return compaction_controller(csg, static_shares, 250ms, std::move(fn));
 }
 
+compaction_manager::compaction_state::~compaction_state() {
+    compaction_done.broken();
+}
+
 std::string compaction_manager::task::describe() const {
     auto* t = _compacting_table;
     auto s = t->schema();
@@ -611,6 +615,7 @@ void compaction_manager::task::finish_compaction(state finish_state) noexcept {
     if (finish_state != state::failed) {
         _compaction_retry.reset();
     }
+    _compaction_state.compaction_done.signal();
 }
 
 void compaction_manager::task::stop(sstring reason) noexcept {
@@ -979,6 +984,50 @@ void compaction_manager::submit(compaction::table_state& t) {
     // OK to drop future.
     // waited via task->stop()
     (void)perform_task(make_shared<regular_compaction_task>(*this, t));
+}
+
+bool compaction_manager::can_perform_regular_compaction(compaction::table_state& t) {
+    return can_proceed(&t) && !t.is_auto_compaction_disabled_by_user();
+}
+
+future<> compaction_manager::maybe_wait_for_sstable_count_reduction(compaction::table_state& t) {
+    auto schema = t.schema();
+    if (!can_perform_regular_compaction(t)) {
+        cmlog.trace("maybe_wait_for_sstable_count_reduction in {}.{}: cannot perform regular compaction",
+                schema->ks_name(), schema->cf_name());
+        co_return;
+    }
+    auto num_runs_for_compaction = [&, this] {
+        auto& cs = t.get_compaction_strategy();
+        auto desc = cs.get_sstables_for_compaction(t, get_strategy_control(), get_candidates(t));
+        return boost::copy_range<std::unordered_set<utils::UUID>>(
+            desc.sstables
+            | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::run_identifier))).size();
+    };
+    const auto threshold = std::max(schema->max_compaction_threshold(), 32);
+    auto count = num_runs_for_compaction();
+    if (count <= threshold) {
+        cmlog.trace("No need to wait for sstable count reduction in {}.{}: {} <= {}",
+                schema->ks_name(), schema->cf_name(), count, threshold);
+        co_return;
+    }
+    // Reduce the chances of falling into an endless wait, if compaction
+    // wasn't scheduled for the table due to a problem.
+    submit(t);
+    using namespace std::chrono_literals;
+    auto start = db_clock::now();
+    auto& cstate = get_compaction_state(&t);
+    try {
+        co_await cstate.compaction_done.wait([this, &num_runs_for_compaction, threshold, &t] {
+            return num_runs_for_compaction() <= threshold || !can_perform_regular_compaction(t);
+        });
+    } catch (const broken_condition_variable&) {
+        co_return;
+    }
+    auto end = db_clock::now();
+    auto elapsed_ms = (end - start) / 1ms;
+    cmlog.warn("Waited {}ms for compaction of {}.{} to catch up on {} sstable runs",
+            elapsed_ms, schema->ks_name(), schema->cf_name(), count);
 }
 
 class compaction_manager::offstrategy_compaction_task : public compaction_manager::task {

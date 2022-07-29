@@ -32,6 +32,7 @@
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/simple_schema.hh"
 #include "utils/error_injection.hh"
+#include "db/commitlog/commitlog.hh"
 #include "test/lib/make_random_string.hh"
 
 static api::timestamp_type next_timestamp() {
@@ -980,27 +981,106 @@ SEASTAR_TEST_CASE(failed_flush_prevents_writes) {
         }
         t.apply(mt);
 
-        utils::get_local_injector().enable("table_seal_active_memtable_pre_flush");
+        auto failed_memtables_flushes_count = db.cf_stats()->failed_memtables_flushes_count;
+
+        utils::get_local_injector().enable("table_seal_active_memtable_add_memtable", true /* oneshot */);
+        utils::get_local_injector().enable("table_seal_active_memtable_start_op", true /* oneshot */);
+        utils::get_local_injector().enable("table_seal_active_memtable_try_flush", true /* oneshot */);
+        utils::get_local_injector().enable("table_seal_active_memtable_reacquire_write_permit");
 
         BOOST_ASSERT(eventually_true([&] {
             // Trigger flush
             dmm.notify_soft_pressure();
-            return db.cf_stats()->failed_memtables_flushes_count != 0;
+            return db.cf_stats()->failed_memtables_flushes_count - failed_memtables_flushes_count >= 4;
         }));
 
         // The flush failed, make sure there is still data in memtable.
         BOOST_ASSERT(t.min_memtable_timestamp() < api::max_timestamp);
-        utils::get_local_injector().disable("table_seal_active_memtable_pre_flush");
-
-        // Release pressure, so that we can trigger flush again
-        dmm.notify_soft_relief();
+        utils::get_local_injector().disable("table_seal_active_memtable_reacquire_write_permit");
 
         BOOST_ASSERT(eventually_true([&] {
-            // Trigger pressure, the error above is no longer being injected, so flush
-            // should be triggerred and succeed
-            dmm.notify_soft_pressure();
+            // The error above is no longer being injected, so
+            // seal_active_memtable retry loop should eventually succeed
             return t.min_memtable_timestamp() == api::max_timestamp;
         }));
     });
 #endif
 }
+
+SEASTAR_TEST_CASE(flushing_rate_is_reduced_if_compaction_doesnt_keep_up) {
+    BOOST_ASSERT(smp::count == 2);
+    // The test simulates a situation where 2 threads issue flushes to 2
+    // tables. Both issue small flushes, but one has injected reactor stalls.
+    // This can lead to a situation where lots of small sstables accumulate on
+    // disk, and, if compaction never has a chance to keep up, resources can be
+    // exhausted.
+    return do_with_cql_env([](cql_test_env& env) -> future<> {
+        struct flusher {
+            cql_test_env& env;
+            const int num_flushes;
+            const int sleep_ms;
+
+            static sstring cf_name(unsigned thread_id) {
+                return format("cf_{}", thread_id);
+            }
+
+            static sstring ks_name() {
+                return "ks";
+            }
+
+            future<> create_table(schema_ptr s) {
+                return env.migration_manager().invoke_on(0, [s = global_schema_ptr(std::move(s))] (service::migration_manager& mm) -> future<> {
+                    auto group0_guard = co_await mm.start_group0_operation();
+                    auto ts = group0_guard.write_timestamp();
+                    auto announcement = co_await mm.prepare_new_column_family_announcement(s, ts);
+                    co_await mm.announce(std::move(announcement), std::move(group0_guard));
+                });
+            }
+
+            future<> drop_table() {
+                return env.migration_manager().invoke_on(0, [shard = this_shard_id()] (service::migration_manager& mm) -> future<> {
+                    auto group0_guard = co_await mm.start_group0_operation();
+                    auto ts = group0_guard.write_timestamp();
+                    auto announcement = co_await mm.prepare_column_family_drop_announcement(ks_name(), cf_name(shard), ts);
+                    co_await mm.announce(std::move(announcement), std::move(group0_guard));
+                });
+            }
+
+            future<> operator()() {
+                const sstring ks_name = this->ks_name();
+                const sstring cf_name = this->cf_name(this_shard_id());
+                random_mutation_generator gen{
+                    random_mutation_generator::generate_counters::no,
+                    local_shard_only::yes,
+                    random_mutation_generator::generate_uncompactable::no,
+                    std::nullopt,
+                    ks_name.c_str(),
+                    cf_name.c_str()
+                };
+                schema_ptr s = gen.schema();
+
+                co_await create_table(s);
+                replica::database& db = env.local_db();
+                replica::table& t = db.find_column_family(ks_name, cf_name);
+
+                for (int value : boost::irange<int>(0, num_flushes)) {
+                    ::usleep(sleep_ms * 1000);
+                    co_await db.apply(t.schema(), freeze(gen()), tracing::trace_state_ptr(), db::commitlog::force_sync::yes, db::no_timeout);
+                    co_await t.flush();
+                    BOOST_ASSERT(t.sstables_count() < t.schema()->max_compaction_threshold() * 2);
+                }
+                co_await drop_table();
+            }
+        };
+
+        int sleep_ms = 2;
+        for (int i : boost::irange<int>(8)) {
+            future<> f0 = smp::submit_to(0, flusher{.env=env, .num_flushes=100, .sleep_ms=0});
+            future<> f1 = smp::submit_to(1, flusher{.env=env, .num_flushes=3, .sleep_ms=sleep_ms});
+            co_await std::move(f0);
+            co_await std::move(f1);
+            sleep_ms *= 2;
+        }
+    });
+}
+

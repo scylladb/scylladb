@@ -26,16 +26,26 @@ namespace sstables {
 class sstable_set_impl;
 class incremental_selector_impl;
 
+struct sstable_first_key_less_comparator {
+    bool operator()(const shared_sstable& s1, const shared_sstable& s2) const;
+};
+
 // Structure holds all sstables (a.k.a. fragments) that belong to same run identifier, which is an UUID.
 // SStables in that same run will not overlap with one another.
 class sstable_run {
-    sstable_list _all;
 public:
-    void insert(shared_sstable sst);
+    using sstable_set = std::set<shared_sstable, sstable_first_key_less_comparator>;
+private:
+    sstable_set _all;
+private:
+    bool will_introduce_overlapping(const shared_sstable& sst) const;
+public:
+    // Returns false if sstable being inserted cannot satisfy the disjoint invariant. Then caller should pick another run for it.
+    bool insert(shared_sstable sst);
     void erase(shared_sstable sst);
     // Data size of the whole run, meaning it's a sum of the data size of all its fragments.
     uint64_t data_size() const;
-    const sstable_list& all() const { return _all; }
+    const sstable_set& all() const { return _all; }
     double estimate_droppable_tombstone_ratio(gc_clock::time_point gc_before) const;
 };
 

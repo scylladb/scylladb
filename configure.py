@@ -428,6 +428,7 @@ scylla_tests = set([
     'test/boost/loading_cache_test',
     'test/boost/log_heap_test',
     'test/boost/estimated_histogram_test',
+    'test/boost/summary_test',
     'test/boost/logalloc_test',
     'test/boost/managed_vector_test',
     'test/boost/managed_bytes_test',
@@ -706,6 +707,7 @@ scylla_core = (['replica/database.cc',
                 'utils/generation-number.cc',
                 'utils/rjson.cc',
                 'utils/human_readable.cc',
+                'utils/histogram_metrics_helper.cc',
                 'mutation_partition.cc',
                 'mutation_partition_view.cc',
                 'mutation_partition_serializer.cc',
@@ -1276,6 +1278,7 @@ deps['test/boost/murmur_hash_test'] = ['bytes.cc', 'utils/murmur_hash.cc', 'test
 deps['test/boost/allocation_strategy_test'] = ['test/boost/allocation_strategy_test.cc', 'utils/logalloc.cc', 'utils/dynamic_bitset.cc']
 deps['test/boost/log_heap_test'] = ['test/boost/log_heap_test.cc']
 deps['test/boost/estimated_histogram_test'] = ['test/boost/estimated_histogram_test.cc']
+deps['test/boost/summary_test'] = ['test/boost/summary_test.cc']
 deps['test/boost/anchorless_list_test'] = ['test/boost/anchorless_list_test.cc']
 deps['test/perf/perf_fast_forward'] += ['seastar/tests/perf/linux_perf_event.cc']
 deps['test/perf/perf_simple_query'] += ['test/perf/perf.cc', 'seastar/tests/perf/linux_perf_event.cc', 'test/lib/alternator_test_env.cc'] + alternator

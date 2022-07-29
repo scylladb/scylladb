@@ -46,11 +46,11 @@ region_evictable_occupancy_ascending_less_comparator::operator()(size_tracked_re
 
 region_group_reclaimer region_group::no_reclaimer;
 
-uint64_t region_group::top_region_evictable_space() const {
+uint64_t region_group::top_region_evictable_space() const noexcept {
     return _regions.empty() ? 0 : _regions.top()->evictable_occupancy().total_space();
 }
 
-dirty_memory_manager_logalloc::size_tracked_region* region_group::get_largest_region() {
+dirty_memory_manager_logalloc::size_tracked_region* region_group::get_largest_region() noexcept {
     if (!_maximal_rg || _maximal_rg->_regions.empty()) {
         return nullptr;
     }
@@ -72,7 +72,8 @@ region_group::del(region_group* child) {
 void
 region_group::add(region* child_r) {
     auto child = static_cast<size_tracked_region*>(child_r);
-    child->_heap_handle = _regions.push(child);
+    assert(!child->_heap_handle);
+    child->_heap_handle = std::make_optional(_regions.push(child));
     region_group_binomial_group_sanity_check(_regions);
     update(child_r->occupancy().total_space());
 }
@@ -80,18 +81,32 @@ region_group::add(region* child_r) {
 void
 region_group::del(region* child_r) {
     auto child = static_cast<size_tracked_region*>(child_r);
-    _regions.erase(child->_heap_handle);
-    region_group_binomial_group_sanity_check(_regions);
-    update(-child_r->occupancy().total_space());
+    if (child->_heap_handle) {
+        _regions.erase(*std::exchange(child->_heap_handle, std::nullopt));
+        region_group_binomial_group_sanity_check(_regions);
+        update(-child_r->occupancy().total_space());
+    }
 }
 
 void
 region_group::moved(region* old_address, region* new_address) {
+    auto old_child = static_cast<size_tracked_region*>(old_address);
+    if (old_child->_heap_handle) {
+        _regions.erase(*std::exchange(old_child->_heap_handle, std::nullopt));
+    }
+
+    auto new_child = static_cast<size_tracked_region*>(new_address);
+
+    // set the old child handle since it's going to be moved
+    // to the new child's handle by the respective move constructor /
+    // assignment operator.
+    old_child->_heap_handle = std::make_optional(_regions.push(new_child));
+    region_group_binomial_group_sanity_check(_regions);
 }
 
 bool
 region_group::execution_permitted() noexcept {
-    return do_for_each_parent(this, [] (auto rg) {
+    return do_for_each_parent(this, [] (auto rg) noexcept {
         return rg->under_pressure() ? stop_iteration::yes : stop_iteration::no;
     }) == nullptr;
 }

@@ -129,7 +129,7 @@ private:
     using bucket = typename traits::bucket_type;
 
     struct hist_size_less_compare {
-        inline bool operator()(const T& v1, const T& v2) const {
+        inline bool operator()(const T& v1, const T& v2) const noexcept {
             return traits::hist_key(v1) < traits::hist_key(v2);
         }
     };
@@ -154,20 +154,20 @@ public:
         iterator_type _it;
     public:
         struct end_tag {};
-        hist_iterator(hist_type& h)
+        hist_iterator(hist_type& h) noexcept
             : _h(h)
             , _b(h._watermark)
             , _it(_b >= 0 ? h._buckets[_b].begin() : h._buckets[0].end()) {
         }
-        hist_iterator(hist_type& h, end_tag)
+        hist_iterator(hist_type& h, end_tag) noexcept
             : _h(h)
             , _b(-1)
             , _it(h._buckets[0].end()) {
         }
-        std::conditional_t<IsConst, const T, T>& operator*() {
+        std::conditional_t<IsConst, const T, T>& operator*() noexcept {
             return *_it;
         }
-        hist_iterator& operator++() {
+        hist_iterator& operator++() noexcept {
             if (++_it == _h._buckets[_b].end()) {
                 do {
                     --_b;
@@ -175,51 +175,51 @@ public:
             }
             return *this;
         }
-        bool operator==(const hist_iterator& other) const {
+        bool operator==(const hist_iterator& other) const noexcept {
             return _b == other._b && _it == other._it;
         }
-        bool operator!=(const hist_iterator& other) const {
+        bool operator!=(const hist_iterator& other) const noexcept {
             return !(*this == other);
         }
     };
     using iterator = hist_iterator<false>;
     using const_iterator = hist_iterator<true>;
 public:
-    bool empty() const {
+    bool empty() const noexcept {
         return _watermark == -1;
     }
     // Returns true if and only if contains any value >= opts.min_size.
-    bool contains_above_min() const {
+    bool contains_above_min() const noexcept {
         return _watermark > 0;
     }
-    const_iterator begin() const {
+    const_iterator begin() const noexcept {
         return const_iterator(*this);
     }
-    const_iterator end() const {
+    const_iterator end() const noexcept {
         return const_iterator(*this, typename const_iterator::end_tag());
     }
-    iterator begin() {
+    iterator begin() noexcept {
         return iterator(*this);
     }
-    iterator end() {
+    iterator end() noexcept {
         return iterator(*this, typename iterator::end_tag());
     }
     // Returns a range of buckets starting from that with the smaller values.
     // Each bucket is a range of const T&.
-    const auto& buckets() const {
+    const auto& buckets() const noexcept {
         return _buckets;
     }
     // Pops one of the largest elements in the histogram.
-    void pop_one_of_largest() {
+    void pop_one_of_largest() noexcept {
         _buckets[_watermark].pop_front();
         maybe_adjust_watermark();
     }
     // Returns one of the largest elements in the histogram.
-    const T& one_of_largest() const {
+    const T& one_of_largest() const noexcept {
         return _buckets[_watermark].front();
     }
     // Returns one of the largest elements in the histogram.
-    T& one_of_largest() {
+    T& one_of_largest() noexcept {
         return _buckets[_watermark].front();
     }
     // Pushes a new element onto the histogram.
@@ -240,7 +240,7 @@ public:
         }
     }
     // Removes the specified element from the histogram.
-    void erase(T& v) {
+    void erase(T& v) noexcept {
         auto& b = _buckets[traits::cached_bucket(v)];
         b.erase(b.iterator_to(v));
         maybe_adjust_watermark();
@@ -254,7 +254,7 @@ public:
         other._watermark = -1;
     }
 private:
-    void maybe_adjust_watermark() {
+    void maybe_adjust_watermark() noexcept {
         while (_buckets[_watermark].empty() && --_watermark >= 0) ;
     }
 };

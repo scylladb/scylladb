@@ -1963,8 +1963,8 @@ private:
         return gc_clock::time_point() + std::chrono::seconds(dist(gen));
     }
 
-    schema_ptr do_make_schema(data_type type) {
-        auto builder = schema_builder("ks", "cf")
+    schema_ptr do_make_schema(data_type type, const char* ks_name, const char* cf_name) {
+        auto builder = schema_builder(ks_name, cf_name)
                 .with_column("pk", bytes_type, column_kind::partition_key)
                 .with_column("ck1", bytes_type, column_kind::clustering_key)
                 .with_column("ck2", bytes_type, column_kind::clustering_key);
@@ -1981,9 +1981,9 @@ private:
         return builder.build();
     }
 
-    schema_ptr make_schema() {
-        return _generate_counters ? do_make_schema(counter_type)
-                                  : do_make_schema(bytes_type);
+    schema_ptr make_schema(const char* ks_name, const char* cf_name) {
+        return _generate_counters ? do_make_schema(counter_type, ks_name, cf_name)
+                                  : do_make_schema(bytes_type, ks_name, cf_name);
     }
 
     api::timestamp_type gen_timestamp(timestamp_level l) {
@@ -2001,13 +2001,13 @@ private:
     }
 public:
     explicit impl(generate_counters counters, local_shard_only lso = local_shard_only::yes,
-            generate_uncompactable uc = generate_uncompactable::no, std::optional<uint32_t> seed_opt = std::nullopt) : _generate_counters(counters), _local_shard_only(lso), _uncompactable(uc) {
+            generate_uncompactable uc = generate_uncompactable::no, std::optional<uint32_t> seed_opt = std::nullopt, const char* ks_name="ks", const char* cf_name="cf") : _generate_counters(counters), _local_shard_only(lso), _uncompactable(uc) {
         // In case of errors, reproduce using the --random-seed command line option with the test_runner seed.
         auto seed = seed_opt.value_or(tests::random::get_int<uint32_t>());
         std::cout << "random_mutation_generator seed: " << seed << "\n";
         _gen = std::mt19937(seed);
 
-        _schema = make_schema();
+        _schema = make_schema(ks_name, cf_name);
 
         auto keys = _local_shard_only ? make_local_keys(n_blobs, _schema, _external_blob_size) : make_keys(n_blobs, _schema, _external_blob_size);
         _blobs =  boost::copy_range<std::vector<bytes>>(keys | boost::adaptors::transformed([this] (sstring& k) { return to_bytes(k); }));
@@ -2300,8 +2300,8 @@ public:
 
 random_mutation_generator::~random_mutation_generator() {}
 
-random_mutation_generator::random_mutation_generator(generate_counters counters, local_shard_only lso, generate_uncompactable uc, std::optional<uint32_t> seed_opt)
-    : _impl(std::make_unique<random_mutation_generator::impl>(counters, lso, uc, seed_opt))
+random_mutation_generator::random_mutation_generator(generate_counters counters, local_shard_only lso, generate_uncompactable uc, std::optional<uint32_t> seed_opt, const char* ks_name, const char* cf_name)
+    : _impl(std::make_unique<random_mutation_generator::impl>(counters, lso, uc, seed_opt,  ks_name, cf_name))
 { }
 
 mutation random_mutation_generator::operator()() {

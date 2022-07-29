@@ -118,7 +118,6 @@ future<prepare_response> paxos_state::prepare(storage_proxy& sp, tracing::trace_
         }).finally([&sp, schema, lc] () mutable {
             auto& stats = sp.get_db().local().find_column_family(schema).get_stats();
             stats.cas_prepare.mark(lc.stop().latency());
-            stats.estimated_cas_prepare.add(lc.latency());
         });
     });
 }
@@ -158,7 +157,6 @@ future<bool> paxos_state::accept(storage_proxy& sp, tracing::trace_state_ptr tr_
         }).finally([&sp, schema, lc] () mutable {
             auto& stats = sp.get_db().local().find_column_family(schema).get_stats();
             stats.cas_accept.mark(lc.stop().latency());
-            stats.estimated_cas_accept.add(lc.latency());
         });
     });
 }
@@ -225,7 +223,6 @@ future<> paxos_state::learn(storage_proxy& sp, schema_ptr schema, proposal decis
     }).finally([&sp, schema, lc] () mutable {
         auto& stats = sp.get_db().local().find_column_family(schema).get_stats();
         stats.cas_learn.mark(lc.stop().latency());
-        stats.estimated_cas_learn.add(lc.latency());
     });
 }
 

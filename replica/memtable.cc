@@ -29,18 +29,18 @@ static flat_mutation_reader_v2 make_partition_snapshot_flat_reader_from_snp_sche
         std::any pointer_to_container,
         streamed_mutation::forwarding fwd, memtable& memtable);
 
-void memtable::memtable_encoding_stats_collector::update_timestamp(api::timestamp_type ts) {
+void memtable::memtable_encoding_stats_collector::update_timestamp(api::timestamp_type ts) noexcept {
     if (ts != api::missing_timestamp) {
         encoding_stats_collector::update_timestamp(ts);
         min_max_timestamp.update(ts);
     }
 }
 
-memtable::memtable_encoding_stats_collector::memtable_encoding_stats_collector()
+memtable::memtable_encoding_stats_collector::memtable_encoding_stats_collector() noexcept
     : min_max_timestamp(0, 0)
 {}
 
-void memtable::memtable_encoding_stats_collector::update(atomic_cell_view cell) {
+void memtable::memtable_encoding_stats_collector::update(atomic_cell_view cell) noexcept {
     update_timestamp(cell.timestamp());
     if (cell.is_live_and_has_ttl()) {
         update_ttl(cell.ttl());
@@ -50,7 +50,7 @@ void memtable::memtable_encoding_stats_collector::update(atomic_cell_view cell) 
     }
 }
 
-void memtable::memtable_encoding_stats_collector::update(tombstone tomb) {
+void memtable::memtable_encoding_stats_collector::update(tombstone tomb) noexcept {
     if (tomb) {
         update_timestamp(tomb.timestamp);
         update_local_deletion_time(tomb.deletion_time);
@@ -78,11 +78,11 @@ void memtable::memtable_encoding_stats_collector::update(const ::schema& s, cons
     });
 }
 
-void memtable::memtable_encoding_stats_collector::update(const range_tombstone& rt) {
+void memtable::memtable_encoding_stats_collector::update(const range_tombstone& rt) noexcept {
     update(rt.tomb);
 }
 
-void memtable::memtable_encoding_stats_collector::update(const row_marker& marker) {
+void memtable::memtable_encoding_stats_collector::update(const row_marker& marker) noexcept {
     update_timestamp(marker.timestamp());
     if (!marker.is_missing()) {
         if (!marker.is_live()) {
@@ -803,7 +803,7 @@ memtable::apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_han
     update(std::move(h));
 }
 
-logalloc::occupancy_stats memtable::occupancy() const {
+logalloc::occupancy_stats memtable::occupancy() const noexcept {
     return logalloc::region::occupancy();
 }
 
@@ -835,11 +835,11 @@ void memtable::mark_flushed(mutation_source underlying) noexcept {
     _underlying = std::move(underlying);
 }
 
-bool memtable::is_flushed() const {
+bool memtable::is_flushed() const noexcept {
     return bool(_underlying);
 }
 
-bool memtable::has_any_tombstones() const {
+bool memtable::has_any_tombstones() const noexcept {
     return _table_stats.memtable_app_stats.has_any_tombstones;
 }
 

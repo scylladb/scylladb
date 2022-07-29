@@ -135,25 +135,25 @@ private:
     private:
         min_max_tracker<api::timestamp_type> min_max_timestamp;
 
-        void update_timestamp(api::timestamp_type ts);
+        void update_timestamp(api::timestamp_type ts) noexcept;
 
     public:
-        memtable_encoding_stats_collector();
-        void update(atomic_cell_view cell);
+        memtable_encoding_stats_collector() noexcept;
+        void update(atomic_cell_view cell) noexcept;
 
-        void update(tombstone tomb);
+        void update(tombstone tomb) noexcept;
 
         void update(const ::schema& s, const row& r, column_kind kind);
-        void update(const range_tombstone& rt);
-        void update(const row_marker& marker);
+        void update(const range_tombstone& rt) noexcept;
+        void update(const row_marker& marker) noexcept;
         void update(const ::schema& s, const deletable_row& dr);
         void update(const ::schema& s, const mutation_partition& mp);
 
-        api::timestamp_type get_min_timestamp() const {
+        api::timestamp_type get_min_timestamp() const noexcept {
             return min_max_timestamp.min();
         }
 
-        api::timestamp_type get_max_timestamp() const {
+        api::timestamp_type get_max_timestamp() const noexcept {
             return min_max_timestamp.max();
         }
     } _stats_collector;
@@ -182,7 +182,7 @@ public:
     // Clears this memtable gradually without consuming the whole CPU.
     // Never resolves with a failed future.
     future<> clear_gently() noexcept;
-    schema_ptr schema() const { return _schema; }
+    schema_ptr schema() const noexcept { return _schema; }
     void set_schema(schema_ptr) noexcept;
     future<> apply(memtable&, reader_permit);
     // Applies mutation to this memtable.
@@ -192,42 +192,42 @@ public:
     void apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_handle&& = {});
     void evict_entry(memtable_entry& e, mutation_cleaner& cleaner) noexcept;
 
-    static memtable& from_region(logalloc::region& r) {
+    static memtable& from_region(logalloc::region& r) noexcept {
         return static_cast<memtable&>(r);
     }
 
-    const logalloc::region& region() const {
+    const logalloc::region& region() const noexcept {
         return *this;
     }
 
-    logalloc::region& region() {
+    logalloc::region& region() noexcept {
         return *this;
     }
 
-    encoding_stats get_encoding_stats() const {
+    encoding_stats get_encoding_stats() const noexcept {
         return _stats_collector.get();
     }
 
-    api::timestamp_type get_min_timestamp() const {
+    api::timestamp_type get_min_timestamp() const noexcept {
         return _stats_collector.get_min_timestamp();
     }
 
-    api::timestamp_type get_max_timestamp() const {
+    api::timestamp_type get_max_timestamp() const noexcept {
         return _stats_collector.get_max_timestamp();
     }
 
-    mutation_cleaner& cleaner() {
+    mutation_cleaner& cleaner() noexcept {
         return _cleaner;
     }
-    bool has_any_tombstones() const;
+    bool has_any_tombstones() const noexcept;
 
 public:
-    memtable_list* get_memtable_list() {
+    memtable_list* get_memtable_list() noexcept {
         return _memtable_list;
     }
 
-    size_t partition_count() const { return nr_partitions; }
-    logalloc::occupancy_stats occupancy() const;
+    size_t partition_count() const noexcept { return nr_partitions; }
+    logalloc::occupancy_stats occupancy() const noexcept;
 
     // Creates a reader of data in this memtable for given partition range.
     //
@@ -272,13 +272,13 @@ public:
 
     mutation_source as_data_source();
 
-    bool empty() const { return partitions.empty(); }
+    bool empty() const noexcept { return partitions.empty(); }
     void mark_flushed(mutation_source) noexcept;
-    bool is_flushed() const;
+    bool is_flushed() const noexcept;
     void on_detach_from_region_group() noexcept;
     void revert_flushed_memory() noexcept;
 
-    const db::replay_position& replay_position() const {
+    const db::replay_position& replay_position() const noexcept {
         return _replay_position;
     }
     /**
@@ -287,12 +287,12 @@ public:
      * purposes, to one-shot report discarded rp:s
      * to commitlog
      */
-    db::rp_set get_and_discard_rp_set() {
+    db::rp_set get_and_discard_rp_set() noexcept {
         return std::exchange(_rp_set, {});
     }
     friend class iterator_reader;
 
-    dirty_memory_manager& get_dirty_memory_manager() {
+    dirty_memory_manager& get_dirty_memory_manager() noexcept {
         return _dirty_mgr;
     }
 

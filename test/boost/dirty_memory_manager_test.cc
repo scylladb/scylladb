@@ -845,3 +845,115 @@ SEASTAR_TEST_CASE(test_reclaiming_runs_as_long_as_there_is_soft_pressure) {
         });
     });
 }
+
+namespace dirty_memory_manager_logalloc {
+
+class test_region_group : public region_group {
+    sstring _name;
+
+public:
+    test_region_group(sstring name)
+        : region_group(name)
+        , _name(std::move(name))
+    {}
+
+    const sstring& name() const noexcept {
+        return _name;
+    }
+
+    bool empty() const noexcept {
+        return _regions.empty();
+    }
+
+    bool contains(const region* r) const noexcept {
+        auto strg = static_cast<const size_tracked_region*>(r);
+        for (auto it = _regions.begin(); it != _regions.end(); ++it) {
+            if (*it == strg) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+public:
+    virtual void add(region* r) override {
+        testlog.debug("test_region_listener [{}:{}]: add region={}", _name, fmt::ptr(this), fmt::ptr(r));
+
+        BOOST_REQUIRE(!contains(r));
+        region_group::add(r);
+        BOOST_REQUIRE(contains(r));
+    }
+    virtual void del(region* r) override {
+        testlog.debug("test_region_listener [{}:{}]: del region={}", _name, fmt::ptr(this), fmt::ptr(r));
+
+        BOOST_REQUIRE(contains(r));
+        region_group::del(r);
+        BOOST_REQUIRE(!contains(r));
+    }
+    virtual void moved(region* old_region, region* new_region) override {
+        testlog.debug("test_region_listener [{}:{}]: moved old_region={} new_region={}", _name, fmt::ptr(this), fmt::ptr(old_region), fmt::ptr(new_region));
+
+        BOOST_REQUIRE(contains(old_region));
+        BOOST_REQUIRE(!contains(new_region));
+        region_group::moved(old_region, new_region);
+        BOOST_REQUIRE(!contains(old_region));
+        BOOST_REQUIRE(contains(new_region));
+    }
+    virtual void increase_usage(region* r, ssize_t delta) override {
+        testlog.debug("test_region_listener [{}:{}]: increase_usage region={} delta={}", _name, fmt::ptr(this), fmt::ptr(r), delta);
+
+        BOOST_REQUIRE(contains(r));
+        region_group::increase_usage(r, delta);
+    }
+    virtual void decrease_evictable_usage(region* r) override {
+        testlog.debug("test_region_listener [{}:{}]: decrease_evictable_usage region={}", _name, fmt::ptr(this), fmt::ptr(r));
+
+        BOOST_REQUIRE(contains(r));
+        region_group::decrease_evictable_usage(r);
+    }
+    virtual void decrease_usage(region* r, ssize_t delta) override {
+        testlog.debug("test_region_listener [{}:{}]: decrease_usage region={} delta={}", _name, fmt::ptr(this), fmt::ptr(r), delta);
+
+        BOOST_REQUIRE(contains(r));
+        region_group::decrease_usage(r, delta);
+    }
+};
+
+} // namespace dirty_memory_manager_logalloc
+
+SEASTAR_THREAD_TEST_CASE(test_size_tracked_region_move) {
+    struct managed_object {
+        int x;
+        static size_t storage_size() noexcept { return sizeof(x); }
+    };
+
+    dirty_memory_manager_logalloc::test_region_group rg0("test_size_tracked_region_move.rg0");
+    size_tracked_region r0;
+    r0.listen(&rg0);
+    void* p = r0.allocator().alloc<managed_object>(managed_object::storage_size());
+    BOOST_REQUIRE_NE(p, nullptr);
+
+    size_tracked_region r1(std::move(r0));
+    r1.allocator().free(std::exchange(p, nullptr));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_size_tracked_region_move_assign) {
+    struct managed_object {
+        int x;
+        static size_t storage_size() noexcept { return sizeof(x); }
+    };
+
+    dirty_memory_manager_logalloc::test_region_group rg0("test_size_tracked_region_move.rg0");
+    size_tracked_region r0;
+    r0.listen(&rg0);
+
+    void* p = r0.allocator().alloc<managed_object>(managed_object::storage_size());
+    BOOST_REQUIRE_NE(p, nullptr);
+
+    dirty_memory_manager_logalloc::test_region_group rg1("test_size_tracked_region_move.rg1");
+    size_tracked_region r1;
+    r1.listen(&rg1);
+
+    r1 = std::move(r0);
+    r1.allocator().free(std::exchange(p, nullptr));
+}

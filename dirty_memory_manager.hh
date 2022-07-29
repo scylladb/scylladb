@@ -36,7 +36,7 @@ using region_heap = boost::heap::binomial_heap<size_tracked_region*,
 
 class size_tracked_region : public logalloc::region {
 public:
-    region_heap::handle_type _heap_handle;
+    std::optional<region_heap::handle_type> _heap_handle;
 };
 
 //
@@ -66,11 +66,11 @@ protected:
     virtual void start_reclaiming() noexcept {}
     virtual void stop_reclaiming() noexcept {}
 public:
-    bool under_pressure() const {
+    bool under_pressure() const noexcept {
         return _under_pressure;
     }
 
-    bool over_soft_limit() const {
+    bool over_soft_limit() const noexcept {
         return _under_soft_pressure;
     }
 
@@ -96,21 +96,21 @@ public:
         _under_pressure = false;
     }
 
-    region_group_reclaimer()
+    region_group_reclaimer() noexcept
         : _threshold(std::numeric_limits<size_t>::max()), _soft_limit(std::numeric_limits<size_t>::max()) {}
-    region_group_reclaimer(size_t threshold)
+    region_group_reclaimer(size_t threshold) noexcept
         : _threshold(threshold), _soft_limit(threshold) {}
-    region_group_reclaimer(size_t threshold, size_t soft)
+    region_group_reclaimer(size_t threshold, size_t soft) noexcept
         : _threshold(threshold), _soft_limit(soft) {
         assert(_soft_limit <= _threshold);
     }
 
     virtual ~region_group_reclaimer() {}
 
-    size_t throttle_threshold() const {
+    size_t throttle_threshold() const noexcept {
         return _threshold;
     }
-    size_t soft_limit_threshold() const {
+    size_t soft_limit_threshold() const noexcept {
         return _soft_limit;
     }
 };
@@ -238,8 +238,8 @@ public:
     // at the time the call to run_when_memory_available() was made.
     region_group(sstring name = "(unnamed region_group)",
             region_group_reclaimer& reclaimer = no_reclaimer,
-            scheduling_group deferred_work_sg = default_scheduling_group())
-        : region_group(name, nullptr, reclaimer, deferred_work_sg) {}
+            scheduling_group deferred_work_sg = default_scheduling_group()) noexcept
+        : region_group(std::move(name), nullptr, reclaimer, deferred_work_sg) {}
     region_group(sstring name, region_group* parent, region_group_reclaimer& reclaimer = no_reclaimer,
             scheduling_group deferred_work_sg = default_scheduling_group());
     region_group(region_group&& o) = delete;
@@ -256,7 +256,7 @@ public:
     }
     region_group& operator=(const region_group&) = delete;
     region_group& operator=(region_group&&) = delete;
-    size_t memory_used() const {
+    size_t memory_used() const noexcept {
         return _total_memory;
     }
     void update(ssize_t delta);
@@ -272,12 +272,12 @@ public:
     //    evictable / non-evictable. Because the evictable occupancy changes, we would like to call
     //    the full update cycle even then.
     virtual void increase_usage(region* r, ssize_t delta) override { // From region_listener
-        _regions.increase(static_cast<size_tracked_region*>(r)->_heap_handle);
+        _regions.increase(*static_cast<size_tracked_region*>(r)->_heap_handle);
         update(delta);
     }
 
     virtual void decrease_evictable_usage(region* r) override { // From region_listener
-        _regions.decrease(static_cast<size_tracked_region*>(r)->_heap_handle);
+        _regions.decrease(*static_cast<size_tracked_region*>(r)->_heap_handle);
     }
 
     virtual void decrease_usage(region* r, ssize_t delta) override { // From region_listener
@@ -325,21 +325,21 @@ public:
     // returns a pointer to the largest region (in terms of memory usage) that sits below this
     // region group. This includes the regions owned by this region group as well as all of its
     // children.
-    size_tracked_region* get_largest_region();
+    size_tracked_region* get_largest_region() noexcept;
 
     // Shutdown is mandatory for every user who has set a threshold
     // Can be called at most once.
-    future<> shutdown() {
+    future<> shutdown() noexcept {
         _shutdown_requested = true;
         _relief.signal();
         return std::move(_releaser);
     }
 
-    size_t blocked_requests() {
+    size_t blocked_requests() const noexcept {
         return _blocked_requests.size();
     }
 
-    uint64_t blocked_requests_counter() const {
+    uint64_t blocked_requests_counter() const noexcept {
         return _blocked_requests_counter;
     }
 private:
@@ -355,7 +355,7 @@ private:
     // This method returns a pointer to the region_group that was processed last, or nullptr if the
     // root was reached.
     template <typename Func>
-    static region_group* do_for_each_parent(region_group *node, Func&& func) {
+    static region_group* do_for_each_parent(region_group *node, Func&& func) noexcept(noexcept(func(node))) {
         auto rg = node;
         while (rg) {
             if (func(rg) == stop_iteration::yes) {
@@ -366,13 +366,13 @@ private:
         return nullptr;
     }
 
-    inline bool under_pressure() const {
+    inline bool under_pressure() const noexcept {
         return _reclaimer.under_pressure();
     }
 
-    uint64_t top_region_evictable_space() const;
+    uint64_t top_region_evictable_space() const noexcept;
 
-    uint64_t maximal_score() const {
+    uint64_t maximal_score() const noexcept {
         return _maximal_score;
     }
 
@@ -401,6 +401,8 @@ private:
     void del(region_group* child);
     virtual void add(region* child) override; // from region_listener
     virtual void del(region* child) override; // from region_listener
+
+    friend class test_region_group;
 };
 
 }
@@ -428,7 +430,7 @@ public:
 class flush_permit {
     friend class dirty_memory_manager;
     dirty_memory_manager* _manager;
-    sstable_write_permit _sstable_write_permit;
+    std::optional<sstable_write_permit> _sstable_write_permit;
     semaphore_units<> _background_permit;
 
     flush_permit(dirty_memory_manager* manager, sstable_write_permit&& sstable_write_permit, semaphore_units<>&& background_permit)
@@ -440,8 +442,12 @@ public:
     flush_permit(flush_permit&&) noexcept = default;
     flush_permit& operator=(flush_permit&&) noexcept = default;
 
-    sstable_write_permit release_sstable_write_permit() {
-        return std::move(_sstable_write_permit);
+    sstable_write_permit release_sstable_write_permit() noexcept {
+        return std::exchange(_sstable_write_permit, std::nullopt).value();
+    }
+
+    bool has_sstable_write_permit() const noexcept {
+        return _sstable_write_permit.has_value();
     }
 
     future<flush_permit> reacquire_sstable_write_permit() &&;
@@ -483,7 +489,7 @@ class dirty_memory_manager: public dirty_memory_manager_logalloc::region_group_r
     future<> _waiting_flush;
     virtual void start_reclaiming() noexcept override;
 
-    bool has_pressure() const {
+    bool has_pressure() const noexcept {
         return over_soft_limit();
     }
 
@@ -535,15 +541,15 @@ public:
         , _flush_serializer(1)
         , _waiting_flush(make_ready_future<>()) {}
 
-    static dirty_memory_manager& from_region_group(dirty_memory_manager_logalloc::region_group *rg) {
+    static dirty_memory_manager& from_region_group(dirty_memory_manager_logalloc::region_group *rg) noexcept {
         return *(boost::intrusive::get_parent_from_member(rg, &dirty_memory_manager::_virtual_region_group));
     }
 
-    dirty_memory_manager_logalloc::region_group& region_group() {
+    dirty_memory_manager_logalloc::region_group& region_group() noexcept {
         return _virtual_region_group;
     }
 
-    const dirty_memory_manager_logalloc::region_group& region_group() const {
+    const dirty_memory_manager_logalloc::region_group& region_group() const noexcept {
         return _virtual_region_group;
     }
 
@@ -567,41 +573,41 @@ public:
         _real_region_group.update(-delta);
     }
 
-    size_t real_dirty_memory() const {
+    size_t real_dirty_memory() const noexcept {
         return _real_region_group.memory_used();
     }
 
-    size_t virtual_dirty_memory() const {
+    size_t virtual_dirty_memory() const noexcept {
         return _virtual_region_group.memory_used();
     }
 
-    future<> flush_one(replica::memtable_list& cf, flush_permit&& permit);
+    future<> flush_one(replica::memtable_list& cf, flush_permit&& permit) noexcept;
 
-    future<flush_permit> get_flush_permit() {
+    future<flush_permit> get_flush_permit() noexcept {
         return get_units(_background_work_flush_serializer, 1).then([this] (auto&& units) {
             return this->get_flush_permit(std::move(units));
         });
     }
 
-    future<flush_permit> get_all_flush_permits() {
+    future<flush_permit> get_all_flush_permits() noexcept {
         return get_units(_background_work_flush_serializer, _max_background_work).then([this] (auto&& units) {
             return this->get_flush_permit(std::move(units));
         });
     }
 
-    bool has_extraneous_flushes_requested() const {
+    bool has_extraneous_flushes_requested() const noexcept {
         return _extraneous_flushes > 0;
     }
 
-    void start_extraneous_flush() {
+    void start_extraneous_flush() noexcept {
         ++_extraneous_flushes;
     }
 
-    void finish_extraneous_flush() {
+    void finish_extraneous_flush() noexcept {
         --_extraneous_flushes;
     }
 private:
-    future<flush_permit> get_flush_permit(semaphore_units<>&& background_permit) {
+    future<flush_permit> get_flush_permit(semaphore_units<>&& background_permit) noexcept {
         return get_units(_flush_serializer, 1).then([this, background_permit = std::move(background_permit)] (auto&& units) mutable {
             return flush_permit(this, sstable_write_permit(std::move(units)), std::move(background_permit));
         });

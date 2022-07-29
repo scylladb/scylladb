@@ -1561,19 +1561,19 @@ void storage_proxy_stats::write_stats::register_stats() {
                                       sm::description("number of throttled write requests"),
                                       {storage_proxy_stats::current_scheduling_group_label()}),
 
-            sm::make_total_operations("write_timeouts", write_timeouts._count,
+            sm::make_total_operations("write_timeouts", [this]{return write_timeouts.count();},
                            sm::description("number of write request failed due to a timeout"),
                            {storage_proxy_stats::current_scheduling_group_label()}),
 
-            sm::make_total_operations("write_unavailable", write_unavailables._count,
+            sm::make_total_operations("write_unavailable", [this]{return write_unavailables.count();},
                            sm::description("number write requests failed due to an \"unavailable\" error"),
                            {storage_proxy_stats::current_scheduling_group_label()}),
 
-            sm::make_total_operations("write_rate_limited", write_rate_limited_by_replicas._count,
+            sm::make_total_operations("write_rate_limited", [this]{return write_rate_limited_by_replicas.count();},
                            sm::description("number of write requests which were rejected by replicas because rate limit for the partition was reached."),
                            {storage_proxy_stats::current_scheduling_group_label(), storage_proxy_stats::rejected_by_coordinator_label(false)}),
 
-            sm::make_total_operations("write_rate_limited", write_rate_limited_by_coordinator._count,
+            sm::make_total_operations("write_rate_limited", [this]{return write_rate_limited_by_coordinator.count();},
                            sm::description("number of write requests which were rejected directly on the coordinator because rate limit for the partition was reached."),
                            {storage_proxy_stats::current_scheduling_group_label(),storage_proxy_stats::rejected_by_coordinator_label(true)}),
 
@@ -1653,27 +1653,27 @@ void storage_proxy_stats::stats::register_stats() {
                        sm::description("number of background read repairs"),
                        {storage_proxy_stats::current_scheduling_group_label()}),
 
-        sm::make_total_operations("read_timeouts", read_timeouts._count,
+        sm::make_total_operations("read_timeouts", [this]{return read_timeouts.count(); },
                        sm::description("number of read request failed due to a timeout"),
                        {storage_proxy_stats::current_scheduling_group_label()}),
 
-        sm::make_total_operations("read_unavailable", read_unavailables._count,
+        sm::make_total_operations("read_unavailable", [this]{return read_unavailables.count(); },
                        sm::description("number read requests failed due to an \"unavailable\" error"),
                        {storage_proxy_stats::current_scheduling_group_label()}),
 
-        sm::make_total_operations("read_rate_limited", read_rate_limited_by_replicas._count,
+        sm::make_total_operations("read_rate_limited", [this]{return read_rate_limited_by_replicas.count(); },
                        sm::description("number of read requests which were rejected by replicas because rate limit for the partition was reached."),
                        {storage_proxy_stats::current_scheduling_group_label(), storage_proxy_stats::rejected_by_coordinator_label(false)}),
 
-        sm::make_total_operations("read_rate_limited", read_rate_limited_by_coordinator._count,
+        sm::make_total_operations("read_rate_limited", [this]{return read_rate_limited_by_coordinator.count(); },
                        sm::description("number of read requests which were rejected directly on the coordinator because rate limit for the partition was reached."),
                        {storage_proxy_stats::current_scheduling_group_label(), storage_proxy_stats::rejected_by_coordinator_label(true)}),
 
-        sm::make_total_operations("range_timeouts", range_slice_timeouts._count,
+        sm::make_total_operations("range_timeouts", [this]{return range_slice_timeouts.count(); },
                        sm::description("number of range read operations failed due to a timeout"),
                        {storage_proxy_stats::current_scheduling_group_label()}),
 
-        sm::make_total_operations("range_unavailable", range_slice_unavailables._count,
+        sm::make_total_operations("range_unavailable", [this]{return range_slice_unavailables.count(); },
                        sm::description("number of range read operations failed due to an \"unavailable\" error"),
                        {storage_proxy_stats::current_scheduling_group_label()}),
 
@@ -1693,19 +1693,19 @@ void storage_proxy_stats::stats::register_stats() {
                 {storage_proxy_stats::current_scheduling_group_label()},
                 [this]{return to_metrics_histogram(estimated_cas_write);}),
 
-        sm::make_total_operations("cas_write_timeouts", cas_write_timeouts._count,
+        sm::make_total_operations("cas_write_timeouts", [this]{return cas_write_timeouts.count(); },
                        sm::description("number of transactional write request failed due to a timeout"),
                        {storage_proxy_stats::current_scheduling_group_label()}),
 
-        sm::make_total_operations("cas_write_unavailable", cas_write_unavailables._count,
+        sm::make_total_operations("cas_write_unavailable", [this]{return cas_write_unavailables.count(); },
                        sm::description("number of transactional write requests failed due to an \"unavailable\" error"),
                        {storage_proxy_stats::current_scheduling_group_label()}),
 
-        sm::make_total_operations("cas_read_timeouts", cas_read_timeouts._count,
+        sm::make_total_operations("cas_read_timeouts", [this]{return cas_read_timeouts.count(); },
                        sm::description("number of transactional read request failed due to a timeout"),
                        {storage_proxy_stats::current_scheduling_group_label()}),
 
-        sm::make_total_operations("cas_read_unavailable", cas_read_unavailables._count,
+        sm::make_total_operations("cas_read_unavailable", [this]{return cas_read_unavailables.count(); },
                        sm::description("number of transactional read requests failed due to an \"unavailable\" error"),
                        {storage_proxy_stats::current_scheduling_group_label()}),
 

@@ -162,7 +162,6 @@ using shared_memtable = lw_shared_ptr<memtable>;
 class memtable_list {
 public:
     using seal_immediate_fn_type = std::function<future<> (flush_permit&&)>;
-    using seal_delayed_fn_type = std::function<future<> ()>;
 private:
     std::vector<shared_memtable> _memtables;
     seal_immediate_fn_type _seal_immediate_fn;
@@ -196,15 +195,15 @@ public:
         : memtable_list({}, std::move(cs), dirty_memory_manager, table_stats, compaction_scheduling_group) {
     }
 
-    bool may_flush() const {
+    bool may_flush() const noexcept {
         return bool(_seal_immediate_fn);
     }
 
-    bool can_flush() const {
+    bool can_flush() const noexcept {
         return may_flush() && !empty();
     }
 
-    bool empty() const {
+    bool empty() const noexcept {
         for (auto& m : _memtables) {
            if (!m->empty()) {
                return false;
@@ -212,13 +211,13 @@ public:
         }
         return true;
     }
-    shared_memtable back() {
+    shared_memtable back() const noexcept {
         return _memtables.back();
     }
 
     // # 8904 - this method is akin to std::set::erase(key_type), not
     // erase(iterator). Should be tolerant against non-existing.
-    void erase(const shared_memtable& element) {
+    void erase(const shared_memtable& element) noexcept {
         auto i = boost::range::find(_memtables, element);
         if (i != _memtables.end()) {
             _memtables.erase(i);
@@ -230,11 +229,11 @@ public:
     // Exception safe.
     std::vector<replica::shared_memtable> clear_and_add();
 
-    size_t size() const {
+    size_t size() const noexcept {
         return _memtables.size();
     }
 
-    future<> seal_active_memtable(flush_permit&& permit) {
+    future<> seal_active_memtable(flush_permit&& permit) noexcept {
         return _seal_immediate_fn(std::move(permit));
     }
 
@@ -254,7 +253,7 @@ public:
         return _memtables.end();
     }
 
-    memtable& active_memtable() {
+    memtable& active_memtable() noexcept {
         return *_memtables.back();
     }
 
@@ -262,7 +261,7 @@ public:
         _memtables.emplace_back(new_memtable());
     }
 
-    dirty_memory_manager_logalloc::region_group& region_group() {
+    dirty_memory_manager_logalloc::region_group& region_group() noexcept {
         return _dirty_memory_manager->region_group();
     }
     // This is used for explicit flushes. Will queue the memtable for flushing and proceed when the
@@ -341,16 +340,11 @@ struct table_stats {
     int64_t memtable_range_tombstone_reads = 0;
     int64_t memtable_row_tombstone_reads = 0;
     mutation_application_stats memtable_app_stats;
-    utils::timed_rate_moving_average_and_histogram reads{256};
-    utils::timed_rate_moving_average_and_histogram writes{256};
-    utils::timed_rate_moving_average_and_histogram cas_prepare{256};
-    utils::timed_rate_moving_average_and_histogram cas_accept{256};
-    utils::timed_rate_moving_average_and_histogram cas_learn{256};
-    utils::time_estimated_histogram estimated_read;
-    utils::time_estimated_histogram estimated_write;
-    utils::time_estimated_histogram estimated_cas_prepare;
-    utils::time_estimated_histogram estimated_cas_accept;
-    utils::time_estimated_histogram estimated_cas_learn;
+    utils::timed_rate_moving_average_summary_and_histogram reads{256};
+    utils::timed_rate_moving_average_summary_and_histogram writes{256};
+    utils::timed_rate_moving_average_summary_and_histogram cas_prepare{256};
+    utils::timed_rate_moving_average_summary_and_histogram cas_accept{256};
+    utils::timed_rate_moving_average_summary_and_histogram cas_learn{256};
     utils::estimated_histogram estimated_sstable_per_read{35};
     utils::timed_rate_moving_average_and_histogram tombstone_scanned;
     utils::timed_rate_moving_average_and_histogram live_scanned;
@@ -568,7 +562,7 @@ private:
     // Update compaction backlog tracker with the same changes applied to the underlying sstable set.
     void backlog_tracker_adjust_charges(const std::vector<sstables::shared_sstable>& old_sstables, const std::vector<sstables::shared_sstable>& new_sstables);
     lw_shared_ptr<memtable> new_memtable();
-    future<stop_iteration> try_flush_memtable_to_sstable(lw_shared_ptr<memtable> memt, sstable_write_permit&& permit);
+    future<> try_flush_memtable_to_sstable(lw_shared_ptr<memtable> memt, sstable_write_permit&& permit);
     // Caller must keep m alive.
     future<> update_cache(lw_shared_ptr<memtable> m, std::vector<sstables::shared_sstable> ssts);
     struct merge_comparator;
@@ -1081,7 +1075,10 @@ private:
     // But it is possible to synchronously wait for the seal to complete by
     // waiting on this future. This is useful in situations where we want to
     // synchronously flush data to disk.
-    future<> seal_active_memtable(flush_permit&&);
+    //
+    // The function never fails.
+    // It either succeeds eventually after retrying or aborts.
+    future<> seal_active_memtable(flush_permit&&) noexcept;
 
     void check_valid_rp(const db::replay_position&) const;
 public:
