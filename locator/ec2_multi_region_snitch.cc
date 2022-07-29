@@ -86,7 +86,7 @@ future<> ec2_multi_region_snitch::start() {
                 // already passed through ec2_snitch::load_config() which, in
                 // turn, had already spread the _my_dc accross shards
                 auto& self = dynamic_cast<ec2_multi_region_snitch&>(local_s.get());
-                self._reconnectable_helper = ::make_shared<reconnectable_snitch_helper>(my_dc);
+                self._reconnectable_helper = ::make_shared<reconnectable_snitch_helper>(my_dc, self, local_s.get_local_gossiper().get_local_messaging());
                 local_s.get_local_gossiper().register_(self._reconnectable_helper);
             }).get();
 
