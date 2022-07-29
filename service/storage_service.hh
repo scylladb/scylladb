@@ -575,10 +575,6 @@ private:
      * @return multimap of addresses to ranges the address is responsible for
      */
     std::unordered_multimap<inet_address, dht::token_range> get_new_source_ranges(const sstring& keyspaceName, const dht::token_range_vector& ranges) const;
-public:
-    future<> confirm_replication(inet_address node);
-
-private:
 
     /**
      * Sends a notification to a node indicating we have finished replicating data.

@@ -2927,12 +2927,6 @@ future<> storage_service::send_replication_notification(inet_address remote) {
     );
 }
 
-future<> storage_service::confirm_replication(inet_address node) {
-    return run_with_no_api_lock([node] (storage_service& ss) {
-        slogger.info("Got confirm_replication from {}", node);
-    });
-}
-
 future<> storage_service::leave_ring() {
     co_await _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::NEEDS_BOOTSTRAP);
     co_await mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) {
@@ -3203,7 +3197,8 @@ future<> storage_service::update_topology(inet_address endpoint) {
 
 void storage_service::init_messaging_service() {
     _messaging.local().register_replication_finished([this] (gms::inet_address from) {
-        return confirm_replication(from);
+        slogger.info("Got confirm_replication from {}", from);
+        return make_ready_future<>();
     });
 
     _messaging.local().register_node_ops_cmd([this] (const rpc::client_info& cinfo, node_ops_cmd_request req) {
