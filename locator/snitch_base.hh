@@ -230,15 +230,8 @@ struct snitch_ptr : public peering_sharded_service<snitch_ptr> {
 
     snitch_ptr(const snitch_config cfg, sharded<gms::gossiper>&);
 
-    gms::gossiper& get_local_gossiper() noexcept { return _gossiper.local(); }
-    const gms::gossiper& get_local_gossiper() const noexcept { return _gossiper.local(); }
-
-    sharded<gms::gossiper>& get_gossiper() noexcept { return _gossiper; }
-    const sharded<gms::gossiper>& get_gossiper() const noexcept { return _gossiper; }
-
 private:
     ptr_type _ptr;
-    sharded<gms::gossiper>& _gossiper;
 };
 
 /**

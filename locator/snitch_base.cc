@@ -117,8 +117,7 @@ std::list<std::pair<gms::application_state, gms::versioned_value>> snitch_base::
     };
 }
 
-snitch_ptr::snitch_ptr(const snitch_config cfg, sharded<gms::gossiper>& g)
-        : _gossiper(g) {
+snitch_ptr::snitch_ptr(const snitch_config cfg, sharded<gms::gossiper>& g) {
     i_endpoint_snitch::ptr_type s;
 
     // Production snitches take a `gms::gossiper&` argument, non-production snitches don't.
