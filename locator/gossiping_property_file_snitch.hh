@@ -45,7 +45,7 @@ public:
         return "org.apache.cassandra.locator.GossipingPropertyFileSnitch";
     }
 
-    gossiping_property_file_snitch(const snitch_config&);
+    gossiping_property_file_snitch(const snitch_config&, gms::gossiper&);
 
     virtual snitch_signal_connection_t when_reconfigured(snitch_signal_slot_t& slot) override {
         return _reconfigured.connect([slot = std::move(slot)] () mutable {

@@ -120,14 +120,23 @@ std::list<std::pair<gms::application_state, gms::versioned_value>> snitch_base::
 snitch_ptr::snitch_ptr(const snitch_config cfg, sharded<gms::gossiper>& g)
         : _gossiper(g) {
     i_endpoint_snitch::ptr_type s;
-    try {
-        s = create_object<i_endpoint_snitch>(cfg.name, cfg);
-    } catch (no_such_class& e) {
-        i_endpoint_snitch::logger().error("Can't create snitch {}: not supported", cfg.name);
-        throw;
-    } catch (...) {
-        throw;
+
+    // Production snitches take a `gms::gossiper&` argument, non-production snitches don't.
+    auto& production_snitches = class_registry<i_endpoint_snitch, const snitch_config&, gms::gossiper&>::classes();
+
+    if (production_snitches.contains(cfg.name)) {
+        s = create_object<i_endpoint_snitch>(cfg.name, cfg, g.local());
+    } else {
+        try {
+            s = create_object<i_endpoint_snitch>(cfg.name, cfg);
+        } catch (no_such_class& e) {
+            i_endpoint_snitch::logger().error("Can't create snitch {}: not supported", cfg.name);
+            throw;
+        } catch (...) {
+            throw;
+        }
     }
+
     s->set_backreference(*this);
     _ptr = std::move(s);
 }

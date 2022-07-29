@@ -21,11 +21,12 @@
 
 namespace locator {
 
-production_snitch_base::production_snitch_base(snitch_config cfg)
+production_snitch_base::production_snitch_base(snitch_config cfg, gms::gossiper& g)
         : allowed_property_keys({ dc_property_key,
                           rack_property_key,
                           prefer_local_property_key,
-                          dc_suffix_property_key }) {
+                          dc_suffix_property_key })
+        , _gossiper(g) {
     if (!cfg.properties_file_name.empty()) {
         _prop_file_name = cfg.properties_file_name;
     } else {

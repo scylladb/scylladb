@@ -24,7 +24,7 @@ namespace locator {
 const std::string azure_snitch::REGION_NAME_QUERY_PATH = fmt::format(AZURE_QUERY_PATH_TEMPLATE, "location");
 const std::string azure_snitch::ZONE_NAME_QUERY_PATH = fmt::format(AZURE_QUERY_PATH_TEMPLATE, "zone");
 
-azure_snitch::azure_snitch(const snitch_config& cfg) : production_snitch_base(cfg) {
+azure_snitch::azure_snitch(const snitch_config& cfg, gms::gossiper& g) : production_snitch_base(cfg, g) {
     if (this_shard_id() == cfg.io_cpu_id) {
         io_cpu_id() = cfg.io_cpu_id;
     }
@@ -115,7 +115,7 @@ future<sstring> azure_snitch::read_property_file() {
     });
 }
 
-using registry_default = class_registrator<i_endpoint_snitch, azure_snitch, const snitch_config&>;
+using registry_default = class_registrator<i_endpoint_snitch, azure_snitch, const snitch_config&, gms::gossiper&>;
 static registry_default registrator_default("org.apache.cassandra.locator.AzureSnitch");
 static registry_default registrator_default_short_name("AzureSnitch");
 

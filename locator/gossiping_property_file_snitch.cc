@@ -39,8 +39,8 @@ future<bool> gossiping_property_file_snitch::property_file_was_modified() {
     });
 }
 
-gossiping_property_file_snitch::gossiping_property_file_snitch(const snitch_config& cfg)
-        : production_snitch_base(cfg), _file_reader_cpu_id(cfg.io_cpu_id) {
+gossiping_property_file_snitch::gossiping_property_file_snitch(const snitch_config& cfg, gms::gossiper& g)
+        : production_snitch_base(cfg, g), _file_reader_cpu_id(cfg.io_cpu_id) {
     if (this_shard_id() == _file_reader_cpu_id) {
         io_cpu_id() = _file_reader_cpu_id;
     }
@@ -275,7 +275,7 @@ future<> gossiping_property_file_snitch::reload_gossiper_state() {
     });
 }
 
-using registry_default = class_registrator<i_endpoint_snitch, gossiping_property_file_snitch, const snitch_config&>;
+using registry_default = class_registrator<i_endpoint_snitch, gossiping_property_file_snitch, const snitch_config&, gms::gossiper&>;
 static registry_default registrator_default("org.apache.cassandra.locator.GossipingPropertyFileSnitch");
 static registry_default registrator_default_short_name("GossipingPropertyFileSnitch");
 } // namespace locator

@@ -18,7 +18,7 @@ public:
     static constexpr const char* ZONE_NAME_QUERY_REQ = "/computeMetadata/v1/instance/zone";
     static constexpr const char* GCE_QUERY_SERVER_ADDR = "metadata.google.internal";
 
-    explicit gce_snitch(const snitch_config&);
+    explicit gce_snitch(const snitch_config&, gms::gossiper&);
     virtual future<> start() override;
     virtual sstring get_name() const override {
         return "org.apache.cassandra.locator.GoogleCloudSnitch";

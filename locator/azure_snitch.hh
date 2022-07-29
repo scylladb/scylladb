@@ -20,7 +20,7 @@ public:
     static const std::string REGION_NAME_QUERY_PATH;
     static const std::string ZONE_NAME_QUERY_PATH;
 
-    explicit azure_snitch(const snitch_config&);
+    explicit azure_snitch(const snitch_config&, gms::gossiper&);
     virtual future<> start() override;
     virtual sstring get_name() const override {
         return "org.apache.cassandra.locator.AzureSnitch";

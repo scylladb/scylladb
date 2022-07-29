@@ -19,8 +19,8 @@ static constexpr const char* PUBLIC_IPV6_QUERY_REQ  = "/latest/meta-data/network
 static constexpr const char* PRIVATE_MAC_QUERY = "/latest/meta-data/network/interfaces/macs";
 
 namespace locator {
-ec2_multi_region_snitch::ec2_multi_region_snitch(const snitch_config& cfg)
-    : ec2_snitch(cfg)
+ec2_multi_region_snitch::ec2_multi_region_snitch(const snitch_config& cfg, gms::gossiper& g)
+    : ec2_snitch(cfg, g)
     , _broadcast_rpc_address_specified_by_user(cfg.broadcast_rpc_address_specified_by_user) {}
 
 future<> ec2_multi_region_snitch::start() {
@@ -108,7 +108,7 @@ std::list<std::pair<gms::application_state, gms::versioned_value>> ec2_multi_reg
     };
 }
 
-using registry_default = class_registrator<i_endpoint_snitch, ec2_multi_region_snitch, const snitch_config&>;
+using registry_default = class_registrator<i_endpoint_snitch, ec2_multi_region_snitch, const snitch_config&, gms::gossiper&>;
 static registry_default registrator_default("org.apache.cassandra.locator.Ec2MultiRegionSnitch");
 static registry_default registrator_default_short_name("Ec2MultiRegionSnitch");
 

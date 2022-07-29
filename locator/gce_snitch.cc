@@ -17,7 +17,7 @@
 
 namespace locator {
 
-gce_snitch::gce_snitch(const snitch_config& cfg) : production_snitch_base(cfg) {
+gce_snitch::gce_snitch(const snitch_config& cfg, gms::gossiper& g) : production_snitch_base(cfg, g) {
     if (this_shard_id() == cfg.io_cpu_id) {
         io_cpu_id() = cfg.io_cpu_id;
         _meta_server_url = cfg.gce_meta_server_url;
@@ -133,7 +133,7 @@ future<sstring> gce_snitch::read_property_file() {
     });
 }
 
-using registry_default = class_registrator<i_endpoint_snitch, gce_snitch, const snitch_config&>;
+using registry_default = class_registrator<i_endpoint_snitch, gce_snitch, const snitch_config&, gms::gossiper&>;
 static registry_default registrator_default("org.apache.cassandra.locator.GoogleCloudSnitch");
 static registry_default registrator_default_short_name("GoogleCloudSnitch");
 

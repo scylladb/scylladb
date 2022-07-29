@@ -20,6 +20,10 @@
 #include <seastar/core/sstring.hh>
 #include "snitch_base.hh"
 
+namespace gms {
+class gossiper;
+}
+
 namespace locator {
 
 class bad_property_file_error : public std::exception {};
@@ -40,7 +44,7 @@ public:
     static constexpr const char* dc_suffix_property_key    = "dc_suffix";
     const std::unordered_set<sstring> allowed_property_keys;
 
-    explicit production_snitch_base(snitch_config);
+    explicit production_snitch_base(snitch_config, gms::gossiper&);
 
     virtual sstring get_rack(inet_address endpoint) override;
     virtual sstring get_datacenter(inet_address endpoint) override;
@@ -72,6 +76,8 @@ protected:
     void throw_incomplete_file() const;
 
 protected:
+    gms::gossiper& _gossiper;
+
     std::optional<addr2dc_rack_map> _saved_endpoints;
     std::string _prop_file_contents;
     sstring _prop_file_name;

@@ -6,7 +6,7 @@
 
 namespace locator {
 
-ec2_snitch::ec2_snitch(const snitch_config& cfg) : production_snitch_base(cfg) {
+ec2_snitch::ec2_snitch(const snitch_config& cfg, gms::gossiper& g) : production_snitch_base(cfg, g) {
     if (this_shard_id() == cfg.io_cpu_id) {
         io_cpu_id() = cfg.io_cpu_id;
     }
@@ -111,7 +111,7 @@ future<sstring> ec2_snitch::read_property_file() {
     });
 }
 
-using registry_default = class_registrator<i_endpoint_snitch, ec2_snitch, const snitch_config&>;
+using registry_default = class_registrator<i_endpoint_snitch, ec2_snitch, const snitch_config&, gms::gossiper&>;
 static registry_default registrator_default("org.apache.cassandra.locator.Ec2Snitch");
 static registry_default registrator_default_short_name("Ec2Snitch");
 } // namespace locator
