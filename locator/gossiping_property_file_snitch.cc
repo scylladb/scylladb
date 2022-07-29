@@ -239,13 +239,18 @@ void gossiping_property_file_snitch::start_io() {
 }
 
 future<> gossiping_property_file_snitch::stop() {
+    future<> ret = make_ready_future<>();
+    if (_reconnectable_helper) {
+        ret = local().get_local_gossiper().unregister_(_reconnectable_helper);
+    }
+
     if (_state == snitch_state::stopped || _state == snitch_state::io_paused) {
-        return make_ready_future<>();
+        return ret;
     }
 
     _state = snitch_state::stopping;
 
-    return stop_io();
+    return ret.then(std::bind_front(&gossiping_property_file_snitch::stop_io, this));
 }
 
 future<> gossiping_property_file_snitch::pause_io() {
