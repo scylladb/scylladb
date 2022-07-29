@@ -1570,6 +1570,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
             auto local_dc = topology.get_datacenter();
             bool find_node_in_local_dc_only = strat.get_type() == locator::replication_strategy_type::network_topology;
             for (auto&r : ranges) {
+                seastar::thread::maybe_yield();
                 if (ops) {
                     ops->check_abort();
                 }
