@@ -8,7 +8,6 @@ Getting Started
    install-scylla/index
    configure
    requirements
-   Scylla Drivers </using-scylla/drivers/index>
    Migrate to Scylla </using-scylla/migrate-scylla>
    Integration Solutions </using-scylla/integrations/index>
    tutorials
