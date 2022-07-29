@@ -77,15 +77,15 @@ future<> ec2_multi_region_snitch::start() {
             // set on the shard0 so that it may be used when Gossiper is
             // going to invoke gossiper_starting() method.
             //
-            container().invoke_on(0, [this] (snitch_ptr& local_s) {
+            container().invoke_on(0, [addr = _local_private_address, my_dc = _my_dc] (snitch_ptr& local_s) {
                 if (this_shard_id() != io_cpu_id()) {
-                    local_s->set_local_private_addr(_local_private_address);
+                    local_s->set_local_private_addr(addr);
                 }
 
                 // this invoke_on() was done from the io_cpu_id() which had
                 // already passed through ec2_snitch::load_config() which, in
                 // turn, had already spread the _my_dc accross shards
-                local_s.get_local_gossiper().register_(::make_shared<reconnectable_snitch_helper>(_my_dc));
+                local_s.get_local_gossiper().register_(::make_shared<reconnectable_snitch_helper>(my_dc));
             }).get();
 
             set_snitch_ready();
