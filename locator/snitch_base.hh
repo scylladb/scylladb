@@ -55,7 +55,7 @@ struct i_endpoint_snitch {
 public:
     using ptr_type = std::unique_ptr<i_endpoint_snitch>;
 
-    static future<> reset_snitch(snitch_config cfg);
+    static future<> reset_snitch(snitch_config cfg, sharded<gms::gossiper>&);
 
     /**
      * returns a String representing the rack this endpoint belongs to
@@ -263,12 +263,12 @@ private:
  *  6) Start the new snitches.
  *  7) Stop() the temporary distributed<snitch_ptr> from (1).
  */
-inline future<> i_endpoint_snitch::reset_snitch(snitch_config cfg) {
-    return seastar::async([cfg = std::move(cfg)] {
+inline future<> i_endpoint_snitch::reset_snitch(snitch_config cfg, sharded<gms::gossiper>& g) {
+    return seastar::async([cfg = std::move(cfg), &g] {
         // (1) create a new snitch
         distributed<snitch_ptr> tmp_snitch;
         try {
-            tmp_snitch.start(cfg, std::ref(get_local_snitch_ptr().get_gossiper())).get();
+            tmp_snitch.start(cfg, std::ref(g)).get();
 
             // (2) start the local instances of the new snitch
             tmp_snitch.invoke_on_all([] (snitch_ptr& local_inst) {

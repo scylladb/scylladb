@@ -810,10 +810,10 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         return map_keys(ctx.db.local().get_keyspaces());
     });
 
-    ss::update_snitch.set(r, [](std::unique_ptr<request> req) {
+    ss::update_snitch.set(r, [&g = g.container()](std::unique_ptr<request> req) {
         locator::snitch_config cfg;
         cfg.name = req->get_query_param("ep_snitch_class_name");
-        return locator::i_endpoint_snitch::reset_snitch(cfg).then([] {
+        return locator::i_endpoint_snitch::reset_snitch(cfg, std::ref(g)).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
