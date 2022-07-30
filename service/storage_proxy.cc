@@ -697,9 +697,10 @@ public:
             std::unique_ptr<mutation_holder> mh, inet_address_vector_replica_set targets,
             const inet_address_vector_topology_change& pending_endpoints, inet_address_vector_topology_change dead_endpoints, tracing::trace_state_ptr tr_state,
             storage_proxy::write_stats& stats, service_permit permit, db::per_partition_rate_limit::info rate_limit_info) :
-                abstract_write_response_handler(std::move(p), ks, cl, type, std::move(mh),
-                        std::move(targets), std::move(tr_state), stats, std::move(permit), rate_limit_info, db::count_local_endpoints(pending_endpoints), std::move(dead_endpoints)) {
-        _total_endpoints = db::count_local_endpoints(_targets);
+                abstract_write_response_handler(p, ks, cl, type, std::move(mh),
+                        std::move(targets), std::move(tr_state), stats, std::move(permit), rate_limit_info,
+                        p->get_token_metadata_ptr()->get_topology().count_local_endpoints(pending_endpoints), std::move(dead_endpoints)) {
+        _total_endpoints = p->get_token_metadata_ptr()->get_topology().count_local_endpoints(_targets);
     }
 };
 
@@ -3967,7 +3968,7 @@ public:
             return make_ready_future<result<foreign_ptr<lw_shared_ptr<query::result>>>>(make_foreign(make_lw_shared(query::result())));
         }
         digest_resolver_ptr digest_resolver = ::make_shared<digest_read_resolver>(_proxy, _schema, _cl, _block_for,
-                db::is_datacenter_local(_cl) ? db::count_local_endpoints(_targets): _targets.size(), timeout);
+                db::is_datacenter_local(_cl) ? _proxy->get_token_metadata_ptr()->get_topology().count_local_endpoints(_targets): _targets.size(), timeout);
         auto exec = shared_from_this();
 
         make_requests(digest_resolver, timeout);
