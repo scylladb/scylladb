@@ -175,6 +175,10 @@ public:
         return _replication_map;
     }
 
+    const topology& get_topology() const noexcept {
+        return _tmptr->get_topology();
+    }
+
     const size_t get_replication_factor() const noexcept {
         return _replication_factor;
     }

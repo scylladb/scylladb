@@ -58,10 +58,9 @@ size_t block_for_local_serial(replica::keyspace& ks) {
     //       a lot of complications since both snitch output for a local host
     //       and the snitch itself (and thus its output) may change dynamically.
     //
-    auto& snitch_ptr = i_endpoint_snitch::get_local_snitch_ptr();
-    auto local_addr = utils::fb_utilities::get_broadcast_address();
 
-    return local_quorum_for(ks, snitch_ptr->get_datacenter(local_addr));
+    const auto& topo = ks.get_effective_replication_map()->get_topology();
+    return local_quorum_for(ks, topo.get_datacenter());
 }
 
 size_t block_for_each_quorum(replica::keyspace& ks) {
@@ -133,7 +132,7 @@ std::unordered_map<sstring, dc_node_count> count_per_dc_endpoints(
     using namespace locator;
 
     auto& rs = ks.get_replication_strategy();
-    auto& snitch_ptr = i_endpoint_snitch::get_local_snitch_ptr();
+    const auto& topo = ks.get_effective_replication_map()->get_topology();
 
     network_topology_strategy* nrs =
             static_cast<network_topology_strategy*>(&rs);
@@ -148,12 +147,13 @@ std::unordered_map<sstring, dc_node_count> count_per_dc_endpoints(
     // will never get any endpoints outside the dataceters from
     // nrs->get_datacenters().
     //
+
     for (auto& endpoint : live_endpoints) {
-        ++(dc_endpoints[snitch_ptr->get_datacenter(endpoint)].live);
+        ++(dc_endpoints[topo.get_datacenter(endpoint)].live);
     }
 
     for (auto& endpoint : pending_endpoints) {
-        ++(dc_endpoints[snitch_ptr->get_datacenter(endpoint)].pending);
+        ++(dc_endpoints[topo.get_datacenter(endpoint)].pending);
     }
 
     return dc_endpoints;
