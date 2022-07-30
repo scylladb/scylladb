@@ -9,8 +9,8 @@
 import asyncio
 import pathlib
 import sys
-from typing import AsyncGenerator
 from test.pylib.random_tables import RandomTables                        # type: ignore
+from test.pylib.util import unique_name                                  # type: ignore
 import pytest
 from cassandra.cluster import Session, ResponseFuture                    # type: ignore
 
@@ -72,9 +72,8 @@ def fails_without_raft(request, check_pre_raft):
 
 # "random_tables" fixture: Creates and returns a temporary RandomTables object
 # used in tests to make schema changes. Tables are dropped after finished.
-@pytest.mark.asyncio
 @pytest.fixture(scope="function")
-async def random_tables(request, cql, keyspace) -> AsyncGenerator:
-    tables = RandomTables(request.node.name, cql, keyspace)
+def random_tables(request, cql):
+    tables = RandomTables(request.node.name, cql, unique_name())
     yield tables
-    await tables.drop_all_tables()
+    tables.drop_all()

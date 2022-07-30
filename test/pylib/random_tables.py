@@ -240,6 +240,8 @@ class RandomTables():
         self.keyspace = keyspace
         self.tables: List[RandomTable] = []
         self.removed_tables: List[RandomTable] = []
+        cql.execute(f"CREATE KEYSPACE {keyspace} WITH REPLICATION = "
+                     "{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
 
     async def add_tables(self, ntables: int = 1, ncolumns: int = 5) -> None:
         """Add random tables to the list.
@@ -278,11 +280,9 @@ class RandomTables():
         self.removed_tables.append(table)
         return table
 
-    async def drop_all_tables(self) -> None:
-        """Drop all active managed tables"""
-        tables, self.tables = self.tables, []
-        await asyncio.gather(*(t.drop() for t in tables))
-        self.removed_tables.extend(tables)
+    def drop_all(self) -> None:
+        """Drop keyspace (and tables)"""
+        self.cql.execute(f"DROP KEYSPACE {self.keyspace}")
 
     async def verify_schema(self, table: Union[RandomTable, str] = None) -> None:
         """Verify schema of all active managed random tables"""
