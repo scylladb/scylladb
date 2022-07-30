@@ -488,7 +488,7 @@ static void test_equivalence(const shared_token_metadata& stm, snitch_ptr& snitc
         using network_topology_strategy::calculate_natural_endpoints;
     };
 
-    my_network_topology_strategy nts(snitch,
+    my_network_topology_strategy nts(
                     boost::copy_range<std::map<sstring, sstring>>(
                                     datacenters
                                                     | boost::adaptors::transformed(

@@ -19,21 +19,16 @@ namespace locator {
 logging::logger rslogger("replication_strategy");
 
 abstract_replication_strategy::abstract_replication_strategy(
-    snitch_ptr& snitch,
     const replication_strategy_config_options& config_options,
     replication_strategy_type my_type)
         : _config_options(config_options)
-        , _snitch(snitch)
         , _my_type(my_type) {}
 
 abstract_replication_strategy::ptr_type abstract_replication_strategy::create_replication_strategy(const sstring& strategy_name, const replication_strategy_config_options& config_options) {
-    assert(locator::i_endpoint_snitch::get_local_snitch_ptr());
     try {
         return create_object<abstract_replication_strategy,
-                             snitch_ptr&,
                              const replication_strategy_config_options&>
-            (strategy_name,
-             locator::i_endpoint_snitch::get_local_snitch_ptr(), config_options);
+            (strategy_name, config_options);
     } catch (const no_such_class& e) {
         throw exceptions::configuration_exception(e.what());
     }
@@ -59,7 +54,6 @@ void abstract_replication_strategy::validate_replication_strategy(const sstring&
 
 using strategy_class_registry = class_registry<
     locator::abstract_replication_strategy,
-    locator::snitch_ptr&,
     const locator::replication_strategy_config_options&>;
 
 sstring abstract_replication_strategy::to_qualified_class_name(std::string_view strategy_class_name) {

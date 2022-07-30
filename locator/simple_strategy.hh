@@ -17,7 +17,7 @@ namespace locator {
 
 class simple_strategy : public abstract_replication_strategy {
 public:
-    simple_strategy(snitch_ptr& snitch, const replication_strategy_config_options& config_options);
+    simple_strategy(const replication_strategy_config_options& config_options);
     virtual ~simple_strategy() {};
     virtual size_t get_replication_factor(const token_metadata& tm) const override;
     virtual void validate_options() const override;
