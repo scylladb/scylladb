@@ -688,7 +688,8 @@ public:
 
 class datacenter_write_response_handler : public abstract_write_response_handler {
     bool waited_for(gms::inet_address from) override {
-        return fbu::is_me(from) || db::is_local(from);
+        const auto& topo = _proxy->get_token_metadata_ptr()->get_topology();
+        return fbu::is_me(from) || (topo.get_datacenter(from) == topo.get_datacenter());
     }
 
 public:
@@ -3085,7 +3086,8 @@ public:
     }
 private:
     bool waiting_for(gms::inet_address ep) {
-        return db::is_datacenter_local(_cl) ? fbu::is_me(ep) || db::is_local(ep) : true;
+        const auto& topo = _proxy->get_token_metadata_ptr()->get_topology();
+        return db::is_datacenter_local(_cl) ? fbu::is_me(ep) || (topo.get_datacenter(ep) == topo.get_datacenter()) : true;
     }
     void got_response(gms::inet_address ep) {
         if (!_cl_reported) {
