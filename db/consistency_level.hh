@@ -42,13 +42,6 @@ size_t block_for(replica::keyspace& ks, consistency_level cl);
 
 bool is_datacenter_local(consistency_level l);
 
-bool is_local(gms::inet_address endpoint);
-
-template<typename Range>
-inline size_t count_local_endpoints(const Range& live_endpoints) {
-    return std::count_if(live_endpoints.begin(), live_endpoints.end(), is_local);
-}
-
 inet_address_vector_replica_set
 filter_for_query(consistency_level cl,
                  replica::keyspace& ks,

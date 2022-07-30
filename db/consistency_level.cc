@@ -113,17 +113,6 @@ bool is_datacenter_local(consistency_level l) {
     return l == consistency_level::LOCAL_ONE || l == consistency_level::LOCAL_QUORUM;
 }
 
-bool is_local(gms::inet_address endpoint) {
-    using namespace locator;
-
-    auto& snitch_ptr = i_endpoint_snitch::get_local_snitch_ptr();
-    auto local_addr = utils::fb_utilities::get_broadcast_address();
-
-    return snitch_ptr->get_datacenter(local_addr) ==
-           snitch_ptr->get_datacenter(endpoint);
-}
-
-
 template <typename Range, typename PendingRange = std::array<gms::inet_address, 0>>
 std::unordered_map<sstring, dc_node_count> count_per_dc_endpoints(
         replica::keyspace& ks,
