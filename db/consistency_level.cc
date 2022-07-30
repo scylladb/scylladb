@@ -202,18 +202,20 @@ void assure_sufficient_live_nodes(
         return pending <= live ? live - pending : 0;
     };
 
+    const auto& topo = ks.get_effective_replication_map()->get_topology();
+
     switch (cl) {
     case consistency_level::ANY:
         // local hint is acceptable, and local node is always live
         break;
     case consistency_level::LOCAL_ONE:
-        if (count_local_endpoints(live_endpoints) < count_local_endpoints(pending_endpoints) + 1) {
+        if (topo.count_local_endpoints(live_endpoints) < topo.count_local_endpoints(pending_endpoints) + 1) {
             throw exceptions::unavailable_exception(cl, 1, 0);
         }
         break;
     case consistency_level::LOCAL_QUORUM: {
-        size_t local_live = count_local_endpoints(live_endpoints);
-        size_t pending = count_local_endpoints(pending_endpoints);
+        size_t local_live = topo.count_local_endpoints(live_endpoints);
+        size_t pending = topo.count_local_endpoints(pending_endpoints);
         if (local_live < need + pending) {
             cl_logger.debug("Local replicas {} are insufficient to satisfy LOCAL_QUORUM requirement of needed {} and pending {}", live_endpoints, local_live, pending);
             throw exceptions::unavailable_exception(cl, need, adjust_live_for_error(local_live, pending));
@@ -366,15 +368,16 @@ is_sufficient_live_nodes(consistency_level cl,
                          replica::keyspace& ks,
                          const inet_address_vector_replica_set& live_endpoints) {
     using namespace locator;
+    const auto& topo = ks.get_effective_replication_map()->get_topology();
 
     switch (cl) {
     case consistency_level::ANY:
         // local hint is acceptable, and local node is always live
         return true;
     case consistency_level::LOCAL_ONE:
-        return count_local_endpoints(live_endpoints) >= 1;
+        return topo.count_local_endpoints(live_endpoints) >= 1;
     case consistency_level::LOCAL_QUORUM:
-        return count_local_endpoints(live_endpoints) >= block_for(ks, cl);
+        return topo.count_local_endpoints(live_endpoints) >= block_for(ks, cl);
     case consistency_level::EACH_QUORUM:
     {
         auto& rs = ks.get_replication_strategy();
