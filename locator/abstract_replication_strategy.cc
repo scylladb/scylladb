@@ -200,8 +200,9 @@ effective_replication_map::get_primary_ranges(inet_address ep) const {
 
 dht::token_range_vector
 effective_replication_map::get_primary_ranges_within_dc(inet_address ep) const {
-    sstring local_dc = _rs->_snitch->get_datacenter(ep);
-    std::unordered_set<inet_address> local_dc_nodes = _tmptr->get_topology().get_datacenter_endpoints().at(local_dc);
+    const topology& topo = _tmptr->get_topology();
+    sstring local_dc = topo.get_datacenter(ep);
+    std::unordered_set<inet_address> local_dc_nodes = topo.get_datacenter_endpoints().at(local_dc);
     return do_get_ranges([ep, local_dc_nodes = std::move(local_dc_nodes)] (inet_address_vector_replica_set eps) {
         // Unlike get_primary_ranges() which checks if ep is the first
         // owner of this range, here we check if ep is the first just
