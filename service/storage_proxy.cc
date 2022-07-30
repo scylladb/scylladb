@@ -2284,9 +2284,8 @@ gms::inet_address storage_proxy::find_leader_for_counter_update(const mutation& 
         return my_address;
     }
 
-    const auto local_endpoints = boost::copy_range<inet_address_vector_replica_set>(live_endpoints | boost::adaptors::filtered([&] (auto&& ep) {
-        return db::is_local(ep);
-    }));
+    const auto local_endpoints = boost::copy_range<inet_address_vector_replica_set>(live_endpoints
+        | boost::adaptors::filtered(get_token_metadata_ptr()->get_topology().get_local_dc_filter()));
 
     if (local_endpoints.empty()) {
         // FIXME: O(n log n) to get maximum
@@ -2369,9 +2368,10 @@ storage_proxy::get_paxos_participants(const sstring& ks_name, const dht::token &
     inet_address_vector_topology_change pending_endpoints = erm->get_token_metadata_ptr()->pending_endpoints_for(token, ks_name);
 
     if (cl_for_paxos == db::consistency_level::LOCAL_SERIAL) {
-        auto itend = boost::range::remove_if(natural_endpoints, std::not_fn(std::cref(db::is_local)));
+        auto local_dc_filter = get_token_metadata_ptr()->get_topology().get_local_dc_filter();
+        auto itend = boost::range::remove_if(natural_endpoints, std::not_fn(std::cref(local_dc_filter)));
         natural_endpoints.erase(itend, natural_endpoints.end());
-        itend = boost::range::remove_if(pending_endpoints, std::not_fn(std::cref(db::is_local)));
+        itend = boost::range::remove_if(pending_endpoints, std::not_fn(std::cref(local_dc_filter)));
         pending_endpoints.erase(itend, pending_endpoints.end());
     }
 
@@ -3994,7 +3994,8 @@ public:
                         if (std::abs(delta) <= write_timeout) {
                             exec->_proxy->get_stats().global_read_repairs_canceled_due_to_concurrent_write++;
                             // if CL is local and non matching data is modified less then write_timeout ms ago do only local repair
-                            auto i = boost::range::remove_if(exec->_targets, std::not_fn(std::cref(db::is_local)));
+                            auto local_dc_filter = exec->_proxy->get_token_metadata_ptr()->get_topology().get_local_dc_filter();
+                            auto i = boost::range::remove_if(exec->_targets, std::not_fn(std::cref(local_dc_filter)));
                             exec->_targets.erase(i, exec->_targets.end());
                         }
                     }
@@ -4212,7 +4213,8 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
 
     // RRD.NONE or RRD.DC_LOCAL w/ multiple DCs.
     if (target_replicas.size() == block_for) { // If RRD.DC_LOCAL extra replica may already be present
-        if (is_datacenter_local(cl) && !db::is_local(extra_replica)) {
+        auto local_dc_filter = get_token_metadata_ptr()->get_topology().get_local_dc_filter();
+        if (is_datacenter_local(cl) && !local_dc_filter(extra_replica)) {
             slogger.trace("read executor no extra target to speculate");
             return ::make_shared<never_speculating_read_executor>(schema, cf, p, cmd, std::move(pr), cl, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
         } else {
