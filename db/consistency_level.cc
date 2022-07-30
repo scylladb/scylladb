@@ -257,7 +257,8 @@ filter_for_query(consistency_level cl,
     }
 
     if (read_repair == read_repair_decision::DC_LOCAL || is_datacenter_local(cl)) {
-        auto it = boost::range::stable_partition(live_endpoints, is_local);
+        const auto& topo = ks.get_effective_replication_map()->get_topology();
+        auto it = boost::range::stable_partition(live_endpoints, topo.get_local_dc_filter());
         local_count = std::distance(live_endpoints.begin(), it);
         if (is_datacenter_local(cl)) {
             live_endpoints.erase(it, live_endpoints.end());
