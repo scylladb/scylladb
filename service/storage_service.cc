@@ -759,13 +759,15 @@ storage_service::get_range_to_address_map(locator::effective_replication_map_ptr
 future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
 storage_service::get_range_to_address_map_in_local_dc(
         locator::effective_replication_map_ptr erm) const {
-    auto orig_map = co_await get_range_to_address_map(erm, co_await get_tokens_in_local_dc(*erm->get_token_metadata_ptr()));
+    auto tmptr = erm->get_token_metadata_ptr();
+    auto orig_map = co_await get_range_to_address_map(erm, co_await get_tokens_in_local_dc(*tmptr));
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> filtered_map;
     filtered_map.reserve(orig_map.size());
+    auto local_dc_filter = tmptr->get_topology().get_local_dc_filter();
     for (auto entry : orig_map) {
         auto& addresses = filtered_map[entry.first];
         addresses.reserve(entry.second.size());
-        std::copy_if(entry.second.begin(), entry.second.end(), std::back_inserter(addresses), db::is_local);
+        std::copy_if(entry.second.begin(), entry.second.end(), std::back_inserter(addresses), local_dc_filter);
         co_await coroutine::maybe_yield();
     }
 
@@ -776,9 +778,10 @@ storage_service::get_range_to_address_map_in_local_dc(
 future<std::vector<token>>
 storage_service::get_tokens_in_local_dc(const locator::token_metadata& tm) const {
     std::vector<token> filtered_tokens;
+    auto local_dc_filter = tm.get_topology().get_local_dc_filter();
     for (auto token : tm.sorted_tokens()) {
         auto endpoint = tm.get_endpoint(token);
-        if (db::is_local(*endpoint))
+        if (local_dc_filter(*endpoint))
             filtered_tokens.push_back(token);
         co_await coroutine::maybe_yield();
     }
