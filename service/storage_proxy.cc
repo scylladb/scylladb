@@ -3078,6 +3078,7 @@ public:
         auto& first = *_digest_results.begin();
         return std::find_if(_digest_results.begin() + 1, _digest_results.end(), [&first] (query::result_digest digest) { return digest != first; }) == _digest_results.end();
     }
+private:
     bool waiting_for(gms::inet_address ep) {
         return db::is_datacenter_local(_cl) ? fbu::is_me(ep) || db::is_local(ep) : true;
     }
@@ -3118,6 +3119,8 @@ public:
             }
         }
     }
+
+public:
     future<result<digest_read_result>> has_cl() {
         return _cl_promise.get_future();
     }
