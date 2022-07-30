@@ -3026,6 +3026,7 @@ struct digest_read_result {
 };
 
 class digest_read_resolver : public abstract_read_resolver {
+    shared_ptr<storage_proxy> _proxy;
     size_t _block_for;
     size_t _cl_responses = 0;
     promise<result<digest_read_result>> _cl_promise; // cl is reached
@@ -3050,8 +3051,12 @@ class digest_read_resolver : public abstract_read_resolver {
         return _digest_results.size();
     }
 public:
-    digest_read_resolver(schema_ptr schema, db::consistency_level cl, size_t block_for, size_t target_count_for_cl, storage_proxy::clock_type::time_point timeout) : abstract_read_resolver(std::move(schema), cl, 0, timeout),
-                                _block_for(block_for),  _target_count_for_cl(target_count_for_cl) {}
+    digest_read_resolver(shared_ptr<storage_proxy> proxy, schema_ptr schema, db::consistency_level cl, size_t block_for, size_t target_count_for_cl, storage_proxy::clock_type::time_point timeout)
+        : abstract_read_resolver(std::move(schema), cl, 0, timeout)
+        , _proxy(std::move(proxy))
+        , _block_for(block_for)
+        , _target_count_for_cl(target_count_for_cl)
+    {}
     void add_data(gms::inet_address from, foreign_ptr<lw_shared_ptr<query::result>> result) {
         if (!_request_failed) {
             // if only one target was queried digest_check() will be skipped so we can also skip digest calculation
@@ -3959,7 +3964,7 @@ public:
             // Return an empty result in this case
             return make_ready_future<result<foreign_ptr<lw_shared_ptr<query::result>>>>(make_foreign(make_lw_shared(query::result())));
         }
-        digest_resolver_ptr digest_resolver = ::make_shared<digest_read_resolver>(_schema, _cl, _block_for,
+        digest_resolver_ptr digest_resolver = ::make_shared<digest_read_resolver>(_proxy, _schema, _cl, _block_for,
                 db::is_datacenter_local(_cl) ? db::count_local_endpoints(_targets): _targets.size(), timeout);
         auto exec = shared_from_this();
 
