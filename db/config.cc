@@ -1042,7 +1042,7 @@ const db::extensions& db::config::extensions() const {
     return *_extensions;
 }
 
-std::unordered_map<sstring, db::experimental_features_t::feature> db::experimental_features_t::map() {
+std::map<sstring, db::experimental_features_t::feature> db::experimental_features_t::map() {
     // We decided against using the construct-on-first-use idiom here:
     // https://github.com/scylladb/scylla/pull/5369#discussion_r353614807
     // Features which are no longer experimental are mapped
