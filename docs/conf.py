@@ -99,8 +99,8 @@ html_theme = "sphinx_scylladb_theme"
 html_theme_options = {
     "conf_py_path": "docs/",
     "hide_edit_this_page_button": "false",
-    "github_issues_repository": "scylladb/scylla",
-    "github_repository": "scylladb/scylla",
+    "github_issues_repository": "scylladb/scylladb",
+    "github_repository": "scylladb/scylladb",
     "hide_version_dropdown": ["master"],
     "versions_unstable": UNSTABLE_VERSIONS,
     "versions_deprecated": DEPRECATED_VERSIONS,
