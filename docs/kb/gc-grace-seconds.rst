@@ -23,7 +23,7 @@ In addition, you should follow the procedure below in order to avoid data resurr
 
 Resolution
 ----------
-#. Run a `full repair <https://manager.docs.scylladb.com/stable/repair/index.html>`_ for the table in question.
+#. Run a `full repair <https://manager.docs.scylladb.com/stable/repair>`_ for the table in question.
 #. Change the ``gc_grace_seconds`` value for the table using the :ref:`ALTER table <alter-table-statement>` command.
 #. Verify that the schema is in sync after the change by issuing :doc:`nodetool describecluster </operating-scylla/nodetool-commands/describecluster>` command from all nodes.
    Verify that only a single schema version is reported. Read the :doc:`Schema Mismatch Troubleshooting Guide </troubleshooting/error-messages/schema-mismatch>` if it's not the case.
