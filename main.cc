@@ -434,6 +434,39 @@ static int scylla_main(int ac, char** av) {
         exit(1);
     }
 
+    // Even on the environment which causes error during initalize Scylla,
+    // "scylla --version" should be able to run without error.
+    // To do so, we need to parse and execute these options before
+    // initializing Scylla/Seastar classes.
+    bpo::options_description preinit_description("Scylla options");
+    bpo::variables_map preinit_vm;
+    preinit_description.add_options()
+        ("version", bpo::bool_switch(), "print version number and exit")
+        ("build-id", bpo::bool_switch(), "print build-id and exit")
+        ("build-mode", bpo::bool_switch(), "print build mode and exit")
+        ("list-tools", bpo::bool_switch(), "list included tools and exit");
+    auto preinit_parsed_opts = bpo::command_line_parser(ac, av).options(preinit_description).allow_unregistered().run();
+    bpo::store(preinit_parsed_opts, preinit_vm);
+    if (preinit_vm["version"].as<bool>()) {
+        fmt::print("{}\n", scylla_version());
+        return 0;
+    }
+    if (preinit_vm["build-id"].as<bool>()) {
+        fmt::print("{}\n", get_build_id());
+        return 0;
+    }
+    if (preinit_vm["build-mode"].as<bool>()) {
+        fmt::print("{}\n", scylla_build_mode());
+        return 0;
+    }
+    if (preinit_vm["list-tools"].as<bool>()) {
+        fmt::print(
+                "types - a command-line tool to examine values belonging to scylla types\n"
+                "sstable - a multifunctional command-line tool to examine the content of sstables\n"
+        );
+        return 0;
+    }
+
   try {
     runtime::init_uptime();
     std::setvbuf(stdout, nullptr, _IOLBF, 1000);
@@ -489,26 +522,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     bpo::variables_map vm;
     auto parsed_opts = bpo::command_line_parser(ac, av).options(app.get_options_description()).allow_unregistered().run();
     bpo::store(parsed_opts, vm);
-    if (vm["version"].as<bool>()) {
-        fmt::print("{}\n", scylla_version());
-        return 0;
-    }
-    if (vm["build-id"].as<bool>()) {
-        fmt::print("{}\n", get_build_id());
-        return 0;
-    }
-    if (vm["build-mode"].as<bool>()) {
-        fmt::print("{}\n", scylla_build_mode());
-        return 0;
-    }
-    if (vm["list-tools"].as<bool>()) {
-        fmt::print(
-                "types - a command-line tool to examine values belonging to scylla types\n"
-                "sstable - a multifunctional command-line tool to examine the content of sstables\n"
-        );
-        return 0;
-    }
-
     print_starting_message(ac, av, parsed_opts);
 
     sharded<locator::shared_token_metadata> token_metadata;
