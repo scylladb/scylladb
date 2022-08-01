@@ -10,6 +10,11 @@
 /stable/upgrade/upgrade-monitor/upgrade-guide-from-monitoring-2.x-to-monitoring-3.y.html: https://monitoring.docs.scylladb.com/stable/upgrade/upgrade-guide-from-monitoring-2.x-to-monitoring-3.y.html
 /stable/upgrade/upgrade-monitor/upgrade-guide-from-monitoring-3.x-to-monitoring-3.y.html: https://monitoring.docs.scylladb.com/stable/upgrade/upgrade-guide-from-monitoring-3.x-to-monitoring-3.y.html
 
+# removing the old Operator documentation from the ScyllaDB docs
+
+/stable/operating-scylla/scylla-operator/index.html: https://operator.docs.scylladb.com/stable/
+
+
 ### moving the CQL reference files to the new cql folder
 
 /stable/getting-started/ddl.html: /stable/cql/ddl.html

@@ -14,7 +14,6 @@
 import pytest
 from util import new_test_table, new_type, user_type
 from cassandra.protocol import InvalidRequest
-from cassandra.query import SimpleStatement
 
 # Test that in a table with multiple clustering-key columns, we can have
 # multi-column restrictions on involving various legal combinations of
@@ -155,17 +154,3 @@ def test_restriction_token_and_nontoken(cql, test_keyspace):
         # This reproduces issue #4244.
         result = list(cql.execute(f"SELECT p,c FROM {table} WHERE token(p) <= {sometoken} AND p = {somep}"))
         assert result == [(somep,0), (somep,1)]
-
-
-# Regression test for #9482
-def test_scan_ending_with_static_row(cql, test_keyspace):
-    with new_test_table(cql, test_keyspace, "pk int, ck int, s int STATIC, v int, PRIMARY KEY (pk, ck)") as table:
-        stmt = cql.prepare(f"UPDATE {table} SET s = ? WHERE pk = ?")
-        for pk in range(100):
-            cql.execute(stmt, (0, pk))
-
-        statement = SimpleStatement(f"SELECT * FROM {table}", fetch_size=10)
-        # This will trigger an error in either processing or building the query
-        # results. The success criteria for this test is the query finishing
-        # without errors.
-        res = list(cql.execute(statement))
