@@ -57,12 +57,15 @@ def scylla_data_dir(cql):
 
 def simple_no_clustering_table(cql, keyspace):
     table = util.unique_name()
-    schema = f"CREATE TABLE {keyspace}.{table} (pk int PRIMARY KEY , v int)"
+    schema = f"CREATE TABLE {keyspace}.{table} (pk int PRIMARY KEY , v int) WITH compaction = {{'class': 'NullCompactionStrategy'}}"
 
     cql.execute(schema)
 
     for pk in range(0, 10):
         cql.execute(f"INSERT INTO {keyspace}.{table} (pk, v) VALUES ({pk}, 0)")
+
+        if pk == 5:
+            nodetool.flush(cql, f"{keyspace}.{table}")
 
     nodetool.flush(cql, f"{keyspace}.{table}")
 
@@ -71,13 +74,15 @@ def simple_no_clustering_table(cql, keyspace):
 
 def simple_clustering_table(cql, keyspace):
     table = util.unique_name()
-    schema = f"CREATE TABLE {keyspace}.{table} (pk int, ck int, v int, PRIMARY KEY (pk, ck))"
+    schema = f"CREATE TABLE {keyspace}.{table} (pk int, ck int, v int, PRIMARY KEY (pk, ck)) WITH compaction = {{'class': 'NullCompactionStrategy'}}"
 
     cql.execute(schema)
 
     for pk in range(0, 10):
         for ck in range(0, 10):
             cql.execute(f"INSERT INTO {keyspace}.{table} (pk, ck, v) VALUES ({pk}, {ck}, 0)")
+        if pk == 5:
+            nodetool.flush(cql, f"{keyspace}.{table}")
 
     nodetool.flush(cql, f"{keyspace}.{table}")
 
@@ -86,7 +91,7 @@ def simple_clustering_table(cql, keyspace):
 
 def clustering_table_with_collection(cql, keyspace):
     table = util.unique_name()
-    schema = f"CREATE TABLE {keyspace}.{table} (pk int, ck int, v map<int, text>, PRIMARY KEY (pk, ck))"
+    schema = f"CREATE TABLE {keyspace}.{table} (pk int, ck int, v map<int, text>, PRIMARY KEY (pk, ck)) WITH compaction = {{'class': 'NullCompactionStrategy'}}"
 
     cql.execute(schema)
 
@@ -95,6 +100,8 @@ def clustering_table_with_collection(cql, keyspace):
             map_vals = {f"{p}: '{c}'" for p in range(0, pk) for c in range(0, ck)}
             map_str = ", ".join(map_vals)
             cql.execute(f"INSERT INTO {keyspace}.{table} (pk, ck, v) VALUES ({pk}, {ck}, {{{map_str}}})")
+        if pk == 5:
+            nodetool.flush(cql, f"{keyspace}.{table}")
 
     nodetool.flush(cql, f"{keyspace}.{table}")
 
@@ -104,7 +111,7 @@ def clustering_table_with_collection(cql, keyspace):
 def clustering_table_with_udt(cql, keyspace):
     table = util.unique_name()
     create_type_schema = f"CREATE TYPE IF NOT EXISTS {keyspace}.type1 (f1 int, f2 text)"
-    create_table_schema = f" CREATE TABLE {keyspace}.{table} (pk int, ck int, v type1, PRIMARY KEY (pk, ck))"
+    create_table_schema = f" CREATE TABLE {keyspace}.{table} (pk int, ck int, v type1, PRIMARY KEY (pk, ck)) WITH compaction = {{'class': 'NullCompactionStrategy'}}"
 
     cql.execute(create_type_schema)
     cql.execute(create_table_schema)
@@ -112,6 +119,8 @@ def clustering_table_with_udt(cql, keyspace):
     for pk in range(0, 10):
         for ck in range(0, 10):
             cql.execute(f"INSERT INTO {keyspace}.{table} (pk, ck, v) VALUES ({pk}, {ck}, {{f1: 100, f2: 'asd'}})")
+        if pk == 5:
+            nodetool.flush(cql, f"{keyspace}.{table}")
 
     nodetool.flush(cql, f"{keyspace}.{table}")
 
@@ -120,13 +129,15 @@ def clustering_table_with_udt(cql, keyspace):
 
 def table_with_counters(cql, keyspace):
     table = util.unique_name()
-    schema = f"CREATE TABLE {keyspace}.{table} (pk int PRIMARY KEY, v counter)"
+    schema = f"CREATE TABLE {keyspace}.{table} (pk int PRIMARY KEY, v counter) WITH compaction = {{'class': 'NullCompactionStrategy'}}"
 
     cql.execute(schema)
 
     for pk in range(0, 10):
         for c in range(0, 4):
             cql.execute(f"UPDATE {keyspace}.{table} SET v = v + 1 WHERE pk = {pk};")
+        if pk == 5:
+            nodetool.flush(cql, f"{keyspace}.{table}")
 
     nodetool.flush(cql, f"{keyspace}.{table}")
 
@@ -151,10 +162,12 @@ def scylla_sstable(table_factory, cql, ks, data_dir):
 
 
 def one_sstable(sstables):
+    assert len(sstables) > 1
     return [sstables[0]]
 
 
 def all_sstables(sstables):
+    assert len(sstables) > 1
     return sstables
 
 
