@@ -155,6 +155,9 @@ void cache_tracker::clear() {
         _memtable_cleaner.clear();
         current_tracker = this;
         _lru.evict_all();
+        // Eviction could have produced garbage.
+        _garbage.clear();
+        _memtable_cleaner.clear();
     });
     _stats.partition_removals += partitions_before;
     _stats.row_removals += rows_before;
