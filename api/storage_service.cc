@@ -11,6 +11,7 @@
 #include "db/config.hh"
 #include "db/schema_tables.hh"
 #include "utils/hash.hh"
+#include <optional>
 #include <sstream>
 #include <time.h>
 #include <algorithm>
@@ -1266,6 +1267,13 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 }
 
+enum class scrub_status {
+    successful = 0,
+    aborted,
+    unable_to_cancel,   // Not used in Scylla, included to ensure compability with nodetool api.
+    validation_errors,
+};
+
 void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_ctl) {
     ss::get_snapshot_details.set(r, [&snap_ctl](std::unique_ptr<request> req) {
         return snap_ctl.local().get_snapshot_details().then([] (std::unordered_map<sstring, std::vector<db::snapshot_ctl::snapshot_details>>&& result) {
@@ -1409,16 +1417,35 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         } else {
             throw httpd::bad_param_exception(fmt::format("Unknown argument for 'quarantine_mode' parameter: {}", quarantine_mode_str));
         }
-        return f.then([&ctx, keyspace, column_families, opts] {
-            return ctx.db.invoke_on_all([=] (replica::database& db) {
-                return do_for_each(column_families, [=, &db](sstring cfname) {
+
+        const auto& reduce_compaction_stats = [] (const compaction_manager::compaction_stats_opt& lhs, const compaction_manager::compaction_stats_opt& rhs) {
+            sstables::compaction_stats stats{};
+            stats += lhs.value();
+            stats += rhs.value();
+            return stats;
+        };
+
+        return f.then([&ctx, keyspace, column_families, opts, &reduce_compaction_stats] {
+            return ctx.db.map_reduce0([=] (replica::database& db) {
+                return map_reduce(column_families, [=, &db] (sstring cfname) {
                     auto& cm = db.get_compaction_manager();
                     auto& cf = db.find_column_family(keyspace, cfname);
                     return cm.perform_sstable_scrub(cf.as_table_state(), opts);
-                });
-            });
-        }).then([]{
-            return make_ready_future<json::json_return_type>(0);
+                }, std::make_optional(sstables::compaction_stats{}), reduce_compaction_stats);
+            }, std::make_optional(sstables::compaction_stats{}), reduce_compaction_stats);
+        }).then_wrapped([] (auto f) {
+            if (f.failed()) {
+                auto ex = f.get_exception();
+                if (try_catch<sstables::compaction_aborted_exception>(ex)) {
+                    return make_ready_future<json::json_return_type>(static_cast<int>(scrub_status::aborted));
+                } else {
+                    return make_exception_future<json::json_return_type>(std::move(ex));
+                }
+            } else if (f.get()->validation_errors) {
+                return make_ready_future<json::json_return_type>(static_cast<int>(scrub_status::validation_errors));
+            } else {
+                return make_ready_future<json::json_return_type>(static_cast<int>(scrub_status::successful));
+            }
         });
     });
 }

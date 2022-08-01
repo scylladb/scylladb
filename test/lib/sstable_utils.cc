@@ -218,16 +218,18 @@ public:
     { }
 
 protected:
-    virtual future<> do_run() override {
+    virtual future<compaction_manager::compaction_stats_opt> do_run() override {
         setup_new_compaction(_run_id);
-        return _job(_compaction_data);
+        return _job(_compaction_data).then([] {
+            return make_ready_future<compaction_stats_opt>(std::nullopt);
+        });
     }
 };
 
 future<> compaction_manager_test::run(utils::UUID output_run_id, replica::column_family* cf, noncopyable_function<future<> (sstables::compaction_data&)> job) {
     auto task = make_shared<compaction_manager::compaction_manager_test_task>(_cm, cf, output_run_id, std::move(job));
     auto& cdata = register_compaction(task);
-    return task->run().finally([this, &cdata] {
+    return task->run().discard_result().finally([this, &cdata] {
         deregister_compaction(cdata);
     });
 }

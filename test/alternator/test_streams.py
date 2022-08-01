@@ -10,7 +10,7 @@ import time
 import urllib.request
 
 from botocore.exceptions import ClientError
-from util import list_tables, unique_table_name, create_test_table, random_string, freeze
+from alternator_util import list_tables, unique_table_name, create_test_table, random_string, freeze
 from contextlib import contextmanager
 from urllib.error import URLError
 from boto3.dynamodb.types import TypeDeserializer

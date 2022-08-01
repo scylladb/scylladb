@@ -903,8 +903,8 @@ void validate_operation(schema_ptr schema, reader_permit permit, const std::vect
         if (sst) {
             sst_log.info("validating {}", sst->get_filename());
         }
-        const auto valid = sstables::scrub_validate_mode_validate_reader(std::move(rd), info).get();
-        sst_log.info("validated {}: {}", sst ? sst->get_filename() : "the stream", valid ? "valid" : "invalid");
+        const auto errors = sstables::scrub_validate_mode_validate_reader(std::move(rd), info).get();
+        sst_log.info("validated {}: {}", sst ? sst->get_filename() : "the stream", errors == 0 ? "valid" : "invalid");
         return stop_iteration::no;
     });
 }

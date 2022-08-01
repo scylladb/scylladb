@@ -28,7 +28,7 @@
 import pytest
 from botocore.exceptions import ClientError
 from decimal import Decimal
-from util import random_string, client_no_transform
+from alternator_util import random_string, client_no_transform
 
 # Monkey-patch the boto3 library to stop doing its own error-checking on
 # numbers. This works around a bug https://github.com/boto/boto3/issues/2500

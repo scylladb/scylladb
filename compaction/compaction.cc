@@ -26,6 +26,7 @@
 #include <seastar/core/scheduling.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/util/closeable.hh>
+#include <seastar/core/shared_ptr.hh>
 
 #include "sstables/sstables.hh"
 #include "sstables/sstable_writer.hh"
@@ -47,6 +48,7 @@
 #include "utils/UUID_gen.hh"
 #include "utils/utf8.hh"
 #include "utils/fmt-compat.hh"
+#include "utils/error_injection.hh"
 #include "readers/filtering.hh"
 #include "readers/compacting.hh"
 #include "tombstone_gc.hh"
@@ -726,13 +728,15 @@ private:
     virtual bool use_interposer_consumer() const {
         return _table_s.get_compaction_strategy().use_interposer_consumer();
     }
-
-    compaction_result finish(std::chrono::time_point<db_clock> started_at, std::chrono::time_point<db_clock> ended_at) {
+protected:
+    virtual compaction_result finish(std::chrono::time_point<db_clock> started_at, std::chrono::time_point<db_clock> ended_at) {
         compaction_result ret {
             .new_sstables = std::move(_all_new_sstables),
-            .ended_at = ended_at,
-            .start_size = _start_size,
-            .end_size = _end_size,
+            .stats {
+                .ended_at = ended_at,
+                .start_size = _start_size,
+                .end_size = _end_size,
+            },
         };
 
         auto ratio = double(_end_size) / double(_start_size);
@@ -756,7 +760,7 @@ private:
 
         return ret;
     }
-
+private:
     void on_interrupt(std::exception_ptr ex) {
         log_info("{} of {} sstables interrupted due to: {}", report_start_desc(), _input_sstable_generations.size(), ex);
         delete_sstables_for_interrupted_compaction();
@@ -1242,12 +1246,14 @@ private:
         flat_mutation_reader_v2 _reader;
         mutation_fragment_stream_validator _validator;
         bool _skip_to_next_partition = false;
+        uint64_t& _validation_errors;
 
     private:
         void maybe_abort_scrub() {
             if (_scrub_mode == compaction_type_options::scrub::mode::abort) {
                 throw compaction_aborted_exception(_schema->ks_name(), _schema->cf_name(), "scrub compaction found invalid data");
             }
+            ++_validation_errors;
         }
 
         void on_unexpected_partition_start(const mutation_fragment_v2& ps) {
@@ -1328,6 +1334,7 @@ private:
         }
 
         void fill_buffer_from_underlying() {
+            utils::get_local_injector().inject("rest_api_keyspace_scrub_abort", [] { throw compaction_aborted_exception("", "", "scrub compaction found invalid data"); });
             while (!_reader.is_buffer_empty() && !is_buffer_full()) {
                 auto mf = _reader.pop_mutation_fragment();
                 if (mf.is_partition_start()) {
@@ -1367,11 +1374,12 @@ private:
         }
 
     public:
-        reader(flat_mutation_reader_v2 underlying, compaction_type_options::scrub::mode scrub_mode)
+        reader(flat_mutation_reader_v2 underlying, compaction_type_options::scrub::mode scrub_mode, uint64_t& validation_errors)
             : impl(underlying.schema(), underlying.permit())
             , _scrub_mode(scrub_mode)
             , _reader(std::move(underlying))
             , _validator(*_schema)
+            , _validation_errors(validation_errors)
         { }
         virtual future<> fill_buffer() override {
             if (_end_of_stream) {
@@ -1419,6 +1427,7 @@ private:
     std::string _scrub_start_description;
     mutable std::string _scrub_finish_description;
     uint64_t _bucket_count = 0;
+    mutable uint64_t _validation_errors = 0;
 
 public:
     scrub_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata, compaction_type_options::scrub options)
@@ -1441,7 +1450,7 @@ public:
 
     flat_mutation_reader_v2 make_sstable_reader() const override {
         auto crawling_reader = _compacting->make_crawling_reader(_schema, _permit, _io_priority, nullptr);
-        return make_flat_mutation_reader_v2<reader>(std::move(crawling_reader), _options.operation_mode);
+        return make_flat_mutation_reader_v2<reader>(std::move(crawling_reader), _options.operation_mode, _validation_errors);
     }
 
     uint64_t partitions_per_sstable() const override {
@@ -1472,11 +1481,17 @@ public:
         return _options.operation_mode == compaction_type_options::scrub::mode::segregate;
     }
 
-    friend flat_mutation_reader_v2 make_scrubbing_reader(flat_mutation_reader_v2 rd, compaction_type_options::scrub::mode scrub_mode);
+    compaction_result finish(std::chrono::time_point<db_clock> started_at, std::chrono::time_point<db_clock> ended_at) override {
+        auto ret = compaction::finish(started_at, ended_at);
+        ret.stats.validation_errors = _validation_errors;
+        return ret;
+    }
+
+    friend flat_mutation_reader_v2 make_scrubbing_reader(flat_mutation_reader_v2 rd, compaction_type_options::scrub::mode scrub_mode, uint64_t& validation_errors);
 };
 
-flat_mutation_reader_v2 make_scrubbing_reader(flat_mutation_reader_v2 rd, compaction_type_options::scrub::mode scrub_mode) {
-    return make_flat_mutation_reader_v2<scrub_compaction::reader>(std::move(rd), scrub_mode);
+flat_mutation_reader_v2 make_scrubbing_reader(flat_mutation_reader_v2 rd, compaction_type_options::scrub::mode scrub_mode, uint64_t& validation_errors) {
+    return make_flat_mutation_reader_v2<scrub_compaction::reader>(std::move(rd), scrub_mode, validation_errors);
 }
 
 class resharding_compaction final : public compaction {
@@ -1634,10 +1649,10 @@ static std::unique_ptr<compaction> make_compaction(table_state& table_s, sstable
     return descriptor.options.visit(visitor_factory);
 }
 
-future<bool> scrub_validate_mode_validate_reader(flat_mutation_reader_v2 reader, const compaction_data& cdata) {
+future<uint64_t> scrub_validate_mode_validate_reader(flat_mutation_reader_v2 reader, const compaction_data& cdata) {
     auto schema = reader.schema();
 
-    bool valid = true;
+    uint64_t errors = 0;
     std::exception_ptr ex;
 
     try {
@@ -1656,24 +1671,24 @@ future<bool> scrub_validate_mode_validate_reader(flat_mutation_reader_v2 reader,
                 if (!validator(mf)) {
                     scrub_compaction::report_invalid_partition_start(compaction_type::Scrub, validator, ps.key());
                     validator.reset(mf);
-                    valid = false;
+                    ++errors;
                 }
                 if (!validator(ps.key())) {
                     scrub_compaction::report_invalid_partition(compaction_type::Scrub, validator, ps.key());
                     validator.reset(ps.key());
-                    valid = false;
+                    ++errors;
                 }
             } else {
                 if (!validator(mf)) {
                     scrub_compaction::report_invalid_mutation_fragment(compaction_type::Scrub, validator, mf);
                     validator.reset(mf);
-                    valid = false;
+                    ++errors;
                 }
             }
         }
         if (!validator.on_end_of_stream()) {
             scrub_compaction::report_invalid_end_of_stream(compaction_type::Scrub, validator);
-            valid = false;
+            ++errors;
         }
     } catch (...) {
         ex = std::current_exception();
@@ -1685,7 +1700,7 @@ future<bool> scrub_validate_mode_validate_reader(flat_mutation_reader_v2 reader,
         co_return coroutine::exception(std::move(ex));
     }
 
-    co_return valid;
+    co_return errors;
 }
 
 static future<compaction_result> scrub_sstables_validate_mode(sstables::compaction_descriptor descriptor, compaction_data& cdata, table_state& table_s) {
@@ -1703,11 +1718,11 @@ static future<compaction_result> scrub_sstables_validate_mode(sstables::compacti
     auto permit = table_s.make_compaction_reader_permit();
     auto reader = sstables->make_crawling_reader(schema, permit, descriptor.io_priority, nullptr);
 
-    const auto valid = co_await scrub_validate_mode_validate_reader(std::move(reader), cdata);
+    const auto validation_errors = co_await scrub_validate_mode_validate_reader(std::move(reader), cdata);
 
-    clogger.info("Finished scrubbing in validate mode {} - sstable(s) are {}", sstables_list_msg, valid ? "valid" : "invalid");
+    clogger.info("Finished scrubbing in validate mode {} - sstable(s) are {}", sstables_list_msg, validation_errors == 0 ? "valid" : "invalid");
 
-    if (!valid) {
+    if (validation_errors != 0) {
         for (auto& sst : *sstables->all()) {
             co_await sst->move_to_quarantine();
         }
@@ -1715,7 +1730,10 @@ static future<compaction_result> scrub_sstables_validate_mode(sstables::compacti
 
     co_return compaction_result {
         .new_sstables = {},
-        .ended_at = db_clock::now(),
+        .stats = {
+            .ended_at = db_clock::now(),
+            .validation_errors = validation_errors,
+        },
     };
 }
 

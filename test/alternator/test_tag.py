@@ -12,7 +12,7 @@ import pytest
 from botocore.exceptions import ClientError
 import re
 import time
-from util import multiset, create_test_table, unique_table_name, random_string
+from alternator_util import multiset, create_test_table, unique_table_name, random_string
 from packaging.version import Version
 
 def delete_tags(table, arn):
