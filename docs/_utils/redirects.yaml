@@ -14,7 +14,7 @@
 
 /stable/operating-scylla/scylla-operator/index.html: https://operator.docs.scylladb.com/stable/
 
-### removing the old Monitoring Stack documentation from the ScyllaDB docs
+### removing the old Scylla Manager documentation from the ScyllaDB docs
 
 /stable/operating-scylla/manager/index.html: https://manager.docs.scylladb.com/
 /stable/upgrade/upgrade-manager/index.html: https://manager.docs.scylladb.com/stable/upgrade/index.html
