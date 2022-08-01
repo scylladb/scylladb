@@ -89,8 +89,6 @@ To upgrade:
        sudo yum remove scylla\*
        sudo yum install scylla-enterprise 
        for conf in $( rpm -qc $(rpm -qa | grep scylla) | grep -v contains ) /etc/systemd/system/{var-lib-scylla,var-lib-systemd-coredump}.mount; do sudo cp -v $conf.backup-5.0 $conf; done
-
-   CentOS only:
    
    If you use a cloud image with a preinstalled version of ScyllaDB (for example, AMI), you need to install an additional 
    package ``scylla-enterprise-machine-image`` with the ``sudo yum install scylla-enterprise-machine-image`` command.
