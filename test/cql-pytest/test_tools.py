@@ -6,6 +6,7 @@
 # Tests for the tools hosted by scylla
 #############################################################################
 
+import contextlib
 import glob
 import json
 import nodetool
@@ -132,26 +133,20 @@ def table_with_counters(cql, keyspace):
     return table, schema
 
 
-@pytest.fixture(scope="module", params=[
-        simple_no_clustering_table,
-        simple_clustering_table,
-        clustering_table_with_collection,
-        clustering_table_with_udt,
-        table_with_counters,
-])
-def scylla_sstable(request, cql, test_keyspace, scylla_path, scylla_data_dir):
-    table, schema = request.param(cql, test_keyspace)
+@contextlib.contextmanager
+def scylla_sstable(table_factory, cql, ks, data_dir):
+    table, schema = table_factory(cql, ks)
 
-    schema_file = os.path.join(scylla_data_dir, "..", "test_tools_schema.cql")
+    schema_file = os.path.join(data_dir, "..", "test_tools_schema.cql")
     with open(schema_file, "w") as f:
         f.write(schema)
 
-    sstables = glob.glob(os.path.join(scylla_data_dir, test_keyspace, table + '-*', '*-Data.db'))
+    sstables = glob.glob(os.path.join(data_dir, ks, table + '-*', '*-Data.db'))
 
     try:
-        yield (scylla_path, schema_file, sstables)
+        yield (schema_file, sstables)
     finally:
-        cql.execute(f"DROP TABLE {test_keyspace}.{table}")
+        cql.execute(f"DROP TABLE {ks}.{table}")
         os.unlink(schema_file)
 
 
@@ -165,10 +160,9 @@ def all_sstables(sstables):
 
 @pytest.mark.parametrize("what", ["index", "compression-info", "summary", "statistics", "scylla-metadata"])
 @pytest.mark.parametrize("which_sstables", [one_sstable, all_sstables])
-def test_scylla_sstable_dump(scylla_sstable, what, which_sstables):
-    (scylla_path, schema_file, sstables) = scylla_sstable
-
-    out = subprocess.check_output([scylla_path, "sstable", f"dump-{what}", "--schema-file", schema_file] + which_sstables(sstables))
+def test_scylla_sstable_dump_component(cql, test_keyspace, scylla_path, scylla_data_dir, what, which_sstables):
+    with scylla_sstable(simple_clustering_table, cql, test_keyspace, scylla_data_dir) as (schema_file, sstables):
+        out = subprocess.check_output([scylla_path, "sstable", f"dump-{what}", "--schema-file", schema_file] + which_sstables(sstables))
 
     print(out)
 
@@ -176,15 +170,21 @@ def test_scylla_sstable_dump(scylla_sstable, what, which_sstables):
     assert json.loads(out)
 
 
+@pytest.mark.parametrize("table_factory", [
+        simple_no_clustering_table,
+        simple_clustering_table,
+        clustering_table_with_collection,
+        clustering_table_with_udt,
+        table_with_counters,
+])
 @pytest.mark.parametrize("merge", [True, False])
 @pytest.mark.parametrize("output_format", ["text", "json"])
-def test_scylla_sstable_dump_merge(scylla_sstable, merge, output_format):
-    (scylla_path, schema_file, sstables) = scylla_sstable
-
-    args = [scylla_path, "sstable", "dump-data", "--schema-file", schema_file, "--output-format", output_format]
-    if merge:
-        args.append("--merge")
-    out = subprocess.check_output(args + sstables)
+def test_scylla_sstable_dump_data(cql, test_keyspace, scylla_path, scylla_data_dir, table_factory, merge, output_format):
+    with scylla_sstable(simple_clustering_table, cql, test_keyspace, scylla_data_dir) as (schema_file, sstables):
+        args = [scylla_path, "sstable", "dump-data", "--schema-file", schema_file, "--output-format", output_format]
+        if merge:
+            args.append("--merge")
+        out = subprocess.check_output(args + sstables)
 
     print(out)
 
