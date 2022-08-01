@@ -98,16 +98,12 @@ To upgrade:
     Answer ‘y’ to the first two questions.
 
     If you use a cloud image with a preinstalled version of ScyllaDB (for example, AMI), you need to install an additional 
-    package ``scylla-enterprise-machine-image`` with the ``sudo apt-get install scylla-enterprise-machine-image`` command:
+    package ``scylla-enterprise-machine-image`` with the ``sudo apt-get install scylla-enterprise-machine-image`` command
+    before reloading systemd files:
 
     .. code:: sh
 
-       sudo apt-get clean all
-       sudo apt-get update
-       sudo apt-get remove scylla\*
        sudo apt-get install scylla-enterprise-machine-image
-       sudo apt-get install scylla-enterprise
-       for conf in $(cat /var/lib/dpkg/info/scylla-*server.conffiles /var/lib/dpkg/info/scylla-*conf.conffiles /var/lib/dpkg/info/scylla-*jmx.conffiles | grep -v init ) /etc/systemd/system/{var-lib-scylla,var-lib-systemd-coredump}.mount; do sudo cp -v $conf.backup-5.0 $conf; done
        sudo systemctl daemon-reload
 
 Start the node
