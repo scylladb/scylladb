@@ -50,9 +50,9 @@ private:
      */
     // FIXME: have to be BiMultiValMap
     std::unordered_map<token, inet_address> _token_to_endpoint_map;
-    // Track the number of nodes in _token_to_endpoint_map. Need to update
-    // _nr_normal_token_owners when _token_to_endpoint_map is updated.
-    size_t _nr_normal_token_owners;
+
+    // Track the unique set of nodes in _token_to_endpoint_map
+    std::unordered_set<inet_address> _normal_token_owners;
 
     /** Maintains endpoint to host ID map of every node in the cluster */
     std::unordered_map<inet_address, utils::UUID> _endpoint_to_host_id_map;
@@ -271,16 +271,15 @@ public:
     // node that is still joining the cluster, e.g., a node that is still
     // streaming data before it finishes the bootstrap process and turns into
     // NORMAL status.
-    std::vector<inet_address> get_all_endpoints() const {
-        auto tmp = boost::copy_range<std::unordered_set<gms::inet_address>>(_token_to_endpoint_map | boost::adaptors::map_values);
-        return std::vector<inet_address>(tmp.begin(), tmp.end());
+    const std::unordered_set<inet_address>& get_all_endpoints() const noexcept {
+        return _normal_token_owners;
     }
 
     /* Returns the number of different endpoints that own tokens in the ring.
      * Bootstrapping tokens are not taken into account. */
     size_t count_normal_token_owners() const;
 private:
-    void update_normal_token_owners();
+    future<> update_normal_token_owners();
 
 public:
     // returns empty vector if keyspace_name not found.
@@ -367,7 +366,7 @@ future<token_metadata_impl> token_metadata_impl::clone_only_token_map(bool clone
         return do_for_each(_token_to_endpoint_map, [&ret] (const auto& p) {
             ret._token_to_endpoint_map.emplace(p);
         }).then([this, &ret] {
-            ret._nr_normal_token_owners = _nr_normal_token_owners;
+            ret._normal_token_owners = _normal_token_owners;
             ret._endpoint_to_host_id_map = _endpoint_to_host_id_map;
         }).then([this, &ret] {
             ret._topology = _topology;
@@ -382,7 +381,7 @@ future<token_metadata_impl> token_metadata_impl::clone_only_token_map(bool clone
 
 future<> token_metadata_impl::clear_gently() noexcept {
     co_await utils::clear_gently(_token_to_endpoint_map);
-    update_normal_token_owners();
+    co_await utils::clear_gently(_normal_token_owners);
     co_await utils::clear_gently(_endpoint_to_host_id_map);
     co_await utils::clear_gently(_bootstrap_tokens);
     co_await utils::clear_gently(_leaving_endpoints);
@@ -482,7 +481,7 @@ future<> token_metadata_impl::update_normal_tokens(const std::unordered_map<inet
             }
         }
     }
-    update_normal_token_owners();
+    co_await update_normal_token_owners();
 
     // New tokens were added to _token_to_endpoint_map
     // so re-sort all tokens.
@@ -655,7 +654,7 @@ bool token_metadata_impl::is_any_node_being_replaced() const {
 void token_metadata_impl::remove_endpoint(inet_address endpoint) {
     remove_by_value(_bootstrap_tokens, endpoint);
     remove_by_value(_token_to_endpoint_map, endpoint);
-    update_normal_token_owners();
+    _normal_token_owners.erase(endpoint);
     _topology.remove_endpoint(endpoint);
     _leaving_endpoints.erase(endpoint);
     del_replacing_endpoint(endpoint);
@@ -913,15 +912,16 @@ future<> token_metadata_impl::update_pending_ranges(
 }
 
 size_t token_metadata_impl::count_normal_token_owners() const {
-    return _nr_normal_token_owners;
+    return _normal_token_owners.size();
 }
 
-void token_metadata_impl::update_normal_token_owners() {
+future<> token_metadata_impl::update_normal_token_owners() {
     std::unordered_set<inet_address> eps;
     for (auto [t, ep]: _token_to_endpoint_map) {
         eps.insert(ep);
+        co_await coroutine::maybe_yield();
     }
-    _nr_normal_token_owners = eps.size();
+    _normal_token_owners = std::move(eps);
 }
 
 void token_metadata_impl::add_leaving_endpoint(inet_address endpoint) {
@@ -1222,7 +1222,7 @@ token_metadata::get_predecessor(token t) const {
     return _impl->get_predecessor(t);
 }
 
-std::vector<inet_address>
+const std::unordered_set<inet_address>&
 token_metadata::get_all_endpoints() const {
     return _impl->get_all_endpoints();
 }

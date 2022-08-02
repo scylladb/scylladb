@@ -306,7 +306,7 @@ public:
 
     token get_predecessor(token t) const;
 
-    std::vector<inet_address> get_all_endpoints() const;
+    const std::unordered_set<inet_address>& get_all_endpoints() const;
 
     /* Returns the number of different endpoints that own tokens in the ring.
      * Bootstrapping tokens are not taken into account. */
