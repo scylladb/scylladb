@@ -13,8 +13,6 @@ Scylla for Administrators
    ScyllaDB Monitoring Stack <https://monitoring.docs.scylladb.com/>
    ScyllaDB Operator <https://operator.docs.scylladb.com/>
    ScyllaDB Manager <https://manager.docs.scylladb.com/>
-   Scylla Monitoring Stack <monitoring/index>
-   Scylla Operator <scylla-operator/index>
    Upgrade Procedures </upgrade/index>
    System Configuration <system-configuration/index>
    benchmarking-scylla
@@ -40,8 +38,7 @@ Scylla for Administrators
   * `ScyllaDB Monitoring Stack <https://monitoring.docs.scylladb.com/stable/>`_ - Tool for cluster monitoring and alerting
   * `ScyllaDB Operator <https://operator.docs.scylladb.com>`_ - Tool to run Scylla on Kubernetes
   * `ScyllaDB Manager <https://manager.docs.scylladb.com/>`_ - Tool for cluster administration and automation
-  * :doc:`Scylla Monitoring Stack </operating-scylla/monitoring/index>` - Tool for cluster monitoring and alerting
-  * :doc:`Scylla Operator </operating-scylla/scylla-operator/index>` - Tool to run Scylla on Kubernetes
+
   * :doc:`Scylla Logs </getting-started/logging/>`
 
 .. panel-box::
