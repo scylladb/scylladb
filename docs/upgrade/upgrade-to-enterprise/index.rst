@@ -6,6 +6,7 @@ Upgrade from Scylla Open Source to Scylla Enterprise
    :titlesonly:
    :hidden:
 
+   ScyllaDB 5.0 to ScyllaDB Enterprise 2022.1 <upgrade-guide-from-5.0-to-2022.1/index>
    Scylla 4.3 to Scylla Enterprise 2021.1 <upgrade-guide-from-4.3-to-2021.1/index>
    Scylla 4.0 to Scylla Enterprise 2020.1 <upgrade-guide-from-4.0-to-2020.1/index>
    Scylla 3.0 to Scylla Enterprise 2019.1 <upgrade-guide-from-3.0-to-2019.1/index>
@@ -27,6 +28,7 @@ Upgrade from Scylla Open Source to Scylla Enterprise
 Procedures for upgrading from Scylla Open Source to Scylla Enterprise.
 
 
+* :doc:`Upgrade - ScyllaDB 5.0 to Scylla Enterprise 2022.1 </upgrade/upgrade-to-enterprise/upgrade-guide-from-5.0-to-2022.1/index>`
 * :doc:`Upgrade - Scylla 4.3 to Scylla Enterprise 2021.1 </upgrade/upgrade-to-enterprise/upgrade-guide-from-4.3-to-2021.1/index>`
 * :doc:`Upgrade - Scylla 4.0 to Scylla Enterprise 2020.1 </upgrade/upgrade-to-enterprise/upgrade-guide-from-4.0-to-2020.1/index>`
 * :doc:`Upgrade - Scylla 3.0 to Scylla Enterprise 2019.1 </upgrade/upgrade-to-enterprise/upgrade-guide-from-3.0-to-2019.1/index>`
