@@ -14,8 +14,7 @@ Scylla Monitor and Manager
   :class: my-panel 
 
 
-* :doc:`Troubleshoot Monitoring </operating-scylla/monitoring/index>`
-
+* `Troubleshoot ScyllaDB Monitoring Stack <https://monitoring.docs.scylladb.com/stable/>`_.
 * :doc:`Troubleshooting guide for Scylla Manager and Scylla Monitoring integration </troubleshooting/manager-monitoring-integration>`
 * :doc:`Scylla Manager is reporting REST API status of healthy nodes as down </troubleshooting/reverse-dns-sshd>`
 

@@ -158,5 +158,5 @@ See Also
 
 * :doc:`sctool Reference <sctool>`
 * :doc:`Remove a node from a Scylla Cluster </operating-scylla/procedures/cluster-management/remove-node>` 
-* :doc:`Scylla Monitoring </operating-scylla/monitoring/index>`
+* `Scylla Monitoring <https://monitoring.docs.scylladb.com/stable/>`_
 

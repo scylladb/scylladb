@@ -177,15 +177,13 @@ For additional information:
 * `Backup <https://manager.docs.scylladb.com/branch-2.2/backup/index.html>`_
 * `Restore a Backup <https://manager.docs.scylladb.com/branch-2.2/restore/index.html>`_
 
-Scylla Monitor
-==============
+ScyllaDB Monitoring Stack
+============================
 
-Scylla Monitoring helps you monitor everything about your Scylla cluster. Scylla Support
+ScyllaDB Monitoring Stack helps you monitor everything about your ScyllaDB cluster. ScyllaDB Support team
 usually asks for your monitoring metrics when you open a ticket.
 
-For information see:
-
-* :doc:`Scylla Monitor </operating-scylla/monitoring/index>`
+See `ScyllaDB Monitoring Stack <https://monitoring.docs.scylladb.com/stable/>`_ for details.
 
 Configuration Management
 ========================

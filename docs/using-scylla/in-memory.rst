@@ -59,7 +59,7 @@ The following Prometheus metrics can be used to calculate memory usage:
 
 * ``in_memory_store_used_memory`` - this is the amount of RAM allocated to in-Memory which is currently in use. Subtracting these two values will give you the free in-Memory space.
 
-Both metrics are available in the latest Scylla Enterprise dashboard of the :doc:`Monitoring Scylla</operating-scylla/monitoring/index>` stack.
+Both metrics are available in the latest Scylla Enterprise dashboard of the `ScyllaDB Monitoring Stack <https://monitoring.docs.scylladb.com/stable/>`_ .
 
 Enable in-memory 
 ================

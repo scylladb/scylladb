@@ -11,7 +11,7 @@ The table is updated every time a partition is written and/or deleted,and includ
 
 Large Partitions can cause any of the following symptoms:
 
-* Longer latencies on a single shard (look at the “Scylla Overview Metrics” :doc:`Scylla Monitoring </operating-scylla/monitoring/index>` dashboard)
+* Longer latencies on a single shard (look at the "Scylla Overview Metrics" dashboard of `ScyllaDB Monitoring Stack <https://monitoring.docs.scylladb.com/stable/>`_).
 * Oversized allocation warning messages in the log (e.g. ``seastar_memory - oversized allocation: 2842624 bytes, please report``)
 
 If you are experiencing any of the above, search to see if you have large partitions. 

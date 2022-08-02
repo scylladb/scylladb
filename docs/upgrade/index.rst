@@ -10,7 +10,6 @@ Upgrade Scylla
    Scylla Open Source <upgrade-opensource/index>
    Scylla Open Source to Scylla Enterprise <upgrade-to-enterprise/index>
    Scylla Manager <upgrade-manager/index>
-   Scylla Monitoring <upgrade-monitor/index>
    Scylla AMI <ami-upgrade>
 
 .. raw:: html
@@ -32,8 +31,6 @@ Procedures for upgrading Scylla.
 * :doc:`Upgrade from Scylla Open Source to Scylla Enterprise <upgrade-to-enterprise/index>`
 
 * :doc:`Upgrade Scylla Manager <upgrade-manager/index>`
-
-* :doc:`Upgrade Scylla Monitoring Stack <upgrade-monitor/index>`
 
 * :doc:`Upgrade Scylla AMI <ami-upgrade>`
 

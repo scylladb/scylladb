@@ -37,7 +37,7 @@ See issue `#5804  <https://github.com/scylladb/scylla/issues/5804>`_ for more in
 .. note::
 
    Scylla monitoring dashboards detect reverse queries and display them on the CQL Optimization dashboard.
-   See :ref:`Reversed CQL Reads <monitoring-3.4-reversed-cql-reads>` for details.
+   See `Reversed CQL Reads <https://monitoring.docs.scylladb.com/stable/use-monitoring/cql_optimization.html#reversed-cql-reads>`_ for details.
 
 .. note::
    To figure out WHICH query is causing the failure, you might try the procedure described in :ref:`probabilistic tracing <tracing-probabilistic-tracing>`.

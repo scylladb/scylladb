@@ -14,7 +14,7 @@ While a minimal server can run on a system with 2 cores and 1GB RAM, the followi
 * **CPU** - 2vCPUs
 * **Memory** - 8GB+ DRAM
 
-.. note::  If you are running :doc:`Scylla Monitoring Stack </operating-scylla/monitoring/2.2/monitoring-stack>` on the same server as Scylla Manager, your system should also meet the minimal :doc:`Monitoring requirements </operating-scylla/monitoring/2.2/monitoring-stack>`.
+.. note::  If you are running `Scylla Monitoring Stack <https://monitoring.docs.scylladb.com/stable/>`_ on the same server as Scylla Manager, your system should also meet the minimal `Monitoring requirements <https://monitoring.docs.scylladb.com/stable/>`_.
 
 Installation workflow
 =====================

@@ -10,7 +10,7 @@ Scylla for Administrators
    security/index
    admin-tools/index
    manager/index
-   Scylla Monitoring Stack <monitoring/index>
+   ScyllaDB Monitoring Stack <https://monitoring.docs.scylladb.com/>
    ScyllaDB Operator <https://operator.docs.scylladb.com/>
    Upgrade Procedures </upgrade/index>
    System Configuration <system-configuration/index>
@@ -34,8 +34,8 @@ Scylla for Administrators
     
   * :doc:`Scylla Tools </operating-scylla/admin-tools/index>` - Tools for Administrating and integrating with Scylla
   * :doc:`Scylla Manager </operating-scylla/manager/index>` - Tool for cluster administration and automation
-  * :doc:`Scylla Monitoring Stack </operating-scylla/monitoring/index>` - Tool for cluster monitoring and alerting
-  *  `ScyllaDB Operator <https://operator.docs.scylladb.com>`_ - Tool to run Scylla on Kubernetes
+  * `ScyllaDB Monitoring Stack <https://monitoring.docs.scylladb.com/stable/>`_ - Tool for cluster monitoring and alerting
+  * `ScyllaDB Operator <https://operator.docs.scylladb.com>`_ - Tool to run Scylla on Kubernetes
   * :doc:`Scylla Logs </getting-started/logging/>`
 
 .. panel-box::

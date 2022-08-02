@@ -1,9 +1,19 @@
 ### a dictionary of redirections
 #old path: new path
 
+# removing the old Monitoring Stack documentation from the ScyllaDB docs
+
+/stable/operating-scylla/monitoring/index.html: https://monitoring.docs.scylladb.com/stable/
+/stable/upgrade/upgrade-monitor/index.html: https://monitoring.docs.scylladb.com/stable/upgrade/index.html
+/stable/upgrade/upgrade-monitor/upgrade-guide-from-monitoring-1.x-to-monitoring-2.x.html: https://monitoring.docs.scylladb.com/stable/upgrade/upgrade-guide-from-monitoring-1.x-to-monitoring-2.x.html
+/stable/upgrade/upgrade-monitor/upgrade-guide-from-monitoring-2.x-to-monitoring-2.y.html: https://monitoring.docs.scylladb.com/stable/upgrade/upgrade-guide-from-monitoring-2.x-to-monitoring-2.y.html
+/stable/upgrade/upgrade-monitor/upgrade-guide-from-monitoring-2.x-to-monitoring-3.y.html: https://monitoring.docs.scylladb.com/stable/upgrade/upgrade-guide-from-monitoring-2.x-to-monitoring-3.y.html
+/stable/upgrade/upgrade-monitor/upgrade-guide-from-monitoring-3.x-to-monitoring-3.y.html: https://monitoring.docs.scylladb.com/stable/upgrade/upgrade-guide-from-monitoring-3.x-to-monitoring-3.y.html
+
 # removing the old Operator documentation from the ScyllaDB docs
 
 /stable/operating-scylla/scylla-operator/index.html: https://operator.docs.scylladb.com/stable/
+
 
 ### moving the CQL reference files to the new cql folder
 
