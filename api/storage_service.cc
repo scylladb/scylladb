@@ -649,10 +649,11 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                     return db.find_column_family(id).get_stats().live_disk_space_used;
                 });
                 auto& cm = db.get_compaction_manager();
+                auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(db.get_keyspace_local_ranges(keyspace));
                 // as a table can be dropped during loop below, let's find it before issuing the cleanup request.
                 for (auto& id : table_ids) {
                     replica::table& t = db.find_column_family(id);
-                    co_await cm.perform_cleanup(db, t.as_table_state());
+                    co_await cm.perform_cleanup(owned_ranges_ptr, t.as_table_state());
                 }
                 co_return;
             }).then([]{
@@ -676,10 +677,11 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         bool exclude_current_version = req_param<bool>(*req, "exclude_current_version", false);
 
         return ctx.db.invoke_on_all([=] (replica::database& db) {
+            auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(db.get_keyspace_local_ranges(keyspace));
             return do_for_each(column_families, [=, &db](sstring cfname) {
                 auto& cm = db.get_compaction_manager();
                 auto& cf = db.find_column_family(keyspace, cfname);
-                return cm.perform_sstable_upgrade(db, cf.as_table_state(), exclude_current_version);
+                return cm.perform_sstable_upgrade(owned_ranges_ptr, cf.as_table_state(), exclude_current_version);
             });
         }).then([]{
             return make_ready_future<json::json_return_type>(0);

@@ -51,7 +51,7 @@ public:
     struct config {
         scheduling_group compaction_sched_group;
         scheduling_group maintenance_sched_group;
-        size_t available_memory;
+        size_t available_memory = 0;
         utils::updateable_value<float> static_shares = utils::updateable_value<float>(0);
         utils::updateable_value<uint32_t> throughput_mb_per_sec = utils::updateable_value<uint32_t>(0);
     };
@@ -282,16 +282,12 @@ private:
     timer<lowres_clock> _compaction_submission_timer = timer<lowres_clock>(compaction_submission_callback());
     static constexpr std::chrono::seconds periodic_compaction_submission_interval() { return std::chrono::seconds(3600); }
 
-    scheduling_group _compaction_sg;
-    scheduling_group _maintenance_sg;
+    config _cfg;
     compaction_controller _compaction_controller;
     compaction_backlog_manager _backlog_manager;
-    size_t _available_memory;
     optimized_optional<abort_source::subscription> _early_abort_subscription;
-    utils::updateable_value<uint32_t> _throughput_mbs;
-    serialized_action _throughput_updater = serialized_action([this] { return update_throughput(_throughput_mbs()); });
+    serialized_action _throughput_updater;
     std::optional<utils::observer<uint32_t>> _throughput_option_observer;
-    utils::updateable_value<float> _static_shares;
     serialized_action _update_compaction_static_shares_action;
     utils::observer<float> _compaction_static_shares_observer;
     uint64_t _validation_errors = 0;
@@ -370,6 +366,26 @@ public:
     // An inline constructor for testing
     compaction_manager(for_testing_tag) : compaction_manager() {}
 
+    const scheduling_group& compaction_sg() const noexcept {
+        return _cfg.compaction_sched_group;
+    }
+
+    const scheduling_group& maintenance_sg() const noexcept {
+        return _cfg.maintenance_sched_group;
+    }
+
+    size_t available_memory() const noexcept {
+        return _cfg.available_memory;
+    }
+
+    float static_shares() const noexcept {
+        return _cfg.static_shares.get();
+    }
+
+    uint32_t throughput_mbs() const noexcept {
+        return _cfg.throughput_mb_per_sec.get();
+    }
+
     void register_metrics();
 
     // enable the compaction manager.
@@ -405,10 +421,10 @@ public:
     // Cleanup is about discarding keys that are no longer relevant for a
     // given sstable, e.g. after node loses part of its token range because
     // of a newly added node.
-    future<> perform_cleanup(replica::database& db, compaction::table_state& t);
+    future<> perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction::table_state& t);
 
     // Submit a table to be upgraded and wait for its termination.
-    future<> perform_sstable_upgrade(replica::database& db, compaction::table_state& t, bool exclude_current_version);
+    future<> perform_sstable_upgrade(owned_ranges_ptr sorted_owned_ranges, compaction::table_state& t, bool exclude_current_version);
 
     // Submit a table to be scrubbed and wait for its termination.
     future<compaction_stats_opt> perform_sstable_scrub(compaction::table_state& t, sstables::compaction_type_options::scrub opts);

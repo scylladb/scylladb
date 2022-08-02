@@ -1094,13 +1094,13 @@ class cleanup_compaction final : public regular_compaction {
         }
     };
 
-    const dht::token_range_vector _owned_ranges;
+    owned_ranges_ptr _owned_ranges;
     incremental_owned_ranges_checker _owned_ranges_checker;
 private:
     // Called in a seastar thread
     dht::partition_range_vector
     get_ranges_for_invalidation(const std::vector<shared_sstable>& sstables) {
-        auto owned_ranges = dht::to_partition_ranges(_owned_ranges, utils::can_yield::yes);
+        auto owned_ranges = dht::to_partition_ranges(*_owned_ranges, utils::can_yield::yes);
 
         auto non_owned_ranges = boost::copy_range<dht::partition_range_vector>(sstables
                 | boost::adaptors::transformed([] (const shared_sstable& sst) {
@@ -1132,10 +1132,10 @@ protected:
     }
 
 private:
-    cleanup_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata, dht::token_range_vector owned_ranges)
+    cleanup_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata, owned_ranges_ptr owned_ranges)
         : regular_compaction(table_s, std::move(descriptor), cdata)
         , _owned_ranges(std::move(owned_ranges))
-        , _owned_ranges_checker(_owned_ranges)
+        , _owned_ranges_checker(*_owned_ranges)
     {
     }
 

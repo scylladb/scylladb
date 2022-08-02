@@ -1028,12 +1028,16 @@ SEASTAR_THREAD_TEST_CASE(max_result_size_for_unlimited_query_selection_test) {
 // Refs: #9494 (https://github.com/scylladb/scylla/issues/9494)
 SEASTAR_TEST_CASE(upgrade_sstables) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
-        e.db().invoke_on_all([&e] (replica::database& db) {
+        e.db().invoke_on_all([&e] (replica::database& db) -> future<> {
             auto& cm = db.get_compaction_manager();
-            return do_for_each(db.get_column_families(), [&] (std::pair<utils::UUID, lw_shared_ptr<replica::column_family>> t) {
-                constexpr bool exclude_current_version = false;
-                return cm.perform_sstable_upgrade(db, t.second->as_table_state(), exclude_current_version);
-            });
+            for (auto& [ks_name, ks] : db.get_keyspaces()) {
+                auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(db.get_keyspace_local_ranges(ks_name));
+                for (auto& [cf_name, schema] : ks.metadata()->cf_meta_data()) {
+                    auto& t = db.find_column_family(schema->id());
+                    constexpr bool exclude_current_version = false;
+                    co_await cm.perform_sstable_upgrade(owned_ranges_ptr, t.as_table_state(), exclude_current_version);
+                }
+            }
         }).get();
     });
 }
