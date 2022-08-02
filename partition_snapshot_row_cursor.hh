@@ -605,8 +605,8 @@ public:
         auto latest_i = get_iterator_in_latest_version();
         auto e = alloc_strategy_unique_ptr<rows_entry>(current_allocator().construct<rows_entry>(_schema, pos, is_dummy(!pos.is_clustering_row()),
             is_continuous(latest_i && latest_i->continuous())));
-        _snp.tracker()->insert(*e);
         auto e_i = rows.insert_before(latest_i, std::move(e));
+        _snp.tracker()->insert(*e_i);
         return ensure_result{*e_i, true};
     }
 

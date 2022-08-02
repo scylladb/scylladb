@@ -13,6 +13,9 @@
 // Double-ended chained list of partition_version objects
 // utilizing partition_version's intrinsic anchorless_list_base_hook.
 class partition_version_list {
+    // All references have unique_owner set to true
+    // so that partition_version::is_referenced_from_entry() is false
+    // so that versions owned here (by mutation_cleaner) are not evicted-from.
     partition_version_ref _head;
     partition_version_ref _tail; // nullptr means _tail == _head.
 public:
@@ -24,10 +27,16 @@ public:
                 v.insert_before(*_head);
                 _tail = std::move(_head);
             }
-            _head = partition_version_ref(v);
+            _head = partition_version_ref(v, true);
+#ifdef SEASTAR_DEBUG
+            assert(!_head->is_referenced_from_entry());
+#endif
         } else {
             v.insert_after(*_tail);
-            _tail = partition_version_ref(v);
+            _tail = partition_version_ref(v, true);
+#ifdef SEASTAR_DEBUG
+            assert(!_tail->is_referenced_from_entry());
+#endif
         }
     }
 
@@ -52,7 +61,10 @@ public:
         _head->erase();
         _head.release();
         if (next) {
-            _head = partition_version_ref(*next);
+            _head = partition_version_ref(*next, true);
+#ifdef SEASTAR_DEBUG
+            assert(!_head->is_referenced_from_entry());
+#endif
         }
     }
 
