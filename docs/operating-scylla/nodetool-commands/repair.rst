@@ -6,7 +6,7 @@ Nodetool repair
 When running ``nodetool repair`` on a **single node**, it acts as the **repair master**. Only the data contained in the master node and its replications will be repaired.
 Typically, this subset of data is replicated on many nodes in the cluster, often all, and the repair process syncs between all the replicas until the master data subset is in-sync.
 
-To repair **all** of the data in the cluster, you need to run a repair on **all** of the nodes in the cluster, or let :doc:`Scylla  Manager</operating-scylla/manager/index/>` do it for you.
+To repair **all** of the data in the cluster, you need to run a repair on **all** of the nodes in the cluster, or let `ScyllaDB Manager <https://manager.docs.scylladb.com/>`_ do it for you.
 
 .. note:: Run the :doc:`nodetool repair </operating-scylla/nodetool-commands/repair/>` command regularly. If you delete data frequently, it should be more often than the value of ``gc_grace_seconds`` (by default: 10 days), for example, every week. Use the **nodetool repair -pr** on each node in the cluster, sequentially.
 
@@ -108,8 +108,6 @@ Scylla nodetool repair command supports the following options:
 
      nodetool repair <my_keyspace> <my_table>
 
-See also
-
-:doc:`Scylla  Manager</operating-scylla/manager/index/>` 
+See also `ScyllaDB Manager <https://manager.docs.scylladb.com/>`_.
 
 .. include:: nodetool-index.rst

@@ -34,7 +34,7 @@ There are two types of compactions:
 View Compaction Statistics
 --------------------------
 
-Scylla has tools you can use to see the status of your compactions. These include nodetool (:doc:`compactionhistory </operating-scylla/nodetool-commands/compactionhistory>`  and :doc:`compactionstats </operating-scylla/nodetool-commands/compactionstats>`)  and the Grafana dashboards which are part of the `Scylla Monitoring Stack <https://monitoring.docs.scylladb.com/>`_ which display the compaction statistics on a per cluster and per node basis.  Compaction errors can be seen in the :ref:`logs <manager-2.1-logging-settings>`. 
+Scylla has tools you can use to see the status of your compactions. These include nodetool (:doc:`compactionhistory </operating-scylla/nodetool-commands/compactionhistory>`  and :doc:`compactionstats </operating-scylla/nodetool-commands/compactionstats>`)  and the Grafana dashboards which are part of the `Scylla Monitoring Stack <https://monitoring.docs.scylladb.com/>`_ which display the compaction statistics on a per cluster and per node basis.  Compaction errors can be seen in the `logs <https://manager.docs.scylladb.com/stable/config/scylla-manager-config.html>`_. 
 
 Compaction strategy
 -------------------
