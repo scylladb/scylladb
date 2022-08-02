@@ -455,7 +455,12 @@ static future<> update_streams_description(
                     noncopyable_function<unsigned()> get_num_token_owners,
                     abort_source& abort_src) -> future<> {
             while (true) {
-                co_await sleep_abortable(std::chrono::seconds(60), abort_src);
+                try {
+                    co_await sleep_abortable(std::chrono::seconds(60), abort_src);
+                } catch (seastar::sleep_aborted&) {
+                    cdc_log.warn( "Aborted update CDC description table with generation {}", gen_id);
+                    co_return;
+                }
                 try {
                     co_await do_update_streams_description(gen_id, *sys_dist_ks, { get_num_token_owners() });
                     co_return;
