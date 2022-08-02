@@ -680,14 +680,14 @@ Check test log at {}.""".format(self.log_filename))
                         raise
                 set_summary("failed: {}".format(e))
             finally:
-                if self.is_new or self.is_equal_result is False:
-                    # Put a copy of the .reject file close to the .result file
-                    # so that it's easy to analyze the diff or overwrite .result
-                    # with .reject. Preserve the original .reject file: in
-                    # multiple modes the copy .reject file may be overwritten.
-                    shutil.copyfile(self.tmpfile, self.reject)
-                elif os.path.exists(self.tmpfile):
-                    pathlib.Path(self.tmpfile).unlink()
+                if os.path.exists(self.tmpfile):
+                    if self.is_executed_ok and (self.is_new or self.is_equal_result is False):
+                        # Move the .reject file close to the .result file
+                        # so that it's easy to analyze the diff or overwrite .result
+                        # with .reject.
+                        shutil.move(self.tmpfile, self.reject)
+                    else:
+                        pathlib.Path(self.tmpfile).unlink()
 
         return self
 
