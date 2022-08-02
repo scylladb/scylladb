@@ -47,7 +47,7 @@ shared_ptr<functions::function> create_function_statement::create(query_processo
             std::move(return_type), _called_on_null_input, std::move(ctx));
     } else if (_language == "xwasm") {
        // FIXME: need better way to test wasm compilation without real_database()
-       wasm::context ctx{db.real_database().wasm_engine(), _name.name};
+       wasm::context ctx{db.real_database().wasm_engine(), _name.name, qp.get_wasm_instance_cache()};
        try {
             wasm::compile(ctx, arg_names, _body);
             return ::make_shared<functions::user_function>(_name, _arg_types, std::move(arg_names), _body, _language,
