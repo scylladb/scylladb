@@ -36,15 +36,12 @@ Scylla for Administrators
   :class: my-panel
     
   * :doc:`Scylla Tools </operating-scylla/admin-tools/index>` - Tools for Administrating and integrating with Scylla
-<<<<<<< HEAD
   * :doc:`Scylla Manager </operating-scylla/manager/index>` - Tool for cluster administration and automation
   * `ScyllaDB Monitoring Stack <https://monitoring.docs.scylladb.com/stable/>`_ - Tool for cluster monitoring and alerting
   * `ScyllaDB Operator <https://operator.docs.scylladb.com>`_ - Tool to run Scylla on Kubernetes
-=======
   * `ScyllaDB Manager <https://manager.docs.scylladb.com/>`_ - Tool for cluster administration and automation
   * :doc:`Scylla Monitoring Stack </operating-scylla/monitoring/index>` - Tool for cluster monitoring and alerting
   * :doc:`Scylla Operator </operating-scylla/scylla-operator/index>` - Tool to run Scylla on Kubernetes
->>>>>>> 40050f951 (doc: add the link to manager.docs.scylladb.com to the toctree)
   * :doc:`Scylla Logs </getting-started/logging/>`
 
 .. panel-box::
