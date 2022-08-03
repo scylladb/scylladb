@@ -1961,7 +1961,7 @@ future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes) 
                 }
             }
         }
-        logger.info("Gossip shadow round finisehd with nodes_talked={}", nodes_talked);
+        logger.info("Gossip shadow round finished with nodes_talked={}", nodes_talked);
     });
 }
 
