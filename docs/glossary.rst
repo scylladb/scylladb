@@ -176,3 +176,7 @@ Glossary
 
     Dummy Rows
        Cache dummy rows are entries in the row set, which have a clustering position, although they do not represent CQL rows written by users.  Scylla cache uses them to mark boundaries of population ranges, to represent the information that the whole range is complete, and there is no need to go to sstables to read the gaps between existing row entries when scanning.
+      
+    Workload
+      A database category that allows you to manage different sources of database activities, such as requests or administrative activities. By creating workloads, you can specify how ScyllaDB will process those activities. For example, you can prioritize one workload over another (e.g., user requests over administrative activities). See :doc:`Workload Prioritization </using-scylla/workload-prioritization>`.
+
