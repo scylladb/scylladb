@@ -1337,6 +1337,7 @@ table::seal_snapshot(sstring jsondir, std::vector<snapshot_file_set> file_sets) 
             ss << ", ";
         }
         ss << "\"" << rf << "\"";
+        co_await coroutine::maybe_yield();
       }
     }
     ss << " ]" << std::endl << "}" << std::endl;
