@@ -334,6 +334,13 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         co_await _gossiper.do_shadow_round(initial_contact_nodes);
         _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
         _gossiper.check_snitch_name_matches();
+        // Check if the node is already removed from the cluster
+        auto local_host_id = _db.local().get_config().host_id;
+        auto my_ip = get_broadcast_address();
+        if (!_gossiper.is_safe_for_restart(my_ip, local_host_id)) {
+            throw std::runtime_error(fmt::format("The node {} with host_id {} is removed from the cluster. Can not restart the removed node to join the cluster again!",
+                    my_ip, local_host_id));
+        }
         co_await _gossiper.reset_endpoint_state_map();
         for (auto ep : loaded_endpoints) {
             co_await _gossiper.add_saved_endpoint(ep);
