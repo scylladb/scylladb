@@ -362,6 +362,7 @@ public:
 
     bool is_gossip_only_member(inet_address endpoint);
     bool is_safe_for_bootstrap(inet_address endpoint);
+    bool is_safe_for_restart(inet_address endpoint, utils::UUID host_id);
 private:
     /**
      * Returns true if the chosen target was also a seed. False otherwise
