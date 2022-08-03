@@ -30,7 +30,7 @@ Apply the following procedure **serially** on each node. Do not move to the next
 **During** the rolling upgrade, it is highly recommended:
 
 * Not to use new 2022.1 features.
-* Not to run administration functions, like repairs, refresh, rebuild or add or remove nodes. See :doc:`here </operating-scylla/manager/2.1/sctool>` for suspending Scylla Manager's scheduled or running repairs.
+* Not to run administration functions, like repairs, refresh, rebuild or add or remove nodes. See `sctool <https://manager.docs.scylladb.com/stable/sctool/>`_ for suspending Scylla Manager's scheduled or running repairs.
 * Not to apply schema changes.
 
 
