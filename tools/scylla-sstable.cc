@@ -488,7 +488,7 @@ class dumping_consumer : public sstable_consumer {
                 write_key(pos.key());
             }
             _writer.Key("weight");
-            _writer.AsString(static_cast<int>(pos.get_bound_weight()));
+            _writer.Int(static_cast<int>(pos.get_bound_weight()));
             _writer.Key("tombstone");
             write(rtc.tombstone());
             _writer.EndObject();
