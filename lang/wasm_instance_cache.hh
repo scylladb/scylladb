@@ -8,6 +8,30 @@
 
 #pragma once
 
+#ifndef SCYLLA_ENABLE_WASMTIME
+
+#include <cstddef>
+#include <seastar/core/lowres_clock.hh>
+#include "lang/wasm.hh"
+
+namespace wasm {
+
+struct instance_cache {
+    explicit instance_cache(size_t size, seastar::lowres_clock::duration timer_period) {}
+
+    void remove(const db::functions::function_name& name, const std::vector<data_type>& arg_types) {
+        throw wasm::exception("WASM support was not enabled during compilation!");
+    }
+
+    future<> stop() {
+        return seastar::make_ready_future<>();
+    }
+};
+
+}
+
+#else
+
 #include "db/functions/function_name.hh"
 #include <list>
 #include <seastar/core/metrics_registration.hh>
@@ -121,3 +145,5 @@ public:
 };
 
 }
+
+#endif
