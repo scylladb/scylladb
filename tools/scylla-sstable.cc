@@ -398,6 +398,9 @@ class dumping_consumer : public sstable_consumer {
                 if (cell.is_live()) {
                     _writer.Key("value");
                     _writer.String(type->to_string(cell.value().linearize()));
+                } else {
+                    _writer.Key("deletion_time");
+                    _writer.String(to_string(cell.deletion_time()));
                 }
             }
             _writer.EndObject();
@@ -1596,7 +1599,7 @@ $REGULAR_LIVE_CELL := {
 $REGULAR_DEAD_CELL := {
     "is_live": false,
     "timestamp": Int64,
-    "deletion_time": String // YYYY-MM-DD HH:MM:SS - optional
+    "deletion_time": String // YYYY-MM-DD HH:MM:SS
 }
 
 $COUNTER_CELL := {
