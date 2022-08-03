@@ -486,31 +486,30 @@ future<mutation_reader_merger::needs_merge> mutation_reader_merger::prepare_one(
             // end are out of data for good for the current range.
             _halted_readers.push_back(rk);
         } else if (_fwd_mr == mutation_reader::forwarding::no) {
-                // FIXME: indentation
-                flat_mutation_reader_v2 r = std::move(*rk.reader);
-                _all_readers.erase(rk.reader);
-                _pending_close++;
-                _to_close = _to_close.then([this, r = std::move(r)] () mutable {
-                    return r.close().then([this] { _pending_close--; });
-                });
-                if (reader_galloping) {
-                    // Galloping reader iterator may have become invalid at this point, so - to be safe - clear it
-                    auto fut = _galloping_reader.reader->close();
-                    _to_close = when_all_succeed(std::move(_to_close), std::move(fut)).discard_result();
-                }
+            flat_mutation_reader_v2 r = std::move(*rk.reader);
+            _all_readers.erase(rk.reader);
+            _pending_close++;
+            _to_close = _to_close.then([this, r = std::move(r)] () mutable {
+                return r.close().then([this] { _pending_close--; });
+            });
+            if (reader_galloping) {
+                // Galloping reader iterator may have become invalid at this point, so - to be safe - clear it
+                auto fut = _galloping_reader.reader->close();
+                _to_close = when_all_succeed(std::move(_to_close), std::move(fut)).discard_result();
+            }
         }
 
         if (reader_galloping) {
             _gallop_mode_hits = 0;
         }
-      // to_close is a chain of flat_mutation_reader close futures,
-      // therefore it can not fail.
-      // To prevent memory usage from growing unbounded, we'll wait for pending closes
-      // if we're submitting them faster than we can retire them.
-      future<> to_close = _pending_close >= 4 ? std::exchange(_to_close, make_ready_future<>()) : make_ready_future<>();
-      return to_close.then([] {
-        return needs_merge::yes;
-      });
+        // to_close is a chain of flat_mutation_reader close futures,
+        // therefore it can not fail.
+        // To prevent memory usage from growing unbounded, we'll wait for pending closes
+        // if we're submitting them faster than we can retire them.
+        future<> to_close = _pending_close >= 4 ? std::exchange(_to_close, make_ready_future<>()) : make_ready_future<>();
+        return to_close.then([] {
+            return needs_merge::yes;
+        });
     });
 }
 
