@@ -121,14 +121,16 @@ fedora_python3_packages=(
     python3-six
 )
 
-pip_packages=(
+# packages used by scylla-python3 for scylla's custom python environment
+_scylla_pip_packages=(
     scylla-driver
     geomet
     traceback-with-variables
     scylla-api-client
 )
 
-pip_symlinks=(
+# packages used by scylla-python3 for scylla's custom python environment
+_scylla_pip_symlinks=(
     scylla-api-client
 )
 
@@ -270,12 +272,12 @@ if $PRINT_PYTHON3; then
 fi
 
 if $PRINT_PIP; then
-    echo "${pip_packages[@]}"
+    echo "${_scylla_pip_packages[@]}"
     exit 0
 fi
 
 if $PRINT_PIP_SYMLINK; then
-    echo "${pip_symlinks[@]}"
+    echo "${_scylla_pip_symlinks[@]}"
     exit 0
 fi
 
