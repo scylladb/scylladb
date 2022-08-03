@@ -1243,22 +1243,22 @@ schema_ptr system_keyspace::legacy::aggregates() {
 
 future<> system_keyspace::setup_version(sharded<netw::messaging_service>& ms) {
     auto& cfg = _db.local().get_config();
-        sstring req = fmt::format("INSERT INTO system.{} (key, release_version, cql_version, thrift_version, native_protocol_version, data_center, rack, partitioner, rpc_address, broadcast_address, listen_address) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-                        , db::system_keyspace::LOCAL);
-        auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
+    sstring req = fmt::format("INSERT INTO system.{} (key, release_version, cql_version, thrift_version, native_protocol_version, data_center, rack, partitioner, rpc_address, broadcast_address, listen_address) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    , db::system_keyspace::LOCAL);
+    auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
 
-        return execute_cql(req, sstring(db::system_keyspace::LOCAL),
-                             version::release(),
-                             cql3::query_processor::CQL_VERSION,
-                             ::cassandra::thrift_version,
-                             to_sstring(cql_serialization_format::latest_version),
-                             snitch->get_datacenter(utils::fb_utilities::get_broadcast_address()),
-                             snitch->get_rack(utils::fb_utilities::get_broadcast_address()),
-                             sstring(cfg.partitioner()),
-                             utils::fb_utilities::get_broadcast_rpc_address().addr(),
-                             utils::fb_utilities::get_broadcast_address().addr(),
-                             ms.local().listen_address().addr()
-        ).discard_result();
+    return execute_cql(req, sstring(db::system_keyspace::LOCAL),
+                            version::release(),
+                            cql3::query_processor::CQL_VERSION,
+                            ::cassandra::thrift_version,
+                            to_sstring(cql_serialization_format::latest_version),
+                            snitch->get_datacenter(utils::fb_utilities::get_broadcast_address()),
+                            snitch->get_rack(utils::fb_utilities::get_broadcast_address()),
+                            sstring(cfg.partitioner()),
+                            utils::fb_utilities::get_broadcast_rpc_address().addr(),
+                            utils::fb_utilities::get_broadcast_address().addr(),
+                            ms.local().listen_address().addr()
+    ).discard_result();
 }
 
 future<> system_keyspace::save_local_supported_features(const std::set<std::string_view>& feats) {
