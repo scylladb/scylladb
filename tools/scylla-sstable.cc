@@ -9,6 +9,7 @@
 #include <boost/algorithm/string.hpp>
 #include <boost/algorithm/string/join.hpp>
 #include <filesystem>
+#include <source_location>
 #include <fmt/chrono.h>
 #include <seastar/core/app-template.hh>
 #include <seastar/core/coroutine.hh>
@@ -20,6 +21,7 @@
 #include "gms/feature_service.hh"
 #include "reader_concurrency_semaphore.hh"
 #include "readers/combined.hh"
+#include "readers/generating_v2.hh"
 #include "schema_builder.hh"
 #include "sstables/index_reader.hh"
 #include "sstables/sstables_manager.hh"
@@ -327,7 +329,7 @@ class dumping_consumer : public sstable_consumer {
         bool _clustering_array_created;
     private:
         sstring to_string(gc_clock::time_point tp) {
-            return fmt::format("{:%F %T}", fmt::gmtime(gc_clock::to_time_t(tp)));
+            return fmt::format("{:%F %T}z", fmt::gmtime(gc_clock::to_time_t(tp)));
         }
         void write(gc_clock::duration ttl, gc_clock::time_point expiry) {
             _writer.Key("ttl");
@@ -398,6 +400,9 @@ class dumping_consumer : public sstable_consumer {
                 if (cell.is_live()) {
                     _writer.Key("value");
                     _writer.String(type->to_string(cell.value().linearize()));
+                } else {
+                    _writer.Key("deletion_time");
+                    _writer.String(to_string(cell.deletion_time()));
                 }
             }
             _writer.EndObject();
@@ -485,7 +490,7 @@ class dumping_consumer : public sstable_consumer {
                 write_key(pos.key());
             }
             _writer.Key("weight");
-            _writer.AsString(static_cast<int>(pos.get_bound_weight()));
+            _writer.Int(static_cast<int>(pos.get_bound_weight()));
             _writer.Key("tombstone");
             write(rtc.tombstone());
             _writer.EndObject();
@@ -869,7 +874,7 @@ void consume_sstables(schema_ptr schema, reader_permit permit, std::vector<sstab
     }
 }
 
-using operation_func = void(*)(schema_ptr, reader_permit, const std::vector<sstables::shared_sstable>&, const bpo::variables_map&);
+using operation_func = void(*)(schema_ptr, reader_permit, const std::vector<sstables::shared_sstable>&, sstables::sstables_manager&, const bpo::variables_map&);
 
 class operation {
     std::string _name;
@@ -891,12 +896,17 @@ public:
     const std::string& description() const { return _description; }
     const std::vector<std::string>& available_options() const { return _available_options; }
 
-    void operator()(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map& vm) const {
-        _func(std::move(schema), std::move(permit), sstables, vm);
+    void operator()(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+            sstables::sstables_manager& sst_man, const bpo::variables_map& vm) const {
+        _func(std::move(schema), std::move(permit), sstables, sst_man, vm);
     }
 };
 
-void validate_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map& vm) {
+void validate_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+        sstables::sstables_manager& sst_man, const bpo::variables_map& vm) {
+    if (sstables.empty()) {
+        throw std::runtime_error("error: no sstables specified on the command line");
+    }
     const auto merge = vm.count("merge");
     sstables::compaction_data info;
     consume_sstables(schema, permit, sstables, merge, true, [&info] (flat_mutation_reader_v2& rd, sstables::sstable* sst) {
@@ -909,7 +919,12 @@ void validate_operation(schema_ptr schema, reader_permit permit, const std::vect
     });
 }
 
-void dump_index_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map&) {
+void dump_index_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+        sstables::sstables_manager& sst_man, const bpo::variables_map&) {
+    if (sstables.empty()) {
+        throw std::runtime_error("error: no sstables specified on the command line");
+    }
+
     json_writer writer;
     writer.StartStream();
     for (auto& sst : sstables) {
@@ -943,7 +958,12 @@ sstring disk_string_to_string(const sstables::disk_string<Integer>& ds) {
     return sstring(ds.value.begin(), ds.value.end());
 }
 
-void dump_compression_info_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map&) {
+void dump_compression_info_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+        sstables::sstables_manager& sst_man, const bpo::variables_map&) {
+    if (sstables.empty()) {
+        throw std::runtime_error("error: no sstables specified on the command line");
+    }
+
     json_writer writer;
     writer.StartStream();
 
@@ -976,7 +996,12 @@ void dump_compression_info_operation(schema_ptr schema, reader_permit permit, co
     writer.EndStream();
 }
 
-void dump_summary_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map&) {
+void dump_summary_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+        sstables::sstables_manager& sst_man, const bpo::variables_map&) {
+    if (sstables.empty()) {
+        throw std::runtime_error("error: no sstables specified on the command line");
+    }
+
     json_writer writer;
     writer.StartStream();
 
@@ -1237,7 +1262,12 @@ void dump_serialization_header(json_writer& writer, sstables::sstable_version_ty
     });
 }
 
-void dump_statistics_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map&) {
+void dump_statistics_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+        sstables::sstables_manager& sst_man, const bpo::variables_map&) {
+    if (sstables.empty()) {
+        throw std::runtime_error("error: no sstables specified on the command line");
+    }
+
     auto to_string = [] (sstables::metadata_type t) {
         switch (t) {
             case sstables::metadata_type::Validation: return "validation";
@@ -1403,7 +1433,12 @@ public:
     }
 };
 
-void dump_scylla_metadata_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map&) {
+void dump_scylla_metadata_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+        sstables::sstables_manager& sst_man, const bpo::variables_map&) {
+    if (sstables.empty()) {
+        throw std::runtime_error("error: no sstables specified on the command line");
+    }
+
     json_writer writer;
     writer.StartStream();
     for (auto& sst : sstables) {
@@ -1422,14 +1457,24 @@ void dump_scylla_metadata_operation(schema_ptr schema, reader_permit permit, con
     writer.EndStream();
 }
 
-void validate_checksums_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map&) {
+void validate_checksums_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+        sstables::sstables_manager& sst_man, const bpo::variables_map&) {
+    if (sstables.empty()) {
+        throw std::runtime_error("error: no sstables specified on the command line");
+    }
+
     for (auto& sst : sstables) {
         const auto valid = sstables::validate_checksums(sst, permit, default_priority_class()).get();
         sst_log.info("validated the checksums of {}: {}", sst->get_filename(), valid ? "valid" : "invalid");
     }
 }
 
-void decompress_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map& vm) {
+void decompress_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+        sstables::sstables_manager& sst_man, const bpo::variables_map& vm) {
+    if (sstables.empty()) {
+        throw std::runtime_error("error: no sstables specified on the command line");
+    }
+
     for (const auto& sst : sstables) {
         if (!sst->get_compression()) {
             sst_log.info("Sstable {} is not compressed, nothing to do", sst->get_filename());
@@ -1459,8 +1504,925 @@ void decompress_operation(schema_ptr schema, reader_permit permit, const std::ve
     }
 }
 
+class json_mutation_stream_parser {
+    using reader = rapidjson::GenericReader<rjson::encoding, rjson::encoding, rjson::allocator>;
+    class stream {
+    public:
+        using Ch = char;
+    private:
+        input_stream<Ch> _is;
+        temporary_buffer<Ch> _current;
+        size_t _pos = 0;
+        size_t _line = 1;
+        size_t _last_lf_pos = 0;
+    private:
+        void maybe_read_some() {
+            if (!_current.empty()) {
+                return;
+            }
+            _current = _is.read().get();
+            // EOS is encoded as null char
+            if (_current.empty()) {
+                _current = temporary_buffer<Ch>("\0", 1);
+            }
+        }
+    public:
+        stream(input_stream<Ch> is) : _is(std::move(is)) {
+            maybe_read_some();
+        }
+        stream(stream&&) = default;
+        ~stream() {
+            _is.close().get();
+        }
+        Ch Peek() const {
+            return *_current.get();
+        }
+        Ch Take() {
+            auto c = Peek();
+            if (c == '\n') {
+                ++_line;
+                ++_last_lf_pos = _pos;
+            }
+            ++_pos;
+            _current.trim_front(1);
+            maybe_read_some();
+            return c;
+        }
+        size_t Tell() {
+            return _pos;
+        }
+        // ostream methods, unused but need a definition
+        Ch* PutBegin() { return nullptr; }
+        void Put(Ch c) { }
+        void Flush() { }
+        size_t PutEnd(Ch* begin) { return 0; }
+        // own methods
+        size_t line() const {
+            return _line;
+        }
+        size_t last_line_feed_pos() const {
+            return _last_lf_pos;
+        }
+    };
+    class handler {
+    public:
+        using Ch = char;
+    private:
+        enum class state {
+            start,
+            before_partition,
+            in_partition,
+            before_key,
+            in_key,
+            before_tombstone,
+            in_tombstone,
+            before_static_columns,
+            before_clustering_elements,
+            before_clustering_element,
+            in_clustering_element,
+            in_range_tombstone_change,
+            in_clustering_row,
+            before_marker,
+            in_marker,
+            before_clustering_columns,
+            before_column_key,
+            before_column,
+            in_column,
+            before_ignored_value,
+            before_integer,
+            before_string,
+            before_bool,
+        };
+        struct column {
+            const column_definition* def = nullptr;
+            std::optional<bool> is_live;
+            std::optional<api::timestamp_type> timestamp;
+            std::optional<bytes> value;
+            std::optional<gc_clock::time_point> deletion_time;
+
+            explicit column(const column_definition* def) : def(def) { }
+        };
+        struct tombstone {
+            std::optional<api::timestamp_type> timestamp;
+            std::optional<gc_clock::time_point> deletion_time;
+        };
+    private:
+        schema_ptr _schema;
+        reader_permit _permit;
+        queue<mutation_fragment_v2_opt>& _queue;
+        circular_buffer<state> _state_stack;
+        std::string _key; // last seen key
+        bool _partition_start_emited = false;
+        bool _is_shadowable = false; // currently processed tombstone is a shadowable one
+        std::optional<bool> _bool;
+        std::optional<int64_t> _integer;
+        std::optional<std::string_view> _string;
+        std::optional<partition_key> _pkey;
+        std::optional<tombstone> _tombstone;
+        std::optional<clustering_key> _ckey;
+        std::optional<bound_weight> _bound_weight;
+        std::optional<row_marker> _row_marker;
+        std::optional<row_tombstone> _row_tombstone;
+        std::optional<row> _row;
+        std::optional<column> _column;
+        std::optional<gc_clock::duration> _ttl;
+        std::optional<gc_clock::time_point> _expiry;
+    private:
+        static std::string_view to_string(state s) {
+            switch (s) {
+                case state::start: return "start";
+                case state::before_partition: return "before_partition";
+                case state::in_partition: return "in_partition";
+                case state::before_key: return "before_key";
+                case state::in_key: return "in_key";
+                case state::before_tombstone: return "before_tombstone";
+                case state::in_tombstone: return "in_tombstone";
+                case state::before_static_columns: return "before_static_columns";
+                case state::before_clustering_elements: return "before_clustering_elements";
+                case state::before_clustering_element: return "before_clustering_element";
+                case state::in_clustering_element: return "in_clustering_element";
+                case state::in_range_tombstone_change: return "in_range_tombstone_change";
+                case state::in_clustering_row: return "in_clustering_row";
+                case state::before_marker: return "before_marker";
+                case state::in_marker: return "in_marker";
+                case state::before_clustering_columns: return "before_clustering_columns";
+                case state::before_column_key: return "before_column_key";
+                case state::before_column: return "before_column";
+                case state::in_column: return "in_column";
+                case state::before_ignored_value: return "before_ignored_value";
+                case state::before_integer: return "before_integer";
+                case state::before_string: return "before_string";
+                case state::before_bool: return "before_bool";
+            }
+            std::abort();
+        }
+
+        std::string stack_to_string() const {
+            return boost::algorithm::join(_state_stack | boost::adaptors::transformed([] (state s) { return std::string(to_string(s)); }), "|");
+        }
+
+        bool error(const char* msg, auto&&... args) {
+#if FMT_VERSION >= 80000
+            auto parse_error = fmt::format(fmt::runtime(msg), std::forward<decltype(args)>(args)...);
+#else
+            auto parse_error = fmt::format(msg, std::forward<decltype(args)>(args)...);
+#endif
+            sst_log.trace(parse_error.c_str());
+            _queue.abort(std::make_exception_ptr(std::runtime_error(parse_error)));
+            return false;
+        }
+
+        bool emit(mutation_fragment_v2 mf) {
+            sst_log.trace("emit({})", mf.mutation_fragment_kind());
+            _queue.push_eventually(std::move(mf)).get();
+            return true;
+        }
+
+        bool parse_partition_key() {
+            try {
+                auto raw = from_hex(*_string);
+                _pkey.emplace(partition_key::from_bytes(raw));
+            } catch (...) {
+                return error("failed to parse partition key from raw string: {}", std::current_exception());
+            }
+            return true;
+        }
+
+        bool parse_clustering_key() {
+            try {
+                auto raw = from_hex(*_string);
+                _ckey.emplace(clustering_key::from_bytes(raw));
+            } catch (...) {
+                return error("failed to parse clustering key from raw string: {}", std::current_exception());
+            }
+            return true;
+        }
+
+        bool parse_bound_weight() {
+            switch (*_integer) {
+                case -1:
+                    _bound_weight.emplace(bound_weight::before_all_prefixed);
+                    return true;
+                case 0:
+                    _bound_weight.emplace(bound_weight::equal);
+                    return true;
+                case 1:
+                    _bound_weight.emplace(bound_weight::after_all_prefixed);
+                    return true;
+                default:
+                    return error("failed to parse bound weight: {} is not a valid bound weight value", *_integer);
+            }
+        }
+
+        bool parse_deletion_time() {
+            try {
+                auto dt = gc_clock::time_point(gc_clock::duration(timestamp_from_string(*_string) / 1000));
+                if (top(1) == state::in_column) {
+                    _column->deletion_time = dt;
+                } else {
+                    _tombstone->deletion_time = dt;
+                }
+                return true;
+            } catch (...) {
+                return error("failed to parse deletion_time: {}", std::current_exception());
+            }
+        }
+
+        bool parse_ttl() {
+            auto e = _string->end();
+            if (*std::prev(e) == 's') {
+                --e;
+            }
+            uint64_t ttl;
+            std::stringstream ss(std::string(_string->begin(), e));
+            ss >> ttl;
+            if (ss.fail()) {
+                return error("failed to parse ttl value of {}", _string);
+            }
+            _ttl = gc_clock::duration(ttl);
+            return true;
+        }
+
+        bool parse_expiry() {
+            try {
+                _expiry = gc_clock::time_point(gc_clock::duration(timestamp_from_string(*_string) / 1000));
+            } catch (...) {
+                return error("failed to parse expiry: {}", std::current_exception());
+            }
+            return true;
+        }
+
+        std::optional<::tombstone> get_tombstone() {
+            if (bool(_tombstone->timestamp) != bool(_tombstone->deletion_time)) {
+                error("incomplete tombstone: timestamp or deletion-time have to be either both present or missing");
+                return {};
+            }
+            if (!_tombstone->timestamp) {
+                _tombstone.reset();
+                return ::tombstone{};
+            }
+            auto tomb = ::tombstone(*_tombstone->timestamp, *_tombstone->deletion_time);
+            _tombstone.reset();
+            return tomb;
+        }
+
+        bool finalize_partition_start(::tombstone tomb = {}) {
+            auto pkey = std::exchange(_pkey, {});
+            if (!pkey) {
+                return error("failed to finalize partition start: no partition key");
+            }
+            partition_start ps(dht::decorate_key(*_schema, *pkey), tomb);
+            _partition_start_emited = true;
+            return emit(mutation_fragment_v2(*_schema, _permit, std::move(ps)));
+        }
+
+        bool finalize_static_row() {
+            if (!_row) {
+                return error("failed to finalize clustering row: row is not initialized yet");
+            }
+            auto row = std::exchange(_row, {});
+            auto sr = static_row(std::move(*row));
+            return emit(mutation_fragment_v2(*_schema, _permit, std::move(sr)));
+        }
+
+        bool finalize_range_tombstone_change() {
+            if (!_bound_weight) {
+                return error("failed to finalize range tombstone change: missing bound weight");
+            }
+            if (*_bound_weight == bound_weight::equal) {
+                return error("failed to finalize range tombstone change: bound_weight::equal is not valid for range tombstones changes");
+            }
+            if (!_row_tombstone) {
+                return error("failed to finalize range tombstone change: missing tombstone");
+            }
+            clustering_key ckey = clustering_key::make_empty();
+            if (_ckey) {
+                ckey = std::move(*std::exchange(_ckey, {}));
+            }
+            auto pos = position_in_partition(partition_region::clustered, *std::exchange(_bound_weight, {}), std::move(ckey));
+            auto tomb = std::exchange(_row_tombstone, {})->tomb();
+            auto rtc = range_tombstone_change(std::move(pos), std::move(tomb));
+            return emit(mutation_fragment_v2(*_schema, _permit, std::move(rtc)));
+        }
+
+        bool finalize_row_marker() {
+            if (!_row_marker) {
+                return error("failed to finalize row marker: it has no timestamp");
+            }
+            if (bool(_expiry) != bool(_ttl)) {
+                return error("failed to finalize row marker: ttl and expiry must either be both present or both missing");
+            }
+            if (!_expiry && !_ttl) {
+                return true;
+            }
+            _row_marker->apply(row_marker(_row_marker->timestamp(), *std::exchange(_ttl, {}), *std::exchange(_expiry, {})));
+            return true;
+        }
+
+        bool parse_column_value() {
+            try {
+                _column->value.emplace(_column->def->type->from_string(*_string));
+            } catch (...) {
+                return error("failed to parse cell value: {}", std::current_exception());
+            }
+            return true;
+        }
+
+        bool finalize_column() {
+            if (!_row) {
+                return error("failed to finalize cell: row not initialized yet");
+            }
+            if (!_column->is_live || !_column->timestamp) {
+                return error("failed to finalize cell: required fields is_live and/or timestamp missing");
+            }
+            if (*_column->is_live && !_column->value) {
+                return error("failed to finalize cell: live cell doesn't have data");
+            }
+            if (!*_column->is_live && !_column->deletion_time) {
+                return error("failed to finalize cell: dead cell doesn't have deletion time");
+            }
+            if (bool(_expiry) != bool(_ttl)) {
+                return error("failed to finalize cell: ttl and expiry must either be both present or both missing");
+            }
+            if (*_column->is_live) {
+                if (_ttl) {
+                    _row->apply(*_column->def, ::atomic_cell::make_live(*_column->def->type, *_column->timestamp, *_column->value,
+                            *std::exchange(_expiry, {}), *std::exchange(_ttl, {})));
+                } else {
+                    _row->apply(*_column->def, ::atomic_cell::make_live(*_column->def->type, *_column->timestamp, *_column->value));
+                }
+            } else {
+                _row->apply(*_column->def, ::atomic_cell::make_dead(*_column->timestamp, *_column->deletion_time));
+            }
+            _column.reset();
+            return true;
+        }
+
+        bool finalize_clustering_row() {
+            if (!_ckey) {
+                return error("failed to finalize clustering row: missing clustering key");
+            }
+            if (!_row) {
+                return error("failed to finalize clustering row: row is not initialized yet");
+            }
+            auto row = std::exchange(_row, {});
+            auto tomb = std::exchange(_row_tombstone, {});
+            auto marker = std::exchange(_row_marker, {});
+            auto cr = clustering_row(
+                    std::move(*_ckey),
+                    tomb.value_or(row_tombstone{}),
+                    marker.value_or(row_marker{}),
+                    std::move(*row));
+            return emit(mutation_fragment_v2(*_schema, _permit, std::move(cr)));
+        }
+
+        bool finalize_partition() {
+            _partition_start_emited = false;
+            return emit(mutation_fragment_v2(*_schema, _permit, partition_end{}));
+        }
+
+        struct retire_state_result {
+            bool ok = true;
+            unsigned pop_states = 1;
+            std::optional<state> next_state;
+        };
+        retire_state_result handle_retire_state() {
+            sst_log.trace("handle_retire_state(): stack={}", stack_to_string());
+            retire_state_result ret;
+            switch (top()) {
+                case state::before_partition:
+                    // EOS
+                    _queue.push_eventually({}).get();
+                    break;
+                case state::in_partition:
+                    ret.ok = finalize_partition();
+                    break;
+                case state::in_key:
+                    ret.pop_states = 2;
+                    break;
+                case state::in_tombstone:
+                    ret.pop_states = 2;
+                    {
+                        auto is_shadowable = std::exchange(_is_shadowable, false);
+                        auto tomb = get_tombstone();
+                        if (!tomb) {
+                            ret.ok = false;
+                            break;
+                        }
+                        if (top(2) == state::in_partition) {
+                            ret.ok = finalize_partition_start(*tomb);
+                        } else if (top(2) == state::in_range_tombstone_change) {
+                            _row_tombstone.emplace(*tomb);
+                        } else if (top(2) == state::in_clustering_row) {
+                            if (is_shadowable) {
+                                if (!_row_tombstone) {
+                                    ret.ok = error("cannot apply shadowable tombstone, row tombstone not initialized yet");
+                                    break;
+                                }
+                                _row_tombstone->apply(shadowable_tombstone(*tomb), {});
+                            } else {
+                                _row_tombstone.emplace(*tomb);
+                            }
+                        } else {
+                            ret.ok = error("retiring in_tombstone state in invalid context: {}", stack_to_string());
+                        }
+                    }
+                    break;
+                case state::in_marker:
+                    ret.pop_states = 2;
+                    ret.ok = finalize_row_marker();
+                    break;
+                case state::in_column:
+                    ret.pop_states = 2;
+                    ret.ok = finalize_column();
+                    break;
+                case state::before_column_key:
+                    if (top(1) == state::before_static_columns) {
+                        ret.ok = finalize_static_row();
+                    }
+                    ret.pop_states = 2;
+                    break;
+                case state::before_clustering_element:
+                    ret.pop_states = 2;
+                    break;
+                case state::in_range_tombstone_change:
+                    ret.pop_states = 2;
+                    ret.ok = finalize_range_tombstone_change();
+                    break;
+                case state::in_clustering_row:
+                    ret.pop_states = 2;
+                    ret.ok = finalize_clustering_row();
+                    break;
+                case state::before_ignored_value:
+                    break;
+                case state::before_bool:
+                    if (top(1) == state::in_column) {
+                        _column->is_live = _bool;
+                    }
+                    _bool.reset();
+                    break;
+                case state::before_integer:
+                    if (top(1) == state::in_tombstone) {
+                        _tombstone->timestamp = _integer.value();
+                    }
+                    if (top(1) == state::in_range_tombstone_change) {
+                        ret.ok = parse_bound_weight();
+                    }
+                    if (top(1) == state::in_column) {
+                        _column->timestamp = _integer;
+                    }
+                    if (top(1) == state::in_marker) {
+                        _row_marker.emplace(_integer.value());
+                    }
+                    _integer.reset();
+                    break;
+                case state::before_string:
+                    if (top(1) == state::in_key) {
+                        if (top(3) == state::in_partition) {
+                            ret.ok = parse_partition_key();
+                        } else if (top(3) == state::in_clustering_row || top(3) == state::in_range_tombstone_change) {
+                            ret.ok = parse_clustering_key();
+                        }
+                    } else if (top(1) == state::in_tombstone) {
+                        ret.ok = parse_deletion_time();
+                    } else if (top(1) == state::in_marker) {
+                        if (_key == "ttl") {
+                            ret.ok = parse_ttl();
+                        } else {
+                            ret.ok = parse_expiry();
+                        }
+                    } else if (top(1) == state::in_clustering_element) {
+                        if (*_string == "clustering-row") {
+                            ret.next_state = state::in_clustering_row;
+                        } else if (*_string == "range-tombstone-change") {
+                            ret.next_state = state::in_range_tombstone_change;
+                        } else {
+                            ret.ok = error("invalid clustering element type: {}, expected clustering-row or range-tombstone-change", *_string);
+                        }
+                    } else if (top(1) == state::in_column) {
+                        if (_key == "ttl") {
+                            ret.ok = parse_ttl();
+                        } else if (_key == "expiry") {
+                            ret.ok = parse_expiry();
+                        } else if (_key == "deletion_time") {
+                            ret.ok = parse_deletion_time();
+                        } else {
+                            ret.ok = parse_column_value();
+                        }
+                    }
+                    _string.reset();
+                    break;
+                default:
+                    ret.ok =  error("attempted to retire unexpected state {} ({})", to_string(top()), stack_to_string());
+                    break;
+            }
+            return ret;
+        }
+        state top(size_t i = 0) const {
+            return _state_stack[i];
+        }
+        bool push(state s) {
+            sst_log.trace("push({})", to_string(s));
+            _state_stack.push_front(s);
+            return true;
+        }
+        bool pop() {
+            auto res = handle_retire_state();
+            sst_log.trace("pop({})", res.ok ? res.pop_states : 0);
+            if (!res.ok) {
+                return false;
+            }
+            while (res.pop_states--) {
+                _state_stack.pop_front();
+            }
+            if (res.next_state) {
+                push(*res.next_state);
+            }
+            return true;
+        }
+        bool unexpected(std::experimental::source_location sl = std::experimental::source_location::current()) {
+            return error("unexpected json event {} in state {}", sl.function_name(), stack_to_string());
+        }
+        bool unexpected(std::string_view key, std::experimental::source_location sl = std::experimental::source_location::current()) {
+            return error("unexpected json event {}({}) in state {}", sl.function_name(), key, stack_to_string());
+        }
+    public:
+        explicit handler(schema_ptr schema, reader_permit permit, queue<mutation_fragment_v2_opt>& queue)
+            : _schema(std::move(schema))
+            , _permit(std::move(permit))
+            , _queue(queue)
+        {
+            push(state::start);
+        }
+        handler(handler&&) = default;
+        bool Null() {
+            sst_log.trace("Null()");
+            switch (top()) {
+                case state::before_ignored_value:
+                    return pop();
+                default:
+                    return unexpected();
+            }
+            return true;
+        }
+        bool Bool(bool b) {
+            sst_log.trace("Bool({})", b);
+            switch (top()) {
+                case state::before_bool:
+                    _bool.emplace(b);
+                    return pop();
+                default:
+                    return unexpected();
+            }
+            return true;
+        }
+        bool Int(int i) {
+            sst_log.trace("Int({})", i);
+            switch (top()) {
+                case state::before_ignored_value:
+                    return pop();
+                case state::before_integer:
+                    _integer.emplace(i);
+                    return pop();
+                default:
+                    return unexpected();
+            }
+            return true;
+        }
+        bool Uint(unsigned i) {
+            sst_log.trace("Uint({})", i);
+            switch (top()) {
+                case state::before_ignored_value:
+                    return pop();
+                case state::before_integer:
+                    _integer.emplace(i);
+                    return pop();
+                default:
+                    return unexpected();
+            }
+            return true;
+        }
+        bool Int64(int64_t i) {
+            sst_log.trace("Int64({})", i);
+            switch (top()) {
+                case state::before_ignored_value:
+                    return pop();
+                case state::before_integer:
+                    _integer.emplace(i);
+                    return pop();
+                default:
+                    return unexpected();
+            }
+            return true;
+        }
+        bool Uint64(uint64_t i) {
+            sst_log.trace("Uint64({})", i);
+            switch (top()) {
+                case state::before_ignored_value:
+                    return pop();
+                case state::before_integer:
+                    _integer.emplace(i);
+                    return pop();
+                default:
+                    return unexpected();
+            }
+            return true;
+        }
+        bool Double(double d) {
+            sst_log.trace("Double({})", d);
+            switch (top()) {
+                case state::before_ignored_value:
+                    return pop();
+                default:
+                    return unexpected();
+            }
+            return true;
+        }
+        bool RawNumber(const Ch* str, rapidjson::SizeType length, bool copy) {
+            sst_log.trace("RawNumber({})", std::string_view(str, length));
+            return unexpected();
+        }
+        bool String(const Ch* str, rapidjson::SizeType length, bool copy) {
+            sst_log.trace("String({})", std::string_view(str, length));
+            switch (top()) {
+                case state::before_ignored_value:
+                    return pop();
+                case state::before_string:
+                    _string.emplace(str, length);
+                    return pop();
+                default:
+                    return unexpected();
+            }
+            return true;
+        }
+        bool StartObject() {
+            sst_log.trace("StartObject()");
+            switch (top()) {
+                case state::before_partition:
+                    return push(state::in_partition);
+                case state::before_key:
+                    return push(state::in_key);
+                case state::before_tombstone:
+                    _tombstone.emplace();
+                    return push(state::in_tombstone);
+                case state::before_static_columns:
+                    _row.emplace();
+                    return push(state::before_column_key);
+                case state::before_clustering_element:
+                    _row.emplace();
+                    return push(state::in_clustering_element);
+                case state::before_marker:
+                    return push(state::in_marker);
+                case state::before_clustering_columns:
+                    return push(state::before_column_key);
+                case state::before_column:
+                    return push(state::in_column);
+                default:
+                    return unexpected();
+            }
+        }
+        bool Key(const Ch* str, rapidjson::SizeType length, bool copy) {
+            _key = std::string(str, length);
+            sst_log.trace("Key({})", _key);
+            switch (top()) {
+                case state::in_partition:
+                    if (_key == "key") {
+                        return push(state::before_key);
+                    }
+                    if (_key == "tombstone") {
+                        return push(state::before_tombstone);
+                    }
+                    if (_key == "static_row" || _key == "clustering_elements") {
+                        if (!_partition_start_emited && !finalize_partition_start()) {
+                            return false;
+                        }
+                        if (_key == "static_row") {
+                            return push(state::before_static_columns);
+                        } else {
+                            return push(state::before_clustering_elements);
+                        }
+                    }
+                    return unexpected(_key);
+                case state::in_key:
+                    if (_key == "value" || (top(2) == state::in_partition && _key == "token")) {
+                        return push(state::before_ignored_value);
+                    }
+                    if (_key == "raw") {
+                        return push(state::before_string);
+                    }
+                    return unexpected(_key);
+                case state::in_tombstone:
+                    if (_key == "timestamp") {
+                        return push(state::before_integer);
+                    }
+                    if (_key == "deletion_time") {
+                        return push(state::before_string);
+                    }
+                    return unexpected(_key);
+                case state::in_marker:
+                    if (_key == "timestamp") {
+                        return push(state::before_integer);
+                    }
+                    if (_key == "ttl" || _key == "expiry") {
+                        return push(state::before_string);
+                    }
+                    return unexpected(_key);
+                case state::in_clustering_element:
+                    if (_key == "type") {
+                        return push(state::before_string);
+                    }
+                    return unexpected(_key);
+                case state::in_range_tombstone_change:
+                    if (_key == "key") {
+                        return push(state::before_key);
+                    }
+                    if (_key == "weight") {
+                        return push(state::before_integer);
+                    }
+                    if (_key == "tombstone") {
+                        return push(state::before_tombstone);
+                    }
+                    return unexpected(_key);
+                case state::in_clustering_row:
+                    if (_key == "key") {
+                        return push(state::before_key);
+                    }
+                    if (_key == "marker") {
+                        return push(state::before_marker);
+                    }
+                    if (_key == "tombstone") {
+                        return push(state::before_tombstone);
+                    }
+                    if (_key == "shadowable_tombstone") {
+                        _is_shadowable = true;
+                        return push(state::before_tombstone);
+                    }
+                    if (_key == "columns") {
+                        return push(state::before_clustering_columns);
+                    }
+                    return unexpected(_key);
+                case state::before_column_key:
+                    _column.emplace(_schema->get_column_definition(bytes(reinterpret_cast<bytes::const_pointer>(_key.data()), _key.size())));
+                    if (!_column->def) {
+                        return error("failed to look-up column name {}", _key);
+                    }
+                    if (top(1) == state::before_static_columns && _column->def->kind != column_kind::static_column) {
+                        return error("cannot add column {} of kind {} to static row", _key, to_sstring(_column->def->kind));
+                    }
+                    if (top(1) == state::before_clustering_columns && _column->def->kind != column_kind::regular_column) {
+                        return error("cannot add column {} of kind {} to regular row", _key, to_sstring(_column->def->kind));
+                    }
+                    if (!_column->def->is_atomic()) {
+                        return error("failed to initialize column {}: non-atomic columns are not supported yet", _key);
+                    }
+                    return push(state::before_column);
+                case state::in_column:
+                    if (_key == "is_live") {
+                        return push(state::before_bool);
+                    }
+                    if (_key == "timestamp") {
+                        return push(state::before_integer);
+                    }
+                    if (_key == "ttl" || _key == "expiry" || _key == "value" || _key == "deletion_time") {
+                        return push(state::before_string);
+                    }
+                    return unexpected(_key);
+                default:
+                    return unexpected(_key);
+            }
+        }
+        bool EndObject(rapidjson::SizeType memberCount) {
+            sst_log.trace("EndObject()");
+            switch (top()) {
+                case state::in_partition:
+                case state::in_key:
+                case state::in_tombstone:
+                case state::in_range_tombstone_change:
+                case state::in_clustering_row:
+                case state::before_column_key:
+                case state::in_marker:
+                case state::in_column:
+                    return pop();
+                default:
+                    return unexpected();
+            }
+        }
+        bool StartArray() {
+            sst_log.trace("StartArray()");
+            switch (top()) {
+                case state::start:
+                    return push(state::before_partition);
+                case state::before_clustering_elements:
+                    return push(state::before_clustering_element);
+                default:
+                    return unexpected();
+            }
+        }
+        bool EndArray(rapidjson::SizeType elementCount) {
+            sst_log.trace("EndArray({})", elementCount);
+            switch (top()) {
+                case state::before_clustering_element:
+                case state::before_partition:
+                    return pop();
+                default:
+                    return unexpected();
+            }
+        }
+    };
+
+private:
+    class impl {
+        queue<mutation_fragment_v2_opt> _queue;
+        stream _stream;
+        handler _handler;
+        reader _reader;
+        thread _thread;
+
+    public:
+        impl(schema_ptr schema, reader_permit permit, input_stream<char> istream)
+            : _queue(1)
+            , _stream(std::move(istream))
+            , _handler(std::move(schema), std::move(permit), _queue)
+            , _thread([this] { _reader.Parse(_stream, _handler); })
+        { }
+        impl(impl&&) = default;
+        ~impl() {
+            _thread.join().get();
+        }
+        future<mutation_fragment_v2_opt> operator()() {
+            return _queue.pop_eventually().handle_exception([this] (std::exception_ptr e) -> mutation_fragment_v2_opt {
+                auto err_off = _reader.GetErrorOffset();
+                throw std::runtime_error(fmt::format("parsing input failed at line {}, offset {}: {}", _stream.line(), err_off - _stream.last_line_feed_pos(), e));
+            });
+        }
+    };
+    std::unique_ptr<impl> _impl;
+
+public:
+    explicit json_mutation_stream_parser(schema_ptr schema, reader_permit permit, input_stream<char> istream)
+        : _impl(std::make_unique<impl>(std::move(schema), std::move(permit), std::move(istream)))
+    { }
+    future<mutation_fragment_v2_opt> operator()() { return (*_impl)(); }
+};
+
+void write_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+        sstables::sstables_manager& manager, const bpo::variables_map& vm) {
+    static const std::vector<std::pair<std::string, mutation_fragment_stream_validation_level>> valid_validation_levels{
+        {"partition_region", mutation_fragment_stream_validation_level::partition_region},
+        {"token", mutation_fragment_stream_validation_level::token},
+        {"partition_key", mutation_fragment_stream_validation_level::partition_key},
+        {"clustering_key", mutation_fragment_stream_validation_level::clustering_key},
+    };
+    if (!sstables.empty()) {
+        throw std::invalid_argument("error: write operation does not operate on input sstables");
+    }
+    if (!vm.count("input-file")) {
+        throw std::invalid_argument("error: missing required option '--input-file'");
+    }
+    mutation_fragment_stream_validation_level validation_level;
+    {
+        const auto vl_name = vm["validation-level"].as<std::string>();
+        auto vl_it = boost::find_if(valid_validation_levels, [&vl_name] (const std::pair<std::string, mutation_fragment_stream_validation_level>& v) {
+            return v.first == vl_name;
+        });
+        if (vl_it == valid_validation_levels.end()) {
+            throw std::invalid_argument(fmt::format("error: invalid validation-level {}", vl_name));
+        }
+        validation_level = vl_it->second;
+    }
+    auto input_file = vm["input-file"].as<std::string>();
+    auto output_dir = vm["output-dir"].as<std::string>();
+    if (!vm.count("generation")) {
+        throw std::invalid_argument("error: missing required option '--generation'");
+    }
+    auto generation = sstables::generation_type(vm["generation"].as<int64_t>());
+    auto format = sstables::sstable_format_types::big;
+    auto version = sstables::get_highest_sstable_version();
+
+    {
+        auto sst_name = sstables::sstable::filename(output_dir, schema->ks_name(), schema->cf_name(), version, generation, format, component_type::Data);
+        if (file_exists(sst_name).get()) {
+            throw std::runtime_error(fmt::format("error: cannot create output sstable {}, file already exists", sst_name));
+        }
+    }
+
+    auto ifile = open_file_dma(input_file, open_flags::ro).get();
+    auto istream = make_file_input_stream(std::move(ifile));
+    auto parser = json_mutation_stream_parser{schema, permit, std::move(istream)};
+    auto reader = make_generating_reader_v2(schema, permit, std::move(parser));
+    auto writer_cfg = manager.configure_writer("scylla-sstable");
+    writer_cfg.validation_level = validation_level;
+    auto sst = manager.make_sstable(schema, output_dir, generation, version, format);
+
+    sst->write_components(std::move(reader), 1, schema, writer_cfg, encoding_stats{}).get();
+}
+
 template <typename SstableConsumer>
-void sstable_consumer_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const bpo::variables_map& vm) {
+void sstable_consumer_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+        sstables::sstables_manager& sst_man, const bpo::variables_map& vm) {
+    if (sstables.empty()) {
+        throw std::runtime_error("error: no sstables specified on the command line");
+    }
     const auto merge = vm.count("merge");
     const auto no_skips = vm.count("no-skips");
     const auto partitions = get_partitions(schema, vm);
@@ -1529,6 +2491,10 @@ const std::vector<option> all_options {
     typed_option<>("no-skips", "don't use skips to skip to next partition when the partition filter rejects one, this is slower but works with corrupt index"),
     typed_option<std::string>("bucket", "months", "the unit of time to use as bucket, one of (years, months, weeks, days, hours)"),
     typed_option<std::string>("output-format", "json", "the output-format, one of (text, json)"),
+    typed_option<std::string>("input-file", "the file containing the input"),
+    typed_option<std::string>("output-dir", ".", "directory to place the output files to"),
+    typed_option<int64_t>("generation", "generation of generated sstable"),
+    typed_option<std::string>("validation-level", "clustering_key", "degree of validation on the output, one of (partition_region, token, partition_key, clustering_key)"),
 };
 
 const std::vector<operation> operations{
@@ -1596,7 +2562,7 @@ $REGULAR_LIVE_CELL := {
 $REGULAR_DEAD_CELL := {
     "is_live": false,
     "timestamp": Int64,
-    "deletion_time": String // YYYY-MM-DD HH:MM:SS - optional
+    "deletion_time": String // YYYY-MM-DD HH:MM:SS
 }
 
 $COUNTER_CELL := {
@@ -2016,6 +2982,56 @@ the output will be:
     md-12311-big-Data.db.decompressed
 )",
             decompress_operation},
+    {"write",
+            "Write an sstable",
+R"(
+Write an sstable based on a JSON representation of the content. The JSON
+representation has to have the same schema as that of a single sstable
+from the output of the dump-data operation (corresponding to the $SSTABLE
+symbol). See the help of dump-data more details on the json schema.
+The easiest way to get started with writing your own sstable is to dump
+an existing sstable, modify the json then invoke this operation with the
+result. You can feed the output of dump-data to write by filtering the
+output of the former with `jq .sstables[]`:
+
+    $ scylla sstable dump-data --system-schema system_schema.columns /path/to/me-14-big-Data.db | jq .sstables[] > input.json
+    $ scylla sstable write --system-schema system_schema.columns --input-file ./input.json --generation 0
+    $ scylla sstable dump-data --system-schema system_schema.columns ./me-0-big-Data.db | jq .sstables[] > dump.json
+
+At the end of the above, `input.json` and `dump.json` will have the same
+content.
+
+Note that "write" doesn't yet support all the features of the scylladb
+storage engine. The following is not supported:
+* Counters.
+* Non-strictly atomic cells, this includes frozen multi-cell types like
+  collections, tuples and UDTs.
+
+Parsing uses a streaming json parser, it is safe to pass in input-files
+of any size.
+
+The output sstable will use the BIG format, the highest supported sstable
+format and the specified generation (--generation). By default it is
+placed in the local directory, can be changed with --output-dir. If the
+output sstable clashes with an existing sstable, the write will fail.
+
+The output is validated before being written to the disk. The validation
+done here is similar to that done by the validate operation. The level
+of validation can be changed with the --validation-level flag.
+Possible validation-levels are:
+* partition_region - only check fragment types, e.g. that a
+  partition-end is followed by partition-start or EOS.
+* token - also check token order of partitions.
+* partition_key - full check on partition-ordering.
+* clustering_key - also check clustering element ordering.
+
+Note that levels are cumulative, each contains all the checks of the
+previous levels too. By default the strictest level is used. This can
+be relaxed if e.g. one wants to produce intentionally corrupt sstables
+for tests.
+)",
+            {"input-file", "output-dir", "generation", "validation-level"},
+            write_operation},
 };
 
 } // anonymous namespace
@@ -2034,10 +3050,9 @@ int scylla_sstable_main(int argc, char** argv) {
     const auto description_template =
 R"(scylla-sstable - a multifunctional command-line tool to examine the content of sstables.
 
-Usage: scylla sstable {{operation}} [--option1] [--option2] ... {{sstable_path1}} [{{sstable_path2}}] ...
+Usage: scylla sstable {{operation}} [--option1] [--option2] ... [{{sstable_path1}}] [{{sstable_path2}}] ...
 
-Allows examining the contents of sstables with various built-in tools
-(operations).
+Contains various tools (operations) to examine or produce sstables.
 
 # Operations
 
@@ -2052,12 +3067,12 @@ For more details on an operation, run: scylla sstable {{operation}} --help
 
 # Sstables
 
-The sstables to-be-examined are passed as positional command line
-arguments. Sstables will be processed by the selected operation
-one-by-one. Any number of sstables can be passed but mind the open file
-limits and the memory consumption. Always pass the path to the data
-component of the sstables (*-Data.db) even if you want to examine
-another component.
+Operations that read sstables, take the sstables to-be-examined
+as positional command line arguments. Sstables will be processed by the
+selected operation one-by-one. Any number of sstables can be passed but
+mind the open file limits and the memory consumption. Always pass the
+path to the data component of the sstables (*-Data.db) even if you want
+to examine another component.
 NOTE: currently you have to prefix dir local paths with `./`.
 
 # Schema
@@ -2136,9 +3151,8 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
         ("schema-file", bpo::value<sstring>()->default_value("schema.cql"), "file containing the schema description")
         ("system-schema", bpo::value<sstring>(), "table has to be a system table, name has to be in `keyspace.table` notation")
         ;
-
     app.add_positional_options({
-        {"sstables", bpo::value<std::vector<sstring>>(), "sstable(s) to process, can also be provided as positional arguments", -1},
+        {"sstables", bpo::value<std::vector<sstring>>(), "sstable(s) to process for operations that have sstable inputs, can also be provided as positional arguments", -1},
     });
 
     if (found_op) {
@@ -2183,18 +3197,17 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
             sstables::sstables_manager sst_man(large_data_handler, dbcfg, feature_service, tracker);
             auto close_sst_man = deferred_close(sst_man);
 
-            if (!app_config.count("sstables")) {
-                std::cerr << "error: no sstables specified on the command line\n";
-                return 2;
+            std::vector<sstables::shared_sstable> sstables;
+            if (app_config.count("sstables")) {
+                sstables = load_sstables(schema, sst_man, app_config["sstables"].as<std::vector<sstring>>());
             }
-            const auto sstables = load_sstables(schema, sst_man, app_config["sstables"].as<std::vector<sstring>>());
 
             reader_concurrency_semaphore rcs_sem(reader_concurrency_semaphore::no_limits{}, app_name);
             auto stop_semaphore = deferred_stop(rcs_sem);
 
             const auto permit = rcs_sem.make_tracking_only_permit(schema.get(), app_name, db::no_timeout);
 
-            operation(schema, permit, sstables, app_config);
+            operation(schema, permit, sstables, sst_man, app_config);
 
             return 0;
         });
