@@ -71,7 +71,6 @@
 #include "readers/multishard.hh"
 
 #include "lang/wasm.hh"
-#include "utils/joinpoint.hh"
 
 using namespace std::chrono_literals;
 using namespace db;

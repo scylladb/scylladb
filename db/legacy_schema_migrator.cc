@@ -36,7 +36,6 @@
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
 #include "cql3/util.hh"
-#include "utils/joinpoint.hh"
 #include "types/user.hh"
 
 static seastar::logger mlogger("legacy_schema_migrator");

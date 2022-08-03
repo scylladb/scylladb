@@ -55,7 +55,6 @@
 #include "utils/latency.hh"
 #include "schema.hh"
 #include "schema_registry.hh"
-#include "utils/joinpoint.hh"
 #include <seastar/util/lazy.hh>
 #include <seastar/core/metrics.hh>
 #include <seastar/core/execution_stage.hh>
