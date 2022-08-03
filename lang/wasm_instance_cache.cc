@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#ifdef SCYLLA_ENABLE_WASMTIME
+
 #include "lang/wasm_instance_cache.hh"
 #include "seastar/core/metrics.hh"
 #include "seastar/core/scheduling.hh"
@@ -220,3 +222,5 @@ struct equal_to<seastar::scheduling_group> {
 };
 
 }
+
+#endif
