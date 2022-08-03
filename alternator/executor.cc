@@ -759,6 +759,19 @@ future<executor::request_return_type> executor::tag_resource(client_state& clien
         co_return api_error::validation("The number of tags must be at least 1") ;
     }
     update_tags_map(*tags, tags_map,  update_tags_action::add_tags);
+
+    if (auto it = tags_map.find("system:default_time_to_live"); it != tags_map.end()) {
+        const int32_t default_ttl = std::atoi(it->second.data());
+        if (default_ttl <= 0) {
+            throw api_error::validation(
+                    format("Incorrect default_time_to_live tag value: {}. It must be a positive integer", it->second));
+        }
+        elogger.debug("Updating default_time_to_live of table {} to {}", schema->cf_name(), default_ttl);
+        schema_builder builder(schema);
+        builder.set_default_time_to_live(std::chrono::seconds(default_ttl));
+        schema = builder.build();
+    }
+
     co_await db::update_tags(_mm, schema, std::move(tags_map));
     co_return json_string("");
 }
@@ -779,6 +792,12 @@ future<executor::request_return_type> executor::untag_resource(client_state& cli
 
     std::map<sstring, sstring> tags_map = get_tags_of_table_or_throw(schema);
     update_tags_map(*tags, tags_map, update_tags_action::delete_tags);
+    if (schema->default_time_to_live() != gc_clock::duration::zero() && !tags_map.contains("system:default_time_to_live")) {
+        elogger.debug("Deleting default_time_to_live of table {}", schema->cf_name());
+        schema_builder builder(schema);
+        builder.set_default_time_to_live(gc_clock::duration::zero());
+        schema = builder.build();
+    }
     co_await db::update_tags(_mm, schema, std::move(tags_map));
     co_return json_string("");
 }
@@ -1012,6 +1031,15 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
     }
     builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(tags_map));
 
+    if (auto it = tags_map.find("system:default_time_to_live"); it != tags_map.end()) {
+        const int32_t default_ttl = std::atoi(it->second.data());
+        if (default_ttl <= 0) {
+            throw api_error::validation(
+                    format("Incorrect default_time_to_live tag value: {}. It must be a positive integer", it->second));
+        }
+        builder.set_default_time_to_live(std::chrono::seconds(default_ttl));
+    }
+
     schema_ptr schema = builder.build();
     auto where_clause_it = where_clauses.begin();
     for (auto& view_builder : view_builders) {
@@ -1140,9 +1168,9 @@ future<executor::request_return_type> executor::update_table(client_state& clien
 static atomic_cell make_live_cell(const abstract_type& type, api::timestamp_type ts, const bytes& value,
         gc_clock::duration default_ttl, atomic_cell::collection_member is_collection_member = atomic_cell::collection_member::no) {
     if (default_ttl == gc_clock::duration::zero()) {
-        return atomic_cell::make_live(type, ts, std::move(value), is_collection_member);
+        return atomic_cell::make_live(type, ts, value, is_collection_member);
     } else {
-        return atomic_cell::make_live(type, ts, std::move(value), gc_clock::now() + default_ttl, default_ttl, is_collection_member);
+        return atomic_cell::make_live(type, ts, value, gc_clock::now() + default_ttl, default_ttl, is_collection_member);
     }
 }
 
@@ -1317,7 +1345,7 @@ mutation put_or_delete_item::build(schema_ptr schema, api::timestamp_type ts) co
         if (!cdef) {
             attrs_collector.put(c.column_name, c.value, ts, default_ttl);
         } else {
-            row.cells().apply(*cdef, make_live_cell(*cdef->type, ts, std::move(c.value), default_ttl));
+            row.cells().apply(*cdef, make_live_cell(*cdef->type, ts, c.value, default_ttl));
         }
     }
     if (!attrs_collector.empty()) {
