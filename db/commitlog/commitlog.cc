@@ -1474,6 +1474,11 @@ future<> db::commitlog::segment_manager::init() {
     for (auto& d : descs) {
         id = std::max(id, replay_position(d.id).base_id());
         _segments_to_replay.push_back(cfg.commit_log_location + "/" + d.filename());
+        // #11184 - include replay footprint so we make sure to delete any segments
+        // pushing us over limits in "delete_segments" (assumed called after replay)
+        // Note: if noone calls get_segments_to_replay + delete we're rather borked,
+        // but...
+        totals.total_size_on_disk += co_await file_size(_segments_to_replay.back());
     }
 
     // base id counter is [ <shard> | <base> ]
