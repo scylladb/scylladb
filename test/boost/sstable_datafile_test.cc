@@ -2713,6 +2713,42 @@ SEASTAR_TEST_CASE(sstable_run_identifier_correctness) {
     });
 }
 
+SEASTAR_TEST_CASE(sstable_run_disjoint_invariant_test) {
+    return test_env::do_with([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+
+        auto key_and_token_pair = token_generation_for_current_shard(6);
+        auto next_gen = [gen = make_lw_shared<unsigned>(1)] { return (*gen)++; };
+
+        sstables::sstable_run run;
+
+        auto insert = [&] (int first_key_idx, int last_key_idx) {
+            auto sst = sstable_for_overlapping_test(env, s, next_gen(),
+                                                    key_and_token_pair[first_key_idx].first, key_and_token_pair[last_key_idx].first);
+            return run.insert(sst);
+        };
+
+        // insert ranges [0, 0], [1, 1], [3, 4]
+        BOOST_REQUIRE(insert(0, 0) == true);
+        BOOST_REQUIRE(insert(1, 1) == true);
+        BOOST_REQUIRE(insert(3, 4) == true);
+        BOOST_REQUIRE(run.all().size() == 3);
+
+        // check overlapping candidates won't be inserted
+        BOOST_REQUIRE(insert(0, 4) == false);
+        BOOST_REQUIRE(insert(4, 5) == false);
+        BOOST_REQUIRE(run.all().size() == 3);
+
+        // check non-overlapping candidates will be inserted
+        BOOST_REQUIRE(insert(2, 2) == true);
+        BOOST_REQUIRE(insert(5, 5) == true);
+        BOOST_REQUIRE(run.all().size() == 5);
+
+        return make_ready_future<>();
+    });
+}
+
 SEASTAR_TEST_CASE(test_reads_cassandra_static_compact) {
     return test_env::do_with_async([] (test_env& env) {
         // CREATE COLUMNFAMILY cf (key varchar PRIMARY KEY, c2 text, c1 text) WITH COMPACT STORAGE ;
