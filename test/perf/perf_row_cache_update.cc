@@ -41,6 +41,9 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
         auto prefill_compacted = logalloc::memory_compacted();
         auto prefill_allocated = logalloc::memory_allocated();
 
+        scheduling_latency_measurer memtable_slm;
+        memtable_slm.start();
+
         auto mt = make_lw_shared<memtable>(s);
         while (mt->occupancy().total_space() < memtable_size) {
             auto pk = dht::decorate_key(*s, partition_key::from_single_value(*s,
@@ -51,6 +54,10 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
                 return;
             }
         }
+
+        memtable_slm.stop();
+
+        std::cout << format("Memtable fill took {}", memtable_slm) << std::endl;
 
         auto prev_compacted = logalloc::memory_compacted();
         auto prev_allocated = logalloc::memory_allocated();
@@ -214,6 +221,40 @@ void test_partition_with_lots_of_range_tombstones() {
     });
 }
 
+// This test case stresses handling of overlapping range tombstones
+void test_partition_with_lots_of_range_tombstones_with_residuals() {
+    auto s = schema_builder("ks", "cf")
+        .with_column("pk", uuid_type, column_kind::partition_key)
+        .with_column("ck", int32_type, column_kind::clustering_key)
+        .with_column("v1", bytes_type, column_kind::regular_column)
+        .with_column("v2", bytes_type, column_kind::regular_column)
+        .with_column("v3", bytes_type, column_kind::regular_column)
+        .build();
+
+    auto pk = dht::decorate_key(*s, partition_key::from_single_value(*s,
+        serialized(utils::UUID_gen::get_time_UUID())));
+    int ck_idx = 0;
+
+    run_test("Large partition, lots of range tombstones with residuals", s, [&] {
+        mutation m(s, pk);
+        auto val = data_value(bytes(bytes::initialized_later(), cell_size));
+        auto ck = clustering_key::from_single_value(*s, serialized(ck_idx++));
+        auto r = query::clustering_range::make({ck}, {ck});
+        tombstone tomb(api::new_timestamp(), gc_clock::now());
+        m.partition().apply_row_tombstone(*s, range_tombstone(bound_view::from_range_start(r), bound_view::top(), tomb));
+
+        // Stress range tombstone overlapping with lots of range tombstones
+        auto stride = 1'000'000;
+        if (ck_idx == stride) {
+            ck = clustering_key::from_single_value(*s, serialized(ck_idx - stride));
+            r = query::clustering_range::make({ck}, {ck});
+            m.partition().apply_row_tombstone(*s, range_tombstone(bound_view::from_range_start(r), bound_view::top(), tomb));
+        }
+
+        return m;
+    });
+}
+
 int main(int argc, char** argv) {
     app_template app;
     return app.run(argc, argv, [&app] {
@@ -227,6 +268,7 @@ int main(int argc, char** argv) {
             test_partition_with_few_small_rows();
             test_partition_with_lots_of_small_rows();
             test_partition_with_lots_of_range_tombstones();
+            test_partition_with_lots_of_range_tombstones_with_residuals();
         });
     });
 }
