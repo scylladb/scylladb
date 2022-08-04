@@ -6,6 +6,10 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "idl/range.idl.hh"
+#include "idl/token.idl.hh"
+#include "idl/uuid.idl.hh"
+
 namespace streaming {
 
 class stream_request {

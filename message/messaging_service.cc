@@ -14,7 +14,6 @@
 #include <seastar/core/distributed.hh>
 #include "gms/failure_detector.hh"
 #include "gms/gossiper.hh"
-#include "gms/inet_address_serializer.hh"
 #include "streaming/prepare_message.hh"
 #include "gms/gossip_digest_syn.hh"
 #include "gms/gossip_digest_ack.hh"
@@ -74,8 +73,6 @@
 #include "idl/replica_exception.dist.hh"
 #include "idl/per_partition_rate_limit_info.dist.hh"
 #include "idl/storage_proxy.dist.hh"
-#include "serializer_impl.hh"
-#include "serialization_visitors.hh"
 #include "message/rpc_protocol_impl.hh"
 #include "idl/consistency_level.dist.impl.hh"
 #include "idl/tracing.dist.impl.hh"

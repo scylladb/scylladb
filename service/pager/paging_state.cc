@@ -12,17 +12,8 @@
 #include "keys.hh"
 #include "paging_state.hh"
 #include <seastar/core/simple-stream.hh>
-#include "idl/keys.dist.hh"
-#include "idl/uuid.dist.hh"
 #include "idl/paging_state.dist.hh"
-#include "idl/token.dist.hh"
-#include "idl/range.dist.hh"
-#include "serializer_impl.hh"
-#include "idl/keys.dist.impl.hh"
-#include "idl/uuid.dist.impl.hh"
 #include "idl/paging_state.dist.impl.hh"
-#include "idl/token.dist.impl.hh"
-#include "idl/range.dist.impl.hh"
 #include "message/messaging_service.hh"
 #include "utils/bit_cast.hh"
 

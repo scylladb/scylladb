@@ -6,6 +6,10 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "raft/raft.hh"
+
+#include "idl/uuid.idl.hh"
+
 namespace raft {
 
 namespace internal {

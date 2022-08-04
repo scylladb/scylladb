@@ -6,6 +6,10 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "tracing/tracing.hh"
+
+#include "idl/uuid.idl.hh"
+
 namespace tracing {
 enum class trace_type : uint8_t {
     NONE,

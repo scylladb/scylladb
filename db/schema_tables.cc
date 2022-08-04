@@ -64,9 +64,7 @@
 #include "lang/lua.hh"
 
 #include "db/query_context.hh"
-#include "serializer.hh"
 #include "idl/mutation.dist.hh"
-#include "serializer_impl.hh"
 #include "idl/mutation.dist.impl.hh"
 #include "db/system_keyspace.hh"
 #include "cql3/untyped_result_set.hh"

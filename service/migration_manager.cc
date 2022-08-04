@@ -31,14 +31,6 @@
 #include "cql3/functions/user_aggregate.hh"
 #include "cql3/functions/user_function.hh"
 
-#include "serialization_visitors.hh"
-#include "serializer.hh"
-#include "idl/frozen_schema.dist.hh"
-#include "idl/uuid.dist.hh"
-#include "serializer_impl.hh"
-#include "idl/frozen_schema.dist.impl.hh"
-#include "idl/uuid.dist.impl.hh"
-
 namespace service {
 
 static logging::logger mlogger("migration_manager");

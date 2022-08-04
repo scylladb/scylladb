@@ -40,7 +40,6 @@
 #include "hashers.hh"
 #include "release.hh"
 #include "log.hh"
-#include "serializer.hh"
 #include <seastar/core/enum.hh>
 #include <seastar/net/inet_address.hh>
 #include "index/secondary_index.hh"
@@ -61,7 +60,6 @@
 #include "utils/build_id.hh"
 #include "query-result-set.hh"
 #include "idl/frozen_mutation.dist.hh"
-#include "serializer_impl.hh"
 #include "idl/frozen_mutation.dist.impl.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include "client_data.hh"
@@ -1382,12 +1380,6 @@ std::unique_ptr<table_selector> table_selector::all_in_keyspace(sstring name) {
 }
 
 }
-
-#include "idl/replay_position.dist.hh"
-#include "idl/truncation_record.dist.hh"
-#include "serializer_impl.hh"
-#include "idl/replay_position.dist.impl.hh"
-#include "idl/truncation_record.dist.impl.hh"
 
 namespace db {
 

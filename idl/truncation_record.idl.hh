@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "idl/replay_position.idl.hh"
+
 namespace db {
 
 struct truncation_record {

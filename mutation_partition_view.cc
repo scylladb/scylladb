@@ -23,15 +23,7 @@
 #include "concrete_types.hh"
 #include "types/user.hh"
 
-#include "utils/UUID.hh"
-#include "serializer.hh"
-#include "idl/uuid.dist.hh"
-#include "idl/keys.dist.hh"
 #include "idl/mutation.dist.hh"
-#include "serializer_impl.hh"
-#include "serialization_visitors.hh"
-#include "idl/uuid.dist.impl.hh"
-#include "idl/keys.dist.impl.hh"
 #include "idl/mutation.dist.impl.hh"
 
 using namespace db;

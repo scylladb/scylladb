@@ -1,3 +1,19 @@
+/*
+ * Copyright 2016-present ScyllaDB
+ */
+
+/*
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
+#include "dht/i_partitioner.hh"
+#include "service/pager/paging_state.hh"
+
+#include "idl/range.idl.hh"
+#include "idl/token.idl.hh"
+#include "idl/keys.idl.hh"
+#include "idl/uuid.idl.hh"
+
 namespace db {
 enum class read_repair_decision : uint8_t {
   NONE,

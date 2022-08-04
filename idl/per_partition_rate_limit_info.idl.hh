@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "db/per_partition_rate_limit_info.hh"
+
 namespace db {
 
 namespace per_partition_rate_limit {

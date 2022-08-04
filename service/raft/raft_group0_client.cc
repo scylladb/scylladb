@@ -13,15 +13,6 @@
 
 #include "frozen_schema.hh"
 #include "schema_mutations.hh"
-#include "serialization_visitors.hh"
-#include "serializer.hh"
-#include "idl/frozen_schema.dist.hh"
-#include "idl/uuid.dist.hh"
-#include "serializer_impl.hh"
-#include "idl/frozen_schema.dist.impl.hh"
-#include "idl/uuid.dist.impl.hh"
-#include "idl/raft_storage.dist.hh"
-#include "idl/raft_storage.dist.impl.hh"
 #include "idl/group0_state_machine.dist.hh"
 #include "idl/group0_state_machine.dist.impl.hh"
 

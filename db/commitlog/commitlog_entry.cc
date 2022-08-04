@@ -8,17 +8,7 @@
 
 #include "counters.hh"
 #include "commitlog_entry.hh"
-#include "idl/uuid.dist.hh"
-#include "idl/keys.dist.hh"
-#include "idl/frozen_mutation.dist.hh"
-#include "idl/mutation.dist.hh"
 #include "idl/commitlog.dist.hh"
-#include "serializer_impl.hh"
-#include "serialization_visitors.hh"
-#include "idl/uuid.dist.impl.hh"
-#include "idl/keys.dist.impl.hh"
-#include "idl/frozen_mutation.dist.impl.hh"
-#include "idl/mutation.dist.impl.hh"
 #include "idl/commitlog.dist.impl.hh"
 
 #include <seastar/core/simple-stream.hh>
