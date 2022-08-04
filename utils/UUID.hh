@@ -217,6 +217,15 @@ struct tagged_uuid {
     bool operator<(const tagged_uuid& o) const noexcept {
         return id < o.id;
     }
+    bool operator>(const tagged_uuid& o) const noexcept {
+        return id > o.id;
+    }
+    bool operator<=(const tagged_uuid& o) const noexcept {
+        return id <= o.id;
+    }
+    bool operator>=(const tagged_uuid& o) const noexcept {
+        return id >= o.id;
+    }
     explicit operator bool() const noexcept {
         // The default constructor sets the id to nil, which is
         // guaranteed to not match any valid id.
@@ -225,6 +234,11 @@ struct tagged_uuid {
     static tagged_uuid create_random_id() noexcept { return tagged_uuid{utils::make_random_uuid()}; }
     explicit tagged_uuid(const utils::UUID& uuid) noexcept : id(uuid) {}
     tagged_uuid() = default;
+
+    // FIXME: rename to uuid()
+    const utils::UUID& to_uuid() const noexcept {
+        return id;
+    }
 };
 } // namespace utils
 
