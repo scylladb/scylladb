@@ -1698,6 +1698,8 @@ def load_file(name):
     """)
     print_cw(cout)
     fprintln(hout, "#include \"serializer.hh\"\n")
+    fprintln(cout, "#include \"serializer_impl.hh\"")
+    fprintln(cout, "#include \"serialization_visitors.hh\"")
 
     def maybe_open_namespace(printed=False):
         if config.ns != '' and not printed:
