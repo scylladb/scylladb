@@ -30,28 +30,30 @@ private:
     int64_t most_sig_bits;
     int64_t least_sig_bits;
 public:
-    constexpr UUID() : most_sig_bits(0), least_sig_bits(0) {}
-    constexpr UUID(int64_t most_sig_bits, int64_t least_sig_bits)
+    constexpr UUID() noexcept : most_sig_bits(0), least_sig_bits(0) {}
+    constexpr UUID(int64_t most_sig_bits, int64_t least_sig_bits) noexcept
         : most_sig_bits(most_sig_bits), least_sig_bits(least_sig_bits) {}
+
+    // May throw marshal_exception is failed to parse uuid string.
     explicit UUID(const sstring& uuid_string) : UUID(sstring_view(uuid_string)) { }
     explicit UUID(const char * s) : UUID(sstring_view(s)) {}
     explicit UUID(sstring_view uuid_string);
 
-    int64_t get_most_significant_bits() const {
+    int64_t get_most_significant_bits() const noexcept {
         return most_sig_bits;
     }
-    int64_t get_least_significant_bits() const {
+    int64_t get_least_significant_bits() const noexcept {
         return least_sig_bits;
     }
-    int version() const {
+    int version() const noexcept {
         return (most_sig_bits >> 12) & 0xf;
     }
 
-    bool is_timestamp() const {
+    bool is_timestamp() const noexcept {
         return version() == 1;
     }
 
-    int64_t timestamp() const {
+    int64_t timestamp() const noexcept {
         //if (version() != 1) {
         //     throw new UnsupportedOperationException("Not a time-based UUID");
         //}
@@ -76,12 +78,12 @@ public:
 
     friend std::ostream& operator<<(std::ostream& out, const UUID& uuid);
 
-    bool operator==(const UUID& v) const {
+    bool operator==(const UUID& v) const noexcept {
         return most_sig_bits == v.most_sig_bits
                 && least_sig_bits == v.least_sig_bits
                 ;
     }
-    bool operator!=(const UUID& v) const {
+    bool operator!=(const UUID& v) const noexcept {
         return !(*this == v);
     }
 
@@ -89,7 +91,7 @@ public:
     // monotonicity. For this reason you should avoid using it for
     // UUIDs that could store timeuuids, otherwise bugs like
     // https://github.com/scylladb/scylla/issues/7729 may happen.
-    bool operator<(const UUID& v) const {
+    bool operator<(const UUID& v) const noexcept {
          if (most_sig_bits != v.most_sig_bits) {
              return uint64_t(most_sig_bits) < uint64_t(v.most_sig_bits);
          } else {
@@ -97,15 +99,15 @@ public:
          }
     }
 
-    bool operator>(const UUID& v) const {
+    bool operator>(const UUID& v) const noexcept {
         return v < *this;
     }
 
-    bool operator<=(const UUID& v) const {
+    bool operator<=(const UUID& v) const noexcept {
         return !(*this > v);
     }
 
-    bool operator>=(const UUID& v) const {
+    bool operator>=(const UUID& v) const noexcept {
         return !(*this < v);
     }
 
@@ -141,14 +143,14 @@ inline UUID null_uuid() noexcept {
     return UUID();
 }
 
-UUID make_random_uuid();
+UUID make_random_uuid() noexcept;
 
-inline std::strong_ordering uint64_t_tri_compare(uint64_t a, uint64_t b) {
+inline std::strong_ordering uint64_t_tri_compare(uint64_t a, uint64_t b) noexcept {
     return a <=> b;
 }
 
 // Read 8 most significant bytes of timeuuid from serialized bytes
-inline uint64_t timeuuid_read_msb(const int8_t *b) {
+inline uint64_t timeuuid_read_msb(const int8_t *b) noexcept {
     // cast to unsigned to avoid sign-compliment during shift.
     auto u64 = [](uint8_t i) -> uint64_t { return i; };
     // Scylla and Cassandra use a standard UUID memory layout for MSB:
@@ -163,7 +165,7 @@ inline uint64_t timeuuid_read_msb(const int8_t *b) {
            u64(b[2]) << 8  | u64(b[3]);
 }
 
-inline uint64_t uuid_read_lsb(const int8_t *b) {
+inline uint64_t uuid_read_lsb(const int8_t *b) noexcept {
     auto u64 = [](uint8_t i) -> uint64_t { return i; };
     return u64(b[8]) << 56 | u64(b[9]) << 48 |
            u64(b[10]) << 40 | u64(b[11]) << 32 |
@@ -180,7 +182,7 @@ inline uint64_t uuid_read_lsb(const int8_t *b) {
 // To avoid breaking ordering in existing sstables, Scylla preserves
 // Cassandra compare order.
 //
-inline std::strong_ordering timeuuid_tri_compare(bytes_view o1, bytes_view o2) {
+inline std::strong_ordering timeuuid_tri_compare(bytes_view o1, bytes_view o2) noexcept {
     auto timeuuid_read_lsb = [](bytes_view o) -> uint64_t {
         return uuid_read_lsb(o.begin()) ^ 0x8080808080808080;
     };
@@ -198,7 +200,7 @@ inline std::strong_ordering timeuuid_tri_compare(bytes_view o1, bytes_view o2) {
 // which is both faster and monotonic, so should be preferred
 // to @timeuuid_tri_compare() used for all new features.
 //
-inline std::strong_ordering uuid_tri_compare_timeuuid(bytes_view o1, bytes_view o2) {
+inline std::strong_ordering uuid_tri_compare_timeuuid(bytes_view o1, bytes_view o2) noexcept {
     auto res = uint64_t_tri_compare(timeuuid_read_msb(o1.begin()), timeuuid_read_msb(o2.begin()));
     if (res == 0) {
         res = uint64_t_tri_compare(uuid_read_lsb(o1.begin()), uuid_read_lsb(o2.begin()));
@@ -211,7 +213,7 @@ inline std::strong_ordering uuid_tri_compare_timeuuid(bytes_view o1, bytes_view 
 template<>
 struct appending_hash<utils::UUID> {
     template<typename Hasher>
-    void operator()(Hasher& h, const utils::UUID& id) const {
+    void operator()(Hasher& h, const utils::UUID& id) const noexcept {
         feed_hash(h, id.get_most_significant_bits());
         feed_hash(h, id.get_least_significant_bits());
     }
@@ -220,7 +222,7 @@ struct appending_hash<utils::UUID> {
 namespace std {
 template<>
 struct hash<utils::UUID> {
-    size_t operator()(const utils::UUID& id) const {
+    size_t operator()(const utils::UUID& id) const noexcept {
         auto hilo = id.get_most_significant_bits()
                 ^ id.get_least_significant_bits();
         return size_t((hilo >> 32) ^ hilo);
