@@ -40,8 +40,7 @@ bool sstable_run::will_introduce_overlapping(const shared_sstable& sst) const {
         auto less_cmp = [s = s1->get_schema()] (const dht::decorated_key& k1, const dht::decorated_key& k2) {
             return k1.less_compare(*s, k2);
         };
-        return less_cmp(s1->get_first_decorated_key(), s2->get_first_decorated_key()) &&
-               less_cmp(s1->get_last_decorated_key(), s2->get_first_decorated_key());
+        return less_cmp(s1->get_last_decorated_key(), s2->get_first_decorated_key());
     };
     // lower bound will be the 1st element which is not *all* before the candidate sstable.
     // upper bound will be the 1st element which the candidate sstable is *all* before.
