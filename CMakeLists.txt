@@ -612,6 +612,7 @@ set(scylla_sources
     streaming/stream_task.cc
     streaming/stream_transfer_task.cc
     table_helper.cc
+    tasks/task_manager.cc
     thrift/controller.cc
     thrift/handler.cc
     thrift/server.cc
