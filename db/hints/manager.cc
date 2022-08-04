@@ -506,7 +506,7 @@ future<> manager::end_point_hints_manager::flush_current_hints() noexcept {
 
 class no_column_mapping : public std::out_of_range {
 public:
-    no_column_mapping(const utils::UUID& id) : std::out_of_range(format("column mapping for CF {} is missing", id)) {}
+    no_column_mapping(const table_schema_version& id) : std::out_of_range(format("column mapping for CF schema_version {} is missing", id)) {}
 };
 
 future<> manager::end_point_hints_manager::sender::flush_maybe() noexcept {

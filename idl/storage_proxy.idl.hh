@@ -34,4 +34,4 @@ verb [[with_timeout]] truncate (sstring, sstring);
 verb [[with_client_info, with_timeout]] paxos_prepare (query::read_command cmd, partition_key key, utils::UUID ballot, bool only_digest, query::digest_algorithm da, std::optional<tracing::trace_info> trace_info) -> service::paxos::prepare_response [[unique_ptr]];
 verb [[with_client_info, with_timeout]] paxos_accept (service::paxos::proposal proposal [[ref]], std::optional<tracing::trace_info> trace_info) -> bool;
 verb [[with_client_info, with_timeout, one_way]] paxos_learn (service::paxos::proposal decision, inet_address_vector_replica_set forward, gms::inet_address reply_to, unsigned shard, uint64_t response_id, std::optional<tracing::trace_info>);
-verb [[with_client_info, with_timeout, one_way]] paxos_prune (utils::UUID schema_id, partition_key key [[ref]], utils::UUID ballot, std::optional<tracing::trace_info> trace_info);
+verb [[with_client_info, with_timeout, one_way]] paxos_prune (table_schema_version schema_id, partition_key key [[ref]], utils::UUID ballot, std::optional<tracing::trace_info> trace_info);

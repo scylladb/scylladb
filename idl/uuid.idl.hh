@@ -19,3 +19,7 @@ class UUID final {
 class table_id final {
     utils::UUID uuid();
 };
+
+class table_schema_version final {
+    utils::UUID uuid();
+};

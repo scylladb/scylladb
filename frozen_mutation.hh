@@ -167,7 +167,7 @@ public:
     frozen_mutation& operator=(const frozen_mutation&) = default;
     const bytes_ostream& representation() const { return _bytes; }
     table_id column_family_id() const;
-    utils::UUID schema_version() const; // FIXME: Should replace column_family_id()
+    table_schema_version schema_version() const; // FIXME: Should replace column_family_id()
     partition_key_view key() const;
     dht::decorated_key decorated_key(const schema& s) const;
     mutation_partition_view partition() const;

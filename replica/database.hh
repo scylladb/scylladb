@@ -14,7 +14,6 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/execution_stage.hh>
-#include "utils/UUID.hh"
 #include "utils/hash.hh"
 #include "db_clock.hh"
 #include "gc_clock.hh"
@@ -1329,7 +1328,7 @@ private:
     ks_cf_to_uuid_t _ks_cf_to_uuid;
     std::unique_ptr<db::commitlog> _commitlog;
     std::unique_ptr<db::commitlog> _schema_commitlog;
-    utils::updateable_value_source<utils::UUID> _version;
+    utils::updateable_value_source<table_schema_version> _version;
     uint32_t _schema_change_count = 0;
     // compaction_manager object is referenced by all column families of a database.
     compaction_manager& _compaction_manager;
@@ -1408,7 +1407,7 @@ private:
     future<> create_keyspace(const lw_shared_ptr<keyspace_metadata>&, locator::effective_replication_map_factory& erm_factory, bool is_bootstrap, system_keyspace system);
     void remove(const table&) noexcept;
 public:
-    static utils::UUID empty_version;
+    static table_schema_version empty_version;
 
     query::result_memory_limiter& get_result_memory_limiter() {
         return _result_memory_limiter;
@@ -1444,10 +1443,10 @@ public:
     cache_tracker& row_cache_tracker() { return _row_cache_tracker; }
     future<> drop_caches() const;
 
-    void update_version(const utils::UUID& version);
+    void update_version(const table_schema_version& version);
 
-    const utils::UUID& get_version() const;
-    utils::observable<utils::UUID>& observable_schema_version() const { return _version.as_observable(); }
+    const table_schema_version& get_version() const;
+    utils::observable<table_schema_version>& observable_schema_version() const { return _version.as_observable(); }
 
     db::commitlog* commitlog() const {
         return _commitlog.get();

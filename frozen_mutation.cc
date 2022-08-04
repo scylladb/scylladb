@@ -14,7 +14,6 @@
 #include "counters.hh"
 #include "partition_builder.hh"
 #include "mutation_partition_serializer.hh"
-#include "utils/UUID.hh"
 #include "utils/data_input.hh"
 #include "query-result-set.hh"
 #include "idl/mutation.dist.hh"
@@ -41,7 +40,7 @@ frozen_mutation::column_family_id() const {
     return mutation_view().table_id();
 }
 
-utils::UUID
+table_schema_version
 frozen_mutation::schema_version() const {
     return mutation_view().schema_version();
 }

@@ -22,7 +22,6 @@
 #include "types.hh"
 #include "compound.hh"
 #include "gc_clock.hh"
-#include "utils/UUID.hh"
 #include "compress.hh"
 #include "compaction/compaction_strategy_type.hh"
 #include "caching_options.hh"
@@ -108,20 +107,6 @@ public:
 private:
     bitset _mask;
 };
-
-// Cluster-wide identifier of schema version of particular table.
-//
-// The version changes the value not only on structural changes but also
-// temporal. For example, schemas with the same set of columns but created at
-// different times should have different versions. This allows nodes to detect
-// if the version they see was already synchronized with or not even if it has
-// the same structure as the past versions.
-//
-// Schema changes merged in any order should result in the same final version.
-//
-// When table_schema_version changes, schema_tables::calculate_schema_digest() should
-// also change when schema mutations are applied.
-using table_schema_version = utils::UUID;
 
 class schema_registry_entry;
 class schema_builder;

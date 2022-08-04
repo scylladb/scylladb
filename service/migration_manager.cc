@@ -142,7 +142,7 @@ void migration_manager::init_messaging_service()
         co_return rpc::tuple(std::move(fm), std::move(cm));
     }, std::ref(*this)));
     _messaging.register_schema_check([this] {
-        return make_ready_future<utils::UUID>(_storage_proxy.get_db().local().get_version());
+        return make_ready_future<table_schema_version>(_storage_proxy.get_db().local().get_version());
     });
     _messaging.register_get_schema_version([this] (unsigned shard, table_schema_version v) {
         // FIXME: should this get an smp_service_group? Probably one separate from reads and writes.
@@ -179,7 +179,7 @@ void migration_manager::schedule_schema_pull(const gms::inet_address& endpoint, 
 
     if (endpoint != utils::fb_utilities::get_broadcast_address() && value) {
         // FIXME: discarded future
-        (void)maybe_schedule_schema_pull(utils::UUID{value->value}, endpoint).handle_exception([endpoint] (auto ep) {
+        (void)maybe_schedule_schema_pull(table_schema_version(utils::UUID{value->value}), endpoint).handle_exception([endpoint] (auto ep) {
             mlogger.warn("Fail to pull schema from {}: {}", endpoint, ep);
         });
     }
@@ -205,7 +205,7 @@ bool migration_manager::have_schema_agreement() {
             mlogger.debug("Schema state not yet available for {}.", endpoint);
             return false;
         }
-        utils::UUID remote_version{schema->value};
+        auto remote_version = table_schema_version(utils::UUID{schema->value});
         if (our_version != remote_version) {
             mlogger.debug("Schema mismatch for {} ({} != {}).", endpoint, our_version, remote_version);
             return false;
@@ -220,7 +220,7 @@ bool migration_manager::have_schema_agreement() {
  * If versions differ this node sends request with local migration list to the endpoint
  * and expecting to receive a list of migrations to apply locally.
  */
-future<> migration_manager::maybe_schedule_schema_pull(const utils::UUID& their_version, const gms::inet_address& endpoint)
+future<> migration_manager::maybe_schedule_schema_pull(const table_schema_version& their_version, const gms::inet_address& endpoint)
 {
     auto& proxy = _storage_proxy;
     auto& db = proxy.get_db().local();
@@ -251,7 +251,7 @@ future<> migration_manager::maybe_schedule_schema_pull(const utils::UUID& their_
                 mlogger.debug("application_state::SCHEMA does not exist for {}, not submitting migration task", endpoint);
                 return make_ready_future<>();
             }
-            utils::UUID current_version{value->value};
+            auto current_version = table_schema_version(utils::UUID{value->value});
             if (db.get_version() == current_version) {
                 mlogger.debug("not submitting migration task for {} because our versions match", endpoint);
                 return make_ready_future<>();
@@ -934,7 +934,7 @@ future<group0_guard> migration_manager::start_group0_operation() {
  *
  * @param version The schema version to announce
  */
-void migration_manager::passive_announce(utils::UUID version) {
+void migration_manager::passive_announce(table_schema_version version) {
     _schema_version_to_publish = version;
     (void)_schema_push.trigger().handle_exception([version = std::move(version)] (std::exception_ptr ex) {
         mlogger.warn("Passive announcing of version {} failed: {}. Ignored.", version);
@@ -1102,10 +1102,10 @@ future<schema_ptr> migration_manager::get_schema_for_write(table_schema_version 
 }
 
 future<> migration_manager::sync_schema(const replica::database& db, const std::vector<gms::inet_address>& nodes) {
-    using schema_and_hosts = std::unordered_map<utils::UUID, std::vector<gms::inet_address>>;
-    return do_with(schema_and_hosts(), db.get_version(), [this, &nodes] (schema_and_hosts& schema_map, utils::UUID& my_version) {
+    using schema_and_hosts = std::unordered_map<table_schema_version, std::vector<gms::inet_address>>;
+    return do_with(schema_and_hosts(), db.get_version(), [this, &nodes] (schema_and_hosts& schema_map, table_schema_version& my_version) {
         return parallel_for_each(nodes, [this, &schema_map, &my_version] (const gms::inet_address& node) {
-            return _messaging.send_schema_check(netw::msg_addr(node)).then([node, &schema_map, &my_version] (utils::UUID remote_version) {
+            return _messaging.send_schema_check(netw::msg_addr(node)).then([node, &schema_map, &my_version] (table_schema_version remote_version) {
                 if (my_version != remote_version) {
                     schema_map[remote_version].emplace_back(node);
                 }

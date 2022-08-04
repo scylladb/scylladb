@@ -223,7 +223,7 @@ public:
     static table_schema_version generate_schema_version(table_id table_id, uint16_t offset = 0);
 
     future<> setup(sharded<netw::messaging_service>& ms);
-    future<> update_schema_version(utils::UUID version);
+    future<> update_schema_version(table_schema_version version);
 
     /*
     * Save tokens used by this node in the LOCAL table.

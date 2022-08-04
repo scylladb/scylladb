@@ -48,7 +48,7 @@ struct max_result_size {
 
 class read_command {
     table_id cf_id;
-    utils::UUID schema_version;
+    table_schema_version schema_version;
     query::partition_slice slice;
     uint32_t row_limit_low_bits;
     std::chrono::time_point<gc_clock, gc_clock::duration> timestamp;

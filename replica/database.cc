@@ -120,7 +120,7 @@ bool string_pair_eq::operator()(spair lhs, spair rhs) const {
     return lhs == rhs;
 }
 
-utils::UUID database::empty_version = utils::UUID_gen::get_name_UUID(bytes{});
+table_schema_version database::empty_version = table_schema_version(utils::UUID_gen::get_name_UUID(bytes{}));
 
 namespace {
 
@@ -751,14 +751,14 @@ database::~database() {
     _user_types->deactivate();
 }
 
-void database::update_version(const utils::UUID& version) {
+void database::update_version(const table_schema_version& version) {
     if (_version.get() != version) {
         _schema_change_count++;
     }
     _version.set(version);
 }
 
-const utils::UUID& database::get_version() const {
+const table_schema_version& database::get_version() const {
     return _version.get();
 }
 

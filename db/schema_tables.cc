@@ -731,7 +731,7 @@ redact_columns_for_missing_features(mutation m, schema_features features) {
  * Read schema from system keyspace and calculate MD5 digest of every row, resulting digest
  * will be converted into UUID which would act as content-based version of the schema.
  */
-future<utils::UUID> calculate_schema_digest(distributed<service::storage_proxy>& proxy, schema_features features, noncopyable_function<bool(std::string_view)> accept_keyspace)
+future<table_schema_version> calculate_schema_digest(distributed<service::storage_proxy>& proxy, schema_features features, noncopyable_function<bool(std::string_view)> accept_keyspace)
 {
     auto map = [&proxy, features, accept_keyspace = std::move(accept_keyspace)] (sstring table) mutable -> future<std::vector<mutation>> {
         auto rs = co_await db::system_keyspace::query_mutations(proxy, NAME, table);
@@ -771,7 +771,7 @@ future<utils::UUID> calculate_schema_digest(distributed<service::storage_proxy>&
     }
 }
 
-future<utils::UUID> calculate_schema_digest(distributed<service::storage_proxy>& proxy, schema_features features)
+future<table_schema_version> calculate_schema_digest(distributed<service::storage_proxy>& proxy, schema_features features)
 {
     return calculate_schema_digest(proxy, features, std::not_fn(&is_system_keyspace));
 }
@@ -1073,7 +1073,7 @@ future<> store_column_mapping(distributed<service::storage_proxy>& proxy, schema
     const auto ts = api::new_timestamp();
     for (const auto& cdef : boost::range::join(s->static_columns(), s->regular_columns())) {
         mutation m(history_tbl, pk);
-        auto ckey = clustering_key::from_exploded(*history_tbl, {uuid_type->decompose(s->version()),
+        auto ckey = clustering_key::from_exploded(*history_tbl, {uuid_type->decompose(s->version().uuid()),
                                                                  utf8_type->decompose(cdef.name_as_text())});
         fill_column_info(*s, ckey, cdef, ts, ttl, m);
         muts.emplace_back(std::move(m));
@@ -2324,7 +2324,7 @@ mutation make_scylla_tables_mutation(schema_ptr table, api::timestamp_type times
     auto pkey = partition_key::from_singular(*s, table->ks_name());
     auto ckey = clustering_key::from_singular(*s, table->cf_name());
     mutation m(scylla_tables(), pkey);
-    m.set_clustered_cell(ckey, "version", utils::UUID(table->version()), timestamp);
+    m.set_clustered_cell(ckey, "version", table->version().uuid(), timestamp);
     // Since 4.0, we stopped using cdc column in scylla tables. Extensions are
     // used instead. Since we stopped reading this column in commit 861c7b5, we
     // can now keep it always empty.
@@ -3455,7 +3455,7 @@ table_schema_version schema_mutations::digest() const {
     const db::schema_features no_features;
     db::schema_tables::feed_hash_for_schema_digest(h, _columnfamilies, no_features);
     db::schema_tables::feed_hash_for_schema_digest(h, _columns, no_features);
-    return utils::UUID_gen::get_name_UUID(h.finalize());
+    return table_schema_version(utils::UUID_gen::get_name_UUID(h.finalize()));
 }
 
 future<schema_mutations> read_table_mutations(distributed<service::storage_proxy>& proxy,
@@ -3475,7 +3475,7 @@ future<column_mapping> get_column_mapping(::table_id table_id, table_schema_vers
     shared_ptr<cql3::untyped_result_set> results = co_await qctx->qp().execute_internal(
         GET_COLUMN_MAPPING_QUERY,
         db::consistency_level::LOCAL_ONE,
-        {table_id.uuid(), version},
+        {table_id.uuid(), version.uuid()},
         cql3::query_processor::cache_internal::no
     );
     if (results->empty()) {
@@ -3516,7 +3516,7 @@ future<bool> column_mapping_exists(table_id table_id, table_schema_version versi
     shared_ptr<cql3::untyped_result_set> results = co_await qctx->qp().execute_internal(
         GET_COLUMN_MAPPING_QUERY,
         db::consistency_level::LOCAL_ONE,
-        {table_id.uuid(), version},
+        {table_id.uuid(), version.uuid()},
         cql3::query_processor::cache_internal::yes
     );
     co_return !results->empty();
@@ -3529,7 +3529,7 @@ future<> drop_column_mapping(table_id table_id, table_schema_version version) {
     co_await qctx->qp().execute_internal(
         DEL_COLUMN_MAPPING_QUERY,
         db::consistency_level::LOCAL_ONE,
-        {table_id.uuid(), version},
+        {table_id.uuid(), version.uuid()},
         cql3::query_processor::cache_internal::no);
 }
 

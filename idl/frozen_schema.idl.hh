@@ -28,7 +28,7 @@ class schema_mutations {
 };
 
 class schema stub [[writable]] {
-    utils::UUID version;
+    table_schema_version version;
     schema_mutations mutations;
 };
 

@@ -680,7 +680,7 @@ future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_
             if (regenerate) {
                 std::cout << format("        utils::UUID(\"{}\"),", actual) << "\n";
             } else {
-                BOOST_REQUIRE_EQUAL(actual, expected);
+                BOOST_REQUIRE_EQUAL(actual.uuid(), expected);
             }
         };
 
@@ -689,7 +689,7 @@ future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_
             if (regenerate) {
                 std::cout << format("        utils::UUID(\"{}\"),", actual) << "\n";
             } else {
-                BOOST_REQUIRE_EQUAL(actual, expected);
+                BOOST_REQUIRE_EQUAL(actual.uuid(), expected);
             }
         };
 
@@ -893,7 +893,7 @@ SEASTAR_TEST_CASE(test_schema_make_reversed) {
     testlog.info("   reversed_schema->version(): {}", reversed_schema->version());
 
     BOOST_REQUIRE(schema->version() != reversed_schema->version());
-    BOOST_REQUIRE(utils::UUID_gen::negate(schema->version()) == reversed_schema->version());
+    BOOST_REQUIRE(reversed(schema->version()) == reversed_schema->version());
 
     auto re_reversed_schema = reversed_schema->make_reversed();
     testlog.info("re_reversed_schema->version(): {}", re_reversed_schema->version());

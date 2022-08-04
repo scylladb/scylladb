@@ -89,7 +89,7 @@ table_schema_version system_keyspace::generate_schema_version(::table_id table_i
     md5_hasher h;
     feed_hash(h, table_id);
     feed_hash(h, version_sequence_number + offset);
-    return utils::UUID_gen::get_name_UUID(h.finalize());
+    return table_schema_version(utils::UUID_gen::get_name_UUID(h.finalize()));
 }
 
 // Currently, the type variables (uuid_type, etc.) are thread-local reference-
@@ -1628,9 +1628,9 @@ future<std::optional<sstring>> system_keyspace::get_scylla_local_param(const sst
     return get_scylla_local_param_as<sstring>(key);
 }
 
-future<> system_keyspace::update_schema_version(utils::UUID version) {
+future<> system_keyspace::update_schema_version(table_schema_version version) {
     sstring req = format("INSERT INTO system.{} (key, schema_version) VALUES (?, ?)", LOCAL);
-    return execute_cql(req, sstring(LOCAL), version).discard_result();
+    return execute_cql(req, sstring(LOCAL), version.uuid()).discard_result();
 }
 
 /**

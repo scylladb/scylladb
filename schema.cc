@@ -431,7 +431,7 @@ schema::schema(const schema& o)
 
 schema::schema(reversed_tag, const schema& o)
     : schema(o, [] (schema& s) {
-        s._raw._version = utils::UUID_gen::negate(s._raw._version);
+        s._raw._version = reversed(s._raw._version);
         for (auto& col : s._raw._columns) {
             if (col.kind == column_kind::clustering_key) {
                 col.type = reversed(col.type);
@@ -1232,7 +1232,7 @@ schema_ptr schema_builder::build() {
     if (_version) {
         new_raw._version = *_version;
     } else {
-        new_raw._version = utils::UUID_gen::get_time_UUID();
+        new_raw._version = table_schema_version(utils::UUID_gen::get_time_UUID());
     }
 
     if (new_raw._is_counter) {
@@ -1670,7 +1670,7 @@ schema_ptr schema::make_reversed() const {
 }
 
 schema_ptr schema::get_reversed() const {
-    return local_schema_registry().get_or_load(utils::UUID_gen::negate(_raw._version), [this] (table_schema_version) {
+    return local_schema_registry().get_or_load(reversed(_raw._version), [this] (table_schema_version) {
         return frozen_schema(make_reversed());
     });
 }

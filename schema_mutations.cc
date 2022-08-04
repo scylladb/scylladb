@@ -56,7 +56,7 @@ table_schema_version schema_mutations::digest() const {
             auto&& row = rs.row(0);
             auto val = row.get<utils::UUID>("version");
             if (val) {
-                return *val;
+                return table_schema_version(*val);
             }
         }
     }
@@ -90,7 +90,7 @@ table_schema_version schema_mutations::digest() const {
     if (_scylla_tables) {
         db::schema_tables::feed_hash_for_schema_digest(h, *_scylla_tables, sf);
     }
-    return utils::UUID_gen::get_name_UUID(h.finalize());
+    return table_schema_version(utils::UUID_gen::get_name_UUID(h.finalize()));
 }
 
 std::optional<sstring> schema_mutations::partitioner() const {
