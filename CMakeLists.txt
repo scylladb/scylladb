@@ -189,6 +189,7 @@ set(swagger_files
     api/api-doc/storage_service.json
     api/api-doc/stream_manager.json
     api/api-doc/system.json
+    api/api-doc/task_manager.json
     api/api-doc/utils.json)
 
 set(swagger_gen_files)
