@@ -386,7 +386,7 @@ public:
     /// Evict all queriers that belong to a table.
     ///
     /// Should be used when dropping a table.
-    future<> evict_all_for_table(const utils::UUID& schema_id) noexcept;
+    future<> evict_all_for_table(const table_id& schema_id) noexcept;
 
     /// Close all queriers and wait on background work.
     ///

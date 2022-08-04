@@ -37,7 +37,7 @@ canonical_mutation::canonical_mutation(const mutation& m)
                  }).end_canonical_mutation();
 }
 
-utils::UUID canonical_mutation::column_family_id() const {
+table_id canonical_mutation::column_family_id() const {
     auto in = ser::as_input_stream(_data);
     auto mv = ser::deserialize(in, boost::type<ser::canonical_mutation_view>());
     return mv.table_id();

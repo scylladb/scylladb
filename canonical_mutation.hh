@@ -14,10 +14,6 @@
 #include "bytes_ostream.hh"
 #include <iosfwd>
 
-namespace utils {
-    class UUID;
-} // namespace utils
-
 // Immutable mutation form which can be read using any schema version of the same table.
 // Safe to access from other shards via const&.
 // Safe to pass serialized across nodes.
@@ -39,7 +35,7 @@ public:
     // is not intended, user should sync the schema first.
     mutation to_mutation(schema_ptr) const;
 
-    utils::UUID column_family_id() const;
+    table_id column_family_id() const;
 
     const bytes_ostream& representation() const { return _data; }
 

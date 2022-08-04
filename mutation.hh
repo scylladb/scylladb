@@ -139,7 +139,7 @@ public:
     const schema_ptr& schema() const { return _ptr->_schema; }
     const mutation_partition& partition() const { return _ptr->_p; }
     mutation_partition& partition() { return _ptr->_p; }
-    const utils::UUID& column_family_id() const { return _ptr->_schema->id(); }
+    const table_id& column_family_id() const { return _ptr->_schema->id(); }
     // Consistent with hash<canonical_mutation>
     bool operator==(const mutation&) const;
     bool operator!=(const mutation&) const;

@@ -29,10 +29,10 @@ private:
     schema_builder(const schema::raw_schema&);
 public:
     schema_builder(std::string_view ks_name, std::string_view cf_name,
-            std::optional<utils::UUID> = { },
+            std::optional<table_id> = { },
             data_type regular_column_name_type = utf8_type);
     schema_builder(
-            std::optional<utils::UUID> id,
+            std::optional<table_id> id,
             std::string_view ks_name,
             std::string_view cf_name,
             std::vector<schema::column> partition_key,
@@ -43,11 +43,11 @@ public:
             sstring comment = "");
     schema_builder(const schema_ptr);
 
-    schema_builder& set_uuid(const utils::UUID& id) {
+    schema_builder& set_uuid(const table_id& id) {
         _raw._id = id;
         return *this;
     }
-    const utils::UUID& uuid() const {
+    const table_id& uuid() const {
         return _raw._id;
     }
     schema_builder& set_regular_column_name_type(const data_type& t) {
@@ -273,7 +273,7 @@ public:
     schema_builder& with(compact_storage);
     schema_builder& with_version(table_schema_version);
 
-    schema_builder& with_view_info(utils::UUID base_id, sstring base_name, bool include_all_columns, sstring where_clause);
+    schema_builder& with_view_info(table_id base_id, sstring base_name, bool include_all_columns, sstring where_clause);
     schema_builder& with_view_info(const schema& base_schema, bool include_all_columns, sstring where_clause) {
         return with_view_info(base_schema.id(), base_schema.cf_name(), include_all_columns, where_clause);
     }

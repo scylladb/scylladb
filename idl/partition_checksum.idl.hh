@@ -109,7 +109,7 @@ struct node_ops_cmd_request {
     // Optional field, map bootstrapping nodes to bootstrap tokens, set by bootstrap cmd
     std::unordered_map<gms::inet_address, std::list<dht::token>> bootstrap_nodes;
     // Optional field, list uuids of tables being repaired, set by repair cmd
-    std::list<utils::UUID> repair_tables;
+    std::list<table_id> repair_tables;
 };
 
 struct node_ops_cmd_response {
@@ -121,7 +121,7 @@ struct node_ops_cmd_response {
 
 struct repair_update_system_table_request {
     utils::UUID repair_uuid;
-    utils::UUID table_uuid;
+    table_id table_uuid;
     sstring keyspace_name;
     sstring table_name;
     dht::token_range range;

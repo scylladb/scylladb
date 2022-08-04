@@ -10,7 +10,7 @@
 
 #pragma once
 
-#include "utils/UUID.hh"
+#include "schema_fwd.hh"
 #include "streaming/stream_summary.hh"
 #include <memory>
 #include <seastar/core/shared_ptr.hh>
@@ -24,13 +24,12 @@ class stream_session;
  */
 class stream_task {
 public:
-    using UUID = utils::UUID;
     /** StreamSession that this task belongs */
     shared_ptr<stream_session> session;
 
-    UUID cf_id;
+    table_id cf_id;
 
-    stream_task(shared_ptr<stream_session> _session, UUID _cf_id);
+    stream_task(shared_ptr<stream_session> _session, table_id _cf_id);
     virtual ~stream_task();
 
 public:

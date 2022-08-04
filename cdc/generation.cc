@@ -607,7 +607,7 @@ future<> generation_service::maybe_rewrite_streams_descriptions() {
             continue;
         }
 
-        times_and_ttls.push_back(time_and_ttl{as_timepoint(s.id()), cdc_opts.ttl()});
+        times_and_ttls.push_back(time_and_ttl{as_timepoint(s.id().uuid()), cdc_opts.ttl()});
     }
 
     if (times_and_ttls.empty()) {

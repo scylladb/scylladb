@@ -238,6 +238,10 @@ struct tagged_uuid {
     const utils::UUID& uuid() const noexcept {
         return id;
     }
+
+    sstring to_sstring() const {
+        return id.to_sstring();
+    }
 };
 } // namespace utils
 

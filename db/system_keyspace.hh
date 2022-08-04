@@ -220,7 +220,7 @@ public:
     static schema_ptr group0_history();
     static schema_ptr discovery();
 
-    static table_schema_version generate_schema_version(utils::UUID table_id, uint16_t offset = 0);
+    static table_schema_version generate_schema_version(table_id table_id, uint16_t offset = 0);
 
     future<> setup(sharded<netw::messaging_service>& ms);
     future<> update_schema_version(utils::UUID version);
@@ -308,7 +308,7 @@ public:
 
     struct repair_history_entry {
         utils::UUID id;
-        utils::UUID table_uuid;
+        table_id table_uuid;
         db_clock::time_point ts;
         sstring ks;
         sstring cf;
@@ -318,16 +318,16 @@ public:
 
     future<> update_repair_history(repair_history_entry);
     using repair_history_consumer = noncopyable_function<future<>(const repair_history_entry&)>;
-    future<> get_repair_history(utils::UUID table_id, repair_history_consumer f);
+    future<> get_repair_history(table_id, repair_history_consumer f);
 
     typedef std::vector<db::replay_position> replay_positions;
 
-    static future<> save_truncation_record(utils::UUID, db_clock::time_point truncated_at, db::replay_position);
+    static future<> save_truncation_record(table_id, db_clock::time_point truncated_at, db::replay_position);
     static future<> save_truncation_record(const replica::column_family&, db_clock::time_point truncated_at, db::replay_position);
-    static future<replay_positions> get_truncated_position(utils::UUID);
-    static future<db::replay_position> get_truncated_position(utils::UUID, uint32_t shard);
-    static future<db_clock::time_point> get_truncated_at(utils::UUID);
-    static future<truncation_record> get_truncation_record(utils::UUID cf_id);
+    static future<replay_positions> get_truncated_position(table_id);
+    static future<db::replay_position> get_truncated_position(table_id, uint32_t shard);
+    static future<db_clock::time_point> get_truncated_at(table_id);
+    static future<truncation_record> get_truncation_record(table_id cf_id);
 
     /**
      * Return a map of stored tokens to IP addresses

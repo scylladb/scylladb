@@ -70,7 +70,7 @@ io_error_handler error_handler_gen_for_upload_dir(disk_error_signal_type& dummy)
 // global_column_family_ptr provides a way to easily retrieve local instance of a given column family.
 class global_column_family_ptr {
     distributed<replica::database>& _db;
-    utils::UUID _id;
+    table_id _id;
 private:
     replica::column_family& get() const { return _db.local().find_column_family(_id); }
 public:
@@ -357,7 +357,7 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
     });
 }
 
-future<std::tuple<utils::UUID, std::vector<std::vector<sstables::shared_sstable>>>>
+future<std::tuple<table_id, std::vector<std::vector<sstables::shared_sstable>>>>
 distributed_loader::get_sstables_from_upload_dir(distributed<replica::database>& db, sstring ks, sstring cf) {
     return seastar::async([&db, ks = std::move(ks), cf = std::move(cf)] {
         global_column_family_ptr global_table(db, ks, cf);
@@ -539,7 +539,7 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
     auto& column_families = db.local().get_column_families();
 
     co_await coroutine::parallel_for_each(ks.metadata()->cf_meta_data() | boost::adaptors::map_values, [&] (schema_ptr s) -> future<> {
-        utils::UUID uuid = s->id();
+        auto uuid = s->id();
         lw_shared_ptr<replica::column_family> cf = column_families[uuid];
         sstring cfname = cf->schema()->cf_name();
         auto sstdir = ks.column_family_directory(ksdir, cfname, uuid);

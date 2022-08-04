@@ -277,7 +277,7 @@ using is_first_page = bool_class<class is_first_page_tag>;
 // Can be accessed across cores.
 class read_command {
 public:
-    utils::UUID cf_id;
+    table_id cf_id;
     table_schema_version schema_version; // TODO: This should be enough, drop cf_id
     partition_slice slice;
     uint32_t row_limit_low_bits;
@@ -306,7 +306,7 @@ public:
     db::allow_per_partition_rate_limit allow_limit; // not serialized
 public:
     // IDL constructor
-    read_command(utils::UUID cf_id,
+    read_command(table_id cf_id,
                  table_schema_version schema_version,
                  partition_slice slice,
                  uint32_t row_limit_low_bits,
@@ -332,7 +332,7 @@ public:
         , allow_limit(db::allow_per_partition_rate_limit::no)
     { }
 
-    read_command(utils::UUID cf_id,
+    read_command(table_id cf_id,
             table_schema_version schema_version,
             partition_slice slice,
             query::max_result_size max_result_size,

@@ -11,7 +11,7 @@
 
 #include <stdint.h>
 #include <seastar/core/shared_ptr.hh>
-#include "utils/UUID.hh"
+#include "schema_fwd.hh"
 #include "utils/hash.hh"
 #include "sstables/version.hh"
 
@@ -72,7 +72,7 @@ struct replay_position {
 class commitlog;
 class cf_holder;
 
-using cf_id_type = utils::UUID;
+using cf_id_type = table_id;
 
 class rp_handle {
 public:

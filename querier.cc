@@ -413,7 +413,7 @@ future<bool> querier_cache::evict_one() noexcept {
     co_return false;
 }
 
-future<> querier_cache::evict_all_for_table(const utils::UUID& schema_id) noexcept {
+future<> querier_cache::evict_all_for_table(const table_id& schema_id) noexcept {
     for (auto ip : {&_data_querier_index, &_mutation_querier_index, &_shard_mutation_querier_index}) {
         auto& idx = *ip;
         for (auto it = idx.begin(); it != idx.end();) {

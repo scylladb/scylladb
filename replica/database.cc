@@ -141,7 +141,7 @@ public:
 };
 
 const boost::container::static_vector<std::pair<size_t, boost::container::static_vector<table*, 16>>, 10>
-phased_barrier_top_10_counts(const std::unordered_map<utils::UUID, lw_shared_ptr<column_family>>& tables, std::function<size_t(table&)> op_count_getter) {
+phased_barrier_top_10_counts(const std::unordered_map<table_id, lw_shared_ptr<column_family>>& tables, std::function<size_t(table&)> op_count_getter) {
     using table_list = boost::container::static_vector<table*, 16>;
     using count_and_tables = std::pair<size_t, table_list>;
     const auto less = [] (const count_and_tables& a, const count_and_tables& b) {
@@ -1012,7 +1012,7 @@ future<> database::detach_column_family(table& cf) {
     co_await _querier_cache.evict_all_for_table(uuid);
 }
 
-future<std::vector<foreign_ptr<lw_shared_ptr<table>>>> database::get_table_on_all_shards(sharded<database>& sharded_db, utils::UUID uuid) {
+future<std::vector<foreign_ptr<lw_shared_ptr<table>>>> database::get_table_on_all_shards(sharded<database>& sharded_db, table_id uuid) {
     std::vector<foreign_ptr<lw_shared_ptr<table>>> table_shards;
     table_shards.resize(smp::count);
     co_await coroutine::parallel_for_each(boost::irange(0u, smp::count), [&] (unsigned shard) -> future<> {
@@ -1049,7 +1049,7 @@ future<> database::drop_table_on_all_shards(sharded<database>& sharded_db, sstri
     co_await sstables::remove_table_directory_if_has_no_snapshots(table_dir);
 }
 
-const utils::UUID& database::find_uuid(std::string_view ks, std::string_view cf) const {
+const table_id& database::find_uuid(std::string_view ks, std::string_view cf) const {
     try {
         return _ks_cf_to_uuid.at(std::make_pair(ks, cf));
     } catch (std::out_of_range&) {
@@ -1057,7 +1057,7 @@ const utils::UUID& database::find_uuid(std::string_view ks, std::string_view cf)
     }
 }
 
-const utils::UUID& database::find_uuid(const schema_ptr& schema) const {
+const table_id& database::find_uuid(const schema_ptr& schema) const {
     return find_uuid(schema->ks_name(), schema->cf_name());
 }
 
@@ -1137,7 +1137,7 @@ const column_family& database::find_column_family(std::string_view ks_name, std:
     }
 }
 
-column_family& database::find_column_family(const utils::UUID& uuid) {
+column_family& database::find_column_family(const table_id& uuid) {
     try {
         return *_column_families.at(uuid);
     } catch (...) {
@@ -1145,7 +1145,7 @@ column_family& database::find_column_family(const utils::UUID& uuid) {
     }
 }
 
-const column_family& database::find_column_family(const utils::UUID& uuid) const {
+const column_family& database::find_column_family(const table_id& uuid) const {
     try {
         return *_column_families.at(uuid);
     } catch (...) {
@@ -1153,7 +1153,7 @@ const column_family& database::find_column_family(const utils::UUID& uuid) const
     }
 }
 
-bool database::column_family_exists(const utils::UUID& uuid) const {
+bool database::column_family_exists(const table_id& uuid) const {
     return _column_families.contains(uuid);
 }
 
@@ -1237,19 +1237,19 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
 }
 
 sstring
-keyspace::column_family_directory(const sstring& name, utils::UUID uuid) const {
+keyspace::column_family_directory(const sstring& name, table_id uuid) const {
     return column_family_directory(_config.datadir, name, uuid);
 }
 
 sstring
-keyspace::column_family_directory(const sstring& base_path, const sstring& name, utils::UUID uuid) const {
+keyspace::column_family_directory(const sstring& base_path, const sstring& name, table_id uuid) const {
     auto uuid_sstring = uuid.to_sstring();
     boost::erase_all(uuid_sstring, "-");
     return format("{}/{}-{}", base_path, name, uuid_sstring);
 }
 
 future<>
-keyspace::make_directory_for_column_family(const sstring& name, utils::UUID uuid) {
+keyspace::make_directory_for_column_family(const sstring& name, table_id uuid) {
     std::vector<sstring> cfdirs;
     for (auto& extra : _config.all_datadirs) {
         cfdirs.push_back(column_family_directory(extra, name, uuid));
@@ -1294,7 +1294,7 @@ schema_ptr database::find_schema(const sstring& ks_name, const sstring& cf_name)
     }
 }
 
-schema_ptr database::find_schema(const utils::UUID& uuid) const {
+schema_ptr database::find_schema(const table_id& uuid) const {
     return find_column_family(uuid).schema();
 }
 
@@ -1349,7 +1349,7 @@ database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::
 
 future<>
 database::drop_caches() const {
-    std::unordered_map<utils::UUID, lw_shared_ptr<column_family>> tables = get_column_families();
+    std::unordered_map<table_id, lw_shared_ptr<column_family>> tables = get_column_families();
     for (auto&& e : tables) {
         table& t = *e.second;
         co_await t.get_row_cache().invalidate(row_cache::external_updater([] {}));
@@ -2292,7 +2292,7 @@ future<> database::flush(const sstring& ksname, const sstring& cfname) {
     return cf.flush();
 }
 
-future<> database::flush_table_on_all_shards(sharded<database>& sharded_db, utils::UUID id) {
+future<> database::flush_table_on_all_shards(sharded<database>& sharded_db, table_id id) {
     return sharded_db.invoke_on_all([id] (replica::database& db) {
         return db.find_column_family(id).flush();
     });
@@ -2489,7 +2489,7 @@ static sstring get_snapshot_table_dir_prefix(const sstring& table_name) {
     return table_name + "-";
 }
 
-static std::pair<sstring, utils::UUID> extract_cf_name_and_uuid(const sstring& directory_name) {
+static std::pair<sstring, table_id> extract_cf_name_and_uuid(const sstring& directory_name) {
     // cf directory is of the form: 'cf_name-uuid'
     // uuid is assumed to be exactly 32 hex characters wide.
     constexpr size_t uuid_size = 32;
@@ -2497,7 +2497,7 @@ static std::pair<sstring, utils::UUID> extract_cf_name_and_uuid(const sstring& d
     if (pos <= 0 || directory_name[pos] != '-') {
         on_internal_error(dblog, format("table directory entry name '{}' is invalid: no '-' separator found at pos {}", directory_name, pos));
     }
-    return std::make_pair(directory_name.substr(0, pos), utils::UUID(directory_name.substr(pos + 1)));
+    return std::make_pair(directory_name.substr(0, pos), table_id(utils::UUID(directory_name.substr(pos + 1))));
 }
 
 future<std::vector<database::snapshot_details_result>> database::get_snapshot_details() {
@@ -2741,10 +2741,10 @@ flat_mutation_reader_v2 make_multishard_streaming_reader(distributed<replica::da
             reader_concurrency_semaphore* semaphore;
         };
         distributed<replica::database>& _db;
-        utils::UUID _table_id;
+        table_id _table_id;
         std::vector<reader_context> _contexts;
     public:
-        streaming_reader_lifecycle_policy(distributed<replica::database>& db, utils::UUID table_id) : _db(db), _table_id(table_id), _contexts(smp::count) {
+        streaming_reader_lifecycle_policy(distributed<replica::database>& db, table_id table_id) : _db(db), _table_id(table_id), _contexts(smp::count) {
         }
         virtual flat_mutation_reader_v2 create_reader(
                 schema_ptr schema,

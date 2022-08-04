@@ -21,7 +21,7 @@ class stream_request {
 };
 
 class stream_summary {
-    utils::UUID cf_id;
+    table_id cf_id;
     int files;
     long total_size;
 };

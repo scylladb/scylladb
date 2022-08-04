@@ -189,10 +189,10 @@ int32_t cf_prop_defs::get_paxos_grace_seconds() const {
     return get_int(KW_PAXOSGRACESECONDS, DEFAULT_GC_GRACE_SECONDS);
 }
 
-std::optional<utils::UUID> cf_prop_defs::get_id() const {
+std::optional<table_id> cf_prop_defs::get_id() const {
     auto id = get_simple(KW_ID);
     if (id) {
-        return utils::UUID(*id);
+        return std::make_optional<table_id>(utils::UUID(*id));
     }
 
     return std::nullopt;

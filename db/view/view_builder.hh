@@ -144,7 +144,7 @@ class view_builder final : public service::migration_listener::only_view_notific
         }
     };
 
-    using base_to_build_step_type = std::unordered_map<utils::UUID, build_step>;
+    using base_to_build_step_type = std::unordered_map<table_id, build_step>;
 
     replica::database& _db;
     db::system_distributed_keyspace& _sys_dist_ks;
@@ -160,7 +160,7 @@ class view_builder final : public service::migration_listener::only_view_notific
     seastar::abort_source _as;
     future<> _started = make_ready_future<>();
     // Used to coordinate between shards the conclusion of the build process for a particular view.
-    std::unordered_set<utils::UUID> _built_views;
+    std::unordered_set<table_id> _built_views;
     // Counter and promise (both on shard 0 only!) allowing to wait for all
     // shards to have read the view build statuses
     unsigned _shards_finished_read = 0;
@@ -173,7 +173,7 @@ class view_builder final : public service::migration_listener::only_view_notific
     struct view_builder_init_state {
         std::vector<future<>> bookkeeping_ops;
         std::vector<std::vector<view_build_status>> status_per_shard;
-        std::unordered_set<utils::UUID> built_views;
+        std::unordered_set<table_id> built_views;
     };
 
 public:
@@ -215,10 +215,10 @@ public:
     future<std::unordered_map<sstring, sstring>> view_build_statuses(sstring keyspace, sstring view_name) const;
 
 private:
-    build_step& get_or_create_build_step(utils::UUID);
+    build_step& get_or_create_build_step(table_id);
     future<> initialize_reader_at_current_token(build_step&);
-    void load_view_status(view_build_status, std::unordered_set<utils::UUID>&);
-    void reshard(std::vector<std::vector<view_build_status>>, std::unordered_set<utils::UUID>&);
+    void load_view_status(view_build_status, std::unordered_set<table_id>&);
+    void reshard(std::vector<std::vector<view_build_status>>, std::unordered_set<table_id>&);
     void setup_shard_build_step(view_builder_init_state& vbi, std::vector<system_keyspace_view_name>, std::vector<system_keyspace_view_build_progress>);
     future<> calculate_shard_build_step(view_builder_init_state& vbi);
     future<> add_new_view(view_ptr, build_step&);

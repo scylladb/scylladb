@@ -41,7 +41,7 @@ namespace replica {
     class database;
 }
 
-void drop_repair_history_map_for_table(const utils::UUID& id);
+void drop_repair_history_map_for_table(const table_id& id);
 
 get_gc_before_for_range_result get_gc_before_for_range(schema_ptr s, const dht::token_range& range, const gc_clock::time_point& query_time);
 

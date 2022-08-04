@@ -18,7 +18,7 @@ namespace api {
 
 void set_column_family(http_context& ctx, routes& r);
 
-const utils::UUID& get_uuid(const sstring& name, const replica::database& db);
+const table_id& get_uuid(const sstring& name, const replica::database& db);
 future<> foreach_column_family(http_context& ctx, const sstring& name, std::function<void(replica::column_family&)> f);
 
 
@@ -63,7 +63,7 @@ struct map_reduce_column_families_locally {
     std::function<std::unique_ptr<std::any>(std::unique_ptr<std::any>, std::unique_ptr<std::any>)> reducer;
     future<std::unique_ptr<std::any>> operator()(replica::database& db) const {
         auto res = seastar::make_lw_shared<std::unique_ptr<std::any>>(std::make_unique<std::any>(init));
-        return do_for_each(db.get_column_families(), [res, this](const std::pair<utils::UUID, seastar::lw_shared_ptr<replica::table>>& i) {
+        return do_for_each(db.get_column_families(), [res, this](const std::pair<table_id, seastar::lw_shared_ptr<replica::table>>& i) {
             *res = reducer(std::move(*res), mapper(*i.second.get()));
         }).then([res] {
             return std::move(*res);

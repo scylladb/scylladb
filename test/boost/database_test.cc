@@ -54,7 +54,7 @@ public:
     }
 };
 
-static future<> apply_mutation(sharded<replica::database>& sharded_db, utils::UUID uuid, const mutation& m, bool do_flush = false,
+static future<> apply_mutation(sharded<replica::database>& sharded_db, table_id uuid, const mutation& m, bool do_flush = false,
         db::commitlog::force_sync fs = db::commitlog::force_sync::no, db::timeout_clock::time_point timeout = db::no_timeout) {
     auto shard = m.shard_of();
     return sharded_db.invoke_on(shard, [uuid, fm = freeze(m), do_flush, fs, timeout] (replica::database& db) {

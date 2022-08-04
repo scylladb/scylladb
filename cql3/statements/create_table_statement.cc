@@ -41,7 +41,7 @@ create_table_statement::create_table_statement(cf_name name,
                                                ::shared_ptr<cf_prop_defs> properties,
                                                bool if_not_exists,
                                                column_set_type static_columns,
-                                               const std::optional<utils::UUID>& id)
+                                               const std::optional<table_id>& id)
     : schema_altering_statement{name}
     , _use_compact_storage(false)
     , _static_columns{static_columns}

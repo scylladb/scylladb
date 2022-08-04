@@ -147,7 +147,7 @@ public:
 
             auto ks_name = td.get_as<sstring>("keyspace_name");
             auto cf_name = td.get_as<sstring>("columnfamily_name");
-            auto id = td.get_or("cf_id", generate_legacy_id(ks_name, cf_name));
+            auto id = table_id(td.get_or("cf_id", generate_legacy_id(ks_name, cf_name).uuid()));
 
             schema_builder builder(dst.name, cf_name, id);
 

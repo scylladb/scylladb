@@ -1310,7 +1310,7 @@ private:
         }
         return {};
     }
-    static schema_ptr schema_from_thrift(const CfDef& cf_def, const sstring ks_name, std::optional<utils::UUID> id = { }) {
+    static schema_ptr schema_from_thrift(const CfDef& cf_def, const sstring ks_name, std::optional<table_id> id = { }) {
         thrift_validation::validate_cf_def(cf_def);
         schema_builder builder(ks_name, cf_def.name, id);
         schema_builder::default_names names(builder);

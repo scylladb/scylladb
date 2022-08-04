@@ -36,7 +36,7 @@ ser::mutation_view frozen_mutation::mutation_view() const {
     return ser::deserialize(in, boost::type<ser::mutation_view>());
 }
 
-utils::UUID
+table_id
 frozen_mutation::column_family_id() const {
     return mutation_view().table_id();
 }

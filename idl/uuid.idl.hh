@@ -7,6 +7,7 @@
  */
 
 #include "utils/UUID.hh"
+#include "schema_fwd.hh"
 
 namespace utils {
 class UUID final {
@@ -14,3 +15,7 @@ class UUID final {
     int64_t get_least_significant_bits();
 };
 }
+
+class table_id final {
+    utils::UUID uuid();
+};

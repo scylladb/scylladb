@@ -123,7 +123,7 @@ class mutation_partition stub [[writable]] {
 };
 
 class mutation stub [[writable]] {
-    utils::UUID table_id;
+    ::table_id table_id;
     utils::UUID schema_version;
     partition_key key;
     mutation_partition partition;
@@ -140,7 +140,7 @@ class column_mapping {
 };
 
 class canonical_mutation stub [[writable]] {
-    utils::UUID table_id;
+    ::table_id table_id;
     utils::UUID schema_version;
     partition_key key;
     column_mapping mapping;

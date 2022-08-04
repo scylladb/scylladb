@@ -31,7 +31,7 @@ public:
         return _raw;
     }
 
-    const utils::UUID& base_id() const {
+    const table_id& base_id() const {
         return _raw.base_id();
     }
 

@@ -47,7 +47,7 @@ struct max_result_size {
 }
 
 class read_command {
-    utils::UUID cf_id;
+    table_id cf_id;
     utils::UUID schema_version;
     query::partition_slice slice;
     uint32_t row_limit_low_bits;

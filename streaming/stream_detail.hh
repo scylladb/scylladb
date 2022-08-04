@@ -11,7 +11,7 @@
 #pragma once
 
 #include "query-request.hh"
-#include "utils/UUID.hh"
+#include "schema_fwd.hh"
 #include <vector>
 #include "range.hh"
 #include "dht/i_partitioner.hh"
@@ -19,10 +19,9 @@
 namespace streaming {
 
 struct stream_detail {
-    using UUID = utils::UUID;
-    UUID cf_id;
+    table_id cf_id;
     stream_detail() = default;
-    stream_detail(UUID cf_id_)
+    stream_detail(table_id cf_id_)
         : cf_id(std::move(cf_id_)) {
     }
 };
