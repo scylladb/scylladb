@@ -7,7 +7,6 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 #include "locator/production_snitch_base.hh"
-#include "reconnectable_snitch_helper.hh"
 #include "db/system_keyspace.hh"
 #include "gms/gossiper.hh"
 #include "message/messaging_service.hh"
@@ -188,82 +187,6 @@ void production_snitch_base::throw_bad_format(const sstring& line) const {
 void production_snitch_base::throw_incomplete_file() const {
     logger().error("Property file {} is incomplete. Some obligatory fields are missing.", _prop_file_name);
     throw bad_property_file_error();
-}
-
-logging::logger& reconnectable_snitch_helper::logger() {
-    static logging::logger _logger("reconnectable_snitch_helper");
-    return _logger;
-}
-
-
-future<> reconnectable_snitch_helper::reconnect(gms::inet_address public_address, const gms::versioned_value& local_address_value) {
-    return reconnect(public_address, gms::inet_address(local_address_value.value));
-}
-
-future<> reconnectable_snitch_helper::reconnect(gms::inet_address public_address, gms::inet_address local_address) {
-    auto& sn_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
-    netw::messaging_service& ms = sn_ptr.get_local_gossiper().get_local_messaging();
-
-    if (sn_ptr->get_datacenter(public_address) == _local_dc &&
-        ms.get_preferred_ip(public_address) != local_address) {
-        //
-        // First, store the local address in the system_table...
-        //
-        co_await db::system_keyspace::update_preferred_ip(public_address, local_address);
-
-        //
-        // ...then update messaging_service cache and reset the currently
-        // open connections to this endpoint on all shards...
-        //
-        co_await ms.container().invoke_on_all([public_address, local_address] (auto& local_ms) {
-            local_ms.cache_preferred_ip(public_address, local_address);
-            local_ms.remove_rpc_client(netw::msg_addr(public_address));
-        });
-
-        logger().debug("Initiated reconnect to an Internal IP {} for the {}", local_address, public_address);
-    }
-}
-
-reconnectable_snitch_helper::reconnectable_snitch_helper(sstring local_dc)
-        : _local_dc(local_dc) {}
-
-future<> reconnectable_snitch_helper::before_change(gms::inet_address endpoint, gms::endpoint_state cs, gms::application_state new_state_key, const gms::versioned_value& new_value) {
-    // do nothing.
-    return make_ready_future();
-}
-
-future<> reconnectable_snitch_helper::on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) {
-    auto* internal_ip_state = ep_state.get_application_state_ptr(gms::application_state::INTERNAL_IP);
-    if (internal_ip_state) {
-        return reconnect(endpoint, *internal_ip_state);
-    }
-    return make_ready_future();
-}
-
-future<> reconnectable_snitch_helper::on_change(gms::inet_address endpoint, gms::application_state state, const gms::versioned_value& value) {
-    if (state == gms::application_state::INTERNAL_IP) {
-        return reconnect(endpoint, value);
-    }
-    return make_ready_future();
-}
-
-future<> reconnectable_snitch_helper::on_alive(gms::inet_address endpoint, gms::endpoint_state ep_state) {
-    return on_join(std::move(endpoint), std::move(ep_state));
-}
-
-future<> reconnectable_snitch_helper::on_dead(gms::inet_address endpoint, gms::endpoint_state ep_state) {
-    // do nothing.
-    return make_ready_future();
-}
-
-future<> reconnectable_snitch_helper::on_remove(gms::inet_address endpoint) {
-    // do nothing.
-    return make_ready_future();
-}
-
-future<> reconnectable_snitch_helper::on_restart(gms::inet_address endpoint, gms::endpoint_state state) {
-    // do nothing.
-    return make_ready_future();
 }
 
 } // namespace locator

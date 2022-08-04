@@ -54,6 +54,10 @@ private:
     virtual void set_prefer_local(bool prefer_local) override;
     void parse_property_file();
 
+    virtual bool prefer_local() const noexcept override {
+        return _prefer_local;
+    }
+
 protected:
     /**
      * Loads the contents of the property file into the map
@@ -95,5 +99,21 @@ protected:
 private:
     size_t _prop_file_size;
     snitch_ptr* _backreference = nullptr;
+protected:
+    /*
+     * @note Currently in order to be backward compatible we are mimicking the C*
+     *       behavior, which is a bit strange: while allowing the change of
+     *       prefer_local value during the same run it won't actually trigger
+     *       disconnect from all remote nodes as would be logical (in order to
+     *       connect using a new configuration). On the contrary, if the new
+     *       prefer_local value is TRUE, it will trigger the reconnect only when
+     *       there is a corresponding gossip event (e.g. on_change()) from the
+     *       corresponding node has been accepted. If the new value is FALSE
+     *       then it won't trigger disconnect at all! And in any case a remote
+     *       node will be reconnected using the PREFERED_IP value stored in the
+     *       system_table.peer.
+     */
+
+    bool _prefer_local = false;
 };
 } // namespace locator

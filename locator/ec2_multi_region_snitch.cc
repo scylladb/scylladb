@@ -9,7 +9,6 @@
  */
 
 #include "locator/ec2_multi_region_snitch.hh"
-#include "locator/reconnectable_snitch_helper.hh"
 #include "gms/gossiper.hh"
 
 static constexpr const char* PUBLIC_IP_QUERY_REQ  = "/latest/meta-data/public-ipv4";
@@ -27,7 +26,7 @@ future<> ec2_multi_region_snitch::start() {
     _state = snitch_state::initializing;
 
     return seastar::async([this] {
-        ec2_snitch::load_config().get();
+        ec2_snitch::load_config(true).get();
         if (this_shard_id() == io_cpu_id()) {
             inet_address local_public_address;
 
@@ -81,11 +80,6 @@ future<> ec2_multi_region_snitch::start() {
                 if (this_shard_id() != io_cpu_id()) {
                     local_s->set_local_private_addr(_local_private_address);
                 }
-
-                // this invoke_on() was done from the io_cpu_id() which had
-                // already passed through ec2_snitch::load_config() which, in
-                // turn, had already spread the _my_dc accross shards
-                local_s.get_local_gossiper().register_(::make_shared<reconnectable_snitch_helper>(_my_dc));
             }).get();
 
             set_snitch_ready();

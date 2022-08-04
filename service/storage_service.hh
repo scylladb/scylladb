@@ -600,6 +600,7 @@ private:
     // needs to be modified to accept either a keyspace or ARS.
     future<std::unordered_multimap<dht::token_range, inet_address>> get_changed_ranges_for_leaving(sstring keyspace_name, inet_address endpoint);
 
+    future<> maybe_reconnect_to_preferred_ip(inet_address ep, inet_address local_ip);
 public:
 
     sstring get_release_version();

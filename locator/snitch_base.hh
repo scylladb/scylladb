@@ -169,6 +169,11 @@ public:
         return snitch_signal_connection_t();
     }
 
+    // tells wheter the INTERNAL_IP address should be preferred over endpoint address
+    virtual bool prefer_local() const noexcept {
+        return false;
+    }
+
     static logging::logger& logger() {
         static logging::logger snitch_logger("snitch_logger");
         return snitch_logger;
@@ -348,7 +353,6 @@ private:
 protected:
     sstring _my_dc;
     sstring _my_rack;
-    bool _prefer_local = false;
 };
 
 } // namespace locator

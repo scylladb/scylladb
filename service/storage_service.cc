@@ -1184,8 +1184,26 @@ future<> storage_service::on_change(inet_address endpoint, application_state sta
             if (state == application_state::RPC_READY) {
                 slogger.debug("Got application_state::RPC_READY for node {}, is_cql_ready={}", endpoint, ep_state->is_cql_ready());
                 co_await notify_cql_change(endpoint, ep_state->is_cql_ready());
+            } else if (state == application_state::INTERNAL_IP) {
+                co_await maybe_reconnect_to_preferred_ip(endpoint, inet_address(value.value));
             }
         }
+    }
+}
+
+future<> storage_service::maybe_reconnect_to_preferred_ip(inet_address ep, inet_address local_ip) {
+    auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
+    if (!snitch->prefer_local()) {
+        co_return;
+    }
+
+    const auto& topo = get_token_metadata().get_topology();
+    if (topo.get_datacenter() == topo.get_datacenter(ep) && _messaging.local().get_preferred_ip(ep) != local_ip) {
+        slogger.debug("Initiated reconnect to an Internal IP {} for the {}", local_ip, ep);
+        co_await _messaging.invoke_on_all([ep, local_ip] (auto& local_ms) {
+            local_ms.cache_preferred_ip(ep, local_ip);
+            local_ms.remove_rpc_client(netw::msg_addr(ep));
+        });
     }
 }
 
@@ -1230,6 +1248,16 @@ future<> storage_service::do_update_system_peers_table(gms::inet_address endpoin
         co_await update_table(endpoint, "data_center", value.value);
     } else if (state == application_state::RACK) {
         co_await update_table(endpoint, "rack", value.value);
+    } else if (state == application_state::INTERNAL_IP) {
+        auto col = sstring("preferred_ip");
+        inet_address ep;
+        try {
+            ep = gms::inet_address(value.value);
+        } catch (...) {
+            slogger.error("fail to update {} for {}: invalid address {}", col, endpoint, value.value);
+            co_return;
+        }
+        co_await update_table(endpoint, col, ep.addr());
     } else if (state == application_state::RPC_ADDRESS) {
         auto col = sstring("rpc_address");
         inet_address ep;
