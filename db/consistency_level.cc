@@ -245,7 +245,7 @@ filter_for_query(consistency_level cl,
                  inet_address_vector_replica_set live_endpoints,
                  const inet_address_vector_replica_set& preferred_endpoints,
                  read_repair_decision read_repair,
-                 gms::gossiper& g,
+                 const gms::gossiper& g,
                  gms::inet_address* extra,
                  replica::column_family* cf) {
     size_t local_count;
@@ -356,7 +356,7 @@ inet_address_vector_replica_set filter_for_query(consistency_level cl,
         replica::keyspace& ks,
         inet_address_vector_replica_set& live_endpoints,
         const inet_address_vector_replica_set& preferred_endpoints,
-        gms::gossiper& g,
+        const gms::gossiper& g,
         replica::column_family* cf) {
     return filter_for_query(cl, ks, live_endpoints, preferred_endpoints, read_repair_decision::NONE, g, nullptr, cf);
 }

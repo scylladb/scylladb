@@ -1023,7 +1023,7 @@ future<> gossiper::unregister_(shared_ptr<i_endpoint_state_change_subscriber> su
     return _subscribers.remove(subscriber);
 }
 
-std::set<inet_address> gossiper::get_live_members() {
+std::set<inet_address> gossiper::get_live_members() const {
     std::set<inet_address> live_members(_live_endpoints.begin(), _live_endpoints.end());
     auto myip = get_broadcast_address();
     logger.debug("live_members before={}", live_members);
@@ -1035,7 +1035,7 @@ std::set<inet_address> gossiper::get_live_members() {
     return live_members;
 }
 
-std::set<inet_address> gossiper::get_live_token_owners() {
+std::set<inet_address> gossiper::get_live_token_owners() const {
     std::set<inet_address> token_owners;
     for (auto& member : get_live_members()) {
         auto es = get_endpoint_state_for_endpoint_ptr(member);
@@ -1046,7 +1046,7 @@ std::set<inet_address> gossiper::get_live_token_owners() {
     return token_owners;
 }
 
-std::set<inet_address> gossiper::get_unreachable_token_owners() {
+std::set<inet_address> gossiper::get_unreachable_token_owners() const {
     std::set<inet_address> token_owners;
     for (auto&& x : _unreachable_endpoints) {
         auto& endpoint = x.first;
@@ -1083,7 +1083,7 @@ future<> gossiper::convict(inet_address endpoint) {
     }
 }
 
-std::set<inet_address> gossiper::get_unreachable_members() {
+std::set<inet_address> gossiper::get_unreachable_members() const {
     std::set<inet_address> ret;
     for (auto&& x : _unreachable_endpoints) {
         ret.insert(x.first);
@@ -2520,72 +2520,6 @@ future<> gossiper::maybe_enable_features() {
 
 locator::token_metadata_ptr gossiper::get_token_metadata_ptr() const noexcept {
     return _shared_token_metadata.get();
-}
-
-inet_address_vector_replica_set gossiper::endpoint_filter(const sstring& local_rack, const std::unordered_map<sstring, std::unordered_set<gms::inet_address>>& endpoints) {
-    // special case for single-node data centers
-    if (endpoints.size() == 1 && endpoints.begin()->second.size() == 1) {
-        return boost::copy_range<inet_address_vector_replica_set>(endpoints.begin()->second);
-    }
-
-    // strip out dead endpoints and localhost
-    std::unordered_multimap<sstring, gms::inet_address> validated;
-
-    auto is_valid = [this ](gms::inet_address input) {
-        return input != utils::fb_utilities::get_broadcast_address()
-            && is_alive(input)
-            ;
-    };
-
-    for (auto& e : endpoints) {
-        for (auto& a : e.second) {
-            if (is_valid(a)) {
-                validated.emplace(e.first, a);
-            }
-        }
-    }
-
-    typedef inet_address_vector_replica_set return_type;
-
-    if (validated.size() <= 2) {
-        return boost::copy_range<return_type>(validated | boost::adaptors::map_values);
-    }
-
-    if (validated.size() - validated.count(local_rack) >= 2) {
-        // we have enough endpoints in other racks
-        validated.erase(local_rack);
-    }
-
-    if (validated.bucket_count() == 1) {
-        // we have only 1 `other` rack
-        auto res = validated | boost::adaptors::map_values;
-        if (validated.size() > 2) {
-            return boost::copy_range<return_type>(
-                    boost::copy_range<std::vector<gms::inet_address>>(res)
-                            | boost::adaptors::sliced(0, 2));
-        }
-        return boost::copy_range<return_type>(res);
-    }
-
-    // randomize which racks we pick from if more than 2 remaining
-
-    std::vector<sstring> racks = boost::copy_range<std::vector<sstring>>(validated | boost::adaptors::map_keys);
-
-    if (validated.bucket_count() > 2) {
-        std::shuffle(racks.begin(), racks.end(), _e1);
-        racks.resize(2);
-    }
-
-    inet_address_vector_replica_set result;
-
-    // grab a random member of up to two racks
-    for (auto& rack : racks) {
-        auto cpy = boost::copy_range<std::vector<gms::inet_address>>(validated.equal_range(rack) | boost::adaptors::map_values);
-        std::uniform_int_distribution<size_t> rdist(0, cpy.size() - 1);
-        result.emplace_back(cpy[rdist(_e1)]);
-    }
-
-    return result;
 }
 
 future<> gossiper::direct_fd_pinger::update_generation_number(int64_t n) {

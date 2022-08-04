@@ -229,11 +229,8 @@ public:
 
 private:
     distributed<replica::database>& _db;
-    gms::gossiper& _gossiper;
     const locator::shared_token_metadata& _shared_token_metadata;
     locator::effective_replication_map_factory& _erm_factory;
-    // _mm is initialized late in init_messaging_service() due to circular dependency
-    shared_ptr<migration_manager> _mm;
     smp_service_group _read_smp_service_group;
     smp_service_group _write_smp_service_group;
     smp_service_group _hints_write_smp_service_group;
@@ -255,7 +252,10 @@ private:
     scheduling_group_key _stats_key;
     storage_proxy_stats::global_stats _global_stats;
     gms::feature_service& _features;
-    netw::messaging_service& _messaging;
+
+    class remote;
+    std::unique_ptr<remote> _remote;
+
     static constexpr float CONCURRENT_SUBREQUESTS_MARGIN = 0.10;
     // for read repair chance calculation
     std::default_random_engine _urandom;
@@ -273,8 +273,6 @@ private:
             bool,
             db::allow_per_partition_rate_limit,
             lw_shared_ptr<cdc::operation_result_tracker>> _mutate_stage;
-    netw::connection_drop_slot_t _connection_dropped;
-    netw::connection_drop_registration_t _condrop_registration;
     db::view::node_update_backlog& _max_view_update_backlog;
     std::unordered_map<gms::inet_address, view_update_backlog_timestamped> _view_update_backlogs;
 
@@ -334,6 +332,7 @@ private:
     db::hints::manager& hints_manager_for(db::write_type type);
     static void sort_endpoints_by_proximity(inet_address_vector_replica_set& eps);
     inet_address_vector_replica_set get_live_sorted_endpoints(replica::keyspace& ks, const dht::token& token) const;
+    bool is_alive(const gms::inet_address&) const;
     db::read_repair_decision new_read_repair_decision(const schema& s);
     result<::shared_ptr<abstract_read_executor>> get_read_executor(lw_shared_ptr<query::read_command> cmd,
             schema_ptr schema,
@@ -428,38 +427,14 @@ private:
     future<> mutate_counters(Range&& mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, service_permit permit, clock_type::time_point timeout);
 
     void retire_view_response_handlers(noncopyable_function<bool(const abstract_write_response_handler&)> filter_fun);
-    void connection_dropped(gms::inet_address);
-private:
-    template<typename... Elements>
-    future<rpc::tuple<Elements..., replica::exception_variant>> encode_replica_exception_for_rpc(future<rpc::tuple<Elements...>>&& f, auto&& default_tuple_maker);
 
-    future<> handle_counter_mutation(const rpc::client_info& cinfo, rpc::opt_time_point t, std::vector<frozen_mutation> fms, db::consistency_level cl, std::optional<tracing::trace_info> trace_info);
-    future<rpc::no_wait_type> handle_write(netw::msg_addr src_addr, rpc::opt_time_point t,
-                      utils::UUID schema_version, auto in, inet_address_vector_replica_set forward, gms::inet_address reply_to,
-                      unsigned shard, storage_proxy::response_id_type response_id, std::optional<tracing::trace_info> trace_info,
-                      auto&& apply_fn, auto&& forward_fn);
-    future<rpc::no_wait_type> receive_mutation_handler (smp_service_group smp_grp, const rpc::client_info& cinfo, rpc::opt_time_point t, frozen_mutation in, inet_address_vector_replica_set forward,
-            gms::inet_address reply_to, unsigned shard, storage_proxy::response_id_type response_id, rpc::optional<std::optional<tracing::trace_info>> trace_info, rpc::optional<db::per_partition_rate_limit::info> rate_limit_info_opt);
-    future<rpc::no_wait_type> handle_paxos_learn(const rpc::client_info& cinfo, rpc::opt_time_point t, paxos::proposal decision,
-            inet_address_vector_replica_set forward, gms::inet_address reply_to, unsigned shard,
-            storage_proxy::response_id_type response_id, std::optional<tracing::trace_info> trace_info);
-    future<rpc::no_wait_type> handle_mutation_done(const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id, rpc::optional<db::view::update_backlog> backlog);
-    future<rpc::no_wait_type> handle_mutation_failed(const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id, size_t num_failed, rpc::optional<db::view::update_backlog> backlog, rpc::optional<replica::exception_variant> exception);
-    future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature, replica::exception_variant>> handle_read_data(const rpc::client_info& cinfo, rpc::opt_time_point t, query::read_command cmd, ::compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> oda, rpc::optional<db::per_partition_rate_limit::info> rate_limit_info_opt);
-    future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature, replica::exception_variant>> handle_read_mutation_data(const rpc::client_info& cinfo, rpc::opt_time_point t, query::read_command cmd, ::compat::wrapping_partition_range pr);
-    future<rpc::tuple<query::result_digest, long, cache_temperature, replica::exception_variant>> handle_read_digest(const rpc::client_info& cinfo, rpc::opt_time_point t, query::read_command cmd, ::compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> oda, rpc::optional<db::per_partition_rate_limit::info> rate_limit_info_opt);
-    future<> handle_truncate(rpc::opt_time_point timeout, sstring ksname, sstring cfname);
-    future<foreign_ptr<std::unique_ptr<service::paxos::prepare_response>>> handle_paxos_prepare(const rpc::client_info& cinfo, rpc::opt_time_point timeout,
-                query::read_command cmd, partition_key key, utils::UUID ballot, bool only_digest, query::digest_algorithm da,
-                std::optional<tracing::trace_info> trace_info);
-    future<bool> handle_paxos_accept(const rpc::client_info& cinfo, rpc::opt_time_point timeout, paxos::proposal proposal,
-            std::optional<tracing::trace_info> trace_info);
-    future<rpc::no_wait_type> handle_paxos_prune(const rpc::client_info& cinfo, rpc::opt_time_point timeout,
-                utils::UUID schema_id, partition_key key, utils::UUID ballot, std::optional<tracing::trace_info> trace_info);
 public:
     storage_proxy(distributed<replica::database>& db, gms::gossiper& gossiper, config cfg, db::view::node_update_backlog& max_view_update_backlog,
             scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, locator::effective_replication_map_factory& erm_factory, netw::messaging_service& ms);
     ~storage_proxy();
+
+    remote& remote();
+
     const distributed<replica::database>& get_db() const {
         return _db;
     }
@@ -474,10 +449,6 @@ public:
 
     replica::database& local_db() noexcept {
         return _db.local();
-    }
-
-    gms::gossiper& gossiper() noexcept {
-        return _gossiper;
     }
 
     void set_cdc_service(cdc::cdc_service* cdc) {
@@ -498,7 +469,7 @@ public:
         }
         return next;
     }
-    void init_messaging_service(shared_ptr<migration_manager>);
+    void init_messaging_service(migration_manager*);
     future<> uninit_messaging_service();
 
 private:
@@ -651,7 +622,7 @@ public:
     mutation get_batchlog_mutation_for(const std::vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now);
 
     future<> stop();
-    future<> start_hints_manager();
+    future<> start_hints_manager(shared_ptr<gms::gossiper>);
     void allow_replaying_hints() noexcept;
     future<> drain_on_shutdown();
 
@@ -828,12 +799,6 @@ inline distributed<storage_proxy>& get_storage_proxy() {
 // Pass references to services through constructor/function parameters. Don't use globals.
 inline storage_proxy& get_local_storage_proxy() {
     return _the_storage_proxy.local();
-}
-
-// DEPRECATED, DON'T USE!
-// Pass references to services through constructor/function parameters. Don't use globals.
-inline shared_ptr<storage_proxy> get_local_shared_storage_proxy() {
-    return _the_storage_proxy.local_shared();
 }
 
 }

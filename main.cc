@@ -1248,7 +1248,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }).get();
             supervisor::notify("initializing storage proxy RPC verbs");
             proxy.invoke_on_all([&mm] (service::storage_proxy& proxy) {
-                proxy.init_messaging_service(mm.local().shared_from_this());
+                proxy.init_messaging_service(&mm.local());
             }).get();
             auto stop_proxy_handlers = defer_verbose_shutdown("storage proxy RPC verbs", [&proxy] {
                 proxy.invoke_on_all(&service::storage_proxy::uninit_messaging_service).get();
@@ -1275,9 +1275,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }
             view_hints_dir_initializer.ensure_rebalanced().get();
 
-            proxy.invoke_on_all([&lifecycle_notifier] (service::storage_proxy& local_proxy) {
+            proxy.invoke_on_all([&lifecycle_notifier, &gossiper] (service::storage_proxy& local_proxy) {
                 lifecycle_notifier.local().register_subscriber(&local_proxy);
-                return local_proxy.start_hints_manager();
+                return local_proxy.start_hints_manager(gossiper.local().shared_from_this());
             }).get();
 
             auto drain_proxy = defer_verbose_shutdown("drain storage proxy", [&proxy, &lifecycle_notifier] {
@@ -1592,7 +1592,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 if (cfg->check_experimental(db::experimental_features_t::feature::ALTERNATOR_TTL)) {
                     supervisor::notify("starting the expiration service");
                     es.start(seastar::sharded_parameter([] (const replica::database& db) { return db.as_data_dictionary(); }, std::ref(db)),
-                             std::ref(proxy)).get();
+                             std::ref(proxy), std::ref(gossiper)).get();
                     stop_expiration_service = defer_verbose_shutdown("expiration service", [&es] {
                         es.stop().get();
                     });

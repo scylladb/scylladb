@@ -227,8 +227,6 @@ private:
     std::unordered_map<inet_address, clk::time_point> _shadow_unreachable_endpoints;
     utils::chunked_vector<inet_address> _shadow_live_endpoints;
 
-    std::default_random_engine _e1{std::random_device{}()};
-
     void run();
     // Replicates given endpoint_state to all other shards.
     // The state state doesn't have to be kept alive around until completes.
@@ -258,19 +256,19 @@ public:
      */
     future<> unregister_(shared_ptr<i_endpoint_state_change_subscriber> subscriber);
 
-    std::set<inet_address> get_live_members();
+    std::set<inet_address> get_live_members() const;
 
-    std::set<inet_address> get_live_token_owners();
+    std::set<inet_address> get_live_token_owners() const;
 
     /**
      * @return a list of unreachable gossip participants, including fat clients
      */
-    std::set<inet_address> get_unreachable_members();
+    std::set<inet_address> get_unreachable_members() const;
 
     /**
      * @return a list of unreachable token owners
      */
-    std::set<inet_address> get_unreachable_token_owners();
+    std::set<inet_address> get_unreachable_token_owners() const;
 
     int64_t get_endpoint_downtime(inet_address ep) const noexcept;
 
@@ -433,8 +431,6 @@ public:
 
     future<> apply_state_locally(std::map<inet_address, endpoint_state> map);
 
-    // filter `endpoints` by `local_rack`
-    inet_address_vector_replica_set endpoint_filter(const sstring& local_rack, const std::unordered_map<sstring, std::unordered_set<gms::inet_address>>& endpoints);
 private:
     future<> do_apply_state_locally(gms::inet_address node, const endpoint_state& remote_state, bool listener_notification);
     future<> apply_state_locally_without_listener_notification(std::unordered_map<inet_address, endpoint_state> map);
