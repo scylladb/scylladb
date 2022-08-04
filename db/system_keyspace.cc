@@ -1394,7 +1394,7 @@ future<truncation_record> system_keyspace::get_truncation_record(utils::UUID cf_
         return make_ready_future<truncation_record>(std::move(r));
     }
     sstring req = format("SELECT * from system.{} WHERE table_uuid = ?", TRUNCATED);
-    return qctx->qp().execute_internal(req, {cf_id}, cql3::query_processor::cache_internal::yes).then([cf_id](::shared_ptr<cql3::untyped_result_set> rs) {
+    return qctx->qp().execute_internal(req, {cf_id}, cql3::query_processor::cache_internal::yes).then([](::shared_ptr<cql3::untyped_result_set> rs) {
         truncation_record r{truncation_record::current_magic};
 
         for (const cql3::untyped_result_set_row& row : *rs) {
