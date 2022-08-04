@@ -12,6 +12,7 @@
 #include <deque>
 #include <random>
 #include "utils/chunked_vector.hh"
+#include "utils/amortized_reserve.hh"
 
 #include <boost/range/algorithm/sort.hpp>
 #include <boost/range/algorithm/equal.hpp>
@@ -206,4 +207,38 @@ BOOST_AUTO_TEST_CASE(test_shrinking_and_expansion_involving_chunk_boundary) {
     for (uint64_t i = 0; i < vector_type::max_chunk_capacity() * 2; ++i) {
         v.emplace_back(std::make_unique<uint64_t>(i));
     }
+}
+
+BOOST_AUTO_TEST_CASE(test_amoritzed_reserve) {
+    utils::chunked_vector<int> v;
+
+    v.reserve(10);
+    amortized_reserve(v, 1);
+    BOOST_REQUIRE_EQUAL(v.capacity(), 10);
+    BOOST_REQUIRE_EQUAL(v.size(), 0);
+
+    v = {};
+    amortized_reserve(v, 1);
+    BOOST_REQUIRE_EQUAL(v.capacity(), 1);
+    BOOST_REQUIRE_EQUAL(v.size(), 0);
+
+    v = {};
+    amortized_reserve(v, 1);
+    BOOST_REQUIRE_EQUAL(v.capacity(), 1);
+    amortized_reserve(v, 2);
+    BOOST_REQUIRE_EQUAL(v.capacity(), 2);
+    amortized_reserve(v, 3);
+    BOOST_REQUIRE_EQUAL(v.capacity(), 4);
+    amortized_reserve(v, 4);
+    BOOST_REQUIRE_EQUAL(v.capacity(), 4);
+    amortized_reserve(v, 5);
+    BOOST_REQUIRE_EQUAL(v.capacity(), 8);
+    amortized_reserve(v, 6);
+    BOOST_REQUIRE_EQUAL(v.capacity(), 8);
+    amortized_reserve(v, 7);
+    BOOST_REQUIRE_EQUAL(v.capacity(), 8);
+    amortized_reserve(v, 7);
+    BOOST_REQUIRE_EQUAL(v.capacity(), 8);
+    amortized_reserve(v, 1);
+    BOOST_REQUIRE_EQUAL(v.capacity(), 8);
 }
