@@ -1480,7 +1480,7 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_opti
     lw_shared_ptr<query::result> result;
     std::exception_ptr ex;
 
-    if (cmd.query_uuid != utils::UUID{} && !cmd.is_first_page) {
+    if (cmd.query_uuid && !cmd.is_first_page) {
         querier_opt = _querier_cache.lookup_data_querier(cmd.query_uuid, *s, ranges.front(), cmd.slice, trace_state, timeout);
     }
 
@@ -1504,7 +1504,7 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_opti
         }
 
         if (!f.failed()) {
-            if (cmd.query_uuid != utils::UUID{} && querier_opt) {
+            if (cmd.query_uuid && querier_opt) {
                 _querier_cache.insert_data_querier(cmd.query_uuid, std::move(*querier_opt), std::move(trace_state));
             }
         } else {
@@ -1546,7 +1546,7 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
     reconcilable_result result;
     std::exception_ptr ex;
 
-    if (cmd.query_uuid != utils::UUID{} && !cmd.is_first_page) {
+    if (cmd.query_uuid && !cmd.is_first_page) {
         querier_opt = _querier_cache.lookup_mutation_querier(cmd.query_uuid, *s, range, cmd.slice, trace_state, timeout);
     }
 
@@ -1570,7 +1570,7 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
         }
 
         if (!f.failed()) {
-            if (cmd.query_uuid != utils::UUID{} && querier_opt) {
+            if (cmd.query_uuid && querier_opt) {
                 _querier_cache.insert_mutation_querier(cmd.query_uuid, std::move(*querier_opt), std::move(trace_state));
             }
         } else {

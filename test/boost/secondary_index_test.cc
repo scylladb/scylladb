@@ -564,7 +564,7 @@ SEASTAR_TEST_CASE(test_simple_index_paging) {
             // not to return rows (since no row matches an empty partition key)
             auto paging_state = make_lw_shared<service::pager::paging_state>(partition_key::make_empty(),
                     position_in_partition_view(position_in_partition_view::partition_start_tag_t()),
-                    1, utils::make_random_uuid(), service::pager::paging_state::replicas_per_token_range{}, std::nullopt, 1);
+                    1, query_id::create_random_id(), service::pager::paging_state::replicas_per_token_range{}, std::nullopt, 1);
             auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
                     cql3::query_options::specific_options{1, paging_state, {}, api::new_timestamp()});
             auto res = e.execute_cql("SELECT * FROM tab WHERE v = 1", std::move(qo)).get0();

@@ -112,8 +112,8 @@ private:
             nullptr);
     }
 
-    static utils::UUID make_cache_key(unsigned key) {
-        return utils::UUID{key, 1};
+    static query_id make_cache_key(unsigned key) {
+        return query_id(utils::UUID{key, 1});
     }
 
     const dht::decorated_key* find_key(const dht::partition_range& range, unsigned partition_offset) const {
@@ -205,7 +205,7 @@ public:
     }
 
     template <typename Querier>
-    entry_info produce_first_page_and_save_querier(void(query::querier_cache::*insert_mem_ptr)(utils::UUID, Querier&&, tracing::trace_state_ptr), unsigned key,
+    entry_info produce_first_page_and_save_querier(void(query::querier_cache::*insert_mem_ptr)(query_id, Querier&&, tracing::trace_state_ptr), unsigned key,
             const dht::partition_range& range, const query::partition_slice& slice, uint64_t row_limit) {
         const auto cache_key = make_cache_key(key);
 
@@ -662,7 +662,7 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
                 gc_clock::now(),
                 std::nullopt,
                 1,
-                utils::make_random_uuid(),
+                query_id::create_random_id(),
                 query::is_first_page::yes,
                 query::max_result_size(1024 * 1024),
                 0);
@@ -692,7 +692,7 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
                 gc_clock::now(),
                 std::nullopt,
                 1,
-                utils::make_random_uuid(),
+                query_id::create_random_id(),
                 query::is_first_page::no,
                 query::max_result_size(1024 * 1024),
                 0);

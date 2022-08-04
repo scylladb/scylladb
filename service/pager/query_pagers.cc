@@ -81,7 +81,7 @@ future<result<service::storage_proxy::coordinator_query_result>> query_pager::do
 
     _cmd->is_first_page = query::is_first_page(!_query_uuid);
     if (!_query_uuid) {
-        _query_uuid = utils::make_random_uuid();
+        _query_uuid = query_id::create_random_id();
     }
     _cmd->query_uuid = *_query_uuid;
 

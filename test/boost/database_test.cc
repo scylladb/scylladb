@@ -1219,7 +1219,7 @@ SEASTAR_TEST_CASE(database_drop_column_family_clears_querier_cache) {
 
         // we add a querier to the querier cache while the drop is ongoing
         auto& qc = db.get_querier_cache();
-        qc.insert_data_querier(utils::make_random_uuid(), std::move(q), nullptr);
+        qc.insert_data_querier(query_id::create_random_id(), std::move(q), nullptr);
         BOOST_REQUIRE_EQUAL(qc.get_stats().population, 1);
 
         op.reset(); // this should allow the drop to finish
