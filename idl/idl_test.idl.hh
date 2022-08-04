@@ -8,6 +8,8 @@
 
 // TODO: test final types more
 
+#include "idl/uuid.idl.hh"
+
 class simple_compound {
     uint32_t foo;
     uint32_t bar;
