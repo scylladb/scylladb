@@ -31,16 +31,36 @@ extern logging::logger sstlog;
 
 bool
 sstable_first_key_less_comparator::operator()(const shared_sstable& s1, const shared_sstable& s2) const {
-    return s1->compare_by_first_key(*s2) < 0;
+    auto r = s1->compare_by_first_key(*s2);
+    if (r == 0) {
+        position_in_partition::less_compare less_cmp(*s1->get_schema());
+        return less_cmp(s1->first_partition_first_position(), s2->first_partition_first_position());
+    }
+    return r < 0;
 }
 
 bool sstable_run::will_introduce_overlapping(const shared_sstable& sst) const {
     // checks if s1 is *all* before s2, meaning their bounds don't overlap.
     auto completely_ordered_before = [] (const shared_sstable& s1, const shared_sstable& s2) {
-        auto less_cmp = [s = s1->get_schema()] (const dht::decorated_key& k1, const dht::decorated_key& k2) {
-            return k1.less_compare(*s, k2);
+        auto pkey_tri_cmp = [s = s1->get_schema()] (const dht::decorated_key& k1, const dht::decorated_key& k2) {
+            return k1.tri_compare(*s, k2);
         };
-        return less_cmp(s1->get_last_decorated_key(), s2->get_first_decorated_key());
+        auto r = pkey_tri_cmp(s1->get_last_decorated_key(), s2->get_first_decorated_key());
+        if (r == 0) {
+            position_in_partition::tri_compare ckey_tri_cmp(*s1->get_schema());
+            const auto& s1_last_position = s1->last_partition_last_position();
+            const auto& s2_first_position = s2->first_partition_first_position();
+            auto r2 = ckey_tri_cmp(s1_last_position, s2_first_position);
+            // Forgive overlapping if s1's last position and s2's first position are both after key.
+            // That still produces correct results because the writer translates after_all_prefixed
+            // for s1's end bound into bound_kind::incl_end, and s2's start bound into bound_kind::excl_start,
+            // meaning they don't actually overlap.
+            if (r2 == 0 && s1_last_position.get_bound_weight() == bound_weight::after_all_prefixed) {
+                return true;
+            }
+            return r2 < 0;
+        }
+        return r < 0;
     };
     // lower bound will be the 1st element which is not *all* before the candidate sstable.
     // upper bound will be the 1st element which the candidate sstable is *all* before.

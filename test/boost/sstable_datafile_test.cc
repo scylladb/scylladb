@@ -2749,6 +2749,64 @@ SEASTAR_TEST_CASE(sstable_run_disjoint_invariant_test) {
     });
 }
 
+SEASTAR_TEST_CASE(sstable_run_clustering_disjoint_invariant_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        auto pks = ss.make_pkeys(1);
+        auto tmp = tmpdir();
+        auto sst_gen = [&env, s, &tmp, gen = make_lw_shared<unsigned>(1)]() {
+            return env.make_sstable(s, tmp.path().string(), (*gen)++, sstables::get_highest_sstable_version(), big);
+        };
+
+        auto make_sstable = [&] (int first_ckey_idx, int last_ckey_idx) {
+            std::vector<mutation> muts;
+            auto mut = mutation(s, pks[0]);
+
+            auto first_ckey_prefix = ss.make_ckey(first_ckey_idx);
+            mut.partition().apply_insert(*s, first_ckey_prefix, ss.new_timestamp());
+            auto last_ckey_prefix = ss.make_ckey(last_ckey_idx);
+            if (first_ckey_prefix != last_ckey_prefix) {
+                mut.partition().apply_insert(*s, last_ckey_prefix, ss.new_timestamp());
+            }
+            muts.push_back(std::move(mut));
+
+            auto sst = make_sstable_containing(sst_gen, std::move(muts));
+
+            BOOST_REQUIRE(sst->min_position().key() == first_ckey_prefix);
+            BOOST_REQUIRE(sst->max_position().key() == last_ckey_prefix);
+            testlog.info("sstable: {} {} -> {} {}", first_ckey_idx, last_ckey_idx, sst->first_partition_first_position(), sst->last_partition_last_position());
+
+            return sst;
+        };
+
+        sstables::sstable_run run;
+
+        auto insert = [&] (int first_ckey_idx, int last_ckey_idx) {
+            auto sst = make_sstable(first_ckey_idx, last_ckey_idx);
+            return run.insert(sst);
+        };
+
+        // insert sstables with disjoint clustering ranges [0, 1], [4, 5], [6, 7]
+        BOOST_REQUIRE(insert(0, 1) == true);
+        BOOST_REQUIRE(insert(4, 5) == true);
+        BOOST_REQUIRE(insert(6, 7) == true);
+        BOOST_REQUIRE(run.all().size() == 3);
+
+        // check overlapping candidates won't be inserted
+        BOOST_REQUIRE(insert(0, 4) == false);
+        BOOST_REQUIRE(insert(1, 3) == false);
+        BOOST_REQUIRE(insert(5, 6) == false);
+        BOOST_REQUIRE(insert(7, 8) == false);
+        BOOST_REQUIRE(run.all().size() == 3);
+
+        // check non-overlapping candidates will be inserted
+        BOOST_REQUIRE(insert(2, 3) == true);
+        BOOST_REQUIRE(insert(8, 9) == true);
+        BOOST_REQUIRE(run.all().size() == 5);
+    });
+}
+
 SEASTAR_TEST_CASE(test_reads_cassandra_static_compact) {
     return test_env::do_with_async([] (test_env& env) {
         // CREATE COLUMNFAMILY cf (key varchar PRIMARY KEY, c2 text, c1 text) WITH COMPACT STORAGE ;
