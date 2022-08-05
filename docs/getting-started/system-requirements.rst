@@ -219,6 +219,78 @@ See `ScyllaDB on the New AWS EC2 I4i Instances: Twice the Throughput & Lower Lat
 learn more about using ScyllaDB with i4i instances.
 
 
+i4g instances
+^^^^^^^^^^^^^^
+
+.. list-table:: Im4gn
+   :widths: 30 20 20 30
+   :header-rows: 1
+
+   * - Model
+     - vCPU
+     - Mem (GB)
+     - Storage (NVMe SSD)
+   * - Im4gn.large
+     - 2
+     - 8
+     - 1 x 937
+   * - Im4gn.xlarge
+     - 4
+     - 16
+     - 1 x 1875
+   * - Im4gn.2xlarge
+     - 8
+     - 32
+     - 1 x 3750
+   * - Im4gn.4xlarge
+     - 16
+     - 64
+     - 1 x 7500
+   * - Im4gn.8xlarge
+     - 32
+     - 128
+     - 2 x 7500
+   * - Im4gn.16xlarge
+     - 64
+     - 256
+     - 4 x 7500
+
+
+.. list-table:: Is4gn
+   :widths: 30 20 20 30
+   :header-rows: 1
+
+   * - Model
+     - vCPU
+     - Mem (GB)
+     - Storage (NVMe SSD)
+   * - Is4gen.medium
+     - 1
+     - 6
+     - 1 x 937
+   * - Is4gen.large
+     - 2
+     - 12
+     - 1 x 1875
+   * - Is4gen.xlarge
+     - 4
+     - 24
+     - 1 x 3750
+   * - Is4gen.2xlarge
+     - 8
+     - 48
+     - 1 x 7500
+   * - Is4gen.4xlarge
+     - 16
+     - 96
+     - 2 x 7500
+   * - Is4gen.8xlarge
+     - 32
+     - 192
+     - 4 x 7500
+
+See  `Amazon EC2 Im4gn and Is4gen instances <https://aws.amazon.com/ec2/instance-types/i4g/>`_ for specification details. 
+
 Google Compute Engine (GCE)
 -----------------------------------
 
