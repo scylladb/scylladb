@@ -29,6 +29,7 @@
 #include "stream_manager.hh"
 #include "system.hh"
 #include "api/config.hh"
+#include "task_manager.hh"
 
 logging::logger apilog("api");
 
@@ -242,6 +243,16 @@ future<> set_server_done(http_context& ctx) {
         rb->register_function(r, "error_injection",
                 "The error injection API");
         set_error_injection(ctx, r);
+    });
+}
+
+future<> set_server_task_manager(http_context& ctx) {
+    auto rb = std::make_shared < api_registry_builder > (ctx.api_doc);
+
+    return ctx.http_server.set_routes([rb, &ctx](routes& r) {
+        rb->register_function(r, "task_manager",
+                "The task manager API");
+        set_task_manager(ctx, r);
     });
 }
 
