@@ -211,19 +211,19 @@ inline std::strong_ordering uuid_tri_compare_timeuuid(bytes_view o1, bytes_view 
 template<typename Tag>
 struct tagged_uuid {
     utils::UUID id;
-    bool operator==(const tagged_uuid& o) const {
+    bool operator==(const tagged_uuid& o) const noexcept {
         return id == o.id;
     }
-    bool operator<(const tagged_uuid& o) const {
+    bool operator<(const tagged_uuid& o) const noexcept {
         return id < o.id;
     }
-    explicit operator bool() const {
+    explicit operator bool() const noexcept {
         // The default constructor sets the id to nil, which is
         // guaranteed to not match any valid id.
         return bool(id);
     }
-    static tagged_uuid create_random_id() { return tagged_uuid{utils::make_random_uuid()}; }
-    explicit tagged_uuid(const utils::UUID& uuid) : id(uuid) {}
+    static tagged_uuid create_random_id() noexcept { return tagged_uuid{utils::make_random_uuid()}; }
+    explicit tagged_uuid(const utils::UUID& uuid) noexcept : id(uuid) {}
     tagged_uuid() = default;
 };
 } // namespace utils
@@ -249,7 +249,7 @@ struct hash<utils::UUID> {
 
 template<typename Tag>
 struct hash<utils::tagged_uuid<Tag>> {
-    size_t operator()(const utils::tagged_uuid<Tag>& id) const {
+    size_t operator()(const utils::tagged_uuid<Tag>& id) const noexcept {
         return hash<utils::UUID>()(id.id);
     }
 };
