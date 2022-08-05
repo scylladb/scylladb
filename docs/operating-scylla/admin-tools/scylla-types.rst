@@ -35,7 +35,7 @@ Specifying the Value Type
 
 You must specify the type of the value(s) you want to examine by adding the ``-t [type name]`` option to the operation. 
 Specify the type by providing its Cassandra class name (the prefix can be omitted, for example, you can provide ``Int32Type`` 
-instead of ``org.apache.cassandra.db.marshal.Int32Type``). See https://github.com/scylladb/scylla/blob/master/docs/design-notes/cql3-type-mapping.md for a mapping of cql3 types to Cassandra type class names.
+instead of ``org.apache.cassandra.db.marshal.Int32Type``). See `CQL3 Type Mapping <https://github.com/scylladb/scylladb/blob/master/docs/dev/cql3-type-mapping.md>`_ for a mapping of cql3 types to Cassandra type class names.
 
 If you provide more than one value, all of the values must share the same type. For example:
 
