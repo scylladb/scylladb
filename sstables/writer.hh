@@ -270,7 +270,7 @@ inline void write(sstable_version_types v, W& out, bool i) {
 }
 
 inline void write(sstable_version_types v, file_writer& out, double d) {
-    unsigned long tmp = net::hton(bit_cast<unsigned long>(d));
+    unsigned long tmp = net::hton(std::bit_cast<unsigned long>(d));
     out.write(reinterpret_cast<const char*>(&tmp), sizeof(unsigned long));
 }
 
