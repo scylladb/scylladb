@@ -584,7 +584,7 @@ void write_counter_value(counter_cell_view ccv, W& out, sstable_version_types v,
         write<int16_t>(v, out, std::numeric_limits<int16_t>::min() + i);
     }
     auto write_shard = [&] (auto&& s) {
-        auto uuid = s.id().to_uuid();
+        auto uuid = s.id().uuid();
         write(v, out, int64_t(uuid.get_most_significant_bits()),
             int64_t(uuid.get_least_significant_bits()),
             int64_t(s.logical_clock()), int64_t(s.value()));

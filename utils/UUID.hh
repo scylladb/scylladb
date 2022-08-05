@@ -235,8 +235,7 @@ struct tagged_uuid {
     explicit tagged_uuid(const utils::UUID& uuid) noexcept : id(uuid) {}
     tagged_uuid() = default;
 
-    // FIXME: rename to uuid()
-    const utils::UUID& to_uuid() const noexcept {
+    const utils::UUID& uuid() const noexcept {
         return id;
     }
 };
