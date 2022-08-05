@@ -16,7 +16,7 @@
 template <class T> concept Trivial = std::is_trivial_v<T>;
 template <class T> concept TriviallyCopyable = std::is_trivially_copyable_v<T>;
 
-template <Trivial To>
+template <TriviallyCopyable To>
 To read_unaligned(const void* src) {
     To dst;
     std::memcpy(&dst, src, sizeof(To));
