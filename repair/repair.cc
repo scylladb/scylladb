@@ -22,7 +22,6 @@
 #include "db/config.hh"
 #include "hashers.hh"
 #include "locator/network_topology_strategy.hh"
-#include "utils/bit_cast.hh"
 #include "service/migration_manager.hh"
 #include "partition_range_compat.hh"
 #include "gms/feature_service.hh"
