@@ -18,7 +18,7 @@
 #include "idl/uuid.dist.impl.hh"
 #include "idl/replay_position.dist.hh"
 #include "idl/replay_position.dist.impl.hh"
-#include "idl/hinted_handoff.idl.hh"
+#include "sync_point.hh"
 #include "idl/hinted_handoff.dist.hh"
 #include "idl/hinted_handoff.dist.impl.hh"
 #include "serializer.hh"
