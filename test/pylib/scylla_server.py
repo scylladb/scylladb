@@ -105,7 +105,7 @@ class ScyllaServer:
 
     def __init__(self, exe: str, vardir: str,
                  host_registry,
-                 cluster_name: str, seed: str,
+                 cluster_name: str, seed: Optional[str],
                  cmdline_options: List[str]) -> None:
         self.exe = pathlib.Path(exe).resolve()
         self.vardir = pathlib.Path(vardir)
