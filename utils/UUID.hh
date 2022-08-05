@@ -208,7 +208,25 @@ inline std::strong_ordering uuid_tri_compare_timeuuid(bytes_view o1, bytes_view 
     return res;
 }
 
-}
+template<typename Tag>
+struct tagged_uuid {
+    utils::UUID id;
+    bool operator==(const tagged_uuid& o) const {
+        return id == o.id;
+    }
+    bool operator<(const tagged_uuid& o) const {
+        return id < o.id;
+    }
+    explicit operator bool() const {
+        // The default constructor sets the id to nil, which is
+        // guaranteed to not match any valid id.
+        return id != utils::UUID();
+    }
+    static tagged_uuid create_random_id() { return tagged_uuid{utils::make_random_uuid()}; }
+    explicit tagged_uuid(const utils::UUID& uuid) : id(uuid) {}
+    tagged_uuid() = default;
+};
+} // namespace utils
 
 template<>
 struct appending_hash<utils::UUID> {
@@ -228,4 +246,16 @@ struct hash<utils::UUID> {
         return size_t((hilo >> 32) ^ hilo);
     }
 };
+
+template<typename Tag>
+struct hash<utils::tagged_uuid<Tag>> {
+    size_t operator()(const utils::tagged_uuid<Tag>& id) const {
+        return hash<utils::UUID>()(id.id);
+    }
+};
+
+template<typename Tag>
+std::ostream& operator<<(std::ostream& os, const utils::tagged_uuid<Tag>& id) {
+    return os << id.id;
 }
+} // namespace std
